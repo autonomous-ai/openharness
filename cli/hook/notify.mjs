@@ -16,7 +16,7 @@
 
 import http from 'node:http'
 import { execFile, execFileSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   accessSync,
   closeSync,
@@ -47,7 +47,18 @@ const HOOK_STARTED_AT = performance.now()
 // parallel test run, a busy CI box) a cold Node start plus lock retries can eat it before the offline
 // registry fallback is reached, and the fallback then silently does nothing. Tests set it explicitly so
 // they measure behaviour instead of the host's load. Clamped, and never below the shipped default.
-const HOOK_DEADLINE_MS = Math.min(60_000, Math.max(4500, Number(process.env.HARNESS_HOOK_DEADLINE_MS) || 0))
+const SHIPPED_DEADLINE_MS = 4500
+const HOOK_DEADLINE_MS = Math.min(60_000, Math.max(SHIPPED_DEADLINE_MS, Number(process.env.HARNESS_HOOK_DEADLINE_MS) || 0))
+// Each step's own limit (`execFileText`: tmux 2 s, ps and sqlite3 3 s, lsof 1.5 s) is a wall-clock assumption too, and
+// the override has to move them with the budget or it does not do what it says: under a loaded full test
+// run (load 36, six workers) the Hermes fallback's fake tmux, ps and sqlite3 each took longer than their
+// step's limit with 30 s of budget left, the lookup read as no answer, and no registry was written
+// (hookNotify.spec.ts, 3 of 3 Hermes cases). 1 with the shipped budget: a hook as shipped is unchanged.
+const STEP_SCALE = HOOK_DEADLINE_MS / SHIPPED_DEADLINE_MS
+/** A step's limit under the budget in force. Whole milliseconds: child_process refuses a fractional timeout. */
+function stepLimit(ms) {
+  return Math.round(ms * STEP_SCALE)
+}
 const EXIT_RESERVE_MS = 500
 const LOCK_RETRIES = 60
 const LOCK_RETRY_MS = 25
@@ -67,7 +78,14 @@ function modelName(value) {
   return typeof value?.id === 'string' ? value.id : null
 }
 
+/**
+ * The daemon this hook reports to, once the pane it came from has named it (`routeToPaneOwner`): its data
+ * folder and port, in place of the `--data-dir` and `--port` the installed command carries.
+ */
+let routed = null
+
 function argPort() {
+  if (routed) return routed.port
   const i = process.argv.indexOf('--port')
   if (i !== -1 && process.argv[i + 1]) return parseInt(process.argv[i + 1], 10)
   return parseInt(process.env.AGENT_ADAPTER_PORT || '18473', 10)
@@ -106,7 +124,7 @@ function argAgyEvent() {
 
 function paths() {
   const cliDir = join(homedir(), '.harness', 'cli')
-  const dataDir = argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
+  const dataDir = routed?.dataDir ?? argValue('--data-dir', process.env.ADAPTER_DATA_DIR || join(cliDir, 'data'))
   const claudeProjectsDir = argValue('--claude-projects-dir', process.env.CLAUDE_PROJECTS_DIR || join(homedir(), '.claude', 'projects'))
   const codexHome = argValue('--codex-home', process.env.CODEX_HOME || join(homedir(), '.codex'))
   const grokHome = argValue('--grok-home', process.env.GROK_HOME || join(homedir(), '.grok'))
@@ -242,11 +260,23 @@ function boundedPrompt(prompt) {
   return Buffer.byteLength(JSON.stringify(prompt)) <= 128 * 1024 ? prompt : ''
 }
 
+/**
+ * POST one hook event to the daemon. Resolves true when it answered 2xx, false when it could not be
+ * reached or refused, and 'late' when it took the request but did not answer within the budget.
+ *
+ * 'late' is not "the daemon is down", and nothing may be written behind its back for it: the request is
+ * in its socket, and it handles it once it gets to it. A daemon whose event loop is held for a few
+ * seconds (or one simply slow to answer a session-start, which waits for a discovery pass) used to get
+ * the offline fallback on every hook meanwhile, each a registry row rebuilt without the name, launch,
+ * permission mode or close plan the daemon kept, merged over its own at its next save
+ * (e2e/stall.e2e.ts).
+ */
 function post(port, path, body, onResponse) {
   return new Promise((resolve) => {
     const payload = JSON.stringify(body)
     const credential = readHookCredential()
     if (!credential) { resolve(false); return }
+    let connected = false
     const req = http.request(
       {
         host: '127.0.0.1',
@@ -273,10 +303,14 @@ function post(port, path, body, onResponse) {
         })
       }
     )
+    req.on('socket', (socket) => {
+      if (!socket.connecting) connected = true
+      else socket.once('connect', () => { connected = true })
+    })
     req.on('error', () => resolve(false))
     req.on('timeout', () => {
       req.destroy()
-      resolve(false)
+      resolve(connected ? 'late' : false)
     })
     req.write(payload)
     req.end()
@@ -370,7 +404,11 @@ function sleep(ms) {
 
 function execFileText(cmd, args, timeout, env) {
   return new Promise((resolve) => {
-    const budget = Math.min(timeout, remainingBudget())
+    // Whole milliseconds. What is left of the budget is a fraction off the whole (performance.now()),
+    // and `execFile` throws ERR_OUT_OF_RANGE on a fractional timeout: once less was left than a step's
+    // own limit, as on the shipped 4.5 s budget after a second of earlier steps on a loaded machine, the
+    // step threw, and the offline registration it was part of was dropped.
+    const budget = Math.floor(Math.min(stepLimit(timeout), remainingBudget()))
     if (budget < 50) { resolve(null); return }
     execFile(cmd, args, { timeout: budget, ...(env && { env }) }, (err, stdout) => {
       resolve(err ? null : stdout)
@@ -425,11 +463,124 @@ function readProcField(pid, field) {
   try { return readFileSync(`/proc/${pid}/${field}`, 'utf8') } catch { return null }
 }
 
-async function panePid(pane) {
-  const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, '#{pane_pid}'], 2000)
+// The tag a daemon puts on every pane it creates, and the name it gives their sessions (both in
+// src/lib/harnessSessionLabel.ts, which hookNotify.spec.ts keeps these equal to). Before tmux 3.0 there
+// are no pane options, and the tag rides in the pane's start command instead (`ownerCommand`); this format
+// reads it there first and from the option otherwise, as the daemon's listing does on such a tmux
+// (`paneOwnerFormat(false)`), and on a newer one a pane's start command never carries it.
+const HARNESS_OWNER_OPTION = '@harness_daemon'
+const HARNESS_SESSION_PREFIX = 'harness-'
+const OWNER_COMMAND_PREFIX = '/usr/bin/env HARNESS_DAEMON='
+// A pane's owner, read as the daemon reads it (harnessSessionLabel.ts paneOwnerFormat): from tmux 3.0 the
+// pane's own option, which stays with the pane wherever the person moves it; before 3.0 the tag in its start
+// command, or its window's tag in a session Harness named only, since elsewhere the window's tag names a
+// pane the person split into, or joined into, an agent's window.
+const PANE_OWNER_FORMAT = `#{${HARNESS_OWNER_OPTION}}`
+const PANE_OWNER_FORMAT_OLD_TMUX = `#{?#{m:${OWNER_COMMAND_PREFIX}*,#{pane_start_command}},#{=${OWNER_COMMAND_PREFIX.length + 16}:pane_start_command},`
+  + `#{?#{m:${HARNESS_SESSION_PREFIX}*,#{session_name}},#{${HARNESS_OWNER_OPTION}},}}`
+
+let paneOptions
+/** Whether this tmux has pane options (3.0+). A version it cannot read counts as new, as the daemon reads it (tmuxVersion.ts). */
+async function tmuxHasPaneOptions() {
+  if (paneOptions === undefined) {
+    const version = /(\d+)\.(\d+)/.exec((await execFileText('tmux', ['-V'], 2000)) || '')
+    paneOptions = !version || Number(version[1]) >= 3
+  }
+  return paneOptions
+}
+
+/** A daemon's tag: its data folder, symlinks resolved, hashed — `harnessPaneOwner` in the daemon. */
+function daemonPaneOwner(dataDir) {
+  let canonical = resolve(dataDir)
+  try { canonical = realpathSync(dataDir) } catch { /* not there: as given */ }
+  return createHash('sha256').update(canonical).digest('hex').slice(0, 16)
+}
+
+/**
+ * The pane, as tmux describes it, in one call: its root process, its session, and the tag of the daemon
+ * that made it (from the pane's option, or before tmux 3.0 from its start command). Read once per hook:
+ * the route to the daemon is chosen from it first, and the offline fallback reads it again. Undefined
+ * when tmux could not answer.
+ */
+const paneDescriptions = new Map()
+function describePane(pane) {
+  if (!paneDescriptions.has(pane)) paneDescriptions.set(pane, readPaneDescription(pane))
+  return paneDescriptions.get(pane)
+}
+async function readPaneDescription(pane) {
+  const format = (await tmuxHasPaneOptions()) ? PANE_OWNER_FORMAT : PANE_OWNER_FORMAT_OLD_TMUX
+  const stdout = await execFileText('tmux', ['display-message', '-p', '-t', pane, `#{pane_pid}|#{session_name}|${format}`], 2000)
   if (stdout === null) return undefined
-  const pid = Number((stdout || '').trim())
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null
+  const line = (stdout || '').trim()
+  const first = line.indexOf('|')
+  const last = line.lastIndexOf('|')
+  if (first < 0 || last <= first) return undefined
+  const pid = Number(line.slice(0, first))
+  const session = line.slice(first + 1, last)
+  const field = line.slice(last + 1)
+  const owner = field.startsWith(OWNER_COMMAND_PREFIX) ? field.slice(OWNER_COMMAND_PREFIX.length).split(' ')[0] : field
+  return { pid: Number.isSafeInteger(pid) && pid > 0 ? pid : null, session, owner }
+}
+
+/**
+ * Whether the daemon this hook writes for takes the pane for one of its agents at all, by the rule its
+ * discovery reads panes with (`ownedHere`): one it tagged, wherever the person moved it; an untagged one
+ * only in a session Harness named, or one an older build named (`<engine>-<ms>`) that its registry
+ * already holds (`taken: 'if-held'`); another daemon's, never. A session the person opened by hand is not
+ * an agent: with the daemon up, its hook is turned away. The offline fallback wrote a row for one all the
+ * same, and the daemon came back with an agent it would never have made and could not drive, "offline"
+ * for good (e2e/hookclient.e2e.ts). Undefined when tmux could not answer.
+ */
+async function paneFacts(pane, dataDir) {
+  const described = await describePane(pane)
+  if (!described) return undefined
+  const { pid, session, owner } = described
+  const taken = owner ? (owner === daemonPaneOwner(dataDir) ? 'yes' : 'no')
+    : session.startsWith(HARNESS_SESSION_PREFIX) ? 'yes'
+    : /^[a-z][a-z0-9]*-\d{13}$/.test(session) ? 'if-held' : 'no'
+  return { pid, taken }
+}
+
+/**
+ * Where every daemon on this computer says it listens, one file per pane tag (src/lib/hookRoutes.ts,
+ * which hookNotify.spec.ts keeps this equal to).
+ */
+function hookRoutesDir() {
+  return process.env.HARNESS_HOOK_ROUTES_DIR || join(homedir(), '.harness', 'hook-routes')
+}
+
+/**
+ * Report to the daemon that made the pane, not to the one whose command this is.
+ *
+ * Claude Code's and Codex's hooks are installed once per computer, in ~/.claude/settings.json and
+ * $CODEX_HOME/hooks.json, and each daemon wrote its own port and data folder into them as it started. With
+ * a dev daemon beside the release one, the last to start owned every hook: the other daemon's agents'
+ * hooks went to it, it turned them away (the pane was not its own), and their turn ends and session
+ * starts were lost. Each daemon now records its data folder and port under the tag it puts on its panes
+ * (`publishHookRoute`), and the hook looks the pane's tag up: a record whose data folder hashes to that tag
+ * routes this hook, its credential, and any offline write to that daemon. A record still names a daemon
+ * that is down: the hook's post fails and its offline write lands in that daemon's own registry, where it
+ * will read it. A pane with no tag, or a tag with no record (a daemon from before the records), keeps the
+ * command's own `--port` and `--data-dir`, as every installed command did.
+ */
+async function routeToPaneOwner(pane) {
+  if (!/^%\d+$/.test(pane || '')) return null
+  const described = await describePane(pane)
+  const tag = described?.owner
+  if (!tag || !/^[0-9a-f]{16}$/.test(tag)) return null
+  try {
+    const dir = hookRoutesDir()
+    secureStateDirectory(dir, false)
+    const record = JSON.parse(readPrivateStateFile(join(dir, `${tag}.json`), 4096))
+    const dataDir = record?.dataDir
+    const port = record?.port
+    if (typeof dataDir !== 'string' || !isAbsolute(dataDir) || !Number.isInteger(port) || port < 1 || port > 65535) return null
+    // The record must be the tag's own, and its folder still there: a folder since removed would be
+    // created again by the offline write, for a daemon that will never read it.
+    if (daemonPaneOwner(dataDir) !== tag || !statSync(dataDir).isDirectory()) return null
+    routed = { dataDir, port }
+    return routed
+  } catch { return null }
 }
 
 function argvTokens(args) {
@@ -661,13 +812,6 @@ async function enrichProcessImages(rows) {
   return rows.map((row) => images.has(row.pid) ? { ...row, imageFileKey: images.get(row.pid) } : row)
 }
 
-async function paneEngineProcess(pane, engine) {
-  const rootPid = await panePid(pane)
-  if (rootPid === undefined) return { state: 'unknown' }
-  if (!rootPid) return { state: 'gone' }
-  return rootEngineProcess(rootPid, engine)
-}
-
 async function rootEngineProcess(rootPid, engine) {
   const rawRows = await processRows()
   if (!rawRows) return { state: 'unknown' }
@@ -758,12 +902,24 @@ function bootTimeSec() {
   return Math.round(Date.now() / 1000 - uptime())
 }
 
+// Which boot this is, named as src/lib/bootId.ts names it: the two read and write the same boot file, so
+// they must agree. macOS has a per-boot id too; without it a boot was named by the moment it began, which
+// moves with every step of the wall clock, and a hook that fell back to the registry after an NTP step
+// or a long sleep took the step for a reboot and wrote a registry of its one agent (round 29).
+let bootId = null
 function currentBootId() {
+  if (bootId) return bootId
   try {
     const value = readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim()
-    if (/^[0-9a-f-]{36}$/i.test(value)) return `linux:${value}`
-  } catch { /* non-Linux fallback below */ }
-  return `time:${bootTimeSec()}`
+    if (/^[0-9a-f-]{36}$/i.test(value)) return (bootId = `linux:${value}`)
+  } catch { /* not Linux */ }
+  if (process.platform === 'darwin') {
+    try {
+      const value = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 1000 }).trim()
+      if (/^[0-9a-f-]{36}$/i.test(value)) return (bootId = `macos:${value}`)
+    } catch { /* sysctl unavailable: the moment the boot began, below */ }
+  }
+  return (bootId = `time:${bootTimeSec()}`)
 }
 
 function readSavedBoot(bootFile) {
@@ -807,6 +963,8 @@ function rebootedSinceSnapshot(bootFile) {
   if (saved === null) return false
   const current = currentBootId()
   if (saved.startsWith('linux:')) return saved !== current
+  // A macOS id that cannot be read now is no evidence of a reboot.
+  if (saved.startsWith('macos:')) return !current.startsWith('time:') && saved !== current
   const savedNumber = Number(saved.replace(/^time:/, ''))
   const currentNumber = current.startsWith('time:') ? Number(current.slice(5)) : bootTimeSec()
   return !Number.isFinite(savedNumber) || Math.abs(currentNumber - savedNumber) > BOOT_TOLERANCE_SEC
@@ -1090,9 +1248,13 @@ function mergeRuntimes(current, observed) {
   return [...merged.values()].sort((a, b) => runtimePlacementKey(a).localeCompare(runtimePlacementKey(b)))
 }
 
+// Every engine a registry row can name: the daemon's own list (src/engines/types.ts ENGINES), which
+// hookNotify.spec.ts keeps this one equal to. A row naming one missing here made the whole registry read
+// as damaged, and a hook while the daemon was down then registered nothing at all: `terminal` was
+// missing, so one terminal open on the machine was enough (e2e/hookclient.e2e.ts).
 const REGISTRY_ENGINES = new Set([
   'claude', 'codex', 'cursor', 'opencode', 'pi', 'hermes', 'commandcode', 'devin', 'muse', 'amp', 'kilo', 'grok',
-  'agy', 'copilot',
+  'agy', 'copilot', 'terminal',
 ])
 
 function validRegistryString(value, max = 4096) {
@@ -1187,11 +1349,12 @@ async function fallbackRegister(input, engine, tmuxPane) {
   if (!transcriptOptional && !transcriptPath) return
   if (transcriptPath && !validTranscriptPath(engine, transcriptPath, p)) return
   const observations = []
-  if (/^%\d+$/.test(tmuxPane || '')) {
-    const tmux = await paneEngineProcess(tmuxPane, engine)
-    if (tmux.state === 'alive' && tmux.identity && await callerOwns(tmux.identity)) {
-      observations.push({ identity: tmux.identity, runtime: { backend: 'tmux', paneId: tmuxPane } })
-    }
+  const pane = /^%\d+$/.test(tmuxPane || '') ? await paneFacts(tmuxPane, p.dataDir) : undefined
+  const taken = pane?.taken ?? 'no'
+  if (taken === 'no' || !pane.pid) return
+  const tmux = await rootEngineProcess(pane.pid, engine)
+  if (tmux.state === 'alive' && tmux.identity && await callerOwns(tmux.identity)) {
+    observations.push({ identity: tmux.identity, runtime: { backend: 'tmux', paneId: tmuxPane } })
   }
   if (!observations.length) return
   const process = observations[0]
@@ -1214,28 +1377,36 @@ async function fallbackRegister(input, engine, tmuxPane) {
     // into an empty registry merely because the daemon is down.
     if (loaded === null) return
     let sessions = loaded
+    const routeKeys = new Set(observedRuntimes.map(runtimeRouteKey))
+    const onRoute = (s) => !!s && !!(Array.isArray(s.runtimes)
+      ? s.runtimes.some((runtime) => routeKeys.has(runtimeRouteKey(runtime)))
+      : s.tmuxPane && routeKeys.has(runtimeRouteKey({ backend: 'tmux', paneId: s.tmuxPane })))
+    // A session an older build named is the daemon's only while its registry holds an agent there.
+    if (taken === 'if-held' && !sessions.some(onRoute)) return
     writeBoot(p.bootFile)
     const now = Date.now()
     const sameRuntime = (s) => s && s.engine === engine
       && s.processIdentity?.pid === process.identity.pid && s.processIdentity?.startMarker === process.identity.startMarker
-    const existingIndex = sessions.findIndex(sameRuntime)
+    let existingIndex = sessions.findIndex(sameRuntime)
+    // An engine typed into a terminal is that terminal's agent from then on, as the daemon adopts it
+    // (registry.adoptEngine): the same agent, its name and its tile, now this engine's. Taken for a
+    // stranger on its pane, the terminal's row was dropped for a new agent, and the tile the person had
+    // open was gone when the daemon came back (e2e/hookclient.e2e.ts).
+    if (existingIndex < 0) existingIndex = sessions.findIndex((s) => s?.engine === 'terminal' && onRoute(s))
     const existing = existingIndex >= 0 ? sessions[existingIndex] : null
     // A resumed session moves to this process agent; the previous process remains visible but unbound.
     sessions = sessions.map((s) => s && s.sessionId === sessionId && !sameRuntime(s)
       ? { ...s, sessionId: '', boundAt: null, transcriptPath: null, source: null, updatedAt: now }
       : s)
-    const routeKeys = new Set(observedRuntimes.map(runtimeRouteKey))
-    if (existingIndex < 0) sessions = sessions.filter((s) => !s || !(Array.isArray(s.runtimes)
-      ? s.runtimes.some((runtime) => routeKeys.has(runtimeRouteKey(runtime)))
-      : s.tmuxPane && routeKeys.has(runtimeRouteKey({ backend: 'tmux', paneId: s.tmuxPane }))))
+    if (existingIndex < 0) sessions = sessions.filter((s) => !onRoute(s))
     const agentId = typeof existing?.agentId === 'string' && existing.agentId ? existing.agentId : randomUUID()
     const runtimes = mergeRuntimes(existing?.runtimes, observedRuntimes)
     const tmuxProjection = runtimes.find((runtime) => runtime.backend === 'tmux')?.paneId || ''
     // What the daemon chose for this agent at launch and cannot re-derive from the process — the
     // grid launch (credential included), the Codex profile, the bypass flag, the observed grid and
-    // gateway — is carried forward exactly as `registry.register()` does. A hook arriving while the
-    // daemon is down must not be the one write that strips the row of them. `launch` is not: like
-    // there, a hook means the engine is up, whatever the launch was.
+    // gateway — is carried forward, in the shapes `registry.register()` gives them. A hook arriving
+    // while the daemon is down must not be the one write that strips the row of them. `launch` is not:
+    // like there, a hook means the engine is up, whatever the launch was.
     const carried = {
       gateway: existing?.gateway === 'ori' ? 'ori' : null,
       grid: existing?.grid ?? null,
@@ -1248,8 +1419,22 @@ async function fallbackRegister(input, engine, tmuxPane) {
       // When an app last opened this agent (RegisteredSession.lastOpenedAt): a fact about the person,
       // not the process, and the daemon's own rebuild carries it the same way.
       ...(Number.isSafeInteger(existing?.lastOpenedAt) && existing.lastOpenedAt > 0 ? { lastOpenedAt: existing.lastOpenedAt } : {}),
+      // A pane that was a terminal goes back to being one when this engine exits.
+      ...(existing?.engine === 'terminal' || existing?.terminalHost === true ? { terminalHost: true } : {}),
     }
+    // Everything else the daemon kept on the row goes on as it stands: the agent's name, permission mode,
+    // harness (DSH) and its runtime, named agent, subscription model, the web search a grid launch decided,
+    // the close planned for after the task (#812), whether it is a terminal, that a stop must be resumed
+    // and not started over, and whatever the daemon keeps there next. Named fields alone were the row
+    // rebuilt without them, which the daemon then loaded as its own: a hook in the seconds an update or a
+    // restart leaves the daemon down relaunched a harness as a plain engine, out of the mode it was made
+    // in and under another name, and never closed an agent its person had asked to close (#831;
+    // e2e/hookclient.e2e.ts). The launch is over once a hook comes, as `registry.register()` has it:
+    // left behind, or `ready` on a row that may only be resumed.
+    const { launch: _launch, ...kept } = existing ?? {}
     const entry = {
+      ...kept,
+      ...(existing?.resumeOnly === true ? { launch: { state: 'ready' } } : {}),
       schemaVersion: 2,
       active: true,
       ...carried,
@@ -1280,7 +1465,10 @@ async function fallbackRegister(input, engine, tmuxPane) {
       cliVersion: typeof (input.cli_version || input.version) === 'string' ? (input.cli_version || input.version) : (existing?.cliVersion ?? null),
       processIdentity: process.identity,
       registeredAt: typeof existing?.registeredAt === 'number' ? existing.registeredAt : now,
+      // A bind is a change to the row, as the daemon stamps one; `updatedAt` is that stamp's name for
+      // a daemon from before 2026-09-27.
       updatedAt: now,
+      touchedAt: now,
       lastHookAt: now,
       lastTranscriptAt: typeof existing?.lastTranscriptAt === 'number' ? existing.lastTranscriptAt : now,
     }
@@ -1298,7 +1486,7 @@ async function fallbackSessionEnd(sessionId, reason, engine, tmuxPane) {
 }
 
 async function main() {
-  const port = argPort()
+  let port = argPort()
   const engine = argEngine()
   const raw = await readStdin()
   let input = {}
@@ -1311,6 +1499,8 @@ async function main() {
   const event = input.hook_event_name || input.hookEventName
   const tmuxPane = process.env.TMUX_PANE
   if (!tmuxPane) return
+  // Before anything reads the data folder or posts: which daemon this pane is (routeToPaneOwner).
+  if (await routeToPaneOwner(tmuxPane)) port = argPort()
   const mutationFields = { engine, ...terminalHookFields(tmuxPane) }
   if (engine === 'cursor' && input.is_background_agent === true) return
   if (engine === 'codex' && isCodexSubagent(input, paths())) return
@@ -1339,7 +1529,7 @@ async function main() {
     const cwd = input.cwd
     if (copilotEvent === 'sessionEnd') {
       const ok = await post(port, '/api/hook/session-end', { sessionId, reason: input.reason, ...mutationFields })
-      if (!ok) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
+      if (ok === false) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
       return
     }
     if (copilotEvent === 'agentStop') {
@@ -1359,7 +1549,7 @@ async function main() {
       ...terminalHookFields(tmuxPane),
     }
     const registered = await post(port, '/api/hook/session-start', body)
-    if (!registered) {
+    if (registered === false) {
       await fallbackRegister({
         ...input, hook_event_name: 'SessionStart', session_id: sessionId, transcript_path: transcriptPath, cwd,
       }, engine, tmuxPane)
@@ -1414,7 +1604,7 @@ async function main() {
       model: modelName(input.modelName),
     }
     const registered = await post(port, '/api/hook/session-start', body)
-    if (!registered) {
+    if (registered === false) {
       await fallbackRegister({
         ...input,
         hook_event_name: 'SessionStart',
@@ -1433,7 +1623,7 @@ async function main() {
     const transcriptPath = grokTranscriptPath(paths(), cwd, sessionId)
     if (grokEventName === 'SessionEnd') {
       const ok = await post(port, '/api/hook/session-end', { sessionId, reason: input.reason, ...mutationFields })
-      if (!ok) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
+      if (ok === false) await fallbackSessionEnd(sessionId, input.reason, engine, tmuxPane)
       return
     }
     if (grokEventName === 'StopFailure') {
@@ -1453,7 +1643,7 @@ async function main() {
       cliVersion: input.cliVersion || input.version,
     }
     const registered = await post(port, '/api/hook/session-start', body)
-    if (!registered) {
+    if (registered === false) {
       await fallbackRegister({
         ...input,
         hook_event_name: grokEventName,
@@ -1472,8 +1662,10 @@ async function main() {
       reason: input.reason,
       ...mutationFields,
     })
-    if (!ok) await fallbackSessionEnd(input.session_id || input.conversation_id, input.reason, engine, tmuxPane)
-    if (engine === 'cursor' && ok) await clearCursorTasks(input.session_id || input.conversation_id)
+    if (ok === false) await fallbackSessionEnd(input.session_id || input.conversation_id, input.reason, engine, tmuxPane)
+    // Only once the daemon has taken the end in: a reply that did not come in time ('late') is no answer,
+    // and the tasks it would have settled are still the daemon's to settle.
+    if (engine === 'cursor' && ok === true) await clearCursorTasks(input.session_id || input.conversation_id)
     return
   }
 
@@ -1514,14 +1706,14 @@ async function main() {
       cliVersion: input.cursor_version || input.version,
     }
     const registered = await post(port, '/api/hook/session-start', body)
-    if (!registered) await fallbackRegister(input, engine, tmuxPane)
+    if (registered === false) await fallbackRegister(input, engine, tmuxPane)
     const stopped = await post(port, '/api/hook/turn-stop', {
       sessionId,
       status: input.status,
       transcriptPath: input.transcript_path,
       ...mutationFields,
     })
-    if (stopped) await clearCursorTasks(sessionId)
+    if (stopped === true) await clearCursorTasks(sessionId)
     return
   }
 
@@ -1549,7 +1741,7 @@ async function main() {
         model: modelName(input.model),
         cliVersion: input.cli_version || input.version,
       })
-      if (!registered) await fallbackRegister(input, engine, tmuxPane)
+      if (registered === false) await fallbackRegister(input, engine, tmuxPane)
     }
     await post(port, '/api/hook/turn-stop', {
       sessionId: input.session_id,
@@ -1589,7 +1781,7 @@ async function main() {
     cliVersion: input.cli_version || input.cursor_version || input.version,
   }
   const ok = await post(port, '/api/hook/session-start', body)
-  if (!ok) await fallbackRegister(input, engine, tmuxPane)
+  if (ok === false) await fallbackRegister(input, engine, tmuxPane)
 }
 
 main()

@@ -1,11 +1,11 @@
-import { execFileSync } from 'node:child_process'
-import { accessSync, chmodSync, constants, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 
 import { env } from '../config/env.js'
 import { gridChildEnv, managedGridPath, meetsVersionFloor } from './gridExec.js'
 import { managedNodePath } from './nodeRuntime.js'
-import { downloadVerified } from './selfUpdate.js'
+import { RUNTIME_DOWNLOAD_LIMITS, downloadVerified } from './selfUpdate.js'
 
 /**
  * Provisioning the Node the CLI runs on, from inside the CLI.
@@ -47,15 +47,54 @@ function artifactFor(document: unknown, name: string, key: string): RuntimeArtif
   return { version: raw.version, url: raw.url, sha256: raw.sha256, size: raw.size, archiveRoot: raw.archiveRoot }
 }
 
+/** How long a child that outlived its deadline has between SIGTERM and SIGKILL. */
+const KILL_GRACE_MS = 2_000
+
+/**
+ * Runs [file] to its end and says whether it exited 0 within [timeoutMs] — WITHOUT holding up the
+ * event loop while it runs.
+ *
+ * This module runs inside the core: on every start, and every ten minutes while it runs
+ * ([startGridPinRecheck]). A synchronous exec here froze the core for as long as the child took — up
+ * to two minutes for an unpack and one for a onefile grid's first `--version` — and a core that does
+ * not turn its event loop answers no client, beats no heartbeat, and is restarted by its master. A
+ * child that outlives its deadline is sent SIGTERM, as the synchronous exec did, and SIGKILL if it
+ * is still there [KILL_GRACE_MS] later; the answer waits for it to be gone, so a staging directory is
+ * never removed under a tar that is still writing into it.
+ */
+export function finishesCleanly(file: string, args: string[], timeoutMs: number, childEnv?: NodeJS.ProcessEnv): Promise<boolean> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(file, args, { stdio: 'ignore', ...(childEnv ? { env: childEnv } : {}) })
+    } catch {
+      resolve(false)
+      return
+    }
+    let timedOut = false
+    let grace: NodeJS.Timeout | undefined
+    const deadline = setTimeout(() => {
+      timedOut = true
+      child.kill('SIGTERM')
+      grace = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS)
+    }, timeoutMs)
+    let settled = false
+    const settle = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(deadline)
+      clearTimeout(grace)
+      resolve(ok)
+    }
+    child.once('error', () => settle(false))
+    child.once('close', (code) => settle(!timedOut && code === 0))
+  })
+}
+
 /** Does `binary --version` answer? `env` and `timeout` for a runtime whose first run is slow — a
  *  onefile grid unpacks itself the first time, and must not be told to update itself while it does. */
-function runs(binary: string, timeout: number = 15_000, childEnv?: NodeJS.ProcessEnv): boolean {
-  try {
-    execFileSync(binary, ['--version'], { timeout, stdio: 'ignore', ...(childEnv ? { env: childEnv } : {}) })
-    return true
-  } catch {
-    return false
-  }
+function runs(binary: string, timeout: number = 15_000, childEnv?: NodeJS.ProcessEnv): Promise<boolean> {
+  return finishesCleanly(binary, ['--version'], timeout, childEnv)
 }
 
 /**
@@ -83,7 +122,7 @@ interface ManagedArchive {
   /** A version the manifest may not go below — this daemon's floor, which a manifest cannot lower. */
   acceptsVersion?: (version: string) => boolean
   /** Does the laid-down binary run on this computer? Asked before the pointer is written. */
-  runs: (binary: string) => boolean
+  runs: (binary: string) => Promise<boolean>
   /**
    * Lay the binary and its directory down read-only. For a runtime whose own updater would replace
    * the file in place — `grid update` is an os.replace INTO the directory — a directory it cannot
@@ -101,7 +140,29 @@ interface ManagedArchive {
  * Everything here is best-effort and returns rather than throws: a daemon must not fail to start
  * because a download failed.
  */
+/**
+ * The staging folders of processes that are gone: a core that exited in the middle of an unpack (an
+ * update's handoff, a master's restart) left its `.<name>-staging-<pid>-<time>`, the archive and a
+ * partial tree in it, and nothing else ever removes one. Another process's, still running, is its own.
+ */
+function sweepStaging(name: string): void {
+  const prefix = `.${name}-staging-`
+  let entries: string[]
+  try { entries = readdirSync(env.ADAPTER_RUNTIME_DIR) } catch { return }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix)) continue
+    const pid = Number(entry.slice(prefix.length).split('-')[0])
+    if (Number.isSafeInteger(pid) && pid > 0 && processAlive(pid)) continue
+    try { rmSync(join(env.ADAPTER_RUNTIME_DIR, entry), { recursive: true, force: true }) } catch { /* the next start tries again */ }
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM' }
+}
+
 async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null> {
+  sweepStaging(spec.name)
   const installed = spec.installed()
   if (installed && !spec.followsPin) return installed
   const key = platformKey()
@@ -123,7 +184,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
       // downloadVerified checks the sha256 but not the length, so check it here: a truncated body
       // that somehow collided would be caught by the hash anyway, but a mismatch here is the cheaper
       // and clearer failure.
-      const bytes = await downloadVerified(artifact)
+      const bytes = await downloadVerified(artifact, RUNTIME_DOWNLOAD_LIMITS)
       if (artifact.size !== undefined && bytes.length !== artifact.size) return installed
 
       mkdirSync(env.ADAPTER_RUNTIME_DIR, { recursive: true, mode: 0o700 })
@@ -132,7 +193,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
         mkdirSync(staging, { recursive: true, mode: 0o700 })
         const archive = join(staging, `${spec.name}.tar.gz`)
         writeFileSync(archive, bytes)
-        execFileSync('/usr/bin/tar', ['-xzf', archive, '-C', staging], { timeout: 120_000, stdio: 'ignore' })
+        if (!await finishesCleanly('/usr/bin/tar', ['-xzf', archive, '-C', staging], 120_000)) return installed
         const unpacked = join(staging, artifact.archiveRoot)
         if (!existsSync(join(unpacked, spec.binary))) return installed
         // Another start may have won the race; theirs is as good as ours.
@@ -153,7 +214,7 @@ async function ensureManagedArchive(spec: ManagedArchive): Promise<string | null
     // hung exec each time until the manifest moved. A new pin is a new directory, and starts clean.
     const unrunnable = join(target, '.unrunnable')
     if (spec.followsPin && existsSync(unrunnable)) return installed
-    if (!spec.runs(binary)) {
+    if (!await spec.runs(binary)) {
       if (spec.followsPin) {
         try { writeFileSync(unrunnable, `${new Date().toISOString()}\n`, { mode: 0o600 }) } catch { /* the retry is the cost */ }
       }
@@ -273,78 +334,6 @@ export function startGridPinRecheck(options: { ensure?: () => Promise<unknown>; 
   return () => clearInterval(timer)
 }
 
-/** The trailing `exec …` line, which is the only line any launcher we ship varies. */
-const EXEC_LINE = /^exec .*$/m
-
-/**
- * Repoints the `harness` launcher at [node].
- *
- * Three launcher shapes have shipped — the public installer's two-liner, `install-cli.sh`'s, and its
- * `--no-updates` variant carrying a comment block and `ADAPTER_UPDATE_DISABLE=true`. All three end in
- * a single `exec … cli.js "$@"` line with everything else preamble, so replacing ONLY that line
- * handles all three and preserves a developer's pin for free: the interpreter is repaired, and the
- * promise that no release reaches that computer on its own is untouched.
- */
-export function ensureLauncher(node: string, log: (message: string) => void = () => {}): void {
-  try {
-    const launcher = join(env.HARNESS_BIN_DIR, 'harness')
-    const current = readFileSync(launcher, 'utf-8')
-    const cli = join(env.ADAPTER_CLI_DIR, 'cli.js')
-    const exec = EXEC_LINE.exec(current)
-    // Only ever rewrite a launcher that runs OUR bundle. Anything else at this path belongs to
-    // somebody else, and a missing launcher means the CLI is being run some other way — writing one
-    // nobody asked for is a different feature.
-    if (!exec || !exec[0].includes(cli)) return
-
-    const next = current.replace(EXEC_LINE, `exec ${shellQuote(node)} ${shellQuote(cli)} "$@"`)
-    if (next === current) return
-
-    const temporary = `${launcher}.tmp-${process.pid}`
-    writeFileSync(temporary, next, { mode: 0o755 })
-    renameSync(temporary, launcher)
-    log(`  ✓ repointed ${launcher} at ${node}`)
-  } catch {
-    // A read-only bin dir, a launcher owned by another user — none of it is worth failing a start.
-  }
-}
-
-/**
- * Add the short terminal command to an existing installation. Self-update replaces only the JS
- * bundles, so machines installed before hn shipped never re-run the installer's launcher step.
- * Run this on entry to the installed bundle, including daemon handoffs and an already-current
- * `harness update`. A checkout or update canary must never change the real installation.
- *
- * Delegate through the existing harness launcher so runtime repairs and --no-updates pins apply
- * equally to hn. Publish the complete script without replacing any existing file or symlink.
- */
-export function ensureHnLauncher(scriptPath: string): boolean {
-  let temporary: string | undefined
-  try {
-    const cli = join(env.ADAPTER_CLI_DIR, 'cli.js')
-    if (realpathSync(scriptPath) !== realpathSync(cli)) return false
-    const hn = join(env.HARNESS_BIN_DIR, 'hn')
-    try { lstatSync(hn); return false } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false
-    }
-    const launcher = join(env.HARNESS_BIN_DIR, 'harness')
-    accessSync(launcher, constants.X_OK)
-    const exec = EXEC_LINE.exec(readFileSync(launcher, 'utf8'))
-    if (!exec || !(exec[0].includes(cli) || exec[0].includes(shellQuote(cli)))) return false
-
-    temporary = mkdtempSync(join(env.HARNESS_BIN_DIR, '.hn-'))
-    const staged = join(temporary, 'hn')
-    writeFileSync(staged, `#!/bin/sh\nexec ${shellQuote(launcher)} tui "$@"\n`, { mode: 0o755 })
-    // link, unlike rename, fails if another process or the user has already created hn.
-    linkSync(staged, hn)
-    return true
-  } catch {
-    // A read-only bin dir or a racing install must not prevent the CLI or daemon from running.
-    return false
-  } finally {
-    if (temporary) { try { rmSync(temporary, { recursive: true, force: true }) } catch { /* best effort */ } }
-  }
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`
-}
+// The launchers are launchers.ts's: the hn updater, which the core runs, repairs them without loading the
+// managed runtimes' code, which grid's half of is the models service's (docs/design/2026-10-06-core-boundary-next.md, step 7).
+export { ensureHnLauncher, ensureLauncher } from './launchers.js'

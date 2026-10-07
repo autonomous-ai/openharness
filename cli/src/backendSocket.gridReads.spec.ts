@@ -1,22 +1,37 @@
 /**
  * The daemon's grid RPCs as a desktop drives them — `grid_models_list`, the Model Manager's
  * `grid_fleet_models_list` and `agent_retarget` — against a fake relay that records every request it
- * receives, and a fake `grid` first on PATH (grid-reads-without-waking issue 02).
+ * receives, and a fake `grid` first on PATH (grid-reads-without-waking issue 02). The first two are
+ * the models service's (services/models.ts), answered through a service host as the daemon runs it.
  *
  * The relay is the spy: nothing here recomputes what the daemon sends, it reads what arrived.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
+import { relaySocket } from './testing/relaySocket.js'
 import { env } from './config/env.js'
+import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF } from './core/api.js'
+import { createServiceHost } from './core/serviceHost.js'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid, type FakeGridPlan } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { observeMachineList, resetGridModels, type GridModelsService } from './lib/gridModels.js'
+import { MODELS_REQUESTS, startModels } from './services/models.js'
+import { fakeCore } from './testing/fakeCore.js'
 
 const OWN = 'mine', OWN_ID = 'net-own'
+const externalFetch = globalThis.fetch.bind(globalThis)
+
+// Grid's set-up, which a move onto a grid model asks the models service for first: the fake grid here is
+// set up already, as on a machine that has used it before.
+vi.mock('./lib/gridAttach.js', async (real) => ({
+  ...await real<object>(),
+  createGridAccess: () => ({ ensure: async () => ({ status: 'converged', name: 'mine', detail: 'set up already' }) }),
+}))
 const OVERVIEW = '/relay/v1/grid/overview'
 
 let server: Server, base: string, seen: Array<{ path: string; headers: IncomingHttpHeaders }>
@@ -58,9 +73,17 @@ function expectNoCredential(): void {
 
 beforeEach(async () => {
   seen = []
+  const clientId = randomUUID()
   overview = { status: 200, body: { nodes: [{ name: 'mac', engine: 'llama.cpp', models: ['small-q4'], online: true }], models: [{ id: 'Small-Q4' }] } }
   modelsDelayMs = 0
   server = createServer((req, res) => {
+    // Quiet-machine QA found local discovery probing this port. Identify the test client, so
+    // unrelated probes cannot pollute its log while every path that it requests remains visible.
+    if (req.headers['x-harness-test-client'] !== clientId) {
+      req.resume()
+      res.writeHead(404).end()
+      return
+    }
     seen.push({ path: req.url ?? '', headers: req.headers })
     const models = req.url === `/g/${OWN_ID}/relay/v1/models`
     const found = req.url === `/g/${OWN_ID}${OVERVIEW}` ? overview : models ? { status: 200, body: { data: [] } } : { status: 404, body: {} }
@@ -72,6 +95,14 @@ beforeEach(async () => {
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
+  const relayOrigin = base
+  vi.stubGlobal('fetch', (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = input instanceof Request ? input.url : input.toString()
+    if (new URL(url).origin !== relayOrigin) return externalFetch(input, init)
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+    headers.set('x-harness-test-client', clientId)
+    return externalFetch(input, { ...init, headers })
+  })
   root = mkdtempSync(join(tmpdir(), 'grid-reads-rpc-'))
   gridHome = join(root, 'grid-home')
   mkdirSync(gridHome, { recursive: true })
@@ -79,15 +110,27 @@ beforeEach(async () => {
   previousData = env.ADAPTER_DATA_DIR
   env.ADAPTER_DATA_DIR = join(root, 'data')
   clock = Date.parse('2026-09-24T10:00:00Z')
-  // Before the socket, which subscribes to the service it finds for its `grid_models_changed` push.
+  // Before the socket and the models service, which subscribe to the service they find: the socket for its
+  // `grid_models_changed` push, models for the agents' frames.
   service = resetGridModels({
     now: () => clock, dataDir: () => join(root, 'data'), gridHome: () => gridHome, email: () => null,
     // An explicit wake's 3 s pauses move the clock instead of the test.
     sleep: async (ms) => { clock += ms },
   })
   grid = installFakeGrid(plan())
-  socket = new BackendSocket('token')
+  socket = relaySocket('token')
   socket.setHarnessGridName(OWN)
+  const ports = emptyPorts()
+  const models = createServiceHost(ports, { log: () => {} })
+  // This test's socket, not the variable's: a change an earlier test's pictures say late must not push here.
+  const here = socket
+  models.start('models', startModels, fakeCore({
+    dataDir: join(root, 'data'),
+    account: { privateGridName: async () => here.gridName(), machineName: () => here.machineName() },
+    clients: { gridModelsChanged: () => { void here.pushGridModels() } },
+  }), MODELS_FALLBACKS, MODELS_REQUESTS)
+  socket.serviceRouter = (type, payload, asker, reply) => models.route(type, payload, asker, reply)
+  socket.models = () => ports.models ?? MODELS_OFF
   frames = []
   socket.registerLocalClient('local:grid-reads', { sendFrame: (frame) => { frames.push(frame as typeof frames[number]); return true }, sendBinary: () => true })
 })
@@ -102,10 +145,29 @@ afterEach(async () => {
   vi.unstubAllEnvs()
   server.closeAllConnections()
   await new Promise<void>((resolve) => server.close(() => resolve()))
+  vi.unstubAllGlobals()
   rmSync(root, { recursive: true, force: true })
 })
 
 describe('grid_models_list', () => {
+  it('keeps another client probing the port out of the model service request log', async () => {
+    // Found by QA on a quiet machine: local discovery sent /v1/models to this fake relay.
+    const probe = await externalFetch(`${base}/v1/models`)
+    expect(probe.status).toBe(404)
+    await probe.arrayBuffer()
+    const reply = await ask('grid_models_list')
+    expect(reply).toMatchObject({ gridName: OWN, models: [{ id: 'Small-Q4', node: 'mac' }] })
+    expect(seen.map((request) => request.path)).toEqual([`/g/${OWN_ID}${OVERVIEW}`])
+    expectNoCredential()
+  })
+
+  it('still records an unsupported path sent by this test client', async () => {
+    const reply = await fetch(`${base}/v1/models`)
+    expect(reply.status).toBe(404)
+    await reply.arrayBuffer()
+    expect(seen.map((request) => request.path)).toEqual(['/v1/models'])
+  })
+
   it('answers in the old shape with the three new fields, and reads the grid with no credential', async () => {
     const reply = await ask('grid_models_list')
 
@@ -150,7 +212,9 @@ describe('grid_fleet_models_list (the Model Manager) on a sleeping own grid', ()
     const reply = await ask('grid_fleet_models_list', { refresh: true })
 
     expect(reply.error).not.toBe('Running models could not be checked. Try again.')
-    expect(reply.models).toEqual([expect.objectContaining({ id: 'local:Small-Q4.gguf', state: 'running', gridAsleep: true, canStop: true })])
+    // (The Jev models offered to get are not this grid's engines; they are listed whatever it runs.)
+    expect((reply.models as Array<{ kind?: string }>).filter((m) => m.kind !== 'decision'))
+      .toEqual([expect.objectContaining({ id: 'local:Small-Q4.gguf', state: 'running', gridAsleep: true, canStop: true })])
     expect(seen.map((r) => r.path)).toEqual([`/g/${OWN_ID}${OVERVIEW}`])
     expectNoCredential()
     // The owner status is asked once and remembered, not asked on every tick.

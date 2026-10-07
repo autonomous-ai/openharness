@@ -354,6 +354,25 @@ describe('GroupSyncer', () => {
     expect(a.syncer.tombstoned(phonePub)).toBe(true)
     for (const n of f.nodes) n.syncer.stop()
   })
+
+  it('a key the roster holds as the log names it, and this machine does not trust, is trusted again', () => {
+    vi.useFakeTimers()
+    const f = fleet()
+    const a = f.add('a')
+    const phonePub = C.b64e(C.newIdentity().pub)
+    const phone = { pub: phonePub, kind: 'viewer' as const, machineId: '', label: 'phone', addedAt: 500 }
+    a.syncer.adoptFromLog([phone])
+    // The trust was lost (a crash between the roster and paired.json): the roster still holds the member
+    // exactly as the log names it, so a merge has nothing new to say about it.
+    a.trusted.delete(phonePub)
+    a.syncer.adoptFromLog([phone])
+    expect(a.trusted.has(phonePub)).toBe(true)
+    // Not a key this machine's user unpaired.
+    a.syncer.unpaired(phonePub)
+    a.syncer.adoptFromLog([phone])
+    expect(a.trusted.has(phonePub)).toBe(false)
+    for (const n of f.nodes) n.syncer.stop()
+  })
 })
 
 describe('GroupSyncer — suspended keys', () => {

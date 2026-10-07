@@ -1,11 +1,12 @@
 import http from 'node:http'
-import type { AddressInfo } from 'node:net'
+import net, { type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebSocket } from 'ws'
 import type { Frame, LocalClientSink } from './backendSocket.js'
-import { attachLocalWsServer, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
+import { attachLocalWsServer, LOCAL_WS_CLOSE_GRACE_MS, type LocalWsBackend, type LocalWsServer, type LocalWsServerOptions } from './localWsServer.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { listenLocalSocket } from './lib/localSocket.js'
+import { RelayConnectError } from './lib/relayFrames.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { WindowForm } from './cable/windowForm.js'
@@ -82,6 +83,23 @@ describe('local CLI WebSocket', () => {
     const port = (server.address() as AddressInfo).port
     return `ws://127.0.0.1:${port}/api/local-ws`
   }
+
+  it('closes within a moment, however long a client takes to answer the close', async () => {
+    // A client that never answers the close frame: a raw socket past the handshake that reads nothing.
+    const url = new URL(await start(new FakeBackend()))
+    const raw = net.connect(Number(url.port), '127.0.0.1')
+    await new Promise<void>((resolve) => raw.once('connect', () => resolve()))
+    raw.write(['GET /api/local-ws HTTP/1.1', `Host: 127.0.0.1:${url.port}`, 'Upgrade: websocket', 'Connection: Upgrade',
+      'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==', 'Sec-WebSocket-Version: 13', '', ''].join('\r\n'))
+    await new Promise<void>((resolve) => raw.once('data', () => resolve()))
+    raw.pause()
+    const started = performance.now()
+    await local!.close()
+    local = null
+    // ws alone waits 30 s for it.
+    expect(performance.now() - started).toBeLessThan(LOCAL_WS_CLOSE_GRACE_MS + 2_000)
+    raw.destroy()
+  })
 
   it('keeps notification identities on the local read and snapshot paths', async () => {
     const backend = new FakeBackend(), seen = vi.fn(), unread = vi.fn()
@@ -285,7 +303,7 @@ describe('local CLI WebSocket', () => {
     ws.close()
   })
 
-  it.each(['local binary', 'remote JSON', 'remote binary', 'route task'] as const)(
+  it.each(['local binary', 'remote JSON', 'remote binary'] as const)(
     'keeps later messages behind an unfinished %s operation', async (kind) => {
       const backend = new FakeBackend(), pending = gate(), entered = gate()
       const trace: string[] = []
@@ -314,11 +332,6 @@ describe('local CLI WebSocket', () => {
             return relay
           },
         } as unknown as LocalWsServerOptions['relayPool'],
-        async onRouteTask(this: LocalWsServerOptions) {
-          expect(this.machineId).toBe(machineId)
-          await first()
-          return { agentId: '', machineId: '', name: '', confidence: 0, reason: '', candidates: [], weighed: 0, machines: 0, via: '' }
-        },
       }))
       await onceOpen(ws)
       const connected = onceMessage(ws)
@@ -327,7 +340,7 @@ describe('local CLI WebSocket', () => {
       if (kind.endsWith('binary')) {
         ws.send(encodeTerminalLocal({ kind: TerminalBinaryKind.input, streamId, seq: 1, bytes: new Uint8Array([97]), compressed: false })!)
       } else {
-        ws.send(JSON.stringify({ type: kind === 'route task' ? 'route_task' : 'agents_list', payload: { requestId: 'first', text: 'route me' } }))
+        ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'first', text: 'route me' } }))
       }
       ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'second' } }))
       await entered.promise
@@ -339,6 +352,43 @@ describe('local CLI WebSocket', () => {
       ws.close()
     },
   )
+
+  it.each(['route_task', 'route_send'] as const)('answers %s off the ordered chain: a window\'s later frames are never held behind it', async (type) => {
+    // The answer is the devices' (the fleet's router), which may be in a process of their own: one that
+    // hangs must not hold the window's typing until the request times out.
+    const backend = new FakeBackend(), pending = gate(), entered = gate()
+    const trace: string[] = []
+    const held = async () => { trace.push('route started'); entered.resolve(); await pending.promise; trace.push('route answered') }
+    backend.handleLocalFrame = () => { trace.push('next') }
+    const ws = new WebSocket(await start(backend, {
+      async onRouteTask(this: LocalWsServerOptions) {
+        expect(this.machineId).toBe(machineId)
+        await held()
+        return { agentId: '', machineId: '', name: '', confidence: 0, reason: '', candidates: [], weighed: 0, machines: 0, via: '' }
+      },
+      async onRouteSend(this: LocalWsServerOptions) {
+        expect(this.machineId).toBe(machineId)
+        await held()
+        return { ok: true as const }
+      },
+    }))
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId, localProtocolVersion: 1 } }))
+    await connected
+    const answered = new Promise<Frame>((resolve) => ws.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString()) as Frame
+      if (frame.type === (type === 'route_task' ? 'route_result' : 'route_send_result')) resolve(frame)
+    }))
+    ws.send(JSON.stringify({ type, payload: { requestId: 'first', agentId: 'a1', text: 'route me' } }))
+    ws.send(JSON.stringify({ type: 'agents_list', payload: { requestId: 'second' } }))
+    await entered.promise
+    await vi.waitFor(() => expect(trace).toEqual(['route started', 'next']))
+    pending.resolve()
+    expect((await answered).payload).toMatchObject({ requestId: 'first' })
+    expect(trace).toEqual(['route started', 'next', 'route answered'])
+    ws.close()
+  })
 
   it.each(['local JSON', 'local binary', 'remote JSON', 'remote binary'] as const)(
     'closes the socket when %s dispatch fails', async (kind) => {
@@ -380,8 +430,7 @@ describe('local CLI WebSocket', () => {
       })
       const ws = new WebSocket(await start(backend, {
         autonomousEnv: 'test',
-        relayPool: { acquire, acquireIsolated: acquire } as unknown as LocalWsServerOptions['relayPool'],
-        shareRelay: { acquire } as unknown as LocalWsServerOptions['shareRelay'],
+        relayPool: { acquire, acquireIsolated: acquire, acquireShare: acquire } as unknown as LocalWsServerOptions['relayPool'],
       }))
       await onceOpen(ws)
       ws.send(JSON.stringify({ type: 'machine_select', payload: {
@@ -400,6 +449,34 @@ describe('local CLI WebSocket', () => {
     },
   )
 
+  // Watching a shared harness goes through the gateway's Share relay (gateway/share.ts): the window is told
+  // what the Share relay said, with the close it set (4403 the share ended, 1013 out of reach).
+  it.each([
+    ['a share that ended', new RelayConnectError('Sharing ended or invitation expired', 4403), [4403, 'Sharing ended or invitation expired']],
+    ['one out of reach', new RelayConnectError('The owner’s machine is offline.', 1013), [1013, 'The owner’s machine is offline.']],
+    ['one failing without a close', new Error('boom'), [1013, 'boom']],
+    ['one failing with no words', 'down', [1013, 'Sharing unavailable']],
+  ] as const)('closes a window watching %s with the close the Share relay gave', async (_name, error, expected) => {
+    const backend = new FakeBackend()
+    const ws = new WebSocket(await start(backend, {
+      autonomousEnv: 'test',
+      relayPool: { acquire: vi.fn(), acquireShare: vi.fn(async () => { throw error }) } as unknown as LocalWsServerOptions['relayPool'],
+    }))
+    await onceOpen(ws)
+    const closed = new Promise<[number, string]>((resolve) => ws.once('close', (code, reason) => resolve([code, reason.toString()])))
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'owner', localProtocolVersion: 1, shareId: 'share' } }))
+    expect(await closed).toEqual(expected)
+  })
+
+  it('refuses to watch a shared harness with no gateway to watch it through', async () => {
+    const backend = new FakeBackend()
+    const ws = new WebSocket(await start(backend, { autonomousEnv: 'test', relayPool: { acquire: vi.fn() } as unknown as LocalWsServerOptions['relayPool'] }))
+    await onceOpen(ws)
+    const closed = new Promise<[number, string]>((resolve) => ws.once('close', (code, reason) => resolve([code, reason.toString()])))
+    ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: 'owner', localProtocolVersion: 1, shareId: 'share' } }))
+    expect(await closed).toEqual([4403, 'Sharing is unavailable'])
+  })
+
   it.each(['owned', 'shared'] as const)('detaches a late %s relay after its window disconnects', async (kind) => {
     const backend = new FakeBackend(), pending = gate(), entered = gate(), disconnected = gate(), detach = vi.fn()
     const acquire = async () => {
@@ -409,8 +486,7 @@ describe('local CLI WebSocket', () => {
     }
     const ws = new WebSocket(await start(backend, {
       autonomousEnv: 'test',
-      relayPool: { acquire } as unknown as LocalWsServerOptions['relayPool'],
-      shareRelay: { acquire } as unknown as LocalWsServerOptions['shareRelay'],
+      relayPool: { acquire, acquireShare: acquire } as unknown as LocalWsServerOptions['relayPool'],
     }))
     server!.once('connection', (socket) => socket.once('close', disconnected.resolve))
     await onceOpen(ws)
@@ -960,7 +1036,7 @@ describe('local CLI WebSocket', () => {
     local = attachLocalWsServer(server, {
       machineId,
       backend,
-      onRouteSend: (agentId, text) => {
+      onRouteSend: async (agentId, text) => {
         sent.push({ agentId, text })
         return { ok: true as const }
       },
@@ -998,7 +1074,7 @@ describe('local CLI WebSocket', () => {
     local = attachLocalWsServer(server, {
       machineId,
       backend,
-      onRouteSend: () => ({ ok: false as const, machine: 'mac-mini', reason: 'the last request to it did not come back' }),
+      onRouteSend: async () => ({ ok: false as const, machine: 'mac-mini', reason: 'the last request to it did not come back' }),
     })
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
     const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/local-ws`
@@ -1022,6 +1098,51 @@ describe('local CLI WebSocket', () => {
     const ws = new WebSocket(url, ['legacy-client-label'])
     await onceOpen(ws)
     ws.close()
+  })
+
+  it('takes the core\'s own services by their token, whatever machine id they name', async () => {
+    // A signed-in core serves under its account's machine id; its services name this computer's.
+    const accepted: string[] = []
+    const receiveBinary = vi.fn()
+    let buffered: (() => number) | undefined
+    const services = {
+      accept: (service: string, token: string, sink: { buffered(): number }, _close: (code: number, reason: string) => void, welcome: () => void) => {
+        if (token !== 'boot-token') return null
+        accepted.push(service)
+        buffered = sink.buffered
+        welcome()
+        return { receive: vi.fn(), receiveBinary, closed: vi.fn() }
+      },
+    }
+    const url = await start(new FakeBackend(), { services })
+    const ws = new WebSocket(url)
+    await onceOpen(ws)
+    const connected = onceMessage(ws)
+    ws.send(JSON.stringify({
+      type: 'machine_select',
+      payload: { machineId: 'this-computer-id', localProtocolVersion: 1, role: 'service', service: 'search', token: 'boot-token' },
+    }))
+    await expect(connected).resolves.toMatchObject({ type: 'connected', payload: { machineId, service: 'search' } })
+    expect(accepted).toEqual(['search'])
+    // A service that carries terminals (the gateway) sends bytes on its link, and the core can ask how many
+    // of its own wait on the socket to it.
+    ws.send(Uint8Array.of(1, 2, 3))
+    await vi.waitFor(() => expect(receiveBinary).toHaveBeenCalledWith(new Uint8Array([1, 2, 3])))
+    expect(buffered?.()).toBe(0)
+    ws.close()
+
+    // The token is the check: a wrong one is refused, whichever machine id it names.
+    for (const named of [machineId, 'this-computer-id']) {
+      const wrong = new WebSocket(url)
+      await onceOpen(wrong)
+      const closed = new Promise<number>((resolve) => wrong.once('close', resolve))
+      wrong.send(JSON.stringify({
+        type: 'machine_select',
+        payload: { machineId: named, localProtocolVersion: 1, role: 'service', service: 'search', token: 'guessed' },
+      }))
+      await expect(closed).resolves.toBe(4401)
+    }
+    expect(accepted).toEqual(['search'])
   })
 
   it('rejects browser origins and machine-id mismatches', async () => {

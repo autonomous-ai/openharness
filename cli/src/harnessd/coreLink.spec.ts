@@ -8,6 +8,7 @@ class FakeChannel implements MasterChannel {
   private disconnect: Array<() => void> = []
   rss = 100
   parentPid = 4242
+  connected = true
   send?: (message: CoreMessage) => unknown = (message) => { this.sent.push(message) }
   once(_event: 'disconnect', listener: () => void): void { this.disconnect.push(listener) }
   on(_event: 'message', listener: (message: unknown) => void): void { this.messageListeners.push(listener) }
@@ -46,9 +47,13 @@ describe('connectToMaster', () => {
       link.startHeartbeat()
       const gone = vi.fn()
       link.onMasterGone(gone)
+      const update = vi.fn()
+      link.onUpdate(update)
+      channel.say({ type: 'harnessd:update', version: '9.9.9' })
       channel.leave()
       vi.advanceTimersByTime(60_000)
       expect(gone).not.toHaveBeenCalled()
+      expect(update).not.toHaveBeenCalled()
       expect(link.status()).toBeNull()
       link.close()
     }
@@ -93,10 +98,38 @@ describe('connectToMaster', () => {
     expect(channel.sent.filter((message) => message.type === 'harnessd:heartbeat')).toHaveLength(3)
   })
 
+  it('asks its master for an experiment\'s process, and asks nothing without one', () => {
+    const channel = new FakeChannel()
+    connectToMaster(channel, supervised).want('orchestrator')
+    connectToMaster(channel, {}).want('orchestrator')
+    expect(channel.sent).toEqual([{ type: 'harnessd:want', service: 'orchestrator' }])
+  })
+
   it('says why when start-up gave way to safe mode', () => {
     const channel = new FakeChannel()
     connectToMaster(channel, supervised).ready('no tmux')
     expect(channel.sent).toEqual([{ type: 'harnessd:ready', safeMode: 'no tmux' }])
+  })
+
+  it('hears an update the master asks for, kept until something listens', async () => {
+    const channel = new FakeChannel()
+    const link = connectToMaster(channel, supervised)
+    // Asked before start-up got as far as listening: not lost.
+    channel.say({ type: 'harnessd:update', version: '9.9.8' })
+    channel.say({ type: 'harnessd:update', version: '9.9.9' })
+    const update = vi.fn()
+    link.onUpdate(update)
+    expect(update).not.toHaveBeenCalled()
+    await Promise.resolve()
+    expect(update.mock.calls).toEqual([['9.9.9']])
+    channel.say({ type: 'harnessd:update', version: '9.9.10' })
+    expect(update.mock.calls).toEqual([['9.9.9'], ['9.9.10']])
+    expect(link.status()).toBeNull()
+    // Nothing kept, nothing said to a listener that comes later.
+    const later = vi.fn()
+    link.onUpdate(later)
+    await Promise.resolve()
+    expect(later).not.toHaveBeenCalled()
   })
 
   it('keeps what the master says about itself, and hears when the master goes', () => {
@@ -113,6 +146,34 @@ describe('connectToMaster', () => {
     expect(gone).toHaveBeenCalledOnce()
   })
 
+  // runForeground subscribes long after the core has bound: a master killed in between went unnoticed,
+  // and its core ran on for good, holding the port.
+  it('hears a master that went before anyone asked, and only once', async () => {
+    const channel = new FakeChannel()
+    const link = connectToMaster(channel, supervised)
+    link.bound(1)
+    channel.leave()
+    const gone = vi.fn()
+    link.onMasterGone(gone)
+    expect(gone).not.toHaveBeenCalled()
+    await Promise.resolve()
+    expect(gone).toHaveBeenCalledOnce()
+    const later = vi.fn()
+    link.onMasterGone(later)
+    await Promise.resolve()
+    expect(later).toHaveBeenCalledOnce()
+    expect(gone).toHaveBeenCalledOnce()
+  })
+
+  it('hears a master whose channel had already closed when the core started', async () => {
+    const channel = new FakeChannel()
+    channel.connected = false
+    const gone = vi.fn()
+    connectToMaster(channel, supervised).onMasterGone(gone)
+    await Promise.resolve()
+    expect(gone).toHaveBeenCalledOnce()
+  })
+
   it('survives a send on a channel the master already closed', () => {
     const channel = new FakeChannel()
     channel.send = () => { throw new Error('ERR_IPC_CHANNEL_CLOSED') }
@@ -123,6 +184,7 @@ describe('connectToMaster', () => {
   it('uses this process by default, which no master started', () => {
     expect(connectToMaster().supervised).toBe(false)
     expect(processChannel.memoryUsage().rss).toBeGreaterThan(0)
+    expect(processChannel.connected).toBe(process.connected)
     expect(processChannel.parentPid).toBe(process.ppid)
   })
 

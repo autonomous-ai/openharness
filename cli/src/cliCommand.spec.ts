@@ -1,11 +1,13 @@
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { createServer, type RequestListener, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { listenLocalSocket, localSocketPath } from './lib/localSocket.js'
+import { fakePlatform } from './testing/fakePlatform.js'
+import { alive, SpawnedRuns } from './testing/spawnedRuns.js'
 
 const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CLI_SOURCE = join(CLI_ROOT, 'src', 'cli.ts')
@@ -13,8 +15,19 @@ const TSX = join(CLI_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 const dirs: string[] = []
 const children: ChildProcess[] = []
 const servers: Server[] = []
+/**
+ * Every CLI run, each in a process group of its own, ended with everything it started at teardown and
+ * at its deadline (testing/spawnedRuns.ts). Twelve `cli.ts start` runs of this file that never exited
+ * were found nine hours later, one spinning a core: tsx runs the CLI in a child of its own, a dev-mode
+ * start becomes the daemon, and nothing killed either when a test timed out. The daemon a run's pid
+ * file names counts as the run's when it is this checkout's CLI.
+ */
+const runs = new SpawnedRuns((command) => command.includes(CLI_SOURCE))
+// A worker that exits with a run still going (a cancelled run) takes the run's group with it.
+process.once('exit', () => runs.killAllSync())
 
 afterEach(async () => {
+  const { leftBehind, survivors } = await runs.endAll()
   for (const child of children.splice(0)) {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
   }
@@ -23,6 +36,10 @@ afterEach(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()))
   }
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  // The guard: a run that left a process behind fails the test that ran it, even though teardown has
+  // ended it by now. Otherwise the next leak is found the way the last one was, hours later.
+  if (survivors.length) throw new Error(`processes this test started would not die:\n${survivors.join('\n')}`)
+  if (leftBehind.length) throw new Error(`a CLI run left processes behind:\n${leftBehind.join('\n')}`)
 })
 
 /** A throwaway HOME for one CLI run; every path the CLI writes is under it. */
@@ -58,21 +75,19 @@ function envFor(root: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv 
   }
 }
 
-function run(...args: string[]) {
-  return spawnSync(process.execPath, [TSX, CLI_SOURCE, ...args], { cwd: CLI_ROOT, encoding: 'utf8', env: envFor(freshRoot()) })
+/** `harness [args]` under a throwaway HOME, to the end. Never blocking this process: a test that also
+ *  SERVES the CLI something (a manifest on the loopback) has to keep its own event loop free while the
+ *  child asks for it. One that has not ended within 15s is ended, everything it started with it, and
+ *  comes back with `timedOut`. */
+async function runAsync(root: string, args: string[], extra: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
+  const { status, stdout, stderr, timedOut } = await runs.complete(root, [TSX, CLI_SOURCE, ...args], {
+    cwd: CLI_ROOT, env: envFor(root, extra), label: `harness ${args.join(' ')}`,
+  })
+  return { status, stdout, stderr, timedOut }
 }
 
-/** The same run, without blocking this process: a test that also SERVES the CLI something (a manifest on
- *  the loopback) has to keep its own event loop free while the child asks for it. */
-function runAsync(root: string, args: string[], extra: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, ...args], { cwd: CLI_ROOT, env: envFor(root, extra), stdio: ['ignore', 'pipe', 'pipe'] })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    child.on('close', (status) => resolve({ status, stdout, stderr }))
-  })
+function run(...args: string[]) {
+  return runAsync(freshRoot(), args, {})
 }
 
 /** A signed-in computer: `start` refuses without one, before it looks at anything else. */
@@ -98,7 +113,9 @@ function seedRunningDaemon(root: string): { pid: number; exited: Promise<void> }
 async function daemonStatusServer(root: string, machineId: string): Promise<number> {
   const handler: RequestListener = (_req, res) => {
     res.setHeader('content-type', 'application/json')
-    res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [] }))
+    // A daemon says its pid (and, under a master, the master's), as every release with the socket has:
+    // start-up tells a live daemon from the core of a master that is gone by it (lib/localSocket.ts).
+    res.end(JSON.stringify({ machineId, version: '0.0.0-test', sessions: [], pid: process.pid, corePid: process.pid }))
   }
   const server = createServer(handler)
   servers.push(server)
@@ -120,9 +137,9 @@ describe('CLI login/start command contract', () => {
     // Run in its own process group and killed as one: a dev-mode start becomes the daemon itself, and
     // tsx wraps it in a child of its own.
     const root = freshRoot()
-    const child = spawn(process.execPath, [TSX, CLI_SOURCE, 'start'], {
+    const started = runs.start(root, [TSX, CLI_SOURCE, 'start'], {
       cwd: CLI_ROOT,
-      detached: true,
+      label: 'harness start (signed out)',
       env: envFor(root, {
         // The kernel reserves a free port atomically; a random choice can hit another test.
         PORT: '0',
@@ -130,46 +147,91 @@ describe('CLI login/start command contract', () => {
         // Startup's sign-in contract does not need a runtime download or the developer's Grid.
         HARNESS_GRID_BIN: join(root, 'grid-unavailable'),
       }),
-      stdio: ['ignore', 'pipe', 'pipe'],
     })
-    children.push(child)
-    let said = ''
-    child.stdout?.on('data', (chunk: Buffer) => { said += chunk.toString() })
-    child.stderr?.on('data', (chunk: Buffer) => { said += chunk.toString() })
+    const said = () => started.stdout + started.stderr
     const deadline = Date.now() + 25_000
-    while (Date.now() < deadline && !/serving this computer only|Sign in to Harness in your browser/.test(said)) {
+    while (Date.now() < deadline && !/serving this computer only|Sign in to Harness in your browser/.test(said())) {
       await new Promise((r) => setTimeout(r, 100))
     }
     try {
-      expect(said).toContain('not signed in — serving this computer only')
-      expect(said).not.toContain('Sign in to Harness in your browser')
-      expect(said).not.toContain('dialing')   // no backend leg is attempted without a session
+      expect(said()).toContain('not signed in — serving this computer only')
+      expect(said()).not.toContain('Sign in to Harness in your browser')
+      expect(said()).not.toContain('dialing')   // no backend leg is attempted without a session
     } finally {
-      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* already gone */ }
+      // Running is what this start should be doing; ended here, it is not a leak.
+      await runs.end(started)
     }
   }, 40_000)
 
-  it('rejects the removed join command with the two-step migration', () => {
-    const result = run('join')
+  it('rejects the removed join command with the two-step migration', async () => {
+    const result = await run('join')
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('`harness join` has been removed.')
     expect(result.stderr).toContain('`harness login`, then `harness start`')
-  })
+  }, 20_000)
 
-  it('no longer has an analytics command (usage metering upload was removed)', () => {
-    const result = run('analytics')
+  it('no longer has an analytics command (usage metering upload was removed)', async () => {
+    const result = await run('analytics')
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('Unknown command: analytics')
-  })
+  }, 20_000)
 
-  it('returns a nonzero status for an unknown command', () => {
-    const result = run('not-a-command')
+  it('returns a nonzero status for an unknown command', async () => {
+    const result = await run('not-a-command')
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('Unknown command: not-a-command')
-  })
+  }, 20_000)
+})
+
+describe('the processes this spec starts', () => {
+  // The guard's own test: what teardown above relies on, shown on runs built to leak. Each uses a
+  // SpawnedRuns of its own, so the leaks it makes on purpose are not this file's teardown's to report.
+  const idle = `['-e', 'setInterval(() => {}, 1000)']`
+
+  it('a run that exits leaving processes behind is caught, and teardown ends every one', async () => {
+    const guard = new SpawnedRuns((command) => command.includes('--guard-daemon'))
+    const root = freshRoot()
+    mkdirSync(join(root, 'data'), { recursive: true })
+    // Three ways a run leaves a process: a child in its group, a child in a session of its own that
+    // names the root, and a daemon in a session of its own that only the pid file names.
+    const script = `
+      const { spawn } = require('node:child_process')
+      const kept = spawn(process.execPath, ${idle}, { stdio: 'ignore' })
+      const orphan = spawn(process.execPath, [...${idle}, ${JSON.stringify(root)}], { stdio: 'ignore', detached: true })
+      const daemon = spawn(process.execPath, [...${idle}, '--', '--guard-daemon'], { stdio: 'ignore', detached: true })
+      require('node:fs').writeFileSync(${JSON.stringify(join(root, 'data', 'adapter.pid'))}, daemon.pid + '\\n')
+      console.log(JSON.stringify([kept.pid, orphan.pid, daemon.pid]))
+      for (const child of [kept, orphan, daemon]) child.unref()
+    `
+    const result = await guard.complete(root, ['-e', script], { label: 'leaky' })
+    expect(result.status, result.stderr).toBe(0)
+    const pids = JSON.parse(result.stdout) as number[]
+    expect(pids.every(alive)).toBe(true)
+    expect(guard.belonging(result.run).map((row) => row.pid).sort()).toEqual([...pids].sort())
+
+    const { leftBehind, survivors } = await guard.endAll()
+    expect(leftBehind).toHaveLength(3)
+    expect(survivors).toEqual([])
+    expect(pids.filter(alive)).toEqual([])
+  }, 30_000)
+
+  it('a run that does not end is ended at its deadline, with what it started, and is no leak', async () => {
+    const guard = new SpawnedRuns()
+    const root = freshRoot()
+    const script = `
+      const child = require('node:child_process').spawn(process.execPath, ${idle}, { stdio: 'ignore' })
+      console.log(child.pid)
+      setInterval(() => {}, 1000)
+    `
+    const result = await guard.complete(root, ['-e', script], { ms: 2_000 })
+    expect(result.timedOut).toBe(true)
+    expect(alive(Number(result.stdout.trim()))).toBe(false)
+    expect(alive(result.run.pgid)).toBe(false)
+    expect(await guard.endAll()).toEqual({ leftBehind: [], survivors: [] })
+  }, 30_000)
 })
 
 describe('start --repair beside a running daemon', () => {
@@ -297,4 +359,67 @@ describe('start beside a daemon that serves another account', () => {
     await expect(Promise.race([daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('alive'), 300))]))
       .resolves.toBe('alive')
   }, 20_000)
+})
+
+describe('harness service, through the CLI', () => {
+  // The whole command as a person runs it, on a throwaway home with fake launchctl or systemctl ALONE
+  // on PATH: nothing can reach this machine's launchd or systemd, or the person's daemon.
+  const platform = process.platform === 'darwin' ? 'launchd' : 'systemd'
+  const standIns: number[] = []
+  afterEach(() => { for (const pid of standIns.splice(0)) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } } })
+
+  /** A process standing in for the master the platform starts. Not this test's child, so it is reaped
+   *  the moment the fake platform stops it. */
+  function standIn(): number {
+    const spawned = spawnSync(process.execPath, ['-e', `
+      const c = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: 'ignore' })
+      c.unref(); console.log(c.pid)
+    `], { encoding: 'utf8' })
+    const pid = Number(spawned.stdout.trim())
+    standIns.push(pid)
+    return pid
+  }
+
+  it.skipIf(platform === 'systemd' && process.platform !== 'linux')('installs, reports, stops through the platform and uninstalls', async () => {
+    const root = freshRoot()
+    const master = standIn()
+    const fake = fakePlatform(join(root, 'bin'), { pidFile: join(root, 'data', 'adapter.pid'), nextPid: master, killable: [master] })
+    mkdirSync(join(root, 'cli'), { recursive: true })
+    writeFileSync(join(root, 'cli', 'cli.js'), '// the installed bundle\n')
+    const extra = { PATH: fake.bin, XDG_CONFIG_HOME: join(root, '.config') }
+    const file = platform === 'launchd'
+      ? join(root, 'Library', 'LaunchAgents', 'ai.autonomous.harness.harnessd.plist')
+      : join(root, '.config', 'systemd', 'user', 'harnessd.service')
+
+    const before = await runAsync(root, ['service', 'status', '--json'], extra)
+    expect(before.status, before.stderr).toBe(0)
+    expect(JSON.parse(before.stdout)).toMatchObject({ supported: true, platform, file, installed: false, registered: false })
+
+    const install = await runAsync(root, ['service', 'install'], extra)
+    expect(install.status, install.stderr).toBe(0)
+    expect(install.stdout).toContain(`✓ harnessd runs under ${platform} (pid ${master})`)
+    expect(readFileSync(file, 'utf8')).toContain(join(root, 'data', 'harness.log'))
+    expect(readFileSync(file, 'utf8')).toContain(join(root, 'cli', 'cli.js'))
+
+    const status = await runAsync(root, ['service', 'status'], extra)
+    expect(status.stdout).toContain(`● running (pid ${master})`)
+
+    // What the master writes when the platform runs it; `harness status` names its supervisor.
+    writeFileSync(join(root, 'data', 'harnessd-status.json'), JSON.stringify({ state: 'running', masterPid: master, platform }))
+    const machine = await runAsync(root, ['status'], extra)
+    expect(machine.stdout).toMatch(new RegExp(`supervisor +${platform} · starts at login, comes back if it dies`))
+
+    const stop = await runAsync(root, ['stop'], extra)
+    expect(stop.stdout).toContain(`machine stopped (pid ${master})`)
+    expect(fake.calls().map((call) => call.join(' '))).toContainEqual(platform === 'launchd'
+      ? expect.stringMatching(/^launchctl bootout gui\/\d+\/ai\.autonomous\.harness\.harnessd$/)
+      : 'systemctl --user kill --kill-who=main --signal=SIGTERM harnessd.service')
+    expect(fake.state().pid).toBeNull()
+
+    const uninstall = await runAsync(root, ['service', 'uninstall'], extra)
+    expect(uninstall.status, uninstall.stderr).toBe(0)
+    expect(uninstall.stdout).toContain(`no longer runs harnessd`)
+    expect(uninstall.stdout).not.toContain('starting it the usual way')
+    expect(existsSync(file)).toBe(false)
+  }, 60_000)
 })

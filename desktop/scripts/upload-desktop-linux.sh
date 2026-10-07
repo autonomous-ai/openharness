@@ -230,7 +230,8 @@ cat > "$APPDIR/harness.desktop" <<EOF
 Type=Application
 Name=Harness
 Comment=Attach terminals to the agents running on your Harness machines
-Exec=harness
+Exec=harness %u
+MimeType=x-scheme-handler/harness;
 Icon=harness
 Categories=Development;
 Terminal=false

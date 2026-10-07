@@ -30,12 +30,23 @@ describe('asking tmux for a pane that is not in its list', () => {
     expect(await lookupPaneEngineProcess('%9', 'claude')).toEqual({ ok: false, unknown: false, reason: 'tmux has no pane %9' })
   })
 
-  it('is unknown when tmux could not be asked: no server on this socket, or a timeout', async () => {
+  it('is gone when no tmux server is running, however tmux says it: with no server there is no pane', async () => {
+    // The inventory already read this as no panes; this check reading it as "could not ask" kept every
+    // agent active after the server died (e2e/machine.e2e.ts).
     answer.err = new Error('Command failed')
     answer.stderr = 'no server running on /tmp/tmux-501/default\n'
-    expect(await lookupPaneEngineProcess('%9', 'claude')).toEqual({ ok: false, unknown: true, reason: 'tmux could not resolve pane %9' })
+    expect(await lookupPaneEngineProcess('%9', 'claude')).toEqual({ ok: false, unknown: false, reason: 'tmux has no pane %9' })
+    // What `kill-server`, a tmux crash and a reboot leave: the socket file itself gone.
+    answer.stderr = 'error connecting to /tmp/tmux-501/default (No such file or directory)\n'
+    expect(await lookupPaneEngineProcess('%9', 'claude')).toEqual({ ok: false, unknown: false, reason: 'tmux has no pane %9' })
+  })
+
+  it('is unknown when tmux could not be asked: a timeout, or a socket it may not use', async () => {
     answer.err = Object.assign(new Error('timed out'), { killed: true })
     answer.stderr = ''
+    expect(await lookupPaneEngineProcess('%9', 'claude')).toEqual({ ok: false, unknown: true, reason: 'tmux could not resolve pane %9' })
+    answer.err = new Error('Command failed')
+    answer.stderr = `error connecting to ${process.cwd()} (Permission denied)\n`
     expect(await lookupPaneEngineProcess('%9', 'claude')).toMatchObject({ unknown: true })
   })
 

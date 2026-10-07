@@ -89,6 +89,17 @@ describe('Enter resumes stopped work', () => {
 
 
 describe('resume runtime verification', () => {
+  // Another client stopped or deleted the live harness while this one checked its runtime: the row this
+  // request was about is gone, and nothing it learned about it may be acted on.
+  it('reports the harness changed when its live row is gone after the runtime check, and acts on nothing', async () => {
+    const deps = fixture()
+    deps.live.mockReturnValue(saved)
+    deps.checkLive.mockImplementation(async () => { deps.live.mockReturnValue(undefined); return { state: 'gone', reason: 'fixture' } })
+    await expect(resumeStoppedAgent(deps)).resolves.toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(deps.retain).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+
   it.each(['unknown', 'gone'] as const)('never calls a %s registry row a successful attachment', async state => {
     const deps = fixture()
     deps.live.mockReturnValue(saved)
@@ -149,7 +160,7 @@ describe('exact conversation readiness', () => {
       current: vi.fn(() => true),
       session: () => row,
       process: vi.fn(async (): Promise<typeof process | null> => process),
-      pane: vi.fn(async (): Promise<{ dead: boolean; engineExit?: number } | null> => ({ dead: false })),
+      pane: vi.fn(async (): Promise<{ dead: boolean; engineExit?: number } | 'gone' | 'unknown'> => ({ dead: false })),
       sleep: vi.fn(async (ms: number) => { now += ms }),
       now: () => now,
       budgetMs: 1000,
@@ -206,10 +217,17 @@ describe('exact conversation readiness', () => {
       .resolves.toMatchObject({ ok: true, resumed: false })
   })
 
-  it.each([null, { dead: true }, { dead: false, engineExit: 1 }])('reports early exit without a fresh fallback: %s', async pane => {
+  it.each(['gone' as const, { dead: true }, { dead: false, engineExit: 1 }])('reports early exit without a fresh fallback: %s', async pane => {
     const deps = readiness()
     deps.pane.mockResolvedValue(pane)
     await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: false, error: 'RESUME_FAILED' })
+  })
+  it('asks again when tmux could not say whether the pane is there, and confirms once it can', async () => {
+    // A read that timed out while the daemon's event loop was held used to fail the resume on the spot.
+    const deps = readiness()
+    deps.pane.mockResolvedValueOnce('unknown')
+    await expect(waitForResumedAgent(saved, deps)).resolves.toMatchObject({ ok: true, resumed: true })
+    expect(deps.sleep).toHaveBeenCalledWith(250)
   })
   // A row whose bound conversation is no longer the one being resumed is still refused — that check
   // is on the row, ahead of any proof, and is what `registry.register`'s mismatch guard feeds.
@@ -289,7 +307,7 @@ describe('resume refusal and readiness edge cases', () => {
     expect(result.ok).toBe(mode === 'missing launch' || mode === 'different start')
   })
   it('uses the production clock and timeout defaults', async () => {
-    expect(await waitForResumedAgent(saved, { current: () => false, session: () => undefined, process: async () => null, pane: async () => null, sleep: async () => {} })).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(await waitForResumedAgent(saved, { current: () => false, session: () => undefined, process: async () => null, pane: async () => 'gone', sleep: async () => {} })).toMatchObject({ error: 'AGENT_CHANGED' })
   })
 })
 

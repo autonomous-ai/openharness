@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -19,6 +20,13 @@ import uuid
 PACMAN_CONFIG = Path('/etc/pacman.conf')
 UPDATE_RECEIPT = Path('/var/lib/harness-os/update.json')
 CHECKPOINTS = Path('/.snapshots')
+
+
+def boot_module():
+    spec = importlib.util.spec_from_file_location('harness_boot_profile', Path(__file__).with_name('boot_profile.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run(*args, capture=False):
@@ -79,7 +87,7 @@ def validate_checkpoint(meta, root_uuid):
         raise ValueError('Checkpoint belongs to a different root filesystem.')
     if not re.fullmatch(r'[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}', meta.get('boot_uuid', '')):
         raise ValueError('Checkpoint has an invalid boot partition identifier.')
-    required = {'vmlinuz-linux-lts', 'initramfs-linux-lts.img', 'grub/grub.cfg'}
+    required = boot_module().boot_files(meta.get('platform', 'pc'))
     if not required.issubset(meta.get('boot_sha256', {})):
         raise ValueError('Checkpoint is missing the kernel, initramfs or boot configuration.')
 
@@ -134,6 +142,11 @@ def checkpoint(reason='manual', pacman_hook=False):
     if pacman_hook and pending_update():
         raise ValueError('A full system update did not finish. Run sudo hn-os update to complete it before changing packages, or recover its checkpoint from the live USB.')
     info = installed()
+    platform = boot_module().selected()
+    if info.get('platform', 'pc') != platform['id']:
+        raise ValueError('The installed system and its boot platform differ.')
+    if platform['id'] == 'apple-t2':
+        boot_module().module('t2_install').retained()
     if Path('/var/lib/pacman/db.lck').exists() and not pacman_hook:
         raise ValueError('Wait for the active package transaction before making a checkpoint.')
     name = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]
@@ -146,7 +159,7 @@ def checkpoint(reason='manual', pacman_hook=False):
         shutil.copytree('/boot', pending / 'boot')
         metadata = {'name': name, 'created_at': datetime.now(timezone.utc).isoformat(),
                     'reason': reason, 'root_uuid': info['root_uuid'], 'boot_uuid': info['boot_uuid'],
-                    'boot_sha256': boot_hashes(pending / 'boot')}
+                    'boot_sha256': boot_hashes(pending / 'boot'), 'platform': platform['id']}
         validate_checkpoint(metadata, info['root_uuid'])
         write_json(pending / 'checkpoint.json', metadata)
         run('sync')
@@ -171,7 +184,7 @@ def advance_snapshot(config, date):
     return pattern.sub(lambda match: match.group(1) + date + match.group(3), config)
 
 
-def update(date):
+def update(date, *, noninteractive=False):
     # Pin every repository to the same date, and perform a full upgrade. Never mix
     # a newly synced package database with an intentionally old installed base.
     config = PACMAN_CONFIG
@@ -196,7 +209,19 @@ def update(date):
     temporary.write_text(advanced)
     temporary.chmod(stat.S_IMODE(config.stat().st_mode))
     temporary.replace(config)
-    result = subprocess.run(['pacman', '-Syyu'])
+    # Both the CLI and the public release updater already hold the operation
+    # lock and saved the recovery point. Only this transaction skips our hook.
+    command = ['pacman', '-Syyu']
+    if noninteractive:
+        command.append('--noconfirm')
+    result = subprocess.run(command, stdin=subprocess.DEVNULL if noninteractive else None,
+                            env=dict(os.environ, HN_OS_UPDATE_CHECKPOINT='1'))
+    if result.returncode == 0 and boot_module().selected()['id'] == 'apple-t2':
+        # Package updates must not replace Apple board data with generic radio
+        # fallbacks. Keep the saved private bundle in the root snapshot too.
+        boot_module().restore_firmware()
+        run('mkinitcpio', '-P')
+        run('grub-mkconfig', '-o', '/boot/grub/grub.cfg')
     receipt.update(finished_at=datetime.now(timezone.utc).isoformat(), exit_status=result.returncode)
     write_json(UPDATE_RECEIPT, receipt)
     if result.returncode:
@@ -249,6 +274,10 @@ def recover(device, name=None):
             meta = read_json(chosen / 'checkpoint.json')
             actual_uuid = run('blkid', '-s', 'UUID', '-o', 'value', device, capture=True).strip()
             validate_checkpoint(meta, actual_uuid)
+            if boot_module().selected(chosen / 'root')['id'] != meta.get('platform', 'pc'):
+                raise ValueError('Checkpoint root has a different boot platform.')
+            if meta.get('platform', 'pc') == 'apple-t2':
+                boot_module().module('t2_install').retained(chosen / 'root')
             if boot_hashes(chosen / 'boot') != meta['boot_sha256']:
                 raise ValueError('Checkpoint boot-file checksums do not match. Nothing restored.')
             boot_device = Path('/dev/disk/by-uuid') / meta['boot_uuid']
@@ -323,7 +352,6 @@ def main():
         if args.command == 'checkpoint':
             checkpoint('before-packages' if args.pacman_hook else 'manual', args.pacman_hook)
         elif args.command == 'update':
-            os.environ['HN_OS_UPDATE_CHECKPOINT'] = '1'
             update(args.snapshot)
         else:
             recover(args.device, args.checkpoint)

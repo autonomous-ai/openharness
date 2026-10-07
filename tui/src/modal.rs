@@ -517,14 +517,15 @@ fn tmux_group(name: &str) -> &'static str {
 }
 
 /// The command list as it shows: hn's own commands and one row for tmux's — searched, tmux's too,
-/// after hn's (their tier); [in_tmux] (Enter on that row): tmux's alone, grouped.
+/// after hn's (their tier); [in_tmux] (Enter on that row): tmux's alone, grouped. The Panes
+/// commands show only to a search: a harness is a pane already, and their keys stay as they are.
 pub fn command_rows_for(app: &App, searching: bool, in_tmux: bool) -> Vec<Row> {
     let all = command_rows(app);
     if in_tmux { return all.into_iter().filter(|r| r.id.starts_with("tmux:")).collect() }
     let n = crate::commands::COMMANDS.len();
     let more = Row::new("cmd:tmux-commands", "tmux commands…").extra("tmux every command")
         .detail(vec![span(format!("every tmux command, grouped — {n} of them"), fg(theme::MUTED))]).group("Settings & help");
-    let (own, tmux): (Vec<Row>, Vec<Row>) = all.into_iter().partition(|r| r.id.starts_with("cmd:"));
+    let (own, tmux): (Vec<Row>, Vec<Row>) = all.into_iter().filter(|r| searching || r.group.as_deref() != Some("Panes")).partition(|r| r.id.starts_with("cmd:"));
     // (The row for tmux's after hn's own settings, before Close hn.)
     let at = own.iter().position(|r| r.id == "cmd:quit").unwrap_or(own.len());
     let mut rows = own;
@@ -679,12 +680,15 @@ pub fn theme_sections(app: &App) -> Vec<Row> {
         // C-b % and C-b " choose it each time, and a harness hn opens splits by the pane's shape —
         // `layout_orientation` in tui.toml, or @hn-layout, where you want one way always. Nor a
         // layout: C-b Space, C-b M-1…5 and Commands → Layout… lay the panes out now.)
+        sec("section:theme", "Theme", "bundled terminal themes", if theme.is_empty() { "terminal" } else { &theme }),
         sec("section:status", "Pane titles", "pane-border-status", &status),
         sec("section:focus", "Focus", "focus_style", focus),
-        sec("section:theme", "Theme", "bundled terminal themes", if theme.is_empty() { "terminal" } else { &theme }),
         // ── status bar ──
         sec("section:bar", "Status bar", "status_bar", status_bar_of(app)),
         sec("section:boxes", "Borders", "every pane its own box", if border_style_of(app) == "box" { "on" } else { "off" }),
+        // ── status bar tabs ──
+        sec("section:tab", "Tab", "how the current tab is marked", tab_active_of(app)),
+        sec("section:tabname", "Tab name", "how a tab's name is shown", tab_name_of(app)),
         // (Keys are Keybinds', a panel of their own in Commands.)
     ]
 }
@@ -696,6 +700,12 @@ fn status_bar_of(app: &App) -> &'static str { match app.options.status_bar() { "
 
 /// How panes are set apart: `box` unless `@hn-border line`.
 fn border_style_of(app: &App) -> &'static str { app.options.border_style() }
+
+/// How the current tab is marked: `star` (default) | `filled` (`@hn-window-active`).
+fn tab_active_of(app: &App) -> &'static str { if app.options.get("@hn-window-active", "", None).as_deref() == Some("filled") { "filled" } else { "star" } }
+
+/// A tab's name source: `tmux` (default) | `pane` (`@hn-window-name`).
+fn tab_name_of(app: &App) -> &'static str { if app.options.get("@hn-window-name", "", None).as_deref() == Some("pane") { "pane" } else { "tmux" } }
 
 /// The look/theme picker, level two: the options of one section. Enter on one applies it (and the
 /// ▼ moves to it); Left/Esc returns to the section list.
@@ -738,6 +748,12 @@ pub fn theme_options(app: &App, section: &str) -> Vec<Row> {
         "boxes" => { let cur = border_style_of(app);
             [("box", "on", "every pane its own box"), ("line", "off", "tmux's lines between panes")]
                 .iter().map(|(v, label, hint)| opt(format!("border_style:{v}"), label, cur == *v, hint)).collect() }
+        "tab" => { let cur = tab_active_of(app);
+            [("star", "star", "the current tab is marked *"), ("filled", "filled", "the current tab is filled (inverted)")]
+                .iter().map(|(v, label, hint)| opt(format!("window_active:{v}"), label, cur == *v, hint)).collect() }
+        "tabname" => { let cur = tab_name_of(app);
+            [("tmux", "tmux", "the window's short name"), ("pane", "pane", "the window's full name")]
+                .iter().map(|(v, label, hint)| opt(format!("window_name:{v}"), label, cur == *v, hint)).collect() }
         _ => vec![],
     }
 }
@@ -825,9 +841,9 @@ mod theme_row_tests {
         let app = app();
         let rows = theme_sections(&app);
         let ids: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(ids, vec!["section:status", "section:focus", "section:theme",
+        assert_eq!(ids, vec!["section:theme", "section:status", "section:focus",
             // ── status bar ──
-            "section:bar", "section:boxes"]);
+            "section:bar", "section:boxes", "section:tab", "section:tabname"]);
         // Each section shows its current value and opens onto a non-empty option list.
         assert!(rows.iter().all(|r| !r.right.is_empty()), "each section shows a value");
         for r in &rows {
@@ -872,6 +888,28 @@ mod theme_row_tests {
         assert!(theme_options(&app, "split").is_empty());
     }
 
+    #[test]
+    fn the_tab_and_tab_name_sections_list_their_choices() {
+        let a0 = app();
+        let tab_rows = theme_options(&a0, "tab");
+        let tab_ids: Vec<&str> = tab_rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(tab_ids, vec!["window_active:star", "window_active:filled"]);
+        let name_rows = theme_options(&a0, "tabname");
+        let name_ids: Vec<&str> = name_rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(name_ids, vec!["window_name:tmux", "window_name:pane"]);
+        // The mark follows the option in use.
+        let mut a1 = app();
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let _ = a1.options.set("@hn-window-active", Some("filled"), &global, "", 0);
+        let filled = theme_options(&a1, "tab");
+        let idx = filled.iter().position(|r| r.id == "window_active:filled").unwrap();
+        assert!(filled[idx].lead.iter().any(|s| s.content.as_ref() == "✓ "));
+        let _ = a1.options.set("@hn-window-name", Some("pane"), &global, "", 0);
+        let pane = theme_options(&a1, "tabname");
+        let idx = pane.iter().position(|r| r.id == "window_name:pane").unwrap();
+        assert!(pane[idx].lead.iter().any(|s| s.content.as_ref() == "✓ "));
+    }
+
     // ── keys ──
 
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -906,6 +944,9 @@ mod theme_row_tests {
         let own: Vec<&Row> = rows.iter().filter(|r| r.id.starts_with("cmd:")).collect();
         assert!(rows.iter().all(|r| r.id.starts_with("cmd:")), "tmux's are behind their one row");
         assert!(own.iter().any(|r| r.id == "cmd:tmux-commands"));
+        // The Panes commands only to a search (a harness is a pane already).
+        assert!(!rows.iter().any(|r| r.group.as_deref() == Some("Panes")), "no Panes until searched");
+        assert!(command_rows_for(&app, true, false).iter().any(|r| r.id == "cmd:split-right"), "searched, Split right is there");
         let inside = command_rows_for(&app, false, true);
         assert!(inside.iter().all(|r| r.id.starts_with("tmux:")), "inside: tmux's only");
         let tmux: Vec<&Row> = inside.iter().collect();

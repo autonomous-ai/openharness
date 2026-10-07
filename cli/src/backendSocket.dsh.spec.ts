@@ -1,27 +1,50 @@
-// dsh_list, dsh_install and dsh_remove through the socket a local client (the desktop app) talks to:
-// the replies it gets, the status it is pushed, and what it gets when this daemon cannot do it.
+// dsh_list, dsh_install and dsh_remove through the socket a local client (the desktop app) talks to,
+// answered by the store service (services/store.ts) the way the daemon runs it: the replies the client
+// gets, the status it is pushed, and what it gets while the store is off.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
+import { relaySocket } from './testing/relaySocket.js'
+import { bindLaunchRequests } from './testing/socketCore.js'
 import { env } from './config/env.js'
+import { emptyPorts } from './core/api.js'
+import { createServiceHost } from './core/serviceHost.js'
+import { refreshDshRegistry } from './dsh/catalog.js'
 import { dshInstallDir, invalidateInstalledDsh, upsertInstalledRecord } from './dsh/installed.js'
 import { resetBundledDshRegistry } from './dsh/registry.js'
+import { dshListRows } from './dsh/wire.js'
+import { STORE_REQUESTS, startStore, type StoreDeps } from './services/store.js'
+import { fakeCore } from './testing/fakeCore.js'
 
 describe('the DSH requests on the local socket', () => {
   let socket: BackendSocket
   let frames: Array<{ type: string; payload: Record<string, unknown> }>
   let root: string
   let savedDshDir: string
+  // The store's install and remove, swapped per test; listing reads the real catalog and installs.
+  let mutate: StoreDeps['mutate']
+  let remove: StoreDeps['remove']
+  const serveStore = (faults: ReadonlySet<string> = new Set()): void => {
+    const host = createServiceHost(emptyPorts(), { log: () => {}, faults })
+    const deps: StoreDeps = { refresh: refreshDshRegistry, rows: dshListRows, mutate: (input, progress) => mutate(input, progress), remove: (id) => remove(id) }
+    const core = fakeCore({ clients: { dshInstallStatus: (status) => socket.send({ type: 'dsh_install_status', payload: status }) } })
+    host.serve('store', (api) => startStore(api, deps), core, STORE_REQUESTS)
+    socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  }
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'dsh-socket-'))
     savedDshDir = env.DSH_DIR
     env.DSH_DIR = join(root, 'dsh')
     invalidateInstalledDsh()
-    socket = new BackendSocket('token')
+    socket = relaySocket('token')
+    bindLaunchRequests(socket)
     frames = []
     socket.registerLocalClient('local:store', { sendFrame: (frame) => { frames.push(frame as (typeof frames)[number]); return true }, sendBinary: () => true })
+    mutate = vi.fn(async () => ({ ok: true as const, id: 'acme/thing' }))
+    remove = vi.fn(() => ({ ok: true as const }))
+    serveStore()
   })
   afterEach(async () => {
     await socket.unregisterLocalClient('local:store')
@@ -71,27 +94,45 @@ describe('the DSH requests on the local socket', () => {
       .toEqual([['acme/thing', 'Thing here', true, true, 0], ['acme/other', 'Other', false, false, 1]])
   })
 
-  it('dsh_remove and dsh_install are refused on a daemon that cannot do them', async () => {
+  it('dsh_remove: uninstalls through the store, and refuses a malformed id before it hears of it', async () => {
+    const removed: string[] = []
+    remove = (id) => { removed.push(id); return id === 'autonomous/marp' ? { ok: true } : { ok: false, error: 'NOT_INSTALLED', detail: `${id} is not installed` } }
+    ask('dsh_remove', { requestId: 'rm-1', id: 'autonomous/marp' })
+    ask('dsh_remove', { requestId: 'rm-2', id: 'autonomous/none' })
+    ask('dsh_remove', { requestId: 'rm-3', id: '../../etc' })
+    await vi.waitFor(() => expect(replies('dsh_remove')).toHaveLength(3))
+    expect(replies('dsh_remove')).toEqual([
+      expect.objectContaining({ requestId: 'rm-1', ok: true, id: 'autonomous/marp' }),
+      expect.objectContaining({ requestId: 'rm-2', error: 'NOT_INSTALLED' }),
+      expect.objectContaining({ requestId: 'rm-3', error: 'INVALID_DSH' }),
+    ])
+    expect(removed).toEqual(['autonomous/marp', 'autonomous/none'])
+  })
+
+  it('dsh_remove, dsh_install and dsh_update say the store is unavailable while it is off, never UNSUPPORTED', async () => {
+    serveStore(new Set(['store']))
     ask('dsh_remove', { requestId: 'rm-1', id: 'acme/thing' })
     ask('dsh_install', { requestId: 'in-1', id: 'acme/thing' })
     ask('dsh_update', { requestId: 'up-1', id: 'acme/thing' })
-    await vi.waitFor(() => expect(replies('dsh_install')).toHaveLength(1))
-    expect(replies('dsh_remove')).toEqual([expect.objectContaining({ requestId: 'rm-1', error: 'UNSUPPORTED_ON_REMOTE' })])
-    expect(replies('dsh_install')).toEqual([expect.objectContaining({ requestId: 'in-1', error: 'UNSUPPORTED_ON_REMOTE' })])
-    expect(replies('dsh_update')).toEqual([expect.objectContaining({ requestId: 'up-1', error: 'UNSUPPORTED_ON_REMOTE' })])
+    await vi.waitFor(() => expect(replies('dsh_update')).toHaveLength(1))
+    const off = { error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: false }
+    expect(replies('dsh_remove')).toEqual([{ requestId: 'rm-1', ...off }])
+    expect(replies('dsh_install')).toEqual([{ requestId: 'in-1', ...off }])
+    expect(replies('dsh_update')).toEqual([{ requestId: 'up-1', ...off }])
+    expect(mutate).not.toHaveBeenCalled()
   })
 
   it('dsh_update validates identity, streams progress, and returns update failures', async () => {
-    const update = vi.fn<NonNullable<BackendSocket['onDshUpdate']>>(async (id, progress) => {
+    const update = vi.fn<StoreDeps['mutate']>(async ({ id }, progress) => {
       progress({ id: null, phase: 'clone' })
-      progress({ id, phase: 'done' })
-      return { ok: true, id }
+      progress({ id: id ?? null, phase: 'done' })
+      return { ok: true, id: id ?? '' }
     })
-    socket.onDshUpdate = update
+    mutate = update
     ask('dsh_update', { requestId: 'invalid', id: '../../etc' })
     ask('dsh_update', { requestId: 'update', id: 'acme/thing', url: 'ignored', ref: 'ignored' })
     await vi.waitFor(() => expect(replies('dsh_update')).toHaveLength(2))
-    expect(update).toHaveBeenCalledTimes(1)
+    expect(update).toHaveBeenCalledExactlyOnceWith({ id: 'acme/thing', update: true }, expect.any(Function))
     expect(replies('dsh_update')).toEqual([
       expect.objectContaining({ requestId: 'invalid', error: 'INVALID_DSH' }),
       expect.objectContaining({ requestId: 'update', ok: true, id: 'acme/thing' }),
@@ -111,7 +152,7 @@ describe('the DSH requests on the local socket', () => {
 
   it('dsh_install: refuses a request with no usable id or url, before the daemon hears of it', async () => {
     const asked: unknown[] = []
-    socket.onDshInstall = async (input) => { asked.push(input); return { ok: true, id: 'acme/thing' } }
+    mutate = async (input) => { asked.push(input); return { ok: true, id: 'acme/thing' } }
     ask('dsh_install', { requestId: 'in-1', id: '../../etc', url: 'https://example.com/\n' })
     await vi.waitFor(() => expect(replies('dsh_install')).toHaveLength(1))
     expect(replies('dsh_install')[0]).toMatchObject({ requestId: 'in-1', error: 'INVALID_DSH', detail: 'dsh_install needs an id or a url' })
@@ -120,7 +161,7 @@ describe('the DSH requests on the local socket', () => {
 
   it('dsh_install: pushes each phase under the id asked for, then replies with what was installed', async () => {
     const asked: unknown[] = []
-    socket.onDshInstall = async (input, progress) => {
+    mutate = async (input, progress) => {
       asked.push(input)
       progress({ id: null, phase: 'clone', detail: 'cloning' })
       progress({ id: 'acme/thing', phase: 'doctor' })
@@ -137,13 +178,13 @@ describe('the DSH requests on the local socket', () => {
   })
 
   it('dsh_install: a failed install is its error and detail; one that throws is INTERNAL with what was thrown', async () => {
-    socket.onDshInstall = async () => ({ ok: false, error: 'SETUP_FAILED', detail: 'setup exited 1' })
+    mutate = async () => ({ ok: false, error: 'SETUP_FAILED', detail: 'setup exited 1' })
     ask('dsh_install', { requestId: 'in-3', url: 'https://example.com/thing.git' })
     await vi.waitFor(() => expect(replies('dsh_install')).toHaveLength(1))
-    socket.onDshInstall = async () => { throw new Error('disk full') }
+    mutate = async () => { throw new Error('disk full') }
     ask('dsh_install', { requestId: 'in-4', url: 'https://example.com/thing.git' })
     await vi.waitFor(() => expect(replies('dsh_install')).toHaveLength(2))
-    socket.onDshInstall = () => Promise.reject('not an Error')
+    mutate = () => Promise.reject('not an Error')
     ask('dsh_install', { requestId: 'in-5', url: 'https://example.com/thing.git' })
     await vi.waitFor(() => expect(replies('dsh_install')).toHaveLength(3))
     expect(replies('dsh_install')).toEqual([

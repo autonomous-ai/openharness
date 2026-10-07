@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './loginCallback.js'
+import { awaitLoginCallback, callbackAttribution, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE } from './loginCallback.js'
 
 const REDIRECT = 'http://127.0.0.1:4321/callback'
 
@@ -90,6 +90,26 @@ describe('awaitLoginCallback', () => {
     expect(cliPage).toContain('return to the terminal')
   })
 
+  it('brings back where the sign-in came from, as auth.autonomous.ai appended it to the redirect', async () => {
+    // The desktop app signs in through this loopback. Before, only code/state were read, so a person who
+    // downloaded the app from a tagged autonomous.ai/harness-app link was never attributed (prod E2E, 2026-10-06).
+    const { server, redirectUri } = await listening()
+    const pending = awaitLoginCallback({ server, redirectUri, manual: null, timeoutMs: 60_000 })
+    await fetch(`${redirectUri}?code=c&iss=https%3A%2F%2Fauth.autonomous.ai&rid=r1&state=s&utm_campaign=launch&utm_content=&utm_source=app&utm_term=`)
+    await expect(pending).resolves.toEqual({
+      code: 'c',
+      state: 's',
+      attribution: { rid: 'r1', utm_campaign: 'launch', utm_source: 'app' },
+    })
+  })
+
+  it('carries no attribution for an untagged sign-in', async () => {
+    const { server, redirectUri } = await listening()
+    const pending = awaitLoginCallback({ server, redirectUri, manual: null, timeoutMs: 60_000 })
+    await fetch(`${redirectUri}?code=c&state=s`)
+    expect(await pending).not.toHaveProperty('attribution')
+  })
+
   it('rejects on an error redirect, with a 400 for the browser', async () => {
     const { server, redirectUri } = await listening()
     // The rejection lands before the browser's response is read, so the expectation is attached first.
@@ -125,5 +145,25 @@ describe('extractCallbackParams', () => {
     expect(extractCallbackParams('http://', REDIRECT)).toEqual({ code: null, state: null, error: null })
     // The raw query-string fallback reads what it can; without a `code` the prompt just asks again.
     expect(extractCallbackParams('http://ex ample/?code=a&state=b', REDIRECT)).toMatchObject({ code: null })
+  })
+
+  it('reads the tags from a pasted URL or query string too', () => {
+    // Over SSH the person pastes the URL the browser landed on; it carries the same tags.
+    expect(extractCallbackParams(`${REDIRECT}?code=a&state=b&rid=r1&utm_medium=email`, REDIRECT))
+      .toEqual({ code: 'a', state: 'b', error: null, attribution: { rid: 'r1', utm_medium: 'email' } })
+    expect(extractCallbackParams('code=a&state=b&utm_source=app', REDIRECT))
+      .toEqual({ code: 'a', state: 'b', error: null, attribution: { utm_source: 'app' } })
+  })
+})
+
+describe('callbackAttribution', () => {
+  it('keeps only the utm keys and rid, trimmed', () => {
+    expect(callbackAttribution(new URLSearchParams('utm_source=%20app%20&role=admin&iss=x&rid=r1')))
+      .toEqual({ utm_source: 'app', rid: 'r1' })
+  })
+
+  it('is absent rather than empty when nothing usable was sent', () => {
+    expect(callbackAttribution(new URLSearchParams('code=a&state=b'))).toBeUndefined()
+    expect(callbackAttribution(new URLSearchParams('utm_term=&utm_content=%20%20'))).toBeUndefined()
   })
 })

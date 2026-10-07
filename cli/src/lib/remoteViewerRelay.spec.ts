@@ -4,9 +4,12 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { WebSocket, WebSocketServer } from 'ws'
 import { BackendSocket, type Frame } from '../backendSocket.js'
+import { gatewayOf, relaySocket } from '../testing/relaySocket.js'
 import { attachLocalWsServer } from '../localWsServer.js'
 import { env } from '../config/env.js'
 import { DshViewerManager } from '../dsh/viewer.js'
+import { createViewerStreams } from '../core/viewerStreams.js'
+import { serveViewers } from '../services/viewers.js'
 import { E2eeStore } from './e2ee/store.js'
 import { b64e, fingerprint, newIdentity } from './e2ee/core.js'
 import { MachinePeerStore } from './e2ee/machinePeers.js'
@@ -64,7 +67,7 @@ it('desktop local-ws → relay → E2EE → daemon → spawned viewer, including
   cleanup.push(() => { env.BACKEND_WS_URL = previousBase })
   let connected!: () => void
   const online = new Promise<void>((resolve) => { connected = resolve })
-  const daemon = new BackendSocket(machineId, undefined, (up) => { if (up) connected() })
+  const daemon = relaySocket(machineId, undefined, (up) => { if (up) connected() })
   cleanup.push(() => daemon.stop())
   daemon.connect()
   await online
@@ -92,13 +95,16 @@ Promise.all([
 const wss = new WebSocketServer({server});
 wss.on('connection', ws => ws.on('message', (data, binary) => ws.send(data, {binary})));
 server.listen(Number(process.env.HARNESS_VIEWER_PORT), '127.0.0.1');`)
+  // The daemon's side as the core wires it: the viewers' own serving (services/viewers.ts), reached through
+  // the core's streams (core/viewerStreams.ts), as with HARNESSD_SERVICES=none.
+  const served = serveViewers((agentId) => manager.forwardingUrl(agentId), (connId, type, payload) => daemon.sendViewerFrame(connId, type, payload))
+  daemon.viewerStreams = createViewerStreams(() => served, (connId, type, payload) => daemon.sendViewerFrame(connId, type, payload))
   const manager = new DshViewerManager({
     onUrl: (agentId, viewerUrl) => {
-      daemon.viewerForwarder.refresh(agentId)
+      served.refresh(agentId)
       daemon.send({ type: 'agent_synced', payload: { agent: { id: agentId, viewerUrl, name: 'remote viewer fixture' } } })
     },
   })
-  daemon.viewerTargetProvider = (agentId) => manager.forwardingUrl(agentId)
   cleanup.push(() => manager.stopAll())
   const dsh: InstalledDsh = {
     id: 'test/viewer', realDir: dir, dir, source: '', ref: null, commit: null, linked: false, installedAt: 0,
@@ -200,7 +206,7 @@ server.listen(Number(process.env.HARNESS_VIEWER_PORT), '127.0.0.1');`)
   const restarted = urls().at(-1)!
   expect((await fetch(restarted, { redirect: 'manual' })).status).toBe(302)
   const ended = once(desktop, 'close')
-  expect(daemon.revoke(fingerprint(localIdentity.pub)).ok).toBe(true)
+  expect(gatewayOf(daemon).revoke(fingerprint(localIdentity.pub)).ok).toBe(true)
   const [code] = await ended
   expect(code).toBe(4404)
   await expect(fetch(restarted)).rejects.toThrow()

@@ -146,15 +146,22 @@ class DirectAuthApi {
         .toString();
   }
 
+  /// [attribution] is the callback's `utm_*` and `rid` (`sign_in_attribution.dart`), recorded on the account.
   Future<IssuedTokens> exchange({
     required String code,
     required String state,
     required String tx,
+    Map<String, String> attribution = const {},
   }) async {
     final data = unwrapApiResponse(
       await _dio.post(
         '/api/auth/exchange',
-        data: {'code': code, 'state': state, 'tx': tx},
+        data: {
+          'code': code,
+          'state': state,
+          'tx': tx,
+          if (attribution.isNotEmpty) 'attribution': attribution,
+        },
       ),
     );
     return IssuedTokens.fromData(data) ??

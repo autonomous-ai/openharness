@@ -74,6 +74,26 @@ describe('compaction', () => {
     client.close()
   })
 
+  it('claude: a /compact typed as Claude Code writes it opens no turn, and the agent reads idle after it', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'compact-command')
+    await turn(client, agent.id, 'before')
+    const since = client.frames.length
+    // Sent from the app, as a person types it. Claude Code 2.1.290 writes the command as a plain user line
+    // before the compaction: taken as a prompt it opened a turn that nothing closed, and the agent read
+    // working, then unknown, until the next message (found by daemon QA).
+    client.send('message', { agentId: agent.id, content: '/compact' })
+    await client.next((frame) => frame.type === 'context_compact' && frame.agentId === agent.id, 30_000, 'context_compact')
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    expect(count(client, since, 'turn_started', agent.id)).toBe(0)
+    await until('the agent to read idle', async () => (await row(client, agent.id))?.activity?.state === 'idle' || null, 15_000, 250)
+    await turn(client, agent.id, 'after')
+    expect(count(client, since, 'turn_started', agent.id)).toBe(1)
+    expect(await users(client, agent.sessionId)).toEqual(['before', '/compact', 'after'])
+    client.close()
+  })
+
   it.each(engines)('%s: a compaction in the middle of a turn: the turn ends once, and the next one is fresh', async (engine) => {
     const d = await fresh()
     const client = await LocalClient.connect(d)

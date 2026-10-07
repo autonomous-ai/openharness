@@ -1,8 +1,11 @@
 import importlib.util
 from contextlib import ExitStack
+import fcntl
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -20,6 +23,15 @@ class RecoveryGuards(unittest.TestCase):
         for bad in [dict(good, root_uuid='another-root'), dict(good, boot_uuid='../../sda1'), dict(good, boot_sha256={})]:
             with self.assertRaises(ValueError):
                 system.validate_checkpoint(bad, 'root-identity')
+
+    def test_t2_checkpoint_requires_its_matching_boot_files(self):
+        good = {'platform': 'apple-t2', 'root_uuid': 'root-identity', 'boot_uuid': 'ABCD-1234',
+                'boot_sha256': {name: 'digest' for name in ['vmlinuz-linux-t2', 'initramfs-linux-t2.img', 'grub/grub.cfg']}}
+        system.validate_checkpoint(good, 'root-identity')
+        with self.assertRaises(ValueError):
+            system.validate_checkpoint(dict(good, platform='pc'), 'root-identity')
+        with self.assertRaises(ValueError):
+            system.validate_checkpoint(dict(good, platform='unknown'), 'root-identity')
 
     def test_snapshot_is_a_complete_real_date(self):
         self.assertEqual(system.snapshot_date('2026/10/01'), '2026/10/01')
@@ -73,6 +85,7 @@ class InterruptedUpdates(unittest.TestCase):
         for key, value in [('PACMAN_CONFIG', self.config), ('UPDATE_RECEIPT', self.receipt), ('CHECKPOINTS', self.snapshots)]:
             self.context.enter_context(patch.object(system, key, value))
         self.installed = self.context.enter_context(patch.object(system, 'installed', return_value={'root_uuid': 'this-system'}))
+        self.run = subprocess.run
         self.pacman = self.context.enter_context(patch.object(system.subprocess, 'run'))
 
     def save_checkpoint(self, reason):
@@ -86,8 +99,9 @@ class InterruptedUpdates(unittest.TestCase):
 
     def test_failed_update_blocks_packages_and_retry_retains_original_checkpoint(self):
         with patch.object(system, 'checkpoint', side_effect=self.save_checkpoint) as save:
-            def failed_pacman(argv):
+            def failed_pacman(argv, **kwargs):
                 self.assertEqual(argv, ['pacman', '-Syyu'])
+                self.assertIsNone(kwargs.get('stdin'))
                 pending = system.pending_update()
                 self.assertIsNone(pending['exit_status'])
                 self.assertEqual(pending['checkpoint'], 'before-update-123')
@@ -114,6 +128,46 @@ class InterruptedUpdates(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'full system update did not finish'):
             system.checkpoint(pacman_hook=True)
         self.installed.assert_not_called()
+
+    def test_programmatic_update_hook_reuses_checkpoint_without_inherited_override(self):
+        # The public release updater calls update() under the operation lock,
+        # without going through system.main(). Run its real hook in a child
+        # process; redirect only root/lock locations into this private fixture.
+        (self.root / 'install.json').write_text('{}')
+        hook = self.root / 'checkpoint-hook.py'
+        hook.write_text('''import builtins, importlib.util, sys
+from pathlib import Path
+source, root = Path(sys.argv[1]), Path(sys.argv[2])
+spec = importlib.util.spec_from_file_location('checkpoint_system', source)
+system = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(system)
+system.Path = lambda path: root / 'install.json' if str(path) == '/var/lib/harness-os/install.json' else Path(path)
+original_open = builtins.open
+def fixture_open(path, *args, **kwargs):
+    return original_open(root / 'operation.lock' if str(path) == '/run/lock/hn-os.lock' else path, *args, **kwargs)
+builtins.open = fixture_open
+system.os.geteuid = lambda: 0
+sys.argv = [str(source), 'checkpoint', '--pacman-hook']
+system.main()
+''')
+        def pacman(argv, **kwargs):
+            self.assertEqual(argv, ['pacman', '-Syyu'])
+            self.assertEqual(system.pending_update()['checkpoint'], 'before-update-123')
+            result = self.run([sys.executable, str(hook), str(Path(system.__file__).resolve()), str(self.root)],
+                              capture_output=True, text=True, timeout=10, **kwargs)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return subprocess.CompletedProcess(argv, 0)
+        self.pacman.side_effect = pacman
+        environment = dict(os.environ)
+        environment.pop('HN_OS_UPDATE_CHECKPOINT', None)
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(system, 'checkpoint', side_effect=self.save_checkpoint) as save, \
+                (self.root / 'operation.lock').open('w') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            system.update('2026/10/01')
+            self.assertNotIn('HN_OS_UPDATE_CHECKPOINT', os.environ)
+        save.assert_called_once_with('before-update')
+        self.assertIsNone(system.pending_update())
 
     def test_failed_preview_receipt_also_blocks_package_transactions(self):
         self.receipt.write_text(json.dumps({'snapshot': '2026/10/01', 'checkpoint': 'before-update-123', 'exit_status': 1}))

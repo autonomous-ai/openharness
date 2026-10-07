@@ -9,6 +9,7 @@
  * answer or record, or this computer's own run records. Everything that is not evidence leaves the list
  * stale, never shorter, and never wakes anything.
  */
+import { idKey, type PictureState } from './gridAnnotation.js'
 import type { OfflineReading } from './gridPresence.js'
 import type { LastKnown, ReadNode } from './gridReader.js'
 
@@ -38,12 +39,8 @@ export const GRID_LAST_KNOWN_MAX_AGE_MS = 29 * 24 * 60 * 60 * 1000
 /** Engines that are a router rather than a model (`grid-router` serves `auto`) are never offered. */
 const ROUTER_ENGINE = 'grid-router'
 
-/**
- * `awake` — the last read answered. `asleep` — the platform says it is resting. `unknown` — the last
- * read failed any other way, or nothing has been read yet (the list shown, if any, is the last known).
- * `waking` — a person asked for it to start (issue 03's explicit wake; never set by a read).
- */
-export type PictureState = 'awake' | 'asleep' | 'waking' | 'unknown'
+// Where a picture's state is read without the pictures' code: an agent's frame (gridAnnotation.ts).
+export type { PictureState }
 
 export interface PictureModel {
   /** The id without case — the join key across sources. Its spelling lives in `caseMap`. */
@@ -77,10 +74,13 @@ export interface GridPicture {
   caseMap: Record<string, string>
   /** lower-case id → the model's context window, as the last awake read that reported one said. */
   windows: Record<string, number>
+  /** lower-case ids of the Jev (System One) decision models the last awake reads said a node serves —
+   *  rows a picker lists apart from chat models, since none of them can run an agent. */
+  decisions: string[]
 }
 
 export function emptyPicture(): GridPicture {
-  return { spec: 1, state: 'unknown', seenAt: null, listAt: null, nodes: [], caseMap: {}, windows: {} }
+  return { spec: 1, state: 'unknown', seenAt: null, listAt: null, nodes: [], caseMap: {}, windows: {}, decisions: [] }
 }
 
 /** `windows` (keyed without case) with a read's figures folded in — the latest figure for a model wins. */
@@ -91,9 +91,28 @@ export function withWindows(picture: GridPicture, windows: Record<string, number
   return { ...picture, windows: Object.fromEntries(kept) }
 }
 
-/** The join key for a model id across every source: trimmed, without case. (Not `localModels.ts`'s own
- *  private key, which also strips `.gguf` for a different comparison.) */
-export const idKey = (id: string): string => id.trim().toLowerCase()
+/**
+ * `decisions` after an awake answer (`picture` is the answer already merged in). A model a node listed is
+ * a decision model exactly when that node's `decisions` names it; a model no node listed keeps its mark
+ * for as long as the picture retains it. A node that does not say (the CLI fallback) changes nothing.
+ */
+export function withDecisions(picture: GridPicture, nodes: readonly ReadNode[]): GridPicture {
+  const told = nodes.filter((node) => node.decisions !== undefined)
+  const listed = new Set(told.flatMap((node) => node.models.map(idKey)))
+  const marked = new Set(told.flatMap((node) => node.decisions!.map(idKey)).filter((key) => key && listed.has(key)))
+  const retained = new Set(picture.nodes.flatMap((node) => node.models.map((model) => model.key)))
+  const decisions = [...new Set([
+    ...picture.decisions.filter((key) => retained.has(key) && !listed.has(key)),
+    ...marked,
+  ])].slice(-MAX_SAVED_DECISIONS)
+  const same = decisions.length === picture.decisions.length && decisions.every((key, i) => key === picture.decisions[i])
+  return same ? picture : { ...picture, decisions }
+}
+
+// The join key for a model id across every source: trimmed, without case (not `localModels.ts`'s own
+// private key, which also strips `.gguf` for a different comparison). gridAnnotation.ts's, which the core
+// reads an agent's note with.
+export { idKey }
 const hasUpperCase = (id: string): boolean => id !== id.toLowerCase()
 
 /**
@@ -283,6 +302,8 @@ export interface GridModelRow {
   node: string
   /** Every computer serving it seems offline (issue 03). Absent otherwise. */
   unavailable?: RowUnavailable
+  /** `decision`: a Jev (System One) model — called at `/v1/systemone`, never chatted with. Absent for chat. */
+  kind?: 'decision'
 }
 
 export interface SectionView {
@@ -343,9 +364,10 @@ export function sectionView(picture: GridPicture, here: ServedHere, now: number,
     const since = Math.min(...readings.map((reading) => reading!.since))
     return { reason: 'offline', machine: first.machine, since: new Date(since).toISOString() }
   }
+  const decisions = new Set(picture.decisions)
   const rows = [...namedBy].map(([key, node]): GridModelRow => {
     const label = unavailable(key)
-    return { id: caseMap[key] ?? key, node, ...(label ? { unavailable: label } : {}) }
+    return { id: caseMap[key] ?? key, node, ...(label ? { unavailable: label } : {}), ...(decisions.has(key) ? { kind: 'decision' as const } : {}) }
   })
   return {
     models: rows,
@@ -363,6 +385,7 @@ const MAX_SAVED_MODELS_PER_NODE = 256
 const MAX_SAVED_TEXT = 256
 const MAX_SAVED_SPELLINGS = 4096
 const MAX_SAVED_WINDOWS = 4096
+const MAX_SAVED_DECISIONS = 4096
 
 /** A picture read back from disk, or null when it is not one this module wrote. Never trusts the file. */
 export function parsePicture(value: unknown): GridPicture | null {
@@ -399,6 +422,11 @@ export function parsePicture(value: unknown): GridPicture | null {
       if (key && key === idKey(key) && typeof window === 'number' && Number.isSafeInteger(window) && window > 0) windows[key.slice(0, MAX_SAVED_TEXT)] = window
     }
   }
+  // Absent from a picture written before Jev models were told apart: none known, as an empty list says.
+  const decisions = Array.isArray(record.decisions)
+    ? [...new Set(record.decisions.filter((key): key is string => typeof key === 'string' && !!key && key === idKey(key))
+      .map((key) => key.slice(0, MAX_SAVED_TEXT)))].slice(0, MAX_SAVED_DECISIONS)
+    : []
   return {
     spec: 1,
     // Waking is a person's request in flight, and that request died with the process that made it.
@@ -408,5 +436,6 @@ export function parsePicture(value: unknown): GridPicture | null {
     nodes,
     caseMap,
     windows,
+    decisions,
   }
 }

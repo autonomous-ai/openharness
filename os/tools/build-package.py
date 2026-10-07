@@ -3,6 +3,7 @@
 import argparse
 import gzip
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -10,6 +11,20 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+
+
+DEPENDENCIES = ('nodejs-lts-jod', 'tmux', 'foot', 'gtklock', 'grim', 'slurp')
+
+
+def package_info(version, timestamp, size, compositor_dependencies=()):
+    # These are needed on upgrades too; adding a tool to the ISO list alone
+    # leaves existing computers with new launchers but no executable to run.
+    return (f'pkgname = harness-os\npkgbase = harness-os\nxdata = pkgtype=pkg\npkgver = {version}\n'
+            'pkgdesc = Harness session and verified Harness runtime\n'
+            'url = https://github.com/autonomous-ai/openharness\n'
+            f'builddate = {timestamp}\npackager = OpenHarness\nsize = {size}\n'
+            'arch = x86_64\nlicense = MIT\nlicense = GPL-2.0-only\n'
+            + ''.join(f'depend = {name}\n' for name in dict.fromkeys((*DEPENDENCIES, *compositor_dependencies))))
 
 
 def digest(path):
@@ -47,10 +62,19 @@ def stage(source, runtime, destination, commit):
         'os/projects.py': 'usr/lib/harness-os/projects.py',
         'os/trial_projects.py': 'usr/lib/harness-os/trial_projects.py',
         'os/system.py': 'usr/lib/harness-os/system.py',
+        'os/boot_profile.py': 'usr/lib/harness-os/boot_profile.py',
+        'os/t2_install.py': 'usr/lib/harness-os/t2_install.py',
+        'os/t2_update.py': 'usr/lib/harness-os/t2_update.py',
+        'os/tools/prepare-t2-kernel.py': 'usr/lib/harness-os/t2_kernel.py',
+        'os/tools/prepare-t2-firmware.py': 'usr/lib/harness-os/t2_firmware.py',
+        'os/platforms/apple-t2/firmware_names.py': 'usr/lib/harness-os/firmware_names.py',
+        'os/platforms/apple-t2/kernel.json': 'usr/share/harness-os/apple-t2/kernel.json',
         'os/runtime_update.py': 'usr/lib/harness-os/runtime_update.py',
         'os/live_update.py': 'usr/lib/harness-os/live_update.py',
         'os/release_update.py': 'usr/lib/harness-os/release_update.py',
         'os/hardware.py': 'usr/lib/harness-os/hardware.py',
+        'os/gpu_health.py': 'usr/lib/harness-os/gpu_health.py',
+        'os/gpu_probe.py': 'usr/lib/harness-os/gpu_probe.py',
         'os/tools/hn-os': 'usr/bin/hn-os',
         'os/lock.json': 'usr/share/harness-os/lock.json',
         'tui/README.md': 'usr/share/harness-os/guide/tui.md',
@@ -112,9 +136,27 @@ def archive_package(root, output, pkginfo, timestamp):
         partial.unlink(missing_ok=True)
 
 
+def bootstrap(source, folder):
+    """Ship every helper needed before the first platform-aware OS package."""
+    files = {'apply-update.py': 'runtime_update.py', 'boot_profile.py': 'boot_profile.py',
+             't2_install.py': 't2_install.py', 't2_firmware.py': 'tools/prepare-t2-firmware.py',
+             'firmware_names.py': 'platforms/apple-t2/firmware_names.py',
+             't2_update.py': 't2_update.py', 't2_kernel.py': 'tools/prepare-t2-kernel.py'}
+    spec = importlib.util.spec_from_file_location('bootstrap_runtime', source / 'os/runtime_update.py')
+    updater = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(updater)
+    if set(files) != set(updater.BOOTSTRAP_FILES):
+        raise ValueError('Incomplete standalone updater helpers.')
+    for name, relative in files.items():
+        shutil.copyfile(source / 'os' / relative, folder / name)
+    return [folder / name for name in files]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--runtime', type=Path, required=True)
+    parser.add_argument('--compositor', type=Path, required=True,
+                        help='Verified native compositor from this source and Arch snapshot')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--development', action='store_true', help='Include a source revision in the package version')
     args = parser.parse_args()
@@ -122,10 +164,14 @@ def main():
     if git(source, 'status', '--porcelain', '--untracked-files=normal'):
         parser.error('Commit source changes before building a traceable package.')
     commit = git(source, 'rev-parse', 'HEAD')
+    spec = importlib.util.spec_from_file_location('harness_compositor', Path(__file__).with_name('compositor_payload.py'))
+    compositor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(compositor)
+    compositor.validate(source, args.compositor.resolve(), commit)
     timestamp = int(git(source, 'log', '-1', '--format=%ct'))
     lock = json.loads((source / 'os/lock.json').read_text())
-    if lock['architecture'] != 'x86_64' or not re.fullmatch(r'\d+\.\d+\.\d+-preview\.\d+', lock['version']):
-        parser.error('Expected a versioned x86-64 OS preview.')
+    if lock['architecture'] != 'x86_64' or not re.fullmatch(r'\d+\.\d+\.\d+(?:-preview\.\d+)?', lock['version']):
+        parser.error('Expected a versioned x86-64 OS release or numbered preview.')
     version = lock['version'].replace('-preview.', 'pre')
     if args.development:
         # Shallow CI checkouts all have a revision count of one. Use the source
@@ -140,28 +186,23 @@ def main():
     with tempfile.TemporaryDirectory(prefix='harness-package-') as temp:
         root = Path(temp) / 'root'
         runtime = stage(source, args.runtime.resolve(), root, commit)
+        display = compositor.stage(source, args.compositor.resolve(), root, commit)
         size = sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_symlink())
-        pkginfo = (f'pkgname = harness-os\npkgbase = harness-os\nxdata = pkgtype=pkg\npkgver = {version}\n'
-                   'pkgdesc = Harness session and verified Harness runtime\n'
-                   'url = https://github.com/autonomous-ai/openharness\n'
-                   f'builddate = {timestamp}\npackager = OpenHarness\nsize = {size}\n'
-                   'arch = x86_64\nlicense = MIT\ndepend = nodejs-lts-jod\ndepend = tmux\n'
-                   'depend = foot\ndepend = labwc\n')
+        pkginfo = package_info(version, timestamp, size, display['runtime_dependencies'])
         archive_package(root, package, pkginfo, timestamp)
     manifest = {'schema': 1, 'kind': 'harness-os-package', 'development': args.development,
                 'source_commit': commit, 'architecture': lock['architecture'],
                 'requires_os_version': lock['version'], 'arch_snapshot': lock['arch_snapshot'],
-                'runtime': runtime,
+                'runtime': runtime, 'compositor': display,
                 'package': {'name': package.name, 'version': version, 'bytes': package.stat().st_size, 'sha256': digest(package)}}
     if lock.get('upgrades_from'):
         manifest['upgrades_from'] = lock['upgrades_from']
     (folder / 'package-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (folder / (package.name + '.sha256')).write_text(f'{manifest["package"]["sha256"]}  {package.name}\n')
     # A preview 4 installation can bootstrap the updater from this same bundle.
-    bootstrap = folder / 'apply-update.py'
-    shutil.copyfile(source / 'os/runtime_update.py', bootstrap)
+    standalone = bootstrap(source, folder)
     (folder / 'SHA256SUMS').write_text(''.join(f'{digest(path)}  {path.name}\n' for path in
-                                            [package, folder / 'package-manifest.json', bootstrap]))
+                                            [package, folder / 'package-manifest.json', *standalone]))
     print(json.dumps(manifest, indent=2))
 
 

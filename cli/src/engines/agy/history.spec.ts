@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { agyHistoryPage } from '../../backendSocket.js'
+import { agyHistoryPage } from '../../core/transcripts/history.js'
 
 const LINES = readFileSync(fileURLToPath(new URL('../../lib/__fixtures__/agy-session.jsonl', import.meta.url)), 'utf8')
   .split('\n').filter(Boolean)

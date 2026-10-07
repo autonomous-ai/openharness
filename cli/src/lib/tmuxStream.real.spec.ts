@@ -8,7 +8,9 @@ import { ENGINES } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
 import { TerminalStreamManager } from './terminalStreamManager.js'
 import type { TerminalBackendCoordinator } from './terminalBackendCoordinator.js'
+import { pasteRawIntoTmux } from './tmux.js'
 import { TmuxControlStream } from './tmuxStream.js'
+import { tmuxFeatures } from './tmuxVersion.js'
 import { TerminalBinaryKind, type TerminalBinaryClear } from './terminalBinary.js'
 
 const run = process.env.RUN_REAL_TMUX_STREAM === '1' ? describe : describe.skip
@@ -20,8 +22,11 @@ function tmux(args: string[]): Promise<string> {
 }
 
 async function eventually(predicate: () => boolean | Promise<boolean>, timeoutMs = 3_000): Promise<void> {
+  // A predicate that throws has not come true yet: a file the pane's process is about to create reads
+  // ENOENT for the ~200 ms an older tmux takes to start it.
+  const settled = async () => { try { return await predicate() } catch { return false } }
   const deadline = Date.now() + timeoutMs
-  while (!await predicate() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
+  while (!await settled() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
   expect(await predicate()).toBe(true)
 }
 
@@ -115,8 +120,11 @@ run('TmuxControlStream real tmux', () => {
     try {
       if (opened.state !== 'succeeded') return
       expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe('30x8')
-      for (const size of [{ cols: 1, rows: 1 }, { cols: 39, rows: 11 }, { cols: 120, rows: 40 }]) {
-        expect((await opened.value.resize(size)).state).toBe('succeeded')
+      // Before tmux 2.9 a control client sizes the window, and tmux takes no client under 2x2.
+      const least = (await tmuxFeatures()).resizeWindow ? 1 : 2
+      for (const asked of [{ cols: 1, rows: 1 }, { cols: 39, rows: 11 }, { cols: 120, rows: 40 }]) {
+        const size = { cols: Math.max(least, asked.cols), rows: Math.max(least, asked.rows) }
+        expect((await opened.value.resize(asked)).state).toBe('succeeded')
         expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_width}x#{pane_height}'])).toBe(`${size.cols}x${size.rows}`)
         opened.value.beginSnapshot()
         const snapshot = await opened.value.snapshot()
@@ -150,6 +158,37 @@ run('TmuxControlStream real tmux', () => {
     } finally {
       if (opened.state === 'succeeded') await opened.value.close()
       await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('types every byte exactly as given: quotes, a trailing semicolon, a leading dash, control bytes, UTF-8', async () => {
+    // tmux before 3.0 has no `send-keys -H`: there the bytes go as quoted literal text and keys, and this
+    // is the case that would show a byte its command parser took for syntax (`literalKeyCommands`).
+    const directory = await mkdtemp(join(tmpdir(), 'harness-typed-'))
+    const sink = join(directory, 'typed.bin')
+    const typed = Buffer.concat([
+      Buffer.from("-l 'single' \"double\" $HOME #not-a-comment ~ a;b \\; \t\r\u001b[A\u007f 世界🚀 "),
+      Buffer.from([0x0a, 0x00, 0x01, 0x1f]),
+      Buffer.from('x'.repeat(5_000) + "';"),
+    ])
+    const typedSession = `harness-typed-${randomUUID().slice(0, 8)}`
+    // A raw tty: every byte reaches `head` as it was written, none taken for a signal or a line edit.
+    const typedPane = await tmux([
+      'new-session', '-d', '-P', '-F', '#{pane_id}', '-s', typedSession,
+      'bash', '--noprofile', '--norc', '-c', `stty raw -echo; head -c ${typed.length} > ${sink}`,
+    ])
+    try {
+      const opened = await TmuxControlStream.open(typedPane, { cols: 120, rows: 30 }, { onData: () => {}, onClose: () => {} })
+      expect(opened.state).toBe('succeeded')
+      if (opened.state !== 'succeeded') return
+      // The pane's `stty raw` must land before the first byte, or the tty would still edit lines.
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      expect((await opened.value.writeRaw(typed)).state).toBe('succeeded')
+      await eventually(async () => (await readFile(sink)).length === typed.length, 5_000)
+      expect((await readFile(sink)).equals(typed)).toBe(true)
+      await opened.value.close()
+    } finally {
+      await tmux(['kill-session', '-t', typedSession]).catch(() => { /* best effort */ })
     }
   })
 
@@ -313,4 +352,32 @@ run('TmuxControlStream real tmux', () => {
       await opened.value.close()
     }
   })
+
+  it('keeps the tmux server up while terminals open and close side by side and messages are pasted', async () => {
+    // Before tmux 3.7 a notification for every control client (one going, a paste buffer set or deleted)
+    // that met one still attaching crashed the server, every agent's pane with it (tmux issue 4980,
+    // tmuxControlGate.ts). This is windows.e2e.ts's churn, which found it: on Ubuntu 24.04's tmux 3.4,
+    // without the gate, the server segfaulted within the first few hundred of these rounds.
+    const beside = `${session}-beside`
+    const besidePane = await tmux(['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', beside, 'cat'])
+    const sink = { onData: () => {}, onClose: () => {} }
+    const openAndClose = async (pane: string, readOnly: boolean) => {
+      const opened = await TmuxControlStream.open(pane, { cols: 90, rows: 25 }, sink, readOnly)
+      expect(opened.state, opened.state === 'failed' ? opened.reason : '').toBe('succeeded')
+      if (opened.state === 'succeeded') await opened.value.close()
+    }
+    try {
+      for (let round = 0; round < 300; round++) {
+        await Promise.all([
+          openAndClose(paneId, false),
+          openAndClose(besidePane, true),
+          openAndClose(paneId, true),
+          pasteRawIntoTmux(besidePane, `round ${round}\n`),
+        ])
+      }
+      expect(await tmux(['display-message', '-p', '-t', paneId, '#{pane_id}'])).toBe(paneId)
+    } finally {
+      await tmux(['kill-session', '-t', beside]).catch(() => { /* best effort */ })
+    }
+  }, 120_000)
 })

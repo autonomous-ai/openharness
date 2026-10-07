@@ -37,7 +37,6 @@ export const StoreExampleSchema = z.object({
   caption: z.string().trim().min(1).max(120).optional(),
 })
 
-export type StoreExample = z.infer<typeof StoreExampleSchema>
 
 /** A folder inside a repo: relative, forward slashes, no `.`/`..` segments, no trailing slash. */
 export const PACKAGE_PATH_RE = /^(?!\/)(?!.*\/$)(?!.*\/\/)(?!(?:.*\/)?\.{1,2}(?:\/|$))[A-Za-z0-9._\-/]+$/
@@ -100,7 +99,6 @@ export const StoreFactsSchema = z.strictObject({
   listed: z.boolean().optional(),
 })
 
-export type StoreFacts = z.infer<typeof StoreFactsSchema>
 
 /** The shelf's two folders and the kind each holds. */
 export const STORE_KINDS = [['agents', 'agent'], ['viewers', 'viewer']] as const
@@ -223,10 +221,6 @@ export function registrySourceUrl(entry: Pick<DshRegistryEntry, 'repo' | 'ref' |
   if (!github) return entry.repo
   const repo = entry.repo.replace(/\/$/, '').replace(/\.git$/, '')
   return `${repo}/tree/${entry.ref ?? 'main'}/${entry.path}`
-}
-
-export function registryEntry(id: string): DshRegistryEntry | undefined {
-  return bundledDshRegistry().find((entry) => entry.id === id)
 }
 
 /** Test seam. */

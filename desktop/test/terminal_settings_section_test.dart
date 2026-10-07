@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/settings/sections/terminal_section.dart';
 import 'package:harness/shared/theme/app_theme.dart';
 import 'package:harness/shared/widgets/app_select_field.dart';
+import 'package:harness/terminal/installed_fonts.dart';
 import 'package:harness/terminal/terminal_font_store.dart';
 import 'package:harness/terminal/terminal_theme_store.dart';
 
@@ -58,7 +59,7 @@ void main() {
       expect(colors.label, 'Terminal colors');
       expect(colors.value, terminalThemeStore.value.label);
       expect(font.label, 'Terminal font');
-      expect(font.value, terminalFontStore.family.label);
+      expect(font.value, terminalFontStore.selection.label);
     } finally {
       semantics.dispose();
     }
@@ -106,6 +107,46 @@ void main() {
     expect(terminalThemeStore.value, TerminalThemeChoice.fallback);
     expect(find.text('Match app appearance'), findsWidgets);
   });
+
+  testWidgets(
+    'the font list is the presets, then installed monospaced faces, then the rest',
+    (tester) async {
+      debugResetInstalledFonts();
+      debugFontLister = () async => [
+        const InstalledFont('Helvetica', monospace: false),
+        const InstalledFont('PT Mono', monospace: true),
+        // Duplicate a preset available on this host. Menlo is not a Linux preset.
+        InstalledFont(
+          TerminalFontChoice.available.first.label,
+          monospace: true,
+        ),
+        const InstalledFont('Andale Mono', monospace: true),
+      ];
+      addTearDown(() {
+        debugFontLister = null;
+        debugResetInstalledFonts();
+      });
+      tester.view.physicalSize = const Size(820 * 2, 700 * 2);
+      tester.view.devicePixelRatio = 2;
+      addTearDown(tester.view.reset);
+
+      await tester.pumpWidget(_host());
+      await tester.pumpAndSettle();
+
+      final field = tester.widget<AppSelectField<TerminalFontSelection>>(
+        find.byKey(const Key('terminal-font-family-dropdown')),
+      );
+      expect(field.filterable, isTrue);
+      expect(field.options.map((option) => option.label), [
+        for (final choice in TerminalFontChoice.available) choice.label,
+        'Andale Mono',
+        'PT Mono',
+        'Helvetica',
+      ]);
+      // Read only — the store is the real singleton, see this file's header.
+      expect(field.value, terminalFontStore.selection);
+    },
+  );
 
   testWidgets('the preview refuses the app-wide text scale', (tester) async {
     // The fifth seam named in `appearance_section.dart`, and the one nothing

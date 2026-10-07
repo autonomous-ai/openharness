@@ -1,0 +1,102 @@
+name: Harness OS ARM graphical session
+
+on:
+  workflow_dispatch:
+    inputs:
+      prepare_only:
+        description: 'Prepare a private fixture for accelerated local acceptance; does not claim a passing VM test'
+        type: boolean
+        default: true
+  push:
+    branches: ['os-polish/arm-graphical']
+    paths:
+      - 'os/tests/arm_session*'
+      - 'os/tests/test_arm_session.py'
+      - 'os/tests/arm-session.lock.json'
+      - 'os/tools/fedora_payload.py'
+      - 'os/tools/opencode_payload.py'
+      - 'os/tools/build-fedora-package.py'
+      - 'os/packaging/fedora/**'
+      - '.github/workflows/os-arm-session.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-arm-session-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  session:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.23.2
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: tui
+          shared-key: tui-aarch64-unknown-linux-musl
+          cache-bin: false
+      - name: Boot tools and portable OS checks
+        run: |
+          df -h . "$RUNNER_TEMP"
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools qemu-system-arm \
+            e2fsprogs rpm libarchive-tools zstd gnupg python3-pil tesseract-ocr
+          if [ -c /dev/kvm ]; then sudo chown "$USER" /dev/kvm; fi
+          make -C os check
+      - name: Build the exact native Harness runtime
+        run: bash os/tools/build-runtime.sh
+      - name: Verify the pinned upstream default agent
+        run: python3 os/tools/opencode_payload.py --archives os/work/opencode-archives --output os/work/opencode-payload
+      - name: Build the Fedora session RPM with declared native inputs
+        run: |
+          image=$(python3 -c 'import json; print(json.load(open("os/tests/arm-session.lock.json"))["root_image"])')
+          docker run --rm --platform linux/arm64 --memory=4g --cpus=2 --pids-limit=1024 \
+            --mount "type=bind,source=$PWD,target=/source" --workdir /source "$image" \
+            bash -c 'manager=$(command -v dnf5 || command -v microdnf); "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True python3 git rpm-build && python3 os/tools/build-fedora-package.py --runtime os/work/runtime --runtime-source "$(git -c safe.directory=/source rev-parse HEAD)" --agent os/work/opencode-payload --output os/work/fedora-package'
+          sudo chown -R "$USER:$(id -gn)" os/work/fedora-package
+      - name: Prepare the fresh fixture or exercise the full graphical session
+        env:
+          PREPARE_ONLY: ${{ github.event_name == 'push' || inputs.prepare_only }}
+        run: |
+          args=()
+          if [[ "$PREPARE_ONLY" == true ]]; then args+=(--prepare-only); fi
+          python3 os/tests/arm_session.py --package os/work/fedora-package \
+            --output os/test-results/arm-session "${args[@]}"
+      - name: Retain graphical session evidence only
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-arm-graphical-session
+          path: |
+            os/work/runtime/source.json
+            os/work/fedora-package/
+            os/test-results/arm-session/receipt.json
+            os/test-results/arm-session/host.log
+            os/test-results/arm-session/packages.tsv
+            os/test-results/arm-session/agent-lock.json
+            os/test-results/arm-session/first-boot/
+            os/test-results/arm-session/second-boot/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 6
+      - name: Retain the private fixture for accelerated acceptance
+        if: success() && (github.event_name == 'push' || inputs.prepare_only)
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-arm-session-fixture
+          path: os/test-results/arm-session/fixture/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

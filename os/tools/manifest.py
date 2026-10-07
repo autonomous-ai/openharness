@@ -30,6 +30,10 @@ if (root / 'usr/lib/harness-os/release_update.py').is_file():
 if (root / 'etc/sudoers.d/30-harness-updates').is_file():
     capabilities.append('single-action-updates')
 hardware = {}
+platform = json.loads((root / 'etc/harness-platform.json').read_text())['id']
+if platform == 'apple-t2':
+    capabilities.extend(['t2-kernel', 'apple-firmware-preservation'])
+    hardware['apple-t2'] = json.loads((root / 'usr/share/harness-os/apple-t2/manifest.json').read_text())
 for driver in ['broadcom', 'nvidia']:
     path = root / f'usr/share/harness-os/hardware/{driver}/manifest.json'
     if path.is_file():
@@ -37,12 +41,14 @@ for driver in ['broadcom', 'nvidia']:
         hardware[driver] = json.loads(path.read_text())
 manifest = {
     'version': lock['version'], 'architecture': 'x86_64',
+    'platform': platform,
     'source_commit': os.environ.get('HARNESS_OS_SOURCE_SHA') or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
     'built_at_unix': int(time.time()), 'arch_snapshot': lock['arch_snapshot'],
     'iso': {'name': iso.name, 'bytes': iso.stat().st_size, 'sha256': digest},
     'capabilities': capabilities,
     'package_version': dict(row.split(maxsplit=1) for row in packages.splitlines())['harness-os'],
     'harness_inputs': json.loads((root / 'usr/share/harness-os/runtime.json').read_text()), 'validation': 'pending',
+    'compositor': json.loads((root / 'usr/share/harness-os/compositor.json').read_text()),
     'hardware': hardware,
 }
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')

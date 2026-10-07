@@ -71,7 +71,9 @@ if (output !== undefined) {
     const pane = await server.run('new-session', '-d', '-P', '-F', '#{pane_id}', '-x', '40', '-y', '12', '-s', 'update', ...command)
     const screen = () => server!.run('capture-pane', '-p', '-J', '-t', pane)
     const attempts = async () => JSON.parse(await readFile(state, 'utf8')) as Attempt[]
-    const exited = () => server!.run('show-option', '-p', '-v', '-t', pane, '@harness_engine_exit').catch(() => '')
+    // Read as the daemon reads it (`tmuxPaneState`): through a format, which finds the pane's own option
+    // and, on a tmux before 3.0 with no pane options, the window's the mark went on there.
+    const exited = () => server!.run('display-message', '-p', '-t', pane, '#{@harness_engine_exit}').catch(() => '')
     const waitFor = async (check: () => Promise<boolean>) => {
       const deadline = Date.now() + 10_000
       while (Date.now() < deadline) {
@@ -129,7 +131,8 @@ if (output !== undefined) {
     await f.accept()
     await f.waitFor(async () => await f.exited() === String(status))
     expect(await f.attempts()).toHaveLength(1)
-    expect(await f.screen()).toContain('This pane is a shell now')
+    // The pane is marked before the input left for the engine is drained, and says so only after.
+    await f.waitFor(async () => (await f.screen()).includes('This pane is a shell now'))
   })
 
   it('bounds update restarts even when the replacement requests another restart', async () => {

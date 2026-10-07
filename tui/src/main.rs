@@ -6,6 +6,7 @@ mod activity;
 mod app;
 mod capture;
 mod tree;
+mod files;
 mod borders;
 mod cli;
 mod clipboard;
@@ -648,7 +649,7 @@ async fn run(config: config::Config) -> io::Result<()> {
         }
     }
     // (A server with the desk lives on past its last terminal, until kill-server.)
-    ids::leave(Some(app.desk_mode != app::DeskMode::Off && !app.forget_sessions));
+    ids::leave(Some(app.desk_on() && !app.forget_sessions));
     drop(term);
     drop(restore);
     // `hn attach -t nosuch`: tmux's error, and no client.

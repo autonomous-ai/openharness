@@ -43,6 +43,12 @@ export interface ExternalSession {
   launchArgs?: readonly string[]
   /** Its other ids: one Hermes conversation carries on under a new id each time it is compressed. */
   aliases?: readonly string[]
+  /**
+   * Codex archived it (`archived_sessions/`). Found, to read, but not opened: Codex refuses to resume
+   * one until `codex unarchive <id>` puts it back (codex-rs thread_processor.rs, "session <id> is
+   * archived"), so a harness opened on it only showed that error.
+   */
+  archived?: true
 }
 
 /** A file's head that cannot be judged yet: the engine is still writing its first lines. */

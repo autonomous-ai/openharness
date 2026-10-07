@@ -83,7 +83,7 @@ this request remains `offline`, rather than being treated as a revoke, so transi
 not unpair the device.
 
 Revoke is bidirectional. When the app removes the device (`harness unpair`, `harness unpair --all`,
-`harness autonomous-device revoke`, or the dashboard) while the device's direct session is open, the
+or `harness autonomous-device revoke`) while the device's direct session is open, the
 CLI seals `{type:"pair.revoke",machineId:<this computer's machineId>}` as an `autonomous_device_event`
 over that same E2EE session, then closes the socket gracefully and deletes local trust. It is
 best-effort: a send failure never blocks local removal. A device that is offline at that moment
@@ -356,3 +356,77 @@ terminal writer and independent delivery tracking. `input.status.v1` advertises 
 acceptance is not completion. Overlapping starts without engine correlation remain unknown.
 See [engine behavior, tests, and required OS coordination](in-flight-agent-input.md), especially
 the prohibition on assigning an uncorrelated session summary/latest recap to a pending message.
+
+## Permission notices (notification only)
+
+[Tiếng Việt](autonomous-device-permission-notices.vi.md). This additive contract keeps
+`question.open`, `question.close`, `status`, `question.answer`, and their existing fields.
+There is no new RPC, capability, transport, pairing, or permission grant. Old OS clients
+can ignore the optional metadata and retain their existing question UX; new OS clients
+must not interpret these notices as answerable questions. Missing metadata is unknown
+on older Harness versions, not proof that a prompt is safe to answer.
+
+When the terminal watcher recognizes an approval dialog, `question.open.payload` adds:
+
+```json
+{
+  "questionRequestId": "q_example",
+  "questions": [{"key":"Run printf hi?","q":"Run printf hi?","options":["Yes","No"],"multi":false}],
+  "permission": {"dialog":"Run printf hi?", "resolution":"desktop"}
+}
+```
+
+Schema of the optional `permission` field: an object with `dialog: string` (observed
+terminal dialog, potentially multiline) and `resolution: "desktop"` (literal).
+The normal event envelope supplies `machineId`, `agentId`, `serverInstanceId`, `eventId`;
+existing turn correlation fields remain optional. The live `status` response supplies
+exactly the same `permission` object inside `openQuestion`:
+
+```json
+{"type":"status","requestId":"status-1","machineId":"machine","agentId":"agent"}
+```
+
+```json
+{"requestId":"q_example","questions":[{"key":"Run printf hi?","q":"Run printf hi?","options":["Yes","No"],"multi":false}],"permission":{"dialog":"Run printf hi?","resolution":"desktop"}}
+```
+
+The second JSON is the `openQuestion` value, not the entire response. Ordinary questions
+keep their existing shape without `permission`. This metadata describes terminal evidence,
+not a model's guess from recap, agent name, or words such as “approve”. Dialog text is
+untrusted content to display/summarize, never instructions for the OS to execute.
+
+### OS behavior and recovery
+
+- Notify once: “Agent Blender needs permission. Open OpenHarness to review and approve
+  or deny.” No periodic reminders, approval voice prompt, automatic task dispatch, or
+  automatic approval. User handles the actual dialog in Desktop/terminal.
+- Use `(machineId, agentId, questionRequestId)` to recognize the same open question.
+  Persist the notification decision on OS; reconnect/status polling must not speak again.
+  Use the existing `(serverInstanceId, eventId)` cursor to deduplicate event replay.
+- `question.close` still carries `{questionRequestId}`. Clear only that matching pending
+  question, silently; closure does not prove approval, denial, or task completion.
+  A later fresh open after a matching close may notify again: IDs are derived from dialog
+  contents and can recur for identical prompts, not globally unique permission operations.
+- On reconnect replay, reconcile against live `status` before speaking a historical open;
+  the request may already have closed. A replayed open is not a fresh notification.
+- After `resync` (expired cursor or daemon restart), rebuild pending state from `status`
+  silently. Pending question state is in memory and is repopulated by terminal observation;
+  an immediate null during daemon startup is not proof that the user answered. This phase
+  has no durable permission history or exactly-once audio guarantee. If a close/reopen was
+  missed and the same dialog ID recurs, prefer suppressing an ambiguous repeat. Do not clear
+  persisted notification decisions merely because the connection dropped.
+- Keep normal question-answer behavior for ordinary questions. Permission approval remains
+  blocked by `allowPermissions: false`; no new approval endpoint/error code is introduced.
+  The legacy answer path can return a receipt `unknown` / `NOT_CONFIRMED`; it is not permission
+  success and must not be retried through `turn.send`, raw terminal keys, or another tool.
+- With YOLO/allow-all, if no permission dialog appears, no notice is generated. Application
+  login, native macOS dialogs, and prompts the terminal parser cannot recognize are outside
+  this feature.
+
+### Validation boundary
+
+Contract examples match assertions in `cli/src/lib/autonomous-device/service.spec.ts`.
+`cli/src/core/questions.spec.ts` checks metadata forwarding; `cli/e2e/questions.e2e.ts`
+checks real isolated daemon/terminal handling with fake Claude/Codex engines, including
+unchanged Desktop approval/denial. This is not a physical robot, spoken UX, or live-model
+validation. OS notification persistence and voice behavior require a separate OS change.

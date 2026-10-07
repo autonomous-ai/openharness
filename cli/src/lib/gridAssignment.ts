@@ -125,8 +125,9 @@ export function classifyGridAssignment(
   // Grok's launch always passes `-m`, unlike every other argv engine: its grid credential rides on a
   // declared `[model.<id>]` block, so "let the grid route" is spelled by declaring the ROUTER rather
   // than by omitting the flag. Reporting that id verbatim would print `Auto` where the app prints its
-  // own Auto row from null, and `assignmentMatches` would compare 'Auto' against null and call every
-  // routed grok agent misplaced, forever — the trap `readOpencodeGridAssignment` documents below.
+  // own Auto row from null, and a check that the agent is where the person put it would compare 'Auto'
+  // against null and call every routed grok agent misplaced, forever — the trap
+  // `readOpencodeGridAssignment` documents below.
   //
   // Scoped to grok because for anyone else a model literally named `Auto` is a model, and blanking it
   // would be this function inventing a meaning the launch never gave it. Opencode reaches the same
@@ -210,9 +211,9 @@ export async function readOpencodeGridAssignment(
     // OpenCode is the only engine whose provider block has to name something, so a launch with no
     // model picked writes the relay's router id there. That is an OpenCode implementation detail and
     // must not leak: the app's own "Auto" is `model: null`, and a raw `Auto` coming back would be the
-    // same state under a different name — the header would print the id instead of "Auto", and
-    // `assignmentMatches` would compare 'Auto' against null and report every such agent as being on
-    // the wrong target, forever. See the desktop's `kAutoModelId`, and the commit that stopped the
+    // same state under a different name — the header would print the id instead of "Auto", and a check
+    // that the agent is where the person put it would compare 'Auto' against null and report every such
+    // agent as being on the wrong target, forever. See the desktop's `kAutoModelId`, and the commit that stopped the
     // model menu offering the router beside its own Auto row.
     const model = models[0]
     return { baseUrl, model: model.toLowerCase() === GRID_ROUTER_MODEL.toLowerCase() ? null : model }
@@ -280,19 +281,4 @@ export async function gridAssignmentFromEnv(
 export function sameGridAssignment(a: GridAssignment | null, b: GridAssignment | null): boolean {
   if (a === null || b === null) return a === b
   return a.baseUrl === b.baseUrl && (a.model ?? null) === (b.model ?? null)
-}
-
-/** Is this agent already where `networkId` is served, on `model`? */
-export function assignmentMatches(
-  assignment: GridAssignment | null | undefined,
-  networkId: string,
-  model: string | null,
-): boolean {
-  if (!assignment) return false
-  // Containment rather than a parsed id: the grid id IS a path segment of the relay URL today, and
-  // asking "does this endpoint name the grid I picked" survives a control plane that rearranges the
-  // rest of the path. A false negative costs one needless move; a false positive would leave an agent
-  // somewhere the user did not choose and say it was fine.
-  if (!assignment.baseUrl.includes(networkId)) return false
-  return (assignment.model ?? null) === (model ?? null)
 }

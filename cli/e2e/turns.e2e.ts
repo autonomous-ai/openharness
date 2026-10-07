@@ -4,6 +4,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { WORK_EVIDENCE_MS } from '../src/lib/turnActivity.js'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
@@ -62,6 +63,72 @@ describe('how turns end', () => {
     client.send('cancel', { agentId: agent.id })
     await settled(client, agent.id)
     await turn(client, agent.id, 'after the cancel')
+    client.close()
+  })
+
+  it.each(engines)('%s: a turn cancelled while a tool runs settles idle after the aborted tool\'s late output, not unknown for good', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `cancel-tool-${engine}`)
+    const started = client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
+    client.send('message', { agentId: agent.id, content: '!holdtool sleep 45' })
+    await started
+    await until('the agent to read as working', async () => (await row(client, agent.id))?.activity?.state === 'working' || null, 15_000, 250)
+    // The CLI writes the aborted tool's output only after the interrupt, and it reads as work for one
+    // lease. With no turn open nothing probes the agent again: it stuck at unknown until the next prompt
+    // (a real Codex 0.160, found by daemon QA). It must settle idle once that late evidence runs out.
+    const late = client.next(isTurn('tool_end', agent.id), 30_000, 'the aborted tool\'s late output')
+    client.send('cancel', { agentId: agent.id })
+    await late
+    await until('the agent to settle idle', async () => (await row(client, agent.id))?.activity?.state === 'idle' || null, WORK_EVIDENCE_MS + 20_000, 500)
+    await turn(client, agent.id, 'after the cancel')
+    client.close()
+  }, 150_000)
+
+  it('claude: a /goal its hook says is not met yet goes on as a turn of its own, working until it ends', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'goal-loop')
+    const since = client.frames.length
+    const label = 'Continuing goal: every check passes'
+    const continued = (frame: Frame) => isTurn('turn_started', agent.id)(frame) && frame.payload?.userMessage === label
+    // The goal hook refuses the first stop and Claude Code works on in the same turn, with no prompt line:
+    // the daemon closed the turn at that stop and the next pass ran with none open, so it never ended,
+    // had no recap, and read idle whenever its tool outlasted the work lease (real 2.1.283 transcripts).
+    client.send('message', { agentId: agent.id, content: '!goalloop every check passes' })
+    const pass = await client.waitFor(continued, 45_000, 'the goal\'s next pass to start', since)
+    const at = client.frames.indexOf(pass)
+    expect(client.frames.slice(since, at).filter(isTurn('turn_ended', agent.id))).toHaveLength(1)
+    await until('the agent to read as working in the next pass', async () => (await row(client, agent.id))?.activity?.state === 'working' || null, 3_000, 100)
+    const end = await client.waitFor(isTurn('turn_ended', agent.id), 45_000, 'the goal\'s next pass to end', at)
+    expect(end.payload?.aborted).toBeUndefined()
+    // Ended by its own answer, after its tool: not by the Stop of the pass before it, which reached the
+    // daemon after this pass had started (as under load) and force-closed it after the grace while its
+    // tool still ran.
+    const tool = client.frames.slice(at).find(isTurn('tool_end', agent.id))
+    expect(tool && client.frames.indexOf(tool) < client.frames.indexOf(end), 'the pass\'s tool to finish before it ends').toBe(true)
+    await settled(client, agent.id)
+    const page = await client.request<{ events?: Array<{ type: string; payload: Record<string, any> }> }>('session_get', { sessionId: agent.sessionId, limit: 200 }, 30_000)
+    expect((page.events ?? []).filter((event) => event.type === 'user_message').map((event) => event.payload.content))
+      .toEqual(['!goalloop every check passes', label])
+    // Its end leaves nothing open: the next message is a fresh turn.
+    await turn(client, agent.id, 'after the goal')
+    client.close()
+  })
+
+  it('claude: a /goal that pauses after its hook refuses to stop ends its turn, and the agent reads idle', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, 'claude', 'goal-pause')
+    const since = client.frames.length
+    const label = 'Continuing goal: every check passes'
+    client.send('message', { agentId: agent.id, content: '!goalpause every check passes' })
+    const pass = await client.waitFor((frame) => isTurn('turn_started', agent.id)(frame) && frame.payload?.userMessage === label, 45_000, 'the refused stop to continue', since)
+    // Claude Code writes no output and fires no Stop for a pass it pauses: only notices and its own
+    // turn_duration. Nothing else closes the pass that the refusal opened.
+    await client.waitFor(isTurn('turn_ended', agent.id), 20_000, 'the paused pass to end', client.frames.indexOf(pass))
+    await until('the agent to read idle', async () => (await row(client, agent.id))?.activity?.state === 'idle' || null, 15_000, 250)
+    await turn(client, agent.id, 'after the pause')
     client.close()
   })
 

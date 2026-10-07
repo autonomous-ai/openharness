@@ -29,7 +29,7 @@ systemd-resolvconf
 zram-generator
 wireless-regdb
 # Exactly one terminal surface and an on-demand browser.
-labwc
+# The compositor and its shared-library dependencies belong to harness-os.
 foot
 chromium
 mesa
@@ -38,13 +38,15 @@ vulkan-radeon
 libva-intel-driver
 intel-media-driver
 wl-clipboard
+grim
+slurp
 xdg-utils
 xdg-desktop-portal-wlr
 pipewire
 pipewire-pulse
 wireplumber
 swayidle
-swaylock
+gtklock
 brightnessctl
 ttf-dejavu
 ttf-nerd-fonts-symbols-mono

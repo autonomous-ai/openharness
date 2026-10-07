@@ -11,6 +11,7 @@ import 'package:xterm/src/ui/controller.dart';
 import 'package:xterm/src/ui/cursor_type.dart';
 import 'package:xterm/src/ui/custom_text_edit.dart';
 import 'package:xterm/src/ui/gesture/gesture_handler.dart';
+import 'package:xterm/src/ui/ime_echo_hold.dart';
 import 'package:xterm/src/ui/input_map.dart';
 import 'package:xterm/src/ui/keyboard_listener.dart';
 import 'package:xterm/src/ui/keyboard_visibility.dart';
@@ -188,9 +189,17 @@ class TerminalViewState extends State<TerminalView> {
 
   final _viewportKey = GlobalKey();
 
+  /// What is painted over the terminal: [_echoHold], then [_composition].
   String? _composingText;
 
   int _composingBacktrackCells = 0;
+
+  /// The input method's live pre-edit, as its client reports it.
+  String? _composition;
+
+  int _compositionBacktrackCells = 0;
+
+  late final _echoHold = ImeEchoHold(onExpired: _showPreview);
 
   late TerminalController _controller;
 
@@ -221,6 +230,9 @@ class TerminalViewState extends State<TerminalView> {
       // or editing buffer into the newly selected terminal.
       _composingText = null;
       _composingBacktrackCells = 0;
+      _composition = null;
+      _compositionBacktrackCells = 0;
+      _echoHold.reset();
       final currentTerminal = widget.terminal;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || !identical(widget.terminal, currentTerminal)) return;
@@ -252,6 +264,7 @@ class TerminalViewState extends State<TerminalView> {
   @override
   void dispose() {
     widget.terminal.removeListener(_onTerminalChanged);
+    _echoHold.dispose();
     if (widget.focusNode == null) {
       _focusNode.dispose();
     }
@@ -320,12 +333,14 @@ class TerminalViewState extends State<TerminalView> {
           for (var index = 0; index < count; index++) {
             widget.terminal.keyInput(TerminalKey.backspace);
           }
+          if (_echoHold.delete(count)) _showPreview();
         },
         onComposing: _onComposing,
         onAction: (action) {
           _scrollToBottom();
           if (action == TextInputAction.done ||
               action == TextInputAction.newline) {
+            _dropEchoHold();
             widget.terminal.keyInput(TerminalKey.enter);
             _customTextEditKey.currentState?.resetEditingState();
           }
@@ -452,18 +467,38 @@ class TerminalViewState extends State<TerminalView> {
     if (!consumed) {
       widget.terminal.textInput(text);
     }
+    if (_echoHold.insert(text)) _showPreview();
 
     _scrollToBottom();
   }
 
   void _onComposing(String? text, int backtrackCells) {
-    if (text != null && _terminalAlreadyEchoes(text)) {
-      text = null;
-      backtrackCells = 0;
+    final committed = _composition;
+    // Clearing a live composition is how its commit begins: the delete and
+    // insert that carry it to the terminal follow in the same input event.
+    if (text == null &&
+        committed != null &&
+        !_terminalAlreadyEchoes(committed)) {
+      _echoHold.beginCommit();
     }
-    if (!mounted ||
-        (_composingText == text &&
-            _composingBacktrackCells == backtrackCells)) {
+    _composition = text;
+    _compositionBacktrackCells = backtrackCells;
+    _showPreview();
+  }
+
+  /// Paints the commit still awaiting its echo, then the live composition.
+  void _showPreview() {
+    if (!mounted) return;
+    var composing = _composition;
+    if (composing != null &&
+        _echoHold.isEmpty &&
+        _terminalAlreadyEchoes(composing)) {
+      composing = null;
+    }
+    final preview = _echoHold.preview(composing, _compositionBacktrackCells);
+    final text = preview?.text;
+    final backtrackCells = preview?.backtrackCells ?? 0;
+    if (_composingText == text && _composingBacktrackCells == backtrackCells) {
       return;
     }
     setState(() {
@@ -472,25 +507,32 @@ class TerminalViewState extends State<TerminalView> {
     });
   }
 
+  /// A key the terminal answers itself — Return, an arrow, a control chord —
+  /// moves on from the text being held, which the echo may never show.
+  void _dropEchoHold() {
+    if (_echoHold.isEmpty) return;
+    _echoHold.clear();
+    _showPreview();
+  }
+
   /// The native macOS input client keeps a marked range while a remote TUI
   /// has already echoed the exact same characters. Keeping our own preview in
   /// that case duplicates the cells and makes them look underlined/stale until
   /// the next keyframe. A real CJK pre-edit has not reached the PTY yet, so it
   /// does not match the cells before the cursor and remains visible.
-  bool _terminalAlreadyEchoes(String text) {
-    if (text.isEmpty) return false;
+  bool _terminalAlreadyEchoes(String text) =>
+      text.isNotEmpty && _textBeforeCursor().endsWith(text);
+
+  String _textBeforeCursor() {
     final buffer = widget.terminal.buffer;
-    if (buffer.cursorX <= 0) return false;
-    return buffer.currentLine.getText(0, buffer.cursorX).endsWith(text);
+    if (buffer.cursorX <= 0) return '';
+    return buffer.currentLine.getText(0, buffer.cursorX);
   }
 
   void _onTerminalChanged() {
-    final text = _composingText;
-    if (!mounted || text == null || !_terminalAlreadyEchoes(text)) return;
-    setState(() {
-      _composingText = null;
-      _composingBacktrackCells = 0;
-    });
+    if (_composingText == null) return;
+    _echoHold.echoed(_textBeforeCursor());
+    _showPreview();
   }
 
   @visibleForTesting
@@ -591,6 +633,7 @@ class TerminalViewState extends State<TerminalView> {
         !keyboard.isMetaPressed;
     if (isTextInput && linuxMeta) {
       widget.terminal.textInput('\x1b${event.character}');
+      _dropEchoHold();
       _scrollToBottom();
       return KeyEventResult.handled;
     }
@@ -664,6 +707,7 @@ class TerminalViewState extends State<TerminalView> {
 
     if (handled) {
       _scrollToBottom();
+      _dropEchoHold();
       if (key == TerminalKey.enter) {
         _customTextEditKey.currentState?.resetEditingState();
       }

@@ -176,6 +176,11 @@ fn on_key(app: &mut App, key: KeyEvent) {
             if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command); return }
             return crate::tree::key(app, pane, chord, None, true);
         }
+        // The file manager (choose-file), likewise.
+        if let Some(pane) = app.focused().filter(|f| app.panes.get(f).map(|p| p.files_top()).unwrap_or(false)) {
+            if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command); return }
+            return crate::files::key(app, pane, chord, None);
+        }
     }
     if !typing(app) && root_table {
         if let Some(binding) = app.keymap.root_command(&chord).cloned() { app.status_redraws += 1; commands::execute_bound(app, &binding.command); return }
@@ -677,7 +682,12 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
                 if let Some(want) = in_use.or(top) { picker.select(&want); picker.placed = picker.selected_id.clone() }
             }
             picker.right_half = true;
-            picker.hints = vec![("enter", "use · get"), ("C-s", "stop a local model")];
+            // (On a Jev model there is nothing to use: Enter copies how to call it.)
+            picker.hints = match picker.selected_id.as_deref() {
+                Some(id) if id.starts_with("mv:jev:") => vec![("enter", "copy how to call it")],
+                Some(id) if id.starts_with("mv:jevlocal:") => vec![("enter", "get · start · copy"), ("C-s", "stop it")],
+                _ => vec![("enter", "use · get"), ("C-s", "stop a local model")],
+            };
             picker.empty = if crate::models::target(app).is_none() { crate::models::no_target_why(app) } else { "Loading its models…".into() };
             picker.status = app.focused().and_then(|f| app.panes.get(&f)).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone()).unwrap_or_default();
         }
@@ -951,6 +961,7 @@ pub fn run(app: &mut App, command: &str) {
             }
         }
         "tree" => commands::execute(app, "choose-tree -Zw"),
+        "files" => crate::files::open(app, None),
         "info" => {
             // tmux `display-message` with its default format, harness-flavoured.
             let text = match focused_agent(app).and_then(|(m, a)| app.fleet.agent(&m, &a).map(|x| (x.clone(), app.fleet.machine_name(&m)))) {
@@ -2982,7 +2993,7 @@ pub fn is_command(id: &str) -> bool {
     matches!(id, "open" | "palette" | "projects" | "models" | "inbox" | "machines" | "help" | "layout" | "store" | "new" | "terminal" | "send"
         | "broadcast" | "clone" | "restart" | "pause" | "take" | "rename" | "tab" | "rename-tab" | "close-tab" | "next-tab" | "prev-tab"
         | "split-right" | "split-down" | "close-pane" | "zoom" | "equalize" | "pane-tab" | "copy-mode" | "find" | "tab-left" | "tab-right"
-        | "last-tab" | "next-waiting" | "prev-waiting" | "resume-focused" | "last-harness" | "tree" | "info" | "messages" | "keys"
+        | "last-tab" | "next-waiting" | "prev-waiting" | "resume-focused" | "last-harness" | "tree" | "files" | "info" | "messages" | "keys"
         | "theme" | "appearance" | "commands" | "choose-buffer" | "quit" | "keybinds"
         // ── machines & devices ──
         | "connect-machine" | "add-phone" | "devices")
@@ -3029,6 +3040,9 @@ pub fn send_prefix_key(app: &mut App, key: KeyEvent) {
     if let Some(pane) = app.focused().filter(|f| app.panes.get(f).map(|p| p.tree_top()).unwrap_or(false)) {
         return crate::tree::key(app, pane, keys::of(&key), None, true);
     }
+    if let Some(pane) = app.focused().filter(|f| app.panes.get(f).map(|p| p.files_top()).unwrap_or(false)) {
+        return crate::files::key(app, pane, keys::of(&key), None);
+    }
     if let Some(bytes) = app.focused().and_then(|f| app.panes.get(&f).map(|p| (f, p))).and_then(|(f, p)| encode_key(&for_pane(app, f, key), p.mode())) { send_to_focused(app, bytes) }
 }
 
@@ -3045,6 +3059,8 @@ pub fn send_chord(app: &mut App, pane: u64, chord: keys::Chord) {
 pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args) {
     // The tree takes keys itself (window_tree_key); copy and view mode through their table.
     let tree = app.panes.get(&pane).map(|p| p.tree_top()).unwrap_or(false);
+    // The file manager takes them as the tree does.
+    let files = app.panes.get(&pane).map(|p| p.files_top()).unwrap_or(false);
     let in_mode = app.panes.get(&pane).map(|p| p.copy_top()).unwrap_or(false);
     let mut np: u32 = 1;
     if let Some(n) = args.get('N') {
@@ -3074,17 +3090,19 @@ pub fn send_keys(app: &mut App, pane: u64, args: &crate::cmd::Args) {
         for word in &args.values {
             if args.has('H') > 0 {
                 // A byte by its hex value (none sent for one that isn't).
-                if let Ok(n) = u8::from_str_radix(word, 16) { if !word.is_empty() && !word.starts_with('+') { if tree { crate::tree::key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE), None, false) } else if in_mode { inject_mode_key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE)) } else { bytes.push(n) } } }
+                if let Ok(n) = u8::from_str_radix(word, 16) { if !word.is_empty() && !word.starts_with('+') { if tree { crate::tree::key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE), None, false) } else if files { crate::files::key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE), None) } else if in_mode { inject_mode_key(app, pane, keys::Chord::normal(KeyCode::Char(n as char), KeyModifiers::NONE)) } else { bytes.push(n) } } }
                 continue;
             }
             match (!literal).then(|| keys::parse(word).ok()).flatten() {
                 // A key by its name: in a mode, what the mode's table binds it to; a mouse key's
                 // name is nothing to a program (there is no event with it).
                 Some(chord) if tree => crate::tree::key(app, pane, chord, None, false),
+                Some(chord) if files => crate::files::key(app, pane, chord, None),
                 Some(chord) if in_mode => inject_mode_key(app, pane, chord),
                 Some(chord) if keys::is_mouse(&chord.code) => {}
                 Some(chord) => { if let Some(b) = encode_key(&KeyEvent::new(chord.code, chord.mods), mode) { bytes.extend(b) } }
                 None if tree => { for c in word.chars() { crate::tree::key(app, pane, keys::Chord::normal(KeyCode::Char(c), KeyModifiers::NONE), None, false) } }
+                None if files => { for c in word.chars() { crate::files::key(app, pane, keys::Chord::normal(KeyCode::Char(c), KeyModifiers::NONE), None) } }
                 None if in_mode => { for c in word.chars() { inject_mode_key(app, pane, keys::Chord::normal(KeyCode::Char(c), KeyModifiers::NONE)) } }
                 None => bytes.extend(word.as_bytes()),
             }
@@ -3444,7 +3462,7 @@ mod tests {
 
         // Level one: the section list, not the whole flat gallery — sections only, no groups.
         assert!(picker.theme_in.is_none(), "opens on the sections");
-        assert_eq!(picker.rows.first().map(|r| r.id.as_str()), Some("section:status"));
+        assert_eq!(picker.rows.first().map(|r| r.id.as_str()), Some("section:theme"));
         assert!(picker.rows.iter().all(|r| r.id.starts_with("section:")), "level one lists sections only");
 
         // Each section opens onto its options; the theme section lists every bundled theme.
@@ -3473,13 +3491,13 @@ mod tests {
             let Modal::Picker { kind, picker } = app.modal.take().unwrap() else { panic!() };
             assert!(matches!(kind, PickerKind::Theme));
             assert!(picker.theme_in.is_none(), "opens on the sections");
-            assert_eq!(picker.current_id().as_deref(), Some("section:status"));
+            assert_eq!(picker.current_id().as_deref(), Some("section:theme"));
             choose(&mut app, kind, picker, Choice::Enter);
         }
         let Modal::Picker { kind, picker } = app.modal.as_ref().unwrap() else { panic!() };
         assert!(matches!(kind, PickerKind::Theme));
-        assert_eq!(picker.theme_in.as_deref(), Some("status"), "Enter opened the section");
-        assert!(picker.rows.iter().all(|r| r.id.starts_with("border_status:")), "the section's options show");
+        assert_eq!(picker.theme_in.as_deref(), Some("theme"), "Enter opened the section");
+        assert!(picker.rows.iter().all(|r| r.id.starts_with("theme:")), "the section's options show");
         assert!(picker.rows.iter().any(|r| r.lead.iter().any(|s| s.content.as_ref() == "✓ ")), "the current option is marked");
     }
 }

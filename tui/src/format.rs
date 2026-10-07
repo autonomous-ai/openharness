@@ -995,7 +995,7 @@ pub fn now_secs() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| 
 fn started(app: &App) -> i64 { now_secs() - app.started.elapsed().as_secs() as i64 }
 
 /// localtime(3): a time's parts in this computer's zone, for the date the time is on (its DST).
-fn local_tm(t: i64) -> libc::tm {
+pub(crate) fn local_tm(t: i64) -> libc::tm {
     // SAFETY: localtime_r only writes the struct it is given.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     let tt = t as libc::time_t;
@@ -1347,7 +1347,7 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         "socket_path" => crate::ipc::here().map(|p| p.display().to_string()).unwrap_or_default(),
         "client_session" => app.session_name(),
         "client_name" | "client_tty" => crate::app::tty_name(),
-        "pane_mode" => pane.and_then(|p| if clock_on(app, focus) { Some("clock-mode") } else if p.tree_top() { Some(crate::tree::MODE_NAME) } else { p.modes.last().map(|m| if m.view { "view-mode" } else { "copy-mode" }) }).unwrap_or("").into(),
+        "pane_mode" => pane.and_then(|p| if clock_on(app, focus) { Some("clock-mode") } else if p.tree_top() { Some(crate::tree::MODE_NAME) } else if p.files_top() { Some(crate::files::MODE_NAME) } else { p.modes.last().map(|m| if m.view { "view-mode" } else { "copy-mode" }) }).unwrap_or("").into(),
         // window_copy_formats: a pane in copy or view mode has them (some only with a selection
         // or a search); others none.
         "scroll_position" | "rectangle_toggle" | "copy_cursor_x" | "copy_cursor_y" | "selection_start_x" | "selection_start_y" | "selection_end_x" | "selection_end_y"
@@ -1816,6 +1816,23 @@ mod tests {
             "Project 0=label-0/1/Project 0=label-0/0/1/%0;Project 1=label-1/1/Project 1=label-1/0/1/%1;");
         app.active = 1;
         assert_eq!(super::expand(&app, "#{window_name}/#{window_active}/#{pane_id}", 1, Some(2), false), "Project 1/1/%1");
+    }
+
+    /// What the status line renders when the current window is `filled` and the tab name is `pane`.
+    #[test]
+    fn window_status_overrides_reach_the_status_line() {
+        let mut app = status_fixture(2, 2);
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let overrides = crate::options::window_status_overrides("pane", "filled");
+        for (o, v) in &overrides { let _ = app.options.set(o, Some(v), &global, "", 0); }
+        let fmt = app.options.get("status-format[0]", &app.tabs[0].id, None).unwrap();
+        let out = super::expand(&app, &fmt, 0, Some(1), true);
+        // The current window is marked filled: no `*`, its cell takes the swapped status-line
+        // colours (the theme's background on the theme's foreground), and in `pane` mode it is
+        // named for its active pane — not the window's auto-renamed name.
+        assert!(!out.contains('*'), "no star marker: {out}");
+        assert!(out.contains("list=focus") && out.contains("bg="), "the current window is filled: {out}");
+        assert!(out.contains("Review project 0") && !out.contains("0:Project 0"), "the pane's title, not the window's: {out}");
     }
 
     #[test]

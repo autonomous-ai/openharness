@@ -709,4 +709,353 @@ void main() {
       }
     },
   );
+
+  testWidgets(
+    'Jev models to get are in their own section, never folded under the chat downloads',
+    (tester) async {
+      final app = await _localFixture();
+      try {
+        app.localInventory = {
+          ..._inventory(),
+          'models': [
+            ...(_inventory()['models'] as List),
+            // More chat downloads than the list shows unfolded, ranked before the Jev models as the
+            // daemon lists them.
+            for (var i = 0; i < 8; i++)
+              {
+                'id': 'unsloth/Chat-$i-GGUF',
+                'name': 'Chat-$i',
+                'state': 'available',
+                'quant': 'Q4_K_M',
+                'sizeBytes': 4 * _gib,
+                'canStart': true,
+              },
+            for (final (id, name) in [
+              ('jev:ggml-org/Kev-0.8B-GGUF', 'kev-0.8b'),
+              ('jev:ggml-org/lev-GGUF', 'lev'),
+              ('jev:ggml-org/Clef-GGUF', 'clef'),
+            ])
+              {
+                'id': id,
+                'name': name,
+                'kind': 'decision',
+                'state': 'available',
+                'quant': 'Q8_0',
+                'sizeBytes': 2 * _gib,
+                'canStart': true,
+              },
+          ],
+        };
+        await app.modelManager.refresh(force: true);
+        final picker = await _open(tester, app);
+        for (final name in ['kev-0.8b', 'lev', 'clef']) {
+          final row = _row(picker, name);
+          expect(picker.modelSection(row), ModelSearchSection.jevCatalog);
+          expect(picker.modelRowAction(row), 'Get');
+        }
+        // Under Decision models, Get for this Mac is headed like the chat models' downloads.
+        expect(
+          picker.modelSectionLabel(ModelSearchSection.jevCatalog),
+          'Get for ${thisComputerName()} · 64 GB',
+        );
+        // Each kind has its heading: Chat models over the chat sections, Decision models over its own —
+        // here only Get for this Mac, since none is on this computer yet.
+        expect(
+          find.byKey(const ValueKey('model-section:group:Chat models')),
+          findsOneWidget,
+        );
+        final decision = find.byKey(
+          const ValueKey('model-section:group:Decision models'),
+        );
+        await tester.scrollUntilVisible(
+          decision,
+          200,
+          scrollable: find
+              .descendant(
+                of: find.byType(SwarmSearchResults),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        );
+        expect(decision, findsOneWidget);
+        expect(
+          find.byKey(
+            const ValueKey('model-section:Decision models: Get models'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(
+            const ValueKey('model-section:Decision models: Your models'),
+          ),
+          findsNothing,
+        );
+        // The fold counts chat downloads alone: ten (the fixture's two and eight more), five shown.
+        expect(
+          picker.modelRowTitle(
+            picker.rows.singleWhere(picker.isModelDownloadsRow),
+          ),
+          'More models (5)',
+        );
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'a running Jev model is never stopped to start a chat model, nor stops one',
+    (tester) async {
+      final app = await _localFixture(running: false);
+      try {
+        Map<String, dynamic> jev(String id, String name, String state) => {
+          'id': id,
+          'name': name,
+          'kind': 'decision',
+          'state': state,
+          'quant': 'Q8_0',
+          'sizeBytes': _gib,
+          'canStart': state != 'running',
+          'canStop': state == 'running',
+        };
+        app.localInventory = {
+          ..._inventory(running: false),
+          'models': [
+            ...(_inventory(running: false)['models'] as List),
+            jev('jev:ggml-org/Laya-GGUF', 'laya-english', 'running'),
+            jev('jev:ggml-org/Kev-4B-GGUF', 'kev-4b', 'downloaded'),
+          ],
+        };
+        await app.modelManager.refresh(force: true);
+        final picker = await _open(tester, app);
+        // No chat model runs: Use on one has nothing to stop, the Jev model running included.
+        expect(picker.otherRunningModel(_row(picker, 'gemma-4-12B')), isNull);
+        // Starting another Jev model stops nothing either.
+        expect(picker.otherRunningModel(_row(picker, 'kev-4b')), isNull);
+
+        // A chat model running is still the one to stop.
+        final withChat = _inventory();
+        app.localInventory = {
+          ...withChat,
+          'models': [
+            ...(withChat['models'] as List),
+            jev('jev:ggml-org/Laya-GGUF', 'laya-english', 'running'),
+          ],
+        };
+        await app.modelManager.refresh(force: true);
+        await tester.pumpAndSettle();
+        expect(
+          picker.otherRunningModel(_row(picker, 'gemma-4-12B'))?.name,
+          'Qwen3.6-35B-A3B',
+        );
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'the arrows walk the Jev models in the order they are drawn, a running one first',
+    (tester) async {
+      final app = await _localFixture();
+      try {
+        Map<String, dynamic> jev(String id, String name, String state) => {
+          'id': id,
+          'name': name,
+          'kind': 'decision',
+          'state': state,
+          'quant': 'Q8_0',
+          'sizeBytes': _gib,
+          'canStart': state != 'running',
+          'canStop': state == 'running',
+        };
+        app.localInventory = {
+          ..._inventory(),
+          'models': [
+            ...(_inventory()['models'] as List),
+            jev('jev:ggml-org/Laya-GGUF', 'laya-english', 'downloaded'),
+            jev('jev:ggml-org/Kev-0.8B-GGUF', 'kev-0.8b', 'running'),
+            jev('jev:ggml-org/Kev-4B-GGUF', 'kev-4b', 'available'),
+            jev('jev:ggml-org/Clef-GGUF', 'clef', 'available'),
+          ],
+        };
+        app.inventory = const GridModels(
+          gridName: 'home',
+          models: [
+            GridModel(id: 'Qwen3.6-35B-A3B', node: 'This Mac'),
+            GridModel(id: 'kev-0.8b', node: 'This Mac', decision: true),
+          ],
+        );
+        await app.modelManager.refresh(force: true);
+        final picker = await _open(tester, app);
+        final drawn = picker.rows
+            .where(
+              (row) =>
+                  picker.modelSection(row).group == ModelSearchGroup.decision,
+            )
+            .map((row) => row.title)
+            .toList();
+        expect(drawn, ['kev-0.8b', 'laya-english', 'kev-4b', 'clef']);
+        // The one running, which the grid lists, says it is serving — live; Enter copies how to call it.
+        final serving = _row(picker, 'kev-0.8b');
+        expect(picker.modelRowStatus(serving), 'Serving');
+        expect(picker.modelRowLive(serving), isTrue);
+        expect(picker.modelRowAction(serving), 'Copy');
+        expect(picker.modelRowStatus(_row(picker, 'laya-english')), 'Start');
+        picker.move(
+          picker.rows.indexOf(_row(picker, 'laya-english')) - picker.cursor,
+        );
+        await tester.pumpAndSettle();
+        await key(tester, LogicalKeyboardKey.arrowUp);
+        await tester.pumpAndSettle();
+        expect(picker.selected!.title, 'kev-0.8b');
+        await key(tester, LogicalKeyboardKey.arrowDown);
+        await tester.pumpAndSettle();
+        expect(picker.selected!.title, 'laya-english');
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
+
+  testWidgets(
+    'Get on a Jev model starts it, never moves the harness, and then it is one Jev row to stop or call',
+    (tester) async {
+      const laya = 'jev:ggml-org/Laya-GGUF';
+      final app = await _localFixture(onModel: 'Qwen3.6-35B-A3B');
+      try {
+        app.localInventory = {
+          ..._inventory(),
+          'models': [
+            ...(_inventory()['models'] as List),
+            {
+              'id': laya,
+              'name': 'laya-english',
+              'kind': 'decision',
+              'state': 'available',
+              'sizeBytes': 449397600,
+              'quant': 'Q8_0',
+              'canStart': true,
+            },
+          ],
+        };
+        await app.modelManager.refresh(force: true);
+        final picker = await _open(tester, app);
+        var row = _row(picker, 'laya-english');
+        expect(picker.modelSection(row), ModelSearchSection.jevCatalog);
+        expect(picker.canSelectModel(row), isFalse);
+        expect(picker.canGetModelForUse(row), isFalse);
+        expect(picker.modelRowAction(row), 'Get');
+        expect(picker.actionLabel(row), 'Get');
+        picker.move(picker.rows.indexOf(row) - picker.cursor);
+        await tester.pumpAndSettle();
+        expect(
+          find.descendant(
+            of: find.byType(SwarmResourcePreview),
+            matching: find.textContaining(
+              "updates Grid's model engine first if it is too old to serve Jev models",
+            ),
+          ),
+          findsOneWidget,
+        );
+
+        expect(find.text('Enter Get  ·  Tab controls'), findsOneWidget);
+        // Get is the whole of it — a start, which downloads, updates and runs — not a download alone,
+        // and no harness is moved onto it.
+        await key(tester, LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(app.actions, [(machine: 'm', model: laya, start: true)]);
+        expect(app.downloads, isEmpty);
+        expect(app.selections, isEmpty);
+
+        // Running, and listed by the own grid as a Jev model: one row, under Jev models, to stop or call.
+        final running = app.localInventory;
+        app.localInventory = {
+          ...running,
+          'models': [
+            for (final model in running['models'] as List)
+              if ((model as Map<String, dynamic>)['id'] == laya)
+                {
+                  ...model,
+                  'state': 'running',
+                  'canStart': false,
+                  'canStop': true,
+                }
+              else
+                model,
+          ],
+        };
+        app.inventory = const GridModels(
+          gridName: 'home',
+          models: [
+            GridModel(id: 'Qwen3.6-35B-A3B', node: 'This Mac'),
+            GridModel(id: 'laya-english', node: 'This Mac', decision: true),
+          ],
+        );
+        await app.modelManager.refresh(force: true);
+        await tester.pumpAndSettle();
+        final layas = picker.rows
+            .where((r) => r.title == 'laya-english')
+            .toList();
+        expect(layas, hasLength(1));
+        row = layas.single;
+        expect(picker.modelSection(row), ModelSearchSection.jevLocal);
+        expect(picker.modelRowAction(row), 'Copy');
+        picker.move(picker.rows.indexOf(row) - picker.cursor);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('resource-action:picker.model_stop')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('resource-action:picker.accept')),
+          findsOneWidget,
+        );
+        expect(_inPreview(jevRequest('home', 'laya-english')), findsOneWidget);
+
+        // Stopped, it is the same row, still selected: Enter must not pass to whatever row the list
+        // then has under the cursor.
+        final layaId = row.id;
+        app.localInventory = {
+          ...running,
+          'models': [
+            for (final model in running['models'] as List)
+              if ((model as Map<String, dynamic>)['id'] == laya)
+                {
+                  ...model,
+                  'state': 'downloaded',
+                  'canStart': true,
+                  'canStop': false,
+                }
+              else
+                model,
+            {
+              'id': 'jev:ggml-org/Clef-GGUF',
+              'name': 'clef',
+              'kind': 'decision',
+              'state': 'available',
+              'sizeBytes': 28732215360,
+              'quant': 'Q8_0',
+              'canStart': true,
+            },
+          ],
+        };
+        app.inventory = const GridModels(
+          gridName: 'home',
+          models: [GridModel(id: 'Qwen3.6-35B-A3B', node: 'This Mac')],
+        );
+        await app.modelManager.refresh(force: true);
+        await tester.pumpAndSettle();
+        expect(picker.selected!.title, 'laya-english');
+        expect(picker.selected!.id, layaId);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        app.dispose();
+      }
+    },
+  );
 }

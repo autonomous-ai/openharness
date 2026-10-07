@@ -5,6 +5,13 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CODEX_STARTUP_RETRY_PROBE } from './codexStartupRetry.js'
 
+// The probe gives tmux 2 s, as it should in a pane. Here tmux is a /bin/sh script, and under 12 busy loops on a
+// 12-core Mac (load 60) it took longer than that to start: the probe gave up and printed nothing, and a test
+// read that as `Unexpected end of JSON input`. These tests are about the evidence the probe reads, so its
+// deadline is lifted here; the probe is otherwise the one a pane runs.
+const PROBE = CODEX_STARTUP_RETRY_PROBE.replace('timeout: 2000,', 'timeout: 120000,')
+if (PROBE === CODEX_STARTUP_RETRY_PROBE) throw new Error('the probe no longer gives tmux `timeout: 2000`: update this spec')
+
 const timeout = 'Error: account/read failed during TUI bootstrap: account/read failed: workspace routing discovery timed out (code -32603)'
 const updated = '🎉 Update ran successfully! Please restart Codex.'
 const dirs: string[] = []
@@ -19,7 +26,7 @@ function fixture() {
   writeFileSync(tmux, '#!/bin/sh\ncat "$HARNESS_TEST_SCREEN"\n', { mode: 0o755 })
   const probe = (mode: string, baseline = '', pane = '%7') => {
     try {
-      return { status: 0, out: execFileSync(process.execPath, ['-e', CODEX_STARTUP_RETRY_PROBE, mode, tmux, pane, baseline], {
+      return { status: 0, out: execFileSync(process.execPath, ['-e', PROBE, mode, tmux, pane, baseline], {
         env: { ...process.env, HARNESS_TEST_SCREEN: screen }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       }) }
     } catch (error) { return { status: (error as { status: number }).status, out: '' } }

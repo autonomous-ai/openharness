@@ -68,6 +68,10 @@ export interface ReadNode {
   name: string
   engine: string
   models: string[]
+  /** The subset of `models` that are Jev (System One) decision models — the overview's `systemone_models`.
+   *  They answer typed decisions at `/v1/systemone` and cannot chat, so they are never an agent's model.
+   *  Absent from the CLI fallback, which cannot tell: absent says nothing, where `[]` says "none". */
+  decisions?: string[]
   /** The provider's account, when the grid publishes it (it withholds it on an `os-community` grid).
    *  Read only to decide whether a node is the account's own, and never persisted. */
   providerEmail: string | null
@@ -160,6 +164,7 @@ function readNodes(value: unknown): ReadNode[] {
     name: text(node.name),
     engine: text(node.engine),
     models: strings(node.models, MAX_MODELS_PER_NODE),
+    decisions: strings(node.systemone_models, MAX_MODELS_PER_NODE),
     providerEmail: typeof node.provider_email === 'string' && node.provider_email ? node.provider_email : null,
   }))
 }

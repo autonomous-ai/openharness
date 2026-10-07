@@ -1,5 +1,6 @@
 // One protocol session per USB dial, sharing the desktop's event source.
 // Voice buffers, decoding, firmware transfers and disconnects remain per dial.
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DialVerdicts } from './dialPortVerdicts.js'
 import { findDialPorts, portInUse, SerialLink, type DialPort } from './serial.js'
@@ -9,7 +10,7 @@ import type { DialLog } from './dialLog.js'
 
 type Surface = Pick<CableSession, keyof CableSession>
 type SessionConstructor = new (host: CableHost, log: DialLog, open: PortOpener) => Surface
-type Entry = { port: DialPort; session: Surface; attached: boolean; status: DialStatus }
+type Entry = { port: DialPort; session: Surface; attached: boolean; status: DialStatus; faults: number[] }
 type OpenPort = (path: string, onData: (chunk: Buffer) => void, onClosed: (why: string) => void) => Promise<CablePort>
 export interface CableFleetOptions {
   discover?: () => Promise<DialPort[]>
@@ -25,6 +26,40 @@ export interface CableFleetOptions {
   canUseUsb?: () => boolean
   /** How often a board ruled out is checked for another program working on it. */
   watchEveryMs?: number
+  /** `HARNESSD_TEST_FAULTS`: `dial.<serial>` makes every call that dial's session makes into the desk throw,
+   *  for the end-to-end suite's proof that one dial failing costs the others nothing. */
+  faults?: ReadonlySet<string>
+  /** The first wait before a dropped dial's port is looked at again (tests shorten it). */
+  dropBackoffMs?: number
+}
+
+/** Faults within a minute that drop one dial; a hostile stream drops it at once. */
+const FAULTS_TO_DROP = 5
+/** How long a dropped dial's port is left alone before it is looked at again: from here, doubling to the
+ *  most, and back to here once it has stayed up for `DROP_FORGIVEN_MS`. */
+const DROP_BACKOFF_MS = 5_000
+const DROP_BACKOFF_MAX_MS = 60_000
+const DROP_FORGIVEN_MS = 300_000
+
+/**
+ * Discovery for the end-to-end suite's dials, pseudo-terminals (e2e/harness/fakeDial.ts) named by
+ * `HARNESSD_TEST_DIAL_PORT`: they are not on the USB bus that discovery reads, and they are the only ports
+ * then looked at. A path is one dial; a `.json` file lists several, `[{ path, serial }]`, read at every scan,
+ * so a test can plug and unplug them. Nothing otherwise: a real daemon finds its dials on USB.
+ */
+export function testDialDiscovery(path: string | undefined, read: (file: string) => string = (file) => readFileSync(file, 'utf8')): Pick<CableFleetOptions, 'discover'> {
+  if (!path) return {}
+  const dial = (at: string, serialNumber: string): DialPort => ({ path: at, vendorId: 0x303a, productId: 0x1001, serialNumber })
+  if (!path.endsWith('.json')) return { discover: async () => [dial(path, 'E2E-DIAL')] }
+  return {
+    discover: async () => {
+      let listed: unknown
+      try { listed = JSON.parse(read(path)) } catch { return [] }
+      return (Array.isArray(listed) ? listed : [])
+        .filter((row): row is { path: string; serial: string } => typeof row?.path === 'string' && typeof row?.serial === 'string')
+        .map((row) => dial(row.path, row.serial))
+    },
+  }
 }
 
 export class CableFleet {
@@ -44,6 +79,8 @@ export class CableFleet {
   /** For each board ruled out: when it was last checked for another program's use, and whether it was in use. */
   private readonly watched = new Map<string, { at: number; wasBusy: boolean }>()
   private readonly watchEveryMs: number
+  /** Dials dropped for their faults, by id: when their port is looked at again, and the wait after that. */
+  private readonly dropped = new Map<string, { until: number; backoffMs: number; at: number }>()
 
   constructor(private readonly Session: SessionConstructor, private readonly host: CableHost,
               private readonly logs: string, private readonly Log: typeof DialLog,
@@ -138,6 +175,8 @@ export class CableFleet {
     if (this.stopped) return
     for (const [id, port] of present) {
       if (this.entries.has(id)) continue
+      // Dropped for its faults a moment ago: its port is left alone until its wait is over.
+      if ((this.dropped.get(id)?.until ?? 0) > Date.now()) continue
       // A board somebody else has open is somebody's work in progress (a flash, a monitor, a console).
       // Two readers on one tty interleave bytes, so it is not opened, and looked at again next scan.
       if (await this.inUse(port.path)) {
@@ -147,7 +186,7 @@ export class CableFleet {
       }
       this.heldNotes.delete(port.path)
       if (this.stopped) return
-      const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined! }
+      const entry: Entry = { port, attached: false, status: { attached: false }, session: undefined!, faults: [] }
       const attached = () => {
         if (entry.attached) return
         const first = ![...this.entries.values()].some(e => e.attached)
@@ -185,8 +224,11 @@ export class CableFleet {
             this.publish()
           }
           if (key === 'log') return (line: string) => this.host.log(`${line} [usb ${id}]`)
+          if (key === 'onFault') return (error: unknown, hostile?: boolean) => this.faulted(id, entry, error, hostile === true)
           const value = Reflect.get(target, key, target)
-          return typeof value === 'function' ? value.bind(target) : value
+          if (typeof value !== 'function') return value
+          if (this.options.faults?.has(`dial.${id}`)) return () => { throw new Error(`injected fault: dial.${id}`) }
+          return value.bind(target)
         },
       })
       const opener: PortOpener = async (onData, onClosed) => {
@@ -202,6 +244,30 @@ export class CableFleet {
       this.entries.set(id, entry)
       entry.session.start()
     }
+  }
+
+  /**
+   * One dial's session failed, or its far end is flooding the port. The dial alone is dropped — its
+   * session stopped and its port let go — once it has failed five times in a minute, or at once for a
+   * flood, and its port is looked at again after a wait that doubles while it keeps failing. Every other
+   * dial goes on: a fault in one device is that device's, and the process they share must not end for it.
+   */
+  private faulted(id: string, entry: Entry, error: unknown, hostile: boolean): void {
+    const now = Date.now()
+    entry.faults = [...entry.faults.filter((at) => now - at < 60_000), now]
+    if (!hostile && entry.faults.length < FAULTS_TO_DROP) return
+    if (this.entries.get(id) !== entry) return
+    const last = this.dropped.get(id)
+    const first = this.options.dropBackoffMs ?? DROP_BACKOFF_MS
+    const backoffMs = !last || now - last.at > DROP_FORGIVEN_MS ? first : Math.min(last.backoffMs * 2, DROP_BACKOFF_MAX_MS)
+    this.dropped.set(id, { until: now + backoffMs, backoffMs, at: now })
+    this.host.log(`cable: ${entry.port.path} dropped (${hostile ? 'flooding the port' : `${entry.faults.length} faults in a minute`}: ${String(error instanceof Error ? error.message : error)}) — this dial alone; its port is looked at again in ${Math.round(backoffMs / 1000)} s [usb ${id}]`)
+    // Off this call stack: the session is in the middle of the call that failed, and stop() waits on it.
+    setTimeout(() => {
+      if (this.entries.get(id) !== entry) return
+      this.entries.delete(id)
+      void entry.session.stop().finally(() => this.publish())
+    }, 0)
   }
 
   /**

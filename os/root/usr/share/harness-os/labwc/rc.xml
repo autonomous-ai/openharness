@@ -11,14 +11,20 @@
       <action name="If">
         <query identifier="chromium*" />
         <then><action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action></then>
-        <else><action name="ForEach"><query identifier="chromium*" /><then><action name="Raise" /><action name="Focus" /></then><none><action name="Execute" command="hn-browser" /></none></action></else>
+        <else>
+          <!-- ForEach visits front-to-back. Reverse once without changing focus,
+               then raise/focus back to the original order: the browser window
+               the user left must stay on top, even with several windows open. -->
+          <action name="ForEach"><query identifier="chromium*" /><then><action name="Raise" /></then></action>
+          <action name="ForEach"><query identifier="chromium*" /><then><action name="Raise" /><action name="Focus" /></then><none><action name="Execute" command="hn-browser" /></none></action>
+        </else>
       </action>
     </keybind>
     <keybind key="W-Return"><action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action></keybind>
     <keybind key="A-Tab"><action name="NextWindowImmediate" /></keybind>
-    <keybind key="W-l"><action name="Execute" command="swaylock -f -c 000000" /></keybind>
+    <keybind key="W-l"><action name="Execute" command="/usr/lib/harness-os/lock" /></keybind>
     <keybind key="W-u">
-      <action name="Execute" command="/usr/lib/harness-os/open-updates" />
+      <action name="Execute" command="/usr/lib/harness-os/screen-action updates" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <keybind key="W-i">
@@ -30,17 +36,35 @@
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <keybind key="W-n">
-      <action name="Execute" command="hn os-action new" />
+      <action name="Execute" command="/usr/lib/harness-os/screen-action new" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
     <keybind key="W-t">
-      <action name="Execute" command="hn os-action terminal" />
+      <action name="Execute" command="/usr/lib/harness-os/screen-action terminal" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
+    <!-- Super+e is run-or-raise for the file manager window, then back to hn, as Super+b is. -->
+    <keybind key="W-e">
+      <action name="If">
+        <query identifier="harness-files" />
+        <then><action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action></then>
+        <else>
+          <action name="ForEach"><query identifier="harness-files" /><then><action name="Raise" /><action name="Focus" /></then><none><action name="Execute" command="/usr/lib/harness-os/files" /></none></action>
+        </else>
+      </action>
+    </keybind>
+    <!-- Super+o asks for a folder or a file in a new file manager window. -->
+    <keybind key="W-o"><action name="Execute" command="/usr/lib/harness-os/files --open" /></keybind>
     <keybind key="W-m">
-      <action name="Execute" command="hn os-action connect" />
+      <action name="Execute" command="/usr/lib/harness-os/screen-action connect" />
       <action name="ForEach"><query identifier="hn" /><then><action name="Raise" /><action name="Focus" /></then></action>
     </keybind>
+    <!-- Screenshots go to ~/Pictures/Screenshots and the clipboard. Super+p/r stand in for Print
+         on keyboards without one. Focus stays where it is: raising hn would capture hn instead. -->
+    <keybind key="Print"><action name="Execute" command="/usr/lib/harness-os/screenshot full" /></keybind>
+    <keybind key="S-Print"><action name="Execute" command="/usr/lib/harness-os/screenshot region" /></keybind>
+    <keybind key="W-p"><action name="Execute" command="/usr/lib/harness-os/screenshot full" /></keybind>
+    <keybind key="W-r"><action name="Execute" command="/usr/lib/harness-os/screenshot region" /></keybind>
     <keybind key="XF86MonBrightnessUp"><action name="Execute" command="brightnessctl --class=backlight --min-value=1 set +5%" /></keybind>
     <keybind key="XF86MonBrightnessDown"><action name="Execute" command="brightnessctl --class=backlight --min-value=1 set 5%-" /></keybind>
     <keybind key="XF86KbdBrightnessUp"><action name="Execute" command="brightnessctl --class=leds --device='*::kbd_backlight' set +10%" /></keybind>
@@ -52,6 +76,9 @@
   <mouse><context name="Root"><mousebind button="Right" action="Press"><action name="None" /></mousebind></context></mouse>
   <windowRules>
     <windowRule identifier="hn" serverDecoration="no" />
+    <windowRule identifier="harness-files" serverDecoration="no" />
+    <!-- The Open dialog draws its own frame; labwc centres a new window by default. -->
+    <windowRule identifier="harness-open" serverDecoration="no" />
     <windowRule identifier="chromium*" type="normal" serverDecoration="no"><action name="Maximize" /></windowRule>
   </windowRules>
 </labwc_config>

@@ -2,6 +2,7 @@
 #include "pets.h"
 #include "focus_faces.h"
 #include "theme.h"
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -45,7 +46,7 @@
 // where the mark is measured from.
 enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, COL_X = 41, COL_W = 384,
        RECAP_X = 51, RECAP_W = 364, RECAP_LINES = 4, RECAP_PITCH = 43, RECAP_BASELINE = 30,
-       RECAP_AREA_Y = 176, RECAP_AREA_H = 200, EMPTY_W = 276,
+       RECAP_AREA_Y = 176, RECAP_AREA_H = 200, RECAP_CAP = 22, EMPTY_W = 276,
        SCENE_LINE_Y = 334 };   // the working scene ends at y 325
 #define FOCUS_RECAP   0xd6d6d2u   // the "Kindle dark" layout's soft white
 #define FOCUS_FG      0xeaeaf0u
@@ -181,6 +182,45 @@ bool ht_focus_scene_shown(const ht_character_face_t *f, const char *recap)
 {
     return working_scene(f, recap) != NULL;
 }
+static void scene_origin(const ht_pet_scene_t *sc, int bias, int *x, int *y);
+/*
+ * THE ALERT (owner, 2026-10-05: no bell on the working face; the pet tells you, then a blue dot at 12 o'clock): a
+ * notice that arrives while the working scene shows plays the pet's alert scene ONCE from f->notice_ms, in the
+ * working scene's place, its bubble the overlay. An alert with no frames of its own (Claude's, owner 2026-10-06:
+ * "bubble only") leaves the working scene playing and pops its bubble over it, placed from the working scene's
+ * origin, in the run after the working scene's overlay. NULL when there is none to play now.
+ */
+static const ht_pet_scene_t *alert_scene(const ht_character_face_t *f, const char *recap, uint32_t *step)
+{
+    const ht_pet_scene_t *work = working_scene(f, recap);
+    const ht_pet_t *pet = pet_for(f);
+    if (!work || !pet->alert_scene || !f->notice_ms) return NULL;
+    const ht_pet_scene_t *a = pet->alert_scene;
+    uint32_t age = f->clock_ms - f->notice_ms;
+    if (age >= (uint32_t)a->steps * a->step_ms) return NULL;
+    if (step) *step = age / a->step_ms;
+    return a;
+}
+uint32_t ht_focus_alert_ms(const ht_character_face_t *f, const char *recap)
+{
+    const ht_pet_t *pet = pet_for(f);
+    if (!working_scene(f, recap) || !pet->alert_scene) return 0;
+    return (uint32_t)pet->alert_scene->steps * pet->alert_scene->step_ms;
+}
+void ht_focus_alert_from(const ht_character_face_t *f, int *x, int *y)
+{
+    // The bubble's centre on its last step: the overlay frame's middle, from the scene's origin (scene_origin, bias 4).
+    const ht_pet_t *pet = pet_for(f);
+    *x = HT_WIDTH / 2; *y = HT_HEIGHT / 2;
+    if (!pet || !pet->alert_scene || !pet->alert_scene->overlay) return;
+    const ht_pet_scene_t *a = pet->alert_scene;
+    unsigned last = a->steps - 1;
+    const ht_cell_frame_t *b = &a->overlay->frames[a->overlay->loop[last]];
+    int ox, oy;
+    scene_origin(a->frames || !pet->working_scene ? a : pet->working_scene, 4, &ox, &oy);
+    *x = ox + a->overlay->at[last][0] + b->cols * b->cell / 2;
+    *y = oy + a->overlay->at[last][1] + b->rows * b->cell / 2;
+}
 static unsigned scene_step(const ht_pet_scene_t *sc, uint32_t clock_ms)
 {
     return (clock_ms / sc->step_ms) % sc->steps;
@@ -190,6 +230,13 @@ static const ht_cell_frame_t *scene_frame(const ht_pet_scene_t *sc, unsigned lev
 {
     if (level >= HT_PET_SCENE_LEVELS) level = HT_PET_SCENE_LEVELS - 1;
     return &sc->frames[sc->loop[level * sc->steps + scene_step(sc, clock_ms)]];
+}
+// The frame's own offset at this level and clock (ht_pet_scene_t.step_dy), in px down.
+static int scene_dy(const ht_pet_scene_t *sc, unsigned level, uint32_t clock_ms)
+{
+    if (!sc->step_dy) return 0;
+    if (level >= HT_PET_SCENE_LEVELS) level = HT_PET_SCENE_LEVELS - 1;
+    return sc->step_dy[level * sc->steps + scene_step(sc, clock_ms)];
 }
 // Where the scene's top-left sits on the glass: centred, `bias` px lower (the slot's own nudge), moved by its dx, dy.
 static void scene_origin(const ht_pet_scene_t *sc, int bias, int *x, int *y)
@@ -208,6 +255,49 @@ static void scene_overlay(ht_scene_t *s, const ht_pet_scene_t *sc, int bias, uns
     int x, y;
     scene_origin(sc, bias, &x, &y);
     ht_cell_sprite(s, x + sc->overlay->at[i][0], y + sc->overlay->at[i][1], &sc->overlay->frames[sc->overlay->loop[i]]);
+}
+/*
+ * A scene's bars (pets.h ht_pet_bars_t): bar j's height at this clock and level, h = round(min + swing * a *
+ * level / 4) with a = (sin(2 pi t / period + j * phase) + 1) / 2; the box is h + 1 px tall, top at cy - h / 2.
+ */
+enum { BARS_TICK_MS = 50 };    // redraw cadence while the bars move
+static int bar_height(const ht_pet_bars_t *b, int j, unsigned level, uint32_t clock_ms)
+{
+    if (level >= HT_PET_SCENE_LEVELS) level = HT_PET_SCENE_LEVELS - 1;
+    float t = (float)(clock_ms % b->period_ms);
+    float a = (sinf(6.2831853f * t / (float)b->period_ms + (float)j * b->phase) + 1.0f) * 0.5f;
+    return (int)floorf((float)b->min_h + (float)b->swing * a * (float)level / (float)(HT_PET_SCENE_LEVELS - 1) + 0.5f);
+}
+static void scene_bar(ht_scene_t *s, const ht_pet_scene_t *sc, int bias, int j, unsigned level, uint32_t clock_ms)
+{
+    const ht_pet_bars_t *b = sc->bars;
+    int x, y, h = bar_height(b, j, level, clock_ms);
+    scene_origin(sc, bias, &x, &y);
+    ht_box(s, x + b->x[j], y + b->cy - h / 2, b->w, h + 1, b->radius, b->fill[j], b->fill[j]);
+}
+/*
+ * A scene's waves (pets.h ht_pet_waves_t): arc k of side `side` (0 = right, 1 = left) at this clock and level, as a
+ * ring arc over the scene's origin. u = (t / period + k / count) mod 1 carries it from r_far in to r_near; its
+ * brightness a = sin(pi u) * (0.4 + 0.6 * level / 4) scales the colour over the black ground (opaque, no blend of
+ * the colour with the ground), and below WAVE_HIDDEN it is not drawn: an empty ring in the same slot.
+ */
+enum { WAVES_TICK_MS = 50 };     // redraw cadence while the waves glide
+static const float WAVE_HIDDEN = 0.12f;
+static void scene_wave(ht_scene_t *s, const ht_pet_scene_t *sc, int bias, int side, int k, unsigned level, uint32_t clock_ms)
+{
+    const ht_pet_waves_t *w = sc->waves;
+    if (level >= HT_PET_SCENE_LEVELS) level = HT_PET_SCENE_LEVELS - 1;
+    float u = (float)(clock_ms % w->period_ms) / (float)w->period_ms + (float)k / (float)w->count;
+    if (u >= 1.0f) u -= 1.0f;
+    float a = sinf(3.14159265f * u) * (0.4f + 0.6f * (float)level / (float)(HT_PET_SCENE_LEVELS - 1));
+    int x, y;
+    scene_origin(sc, bias, &x, &y);
+    int cx16 = x * 16 + w->cx16 + (side ? -w->gap16 : w->gap16), cy16 = y * 16 + w->cy16;
+    if (a < WAVE_HIDDEN) { ht_ring_arc(s, cx16, cy16, 0, 0, 0, 0, 0); return; }
+    int r16 = (int)floorf((float)w->r_far16 - (float)(w->r_far16 - w->r_near16) * u + 0.5f);
+    unsigned c[3];
+    for (int i = 0; i < 3; i++) c[i] = (unsigned)floorf((float)w->rgb[i] * a + 0.5f);
+    ht_ring_arc(s, cx16, cy16, r16, w->w16, side ? 180 : 0, w->half_deg, ht_rgb(c[0] << 16 | c[1] << 8 | c[2]));
 }
 /*
  * THE LISTENING WORD on the lower arc of the voice face (owner, 2026-10-02: rhythm B, mockup/listening_arc.py):
@@ -258,6 +348,7 @@ static const ht_pet_scene_t *sending_scene(const ht_character_face_t *f)
 static bool step_same(const ht_pet_scene_t *sc, unsigned at, unsigned a, unsigned b)
 {
     if (sc->loop[at + a] != sc->loop[at + b]) return false;
+    if (sc->step_dy && sc->step_dy[at + a] != sc->step_dy[at + b]) return false;
     const ht_pet_overlay_t *o = sc->overlay;
     return !o || (o->loop[at + a] == o->loop[at + b] && o->at[at + a][0] == o->at[at + b][0] &&
                   o->at[at + a][1] == o->at[at + b][1]);
@@ -281,18 +372,33 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
         unsigned level = f->pose.level >= HT_PET_SCENE_LEVELS ? HT_PET_SCENE_LEVELS - 1 : f->pose.level;
         if (ls) {   // the scene's next frame or the word's next sweep step, whichever comes first
             uint32_t frame = scene_next_ms(ls, level, f->clock_ms), sweep = sweep_next_ms(f->clock_ms);
+            if (ls->waves) {   // the arcs glide with the clock at every level (0.4 of the brightness at level 0)
+                uint32_t tick = (f->clock_ms / WAVES_TICK_MS + 1) * WAVES_TICK_MS;
+                if (!frame || tick < frame) frame = tick;
+            }
+            if (ls->bars && level) {   // the bars move with the clock: wake every tick (flat at level 0, no wake)
+                uint32_t tick = (f->clock_ms / BARS_TICK_MS + 1) * BARS_TICK_MS;
+                if (!frame || tick < frame) frame = tick;
+            }
             return frame && frame < sweep ? frame : sweep;
         }
         const ht_pet_scene_t *ss = sending_scene(f);
         return ss ? scene_next_ms(ss, 0, f->clock_ms) : 0;
     }
+    uint32_t alert_step;
+    const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step);
     const ht_pet_scene_t *sc = working_scene(f, recap);
+    if (alert) {   // its next step, or the work again after the last; under a bubble only, the work's next frame too
+        uint32_t next = f->notice_ms + (alert_step + 1) * alert->step_ms, work = scene_next_ms(sc, 0, f->clock_ms);
+        return !alert->frames && work && work < next ? work : next;
+    }
     if (sc) return scene_next_ms(sc, 0, f->clock_ms);
     ht_pet_state_t state = pet_state(f, recap);
     uint32_t each = pet->step_ms[state], now = f->clock_ms / each;
-    const ht_pet_step_t *cur = &pet->loops[state][now % HT_PET_STEPS];
-    for (unsigned i = 1; i <= HT_PET_STEPS; i++) {
-        const ht_pet_step_t *p = &pet->loops[state][(now + i) % HT_PET_STEPS];
+    unsigned steps = ht_pet_steps(pet);
+    const ht_pet_step_t *cur = &pet->loops[state][now % steps];
+    for (unsigned i = 1; i <= steps; i++) {
+        const ht_pet_step_t *p = &pet->loops[state][(now + i) % steps];
         if (p->frame != cur->frame || p->dy != cur->dy) return (now + i) * each;
     }
     return 0;
@@ -378,14 +484,20 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
     // A pet with a listening scene (Claude's headphones Clawd) draws it, nodding with the mic level,
     // in place of the seven bars; its step follows the face's clock (140 ms), 0 when there is none.
     const ht_pet_scene_t *scene = listening ? listening_scene(f) : NULL;
-    // Sending with one (Claude's rocket Clawd) takes the same slot, centred, and the sparkles go empty.
+    // Sending with one (Claude's Clawd posting a letter) takes the same slot, centred, and the sparkles go empty.
     const ht_pet_scene_t *launch = listening ? NULL : sending_scene(f);
 
     /*
      * ELEVEN RUNS, ALWAYS, IN THIS ORDER — seven bars, the scene's slot, three sparkles — whichever
      * half is showing; the bars are empty under a scene and the slot is empty without one. A scene's
      * extras sit in slots it leaves empty: the first bar's is the "Listening" arc (a listening scene), the
-     * first sparkle's the scene's overlay (Codex's bubble or plane), after the scene's own run.
+     * first sparkle's the scene's overlay (Codex's plane), after the scene's own run. A scene with BARS
+     * (Codex's listening bubble) uses runs 0 (the arc), 1 (the bubble, before the scene: the robot's ink
+     * never reaches the bubble's box, so the order does not show) and 8, 9, 10 (the three bar boxes, over
+     * the bubble); the rest stay empty. A scene with WAVES (Muse's listening scene) uses run 0 (the arc),
+     * runs 1-6 (its six ring arcs, three on the right then three on the left, before the scene: the body
+     * never reaches the band, so the order does not show; an arc that is dim enough to be hidden is an
+     * empty ring in its slot) and the scene's run 7; sparkles 8-10 stay empty.
      *
      * ht_damage() diffs run index against run index and repaints all 466x466 the moment the count or
      * the order moves, so the half that is idle is emitted empty rather than skipped. Recording and
@@ -401,6 +513,14 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
             ht_arc_status_sweep(s, ht_rgb(FOCUS_VOICE), LISTENING_WORD, &ht_arc_inter_lower, gain);
             continue;
         }
+        if (k == 1 && scene && scene->bars) {
+            scene_overlay(s, scene, -6, f->pose.level, f->clock_ms, &ht_wave);
+            continue;
+        }
+        if (scene && scene->waves && k >= 1 && k <= 2 * (int)scene->waves->count) {
+            scene_wave(s, scene, -6, (k - 1) / scene->waves->count, (k - 1) % scene->waves->count, f->pose.level, f->clock_ms);
+            continue;
+        }
         char bar[4] = {0};
         if (listening && !scene) wave_glyph(WAVE[frame % WAVE_FRAMES][k], bar);
         int x = HT_WIDTH / 2 + (k - WAVE_BARS / 2) * WAVE_PITCH_X10 / 10 - ht_wave.width / 2;
@@ -410,10 +530,10 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
     int sx, sy;
     if (scene) {
         scene_origin(scene, -6, &sx, &sy);
-        ht_cell_sprite(s, sx, sy, scene_frame(scene, f->pose.level, f->clock_ms));
+        ht_cell_sprite(s, sx, sy + scene_dy(scene, f->pose.level, f->clock_ms), scene_frame(scene, f->pose.level, f->clock_ms));
     } else if (launch) {
         scene_origin(launch, 0, &sx, &sy);
-        ht_cell_sprite(s, sx, sy, scene_frame(launch, 0, f->clock_ms));
+        ht_cell_sprite(s, sx, sy + scene_dy(launch, 0, f->clock_ms), scene_frame(launch, 0, f->clock_ms));
     } else no_text(s, &ht_wave);
 
     /*
@@ -425,6 +545,10 @@ static void voice_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t fram
     int spark_y = (HT_HEIGHT - ht_spark.height) / 2;
     int lit = (frame % WAVE_FRAMES) / 5;      // three steps, 200 ms each, per the old busy sweep
     for (int i = 0; i < 3; i++) {
+        if (scene && scene->bars) {
+            scene_bar(s, scene, -6, i, f->pose.level, f->clock_ms);
+            continue;
+        }
         if (i == 0 && (scene ? scene : launch) && (scene ? scene : launch)->overlay) {
             scene_overlay(s, scene ? scene : launch, scene ? -6 : 0, scene ? f->pose.level : 0, f->clock_ms, &ht_spark);
             continue;
@@ -583,24 +707,44 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
 
     // The body, laid out first.
     ht_lv_label_t body;
-    int recap_h = 0;
+    int recap_h = 0, recap_n = 0;
     if (has_recap) {
         char cut[HT_TEXT_BYTES];
         recap_cut(cut, sizeof cut, recap, rf, RECAP_W);
         int n = ht_lv_label(&body, rf, cut, RECAP_W, RECAP_LINES, false);
         if (n > RECAP_LINES) n = RECAP_LINES;
         recap_h = n * RECAP_PITCH;
+        recap_n = n;
     } else if (status[0]) {
         ht_lv_label(&body, sf, status, COL_W, 1, true);
     } else {
         ht_lv_label(&body, ef, resting_line(f), EMPTY_W, 2, false);
     }
     // A recap's block is centred in its fixed area, its first baseline RECAP_BASELINE under the block's
-    // top; a line without a recap is centred on the glass. The mark halfway between the name and the
-    // area's top or the line: the gap above it equals the gap below, whatever the recap's length.
+    // top; a line without a recap is centred on the glass.
     int body_y = has_recap ? RECAP_AREA_Y + (RECAP_AREA_H - recap_h) / 2 + RECAP_BASELINE - ht_pfont(rf)->ascent
                            : HT_HEIGHT / 2 - sf->height / 2;
-    int below = has_recap ? RECAP_AREA_Y : body_y;
+    /*
+     * THE MARK BETWEEN THE NAME AND THE RECAP (owner, 2026-10-05): a short recap is centred in the four lines' area,
+     * so a mark halfway to the AREA's top left a wide gap under it. It is centred between the name and the recap's
+     * first line as drawn (its capitals' top), and a pet grows into the room a short recap leaves: 2x over one line,
+     * 1.75x over two, 1.5x over three (one 2x drawing, zoomed: pets.h `cells`). Without a recap, halfway to the line,
+     * or resting, where a four-line recap puts it.
+     */
+    // Resting (no recap, no line of status) the mark stands where a full recap's does: the same place on both faces
+    // (design 2026-10-06, focus-project.html "Rest": "same position as Recap").
+    int full_cap = RECAP_AREA_Y + (RECAP_AREA_H - RECAP_LINES * RECAP_PITCH) / 2 + RECAP_BASELINE - RECAP_CAP;
+    // A status of its own ("Try again" after a failed voice turn) is one line in the middle: the mark sizes and sits
+    // as over a one-line recap (owner, 2026-10-06).
+    int below = has_recap || retry ? body_y + ht_pfont(rf)->ascent - RECAP_CAP : empty ? full_cap : body_y;
+    int size = retry ? 2 : has_recap && recap_n >= 1 && recap_n <= 3 ? 3 - recap_n : -1;   // 0 1.5x, 1 1.75x, 2 2x; -1 1x
+    // Claude's block of a body reads larger than the others at the same size (owner, 2026-10-06): it stays at 1.5x
+    // resting and over a recap of one to three lines, and 1x over four.
+    if (f->engine && !strcmp(f->engine, "claude") && ((has_recap && recap_n <= 3) || empty || retry)) size = 0;
+    // Codex's robot reads small at 1x over a full recap, and 1.5x was too big (owner, 2026-10-06): over four lines it is
+    // 1.25x (the eighths nearest the asked 1.3x), placed like the sizes over a shorter recap.
+    bool codex_full = f->engine && !strcmp(f->engine, "codex") && has_recap && recap_n >= 4;
+    if (codex_full) size = 0;
     int mark_top = TITLE_BOTTOM + (below - TITLE_BOTTOM - MARK_SIZE) / 2;
 
     // The name on the top curve, the octopus's arc; a tap there opens the pane list.
@@ -612,20 +756,38 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     int mark_x = (HT_WIDTH - MARK_SIZE) / 2;
     const ht_pet_t *pet = pet_for(f);
     const ht_pet_scene_t *scene = working_scene(f, recap);
-    if (scene) {
+    uint32_t alert_step = 0;
+    const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step);
+    if (alert && alert->frames) {
+        // A notice just came: the pet's alert in the working scene's place, once.
+        int sx, sy;
+        scene_origin(alert, 4, &sx, &sy);
+        ht_cell_sprite(s, sx, sy + (alert->step_dy ? alert->step_dy[alert_step] : 0), &alert->frames[alert->loop[alert_step]]);
+    } else if (scene) {
         // The working scene in the mark's slot: centred on the glass, a touch low for its hat.
         int sx, sy;
         scene_origin(scene, 4, &sx, &sy);
-        ht_cell_sprite(s, sx, sy, scene_frame(scene, 0, f->clock_ms));
+        ht_cell_sprite(s, sx, sy + scene_dy(scene, 0, f->clock_ms), scene_frame(scene, 0, f->clock_ms));
     } else if (pet) {
         // The engine's pet, centred in the mark's box, lifted by its step's hop.
         bool hold = pet_holds(f);
         ht_pet_state_t state = hold ? HT_PET_IDLE : pet_state(f, recap);
-        unsigned step = hold ? 0 : (f->clock_ms / pet->step_ms[state]) % HT_PET_STEPS;
+        unsigned step = hold ? 0 : (f->clock_ms / pet->step_ms[state]) % ht_pet_steps(pet);
         const ht_pet_step_t *p = &pet->loops[state][step];
-        int px = (HT_WIDTH - pet->w) / 2, py = mark_top + (MARK_SIZE - pet->h) / 2 + p->dy;
-        if (pet->cells) ht_cell_sprite(s, px, py, &pet->cells[p->frame]);
-        else ht_icon(s, px, py, &pet->frames[p->frame]);
+        if (pet->cells) {
+            // One 2x drawing, shown at 1x — or larger over a short recap, centred between the name and the recap's
+            // first line, its hop scaled with it (zoom in eighths of the drawing: 4 = 1x, 6, 7, 8 = 2x).
+            static const uint8_t zooms[4] = {4, 6, 7, 8};
+            const ht_cell_frame_t *fr = &pet->cells[p->frame];
+            int z = codex_full ? 5 : zooms[size + 1];
+            int pw = (fr->cols * fr->cell * z + 7) / 8, ph = (fr->rows * fr->cell * z + 7) / 8;
+            int px = (HT_WIDTH - pw) / 2;
+            int py = (size >= 0 ? TITLE_BOTTOM + (below - TITLE_BOTTOM - ph) / 2 : mark_top + (MARK_SIZE - ph) / 2) + p->dy * z / 4;
+            ht_cell_sprite_zoom(s, px, py, fr, (unsigned)z);
+        } else {
+            int px = (HT_WIDTH - pet->w) / 2, py = mark_top + (MARK_SIZE - pet->h) / 2 + p->dy;
+            ht_icon(s, px, py, &pet->frames[p->frame]);
+        }
     } else if (engine >= 0) ht_icon(s, mark_x, mark_top, &ht_icon_engine56[engine]);
     else no_text(s, rf);
 
@@ -636,7 +798,14 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                               s->background);
     else for (int n = 0; n < RECAP_LINES; n++) {
         // The scene's overlay (Codex's sandboxes) takes the first line's slot, empty without a recap.
-        if (n == 0 && scene && scene->overlay) scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
+        // The alert's bubble: in the overlay's slot, or the next one when the working scene plays on under it.
+        if (alert && n == (alert->frames ? 0 : 1)) {
+            int sx, sy;
+            scene_origin(alert->frames ? alert : scene, 4, &sx, &sy);
+            ht_cell_sprite(s, sx + alert->overlay->at[alert_step][0], sy + alert->overlay->at[alert_step][1],
+                           &alert->overlay->frames[alert->overlay->loop[alert_step]]);
+        } else if (n == 0 && scene && scene->overlay && !(alert && alert->frames))
+            scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
         else no_text(s, rf);
     }
 
@@ -655,8 +824,14 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                    ht_rgb(retry ? FOCUS_FG : FOCUS_VOICE), s->background);
     else no_text(s, sf);
 
-    // Nothing yet: said in the resting grey.
-    if (empty) label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, body_y, ef->height, ef,
+    // Nothing yet: said in the resting grey. With nothing standing above it (no pet, no mark: design 2026-10-06
+    // "No pane"), its lines are 50 px apart and centred on the glass, each baseline where a browser puts Inter's.
+    bool bare = !pet && engine < 0;
+    if (empty && bare) {
+        int n = body.lines < 2 ? body.lines : 2, top = HT_HEIGHT / 2 - n * 50 / 2;
+        label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, top + 25 + 36 * 93 / 256 - ht_pfont(ef)->ascent, 50, ef,
+                   ht_rgb(FOCUS_EMPTY), s->background);
+    } else if (empty) label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, body_y, ef->height, ef,
                           ht_rgb(FOCUS_EMPTY), s->background);
     else { no_text(s, ef); no_text(s, ef); }
 

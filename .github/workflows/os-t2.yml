@@ -1,0 +1,152 @@
+name: Harness OS T2 image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_run_id:
+        description: 'Reuse an exact T2 image built from this source for machine acceptance'
+        required: false
+        type: string
+  push:
+    branches: ['os-candidate/t2-*']
+    paths: ['os/**', '.github/workflows/os-t2.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-t2-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    if: ${{ !inputs.image_run_id }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Require frozen public runtime inputs for the private T2 candidate
+        run: |
+          df -h .
+          python3 - <<'PY'
+          import subprocess
+          expected = {'tui': '1ec2af97a8695bdcc8429ddc498747bd86eada08',
+                      'cli': '27f50e77fa9bdc8de75a64c9e9166c932c559a8b',
+                      'store': 'ea5589e2d8db518a85453fa3c9efc60d29a16085'}
+          for path, tree in expected.items():
+              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == tree, path
+          PY
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-t2.yml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.0'
+          targets: x86_64-unknown-linux-musl
+      - name: Build the frozen runtime and verify the pinned kernel archive
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl=1.2.4-2 musl-dev=1.2.4-2 musl-tools=1.2.4-2 zstd
+          make -C os runtime
+          python3 - <<'PY'
+          import hashlib, json, subprocess
+          from pathlib import Path
+          expected = {'harness-tui': 'bd221059a24d7f7ca8ce69bb3b6d69c2fb66cb655aae6658627c278a548a8fa8',
+                      'cli.js': '23b46a7c498fd1ef8ff5936aeb431f1de08b959b957141fa732d2cede870d147',
+                      'notify.mjs': '5690159e964f9ce022bdb2a5e4bc9d853e595e822f254478df241e1386dde68e'}
+          for name, digest in expected.items():
+              assert hashlib.sha256((Path('os/work/runtime') / name).read_bytes()).hexdigest() == digest, name
+          lock = json.loads(Path('os/platforms/apple-t2/kernel.json').read_text())
+          folder = Path('os/work/t2-inputs')
+          folder.mkdir(parents=True, exist_ok=False)
+          package = lock['package']
+          subprocess.run(['curl', '--fail', '--location', '--proto', '=https', '--proto-redir', '=https',
+                          '--max-time', '180', package['url'], '-o', str(folder / package['filename'])], check=True)
+          PY
+          python3 os/tools/prepare-t2-kernel.py --package os/work/t2-inputs/*.pkg.tar.zst --output os/work/t2-kernel-bundle
+      - name: Build the pinned OS compositor
+        run: bash os/tools/build-compositor-container.sh os/work/compositor
+      - name: Build the isolated T2 live and installed image
+        run: |
+          docker run --rm --privileged \
+            -v "$PWD:/src" -w /src/os \
+            -e SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            -e HARNESS_OS_SOURCE_SHA="$(git rev-parse HEAD)" \
+            -e HARNESS_OS_RUNTIME_DIR=/src/os/work/runtime \
+            -e HARNESS_OS_PLATFORM=apple-t2 \
+            -e HARNESS_OS_T2_BUNDLE=/src/os/work/t2-kernel-bundle \
+            archlinux:base-devel@sha256:51dd3d24f7fba779e7c471caeee7804c50e8c134ad948e19685a1c83a42facc3 \
+            bash -c 'set -euo pipefail; pacman -Syu --noconfirm archiso python git; bash build.sh'
+      - name: Retain private image and exact package inputs
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-t2-image
+          path: os/dist/
+          retention-days: 7
+          compression-level: 0
+      - name: Retain diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-t2-build-diagnostics
+          path: |
+            os/work/profile/profiledef.sh
+            os/work/profile/pacman.conf
+            os/work/archiso/x86_64/airootfs/var/log/pacman.log
+          retention-days: 7
+
+  machine:
+    needs: image
+    if: ${{ always() && !cancelled() && (needs.image.result == 'success' || inputs.image_run_id != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v6
+        with:
+          name: harness-os-t2-image
+          path: os/dist
+          run-id: ${{ inputs.image_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Install native VM tools
+        run: |
+          python3 -m unittest discover -s os/tests -p test_t2_observer.py -v
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+      - name: Install offline, preserve firmware, cold boot, update and recover
+        run: python3 os/tests/t2_install_vm.py --iso os/dist/*.iso --output os/test-results/t2-install
+      - name: Show bounded failure diagnostics
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for name in ['receipt.json', 'qemu.log', 'serial.log']:
+              path = Path('os/test-results/t2-install') / name
+              if path.exists():
+                  print(name, path.read_text(errors='replace')[-16000:])
+          PY
+      - name: Retain source, boot, preservation and recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-t2-install
+          path: |
+            os/test-results/t2-install/
+            !os/test-results/t2-install/*.qcow2
+            !os/test-results/t2-install/OVMF_VARS.fd
+            !os/test-results/t2-install/synthetic-firmware/
+            !os/test-results/t2-install/*.tar
+          retention-days: 14
+          compression-level: 0

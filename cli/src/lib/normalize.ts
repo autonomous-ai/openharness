@@ -135,6 +135,12 @@ const LOCAL_ONLY_COMMANDS = new Set([
   'upgrade', 'vim',
 ])
 
+/** A whole prompt that is one of LOCAL_ONLY_COMMANDS, typed plainly: `/compact`, `/model opus`. */
+function isLocalOnlyCommandLine(text: string): boolean {
+  const name = /^\/([A-Za-z][\w-]*)(?:\s|$)/.exec(text.trim())?.[1]
+  return name !== undefined && LOCAL_ONLY_COMMANDS.has(name.toLowerCase())
+}
+
 /**
  * `<command-name>/goal</command-name>…<command-args>x</command-args>` → `/goal x`.
  *
@@ -402,8 +408,11 @@ function userTextRaw(msg: NormalizedMessage): string | null {
  * then the text block is empty and there is nothing left to parse.
  */
 function taskNotificationEvent(raw: Record<string, unknown>): LiveEvent | null {
-  if (raw.type !== 'user') return null
-  const content = (raw.message as { content?: unknown } | undefined)?.content ?? raw.content
+  // One that finishes while its parent still works comes as a `queued_command` attachment, the more common
+  // delivery (real 2.1.270–2.1.287). Read from user records alone, it never finished on the dial.
+  const attachment = raw.type === 'attachment' ? raw.attachment as { type?: unknown; prompt?: unknown } | undefined : undefined
+  if (raw.type !== 'user' && attachment?.type !== 'queued_command') return null
+  const content = attachment ? attachment.prompt : (raw.message as { content?: unknown } | undefined)?.content ?? raw.content
   let text = ''
   if (typeof content === 'string') text = content
   else if (Array.isArray(content)) {
@@ -430,6 +439,11 @@ function isInterruptLine(msg: NormalizedMessage): boolean {
 function realUserText(msg: NormalizedMessage): string | null {
   const text = userTextRaw(msg)
   if (text === null || INTERRUPT_MARKER.test(text)) return null
+  // Claude Code 2.1.290 also writes a built-in command it runs itself as a plain user line ("/compact"),
+  // ahead of the tagged record `commandPromptText` already keeps out. Taken as a prompt, it opened a turn
+  // nothing ever closed: after a /compact the agent read working, then unknown, until the next message
+  // (found by daemon QA). The same list decides both forms.
+  if (isLocalOnlyCommandLine(text)) return null
   // A `!command` line is not a prompt — skip it so the turn (and its recap) stays anchored to the last
   // real ask. Only when nothing but bash blocks remain: a message that also carries prose still counts.
   if (!stripBashModeBlocks(text)) return null
@@ -656,11 +670,30 @@ export function compactEventFromRaw(raw: Record<string, unknown>): SessionEvent[
 // ── Full replay (session_get) ─────────────────────────────────────────────────────────────────────
 
 /** Convert a whole session's raw JSONL lines to replay events (same render path as streaming). */
+/**
+ * A message the person typed while Claude Code was working. Claude Code delivers it into the running
+ * turn as a `queued_command` attachment, not a prompt record. The live view leaves it out on purpose
+ * (it opens no turn there), but the history must show it: without it a reopened conversation answered a
+ * question it never showed (found by daemon QA with Claude Code 2.1.290). Sub-agent hand-backs and
+ * Claude's own continuations arrive the same way, and they are not the person's words.
+ */
+function queuedHumanPrompt(raw: Record<string, unknown>): string | null {
+  if (raw.type !== 'attachment') return null
+  const attachment = raw.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown; origin?: { kind?: unknown } } | undefined
+  if (attachment?.type !== 'queued_command' || attachment.commandMode !== 'prompt' || attachment.origin?.kind !== 'human') return null
+  const prompt = attachment.prompt
+  const text = typeof prompt === 'string' ? prompt
+    : Array.isArray(prompt) ? prompt.map((block) => (block as { type?: unknown; text?: unknown })?.type === 'text' ? String((block as { text?: unknown }).text ?? '') : '').join('\n')
+    : ''
+  return text.trim() ? text : null
+}
+
 export function messagesToEvents(rawLines: string[]): SessionEvent[] {
   const events: SessionEvent[] = []
   const toolIdToName = new Map<string, string>()
   let thinkingCounter = 0
   let inAutoFixSequence = false
+  let continuedAt = -1
 
   for (const line of rawLines) {
     if (!line.trim()) continue
@@ -668,6 +701,15 @@ export function messagesToEvents(rawLines: string[]): SessionEvent[] {
     try { raw = JSON.parse(line) as Record<string, unknown> } catch { continue }
     const compact = compactEventFromRaw(raw)
     if (compact) { events.push(...compact); continue } // compact boundary → indicator; summary/meta → suppressed
+    const queued = queuedHumanPrompt(raw)
+    if (queued) { events.push({ type: 'user_message', payload: { content: queued } }); continue }
+    // A pass a blocking Stop hook continued, as the live view starts it (lineToEvents), once per pass.
+    const continued = stopHookContinuation(raw)
+    if (continued !== null) {
+      if (continuedAt !== events.length - 1) events.push({ type: 'user_message', payload: { content: continued } })
+      continuedAt = events.length - 1
+      continue
+    }
     const msg = transformLine(raw)
     if (!msg?.message) continue
 
@@ -779,6 +821,33 @@ export interface TurnState {
   /** Before the counter in a live thinking id. A fold that starts mid-transcript names its window here
    *  (lib/attachTranscript.ts), so its ids cannot repeat ones another fold of the same session sent. */
   thinkingPrefix?: string
+  /** The open turn is one a blocking Stop hook continued (`stopHookContinuation`), not a prompt's. */
+  continued?: boolean
+}
+
+/**
+ * The turn a Stop hook that blocked keeps going, or null. `/goal` is built on such a hook, and people write
+ * their own. Claude Code writes the hook's feedback as a hidden `isMeta` user line, then one of these, then
+ * works on in the SAME turn with no prompt line between (real 2.1.282/2.1.283):
+ *   {"type":"attachment","attachment":{"type":"goal_status","met":false,"condition":"…","reason":"…"}}
+ *   {"type":"attachment","attachment":{"type":"hook_blocking_error","hookEvent":"Stop","blockingError":{"blockingError":"…"}}}
+ * The pass's end_turn had closed the turn, so the rest ran with none open: no turn_ended, no recap, and
+ * idle whenever a tool outlasted the work lease. A `sentinel` goal_status restates an active goal at start.
+ * The label matches the Codex normalizer's goal continuations.
+ */
+export function stopHookContinuation(raw: Record<string, unknown>): string | null {
+  if (raw.type !== 'attachment') return null
+  const attachment = raw.attachment as Record<string, unknown> | undefined
+  if (attachment?.type === 'goal_status' && attachment.met === false && attachment.sentinel !== true) {
+    const condition = typeof attachment.condition === 'string' ? attachment.condition.trim() : ''
+    return condition ? `Continuing goal: ${condition}` : 'Continuing goal'
+  }
+  if (attachment?.type === 'hook_blocking_error' && attachment.hookEvent === 'Stop') {
+    const blocking = attachment.blockingError as { blockingError?: unknown } | undefined
+    const reason = typeof blocking?.blockingError === 'string' ? blocking.blockingError.trim().split('\n')[0].trim() : ''
+    return reason ? `Continuing: ${reason.length > 200 ? `${reason.slice(0, 197)}...` : reason}` : 'Continuing'
+  }
+  return null
 }
 
 export function newTurnState(): TurnState {
@@ -876,6 +945,24 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
   // launch ack, and this record is not a prompt.
   const finished = taskNotificationEvent(raw)
   if (finished) return [finished]
+  // A Stop hook that blocked: the pass's end_turn closed the turn Claude Code works on in. Open it again.
+  const continued = stopHookContinuation(raw)
+  if (continued !== null) {
+    if (state.turnOpen) return []
+    state.turnOpen = true
+    state.pendingTools.clear()
+    state.continued = true
+    return [{ type: 'turn_started', payload: { userMessage: continued } }]
+  }
+  // Claude Code's own record that its turn is over. A continued pass can end with no output: when the hook
+  // refuses again, Claude Code pauses the goal and writes only notices and this (real 2.1.283), with no
+  // end_turn or Stop to close what was opened above. Every other turn is closed as before.
+  if (raw.type === 'system' && raw.subtype === 'turn_duration') {
+    if (!state.turnOpen || !state.continued) return []
+    state.turnOpen = false
+    state.pendingTools.clear()
+    return [{ type: 'turn_ended', payload: {} }]
+  }
   const msg = transformLine(raw)
   if (!msg?.message) return []
 
@@ -896,6 +983,7 @@ export function lineToEvents(rawLine: string, state: TurnState): LiveEvent[] {
       if (state.turnOpen) events.push({ type: 'turn_ended', payload: {} })
       state.turnOpen = true
       state.pendingTools.clear()
+      state.continued = false
       events.push({ type: 'turn_started', payload: { userMessage: userText } })
       return events
     }

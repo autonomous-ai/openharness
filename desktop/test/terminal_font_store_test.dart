@@ -140,4 +140,51 @@ void main() {
       expect(store.family, TerminalFontChoice.defaultForPlatform);
     },
   );
+
+  test('an installed family is saved by name and comes back with its fallback chain', () async {
+    final storage = _FakeStore();
+    final store = TerminalFontStore(storage: storage);
+    await store.setSelection(const InstalledFontFamily('JetBrains Mono'));
+
+    expect(storage.values['terminal_font_family'], 'font:JetBrains Mono');
+    expect(store.family, isNull);
+    expect(store.value.fontFamily, 'JetBrains Mono');
+    // A glyph the face lacks still comes from a monospaced one: the platform's default first.
+    expect(store.value.fontFamilyFallback, [
+      terminalFontFamily,
+      ...terminalFontFallback,
+    ]);
+    expect(store.isDefault, isFalse);
+
+    final reopened = TerminalFontStore(storage: storage);
+    await reopened.load();
+    expect(reopened.selection, const InstalledFontFamily('JetBrains Mono'));
+    expect(reopened.value.fontFamily, 'JetBrains Mono');
+
+    await reopened.reset();
+    expect(reopened.family, TerminalFontChoice.defaultForPlatform);
+    expect(reopened.isDefault, isTrue);
+  });
+
+  test(
+    'the same choice is the same style object, preset or installed',
+    () async {
+      final store = TerminalFontStore(storage: _FakeStore());
+      await store.setSelection(const InstalledFontFamily('PT Mono'));
+      final first = store.value;
+      await store.setFamily(TerminalFontChoice.menlo);
+      await store.setSelection(const InstalledFontFamily('PT Mono'));
+      expect(identical(store.value, first), isTrue);
+    },
+  );
+
+  test(
+    'an empty installed name in the file falls back to the default',
+    () async {
+      final storage = _FakeStore()..values['terminal_font_family'] = 'font:  ';
+      final store = TerminalFontStore(storage: storage);
+      await store.load();
+      expect(store.family, TerminalFontChoice.defaultForPlatform);
+    },
+  );
 }

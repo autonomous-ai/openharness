@@ -1,0 +1,68 @@
+{
+ "spec": "rdkit-series/1",
+ "updatedAt": "2026-10-05T08:55:27Z",
+ "molecules": [
+  {
+   "name": "butane",
+   "smiles": "CCCC",
+   "formula": "C4H10",
+   "inchikey": "IJDNQMDRQITEOD-UHFFFAOYSA-N",
+   "sdf": "butane.sdf",
+   "svg": "butane.svg",
+   "json": "butane.molecule.json",
+   "conformers": 3,
+   "parent": null,
+   "similarity": null,
+   "change": null,
+   "properties": {
+    "mw": 58.12,
+    "logp": 1.81,
+    "tpsa": 0.0,
+    "hbd": 0,
+    "hba": 0,
+    "rotatable_bonds": 1,
+    "aromatic_rings": 0,
+    "qed": 0.431,
+    "fsp3": 1.0,
+    "formal_charge": 0,
+    "heavy_atoms": 4,
+    "lipinski_violations": 0,
+    "veber_violations": 0
+   },
+   "alerts": 0,
+   "createdAt": "2026-10-05T08:55:27Z",
+   "updatedAt": "2026-10-05T08:55:27Z"
+  },
+  {
+   "name": "phenethyl-acetate",
+   "smiles": "CC(=O)OCCc1ccccc1",
+   "formula": "C10H12O2",
+   "inchikey": "MDHYEMXUFSJLGV-UHFFFAOYSA-N",
+   "sdf": "phenethyl-acetate.sdf",
+   "svg": "phenethyl-acetate.svg",
+   "json": "phenethyl-acetate.molecule.json",
+   "conformers": 7,
+   "parent": null,
+   "similarity": null,
+   "change": null,
+   "properties": {
+    "mw": 164.2,
+    "logp": 1.79,
+    "tpsa": 26.3,
+    "hbd": 0,
+    "hba": 2,
+    "rotatable_bonds": 3,
+    "aromatic_rings": 1,
+    "qed": 0.637,
+    "fsp3": 0.3,
+    "formal_charge": 0,
+    "heavy_atoms": 12,
+    "lipinski_violations": 0,
+    "veber_violations": 0
+   },
+   "alerts": 0,
+   "createdAt": "2026-10-05T08:55:27Z",
+   "updatedAt": "2026-10-05T08:55:27Z"
+  }
+ ]
+}

@@ -18,20 +18,21 @@ import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import { GrokNormalizer } from '../../engines/grok/normalizer.js'
 import { MuseNormalizer } from '../../engines/muse/normalizer.js'
 import { PiNormalizer } from '../../engines/pi/normalizer.js'
-import type { AutonomousDeviceService } from '../../lib/autonomous-device/service.js'
+import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
 import { lineToEvents, newTurnState, type LiveEvent } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from './normalizers.js'
+import { createSideReads } from './sideReads.js'
 
 export interface IngestDeps {
   has: (sessionId: string) => boolean
   bySession: (sessionId: string) => RegisteredSession | undefined
   tokenUsage: { changed(session: RegisteredSession): void }
-  /** The Harness device service, once it exists: some subscriptions read the raw transcript. */
-  device: () => Pick<AutonomousDeviceService, 'needsTranscript' | 'observeTranscript'> | undefined
+  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
+  device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
   runtimeProfiles: Pick<RuntimeProfileManager, 'ingest'>
   normalizers: SessionNormalizers
   announceTurnAborted: (sessionId: string, engine: string, message: string, deviceMessage?: string) => void
@@ -46,6 +47,7 @@ export function createIngest({
     turnStates, codexNormalizers, cursorNormalizers, museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers,
     copilotNormalizers, piNormalizers, commandcodeNormalizers,
   } = normalizers
+  const sideRead = createSideReads()
   // JSONL watcher → normalize each appended line → stream up. ONE lineToEvents pass feeds BOTH
   // audiences: web (send, ServerEvents) and device (mirror.ingest → curated commander_event cards).
   /** One transcript line through its engine's normalizer. The events, not yet emitted — the two
@@ -55,11 +57,13 @@ export function createIngest({
     const session = bySession(evt.sessionId)
     if (!session || session.engine !== evt.engine) return null
     tokenUsage.changed(session)
-    const service = device()
-    if (service?.needsTranscript(session.agentId, evt.sessionId, session.engine)) {
-      service.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
-    }
-    runtimeProfiles.ingest(session, evt.text)
+    sideRead('device', evt.sessionId, () => {
+      const service = device()
+      if (service?.needsTranscript(session.agentId, evt.sessionId, session.engine)) {
+        service.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
+      }
+    })
+    sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
     let events
     if (session.engine === 'codex') {
       let normalizer = codexNormalizers.get(evt.sessionId)

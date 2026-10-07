@@ -1,9 +1,11 @@
 /** Narrow adapter onto the SAME Store, project preparation and engine creator used by Desktop.
- * Never passes device frames to BackendSocket's generic dispatcher.
+ * Never passes device frames to BackendSocket's generic dispatcher. It runs with the Wi-Fi device's
+ * service, in the devices' process (services/wifi.ts): the agents it reads and the one it creates are the
+ * core's (`CoreApi.wifi.view` and `create`, core/wifiAgents.ts).
  */
 import { realpathSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { BackendSocket } from '../../backendSocket.js'
+import type { ForkResult } from '../../core/api.js'
 import { refreshDshRegistry } from '../../dsh/catalog.js'
 import { installedDsh, listDshState } from '../../dsh/installed.js'
 import { runDshDoctor } from '../../dsh/install.js'
@@ -11,21 +13,9 @@ import { viewerUse } from '../../dsh/manifest.js'
 import { HARNESS_MONOREPO, type DshRegistryEntry } from '../../dsh/registry.js'
 import { mutateDsh } from '../../dsh/service.js'
 import { prepareProjectFolder, ProjectFolderError } from '../projectFolder.js'
-import { registry } from '../registry.js'
 import { AutonomousDeviceStore, type StoreAgent, type StorePackage } from './store.js'
 import { DeviceStoreError } from './storeContract.js'
 
-const canonicalPath = (path: string | null): string | null => {
-  if (!path) return null
-  try { return realpathSync(path) } catch { return path }
-}
-export function deviceStoreAgents(machineId: string): StoreAgent[] {
-  return registry.list().map(s => ({ agentId: s.agentId, machineId, packageId: s.dsh ? installedDsh(s.dsh)?.id ?? s.dsh : null,
-    engine: s.engine, workspace: canonicalPath(s.cwd), state: s.active ? 'active' : 'inactive',
-    runtime: !registry.terminalAvailable(s.agentId) || s.launch?.state === 'failed' ? 'unavailable'
-      : s.launch?.state === 'starting' ? 'starting' : s.active ? (s.launch?.state === 'ready' || s.sessionId || s.engine === 'terminal' ? 'ready' : 'starting') : 'unavailable',
-    ...(s.launch?.state === 'failed' ? { error: s.launch.detail ?? s.launch.error } : {}) }))
-}
 function trusted(entry: DshRegistryEntry | undefined): boolean {
   return !!entry && entry.verified === true && entry.repo.replace(/\.git$/, '') === HARNESS_MONOREPO
     && entry.id.startsWith('autonomous/') && entry.path === `store/${entry.kind === 'viewer' ? 'viewers' : 'agents'}/${entry.id.slice(11)}`
@@ -53,11 +43,21 @@ export async function deviceStorePackages(): Promise<StorePackage[]> {
   })
 }
 
-export function createDeviceStore(options: { dataDir: string; machineId: string; create: NonNullable<BackendSocket['onCreateAgent']>; reveal?: (operationId: string, agentId: string) => void }): AutonomousDeviceStore {
+export interface DeviceStoreOptions {
+  dataDir: string
+  machineId: string
+  /** Every agent with the Store's evidence on it, as the core last listed them. */
+  agents(): StoreAgent[]
+  /** The core starts the agent, with the device's fixed launch arguments, unless another works in `cwd`. */
+  create(packageId: string, engine: string, cwd: string): Promise<ForkResult>
+  reveal?: (operationId: string, agentId: string) => void
+}
+
+export function createDeviceStore(options: DeviceStoreOptions): AutonomousDeviceStore {
   return new AutonomousDeviceStore({
     directory: join(options.dataDir, 'device-preparations'), machineId: options.machineId, reveal: options.reveal,
     packages: deviceStorePackages,
-    agents: () => deviceStoreAgents(options.machineId),
+    agents: () => options.agents(),
     install: async (id, progress) => {
       const pkg = (await deviceStorePackages()).find(p => p.packageId === id)
       if (!pkg?.installAllowed) return { ok: false, error: 'PACKAGE_REVIEW_REQUIRED', detail: 'Review this package and its dependencies in Harness Store first.' }
@@ -96,11 +96,10 @@ export function createDeviceStore(options: { dataDir: string; machineId: string;
     create: async (id, cwd) => {
       const pkg = installedDsh(id)
       if (!pkg?.manifest.engine || pkg.manifest.kind === 'viewer') return { state: 'failed', error: 'INVALID_DSH' }
-      // Check again immediately before materialization; never retarget another agent.
-      if (deviceStoreAgents(options.machineId).some(a => a.workspace === cwd)) return { state: 'failed', error: 'WORKSPACE_IN_USE' }
-      const result = await options.create({ engine: pkg.manifest.engine, cwd, dsh: id,
-        bypassPermission: false, permissionMode: null, grid: null, codexHome: null, prompt: null, name: null, agent: null })
-      if (result.ok) return { state: 'created', agentId: result.session.agentId }
+      // The core checks again immediately before materialization, where the agents are: never retarget another agent.
+      const result = await options.create(id, pkg.manifest.engine, cwd)
+      if (result.ok) return { state: 'created', agentId: result.agentId }
+      if (result.error === 'WORKSPACE_IN_USE') return { state: 'failed', error: 'WORKSPACE_IN_USE' }
       if (['SPAWN_FAILED', 'REGISTRATION_FAILED'].includes(result.error)) return { state: 'unconfirmed' }
       return { state: 'failed', error: result.error, detail: result.detail }
     },

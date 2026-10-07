@@ -8,8 +8,10 @@
  */
 
 import { rmSync } from 'fs'
-import { PID_FILE, isAlive, readPid } from './daemonState.js'
+import { HARNESSD_REEXEC_FILE, PID_FILE, isAlive, readPid } from './daemonState.js'
+import { readMarker, removeMarker } from '../harnessd/reexec.js'
 import { acquireSpawnLock, describeSpawnLockFailure, describeSpawnLockOwner, SPAWN_LOCK_WAIT_MS } from './daemonSpawnLock.js'
+import { PLATFORM_STOP_WAIT_MS, stopUnderPlatform, type PlatformStop } from './platformDaemon.js'
 
 export interface StopDeps {
   readPid: () => number | null
@@ -20,6 +22,11 @@ export interface StopDeps {
   /** Acquire the spawn lock; resolves to a release. Injected so the stop sequence is testable alone. */
   lock: () => Promise<() => void>
   warn: (message: string) => void
+  /**
+   * Ask launchd or systemd to stop the master when it runs it (`harness service install`,
+   * lib/platformDaemon.ts); null when it does not, and nothing was asked. Left out, nothing is.
+   */
+  stopPlatform?: () => PlatformStop | null
 }
 
 export function defaultStopDeps(): StopDeps {
@@ -44,15 +51,29 @@ export function defaultStopDeps(): StopDeps {
       }
     },
     warn: (m) => console.warn(m),
+    stopPlatform: () => stopUnderPlatform(),
   }
 }
 
 export const STOP_GRACE_MS = 3_000
 
+/**
+ * A re-execution marker that names the master just stopped. A master stopped in the moment after it
+ * re-executed on a new bundle, before its code has its signal handlers, dies of the signal and leaves
+ * the marker it would have cleared; the next start took that for a re-execution that never came up,
+ * rolled the update back and rejected its version (harnessd/reexec.ts recoverFailedReexec). A stop is
+ * not a failure.
+ */
+function clearReexecMarker(pid: number): void {
+  if (readMarker(HARNESSD_REEXEC_FILE)?.pid === pid) removeMarker(HARNESSD_REEXEC_FILE)
+}
+
 /** SIGTERM the daemon named by the pid file, SIGKILL if it lingers. Returns what was stopped. */
 export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Promise<{ pid: number | null; stopped: boolean }> {
   const release = await deps.lock()
   try {
+    const stopped = await stopThroughPlatform(deps)
+    if (stopped !== null) { clearReexecMarker(stopped); return { pid: stopped, stopped: true } }
     const pid = deps.readPid()
     if (!pid || !deps.isAlive(pid)) {
       // A pid file naming nothing is debris from a crash; nobody else can be relying on it.
@@ -67,8 +88,39 @@ export async function stopDaemonProcess(deps: StopDeps = defaultStopDeps()): Pro
     // (shutdown), and a daemon that came up meanwhile — impossible under the lock, but cheap to
     // respect — must not lose its record to us.
     if (deps.readPid() === pid) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
+    if (!deps.isAlive(pid)) clearReexecMarker(pid)
     return { pid, stopped: true }
   } finally {
     release()
   }
+}
+
+/**
+ * The platform's half of a stop, when launchd or systemd runs the master: it is asked to stop it, and
+ * keeps it stopped, where a signal from here would read to it as a crash and bring the master back.
+ * Returns the pid it stopped; null when it was not asked, stopped nothing, or has not stopped it in
+ * time, and the signals in `stopDaemonProcess` take it from there.
+ */
+async function stopThroughPlatform(deps: StopDeps): Promise<number | null> {
+  if (!deps.stopPlatform) return null
+  const outcome = deps.stopPlatform()
+  if (!outcome) return null
+  if (!outcome.ok) {
+    deps.warn(`  ! ${outcome.detail} — stopping it directly`)
+    return null
+  }
+  const master = outcome.stopped
+  if (master === null) return null
+  // bootout and `systemctl stop` can return before the master has finished its own ordered stop.
+  const deadline = deps.now() + PLATFORM_STOP_WAIT_MS
+  while (deps.isAlive(master)) {
+    if (deps.now() >= deadline) return null
+    await deps.sleep(150)
+  }
+  const pid = deps.readPid()
+  if (pid === master) { try { rmSync(PID_FILE, { force: true }) } catch { /* ignore */ } }
+  // A daemon `harness start` spawned beside the platform's (two supervisors, which `harness service`
+  // exists to prevent) is the signals' to stop.
+  if (pid !== null && pid !== master && deps.isAlive(pid)) return null
+  return master
 }

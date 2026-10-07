@@ -16,7 +16,7 @@
  */
 import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import { isIP } from 'node:net'
+import { isIP, type LookupFunction } from 'node:net'
 import { lookup as dnsLookup } from 'node:dns/promises'
 import { env } from '../config/env.js'
 
@@ -292,22 +292,20 @@ export function providerFetch(target: string, init: ProviderRequestInit = {}): P
   })
 }
 
-/** Matches Node's `net.LookupFunction` callback: `address` is required, so errors pass an empty one. */
-type LookupCallback = (err: NodeJS.ErrnoException | null, address: string, family: number) => void
-
 /**
  * `dns.lookup`-shaped hook that refuses blocked addresses.
  *
  * Node calls this with the hostname at connect time; whatever it returns is what the socket dials.
  * Refusing here means a rebinding attack has nothing to rebind to.
  */
-function guardedLookup(hostname: string, options: unknown, callback: LookupCallback): void {
+const guardedLookup: LookupFunction = (hostname, options, callback) => {
   if (isIP(hostname)) {
     if (refuseAddress(hostname)) {
       callback(new ProviderUrlError(REASONS.BLOCKED_ADDRESS, 'BLOCKED_ADDRESS') as NodeJS.ErrnoException, '', 0)
       return
     }
-    callback(null, hostname, isIP(hostname))
+    if (options.all) callback(null, [{ address: hostname, family: isIP(hostname) }])
+    else callback(null, hostname, isIP(hostname))
     return
   }
   dnsLookup(hostname, { all: true, verbatim: true })
@@ -320,7 +318,9 @@ function guardedLookup(hostname: string, options: unknown, callback: LookupCallb
         callback(new ProviderUrlError(REASONS.BLOCKED_ADDRESS, 'BLOCKED_ADDRESS') as NodeJS.ErrnoException, '', 0)
         return
       }
-      callback(null, usable.address, usable.family)
+      // Node's family autoselection asks for all addresses, not the scalar lookup result.
+      if (options.all) callback(null, entries)
+      else callback(null, usable.address, usable.family)
     })
     .catch(() => callback(new ProviderUrlError(REASONS.DNS_FAILED, 'DNS_FAILED') as NodeJS.ErrnoException, '', 0))
 }

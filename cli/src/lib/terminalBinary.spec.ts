@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './e2ee/terminalSeal.js'
 import {
-  deriveTerminalBinaryKey,
   decodeTerminalLocal,
   encodeTerminalLocal,
-  openTerminalBinary,
   parseTerminalBinaryEnvelope,
-  sealTerminalBinary,
   TerminalBinaryKind,
   TERMINAL_BINARY_IMAGE_PASTE_MAX_CIPHERTEXT_BYTES,
   TERMINAL_BINARY_MAX_CIPHERTEXT_BYTES,

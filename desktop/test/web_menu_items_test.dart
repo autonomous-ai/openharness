@@ -33,6 +33,8 @@ void main() {
       'swarm.new',
       'harnesses.list',
       'navigation.needs_input',
+      // Share is the Experimental setting's to show, never the menu's.
+      'agent.share',
       'pane.split_down',
       'pane.close',
       'pane.zoom',
@@ -44,14 +46,14 @@ void main() {
     }
   });
 
-  test('sharing and one split, to the right, have a row', () {
+  test('one split, to the right, has a row', () {
     final all = _commands(runnableWebMenu((_) => true, compact: true));
-    expect(all, containsAll(['agent.share', 'pane.split_right']));
+    expect(all, contains('pane.split_right'));
   });
 
   test('rows that cannot run, and groups left empty, are not drawn', () {
     final menu = runnableWebMenu(
-      (command) => !command.startsWith('pane.') && command != 'agent.share',
+      (command) => !command.startsWith('pane.'),
       compact: false,
     );
     expect(menu, hasLength(kWebMenuGroups.length - 1));

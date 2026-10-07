@@ -79,6 +79,53 @@ describe('unchanged discovery observations', () => {
     expect(fsyncSync).not.toHaveBeenCalled()
   })
 
+  // The daemon rewrote registry.json every 5 s when only key order differed (2026-10-06 profile).
+  it('does not rewrite a registry saved with another key order, yet writes a real change', async () => {
+    const reversed = <T extends object>(o: T): T => Object.fromEntries(Object.entries(o).reverse()) as T
+    const [saved] = readRows()
+    writeFileSync(file, JSON.stringify([reversed({
+      ...saved, processIdentity: reversed(saved.processIdentity), runtimes: saved.runtimes.map(reversed),
+      launch: { state: 'ready' }, forkedFrom: { name: 'Parent', agentId: 'parent-agent' },
+      closePlan: reversed(plan), lastOpenedAt: 1790900000000,
+    })], null, 2))
+    clearCounts()
+    registry.load()
+    const discover = () => registry.transaction(() => {
+      registry.updateRuntimes(input.agentId, [{ backend: 'tmux', paneId: '%31' }])
+      registry.updateProcessIdentity(input.agentId, { ...input.processIdentity })
+    })
+    await discover()
+    expect(registryWrites()).toBe(1)
+    const bytes = readFileSync(file, 'utf8')
+    const touchedAt = readRows()[0].touchedAt
+    clearCounts()
+    for (let pass = 0; pass < 3; pass++) {
+      vi.setSystemTime(Date.now() + 5000)
+      await discover()
+    }
+    expect(registryWrites()).toBe(0)
+    expect(lockAttempts()).toBe(0)
+    expect(fsyncSync).not.toHaveBeenCalled()
+    expect(readFileSync(file, 'utf8')).toBe(bytes)
+    expect(readRows()[0]).toMatchObject({ touchedAt, launch: { state: 'ready' }, closePlan: plan,
+      forkedFrom: { name: 'Parent', agentId: 'parent-agent' }, lastOpenedAt: 1790900000000 })
+    await registry.transaction(() => {
+      registry.updateProcessIdentity(input.agentId, { ...input.processIdentity, startMarker: 'fixture-next' })
+    })
+    expect(registryWrites()).toBe(1)
+    expect(fsyncSync).toHaveBeenCalledTimes(3)
+    expect(readRows()[0]).toMatchObject({ processIdentity: { startMarker: 'fixture-next' }, touchedAt: Date.now() })
+  })
+
+  it('keeps another process\'s change to a nested field when a different field changes here', () => {
+    registry.setClosePlan(input.agentId, plan)
+    const [saved] = readRows()
+    writeFileSync(file, JSON.stringify([{ ...saved, closePlan: { ...plan, state: 'failed', detail: 'external' } }], null, 2))
+    registry.updateProcessIdentity(input.agentId, input.processIdentity, 'ori')
+    expect(readRows()[0]).toMatchObject({ gateway: 'ori', closePlan: { state: 'failed', detail: 'external' } })
+    expect(registry.byAgent(input.agentId)?.closePlan?.state).toBe('failed')
+  })
+
   it('still persists a changed route and process generation in one durable transaction', async () => {
     const row = registry.byAgent(input.agentId)!
     const identity = { ...input.processIdentity, startMarker: 'replacement-generation', executable: '/fixture/new-claude' }
@@ -259,6 +306,41 @@ describe('unchanged discovery observations', () => {
     expect(registry.byAgent(input.agentId)?.closePlan).toBeUndefined()
     expect(readRows()[0].closePlan).toBeUndefined()
     registry.setClosePlan(input.agentId, plan)
+    expect(readRows()[0].closePlan).toEqual(plan)
+  })
+
+  // Each of these is another process's write this view has not read: a hook's, a second daemon's, a
+  // command's. CI's registry-observation contract lost the first one when a process was starved.
+  it('a cancellation from a view that never saw another process\'s close plan removes it', () => {
+    const [row] = readRows()
+    writeFileSync(file, JSON.stringify([{ ...row, closePlan: plan }], null, 2))
+    registry.setClosePlan(input.agentId, null)
+    expect(readRows()[0].closePlan).toBeUndefined()
+    expect(registry.byAgent(input.agentId)?.closePlan).toBeUndefined()
+  })
+
+  it('a close retried over another process\'s cancellation is written again', () => {
+    registry.setClosePlan(input.agentId, plan)
+    const [row] = readRows()
+    delete row.closePlan
+    writeFileSync(file, JSON.stringify([row], null, 2))
+    registry.setClosePlan(input.agentId, { ...plan })
+    expect(readRows()[0].closePlan).toEqual(plan)
+  })
+
+  it('a cancellation never brings back a row another process removed', () => {
+    writeFileSync(file, JSON.stringify([], null, 2))
+    registry.setClosePlan(input.agentId, null)
+    expect(readRows()).toEqual([])
+    expect(registry.byAgent(input.agentId)).toBeUndefined()
+  })
+
+  it('a cancellation whose save failed is not written by a later save', async () => {
+    const [row] = readRows()
+    writeFileSync(file, JSON.stringify([{ ...row, closePlan: plan }], null, 2))
+    vi.mocked(fsyncSync).mockImplementationOnce(() => { throw new Error('fixture disk failure') })
+    expect(() => registry.setClosePlan(input.agentId, null)).toThrow('fixture disk failure')
+    await observe()
     expect(readRows()[0].closePlan).toEqual(plan)
   })
 

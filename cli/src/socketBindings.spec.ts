@@ -1,5 +1,5 @@
 /**
- * Every slot BackendSocket calls into the core through is bound by the composition root (cli.ts) — the
+ * Every slot BackendSocket calls into the core through is bound by the composition root (core/main.ts) — the
  * core boundary's step 14 (docs/design/2026-10-03-harnessd.md). A slot left null answers its requests
  * UNSUPPORTED or does nothing at all, and nothing says so: that is how `onLocalClient` came to be
  * declared and never wired. The bindings stay where start-up puts them (startupOrder.spec.ts pins that
@@ -14,8 +14,6 @@ const SRC = join(__dirname)
 
 /** Slots left unbound on purpose, and why. */
 const NOT_BOUND_ON_PURPOSE: Record<string, string> = {
-  orchestratorCommand: 'a test override: null runs the daemon\'s own `orchestrator` command',
-  teamCommand: 'a test override: null runs the daemon\'s own `team` command',
   onLocalClient: 'declared and never wired (the design doc\'s "Found while mapping")',
 }
 
@@ -39,9 +37,9 @@ function socketSlots(): string[] {
   return slots.sort()
 }
 
-/** What cli.ts assigns on the socket: `backend.<slot> =`. */
+/** What the composition root assigns on the socket: `backend.<slot> =`. */
 function boundInCli(): Set<string> {
-  const cli = readFileSync(join(SRC, 'cli.ts'), 'utf8')
+  const cli = readFileSync(join(SRC, 'core', 'main.ts'), 'utf8')
   return new Set([...cli.matchAll(/\bbackend\.([A-Za-z]+)\s*=(?!=)/g)].map((match) => match[1]))
 }
 
@@ -57,7 +55,8 @@ describe('the socket\'s slots into the core', () => {
     // Both kinds: one that starts null, and an optional callback with no initializer.
     expect(slots).toContain('onCreateAgent')
     expect(slots).toContain('onOutboundCommander')
-    expect(slots.length).toBeGreaterThan(50)
+    // Dozens, and fewer as requests move into the services that answer them (core/serviceHost.ts).
+    expect(slots.length).toBeGreaterThan(30)
     for (const name of Object.keys(NOT_BOUND_ON_PURPOSE)) expect(slots, name).toContain(name)
   })
 })

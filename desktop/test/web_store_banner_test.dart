@@ -73,6 +73,13 @@ void main() {
     ) async {
       final opened = await mount(tester, platform, _MemoryStore());
       expect(find.byKey(_banner), findsOneWidget);
+      // The app's icon leads its name: the bar reads as an app to get.
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('web-store-banner-icon')))
+            .right,
+        lessThan(tester.getRect(find.text('Harness')).left),
+      );
       // The bar is above the app, never over it.
       expect(
         tester.getRect(find.byKey(_banner)).bottom,

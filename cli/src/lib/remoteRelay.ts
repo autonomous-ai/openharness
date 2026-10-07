@@ -19,6 +19,9 @@ import type { Frame, LocalClientSink } from '../backendSocket.js'
 import type { AuthSessionManager } from './authSession.js'
 import { b64d, type Identity } from './e2ee/core.js'
 import { sid } from './log.js'
+import { DAEMON_LOCAL_ONLY_TYPES, RelayConnectError } from './relayFrames.js'
+
+export { DAEMON_LOCAL_ONLY_TYPES, RelayConnectError }
 import type { MachinePeerStore } from './e2ee/machinePeers.js'
 import { RelaySessionCrypto } from './e2ee/relayClient.js'
 import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from './terminalBinary.js'
@@ -92,12 +95,6 @@ const P2P_UPGRADE_ATTEMPT_TIMEOUT_MS = 15_000
 const P2P_UPGRADE_DRAIN_TIMEOUT_MS = 5_000
 const P2P_PROMOTE_ACK_TIMEOUT_MS = 5_000
 
-export class RelayConnectError extends Error {
-  constructor(message: string, readonly closeCode?: number) {
-    super(message)
-    this.name = 'RelayConnectError'
-  }
-}
 
 function binaryBytes(raw: RawData): Uint8Array {
   if (Buffer.isBuffer(raw)) return new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength)
@@ -106,13 +103,6 @@ function binaryBytes(raw: RawData): Uint8Array {
   return new Uint8Array()
 }
 
-/**
- * Frames only THIS machine's own daemon says to its own windows (the device key log's notices). A
- * remote machine is not that daemon: if its frame reached the local app as-is, the app would show a
- * "new device" / "removed by" band as though this machine had verified it. Dropped on the way in,
- * sealed or not.
- */
-export const DAEMON_LOCAL_ONLY_TYPES: ReadonlySet<string> = new Set(['device_key_added', 'device_key_removed', 'device_conflict', 'device_keys_changed'])
 
 /** One local client attached to a pooled upstream: where its frames go, and what to tell it on close. */
 interface AttachedClient {
@@ -279,9 +269,13 @@ export class RemoteRelayPool {
   /** Warm background pools per machine, each holding one lingering session nobody is attached to —
    *  see acquireIsolated(). A pool is either here (idle) or in a client's hands, never both. */
   private readonly idleIsolated = new Map<string, RemoteRelayPool[]>()
+  /** Per machine, the group counters this pool's sessions opened, carried to its next session so a
+   *  relay cannot replay an old broadcast into it (relayClient.ts `groupSeen`). This pool's alone: the
+   *  background pools are clients of their own, sent every broadcast as this one is. */
+  private readonly groupSeen = new Map<string, Map<string, number>>()
 
   constructor(
-    private readonly auth: AuthSessionManager,
+    private readonly auth: Pick<AuthSessionManager, 'accessToken'>,
     private readonly backendWsBase: string,
     private readonly selfIdentity: Identity,
     private readonly peers: MachinePeerStore,
@@ -386,6 +380,13 @@ export class RemoteRelayPool {
     try { entry.ws.terminate() } catch { /* already gone */ }
   }
 
+  /** Every session this pool holds, ended, for a gateway that is going (its core went away, or it is
+   *  stopping): the windows on them are told by whoever holds their sockets, the core's local socket. */
+  close(): void {
+    for (const machineId of [...this.entries.keys()]) this.invalidate(machineId)
+    for (const machineId of [...this.idleIsolated.keys()]) this.invalidateIsolated(machineId)
+  }
+
   /** Attach `sink` to the (possibly newly-created, possibly reused) upstream connection for
    *  `machineId`. `selectFrame` is the local client's own `machine_select` frame, forwarded upstream
    *  verbatim on a fresh connect — backend only reads its `.machineId`, so the local protocol's extra
@@ -458,7 +459,9 @@ export class RemoteRelayPool {
     // this sink turns every later emit — including the one terminate() raises while CONNECTING — into a
     // plain 'close', which is what the owners actually clean up on.
     ws.on('error', () => { /* handled via 'close' */ })
-    const crypto = new RelaySessionCrypto({ machineId, selfIdentity: this.selfIdentity, peerPub: b64d(peer.pub) })
+    let groupSeen = this.groupSeen.get(machineId)
+    if (!groupSeen) { groupSeen = new Map(); this.groupSeen.set(machineId, groupSeen) }
+    const crypto = new RelaySessionCrypto({ machineId, selfIdentity: this.selfIdentity, peerPub: b64d(peer.pub), groupSeen })
     const entry: Entry = {
       ws,
       crypto,
@@ -618,6 +621,14 @@ export class RemoteRelayPool {
           entry.sink?.sendFrame(frame)
           if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
           try { ws.close(1012, 'remote machine disconnected') } catch { ws.terminate() }
+          return
+        }
+        if (frame.type === 'e2e_session_unknown') {
+          // The machine's daemon has no session for this connection: it restarted while the relay kept
+          // our socket, and nothing sent on these keys will open there. Retired as for node_status
+          // offline, so the next select opens a new session. The pin stays: nothing was revoked.
+          if (this.entries.get(machineId) === entry) this.entries.delete(machineId)
+          try { ws.close(1012, 'remote session gone') } catch { ws.terminate() }
           return
         }
         if (frame.type === 'e2e_rekey') { crypto.handleRekey((frame.payload ?? {}) as Record<string, unknown>); return }

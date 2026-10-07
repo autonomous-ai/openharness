@@ -299,3 +299,134 @@ describe('slash-command prompts', () => {
     })
   })
 })
+
+describe('a message typed while Claude Code worked', () => {
+  const queued = (prompt: unknown, kind: string, commandMode = 'prompt') => line({
+    type: 'attachment', uuid: `q-${kind}`, attachment: { type: 'queued_command', prompt, commandMode, origin: { kind } },
+  })
+  const prompt = line({ type: 'user', uuid: 'u1', message: { role: 'user', content: 'run sleep 8, then say three' } })
+  const answer = line({ type: 'assistant', uuid: 'a1', message: { role: 'assistant', content: [{ type: 'text', text: 'three\nfour' }], stop_reason: 'end_turn' } })
+
+  it('is in the history where it was delivered, but only the person\'s own words', () => {
+    const events = messagesToEvents([
+      prompt,
+      queued('and then say four', 'human'),
+      queued([{ type: 'text', text: 'blocks too' }], 'human'),
+      queued('Goal set: ship it', 'auto-continuation'),
+      queued('a sub-agent hands back', 'task-notification'),
+      queued('/model opus', 'human', 'bash'),
+      queued('   ', 'human'),
+      answer,
+    ])
+    expect(events.filter((e) => e.type === 'user_message').map((e) => (e.payload as { content: string }).content))
+      .toEqual(['run sleep 8, then say three', 'and then say four', 'blocks too'])
+  })
+
+  it('still opens no live turn', () => {
+    const state = newTurnState()
+    lineToEvents(prompt, state)
+    expect(lineToEvents(queued('and then say four', 'human'), state)).toEqual([])
+    expect(state.turnOpen).toBe(true)
+  })
+})
+
+describe('a built-in command Claude Code runs itself, typed plainly', () => {
+  const user = (content: string) => line({ type: 'user', uuid: content, message: { role: 'user', content } })
+  it.each(['/compact', '/compact keep the plan', '/model opus', '/Clear'])('%s opens no live turn', (prompt) => {
+    const state = newTurnState()
+    expect(lineToEvents(user(prompt), state)).toEqual([])
+    expect(state.turnOpen).toBe(false)
+  })
+  it.each(['/goal ship it', '/review', '/compactor', 'run /compact later'])('%s is still a prompt', (prompt) => {
+    const state = newTurnState()
+    expect(lineToEvents(user(prompt), state)).toEqual([{ type: 'turn_started', payload: { userMessage: prompt } }])
+  })
+})
+
+
+// A Stop hook that blocks keeps Claude Code's turn going: `/goal` is built on one. The shapes are real
+// 2.1.282/2.1.283 records with invented text: the feedback as a hidden isMeta user line, then the record
+// saying which hook it was, then the continuation's output with no prompt line between. The iteration's
+// end_turn closed the turn, and the continuation ran with none open: no turn_started, no turn_ended, no
+// recap, and the agent read idle whenever a tool outlasted the work lease.
+describe('a Stop hook that blocks', () => {
+  const user = (content: string) => line({ type: 'user', uuid: `u-${content}`, message: { role: 'user', content } })
+  const feedback = line({ type: 'user', isMeta: true, promptId: 'p1', message: { role: 'user', content: 'Stop hook feedback:\n[goal check]: the condition is not met yet' } })
+  const goal = (met: boolean, extra: Record<string, unknown> = {}) => line({
+    type: 'attachment', uuid: `g-${met}`, attachment: { type: 'goal_status', met, condition: 'every page loads under a second', reason: 'two pages still slow', ...extra },
+  })
+  const blocked = (hookEvent: string, blockingError: unknown) => line({
+    type: 'attachment', uuid: `b-${hookEvent}`, attachment: { type: 'hook_blocking_error', hookName: hookEvent, hookEvent, toolUseID: 'h1', blockingError },
+  })
+  const summary = line({ type: 'system', subtype: 'stop_hook_summary', hookCount: 2, hookInfos: [], hookErrors: [], preventedContinuation: false, stopReason: '', hasOutput: false, level: 'suggestion' })
+  const answer = (text: string) => line({ type: 'assistant', uuid: `a-${text}`, message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
+
+  it('opens the goal\'s next iteration as a turn of its own, and closes it at its end', () => {
+    const state = newTurnState()
+    expect(lineToEvents(user('/goal every page loads under a second'), state)).toEqual([{ type: 'turn_started', payload: { userMessage: '/goal every page loads under a second' } }])
+    expect(lineToEvents(answer('made the home page fast'), state).at(-1)).toEqual({ type: 'turn_ended', payload: {} })
+    expect(lineToEvents(feedback, state)).toEqual([])
+    expect(lineToEvents(goal(false), state)).toEqual([{ type: 'turn_started', payload: { userMessage: 'Continuing goal: every page loads under a second' } }])
+    expect(state.turnOpen).toBe(true)
+    expect(state.continued).toBe(true)
+    expect(lineToEvents(summary, state)).toEqual([])
+    expect(lineToEvents(answer('made the rest fast'), state)).toEqual([
+      { type: 'text_delta', payload: { content: 'made the rest fast' } },
+      { type: 'turn_ended', payload: {} },
+    ])
+    // A goal met ends nothing more than the end_turn before it did; a goal restated at start opens nothing.
+    expect(lineToEvents(goal(true), state)).toEqual([])
+    expect(lineToEvents(goal(false, { sentinel: true }), state)).toEqual([])
+    expect(state.turnOpen).toBe(false)
+  })
+
+  it('opens the turn a person\'s own blocking Stop hook continues, labelled with its first line', () => {
+    const state = newTurnState()
+    expect(lineToEvents(blocked('Stop', { blockingError: 'Run the tests before you finish.\nThey are in test/.', command: 'check.sh' }), state))
+      .toEqual([{ type: 'turn_started', payload: { userMessage: 'Continuing: Run the tests before you finish.' } }])
+    const long = newTurnState()
+    expect((lineToEvents(blocked('Stop', { blockingError: 'x'.repeat(300) }), long)[0].payload as { userMessage: string }).userMessage)
+      .toBe(`Continuing: ${'x'.repeat(197)}...`)
+    expect(lineToEvents(blocked('Stop', {}), newTurnState())).toEqual([{ type: 'turn_started', payload: { userMessage: 'Continuing' } }])
+    expect(lineToEvents(goal(false, { condition: undefined }), newTurnState())).toEqual([{ type: 'turn_started', payload: { userMessage: 'Continuing goal' } }])
+    // A sub-agent's Stop is its own business, and a turn still open (its end_turn not read yet) goes on.
+    expect(lineToEvents(blocked('SubagentStop', { blockingError: 'no' }), newTurnState())).toEqual([])
+    const open = newTurnState()
+    lineToEvents(user('fix it'), open)
+    expect(lineToEvents(goal(false), open)).toEqual([])
+    expect(open.continued).toBe(false)
+  })
+
+  it('closes a pass that ends with no output when the goal pauses, and only such a pass', () => {
+    const informational = (content: string) => line({ type: 'system', subtype: 'informational', content, level: 'notice' })
+    const duration = line({ type: 'system', subtype: 'turn_duration', durationMs: 42_000, messageCount: 12 })
+    const state = newTurnState()
+    lineToEvents(user('/goal every page loads under a second'), state)
+    lineToEvents(answer('made the home page fast'), state)
+    lineToEvents(feedback, state)
+    lineToEvents(goal(false), state)
+    for (const record of [summary, informational('A hook blocked the stop twice — pausing.'), informational('Goal paused · resume with /goal')]) {
+      expect(lineToEvents(record, state)).toEqual([])
+    }
+    expect(lineToEvents(duration, state)).toEqual([{ type: 'turn_ended', payload: {} }])
+    expect(state.turnOpen).toBe(false)
+    expect(lineToEvents(duration, state)).toEqual([])
+    // A turn a prompt opened is left to its end_turn and the Stop hook, as before.
+    const prompted = newTurnState()
+    lineToEvents(user('fix it'), prompted)
+    expect(lineToEvents(duration, prompted)).toEqual([])
+    expect(prompted.turnOpen).toBe(true)
+    lineToEvents(feedback, prompted)
+    lineToEvents(answer('fixed'), prompted)
+    lineToEvents(goal(false), prompted)
+    lineToEvents(user('and the rest'), prompted)
+    expect(lineToEvents(duration, prompted)).toEqual([])
+    expect(lineToEvents(duration, { ...newTurnState(), turnOpen: true })).toEqual([])
+  })
+
+  it('shows the continuation in the history once, where the live view started it', () => {
+    const contents = messagesToEvents([user('/goal every page loads under a second'), answer('made the home page fast'), feedback, goal(false), blocked('Stop', { blockingError: 'not yet' }), summary, answer('made the rest fast')])
+      .filter((e) => e.type === 'user_message' || e.type === 'text_delta').map((e) => (e.payload as { content: string }).content)
+    expect(contents).toEqual(['/goal every page loads under a second', 'made the home page fast', 'Continuing goal: every page loads under a second', 'made the rest fast'])
+  })
+})

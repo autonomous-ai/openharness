@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  clearSafeModeMarker, readSafeModeMarker, runBootHandoff, safeModeDisposition,
-  safeModeFile, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker, type BootHandoffDeps,
+  clearSafeModeMarker, readSafeModeMarker, safeModeDisposition,
+  safeModeFile, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker,
 } from './daemonSafeMode.js'
 
 let dir = ''
@@ -25,6 +25,14 @@ describe('safeModeDisposition', () => {
       .toMatchObject({ stay: false })
     expect(safeModeDisposition(new Error('boom'), { selfPid: 100, readPid: () => 200, isAlive: () => true }))
       .toMatchObject({ stay: false, reason: 'another daemon (pid 200) owns this machine' })
+    // The data folder's socket already served, before any pid file names the daemon serving it.
+    const served = Object.assign(new Error('A Harness daemon is already serving /data/daemon-18473.sock'), { code: 'EADDRINUSE' })
+    expect(safeModeDisposition(served, nobody)).toEqual({ stay: false, reason: 'A Harness daemon is already serving /data/daemon-18473.sock' })
+    expect(safeModeDisposition(Object.assign(new Error('boom'), { code: 'ENOENT' }), nobody).stay).toBe(true)
+    // The core of a master that is gone, still leaving: this core leaves to be started again, not for good.
+    const leaving = Object.assign(new Error('The core (pid 8) of a master that is gone still serves /data/daemon-18473.sock'), { code: 'ORPHAN_STILL_SERVING' })
+    expect(safeModeDisposition(leaving, nobody)).toEqual({ stay: false, reason: leaving.message, retry: true })
+    expect(safeModeDisposition(null, nobody).stay).toBe(true)
   })
 
   it('stays when the pid file names us, or names a corpse', () => {
@@ -70,51 +78,5 @@ describe('the safe-mode marker', () => {
     writeFileSync(safeModeFile(dir), '{ not json')
     expect(readSafeModeMarker(dir, () => true)).toBeNull()
     expect(readFileSync(safeModeFile(dir), 'utf-8')).toBe('{ not json')
-  })
-})
-
-describe('runBootHandoff', () => {
-  function harness(over: Partial<BootHandoffDeps> = {}) {
-    const calls: string[] = []
-    let env: Record<string, string> = {}
-    let exited: number | null = null
-    const deps: BootHandoffDeps = {
-      closeServer: () => calls.push('close'),
-      removePidFile: () => calls.push('removePid'),
-      spawn: (extra) => { calls.push('spawn'); env = extra; return { pid: 999, unref: () => calls.push('unref') } },
-      exit: ((code: number) => { calls.push(`exit:${code}`); exited = code; return undefined as never }),
-      log: () => {},
-      ...over,
-    }
-    return { deps, calls, env: () => env, exited: () => exited }
-  }
-
-  it('releases the port, then the pid file, then spawns the successor and leaves', () => {
-    const h = harness()
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(h.calls).toEqual(['close', 'removePid', 'spawn', 'unref', 'exit:0'])
-    expect(h.env()).toEqual({ ADAPTER_UPDATED_TO: '0.3.6' })
-  })
-
-  it('has already exited by the time it returns — the property that makes two daemons impossible', () => {
-    // Nothing is awaited, so the half-built boot cannot interleave between closing the port and the
-    // exit, and can never reach the code that would bind the port the successor is taking.
-    const h = harness()
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(h.exited()).toBe(0)   // no await, no tick: true immediately after the call returns
-  })
-
-  it('a start-up that never bound or claimed anything still hands off', () => {
-    const h = harness({ closeServer: () => {}, removePidFile: () => {} })
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(h.calls).toEqual(['spawn', 'unref', 'exit:0'])
-  })
-
-  it('says which pid took over, so the log names the successor', () => {
-    const lines: string[] = []
-    const h = harness({ log: (m) => lines.push(m) })
-    runBootHandoff('0.3.5', '0.3.6', h.deps)
-    expect(lines[0]).toContain('0.3.5 → 0.3.6')
-    expect(lines[1]).toContain('pid 999')
   })
 })

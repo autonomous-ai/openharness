@@ -3,10 +3,12 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from './backendSocket.js'
+import { relaySocket } from './testing/relaySocket.js'
+import { bindLaunchRequests } from './testing/socketCore.js'
 import { env } from './config/env.js'
-import { resolveNewAgentModel } from './lib/newAgentModel.js'
 
-vi.mock('./lib/newAgentModel.js', async (original) => ({ ...await original<typeof import('./lib/newAgentModel.js')>(), resolveNewAgentModel: vi.fn() }))
+/** Where the models service resolves a new agent's grid model (core/api.ts `ModelsPort.launchTarget`). */
+const resolveNewAgentModel = vi.fn()
 let socket: BackendSocket, root: string, previous: string
 let frames: Array<{ type: string; payload: Record<string, unknown> }>
 const target = { networkId: 'fixture-grid', networkName: 'my-grid', baseUrl: 'https://fixture.invalid/relay/v1', apiKey: 'fixture-secret', model: 'Qwen-35B' }
@@ -16,7 +18,8 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'launch-models-'))
   previous = env.ADAPTER_DATA_DIR
   env.ADAPTER_DATA_DIR = root
-  socket = new BackendSocket('token')
+  socket = relaySocket('token')
+  bindLaunchRequests(socket, { modelTarget: resolveNewAgentModel })
   frames = []
   socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame as typeof frames[number]); return true }, sendBinary: () => true })
   socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TEST_STOP' }))
@@ -34,7 +37,7 @@ async function ask(extra: Record<string, unknown>) {
   await vi.waitFor(() => expect(frames.some(f => f.type === 'agent_create_result' && f.payload.requestId === requestId)).toBe(true))
   return frames.find(f => f.type === 'agent_create_result' && f.payload.requestId === requestId)!.payload
 }
-it('resolves a cross-machine choice on the daemon, including clients without receipts', async () => {
+it('resolves a cross-machine choice on the daemon, through the models service, including clients without receipts', async () => {
   await ask({})
   expect(socket.onCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ engine: 'codex', grid: target, cwd: '/tmp' }))
   expect(resolveNewAgentModel).toHaveBeenCalledWith({ model: 'Qwen-35B', grid: 'my-grid' })
@@ -44,6 +47,12 @@ it.each([null, new Error('private error')])('refuses resolution failure before a
   if (value instanceof Error) vi.mocked(resolveNewAgentModel).mockRejectedValue(value)
   else vi.mocked(resolveNewAgentModel).mockResolvedValue(value)
   expect(await ask({})).toMatchObject({ error: 'GRID_UNAVAILABLE' })
+  expect(socket.onCreateAgent).not.toHaveBeenCalled()
+})
+it('refuses the create while models is off, as GRID_UNAVAILABLE', async () => {
+  bindLaunchRequests(socket, { modelTarget: null })
+  expect(await ask({})).toMatchObject({ error: 'GRID_UNAVAILABLE' })
+  expect(await ask({ creationId: 'model-launch-00000003' })).toMatchObject({ state: 'failed', failure: { code: 'GRID_UNAVAILABLE' } })
   expect(socket.onCreateAgent).not.toHaveBeenCalled()
 })
 it('refuses malformed model selections before creating a receipt', async () => {

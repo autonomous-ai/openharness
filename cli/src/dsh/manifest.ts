@@ -14,8 +14,9 @@ import { homedir } from 'node:os'
 import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { ENGINES } from '../engines/types.js'
+import { DSH_ID_RE } from './id.js'
 
-export const DSH_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}\/[a-z0-9][a-z0-9-]{0,63}$/
+export { DSH_ID_RE }
 export const DSH_MANIFEST_FILE = 'harness.json'
 export const DEFAULT_VERDICT_PATH = '.harness/verdict.json'
 export { compatibleHarnessEngines as dshSupportedEngines } from './compatibility.js'
@@ -97,8 +98,6 @@ export const DshManifestSchema = z.strictObject({
 
 export type DshManifest = z.infer<typeof DshManifestSchema>
 
-export type DshViewerSpec = z.infer<typeof OwnViewerSchema>
-export type DshViewerUse = z.infer<typeof UsedViewerSchema>
 
 /** True for a viewer package: a pane others point at, never a tile. */
 export function isViewerPackage(manifest: DshManifest): boolean {
@@ -121,11 +120,6 @@ export function dshViewerName(manifest: DshManifest, nameOf: (id: string) => str
   const used = viewerUse(manifest)
   if (used) return nameOf(used)?.trim() || null
   return `${manifest.name} Viewer`
-}
-
-/** The base engine of an agent package; a viewer package answers null. */
-export function dshEngine(manifest: DshManifest): DshManifest['engine'] | null {
-  return manifest.engine ?? null
 }
 
 /**

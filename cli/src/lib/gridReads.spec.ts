@@ -15,6 +15,11 @@ import { join } from 'node:path'
 import { installFakeGrid, type FakeGrid, type FakeGridPlan, type FakeGridTurn } from './__fixtures__/fakeGrid.js'
 import { forgetGridModels, gridInventory, listAllGridModels, listGridModels, resetGridModels, type GridModelsService, type GridSection } from './gridModels.js'
 
+// Every look starts the fake `grid`, a node process, for its list and each grid's info: the seam under test is
+// that subprocess. The longest test here looks 13 times, about 26 starts: 2.7 s under 12 busy loops on a
+// 12-core Mac (load 85), and past vitest's 5 s at load 110. Room for a loaded machine, not for a hang.
+vi.setConfig({ testTimeout: 30_000 })
+
 const OWN = 'mine', OWN_ID = 'net-own', TEAM = 'team', TEAM_ID = 'net-team'
 const EMAIL = 'me@example.com'
 const OVERVIEW = '/relay/v1/grid/overview', DISCOVER = '/nodes/discover'
@@ -81,6 +86,13 @@ beforeEach(async () => {
   seen = []
   answers = new Map()
   server = createServer((req, res) => {
+    // Only what was sent to a grid's address is this test's. Under load a request with Node's own User-Agent
+    // ('node', which no grid read sends) reached this port, from outside the code under test: ports are
+    // reused across the suite's workers.
+    if (!req.url?.startsWith('/g/')) {
+      res.writeHead(404).end()
+      return
+    }
     seen.push({ method: req.method ?? '', path: req.url ?? '', headers: req.headers })
     const found = answers.get(req.url ?? '') ?? { status: 404, body: { detail: 'Not Found' } }
     setTimeout(() => {
@@ -459,6 +471,42 @@ describe('the grid list', () => {
 
     expect((await look()).map((s) => s.name)).toEqual([OWN])
     expect(grid.calls().filter((argv) => argv[1] === 'info').map((argv) => argv[2])).toEqual([OWN])
+  })
+})
+
+describe('Jev (System One) decision models', () => {
+  const kinds = (s: GridSection) => Object.fromEntries(s.models.map((m) => [m.id, m.kind ?? 'chat']))
+
+  it('are the rows the overview lists in a node\'s systemone_models; every other row is chat', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['qwen', 'laya-english'], { systemone_models: ['laya-english'] })]))
+
+    expect(kinds(section(await look(), TEAM))).toEqual({ qwen: 'chat', 'laya-english': 'decision' })
+  })
+
+  it('keep the mark while a missed read retains them, lose it once listed as chat, and never gain it unlisted', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['laya'], { systemone_models: ['laya', 'ghost'] })]))
+    await look()
+    later(20)
+    answer(TEAM_ID, OVERVIEW, awake([]))
+    expect(kinds(section(await look(), TEAM))).toEqual({ laya: 'decision' })
+
+    later(20)
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['laya'])]))
+    expect(kinds(section(await look(), TEAM))).toEqual({ laya: 'chat' })
+  })
+
+  it('keep the mark through the CLI fallback, which cannot tell, and through a daemon restart', async () => {
+    answer(TEAM_ID, OVERVIEW, awake([node('rig', ['Laya'], { systemone_models: ['laya'] })]))
+    await look()
+    grid.replan(plan({ teamUrl: 'ftp://nowhere.example', models: { stdout: JSON.stringify([
+      { model: 'Laya', engine: 'llama.cpp', node: 'rig' },
+    ]) } }))
+    forgetGridModels()
+    later()
+    expect(kinds(section(await look(), TEAM))).toEqual({ Laya: 'decision' })
+
+    service = resetGridModels({ now: () => clock, dataDir: () => join(root, 'data'), gridHome: () => gridHome, email: () => EMAIL })
+    expect(kinds(section(await listAllGridModels(OWN), TEAM))).toEqual({ Laya: 'decision' })
   })
 })
 

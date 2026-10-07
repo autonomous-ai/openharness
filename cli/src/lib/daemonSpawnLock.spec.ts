@@ -149,6 +149,46 @@ describe('daemon spawn lock', () => {
     release()
   })
 
+  it('reclaims a lock whose owner record names no one (cut short by a crash or a full disk) once it is debris', async () => {
+    const lock = await loadLock()
+    mkdirSync(lockDir(), { mode: 0o700 })
+    writeFileSync(ownerFile(), '', { mode: 0o600 })
+    // Fresh: someone is between the O_EXCL create and the write.
+    await expect(lock.acquireSpawnLock('start', { waitMs: 250 })).rejects.toMatchObject({ name: 'SpawnLockBusyError', owner: null })
+    const old = new Date(Date.now() - 10_000)
+    const { utimesSync } = await import('fs')
+    utimesSync(lockDir(), old, old)
+    // The record is what was written last: it alone being fresh still means a lock being made.
+    await expect(lock.acquireSpawnLock('start', { waitMs: 250 })).rejects.toMatchObject({ name: 'SpawnLockBusyError', owner: null })
+    utimesSync(ownerFile(), old, old)
+    const release = await lock.acquireSpawnLock('start', { waitMs: 1000 })
+    expect(lock.readSpawnLockOwner()?.pid).toBe(process.pid)
+    release()
+    expect(existsSync(lockDir())).toBe(false)
+  })
+
+  it('leaves no lock behind when its owner record cannot be written, so the next taker is not shut out', async () => {
+    vi.doMock('fs', async (importOriginal) => {
+      const fs = await importOriginal<typeof import('fs')>()
+      return {
+        ...fs,
+        writeFileSync: (...args: Parameters<typeof fs.writeFileSync>) => {
+          if (typeof args[0] === 'number') throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+          return fs.writeFileSync(...args)
+        },
+      }
+    })
+    try {
+      const lock = await loadLock()
+      await expect(lock.acquireSpawnLock('update', { waitMs: 250 })).rejects.toMatchObject({ code: 'ENOSPC' })
+      expect(existsSync(lockDir())).toBe(false)
+    } finally { vi.doUnmock('fs') }
+    const lock = await loadLock()
+    const release = await lock.acquireSpawnLock('update', { waitMs: 250 })
+    expect(lock.readSpawnLockOwner()?.purpose).toBe('update')
+    release()
+  })
+
   it('refuses a lock directory with an unsafe mode rather than reading it', async () => {
     const lock = await loadLock()
     mkdirSync(lockDir(), { mode: 0o777 })

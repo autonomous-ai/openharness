@@ -1,14 +1,25 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isLegacyHarnessSession } from './harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions } from './tmuxAgentDiscovery.js'
+import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
+
+// The fake binaries below are /bin/sh scripts; their answers, not their speed, are what is tested
+// (testing/patientExecWithoutDeadline.ts).
+vi.mock('./patientExec.js', async (importOriginal) =>
+  (await import('../testing/patientExecWithoutDeadline.js')).withoutDeadline(await importOriginal()))
 
 const originalPath = process.env.PATH
 const dirs: string[] = []
 
+// Known up front: a rename asks which tmux this is (tmuxControlGate.ts), and a `tmux -V` through the fake
+// would land in the calls compared below.
+beforeEach(() => assumeTmuxVersion(null))
+
 afterEach(() => {
+  resetTmuxVersionCache()
   process.env.PATH = originalPath
   delete process.env.TMUX_LEGACY_CALLS
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
@@ -64,7 +75,7 @@ describe('adoptLegacyHarnessSessions', () => {
       { from: 'codex-1787549944131', to: 'harness-codex-1800000000001', paneId: '%1' },
     ])
     expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual([
-      'list-panes -a -F #{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}',
+      'list-panes -a -F #{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|#{@harness_daemon}',
       'rename-session -t =claude-1787912296587 harness-claude-1800000000000',
       'rename-session -t =codex-1787549944131 harness-codex-1800000000001',
     ])

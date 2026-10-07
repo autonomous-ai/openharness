@@ -1,16 +1,42 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { codexEffortRows, parseCodexPicker } from '../engines/codex/modelPicker.js'
 import type { RegisteredSession } from './registry.js'
 import { encodeRuntimeProfile, parseRuntimeProfile, RuntimeProfileManager } from './runtimeProfile.js'
 import {
   inspectRuntimePane,
-  parseCodexAdvancedRows,
-  parseCodexEffortRows,
-  parseCodexModelMenuRows,
-  parseCodexModelRows,
   parseCursorModelPicker,
   parseCursorParameterRows,
+  paneModal,
   RuntimeProfileController,
 } from './runtimeProfileController.js'
+import {
+  CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY, CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED,
+  CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK, CODEX_PROMPT,
+} from './__fixtures__/rewindPickers.js'
+import { CLAUDE_HISTORY_SEARCH, CLAUDE_TRUST_PROMPT, CODEX_TRANSCRIPT_FIND, CODEX_TRANSCRIPT_OVERLAY, CODEX_UPDATE_PROMPT } from './__fixtures__/takeoverScreens.js'
+import {
+  CODEX_0160_ADVANCED, CODEX_0160_ALL_MODELS, CODEX_0160_ALL_MODELS_REFRESHED, CODEX_0160_ALL_MODELS_SPACED, CODEX_0160_COMPOSER, CODEX_0160_QUICK_MENU,
+  CODEX_0160_REASONING, CODEX_0160_REASONING_SPACED, CODEX_0160_RESERVE, CODEX_0160_RESERVE_REASONING,
+} from './__fixtures__/codexModelPickers.js'
+
+/**
+ * Codex's own catalog, where the controller reads the display names its picker shows. Every Codex
+ * session here points at it (or at a throwaway home): with no `codexHome`, the manager would read the
+ * developer's real ~/.codex.
+ */
+const CODEX_HOME_0160 = join(import.meta.dirname, '__fixtures__', 'codex-home-0.160')
+const homes: string[] = []
+afterEach(async () => { await Promise.all(homes.splice(0).map((home) => rm(home, { recursive: true, force: true }))) })
+/** A throwaway CODEX_HOME whose models_cache.json lists these models. */
+async function codexHome(models: Array<Record<string, unknown>>): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), 'codex-home-'))
+  homes.push(home)
+  await writeFile(join(home, 'models_cache.json'), JSON.stringify({ fetched_at: '2026-10-05T09:00:00Z', client_version: '0.160.0', models }))
+  return home
+}
 
 // The id inside a `runtime-v1:` string is the AGENT id ('h1' here) — a client only ever echoes back an id
 // the catalog minted, and the catalog is agent-scoped. `setProfile` is still addressed with either id.
@@ -23,6 +49,7 @@ function session(engine: 'claude' | 'codex' | 'cursor' | 'opencode'): Registered
     runtimes: [{ backend: 'tmux', paneId: '%1' }], primaryRuntimeKey: 'tmux\u0000%1',
     cliVersion: engine === 'codex' ? '0.144.5' : engine === 'cursor' ? '2026.07.20-8cc9c0b' : engine === 'opencode' ? '1.18.31' : '2.1.212', processIdentity: null,
     registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
+    ...(engine === 'codex' ? { codexHome: CODEX_HOME_0160 } : {}),
   }
 }
 
@@ -36,6 +63,74 @@ describe('runtime pane parsing', () => {
       'cursor',
       '\u001b[48;2;21;21;21m \u001b[2m→ \u001b[0;7mP\u001b[0;2mlan, search, build anything\u001b[0m',
     )).toMatchObject({ idle: true, draft: false })
+  })
+
+  it('reads Codex browsing its transcript as a modal, at every width, with or without a draft dimmed under it', () => {
+    // As 0.160 draws it (tui/src/app_backtrack/prompt_navigation.rs): the composer dimmed whole, and the
+    // footer row naming the mode, its keys and their actions, cut down as the pane narrows.
+    const composer = '\u001b[2m\u001b[1m›\u001b[0m\u001b[2m \u001b[2mAsk Codex to do anything\u001b[0m'
+    const dot = '\u001b[2m · \u001b[0m'
+    const footers = [
+      `\u001b[36mBrowsing transcript\u001b[0m${dot}↑↓/jk\u001b[2m scroll\u001b[0m${dot}←→/hl\u001b[2m prompts\u001b[0m${dot}ctrl + t\u001b[2m details\u001b[0m${dot}↵\u001b[2m rewind\u001b[0m${dot}esc\u001b[2m back\u001b[0m`,
+      `\u001b[36mBrowsing\u001b[0m${dot}↵\u001b[2m rewind\u001b[0m${dot}esc\u001b[2m back\u001b[0m`,
+      `\u001b[36mBrowsing\u001b[0m${dot}esc`,
+      '\u001b[36mBrowsing\u001b[0m',
+    ]
+    for (const footer of footers) {
+      expect(inspectRuntimePane('codex', `${composer}\n\n${footer}`), footer).toMatchObject({ idle: false, dialog: true })
+    }
+    // A draft is dimmed with everything else in the composer while browsing: still not a pane to type into.
+    expect(inspectRuntimePane('codex', `\u001b[2m› keep this draft\u001b[0m\n\n${footers[0]}`)).toMatchObject({ idle: false, dialog: true })
+    // Other engines, and Codex's own transcript text, are not read for it.
+    expect(inspectRuntimePane('claude', `\u001b[39m❯\u00a0\u001b[2mAsk about the codebase\u001b[0m\n  Browsing · esc`)).toMatchObject({ idle: true, dialog: false })
+    expect(inspectRuntimePane('codex', `  Browsing transcript · as before\n${composer}\n\n  gpt-5.6-sol default · /tmp/project`)).toMatchObject({ dialog: false })
+  })
+
+  it('reads Claude Code\'s Rewind menu as a modal, in each of its views, and as closed once its prompt is back', () => {
+    // Its focused row is `❯ (current)` in italics: read as an empty, idle prompt, where Enter closes the
+    // menu and drops what was pasted, and, on a message, takes it a step from restoring the conversation.
+    for (const [view, screen] of Object.entries({ CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY })) {
+      expect(inspectRuntimePane('claude', screen), view).toMatchObject({ idle: false, dialog: true })
+      expect(paneModal('claude', screen), view).toBe('rewind')
+    }
+    // Its prompt back between its rules under any leftover of it, it is closed.
+    expect(inspectRuntimePane('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toMatchObject({ idle: true, dialog: false })
+    expect(paneModal('claude', `${CLAUDE_REWIND_LIST}\n${CLAUDE_PROMPT}`)).toBeNull()
+    // A message that reads `Rewind`, in the transcript or the list, is not the menu's title.
+    expect(paneModal('claude', `\u001b[38;5;239m\u001b[48;5;237m❯ \u001b[38;5;231mRewind\u001b[39m\u001b[49m\n\n${CLAUDE_PROMPT}`)).toBeNull()
+    expect(paneModal('claude', CLAUDE_REWIND_LIST.replace('   fix the login bug', '   Rewind'))).toBe('rewind')
+    // Another engine's pane is not read for it.
+    expect(paneModal('cursor', CLAUDE_REWIND_LIST)).toBeNull()
+  })
+
+  it('finds Codex browsing its transcript in both its screen modes', () => {
+    for (const [mode, screen] of Object.entries({ CODEX_BROWSING_FULLSCREEN, CODEX_BROWSING_SCROLLBACK })) {
+      expect(inspectRuntimePane('codex', screen), mode).toMatchObject({ idle: false, dialog: true })
+      expect(paneModal('codex', screen), mode).toBe('rewind')
+    }
+    expect(paneModal('codex', CODEX_PROMPT)).toBeNull()
+    expect(paneModal('claude', '')).toBeNull()
+  })
+
+  it('reads the engines\' own screens that take the composer\'s place as dialogs, so no work is typed into them', () => {
+    // A ready-looking composer stays on screen under Codex's find and Claude Code's history search.
+    expect(inspectRuntimePane('codex', CODEX_TRANSCRIPT_FIND)).toMatchObject({ dialog: true, idle: false })
+    expect(paneModal('codex', CODEX_TRANSCRIPT_FIND)).toBe('search')
+    expect(inspectRuntimePane('claude', CLAUDE_HISTORY_SEARCH)).toMatchObject({ dialog: true, idle: false })
+    expect(paneModal('codex', CODEX_TRANSCRIPT_OVERLAY)).toBe('transcript')
+    expect(paneModal('codex', CODEX_UPDATE_PROMPT)).toBe('update')
+    expect(paneModal('claude', CLAUDE_TRUST_PROMPT)).toBe('trust')
+    // Codex browsing its transcript in its scrollback mode draws the same header: a rewind picker still.
+    expect(paneModal('codex', CODEX_BROWSING_SCROLLBACK)).toBe('rewind')
+  })
+
+  it('tells an approval prompt and a menu from the MCP boot notice, which takes typing and is no modal for a message', () => {
+    expect(paneModal('claude', ' Bash command\n   printf hi\n Do you want to proceed?\n ❯ 1. Yes\n   2. No')).toBe('permission')
+    expect(paneModal('codex', 'Select Model and Effort\n› 1. gpt-5.6-sol (current)')).toBe('menu')
+    const booting = `${CLAUDE_PROMPT}\n  Starting MCP servers (1/3)…`
+    expect(paneModal('claude', booting)).toBeNull()
+    // Still a dialog to every reader that holds work back from a booting pane.
+    expect(inspectRuntimePane('claude', booting)).toMatchObject({ dialog: true })
   })
 
   it('reads hermes, which italicises its placeholder instead of dimming it', () => {
@@ -269,26 +364,23 @@ describe('runtime pane parsing', () => {
   })
 
   it('parses the version-gated Codex picker rows', () => {
-    const menu = parseCodexModelMenuRows([
+    const menu = parseCodexPicker([
       'Select Model',
       'Pick a quick auto mode or browse all models.',
       '  1. codex-auto-review     Balanced agentic coding model for everyday work.',
       '› 2. All models (current)  Choose a specific model and reasoning level',
     ].join('\n'))
-    expect(menu?.quickModels.get('codex-auto-review')).toBe('1')
-    expect(menu?.allModelsRow).toBe('2')
+    expect(menu).toMatchObject({ kind: 'quick', rows: [{ number: 1, name: 'codex-auto-review' }, { number: 2, name: 'All models', current: true }] })
 
-    const models = parseCodexModelRows('Select Model and Effort\n  1. gpt-5.6-sol (default)          Latest frontier model.\n  2. gpt-5.6-terra\n› 3. gpt-5.6-luna (current)  Fast model.')
-    expect(models?.get('gpt-5.6-sol')).toBe('1')
-    expect(models?.get('gpt-5.6-terra')).toBe('2')
-    expect(models?.get('gpt-5.6-luna')).toBe('3')
-    const efforts = parseCodexEffortRows('Select Reasoning Level for gpt-5.6-sol\n  1. Low\n  2. High (default)\n  3. Extra high\n  4. More reasoning options')
-    expect(efforts?.efforts.get('xhigh')).toBe('3')
-    expect(efforts?.defaultRow).toBe('2')
-    expect(efforts?.advancedRow).toBe('4')
-    const advanced = parseCodexAdvancedRows('Advanced Reasoning\n› 1. Max (current)  Higher usage\n  2. Ultra          Highest usage')
-    expect(advanced?.get('max')).toBe('1')
-    expect(advanced?.get('ultra')).toBe('2')
+    const models = parseCodexPicker('Select Model and Effort\n  1. gpt-5.6-sol (default)          Latest frontier model.\n  2. gpt-5.6-terra\n› 3. gpt-5.6-luna (current)  Fast model.')
+    expect(models?.rows.map((row) => [row.number, row.name])).toEqual([[1, 'gpt-5.6-sol'], [2, 'gpt-5.6-terra'], [3, 'gpt-5.6-luna']])
+    const efforts = codexEffortRows(parseCodexPicker('Select Reasoning Level for gpt-5.6-sol\n  1. Low\n  2. High (default)\n  3. Extra high\n  4. More reasoning options')!)
+    expect(efforts.efforts.get('xhigh')).toBe(3)
+    expect(efforts.defaultRow).toBe(2)
+    expect(efforts.advancedRow).toBe(4)
+    const advanced = codexEffortRows(parseCodexPicker('Advanced Reasoning\n› 1. Max (current)  Higher usage\n  2. Ultra          Highest usage')!)
+    expect(advanced.efforts.get('max')).toBe(1)
+    expect(advanced.efforts.get('ultra')).toBe(2)
   })
 
   it('treats both Codex model picker generations as active dialogs', () => {
@@ -304,7 +396,7 @@ describe('runtime pane parsing', () => {
 
   it('does not reuse picker rows left before a newer composer prompt', () => {
     const stale = 'Select Model and Effort\n  1. gpt-old\n› 1. gpt-old\n› \ngpt-current high ·'
-    expect(parseCodexModelRows(stale)).toBeNull()
+    expect(parseCodexPicker(stale)).toBeNull()
   })
 
   it('parses the gated Cursor picker and parameter rows by meaning', () => {
@@ -623,6 +715,268 @@ describe('RuntimeProfileController', () => {
 
     expect(keys).toEqual(['1', '3'])
     expect(manager.selectedModel(value)).toBe(target)
+  })
+
+  describe('Codex 0.160', () => {
+    /** Codex's settings record once a choice is applied: what the switch is confirmed by. */
+    const applied = (manager: RuntimeProfileManager, value: RegisteredSession, model: string, effort: string) =>
+      manager.ingest(value, JSON.stringify({
+        type: 'event_msg',
+        payload: { type: 'thread_settings_applied', thread_settings: { model, reasoning_effort: effort, collaboration_mode: { mode: 'default' } } },
+      }))
+    const reasoningFor = (name: string) => CODEX_0160_REASONING.replace('Select Reasoning Level for GPT-5.5', `Select Reasoning Level for ${name}`)
+    /** A 0.160 agent on `model` at `effort`, as its rollout says. */
+    const agent = (model: string, effort: string, home = CODEX_HOME_0160) => {
+      const value = { ...session('codex'), cliVersion: '0.160.0', codexHome: home }
+      const manager = new RuntimeProfileManager()
+      manager.hydrate(value, [JSON.stringify({ type: 'turn_context', payload: { model, reasoning_effort: effort } })])
+      return { value, manager }
+    }
+    /**
+     * A pane that answers as Codex's picker does: `/model` opens `opened`, and `press` says where each
+     * key leads from the screen on show. The digits pressed are kept, in order.
+     */
+    const drive = (manager: RuntimeProfileManager, value: RegisteredSession, opened: string,
+      press: (screen: string, key: string) => string, read: (screen: string) => string = (screen) => screen, ownEscape = false) => {
+      let screen = CODEX_0160_COMPOSER
+      const keys: string[] = []
+      const controller = new RuntimeProfileController({
+        manager,
+        getSession: () => value,
+        validateRuntime: async () => true,
+        capture: async () => read(screen),
+        sendText: async (_pane, text) => { if (text === '/model') screen = opened; return true },
+        sendLiteral: async () => true,
+        sendKey: async (_pane, key) => {
+          keys.push(key)
+          screen = key === 'Escape' && !ownEscape ? CODEX_0160_COMPOSER : press(read(screen), key)
+          return true
+        },
+        acquireInput: () => () => undefined,
+      })
+      return { controller, keys }
+    }
+
+    it('switches the effort by the display-named rows, to the new Persistent', async () => {
+      const models = JSON.parse(await readFile(join(CODEX_HOME_0160, 'models_cache.json'), 'utf8')).models
+      // As Codex's own test gives gpt-5.5 the effort (popups_and_settings.rs `model_reasoning_selection_popup_snapshot`).
+      for (const entry of models) {
+        if (entry.slug === 'gpt-5.5') entry.supported_reasoning_levels.push({ effort: 'persistent', description: 'Continue working until put to sleep' })
+      }
+      const { value, manager } = agent('gpt-5.5', 'high', await codexHome(models))
+      const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-5.5', effort: 'persistent' })
+      // The catalog offers it: Harness lists persistent now that it knows the word.
+      expect((await manager.modelsForSession(value)).map((option) => option.id)).toContain(target)
+      const { controller, keys } = drive(manager, value, CODEX_0160_ALL_MODELS, (screen, key) => {
+        if (screen === CODEX_0160_ALL_MODELS && key === '8') return CODEX_0160_REASONING
+        if (screen === CODEX_0160_REASONING && key === '5') { applied(manager, value, 'gpt-5.5', 'persistent'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+
+      await controller.setProfile('s1', target)
+
+      expect(keys).toEqual(['8', '5'])
+      expect(manager.selectedModel(value)).toBe(target)
+    })
+
+    it('reaches a model whose name has a space through All models', async () => {
+      const home = await codexHome([
+        { slug: 'codex-auto-fast', display_name: 'Auto Fast', visibility: 'list', default_reasoning_level: 'high',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }] },
+        { slug: 'us.openai.gpt-5.6-luna', display_name: 'GPT-5.6 Luna', visibility: 'list', default_reasoning_level: 'high',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }] },
+      ])
+      const { value, manager } = agent('us.openai.gpt-5.6-luna', 'high', home)
+      const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'us.openai.gpt-5.6-luna', effort: 'low' })
+      const { controller, keys } = drive(manager, value, CODEX_0160_QUICK_MENU, (screen, key) => {
+        if (screen === CODEX_0160_QUICK_MENU && key === '2') return CODEX_0160_ALL_MODELS_SPACED
+        if (screen === CODEX_0160_ALL_MODELS_SPACED && key === '1') return CODEX_0160_REASONING_SPACED
+        if (screen === CODEX_0160_REASONING_SPACED && key === '1') { applied(manager, value, 'us.openai.gpt-5.6-luna', 'low'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+
+      await controller.setProfile('s1', target)
+
+      expect(keys).toEqual(['2', '1', '1'])
+      expect(manager.selectedModel(value)).toBe(target)
+    })
+
+    it('applies a quick preset with one press, and presses nothing for an effort it cannot give', async () => {
+      const home = await codexHome([
+        { slug: 'codex-auto-fast', display_name: 'Auto Fast', visibility: 'list', default_reasoning_level: 'high',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }] },
+        { slug: 'us.openai.gpt-5.6-luna', display_name: 'GPT-5.6 Luna', visibility: 'list', default_reasoning_level: 'high',
+          supported_reasoning_levels: [{ effort: 'low' }, { effort: 'high' }] },
+      ])
+      const { value, manager } = agent('us.openai.gpt-5.6-luna', 'high', home)
+      const run = drive(manager, value, CODEX_0160_QUICK_MENU, (screen, key) => {
+        // The row applies its default effort at once and saves it (model_popups.rs `model_selection_actions`).
+        if (screen === CODEX_0160_QUICK_MENU && key === '1') { applied(manager, value, 'codex-auto-fast', 'high'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+      const auto = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'codex-auto-fast', effort: 'auto' })
+      await run.controller.setProfile('s1', auto)
+      expect(run.keys).toEqual(['1'])
+      expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'codex-auto-fast', effort: 'high' })
+
+      // Low: the preset can only apply High, so the switch is refused and the picker closed untouched.
+      const again = drive(manager, value, CODEX_0160_QUICK_MENU, () => { throw new Error('no row may be pressed') })
+      const low = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'codex-auto-fast', effort: 'low' })
+      await expect(again.controller.setProfile('s1', low)).rejects.toMatchObject({ code: 'EFFORT_UNSUPPORTED' })
+      expect(again.keys).toEqual(['Escape'])
+    })
+
+    it('presses the row the list shows once Codex has refreshed it, not the row it first drew', async () => {
+      // Codex 0.160 draws its cached models at once and redraws the list when the server answers; here
+      // the answer brings a new model first, and GPT-6-Luna moves from row 4 to row 5.
+      const { value, manager } = agent('gpt-5.5', 'high')
+      const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'high' })
+      let reads = 0
+      const { controller, keys } = drive(manager, value, CODEX_0160_ALL_MODELS, (screen, key) => {
+        const row = parseCodexPicker(screen)?.rows.find((candidate) => String(candidate.number) === key)
+        if (screen === CODEX_0160_ALL_MODELS_REFRESHED && row) return reasoningFor(row.name)
+        if (screen === reasoningFor('GPT-6-Luna') && key === '3') { applied(manager, value, 'gpt-6-luna', 'high'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key} on ${row?.name ?? 'a reasoning screen'}`)
+      }, (screen) => (screen === CODEX_0160_ALL_MODELS && ++reads > 1 ? CODEX_0160_ALL_MODELS_REFRESHED : screen))
+
+      await controller.setProfile('s1', target)
+
+      expect(keys).toEqual(['5', '3'])
+      expect(manager.selectedModel(value)).toBe(target)
+    })
+
+    it('stops when the reasoning picker that opens names another model than the row pressed', async () => {
+      // The list read the same twice, and was renumbered between the second read and the digit.
+      const { value, manager } = agent('gpt-5.5', 'high')
+      const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'high' })
+      const { controller, keys } = drive(manager, value, CODEX_0160_ALL_MODELS, (screen, key) => {
+        const row = parseCodexPicker(CODEX_0160_ALL_MODELS_REFRESHED)?.rows.find((candidate) => String(candidate.number) === key)
+        if (screen === CODEX_0160_ALL_MODELS && row) return reasoningFor(row.name)
+        throw new Error(`unexpected ${key}`)
+      })
+
+      await expect(controller.setProfile('s1', target)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+      // Row 4 was GPT-6-Luna when read and GPT-6-Sol when pressed: no effort was chosen for it.
+      expect(keys).toEqual(['4', 'Escape'])
+    })
+
+    it('presses nothing for a model the list does not show exactly', async () => {
+      const { value, manager } = agent('gpt-5.5', 'high')
+      const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-7', effort: 'high' })
+      vi.spyOn(manager, 'modelsForSession').mockResolvedValue([{ id: target, displayName: 'GPT-7 / High' }])
+      const catalog = vi.spyOn(manager, 'codexCatalog')
+      const { controller, keys } = drive(manager, value, CODEX_0160_ALL_MODELS, () => { throw new Error('no row may be pressed') })
+
+      await expect(controller.setProfile('s1', target)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+      expect(keys).toEqual(['Escape'])
+      // The catalog is read again once before giving up: a refresh may have brought the name.
+      expect(catalog).toHaveBeenCalledTimes(2)
+    })
+
+    it('offers an account held to the reserve model nothing else, and changes the reserve effort', async () => {
+      const held = agent('gpt-reserve', 'medium')
+      const other = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'high' })
+      const refused = drive(held.manager, held.value, CODEX_0160_RESERVE, () => { throw new Error('no row may be pressed') })
+      await expect(refused.controller.setProfile('s1', other)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+      // Neither its one row nor Enter: the picker is recognised, and closed.
+      expect(refused.keys).toEqual(['Escape'])
+
+      const high = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-reserve', effort: 'high' })
+      vi.spyOn(held.manager, 'modelsForSession').mockResolvedValue([{ id: high, displayName: 'Luna Reserve / High' }])
+      const { controller, keys } = drive(held.manager, held.value, CODEX_0160_RESERVE, (screen, key) => {
+        if (screen === CODEX_0160_RESERVE && key === '1') return CODEX_0160_RESERVE_REASONING
+        if (screen === CODEX_0160_RESERVE_REASONING && key === '3') { applied(held.manager, held.value, 'gpt-reserve', 'high'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+      await controller.setProfile('s1', high)
+      expect(keys).toEqual(['1', '3'])
+      expect(held.manager.selectedModel(held.value)).toBe(high)
+    })
+
+    it('reaches Max through Advanced Reasoning, from a picker that opened on a reasoning screen', async () => {
+      const { value, manager } = agent('gpt-5.6-sol', 'high')
+      const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-5.6-sol', effort: 'max' })
+      const reasoning = reasoningFor('GPT-5.6-Sol')
+      let opened = false
+      const { controller, keys } = drive(manager, value, reasoning, (screen, key) => {
+        if (key === 'Escape' && !opened) { opened = true; return CODEX_0160_ALL_MODELS }
+        if (screen === CODEX_0160_ALL_MODELS && key === '5') return reasoning
+        if (screen === reasoning && key === '6') return CODEX_0160_ADVANCED
+        if (screen === CODEX_0160_ADVANCED && key === '1') { applied(manager, value, 'gpt-5.6-sol', 'max'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      }, undefined, true)
+
+      await controller.setProfile('s1', target)
+
+      expect(keys).toEqual(['Escape', '5', '6', '1'])
+      expect(manager.selectedModel(value)).toBe(target)
+    })
+
+    it('reaches Ultra on a GPT-6 model, as Codex catalog lists it there, and refuses Max where it does not', async () => {
+      const { value, manager } = agent('gpt-5.5', 'high')
+      const ultra = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6.1-sol', effort: 'ultra' })
+      const reasoning = reasoningFor('GPT-6.1-Sol')
+      const { controller, keys } = drive(manager, value, CODEX_0160_ALL_MODELS, (screen, key) => {
+        if (screen === CODEX_0160_ALL_MODELS && key === '1') return reasoning
+        if (screen === reasoning && key === '6') return CODEX_0160_ADVANCED
+        if (screen === CODEX_0160_ADVANCED && key === '2') { applied(manager, value, 'gpt-6.1-sol', 'ultra'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+      await controller.setProfile('s1', ultra)
+      expect(keys).toEqual(['1', '6', '2'])
+      expect(manager.selectedModel(value)).toBe(ultra)
+
+      // gpt-5.5 lists no Max: refused before `/model` is typed.
+      const refused = drive(manager, value, CODEX_0160_ALL_MODELS, () => { throw new Error('no key may be pressed') })
+      await expect(refused.controller.setProfile('s1', encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-5.5', effort: 'max' })))
+        .rejects.toMatchObject({ code: 'EFFORT_UNSUPPORTED' })
+      expect(refused.keys).toEqual([])
+    })
+
+    it('presses nothing on a list that never reads the same twice', async () => {
+      const { value, manager } = agent('gpt-5.5', 'high')
+      const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'high' })
+      let reads = 0
+      const { controller, keys } = drive(manager, value, CODEX_0160_ALL_MODELS, () => { throw new Error('no row may be pressed') },
+        (screen) => (screen === CODEX_0160_ALL_MODELS && ++reads % 2 === 0 ? CODEX_0160_ALL_MODELS_REFRESHED : screen))
+
+      await expect(controller.setProfile('s1', target)).rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+      expect(keys).toEqual(['Escape'])
+    })
+
+    it('takes the next switch after a refused one, when the app names the agent', async () => {
+      // The apps address an agent by its agent id ('h1'), not by the engine session ('s1').
+      const held = agent('gpt-reserve', 'medium')
+      const refused = drive(held.manager, held.value, CODEX_0160_RESERVE, () => { throw new Error('no row may be pressed') })
+      await expect(refused.controller.setProfile('h1', encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'high' })))
+        .rejects.toMatchObject({ code: 'MODEL_UNAVAILABLE' })
+
+      const high = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-reserve', effort: 'high' })
+      vi.spyOn(held.manager, 'modelsForSession').mockResolvedValue([{ id: high, displayName: 'Luna Reserve / High' }])
+      const { controller } = drive(held.manager, held.value, CODEX_0160_RESERVE, (screen, key) => {
+        if (screen === CODEX_0160_RESERVE && key === '1') return CODEX_0160_RESERVE_REASONING
+        if (screen === CODEX_0160_RESERVE_REASONING && key === '3') { applied(held.manager, held.value, 'gpt-reserve', 'high'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+      await controller.setProfile('h1', high)
+      expect(held.manager.selectedModel(held.value)).toBe(high)
+    })
+
+    it('confirms a model the catalog does not describe that applied its one effort at once', async () => {
+      const { value, manager } = agent('gpt-5.5', 'high', await codexHome([]))
+      const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'codex', model: 'gpt-6-luna', effort: 'auto' })
+      vi.spyOn(manager, 'modelsForSession').mockResolvedValue([{ id: target, displayName: 'GPT-6-Luna / Auto' }])
+      const list = '  Select Model and Effort\n\n› 1. gpt-6-luna  Fast and affordable model for easier tasks.'
+      const { controller, keys } = drive(manager, value, list, (screen, key) => {
+        if (screen === list && key === '1') { applied(manager, value, 'gpt-6-luna', 'medium'); return CODEX_0160_COMPOSER }
+        throw new Error(`unexpected ${key}`)
+      })
+
+      await controller.setProfile('s1', target)
+
+      expect(keys).toEqual(['1'])
+      expect(parseRuntimeProfile(manager.selectedModel(value))).toMatchObject({ model: 'gpt-6-luna', effort: 'medium' })
+    })
   })
 
   it('refuses to drive an engine the owner made view-only', async () => {

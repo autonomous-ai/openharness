@@ -27,6 +27,8 @@ export interface SafeModeMarker {
 export interface SafeModeDisposition {
   stay: boolean
   reason: string
+  /** Leave so as to be started again: what stands in the way is leaving too (lib/localSocket.ts). */
+  retry?: true
 }
 
 /** Thrown at the top of start-up when harnessd's master asks for safe mode: the core kept crashing. */
@@ -52,6 +54,15 @@ export function safeModeDisposition(
   if (/EADDRINUSE|address already in use/i.test(message)) {
     return { stay: false, reason: 'the control port belongs to another daemon' }
   }
+  // The data folder's socket refusing us (lib/localSocket.ts): another daemon serves it now, whether or
+  // not it has claimed the pid file yet. Read off the code, which the message does not carry: a second
+  // master's core that lost the race before the winner's claim would otherwise stay up in safe mode, and
+  // its master claim the pid file over the daemon that is serving (e2e/twodaemons.e2e.ts).
+  if ((error as { code?: unknown } | null | undefined)?.code === 'EADDRINUSE') return { stay: false, reason: message }
+  // The core of a master that is gone, still leaving once the wait for it was over: this core goes, and is
+  // started again by its master, which by then finds the folder free. Gone for good instead, its master
+  // went with it, cleanly, and launchd and systemd do not start a clean exit again.
+  if ((error as { code?: unknown } | null | undefined)?.code === 'ORPHAN_STILL_SERVING') return { stay: false, reason: message, retry: true }
   const owner = deps.readPid()
   // Under harnessd the pid file names the master that runs this core: that daemon is this one.
   if (owner !== null && owner !== deps.selfPid && owner !== deps.masterPid && deps.isAlive(owner)) {
@@ -98,38 +109,6 @@ export function writeSafeModeMarker(dataDir: string, marker: SafeModeMarker): vo
 
 export function clearSafeModeMarker(dataDir: string): void {
   try { rmSync(safeModeFile(dataDir), { force: true }) } catch { /* ignore */ }
-}
-
-export interface BootHandoffDeps {
-  /** The bound control port, if start-up ever got that far. */
-  closeServer: () => void
-  removePidFile: () => void
-  spawn: (extraEnv: Record<string, string>) => { pid?: number; unref: () => void }
-  exit: (code: number) => never
-  log: (message: string) => void
-}
-
-/**
- * Hand the machine to a newer build without finishing start-up.
- *
- * SYNCHRONOUS END TO END, and that is the whole safety argument: never awaiting means the half-built
- * boot cannot interleave between the port closing and the exit, so it can never reach the code that
- * would bind the port the successor is about to take. Two daemons are impossible by construction.
- * That is also why it does not supervise the child the way a normal update restart does — waiting
- * would leave this process running alongside the new one for up to a minute, both reconciling tmux
- * and writing the registry.
- *
- * It spawns rather than merely exiting because nothing supervises a daemon: on a machine with no
- * desktop app nothing else would ever start the successor.
- */
-export function runBootHandoff(from: string, to: string, deps: BootHandoffDeps): void {
-  deps.log(`[update] ${from} → ${to} staged during start-up — handing off without finishing boot`)
-  deps.closeServer()
-  deps.removePidFile()
-  const child = deps.spawn({ ADAPTER_UPDATED_TO: to })
-  child.unref()
-  deps.log(`[update] boot handoff → pid ${child.pid ?? '?'} · this process is leaving`)
-  deps.exit(0)
 }
 
 /** The marker, or null — including for one left behind by a process that is no longer running. */

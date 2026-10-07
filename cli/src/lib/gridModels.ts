@@ -23,12 +23,13 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { env as config } from '../config/env.js'
+import { annotate, glanceFor, type AgentGridTarget, type GridAnnotation, type GridGlance, type GridNote } from './gridAnnotation.js'
 import { gridCredentialsPath } from './gridCredentials.js'
 import { signedInGridEmail } from './gridDerive.js'
 import { gridJson } from './gridExec.js'
 import {
   advertisedNow, emptyPicture, mergeAwake, idKey, parsePicture, provenStopped, sectionView, servedKey, servesAModel, unspelled, withAsleep,
-  withSpellings, withUnknown, withWindows, type GridPicture, type LocalRecord, type PictureState, type RowUnavailable,
+  withDecisions, withSpellings, withUnknown, withWindows, type GridPicture, type LocalRecord, type PictureState, type RowUnavailable,
   type SectionView, type ServedHere,
 } from './gridPicture.js'
 import { ComputerPresence, computersIn, MACHINE_LIST_FRESH_MS } from './gridPresence.js'
@@ -48,6 +49,9 @@ export interface GridModel {
   /** Every computer serving it seems offline — sent only to a client that asked for row state
    *  ([presentGridSections]); an older one reads it in `node` instead. */
   unavailable?: RowUnavailable
+  /** `decision`: a Jev (System One) model, called at `/v1/systemone` and never run as an agent — a picker
+   *  lists it in its own section. Absent for a chat model; an older app ignores it. */
+  kind?: 'decision'
 }
 
 /** How an explicit wake that did not show models ended: the grid did not come up in time, or came up
@@ -165,13 +169,8 @@ export type PrewarmOutcome =
 /** A grid as a launch names it: its network id (what it is tracked and persisted under) and its name. */
 export interface GridRef { networkId: string; gridName: string }
 
-/** Where an agent's inference goes (`gridAssignment.ts`) — all a prewarm or a note needs of it. */
-export interface AgentGridTarget { baseUrl: string; model: string | null }
-
-/** What is said about an agent already on a grid model (issue 03): that grid's state, and a note when its
- *  model will not answer — every computer serving it seems offline, or the latest list no longer has it. */
-export interface GridNote { reason: 'offline' | 'not_served'; model: string; machine?: string }
-export interface GridAnnotation { state: PictureState; note?: GridNote }
+// An agent's grid, and what its frame says of that grid: gridAnnotation.ts's, read in the core without this module.
+export type { AgentGridTarget, GridAnnotation, GridGlance, GridNote }
 
 export interface GridModelsDeps {
   now: () => number
@@ -245,6 +244,7 @@ export class GridModelsService {
   async warm(): Promise<void> {
     const folder = join(this.deps.dataDir(), PICTURES_DIR)
     const names = await readdir(folder).catch(() => [] as string[])
+    let warmed = 0
     await Promise.all(names.filter((name) => name.endsWith('.json')).map(async (name) => {
       try {
         const saved = JSON.parse(await readFile(join(folder, name), 'utf8')) as SavedPicture
@@ -252,8 +252,12 @@ export class GridModelsService {
         const gridName = typeof saved.name === 'string' ? saved.name : ''
         const tracked = await this.track({ id: saved.networkId, name: gridName, type: '' }, saved.own === true ? true : undefined)
         await this.view(tracked)
+        warmed++
       } catch { /* not a picture this module wrote; the list will read that grid when asked */ }
     }))
+    // Said like any change: the frames built before this landed carried no note, and a core that reads the
+    // notes from models in its own process has heard nothing of these grids yet (core/modelsLink.ts).
+    if (warmed) this.changed()
   }
 
   /** Every read is due again — for a caller that has just changed what a grid serves, or which grid is
@@ -440,6 +444,7 @@ export class GridModelsService {
     let picture = mergeAwake(previous, read.nodes, now, isMine, (name, key) => provenStopped(previous, here, name, key))
     const spelled = withSpellings(picture.caseMap, [...read.curatedIds, ...here.records.flatMap((r) => r.ids)])
     picture = withWindows({ ...picture, caseMap: withSpellings(spelled, advertisedNow(here.records), true) }, read.windows)
+    picture = withDecisions(picture, read.nodes)
     const unknownIds = unspelled(picture, read.nodes).filter((key) => !tracked.spelled.has(key))
     if (unknownIds.length && base) {
       unknownIds.forEach((key) => tracked.spelled.add(key))
@@ -615,9 +620,12 @@ export class GridModelsService {
 
   /** The grid an agent's inference goes to: the tracked grid whose id is a segment of its relay's path. */
   private trackedFor(baseUrl: string): Tracked | null {
-    let segments: string[]
-    try { segments = new URL(baseUrl).pathname.split('/').filter(Boolean) } catch { return null }
-    return [...this.tracked.values()].find((tracked) => !tracked.id.startsWith(NAME_ONLY_PREFIX) && segments.includes(tracked.id)) ?? null
+    return glanceFor([...this.tracked.values()].filter((tracked) => !tracked.id.startsWith(NAME_ONLY_PREFIX)), baseUrl)
+  }
+
+  /** As much of a tracked grid as an agent's frame and a keystroke read (gridAnnotation.ts). */
+  private glance(tracked: Tracked): GridGlance {
+    return { id: tracked.id, view: tracked.lastView, listed: tracked.picture.listAt !== null, asleep: tracked.picture.state === 'asleep' && !tracked.waking }
   }
 
   /**
@@ -626,14 +634,19 @@ export class GridModelsService {
    */
   annotation(target: AgentGridTarget | null | undefined): GridAnnotation | null {
     const tracked = target ? this.trackedFor(target.baseUrl) : null
-    const view = tracked?.lastView
-    if (!tracked || !view || !target) return null
-    if (!target.model || view.state === 'waking') return { state: view.state }
-    const row = servedRow(view.models, target.model)
-    if (row?.unavailable) return { state: view.state, note: { reason: 'offline', model: row.id, machine: row.unavailable.machine } }
-    // "No longer lists" needs a list: a grid never read says nothing about any model.
-    if (!row && tracked.picture.listAt !== null) return { state: view.state, note: { reason: 'not_served', model: target.model } }
-    return { state: view.state }
+    return tracked && target ? annotate(this.glance(tracked), target) : null
+  }
+
+  /**
+   * Every grid tracked here at a glance, for a core that reads agents' notes without this module: what
+   * models in its own process tells the core whenever a picker would be told something new
+   * (services/modelsProcess.ts). Each model is its id and the computer it waits for, nothing more.
+   */
+  glances(): GridGlance[] {
+    return [...this.tracked.values()].filter((tracked) => !tracked.id.startsWith(NAME_ONLY_PREFIX)).map((tracked) => {
+      const { view, ...rest } = this.glance(tracked)
+      return { ...rest, view: view && { state: view.state, models: view.models.map(({ id, unavailable }) => unavailable ? { id, unavailable: { machine: unavailable.machine } } : { id }) } }
+    })
   }
 
   /** A machine list this daemon just read (`GET /api/machines`, or null when signed out): which of the
@@ -754,6 +767,11 @@ export function keystrokePrewarm(target: AgentGridTarget | null | undefined): Pr
 /** What an agent frame says about the grid the agent is on ([GridModelsService.annotation]). */
 export function gridAnnotation(target: AgentGridTarget | null | undefined): GridAnnotation | null {
   return service.annotation(target)
+}
+
+/** Every tracked grid at a glance ([GridModelsService.glances]). */
+export function gridGlances(): GridGlance[] {
+  return service.glances()
 }
 
 /** The context window `model` was last reported with on `grid`, read without a credential. */

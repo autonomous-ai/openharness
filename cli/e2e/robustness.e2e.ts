@@ -4,7 +4,7 @@
  * outside, a restart in the middle of a turn, and state files that are garbage when it starts. After
  * each, the same core is serving and a well-behaved client still works.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import WebSocket from 'ws'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -186,12 +186,17 @@ describe('what the daemon survives', () => {
     client.close()
   })
 
-  it('the dial, the window bridges and the device service failing on every call never disconnect the desktop', async () => {
-    const d = await fresh({ env: { HARNESSD_TEST_FAULTS: 'dial,window,devices' } })
+  it('the dial, the window bridges and the Wi-Fi device service failing on every call never disconnect the desktop', async () => {
+    // The Wi-Fi device's service is the devices' process's too, on a link of its own: every call the desktop's
+    // frames make into it fails there (services/process.ts).
+    const d = await fresh({ env: { HARNESSD_TEST_FAULTS: 'dial,window,wifi.appFocus,wifi.card' } })
     await d.start()
     // The handshake itself asks the dial for its status.
     const desktop = await LocalClient.connect(d)
     const agent = await boundAgent(d, desktop, 'devices-failing')
+    // No device here: the Devices tab's request starts their process (core/devicesWake.ts), whatever it answers.
+    await desktop.request('harness_devices_list', {}, 30_000)
+    await until('the Wi-Fi device\'s service to connect', () => d.log().includes('[services] wifi connected') || null, 30_000, 100)
     // What a desktop sends on every pane change, focus, read and spoken reply — each one reaching the dial,
     // a window bridge or the WiFi device service.
     for (let i = 0; i < 3; i++) {
@@ -207,7 +212,7 @@ describe('what the daemon survives', () => {
     expect(desktop.closed).toBe(false)
     expect(d.log()).toContain('[devices] dial failed · injected fault: dial')
     expect(d.log()).toContain('[devices] window failed · injected fault: window')
-    expect(d.log()).toContain('[devices] devices failed · injected fault: devices')
+    await until('the Wi-Fi device\'s service to fail the desktop\'s focus', () => d.log().includes('[service wifi] appFocus failed · injected fault: wifi.appFocus') || null, 15_000, 100)
     expect(d.log()).not.toContain('local dispatch failed')
     expect(d.coresStarted()).toBe(1)
     desktop.close()
@@ -226,7 +231,18 @@ describe('what the daemon survives', () => {
     mkdirSync(join(d.dataDir, 'stopped-agents'), { recursive: true, mode: 0o700 })
     writeFileSync(join(d.dataDir, 'stopped-agents', 'garbage.json'), '[[[', { mode: 0o600 })
     writeFileSync(join(d.dataDir, 'registry-boot'), 'not a boot id', { mode: 0o600 })
+    // The Wi-Fi device's (experimental): either one threw out of the core's start, into safe mode.
+    writeFileSync(join(d.dataDir, 'autonomous-device-connections.json'), '{"not": "a list"}', { mode: 0o600 })
+    writeFileSync(join(d.dataDir, 'device-results.json'), '{"version": 1, "entries": [', { mode: 0o600 })
     await d.start()
+    // The requests that need no device piece still answer; the ones that need one say it is not running,
+    // not that it is still starting.
+    const credential = readFileSync(join(d.dataDir, 'hook-credential'), 'utf8').trim()
+    const device = (path: string) => fetch(`http://127.0.0.1:${d.port}/api/autonomous-device/${path}`, { headers: { authorization: `Bearer ${credential}` } })
+    await until('the device requests to answer', async () => (await device('list')).status === 200, 30_000, 250)
+    // A discovery starts the devices' process (core/devicesWake.ts), which leaves out what it cannot read.
+    expect(await (await device('discover')).json()).toMatchObject({ error: { code: 'UNAVAILABLE', message: expect.stringContaining('is not running on this computer') } })
+    await until('the device service to be left out', () => /the Wi-Fi device service could not be started/.test(d.log()), 30_000)
     const client = await LocalClient.connect(d)
     expect(Array.isArray((await client.request('agents_list', { includeStopped: true })).agents)).toBe(true)
     const agent = await boundAgent(d, client, 'after-the-corruption')

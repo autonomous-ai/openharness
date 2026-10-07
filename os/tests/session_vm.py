@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Observe locking and suspend/resume on a disposable installed Harness machine."""
+"""Observe locking, suspend or compositor recovery on a disposable installed machine."""
 import argparse
 import base64
+import gzip
 import hashlib
 import json
 import os
@@ -48,11 +49,11 @@ def screen_text(vm, name):
 
 
 def wait_lock(vm, locked, timeout=15):
-    # -f returns only after the compositor acknowledges the lock, then its child
-    # calls setsid(). A matching process alone includes the pre-lock parent/PAM
-    # helper and can race the screen and keyboard grab.
-    command = ("ps -u 1000 -o pid=,sid=,comm= | awk '$1 == $2 && $3 == \"swaylock\" {ready=1} END {exit !ready}'"
-               if locked else '! pgrep -u 1000 -x swaylock >/dev/null')
+    # The lock's marker is written only once the compositor acknowledges the lock
+    # (gtklock's lock command, usr/lib/harness-os/lock). A matching process alone
+    # includes the pre-lock parent and can race the screen and keyboard grab.
+    command = ('pgrep -u 1000 -x gtklock >/dev/null && test -e /run/user/1000/harness-os-locked'
+               if locked else '! pgrep -u 1000 -x gtklock >/dev/null')
     vm.command('for n in $(seq 1 ' + str(timeout * 4) + '); do if ' + command + '; then exit 0; fi; sleep 0.25; done; exit 1', timeout=timeout + 5)
 
 
@@ -64,7 +65,7 @@ def live_lock(vm, user):
         print('Checking live ' + name, flush=True)
         trigger()
         time.sleep(1)
-        _, status = vm.command('pgrep -u 1000 -x swaylock', check=False)
+        _, status = vm.command('pgrep -u 1000 -x gtklock', check=False)
         if status == 0:
             vm.screenshot('live-' + name + '-locked')
             vm.keys('ret')
@@ -180,31 +181,139 @@ def installed_session(vm, config, result):
     vm.command('hn kill-window')
 
 
+def installed_recovery(vm, config, result):
+    """Crash only the disposable guest compositor, preserving real running work."""
+    vm.command('mkdir -p ~/projects/recovery-agent; printf %s recovery-project > ~/projects/recovery-agent/proof.txt')
+    agent = 'echo $$ > /tmp/harness-recovery-agent-pid; cd ~/projects/recovery-agent; exec opencode'
+    vm.command('hn new-window -n recovery-agent ' + shlex.quote(agent))
+    vm.command('for n in $(seq 1 80); do p=$(cat /tmp/harness-recovery-agent-pid 2>/dev/null) && '
+               'test "$(cat /proc/$p/comm 2>/dev/null)" = opencode && exit 0; sleep .25; done; exit 1', timeout=30)
+    put(vm, '/tmp/harness-recovery-probe.py', PROBE.replace('LOCK PROBE', 'RECOVERY PROBE'))
+    vm.command('hn new-window -n recovery-probe ' + shlex.quote('python3 /tmp/harness-recovery-probe.py'))
+    vm.command('for n in $(seq 1 40); do test -s ~/projects/session-probe/heartbeat && '
+               'test -s ~/projects/session-probe/pid && exit 0; sleep .25; done; exit 1')
+    observer = '''from pathlib import Path
+import hashlib, json, subprocess, sys, time
+root = Path.home() / 'projects/session-probe'
+def identity(pid):
+    process = Path('/proc') / str(pid)
+    return {'pid': pid, 'start_ticks': (process/'stat').read_text().rsplit(')', 1)[1].split()[19],
+            'executable': str((process/'exe').resolve(strict=True))}
+pids = {'terminal': int((root/'pid').read_text()),
+        'agent': int(Path('/tmp/harness-recovery-agent-pid').read_text()),
+        'daemon': int(subprocess.check_output(['systemctl', '--user', 'show',
+                    'harness-daemon.service', '-p', 'MainPID', '--value'], text=True))}
+snapshot = {'processes': {name: identity(pid) for name, pid in pids.items()},
+            'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+            'project_sha256': hashlib.sha256((Path.home()/'projects/recovery-agent/proof.txt').read_bytes()).hexdigest()}
+baseline = Path('/tmp/harness-recovery-baseline.json')
+if sys.argv[1] == 'record':
+    baseline.write_text(json.dumps(snapshot, indent=2)+'\\n')
+else:
+    assert snapshot == json.loads(baseline.read_text()), 'Running work or project identity changed'
+    expected = json.loads(sys.argv[2])
+    deadline = time.monotonic()+5
+    while (root/'input').read_text() != expected and time.monotonic() < deadline: time.sleep(.05)
+    assert (root/'input').read_text() == expected, 'Keyboard input did not reach the surviving terminal'
+    before = (root/'heartbeat').read_text()
+    time.sleep(.5)
+    assert (root/'heartbeat').read_text() != before, 'Terminal heartbeat stopped'
+print(json.dumps(snapshot))
+'''
+    put(vm, '/tmp/harness-recovery-state.py', observer)
+    vm.command('python3 /tmp/harness-recovery-state.py record')
+    baseline = json.loads(vm.read_file('/tmp/harness-recovery-baseline.json'))
+    result['surviving_work'] = baseline
+    accepted = ''
+
+    def type_and_check(name):
+        nonlocal accepted
+        vm.command('hn select-window -t recovery-probe')
+        deadline = time.monotonic() + 15
+        while 'visible recovery probe' not in screen_text(vm, name):
+            if time.monotonic() >= deadline:
+                raise AssertionError('The recovery terminal was not visible: ' + name)
+            time.sleep(.25)
+        vm.type_probe(name)
+        vm.keys('ret')
+        accepted += name + '\n'
+        output, _ = vm.command('python3 /tmp/harness-recovery-state.py check ' + shlex.quote(json.dumps(accepted)))
+        (vm.folder / (name + '-processes.txt')).write_text(output)
+        vm.screenshot(name + '-accepted')
+
+    type_and_check('recovery-before-crash')
+    print('Crashing the installed compositor while an agent and terminal remain active', flush=True)
+    vm.command('pkill -KILL -u "$(id -u)" -x labwc')
+    # An arbitrary hn process is not proof that the visible fallback accepts
+    # commands. Require the actual client responding on tty1, then type there.
+    vm.command('for n in $(seq 1 120); do '
+               'p=$(hn display-message -p "#{client_pid}" 2>/dev/null) || p=; '
+               'case "$p" in ""|*[!0-9]*) ;; *) '
+               'if test "$(readlink /proc/$p/fd/0)" = /dev/tty1; then exit 0; fi ;; esac; '
+               'sleep .25; done; exit 1', timeout=40)
+    vm.command('! pgrep -u "$(id -u)" -x labwc && ! pgrep -u "$(id -u)" -x foot')
+    type_and_check('recovery-console')
+    result['checks'].append('A killed installed compositor falls back to a responsive hn console; the same OpenCode, daemon, terminal and project survive and real keyboard input reaches that terminal')
+    print('Restoring graphics without restarting the computer or agent', flush=True)
+    vm.command('sudo systemctl restart getty@tty1.service')
+    if not config['encrypt']:
+        deadline = time.monotonic() + 20
+        while 'login:' not in screen_text(vm, 'recovery-console-login'):
+            if time.monotonic() >= deadline:
+                raise AssertionError('The unencrypted installed console did not offer login')
+            time.sleep(.25)
+        vm.type_probe(config['username'])
+        vm.keys('ret')
+        deadline = time.monotonic() + 10
+        while 'password:' not in screen_text(vm, 'recovery-console-password'):
+            if time.monotonic() >= deadline:
+                raise AssertionError('The restored console did not request its account password')
+            time.sleep(.25)
+        vm.type_probe(config['password'])
+        vm.keys('ret')
+    vm.command('for n in $(seq 1 160); do '
+               'if systemctl --user is-active --quiet hn-screen && pgrep -u "$(id -u)" -x labwc >/dev/null && '
+               'pgrep -u "$(id -u)" -x foot >/dev/null; then '
+               'p=$(hn display-message -p "#{client_pid}" 2>/dev/null) || p=; '
+               'case "$p" in ""|*[!0-9]*) ;; *) '
+               'case "$(readlink /proc/$p/fd/0)" in /dev/pts/*) exit 0 ;; esac ;; esac; fi; '
+               'sleep .25; done; exit 1', timeout=50)
+    type_and_check('recovery-graphics')
+    result['checks'].append('Restoring the installed graphical session preserves the same agent, daemon and terminal process identities, boot ID and project; real keyboard input works again in foot')
+    result['keyboard_input'] = accepted.splitlines()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--iso', type=Path, required=True)
     parser.add_argument('--firmware', choices=['bios', 'uefi'], required=True)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--check', choices=['lock', 'recovery'], default='lock',
+                        help='Run the existing lock/suspend check or the separate compositor recovery check')
     parser.add_argument('--video', choices=['VGA', 'virtio-vga'], default='VGA',
                         help='QEMU display; bochs VGA has suspend/resume callbacks in the pinned LTS kernel')
     parser.add_argument('--session-file', type=Path,
                         help='Explicitly test this candidate launcher over the verified base ISO; records its hash and reboots before checking')
     parser.add_argument('--theme-directory', type=Path,
                         help='Explicitly test the candidate Plymouth theme after regenerating the installed initramfs')
+    parser.add_argument('--compositor-file', type=Path,
+                        help='Private labwc proof only: stage a manifest-verified compositor and reboot before testing')
     args = parser.parse_args()
     if not os.access('/dev/kvm', os.R_OK | os.W_OK):
-        parser.error('Use native x86 KVM for session and suspend acceptance.')
+        parser.error('Use native x86 KVM for session acceptance.')
     iso = args.iso.resolve()
     manifest = json.loads(iso.with_name('manifest.json').read_text())
     with iso.open('rb') as handle:
         assert hashlib.file_digest(handle, 'sha256').hexdigest() == manifest['iso']['sha256']
-    folder = (args.output or Path('os/test-results') / (args.firmware + '-session')).resolve()
+    folder = (args.output or Path('os/test-results') /
+              (args.firmware + ('-session' if args.check == 'lock' else '-recovery'))).resolve()
     folder.mkdir(parents=True, exist_ok=False)
     vm = VM(folder, iso, args.firmware, 2048, video=args.video)
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                   username='me', hostname='harness', password='test-password-123',
                   encrypt=args.firmware == 'uefi', serial_console=True)
-    result = {'status': 'running', 'scope': 'password lock, input isolation and virtual ACPI suspend/resume',
+    result = {'status': 'running', 'scope': ('password lock, input isolation and virtual ACPI suspend/resume'
+              if args.check == 'lock' else 'installed compositor crash, console fallback and graphical recovery'),
               'firmware': args.firmware, 'encrypted': config['encrypt'], 'memory_mib': 2048,
               'video': args.video,
               'iso_sha256': manifest['iso']['sha256'], 'image_source_commit': manifest['source_commit'],
@@ -217,7 +326,7 @@ def main():
         vm.wait(r'root@[^\r\n]*[#] ')
         vm.shell_ready = True
         vm.command('stty -echo')
-        if 'install-first' not in manifest.get('capabilities', []):
+        if args.check == 'lock' and 'install-first' not in manifest.get('capabilities', []):
             vm.command(user('/usr/lib/harness-os/wait-runtime'))
             vm.command(user('systemctl --user is-active --quiet hn-screen harness-idle'))
             time.sleep(2)
@@ -227,7 +336,7 @@ def main():
                 result['live_lock_error'] = str(error)
                 vm.screenshot('live-lock-failure')
                 # Recover this disposable fixture so installed locking can still be diagnosed.
-                vm.command('pkill -u 1000 -x swaylock || true')
+                vm.command('pkill -u 1000 -x gtklock || true')
         put(vm, '/tmp/install-config.json', json.dumps(config))
         vm.command('nmcli networking off')
         print('Installing offline into the disposable test disk', flush=True)
@@ -242,6 +351,20 @@ def main():
         tty_probe = "sudo -n stty -a -F /dev/tty1; ps -u 1000 -o pid,ppid,sid,tpgid,tty,comm --width 200"
         output, _ = vm.command(tty_probe)
         (folder / 'base-console-state.txt').write_text(output)
+        if args.compositor_file:
+            candidate = args.compositor_file.read_bytes()
+            manifest = json.loads(args.compositor_file.with_name('manifest.json').read_text())
+            checksum = hashlib.sha256(candidate).hexdigest()
+            assert manifest['binary']['sha256'] == checksum
+            assert manifest['binary']['bytes'] == len(candidate)
+            assert candidate[:6] == b'\x7fELF\x02\x01' and int.from_bytes(candidate[18:20], 'little') == 62
+            assert manifest['source_commit'] == result['test_source_commit']
+            result['candidate_compositor'] = manifest
+            packed = base64.b64encode(gzip.compress(candidate, mtime=0)).decode()
+            put(vm, '/tmp/lock-compositor.gz.b64', packed)
+            vm.command('base64 -d /tmp/lock-compositor.gz.b64 | gzip -d > /tmp/lock-compositor && '
+                       'test "$(sha256sum /tmp/lock-compositor | cut -d " " -f 1)" = ' + shlex.quote(checksum) + ' && '
+                       'sudo install -o root -g root -m 755 /tmp/lock-compositor /usr/bin/labwc && sync')
         if args.session_file:
             candidate = args.session_file.read_bytes()
             result['candidate_session'] = {'path': str(args.session_file), 'sha256': hashlib.sha256(candidate).hexdigest(),
@@ -260,7 +383,7 @@ def main():
                 vm.command('sudo install -o root -g root -m 644 /tmp/' + name + ' /usr/share/plymouth/themes/harness/' + name)
             output, _ = vm.command('sudo mkinitcpio -P && sudo lsinitcpio -l /boot/initramfs-linux-lts.img | grep -E "Plymouth.*ttf|harness\\.(script|plymouth)"', timeout=180)
             (folder / 'candidate-initramfs.txt').write_text(output)
-        if args.session_file or (args.theme_directory and config['encrypt']):
+        if args.session_file or args.compositor_file or (args.theme_directory and config['encrypt']):
             # VM.stop is a power cut, not an orderly guest shutdown. Flush the
             # rebuilt initramfs before testing that exact candidate at boot.
             vm.command('sync')
@@ -270,7 +393,12 @@ def main():
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
             output, _ = vm.command(tty_probe)
             (folder / 'candidate-console-state.txt').write_text(output)
-        installed_session(vm, config, result)
+        if args.check == 'recovery':
+            installed_recovery(vm, config, result)
+        else:
+            installed_session(vm, config, result)
+            from session_update_vm import screenshots
+            screenshots(vm, result)
         assert 'live_lock_error' not in result, 'The unconfigured live session could not be unlocked'
         result['status'] = 'passed'
     except BaseException as error:

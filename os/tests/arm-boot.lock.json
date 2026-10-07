@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "scope": "Disposable 16 KiB-kernel userspace acceptance; not an ARM product image",
+  "architecture": "aarch64",
+  "page_size": 16384,
+  "root_image": "docker.io/library/ubuntu@sha256:08571ca13e00ca07a2a84eab83a959b4242e22cceb16486a11bef1428c9e93a7",
+  "kernel_release": "7.1.13-402.asahi.fc44.aarch64+16k",
+  "kernel_packages": [
+    {
+      "url": "https://packages.redhat.com/api/pulp-content/public-copr/@asahi/kernel/fedora-44-aarch64/Packages/k/kernel-16k-core-7.1.13-402.asahi.fc44.aarch64.rpm",
+      "bytes": 24411445,
+      "sha256": "eed80db3ed1f6762023b98917f860ba2f33b622f0af36a2d75bbd17897c652f9"
+    },
+    {
+      "url": "https://packages.redhat.com/api/pulp-content/public-copr/@asahi/kernel/fedora-44-aarch64/Packages/k/kernel-16k-modules-core-7.1.13-402.asahi.fc44.aarch64.rpm",
+      "bytes": 42678069,
+      "sha256": "b56ff68c92b909124cbd1b69ba764e8014267142b7ce114459c9d3fd31a9672b"
+    }
+  ],
+  "signing_key": {
+    "url": "https://download.copr.fedorainfracloud.org/results/@asahi/kernel/pubkey.gpg",
+    "bytes": 998,
+    "sha256": "93372b0c24fdb10b6d6204ebedf8861b0dceffa7998b4d6c70f55bd69fe86668",
+    "fingerprint": "9E4DF9135D39DDFFC77B514EB2D8704E00C08EA0"
+  }
+}

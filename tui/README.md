@@ -31,6 +31,16 @@ mode. Its live USB offers Install and Try; an installed OS offers agents, termin
 These screens and installation shortcuts are absent from ordinary hn on macOS and other Linux
 systems. Installing or updating hn alone does not turn a computer into Harness OS.
 
+Harness OS also has a file manager, only there: `hn files [folder]` (Super+E) fills a terminal of
+its own with a folder as big tiles or a list (`v`), its folder tree to the left, and VS Code's
+explorer menu on a right click: new files and folders, cut, copy, paste, duplicate, rename, and
+delete to the Trash. A text file opens in its own editor (Ctrl+S saves, Esc closes; `e` uses
+`$EDITOR`). `hn files --open [folder]` (Super+O) is an Open dialog in
+the Mac's manner: places, folders as columns with a preview, Search, Cancel and Open. A folder
+opens in an explorer of its own kept inside it (`hn files --root DIR`), a text file in the
+editor alone (`hn files --edit FILE`), each through `$HARNESS_FILES_LAUNCH` when it is set. Inside hn on the OS, `choose-file [-t pane] [folder]` shows it over a pane.
+Ordinary hn refuses both.
+
 ![Three harnesses on two machines, side by side](docs/panes.png)
 
 ![C-b s: every harness on every machine, the one waiting on you nearest the prompt](docs/launcher.png)

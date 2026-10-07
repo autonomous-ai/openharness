@@ -11,7 +11,7 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Preview 12:** the USB opens the installer directly. Installation works offline.
+**Preview 14:** the USB opens the installer directly. Installation works offline.
 After shutdown, remove the USB and boot the installed disk. If disconnected,
 the Wi-Fi page opens first and advances automatically when connected; Ethernet
 skips that step. OpenCode starts on the left with two real terminals on the right.
@@ -32,7 +32,7 @@ a confirmation or password prompt. Running agents and terminals stay alive.
 The update checker records release ancestry so a source-built runtime cannot be
 replaced by an older public CLI with a higher development version number.
 
-[Download preview 13](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.13)
+[Download Harness](https://github.com/autonomous-ai/openharness/releases/tag/os-latest)
 · [Mac → USB → ThinkPad installation guide](INSTALL.md)
 · [Standalone HTML/CSS landing page](../website/public/os/README.md)
 · [Development feedback loop and Mac support targets](DEVELOPMENT.md)
@@ -51,18 +51,31 @@ These changes concern the live USB; existing installations do not need updating 
 reflashing for them. The installed system update feed remains independent from
 ISO packaging.
 
-Each published image includes its matching installation guide and exact validation
-evidence. Preview 6 passed BIOS/plain and UEFI/encrypted USB installation, boot,
-update retry and recovery at 1 GiB and 4 GiB RAM. First-use model conversations,
-four programmer projects and three harness/viewer exercises passed the checks
-described below. Selected Broadcom packages are available offline for experimental
-Intel Mac testing; generic installations do not retain that optional toolchain.
+The [preview 14 release](https://github.com/autonomous-ai/openharness/releases/tag/os-v0.1.0-preview.14)
+includes its installation guide, package inventory and exact validation evidence.
+Native x86 VM checks passed BIOS/plain and UEFI/encrypted installation, first-use
+agent conversations, graphical keyboard input, browser switching, update retry
+and checkpoint recovery. The matching OS update bundle also passed runtime
+activation with running work preserved, rollback and an encrypted system reboot.
+The four programmer projects and three harness/viewer exercises described below
+are earlier preview 6 evidence, not a claim that each was repeated on preview 14.
 
 The user confirmed preview 2 installation and boot from a physical ThinkPad's
 internal disk with the USB removed. Its first-use feedback informed this revision.
 The user also confirmed preview 4 installation, boot and use on a ThinkPad.
-Physical Wi-Fi, suspend and NVIDIA validation remain outstanding. A working older
-installation does not need reinstalling solely for the USB payload-location fix.
+Broader physical Wi-Fi, suspend and NVIDIA workload validation remain outstanding.
+A working older installation does not need reinstalling solely for the USB
+payload-location fix.
+
+**Mac support:** suitable older Intel Macs without T2 can test this x86-64 preview,
+but no Mac model family has completed physical validation. Selected Broadcom
+drivers are available offline, and supported SPI keyboard controllers are included
+for encrypted unlock; VM checks do not prove physical Wi-Fi or keyboard support.
+T2 Macs have a separate [experimental image](platforms/apple-t2/README.md) with
+VM-verified installation, firmware preservation and offline recovery; physical
+hardware and automatic T2 kernel upgrades remain unverified. Apple Silicon and Raspberry Pi do not have
+installable Harness images yet. See the [hardware targets](DEVELOPMENT.md#mac-support-targets)
+for requirements and remaining work.
 
 ## Design
 
@@ -71,6 +84,13 @@ installation does not need reinstalling solely for the USB payload-location fix.
   repository snapshot and record the installed package inventory.
 - labwc supplies Wayland, focus, input and display management. No panel, launcher,
   wallpaper process, desktop icons, or notification daemon.
+  On PC and Intel Mac builds, the OS package owns its pinned compositor at
+  `/usr/lib/harness-os/labwc`. Its lock acknowledgement waits until every active
+  display presents a covered frame. Updating or rolling back that package moves
+  the session and compositor together; the running session is left alone until
+  restart. Corresponding GPL source, the patch and rebuild instructions are in
+  `/usr/share/licenses/harness-os/labwc/`. Fresh images do not install a second
+  compositor. The experimental Fedora session still uses Fedora's labwc.
 - One fullscreen foot window displays the existing Rust `hn`. Agent/runtime
   processes are supervised separately from that window. The image does not fork
   foot or add a second graphical Harness client.
@@ -103,6 +123,7 @@ rustup default stable
 rustup target add x86_64-unknown-linux-musl
 make -C os check
 make -C os runtime
+make -C os compositor
 make -C os build
 ```
 
@@ -174,7 +195,14 @@ is no connection. Connecting advances automatically to OpenCode on the left and
 two terminal panes on the right. Working Ethernet skips Wi-Fi setup. Later boots
 reconnect to saved Wi-Fi and restore existing work. Super+n starts New Harness,
 Super+t opens a shell directly, Super+m connects a computer, Super+w opens Wi-Fi
-and Super+l locks the session. These require no Shift or prefix. The shared TUI
+and Super+l locks the session behind the same wordmark and "Enter your password"
+as disk unlock. Super+e opens the file manager in its own window, a folder
+tree on the left and the folder on the right; pressing it again returns to hn.
+Super+o asks for a folder, opened in that window, or a text file, opened in
+its editor.
+Print or Super+p captures the screen, Shift+Print or Super+r a
+dragged region; each picture is saved under `~/Pictures/Screenshots` and copied
+to the clipboard. The Super keys require no Shift or prefix. The shared TUI
 shortcuts still work; ordinary hn on macOS and other Linux distributions retains
 its usual UI.
 Recovery remains available through another console or the USB; the owner retains
@@ -194,7 +222,7 @@ is always deliberate. After that reboot, the same update request finishes any
 remaining hn/CLI release against the new OS base. Later background checks return
 to downloading only. See [update development](DEVELOPMENT.md#fast-hn-updates).
 
-Earlier previews retain their existing controls until this update is installed:
+Previews 5 through 11 retain their existing controls until this update is installed:
 **Super+u**, then **s**, then the account password. No new USB flash is needed.
 
 Preview 4 needs the matching bootstrap bundle from the

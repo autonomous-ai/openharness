@@ -236,7 +236,7 @@ jobs:
           RUN_DARWIN_PROCESS_IMAGES: '1'
         run: |
           node scripts/test-process-images-bundled.mjs
-          npx vitest run src/lib/nativeProcessImages.spec.ts src/lib/processImages.spec.ts src/lib/processImages.real.spec.ts --maxWorkers=1
+          npx vitest run src/lib/nativeProcessImages.spec.ts src/lib/processImages.spec.ts src/lib/processImages.real.spec.ts src/lib/periodicCpu.integration.spec.ts --maxWorkers=1
 
   # The optional product has its own dependencies, bundle and suites. CLI-only CI
   # deliberately checks core without installing or building this package.
@@ -350,6 +350,46 @@ jobs:
       # (docs/design/2026-10-03-harnessd.md#testing).
       - name: Require complete harnessd and core coverage
         run: npm run test:harnessd && npm run test:core
+
+  # The other per-file 100% coverage gates in cli/package.json, beside cli-contracts' harnessd and core
+  # ones, on a runner of their own so the CI run takes no longer. They used to run only when somebody
+  # remembered: test:resume had slipped to 93% of stoppedAgents.ts and test:orchestrator below 100% by
+  # 5 October 2026 without anyone noticing. One step per gate, so a red run names the gate.
+  cli-coverage-gates:
+    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - name: Stopped harnesses, stop and resume
+        run: npm run test:resume
+      - name: Orchestrator
+        run: npm run test:orchestrator
+      - name: Sharing
+        run: npm run test:sharing
+      - name: Remote viewers
+        run: npm run test:remote-viewers
+      - name: Harness portability
+        run: npm run test:portability
+      - name: Local models and bundled harnesses
+        run: npm run test:local-models -- --coverage.reporter=json --coverage.reportOnFailure
+      - name: Preserve local-model coverage details
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-local-models-coverage
+          path: cli/coverage/local-models/*.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   cli-tests:
     if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}

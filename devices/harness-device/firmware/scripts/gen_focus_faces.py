@@ -6,7 +6,9 @@ Writes main/ui/habitat/focus_faces.c and focus_faces.h. Focus sets every word an
 optical size (owner, 2026-10-03: SF Compact's open look-alike; docs/plans/2026-10-03-inter-sf-compact.md), in
 five faces: inter_20 (small labels, the PANES / TABS header, inbox machine and agent, the bell count), inter_25
 (an inbox message, the "Choose a tab" pill), inter_med_26 (the curved name and the lower-arc status and Listening
-sweep), inter_30 (the recap, pane and tab names, the working status) and inter_36 (the resting line).
+sweep), inter_28 / inter_44 (the tabs carousel's neighbours and chosen tab), inter_30 (the recap, pane and tab names,
+the working status) and inter_36 (the resting line), and the wordmark inter_bold_48: "Harness" while the dial connects,
+cut to its six letters (WORDMARK).
 Only the two FontAwesome symbols (bell, close cross) stay in lvgl_fonts.c's Montserrat, which
 gen_lvgl_assets.py cuts to them. Each face is converted as the LVGL faces were: lv_font_conv
 (pinned, run through npx) with --bpp 4 --no-compress --no-prefilter, kerning on, over gen_lvgl_assets.py's
@@ -15,7 +17,7 @@ marks (U+2713 / U+2717), so each face takes those two codepoints from Noto Sans 
 as fonts/NotoSansSymbols2-Regular.ttf with fonts/NotoSansSymbols2-OFL.txt) through a second --font.
 
 Inter (OFL 1.1, fonts/Inter-OFL.txt): fonts/Inter-Regular20.ttf, -Regular25, -Regular30 and -Regular36 (opsz 14,
-wght 450) and -Medium26 (opsz 14, wght 520) are static instances of the variable
+wght 450), -Medium26 (opsz 14, wght 520) and -Bold48 (opsz 28, wght 700) are static instances of the variable
 mockup/fonts-inter/Inter.ttf (github.com/google/fonts ofl/inter, Inter[opsz,wght].ttf), each
 cut down to the TEXT codepoints and kern feature, its kerning lookups unwrapped from GPOS Extension (type 9)
 subtables, which lv_font_conv does not read (without them the face comes out unkerned). `--inter-instance`
@@ -44,7 +46,8 @@ assert MARKS <= KEEP
 # Inter instances: file stem -> (opsz, wght). The text optical size everywhere (SF Compact Text's look-alike);
 # 450 / 520 match SF Compact Text Regular / Medium widths.
 INTER = {'Inter-Regular20': (14, 450), 'Inter-Regular25': (14, 450), 'Inter-Medium26': (14, 520),
-         'Inter-Regular30': (14, 450), 'Inter-Regular36': (14, 450)}
+         'Inter-Regular30': (14, 450), 'Inter-Regular36': (14, 450),
+         'Inter-Bold48': (28, 700)}   # opsz 28: the design's 184 px "Harness" at 48 px bold (design 2026-10-06)
 # The curved Inter name's mid-caps offset on the upper arc (px above the baseline); terminal.c's ARC_PROP_MID is 11.
 INTER_ARC_MID = 16
 # On the lower arc the glyphs are upright and the descenders point at the glass's edge, so the face keeps the
@@ -54,9 +57,13 @@ FACES = [
     ('inter_20', 'Inter-Regular20', 20, 'NULL'),   # small labels: PANES / TABS, inbox machine and agent, the bell count
     ('inter_25', 'Inter-Regular25', 25, 'NULL'),   # an inbox message, the "Choose a tab" pill
     ('inter_med_26', 'Inter-Medium26', 26, 'NULL'),   # the curved name, the lower-arc status and the Listening sweep
+    ('inter_28', 'Inter-Regular30', 28, 'NULL'),   # the tabs carousel's neighbours (design 2026-10-06)
     ('inter_30', 'Inter-Regular30', 30, 'NULL'),   # the recap (Kindle dark layout), pane and tab names, the working status
+    ('inter_44', 'Inter-Regular30', 44, 'NULL'),   # the tabs carousel's chosen tab (design 2026-10-06: 1.5x of 28-30)
     ('inter_36', 'Inter-Regular36', 36, 'NULL'),   # the resting line
 ]
+# Faces that set one word: name -> (font file, px, the word). Only its letters (and the space) are kept.
+WORDMARK = [('inter_bold_48', 'Inter-Bold48', 48, 'Harness')]   # while the dial connects (design 2026-10-06)
 
 
 def instance_inter():
@@ -141,6 +148,16 @@ def main():
             total += size
             print(f'{name}: {len(codes)} glyphs, line {font["line"]}, ascent {font["line"] - font["base"]},'
                   f' {size} bytes')
+        for name, source, px, word in WORDMARK:
+            font = base.lv_font(convert(source, px, Path(t), name))
+            keep = {ord(c) for c in word} | {0x20}   # the space sets the face's width, which a run needs
+            code, size = base.emit_font(name, font, keep)
+            c.append(code)
+            h.append(f'extern const ht_pfont_t ht_lv_{name};\n')
+            m = re.search(rf'static const uint16_t {name}_codes\[\] = \{{(.*?)\}};', code)
+            assert {int(v) for v in m.group(1).split(',')} == keep, name
+            total += size
+            print(f'{name}: {word}, line {font["line"]}, ascent {font["line"] - font["base"]}, {size} bytes')
     # The curved name's arc face lives with its font: terminal.c names no Focus face, so the compositor's
     # tests need not link these (terminal.h declares it).
     c.append('// The Focus curved name: Inter Medium 26 on the upper arc. Its stacked Vietnamese capitals stand tall:\n'

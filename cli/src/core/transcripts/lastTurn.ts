@@ -26,7 +26,7 @@ import { readOpencodeMessages } from '../../engines/opencode/reader.js'
 import { lastPiTurnText } from '../../engines/pi/normalizer.js'
 import { lastTurnTextFromRawLines, selectClaudeRecapLine, type LastTurnText } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { tailFile, tailFileUntil } from '../../lib/transcriptTail.js'
+import { tailFileCapped, tailFileUntil } from '../../lib/transcriptTail.js'
 
 export interface LastTurnDeps {
   bySession: (sessionId: string) => RegisteredSession | undefined
@@ -48,7 +48,10 @@ export function createLastTurnReader({ bySession, dbs, hermesDb }: LastTurnDeps)
     if (s.engine === 'codex') return readLastCodexTurnText(s.transcriptPath)
     // Its last turn, read backward — not the whole conversation once per turn end.
     if (s.engine === 'claude') return lastTurnTextFromRawLines(await tailFileUntil(s.transcriptPath, selectClaudeRecapLine))
-    const lines = await tailFile(s.transcriptPath, Infinity)
+    // Bounded from the end like every whole read of an engine without pages (lib/transcriptTail.ts):
+    // the last turn is at the end, and a transcript past the cap would otherwise be read whole at
+    // every turn's end.
+    const { lines } = await tailFileCapped(s.transcriptPath)
     if (s.engine === 'cursor') return lastCursorTurnText(lines)
     if (s.engine === 'muse') return lastMuseTurnText(lines)
     if (s.engine === 'amp') return lastAmpTurnText(lines)

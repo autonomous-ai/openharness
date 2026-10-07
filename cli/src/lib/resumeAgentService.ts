@@ -32,6 +32,8 @@ export interface ResumeAgentServiceDeps {
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
   attachDsh(session: RegisteredSession): void
+  /** Follows a session: its history read, then its tail (core/transcripts/attach.ts). */
+  attachSession(session: RegisteredSession): Promise<boolean>
   /** Where the relaunched engine's own writing begins, for the attach that follows (core/transcripts/relaunch.ts). */
   relaunchMarks?: Pick<RelaunchMarks, 'note'>
 }
@@ -39,7 +41,7 @@ export interface ResumeAgentServiceDeps {
 export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
   const { registry, stoppedAgents, tmuxBackend, restartJobs, stopJobs, pinnedControls,
     retainExitedSession, announceSession, relaunchOverrides, prepareSessionResume,
-    refreshGridWebSearch, clearDeleted, attachDsh, relaunchMarks } = deps
+    refreshGridWebSearch, clearDeleted, attachDsh, attachSession, relaunchMarks } = deps
   const resumeConversations = new Set<string>()
   /** Same short form every other `[…]` line in the daemon logs uses. */
   const sid = (id: string) => id.slice(0, 8)
@@ -99,13 +101,27 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
       // else coming. A row left `starting` reads as "Starting" for ever, is made dormant without
       // being retained by discovery's `onExited`, and is refused by the desk's own resume receipt —
       // asking WHICH proof confirmed it got that wrong in both directions, so ask the row instead.
-      const confirmed = registry.byAgent(saved.agentId)
-      const ready = confirmed?.launch?.state === 'ready'
+      // `ownsRoute()` read this row just above, and nothing since has yielded: it is still registered.
+      const confirmed = registry.byAgent(saved.agentId)!
+      const ready = confirmed.launch?.state === 'ready'
         ? confirmed
-        : registry.setLaunch(saved.agentId, { state: 'ready' }) ?? result.session
+        : registry.setLaunch(saved.agentId, { state: 'ready' })!
+      const hooked = confirmed.lastHookAt > 0
       console.log(`[resume] ${sid(saved.agentId)} confirmed · engine=${saved.engine}`
-        + ` · hook=${(confirmed?.lastHookAt ?? 0) > 0 ? 'yes' : 'no'} · ${result.resumed ? 'same conversation' : 'fresh'}`)
+        + ` · hook=${hooked ? 'yes' : 'no'} · ${result.resumed ? 'same conversation' : 'fresh'}`)
       announceSession(ready)
+      // Confirmed by its own process, the conversation is followed whether or not a hook ever comes.
+      // Only the hook's registration attached it: discovery attaches a row it finds still launching,
+      // and this one is ready already. With its SessionStart refused (round 23: the hook beat the
+      // process being recorded) or never sent, nothing attached it, and the resumed agent never showed
+      // a turn. A hook that registers later attaches it again, as one does a created agent. Only the
+      // conversation it reopened: a resume that started a new one has nothing to follow until the engine
+      // names it, and the row's old conversation is not being written any more.
+      if (!hooked && result.resumed) {
+        void attachSession(ready).catch((error) => {
+          console.error(`[resume] ${sid(saved.agentId)} attach failed:`, error instanceof Error ? error.message : error)
+        })
+      }
       return { ...result, session: ready }
     } else if (result.error !== 'AGENT_CHANGED') {
       const row = registry.byAgent(saved.agentId)!
@@ -121,7 +137,9 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         if (!ownsRoute()) return resumeChanged
         const pane = await tmuxPaneState(saved.tmuxPane)
         if (!ownsRoute()) return resumeChanged
-        retainExitedSession(row, !!pane && !pane.dead)
+        // Only a pane known to be gone or dead loses its row. One tmux could not read keeps it, as a
+        // terminal: the reconciler removes it once its scans agree the pane is gone.
+        retainExitedSession(row, pane === 'unknown' || (pane !== 'gone' && !pane.dead))
         stoppedAgents.finishResume(saved.agentId)
       }
     }
@@ -206,7 +224,8 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         // conversation only up to this byte. Taken after the history is prepared, which can rewrite it.
         if (resumeSessionId && saved.sessionId && saved.transcriptPath) {
           const offset = transcriptSize(saved.transcriptPath)
-          if (offset !== null) relaunchMarks?.note(saved.sessionId, offset)
+          // A resume always starts a new engine: a turn left open before it is over.
+          if (offset !== null) relaunchMarks?.note(saved.sessionId, offset, true)
         }
         const { extraArgs, clearEnv } = built.overrides
         const launchEnv = permissionMode === undefined ? built.overrides.env

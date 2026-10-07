@@ -50,6 +50,7 @@ class FirstUse(unittest.TestCase):
 
     def test_install_never_requires_network_setup(self):
         with patch.object(hn_os.sys, 'argv', ['hn-os', 'install']), \
+             patch.object(hn_os, 'system_profile', return_value='arch'), \
              patch.object(hn_os.os, 'execv', side_effect=SystemExit) as execute, \
              patch.object(hn_os, 'wifi') as network:
             with self.assertRaises(SystemExit):

@@ -14,7 +14,7 @@ enum HarnessActivity {
   starting('◌', 'Starting'),
   unknown('◌', 'Status unavailable'),
   idle('', 'Idle'),
-  paused('×', 'Stopped'),
+  paused('■', 'Stopped'),
   offline('⊘', 'Offline');
 
   const HarnessActivity(this.mark, this.label);

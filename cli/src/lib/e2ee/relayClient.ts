@@ -12,7 +12,8 @@
 import { WebSocket } from 'ws'
 import * as C from './core.js'
 import { encryptDownFrameFor } from './applicationFrames.js'
-import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary, type TerminalBinaryClear } from '../terminalBinary.js'
+import type { TerminalBinaryClear } from '../terminalBinary.js'
+import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './terminalSeal.js'
 import { pwCpaceGenerator, pwContext, stretchPassword } from './passwordPake.js'
 import { ReplayWindow } from './replayWindow.js'
 
@@ -22,7 +23,20 @@ export interface RelayCryptoDeps {
   machineId: string
   selfIdentity: C.Identity
   peerPub: Uint8Array
+  /**
+   * The highest group-key counter this client has opened from the machine, per epoch, carried from one
+   * of its sessions to the next. A broadcast is sealed under the machine's group key, which every
+   * session of one machine process shares, so a session's own record, starting empty, let a relay
+   * replay any broadcast the machine had sent since it started (a turn starting, an agent's frame) to
+   * the client's next session, which opened it as news (round 34, `e2e/relay.e2e.ts`). Within an epoch
+   * broadcasts only count up, so a later session never needs an older one. Never shared between two
+   * sessions open at once: each connection is sent every broadcast, under the same counters.
+   */
+  groupSeen?: Map<string, number>
 }
+
+/** The machine's epochs a client remembers counters for; one per process it ran, and per key rotation. */
+export const GROUP_EPOCHS_KEPT = 16
 
 export class RelaySessionCrypto {
   private readonly eph = C.newEphemeral()
@@ -39,9 +53,11 @@ export class RelaySessionCrypto {
   private p2pVersion = 0
   private viewerVersion = 0
   private strict = false
-  private groupRecv = new Map<string, number>() // epoch -> highest counter seen
+  private readonly groupRecv: Map<string, number> // epoch -> highest counter seen
 
-  constructor(private readonly deps: RelayCryptoDeps) {}
+  constructor(private readonly deps: RelayCryptoDeps) {
+    this.groupRecv = deps.groupSeen ?? new Map()
+  }
 
   get ready(): boolean { return this.c2s !== null && this.s2c !== null }
   get terminalP2pVersion(): number { return this.p2pVersion }
@@ -134,6 +150,8 @@ export class RelaySessionCrypto {
       const plain = C.unwrapPayload(this.groupKey, env, type, frame.dbSessionId as string | undefined)
       if (plain === null) return null
       this.groupRecv.set(env.epoch, env.n)
+      // The epochs of the machine's earlier processes: a few kept, the first seen let go first.
+      if (this.groupRecv.size > GROUP_EPOCHS_KEPT) this.groupRecv.delete(this.groupRecv.keys().next().value!)
       return { ...frame, payload: plain }
     }
     if (!this.s2c) return null

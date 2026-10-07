@@ -12,6 +12,9 @@ import 'workspace_share_button.dart';
 Future<bool> openInNewTab(Uri uri) =>
     launchUrl(uri, webOnlyWindowName: '_blank');
 
+/// The Harness product page; its download view is one query away.
+final harnessAppPage = Uri.parse('https://www.autonomous.ai/harness-app');
+
 /// The browser's consistent handoff to the existing macOS/Linux download page,
 /// in a new tab so the workspace stays open behind it.
 class WebDownloadButton extends StatelessWidget {
@@ -27,8 +30,8 @@ class WebDownloadButton extends StatelessWidget {
   /// True fills it like Share: the bar's one filled action when Share is off.
   final bool prominent;
 
-  static final uri = Uri.parse(
-    'https://www.autonomous.ai/harness-app?page=download',
+  static final uri = harnessAppPage.replace(
+    queryParameters: {'page': 'download'},
   );
   static const _text = 'Download app';
 

@@ -1,5 +1,8 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { patientDeadline } from './patientExec.js'
 import { pasteRawIntoTmux } from './tmux.js'
+import { enterTmuxRoom, inTmuxRoom, needsControlGate } from './tmuxControlGate.js'
+import { tmuxFeatures, tmuxFeaturesOf, type TmuxFeatures } from './tmuxVersion.js'
 import {
   TERMINAL_ACTION_SUCCEEDED,
   terminalActionNotStarted,
@@ -21,6 +24,12 @@ const MAX_ROWS = 120
 // line built from 8192 such bytes and rejects 16384 with `%error`, so this leaves a 4x margin.
 const INPUT_CHUNK_BYTES = 2 * 1024
 const CONTROL_COMMAND_TIMEOUT_MS = 3_000
+/** The longest a control client keeps every other one and every paste waiting while it attaches, on a
+ *  tmux before 3.7 (tmuxControlGate.ts): tmux answers an attach in milliseconds, and one that has not in
+ *  this long has its first command time out and its stream closed anyway. */
+const ATTACH_HOLD_MAX_MS = CONTROL_COMMAND_TIMEOUT_MS
+/** How long a going control client gets to exit, after `detach-client` and again after SIGTERM. */
+const CLOSE_EXIT_WAIT_MS = 500
 const SNAPSHOT_BUFFER_MAX_BYTES = 2 * 1024 * 1024
 const SNAPSHOT_QUIET_MS = 8
 const SNAPSHOT_QUIET_MAX_MS = 40
@@ -35,6 +44,57 @@ const TUI_SCROLL_MIN_INTERVAL_MS = 180
 export function tuiScrollPageCount(lines: number): number {
   if (!Number.isFinite(lines) || lines <= 0) return 0
   return 1
+}
+
+/** Keystrokes as hex bytes (`send-keys -H`, tmux 3.0), [chunk] bytes to a command. */
+function hexKeyCommands(paneId: string, bytes: Uint8Array, chunk = INPUT_CHUNK_BYTES): string[] {
+  const commands: string[] = []
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    const hex = [...bytes.subarray(offset, offset + chunk)].map((byte) => byte.toString(16).padStart(2, '0')).join(' ')
+    commands.push(`send-keys -t ${paneId} -H ${hex}`)
+  }
+  return commands
+}
+
+/**
+ * One argument for the command parser of tmux before 3.0 (`cmd-string.c`), holding [text] exactly.
+ * Single quotes take every byte as it is but their own; a `'` goes in double quotes, which hold it
+ * as it is too. An argument that ends in `;` would end the command there instead, unless it ends in
+ * `\;`, which the parser gives back as `;` (`cmd_list_parse`).
+ */
+export function quoteForOldTmux(text: string): string {
+  const quoted = text.split("'").map((part) => `'${part}'`).join(`"'"`)
+  return text.endsWith(';') ? `${quoted.slice(0, -2)}\\;'` : quoted
+}
+
+/**
+ * Keystrokes for a tmux before 3.0, which has no `send-keys -H`: the bytes as literal text,
+ * `send-keys -l`, which tmux writes to the pane byte for byte. Two bytes cannot ride a control-mode
+ * command line, and go as the keys that write them: LF ends the line (`C-j`), NUL ends the string
+ * (`C-@`). Runs are cut at [chunk] bytes and never inside a UTF-8 sequence: tmux reads each argument as
+ * UTF-8, and half a character would be written as two wrong ones. `--` before the text, or text that
+ * starts with `-` would be read as a flag. One command per line: tmux answers each with its own
+ * `%begin`/`%end`, which is what `ControlCommandQueue` counts.
+ */
+export function literalKeyCommands(paneId: string, bytes: Uint8Array, chunk = INPUT_CHUNK_BYTES): string[] {
+  const commands: string[] = []
+  const literal = (from: number, to: number): void => {
+    for (let at = from; at < to;) {
+      let cut = Math.min(to, at + chunk)
+      while (cut < to && cut > at + 1 && (bytes[cut] & 0xc0) === 0x80) cut--
+      commands.push(`send-keys -t ${paneId} -l -- ${quoteForOldTmux(Buffer.from(bytes.subarray(at, cut)).toString('utf8'))}`)
+      at = cut
+    }
+  }
+  let start = 0
+  for (let index = 0; index < bytes.length; index++) {
+    if (bytes[index] !== 0x0a && bytes[index] !== 0x00) continue
+    literal(start, index)
+    commands.push(`send-keys -t ${paneId} ${bytes[index] === 0x0a ? 'C-j' : 'C-@'}`)
+    start = index + 1
+  }
+  literal(start, bytes.length)
+  return commands
 }
 const PANE_META_FORMAT = [
   '#{session_id}', '#{window_id}', '#{window_panes}', '#{window_width}', '#{window_height}',
@@ -62,10 +122,14 @@ interface PaneMeta {
   mouseSgr: boolean
 }
 
-function boundedSize(size: TerminalStreamSize): TerminalStreamSize {
+/** The smallest size `refresh-client -C` takes before tmux 2.9 (its PANE_MINIMUM): asked for less, it
+ *  refused, and the resize failed instead of drawing two columns. */
+const OLD_TMUX_MIN_CLIENT_SIZE = 2
+
+function boundedSize(size: TerminalStreamSize, min = { cols: MIN_COLS, rows: MIN_ROWS }): TerminalStreamSize {
   return {
-    cols: Math.max(MIN_COLS, Math.min(MAX_COLS, Math.floor(size.cols))),
-    rows: Math.max(MIN_ROWS, Math.min(MAX_ROWS, Math.floor(size.rows))),
+    cols: Math.max(min.cols, Math.min(MAX_COLS, Math.floor(size.cols))),
+    rows: Math.max(min.rows, Math.min(MAX_ROWS, Math.floor(size.rows))),
   }
 }
 
@@ -301,7 +365,8 @@ interface PendingControlCommand {
   command: string
   lines: Buffer[]
   commandNumber: string | null
-  timer: ReturnType<typeof setTimeout> | null
+  /** Cancels the head's deadline (`armHead`). */
+  timer: (() => void) | null
   onEnd?: () => void
   resolve: (result: ControlCommandResult) => void
 }
@@ -373,7 +438,7 @@ export class ControlCommandQueue {
     const head = this.outstanding[0]
     if (!head || head.commandNumber !== commandNumber) return false
     this.outstanding.shift()
-    if (head.timer) clearTimeout(head.timer)
+    head.timer?.()
     head.timer = null
     if (kind === 'end') head.onEnd?.()
     head.resolve({ ok: kind === 'end', stdout: decodeControlResponse(head.lines) })
@@ -384,7 +449,7 @@ export class ControlCommandQueue {
   failAll(): void {
     const abandoned = [...this.outstanding.splice(0), ...this.waiting.splice(0)]
     for (const command of abandoned) {
-      if (command.timer) clearTimeout(command.timer)
+      command.timer?.()
       command.timer = null
       command.resolve(CONTROL_COMMAND_FAILED)
     }
@@ -417,10 +482,13 @@ export class ControlCommandQueue {
   private armHead(): void {
     const head = this.outstanding[0]
     if (!head || head.timer) return
-    head.timer = setTimeout(() => {
+    // Running time, not wall time: a daemon whose event loop was held wakes to this deadline before it
+    // reads the reply tmux sent meanwhile, and took the stream down for a command that had answered
+    // (patientExec.ts, e2e/stall.e2e.ts).
+    head.timer = patientDeadline(this.timeoutMs, () => {
       if (this.outstanding[0] !== head) return
       this.deps.onFatal('tmux control command timed out')
-    }, this.timeoutMs)
+    })
   }
 }
 
@@ -449,12 +517,21 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
   private snapshotPostCutBytes = 0
   private snapshotLastOutputAt = 0
   private lastTuiScrollAt = 0
+  private settleAttach: () => void = () => {}
+  /**
+   * Settles once tmux has answered this client's attach (its first `%end`), or the client is gone. From
+   * then on the server holds the state it writes this client's notifications into: on a tmux before 3.7
+   * one sent before then crashed the server (tmuxControlGate.ts).
+   */
+  readonly attached: Promise<void> = new Promise((resolve) => { this.settleAttach = resolve })
 
   private constructor(
     paneId: string,
     child: ChildProcessWithoutNullStreams,
     private readonly sink: TerminalStreamSink,
     private readonly readOnly = false,
+    /** What this tmux can do: read once, at open, so a keystroke never waits on it (see `writeRaw`). */
+    private readonly features: TmuxFeatures = tmuxFeaturesOf(null),
   ) {
     this.runtime = { backend: 'tmux', paneId }
     this.child = child
@@ -486,7 +563,15 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     const original = await paneMeta(paneId)
     if (!original) return { state: 'failed', reason: 'tmux pane metadata is unavailable' }
     if (original.windowPanes !== 1) return { state: 'failed', reason: 'TERMINAL_MULTI_PANE_UNSUPPORTED' }
-    const child = spawn('tmux', ['-C', 'attach-session', '-f', 'ignore-size', '-t', paneId], {
+    const features = await tmuxFeatures()
+    // `ignore-size` keeps this client's size out of the window's. Client flags are tmux 3.2; before it
+    // the flag was a usage error, the client exited at once, and no terminal opened on 3.1 or older.
+    // Nothing is lost there: a control client that never sets its own size counts for none (`resize`).
+    const flags = features.clientFlags ? ['-f', 'ignore-size'] : []
+    // On a tmux before 3.7, nothing tmux tells every control client may happen while this one attaches:
+    // it crashed the server, and every agent with it (tmuxControlGate.ts).
+    const leave = await enterTmuxRoom('attach', features)
+    const child = spawn('tmux', ['-C', 'attach-session', ...flags, '-t', paneId], {
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     const spawned = await new Promise<boolean>((resolve) => {
@@ -494,8 +579,17 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       child.once('spawn', () => { if (!settled) { settled = true; resolve(true) } })
       child.once('error', () => { if (!settled) { settled = true; resolve(false) } })
     })
-    if (!spawned) return { state: 'failed', reason: 'tmux control client could not start' }
-    const stream = new TmuxControlStream(paneId, child, sink, readOnly)
+    if (!spawned) {
+      leave()
+      return { state: 'failed', reason: 'tmux control client could not start' }
+    }
+    const stream = new TmuxControlStream(paneId, child, sink, readOnly, features)
+    const held = setTimeout(leave, ATTACH_HOLD_MAX_MS)
+    held.unref()
+    void stream.attached.then(() => {
+      clearTimeout(held)
+      leave()
+    })
     const resized = readOnly ? TERMINAL_ACTION_SUCCEEDED : await stream.resize(size)
     if (resized.state !== 'succeeded') {
       await stream.close()
@@ -532,6 +626,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     if (completed) {
       if (!this.commands.isReady && this.commands.idle) {
         this.commands.markReady()
+        this.settleAttach()
         return
       }
       this.commands.handleCompleted(completed[1] === 'end' ? 'end' : 'error', completed[2])
@@ -588,6 +683,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
   }
 
   private notifyClose(reason: string): void {
+    this.settleAttach()
     if (this.closeNotified) return
     this.closeNotified = true
     this.failControlCommands()
@@ -620,7 +716,11 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       // trims from each captured row. Deliberately do not use capture-pane -S:
       // tmux scrollback contains old full-screen TUI repaint frames. Replaying
       // those frames into a fresh emulator corrupts the visible screen.
-      const baseCapture = `capture-pane -p -e -N -t ${this.runtime.paneId}`
+      // -N is tmux 3.1. Before it the flag failed the capture, and with it every
+      // snapshot: the terminal never showed. Without it the screen is all there,
+      // short only of the colour of a row's trailing blanks.
+      const keepTrailing = this.features.captureTrailingSpaces ? ' -N' : ''
+      const baseCapture = `capture-pane -p -e${keepTrailing} -t ${this.runtime.paneId}`
       // Attaching a control client can trigger an immediate TUI repaint. Wait
       // before reading both cursor metadata and the grid so the synthesized
       // keyframe cannot combine a post-repaint grid with pre-repaint cursor
@@ -646,7 +746,7 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       const history = (meta.alternateOn || tuiOwnsScrollback)
         ? Buffer.alloc(0)
         : (await this.runControlCommand(
-            `capture-pane -p -e -N -t ${this.runtime.paneId} -S -${SNAPSHOT_HISTORY_LINES} -E -1`,
+            `capture-pane -p -e${keepTrailing} -t ${this.runtime.paneId} -S -${SNAPSHOT_HISTORY_LINES} -E -1`,
           )).stdout
       const capture = await this.runControlCommand(baseCapture, () => {
         // `%end` is the ordered cut. Notifications observed before it are
@@ -697,11 +797,12 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     const sends: Array<Promise<ControlCommandResult>> = []
     // Every chunk is handed to the queue before any reply is awaited, so a paste costs one
     // round-trip rather than one per chunk. tmux applies them in the order they were written.
-    for (let offset = 0; offset < bytes.length; offset += INPUT_CHUNK_BYTES) {
-      const chunk = bytes.subarray(offset, offset + INPUT_CHUNK_BYTES)
-      const hex = [...chunk].map((byte) => byte.toString(16).padStart(2, '0')).join(' ')
-      sends.push(this.runControlCommand(`send-keys -t ${this.runtime.paneId} -H ${hex}`))
-    }
+    // `send-keys -H` is tmux 3.0: before it, every keystroke was a usage error and nothing typed in
+    // a terminal reached the engine. There the same bytes go as literal text (`literalKeyCommands`).
+    const commands = this.features.sendKeysHex
+      ? hexKeyCommands(this.runtime.paneId, bytes)
+      : literalKeyCommands(this.runtime.paneId, bytes)
+    for (const command of commands) sends.push(this.runControlCommand(command))
     const results = await Promise.all(sends)
     const failedAt = results.findIndex((result) => !result.ok)
     if (failedAt < 0) return TERMINAL_ACTION_SUCCEEDED
@@ -767,16 +868,20 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
       const meta = parsePaneMeta(metadata.stdout)
       if (!meta) return terminalActionNotStarted('tmux pane disappeared')
       if (meta.windowPanes !== 1) return terminalActionNotStarted('TERMINAL_MULTI_PANE_UNSUPPORTED')
-      const size = boundedSize(requested)
+      const size = this.features.resizeWindow
+        ? boundedSize(requested)
+        : boundedSize(requested, { cols: OLD_TMUX_MIN_CLIENT_SIZE, rows: OLD_TMUX_MIN_CLIENT_SIZE })
       // A repeated open/focus can legitimately ask for the grid already in
       // use. Avoid a redundant resize-window because full-screen TUIs may
       // repaint on SIGWINCH even when the dimensions did not change.
       if (meta.windowWidth === size.cols && meta.windowHeight === size.rows) {
         return TERMINAL_ACTION_SUCCEEDED
       }
-      const result = await this.runControlCommand(
-        `resize-window -t ${meta.windowId} -x ${size.cols} -y ${size.rows}`,
-      )
+      // `resize-window` is tmux 2.9. Before it a control client gives its own size, and the window takes
+      // the smallest of its session's clients: alone with the agent, this one.
+      const result = await this.runControlCommand(this.features.resizeWindow
+        ? `resize-window -t ${meta.windowId} -x ${size.cols} -y ${size.rows}`
+        : `refresh-client -C ${size.cols},${size.rows}`)
       if (!result.ok) return terminalActionPossiblyExecuted('tmux resize did not complete')
       return TERMINAL_ACTION_SUCCEEDED
     })
@@ -802,14 +907,29 @@ export class TmuxControlStream implements TerminalStreamHandle<TmuxRuntimeRef> {
     // makes agent switching shrink and immediately re-expand the pane; TUIs
     // such as Grok preserve those intermediate repaint fragments in the live
     // screen. The next controller will resize only if its grid truly differs.
-    if (this.child.stdin.writable) {
-      try { this.child.stdin.write('detach-client\n') } catch { /* ignore */ }
-    }
-    const exited = await new Promise<boolean>((resolve) => {
+    //
+    // A control client going is a notification to every other (`%client-detached`), so on a tmux before
+    // 3.7 it goes in the gate's other room from one that is attaching (tmuxControlGate.ts).
+    await inTmuxRoom('notify', async () => {
+      if (this.child.stdin.writable) {
+        try { this.child.stdin.write('detach-client\n') } catch { /* ignore */ }
+      }
+      if (!(await this.exited())) {
+        this.child.kill('SIGTERM')
+        await this.exited()
+      }
+      // tmux tells the others when it reads this client's socket close, which comes after the client
+      // has exited. A command another client sends after that is answered only once tmux has read it,
+      // so the room is not left while that notification may still be on its way.
+      if (needsControlGate(this.features)) await execTmux(['display-message', '-p', '#{pid}'])
+    }, this.features)
+  }
+
+  private exited(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
       if (this.child.exitCode != null || this.child.signalCode != null) { resolve(true); return }
-      const timer = setTimeout(() => resolve(false), 500)
+      const timer = setTimeout(() => resolve(false), CLOSE_EXIT_WAIT_MS)
       this.child.once('close', () => { clearTimeout(timer); resolve(true) })
     })
-    if (!exited) this.child.kill('SIGTERM')
   }
 }

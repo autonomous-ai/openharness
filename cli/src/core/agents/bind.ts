@@ -12,8 +12,8 @@ import { copilotSessionForPid, findCopilotTranscript } from '../../engines/copil
 import { findCursorTranscript } from '../../engines/cursor/discovery.js'
 import { cursorDataDir } from '../../engines/cursor/home.js'
 import { findGrokTranscript } from '../../engines/grok/session.js'
-import type { CommanderMirror } from '../../lib/commander.js'
-import type { AutonomousDeviceInput } from '../../lib/autonomous-device/input.js'
+import type { TurnRecaps } from '../turns/recaps.js'
+import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { sid } from '../../lib/log.js'
@@ -53,7 +53,7 @@ export type RegisteredMeta = {
 
 export interface BindDeps {
   registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession'>
-  mirror: Pick<CommanderMirror, 'inheritSummary'>
+  mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
   /** The app. */
   clients: { send(frame: { type: string; payload: Record<string, unknown> }): void }
@@ -79,6 +79,8 @@ export function createBinding({
    * over a hook. Settled the moment it binds, below.
    */
   const pendingForkInherit = new Map<string, string>()
+  /** Whether a stop, restart, retarget or resume owns the agent right now (`whileChanging`). */
+  let changing: (agentId: string) => boolean = () => false
 
   const handleRegistered = async (entry: RegisteredSession, meta: RegisteredMeta): Promise<void> => {
     const forkSource = pendingForkInherit.get(entry.agentId)
@@ -157,13 +159,26 @@ export function createBinding({
     )
     const attached = await attachSession(entry, reset, entry.engine === 'cursor', bornAfterAgent)
     if (!attached) {
-      registry.unbindSession(entry.sessionId)
+      // A terminal reads as gone while a stop or a restart ends its engine. A registration that comes in
+      // then, such as the old engine's own SessionStart arriving late on a loaded machine, is still the
+      // agent's conversation, and the operation owns what happens to it. Unbound, a stop that had just
+      // signalled the engine found the conversation changed and gave up, leaving an active agent with no
+      // engine; and a second restart queued behind a first found no conversation to resume and started a
+      // fresh one (e2e/races.e2e.ts). The binding stands while one of them runs: a stop retires it, and a
+      // restart's new engine registers it again.
+      if (!changing(entry.agentId)) registry.unbindSession(entry.sessionId)
       announceSession(entry)
       return
     }
     const confirmed = registry.byAgent(entry.agentId)
     if (confirmed?.sessionId === entry.sessionId) {
-      stoppedAgents.save(confirmed)
+      // The record a stop is resumed from, kept current. Best effort: the binding has happened, and a
+      // full disk must not stop the windows hearing of it below (found end to end, e2e/diskfull.e2e.ts).
+      try {
+        stoppedAgents.save(confirmed)
+      } catch (error) {
+        console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${error instanceof Error ? error.message : error}`)
+      }
       if (confirmed.resumeOnly) stoppedAgents.finishResume(confirmed.agentId)
     }
     syncRecapPool()
@@ -319,5 +334,9 @@ export function createBinding({
     await handleRegistered(result.entry, result)
     console.log(`[discovery] bound ${observed.engine} session ${sid(result.entry.sessionId)} via ${observed.primaryRuntimeKey}`)
   }
-  return { pendingForkInherit, handleRegistered, bindObservedAgent }
+  return {
+    pendingForkInherit, handleRegistered, bindObservedAgent,
+    /** Set by cli.ts once the lifecycle operations exist: they are made long after the binding. */
+    whileChanging: (test: (agentId: string) => boolean): void => { changing = test },
+  }
 }

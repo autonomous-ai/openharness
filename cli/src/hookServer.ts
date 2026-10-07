@@ -13,7 +13,6 @@ import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes
 import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
-import { LOCAL_WEB_HTML } from './webui.js'
 import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
@@ -21,8 +20,7 @@ import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAut
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
-import type { CommandBarService } from './lib/commandBar.js'
-import { handleCommandBarHttp } from './lib/commandBarHttp.js'
+import { handleCommandBarHttp, type CommandBarDoor } from './lib/commandBarHttp.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 
@@ -56,7 +54,7 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
-  onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
+  onCommandBar?: CommandBarDoor
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
   onRegistered: (
@@ -79,6 +77,9 @@ export interface HookServerHandlers {
     tmuxPane?: string
     runtimeHints: HookTerminalHint[]
     callerPid?: number
+    /** Called once the resolution has to wait for the agent to record its process
+     *  (core/engines/hooks.ts): the hook is answered then, before the wait. */
+    onWait?: () => void
   }) => Promise<RegisteredSession | null>
   /** A turn is now running (Command Code's PreToolUse — its only live turn-open signal). Idempotent:
    *  it fires once per tool call, and every call after the first in a turn must be a no-op. */
@@ -98,25 +99,25 @@ export interface HookServerHandlers {
   /** `harness pair <code>` from a second CLI process: run CPace toward the waiting browser. */
   onPair?: (code: string) => Promise<PairOutcome>
   /** `harness pairings` — list E2EE-paired browsers. */
-  onListPairs?: () => PairOutcome
+  onListPairs?: () => PairOutcome | Promise<PairOutcome>
   /** `harness unpair <id>` — unpair one browser (by fingerprint/prefix/index). */
-  onRevoke?: (id: string) => PairOutcome
+  onRevoke?: (id: string) => PairOutcome | Promise<PairOutcome>
   /** `harness unpair --all` — unpair every browser. */
-  onRevokeAll?: () => PairOutcome
+  onRevokeAll?: () => PairOutcome | Promise<PairOutcome>
   /** `harness remote-password set` — stretch + persist a new persistent remote password on the
    *  running daemon's live E2EE state. */
   onSetRemotePassword?: (password: string) => Promise<PairOutcome>
   /** `harness remote-password clear` — remove the persistent remote password. */
-  onClearRemotePassword?: () => PairOutcome
+  onClearRemotePassword?: () => PairOutcome | Promise<PairOutcome>
   /** `harness remote-password status` — whether one is set, and its fingerprint. */
-  onRemotePasswordStatus?: () => PairOutcome
+  onRemotePasswordStatus?: () => PairOutcome | Promise<PairOutcome>
   /** `harness link connect` — the machine this one just linked pinned it back, so trust that machine
    *  here too (the mutual half of the link). Goes through the daemon: it holds paired.json in memory. */
-  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome
+  onTrustLinkedPeer?: (peer: { pub: string; machineId: string; label: string }) => PairOutcome | Promise<PairOutcome>
   /** `harness group list|sync|remove` — the trust group this machine belongs to (groupSyncer.ts). */
-  onGroupList?: () => PairOutcome
-  onGroupSync?: () => PairOutcome
-  onGroupRemove?: (selector: string) => PairOutcome
+  onGroupList?: () => PairOutcome | Promise<PairOutcome>
+  onGroupSync?: () => PairOutcome | Promise<PairOutcome>
+  onGroupRemove?: (selector: string) => PairOutcome | Promise<PairOutcome>
   /** `harness devices list|remove|rebaseline` and the window's Devices list — the account's device key
    *  log as this machine verified it (lib/e2ee/deviceLogSyncer.ts). */
   onDevicesList?: () => Promise<PairOutcome>
@@ -125,13 +126,9 @@ export interface HookServerHandlers {
   /** `harness devices history` and the window's History — every add and remove, as this machine verified it. */
   onDevicesHistory?: () => Promise<PairOutcome>
   /** `harness devices dismiss` and the window's "It's mine" / "Got it" — mark new devices as seen. */
-  onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome
-  /** Local dashboard status snapshot (GET /api/status). */
+  onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome | Promise<PairOutcome>
+  /** The daemon's status (GET /api/status): what `harness status`, the desktop's discovery and scripts read. */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
-  /** Recent adapter log tail (GET /api/logs). */
-  onLogs?: () => string
-  /** Stop the adapter from the local dashboard (POST /api/stop). */
-  onStop?: () => void
   /** GET /api/machines — proxy the user's full machine list from backend using this daemon's own
    *  saved SSO session, so a local GUI client never needs a token of its own. */
   onMachinesList?: () => Promise<PairOutcome>
@@ -433,9 +430,9 @@ export function startHookServer(
         }
       }
       // CSRF guard for mutating endpoints: a cross-origin browser page cannot set a custom header on a
-      // simple request (it forces a CORS preflight we never allow), so only our same-origin dashboard
-      // (and the CLI, which sends it too) can trigger actions. A local process could still call it —
-      // same trust level as the CLI, which is acceptable on loopback.
+      // simple request (it forces a CORS preflight we never allow), so only the CLI and the apps, which
+      // send it, can trigger actions. A local process could still call it — same trust level as the
+      // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
       const hookOk = hookCredentialMatches(hookCredential, req.headers['x-harness-hook-token'])
 
@@ -460,19 +457,12 @@ export function startHookServer(
 
       if (await handleCommandBarHttp(req, res, handlers.onCommandBar)) return
 
-      // Local dashboard (self-contained page) + its read-only status/logs.
-      if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(LOCAL_WEB_HTML); return
-      }
+      // The local web dashboard that `GET /` served, with its log tail (`/api/logs`) and stop button
+      // (`/api/stop`), is gone: no app, website, script or the backend opened it, and the web client
+      // it linked from retired with the browser setup links (#348). `harness stop` stops the daemon
+      // through its pid, never through here.
       if (req.method === 'GET' && url === '/api/status') {
         json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
-      }
-      if (req.method === 'GET' && url === '/api/logs') {
-        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(handlers.onLogs ? handlers.onLogs() : ''); return
-      }
-      if (req.method === 'POST' && url === '/api/stop') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        json(200, { ok: true }); handlers.onStop?.(); return
       }
 
       // SessionStart AND UserPromptSubmit both POST here (the catch hook re-registers so a session
@@ -488,9 +478,16 @@ export function startHookServer(
         // Every rejection below says WHY, out loud. They used to be silent, and a hook that arrives and
         // is dropped looks exactly like a hook that never fired — which is precisely the confusion behind
         // "the agent is running in my terminal but the list does not show it".
+        // Answered once: a hook answered before its resolution waited is only logged after it.
+        let answered = false
+        const answer = (code: number, reply: unknown): void => {
+          if (answered) return
+          answered = true
+          json(code, reply)
+        }
         const ignore = (reason: string): void => {
           console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`)
-          json(200, { ignored: true, reason })
+          answer(200, { ignored: true, reason })
         }
         const runtimeHints = normalizedRuntimeHints(body)
         if (!runtimeHints.length) { ignore('not_in_terminal'); return }
@@ -512,6 +509,13 @@ export function startHookServer(
             tmuxPane: body.tmuxPane,
             runtimeHints,
             callerPid: Number.isSafeInteger(body.callerPid) && body.callerPid! > 0 ? body.callerPid : undefined,
+            // A relaunch records its engine's process a moment after the engine starts, and a hook in that
+            // moment waits for the record, up to 20s. Its client does not: the engine's hook command gives
+            // up on a reply after 500ms and then writes the registry itself, as for a daemon that is down
+            // (hook/notify.mjs, fallbackRegister), with a row of its own in place of the agent's, which
+            // the running daemon's next save took in. Told the registration is pending, it writes nothing,
+            // as for a transcript not yet written below, and the wait goes on here.
+            onWait: () => answer(200, { pending: true }),
           })
           : body.tmuxPane ? registry.byPaneEngine(body.tmuxPane, engine) ?? null : null
         if (!processAgent || processAgent.engine !== engine) { ignore('no_matching_engine_process'); return }
@@ -534,7 +538,7 @@ export function startHookServer(
           // Settled off the HTTP path entirely: the answer needs a SQLite read, and the row may not even
           // be written yet (measured: a child's hook beat its own INSERT by 110ms). Registering
           // optimistically would hand the parent's pane to a sub-agent.
-          json(200, { pending: true })
+          answer(200, { pending: true })
           void awaitHermesKind(body, handlers)
           return
         }
@@ -548,18 +552,18 @@ export function startHookServer(
           // is only accepted with a real file behind it) and the agent stayed off the list until something
           // else noticed it. Wait for the file instead of dropping the announcement — in the background,
           // because a SessionStart hook blocks the CLI that is waiting on this reply.
-          json(200, { pending: true })
+          answer(200, { pending: true })
           void awaitTranscript(body, handlers)
           return
         }
         if (!result) {
           console.warn(`[hooks] ${sid(body.sessionId ?? '?')} REJECTED · engine=${body.engine} pane=${body.tmuxPane}`)
-          json(400, { error: 'invalid session registration' })
+          answer(400, { error: 'invalid session registration' })
           return
         }
         console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=${result.entry.engine} · isNew=${result.isNew}`)
         handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
-        json(200, { ok: true })
+        answer(200, { ok: true })
         return
       }
 
@@ -669,7 +673,7 @@ export function startHookServer(
       if (req.method === 'POST' && url === '/api/remote-password/clear') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onClearRemotePassword) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onClearRemotePassword(); json(out.status, out.body); return
+        const out = await handlers.onClearRemotePassword(); json(out.status, out.body); return
       }
 
       // `harness link connect` → trust the machine just linked back, on the daemon's live E2EE state.
@@ -681,20 +685,20 @@ export function startHookServer(
         const isKey = typeof body.pub === 'string' && /^[A-Za-z0-9+/]{43}=$/.test(body.pub) // 32-byte Ed25519, base64
         if (!isKey || typeof body.machineId !== 'string' || !/^[a-f0-9]{32}$/.test(body.machineId)) { json(400, { error: 'BAD_PEER' }); return }
         const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 60) : body.machineId
-        const out = handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
+        const out = await handlers.onTrustLinkedPeer({ pub: body.pub as string, machineId: body.machineId, label })
         json(out.status, out.body); return
       }
 
       // `harness group list` → the trust group's members. Read-only (keys and labels, no secrets).
       if (req.method === 'GET' && url === '/api/group') {
         if (!handlers.onGroupList) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onGroupList(); json(out.status, out.body); return
+        const out = await handlers.onGroupList(); json(out.status, out.body); return
       }
       // `harness group sync` → compare rosters with every reachable member now.
       if (req.method === 'POST' && url === '/api/group/sync') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onGroupSync) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onGroupSync(); json(out.status, out.body); return
+        const out = await handlers.onGroupSync(); json(out.status, out.body); return
       }
       // `harness group remove <id|#|fp>` / `harness link unlink` → drop a member everywhere.
       if (req.method === 'POST' && url === '/api/group/remove') {
@@ -703,7 +707,7 @@ export function startHookServer(
         let body: { selector?: unknown }
         try { body = JSON.parse(await readBody(req)) as typeof body } catch { json(400, { error: 'bad json' }); return }
         if (typeof body.selector !== 'string' || !body.selector.trim()) { json(400, { error: 'MISSING_SELECTOR' }); return }
-        const out = handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
+        const out = await handlers.onGroupRemove(body.selector.trim()); json(out.status, out.body); return
       }
 
       // `harness devices list` / the window's Devices list → the account's devices, as this machine's
@@ -758,7 +762,7 @@ export function startHookServer(
         // The keys a window displayed, so a key accepted since the window read the list is not cleared unseen.
         if (body.pubs !== undefined && (!Array.isArray(body.pubs) || body.pubs.length > 256
           || body.pubs.some((k) => typeof k !== 'string' || !k || k.length > 256))) { json(400, { error: 'BAD_PUBS' }); return }
-        const out = handlers.onDevicesDismiss({
+        const out = await handlers.onDevicesDismiss({
           ...(typeof body.pub === 'string' ? { pub: body.pub } : {}),
           ...(Array.isArray(body.pubs) ? { pubs: body.pubs as string[] } : {}),
           ...(body.baseline === true ? { baseline: true } : {}),
@@ -769,7 +773,7 @@ export function startHookServer(
       // gating tier as /api/pairs.
       if (req.method === 'GET' && url === '/api/remote-password/status') {
         if (!handlers.onRemotePasswordStatus) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onRemotePasswordStatus(); json(out.status, out.body); return
+        const out = await handlers.onRemotePasswordStatus(); json(out.status, out.body); return
       }
 
       // Local GUI clients (e.g. the desktop app): read the full machine list / rename or delete one /
@@ -856,7 +860,7 @@ export function startHookServer(
       // `harness pairings` — list paired browsers.
       if (req.method === 'GET' && url === '/api/pairs') {
         if (!handlers.onListPairs) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onListPairs(); json(out.status, out.body); return
+        const out = await handlers.onListPairs(); json(out.status, out.body); return
       }
 
       // `harness unpair <id>` — unpair one browser; signals it (if online) to re-pair.
@@ -866,14 +870,14 @@ export function startHookServer(
         let body: { id?: string }
         try { body = JSON.parse(await readBody(req)) as { id?: string } } catch { json(400, { error: 'bad json' }); return }
         if (!body.id) { json(400, { error: 'MISSING_ID' }); return }
-        const out = handlers.onRevoke(body.id); json(out.status, out.body); return
+        const out = await handlers.onRevoke(body.id); json(out.status, out.body); return
       }
 
       // `harness unpair --all` — unpair every browser.
       if (req.method === 'POST' && url === '/api/revoke-all') {
         if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
         if (!handlers.onRevokeAll) { json(503, { error: 'UNAVAILABLE' }); return }
-        const out = handlers.onRevokeAll(); json(out.status, out.body); return
+        const out = await handlers.onRevokeAll(); json(out.status, out.body); return
       }
 
       json(404, { error: 'not found' })

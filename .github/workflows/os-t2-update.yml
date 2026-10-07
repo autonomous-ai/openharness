@@ -1,0 +1,96 @@
+name: Harness OS T2 kernel update
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['os-checks/t2-kernel-*']
+    paths: ['os/**', '.github/workflows/os-t2-update.yml']
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-t2-update-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Require unchanged public shared runtime sources
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          expected = {'tui': '1ec2af97a8695bdcc8429ddc498747bd86eada08',
+                      'cli': '27f50e77fa9bdc8de75a64c9e9166c932c559a8b',
+                      'store': 'ea5589e2d8db518a85453fa3c9efc60d29a16085'}
+          for path, tree in expected.items():
+              assert subprocess.check_output(['git', 'rev-parse', 'HEAD:' + path], text=True).strip() == tree, path
+          PY
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.23.2'
+          cache: npm
+          cache-dependency-path: cli/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.0'
+          targets: x86_64-unknown-linux-musl
+      - uses: actions/download-artifact@v6
+        with:
+          name: harness-os-t2-image
+          path: os/dist
+          run-id: 37409262209
+          github-token: ${{ github.token }}
+      - name: Install native test tools and verify source contracts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl=1.2.4-2 musl-dev=1.2.4-2 musl-tools=1.2.4-2 zstd qemu-system-x86 qemu-utils ovmf python3-pil tesseract-ocr
+          sudo chmod a+rw /dev/kvm
+          make -C os check
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/os-t2-update.yml
+      - name: Build private update and verify both immutable kernel archives
+        run: |
+          make -C os runtime
+          bash os/tools/build-compositor-container.sh os/work/compositor
+          python3 os/tools/build-package.py --runtime os/work/runtime --compositor os/work/compositor --output os/work/t2-update --development
+          python3 - <<'PY'
+          import importlib.util, json
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('t2', 'os/t2_update.py')
+          t2 = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(t2)
+          folder = Path('os/work/t2-kernel-inputs')
+          folder.mkdir(parents=True)
+          for path in ['os/tests/t2-kernel-before.json', 'os/platforms/apple-t2/kernel.json']:
+              pin = t2.validate_pin(json.loads(Path(path).read_text()))
+              package = folder / pin['package']['filename']
+              t2.download(pin, package)
+              t2.KERNEL.inspect(package, pin)
+          PY
+      - name: Change actual T2 kernel, reboot, roll back offline, and recover
+        run: |
+          python3 os/tests/t2_update_vm.py --iso os/dist/*.iso --bundle os/work/t2-update \
+            --kernels os/work/t2-kernel-inputs --output os/test-results/t2-kernel-update
+      - name: Retain source, kernel transaction and cold-boot evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-t2-kernel-update
+          path: |
+            os/test-results/t2-kernel-update/
+            !os/test-results/t2-kernel-update/*.qcow2
+            !os/test-results/t2-kernel-update/OVMF_VARS.fd
+            !os/test-results/t2-kernel-update/synthetic-firmware/
+            !os/test-results/t2-kernel-update/served/
+            os/work/t2-update/package-manifest.json
+            os/work/t2-update/SHA256SUMS
+          retention-days: 14
+          compression-level: 0

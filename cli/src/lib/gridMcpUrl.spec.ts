@@ -111,13 +111,11 @@ describe('resolveGridMcpUrl', () => {
     expect(warned.join('\n')).toContain('Not logged in')
   })
 
-  it('answers undefined when the output is not a usable address', async () => {
-    for (const url of ['', 'v1/grid/web-mcp/', 'file:///etc/passwd']) {
-      clearGridMcpUrlCache()
-      fake?.dispose()
-      install({ mcp: { stdout: JSON.stringify({ server: 'grid-web', url, authorization: 'Bearer x' }) } })
-      expect(await resolveGridMcpUrl(GRID, NOW), url).toBeUndefined()
-    }
+  // One case each: every case starts the fake `grid`, a node process. Three in one test took it past its 5 s
+  // under 12 busy loops on a 12-core Mac (load 60), where each start took one to two seconds.
+  it.each(['', 'v1/grid/web-mcp/', 'file:///etc/passwd'])('answers undefined when the output is not a usable address: %j', async (url) => {
+    install({ mcp: { stdout: JSON.stringify({ server: 'grid-web', url, authorization: 'Bearer x' }) } })
+    expect(await resolveGridMcpUrl(GRID, NOW)).toBeUndefined()
   })
 
   it('answers undefined when there is no `grid` at all, and never throws', async () => {

@@ -150,12 +150,14 @@ abstract final class AppIcons {
   static const slidersHorizontal = LucideIcons.slidersHorizontal400;
   static const smartphone = LucideIcons.smartphone400;
   static const snowflake = LucideIcons.snowflake400;
+  static const signpost = LucideIcons.signpost400;
   static const sparkles = LucideIcons.sparkles400;
   static const square = LucideIcons.square400;
   static const squareCheck = LucideIcons.squareCheck400;
   static const squarePlus = LucideIcons.squarePlus400;
   static const squareTerminal = LucideIcons.squareTerminal400;
   static const star = LucideIcons.star400;
+  static const store = LucideIcons.store400;
   static const starHalf = LucideIcons.starHalf400;
   static const sun = LucideIcons.sun400;
   static const terminal = LucideIcons.terminal400;

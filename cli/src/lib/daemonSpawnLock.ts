@@ -58,7 +58,8 @@ export const SPAWN_LOCK_DIR = join(env.ADAPTER_DATA_DIR, 'adapter.spawn.lock')
 const OWNER_FILE = 'owner.json'
 const POLL_MS = 100
 export const SPAWN_LOCK_WAIT_MS = 45_000
-/** A directory with no owner.json is a crash between mkdir and the O_EXCL write — a window of
+/** A directory with no owner.json is a crash between mkdir and the O_EXCL write, and one whose
+ *  owner.json names no one is a crash or a full disk between that create and the write: windows of
  *  microseconds. Anything older than this with no owner is debris, not a lock. */
 const OWNERLESS_STALE_MS = 5_000
 
@@ -171,10 +172,12 @@ function tryCreate(purpose: SpawnLockPurpose): string | null {
   secureStateDirectory(env.ADAPTER_DATA_DIR)
   const token = randomUUID()
   let created = false
+  let opened = false
   try {
     mkdirSync(SPAWN_LOCK_DIR, { mode: 0o700 })
     created = true
     const fd = openSync(ownerPath(), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
+    opened = true
     try {
       const owner: SpawnLockOwner = {
         pid: process.pid, ...processLockIdentity(process.pid), token, purpose, since: Date.now(),
@@ -184,7 +187,12 @@ function tryCreate(purpose: SpawnLockPurpose): string | null {
     } finally { closeSync(fd) }
     return token
   } catch (error) {
-    if (created) releaseOwnedBy(token)
+    // The owner file is this call's (O_EXCL), so the directory is too, however little of the record
+    // reached the disk. A full disk cut it short on 2026-10-05 (e2e/updateHostile.e2e.ts): left there,
+    // empty, it named no one that could ever let go, and every update, start and stop after it waited
+    // out its 45 s and gave up, long after the space came back.
+    if (opened) rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
+    else if (created) releaseOwnedBy(token)
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
     return null
   }
@@ -219,11 +227,18 @@ function reclaimIfStale(owner: SpawnLockOwner): boolean {
   return false
 }
 
+/**
+ * Remove a lock that names no one once it is clearly debris: a directory with no owner record, or one
+ * whose record names no process (empty or cut short: a crash, or a full disk, between the O_EXCL create
+ * and the write). Called only when the record could not be read as an owner. Fresh, either is a lock
+ * being created, and is left alone.
+ */
 function reclaimIfOwnerless(): boolean {
   try {
     const dir = lstatSync(SPAWN_LOCK_DIR)
-    try { lstatSync(ownerPath()); return false } catch { /* no owner file */ }
-    if (Date.now() - dir.mtimeMs > OWNERLESS_STALE_MS) {
+    let since = dir.mtimeMs
+    try { since = Math.max(since, lstatSync(ownerPath()).mtimeMs) } catch { /* no owner file */ }
+    if (Date.now() - since > OWNERLESS_STALE_MS) {
       rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
       return true
     }

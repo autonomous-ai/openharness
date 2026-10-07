@@ -14,7 +14,11 @@ it('discovers, downloads, starts, verifies, stops and restarts across real subpr
   const server = createServer(async (req, res) => {
     const chunks: Buffer[] = []
     for await (const chunk of req) chunks.push(Buffer.from(chunk))
-    const body = JSON.parse(Buffer.concat(chunks).toString())
+    // The engine probe's GET /health is the one request with no body, and this fixture serves no
+    // engine: parsing it threw outside the test, failing a unit run whose every test had passed.
+    const text = Buffer.concat(chunks).toString()
+    if (!text) { res.statusCode = 404; res.end(); return }
+    const body = JSON.parse(text)
     res.setHeader('content-type', 'application/json')
     if (req.url === '/v1/grid/catalog') {
       expect(req.headers.authorization).toBe('Bearer catalog-fixture')

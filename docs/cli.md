@@ -25,13 +25,15 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness remote` | From a Harness terminal tile: choose another of your machines (linking it on the spot if needed), open a terminal there and move this tile to it. |
 | `harness devices [list] [--json]` · `show <#\|fp>` · `remove <fp>` · `history [--json]` · `dismiss [<#\|fp>]` · `rebaseline [--yes]` | The account's devices as this machine verified them (below): list · one in full · take one out on every device · every add and removal, newest first · mark new ones seen · review and trust a frozen list again. |
 | `harness grid login [--force] [--json]` · `harness grid logout` | Sign the `grid` CLI in with this computer's account, no second browser. |
+| `harness grid env <grid>` | `<grid>`'s relay address and key as shell exports, through the harness's own `grid`: `eval "$(harness grid env <grid>)"` before calling a Jev model at `$OPENAI_BASE_URL/systemone`. |
 | `harness flash [flags]` | Re-flash a plugged-in Harness device over USB. Flags pass straight to the flasher. |
 | `harness autonomous-device discover\|status\|list\|pair\|revoke` | Pair Autonomous OS devices found on the LAN, directly, with no relay. |
 
 Interactive prompts read one line from stdin with `--stdin`; `--json` switches any of them to NDJSON.
 
-The daemon also serves a loopback dashboard at `http://127.0.0.1:18473`: health, this machine's
-fingerprint, paired clients, stop. It never renders a transcript. Configuration is environment
+The daemon answers on loopback at `http://127.0.0.1:18473` (`harness status` prints it as `local api`):
+`/api/status` gives its health, this machine's fingerprint and its paired clients. It serves no web
+page and never a transcript. Configuration is environment
 variables (`BACKEND_WS_URL`, `WEB_URL`, `ADAPTER_DATA_DIR`, `ADAPTER_COMPUTER_ID`, `PORT`, and the
 per-engine home directories); [`cli/README.md`](cli/README.md) has the full table and the
 `.env.example`.
@@ -47,7 +49,7 @@ through this daemon's link to it.
 What it answers: `agents_list`, `agent_create`, `agent_restart`, `agent_retarget`, `agent_delete`,
 `agent_update`, `agent_recent`, `agent_handoff_prepare`, `agent_read_file` (media previews, in 128 KiB chunks),
 `fs_list_dir`, `engines_probe`, `codex_profiles_list`, `codex_profile_link`, `models_list`,
-`usage_read`, `question_response`, `voice_route`, `message`, `cancel`, and `terminal_open` for a
+`usage_read`, `question_response`, `message`, `cancel`, and `terminal_open` for a
 binary terminal channel with scroll, resync and paste. The same frames travel from the web client
 over the relay.
 

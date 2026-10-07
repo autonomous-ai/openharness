@@ -7,9 +7,8 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 6: docs/design/2026-10-03-harnessd.md).
  * The socket's two handlers stay bound there: `answer` (question_response) and `monitorActivity`.
  */
-import { AgentNotifications } from '../lib/agentNotifications.js'
 import { AskQuestionController, QuestionWatcher, type QuestionAnswerPayload, type QuestionAnswerResult } from '../lib/askQuestion.js'
-import type { AutonomousDeviceInput } from '../lib/autonomous-device/input.js'
+import type { AutonomousDeviceInput } from './deviceInput.js'
 import { preview, sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalControl } from './terminals/control.js'
@@ -69,7 +68,10 @@ export function createQuestions({
   const openQuestions = new Map<string, Record<string, unknown>>()
   const monitorActivity = (sessionId: string): 'needsInput' | 'working' | 'idle' => openQuestions.has(sessionId)
     ? 'needsInput' : sessionTurnOpen(sessionId) ? 'working' : 'idle'
-  const agentNotifications = new AgentNotifications()
+  // Who hears that a question was asked or answered: the recaps, which do not announce a turn waiting on
+  // the person as done (services/recaps.ts). Told once they exist; a question before then is nobody's news.
+  let heard: ((kind: 'asked' | 'answered', sessionId: string, requestId: string) => void) | null = null
+  const hearQuestions = (listener: typeof heard): void => { heard = listener }
   const questionWatcher = new QuestionWatcher({
     getSession: (id) => resolve(id),
     capture: captureTerminal,
@@ -83,8 +85,14 @@ export function createQuestions({
         type: 'commander_question',
         agentId: agentIdFor(sessionId),
         dbSessionId: sessionId,
-        payload: { requestId, questions: shaped, notification: agentNotifications.asked(sessionId, requestId) },
+        // A question is always news: the person is needed (lib/agentNotifications.ts `asked`, which the
+        // recaps keep to hold back the turn's own "done").
+        payload: { requestId, questions: shaped, notification: { id: requestId, kind: 'needsYou' },
+          // Robot clients need to distinguish a permission notice from an answerable question.
+          ...(detail?.permission ? { permission: { dialog: detail.dialog, resolution: 'desktop' } } : {}),
+        },
       }
+      heard?.('asked', sessionId, requestId)
       clients.sendCommander(asked)
       // ...and to the window on this computer. `sendCommander` is `webEligible: false`, so until this
       // second call the app could not learn that an agent was blocked even though the question had
@@ -105,7 +113,7 @@ export function createQuestions({
     // waiting, down the SAME path the question itself took, so the dial and the WiFi device cannot
     // disagree about whether a question is still open.
     onQuestionGone: (sessionId, requestId) => {
-      agentNotifications.answered(sessionId, requestId)
+      heard?.('answered', sessionId, requestId)
       deviceInput.setUserAction(agentIdFor(sessionId), false)
       const closed = {
         type: 'commander_question_close',
@@ -122,7 +130,30 @@ export function createQuestions({
       console.log(`[question] ${sid(sessionId)} answered elsewhere · closing on every client · req=${requestId}`)
     },
   })
-  return { questions, showAwaitingAnswer, answer, openQuestions, monitorActivity, agentNotifications, questionWatcher }
+  const questionResponse = createQuestionResponse(answer)
+  return { questions, showAwaitingAnswer, answer, questionResponse, openQuestions, monitorActivity, hearQuestions, questionWatcher }
+}
+
+/**
+ * Answers `question_response`: a person answered an agent's question on a device or in a window. There
+ * is no control channel into an interactive CLI, so `answer` keys it straight into that session's tmux
+ * dialog, and what became of it goes back through `reply`.
+ *
+ * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md).
+ */
+export function createQuestionResponse(answer: (payload: QuestionAnswerPayload) => Promise<QuestionAnswerResult> | void) {
+  return (payload: Record<string, unknown>, reply: (result: Record<string, unknown>) => void): void => {
+    const p = payload as { requestId?: string; sessionId?: string; agentId?: string; answers?: Record<string, string> }
+    const answered = answer(p)
+    // Detached: driving a dialog takes seconds of keystrokes and repaints. The outcome goes back
+    // under the QUESTION's requestId, so the client that answered can say why nothing happened —
+    // STALE_QUESTION when the dialog changed before the answer arrived and nothing was typed.
+    if (answered) {
+      void answered
+        .then((result) => reply(result.ok ? { ok: true } : { error: result.error, detail: result.detail }))
+        .catch(() => reply({ error: 'ANSWER_FAILED', detail: 'The answer could not be entered.' }))
+    }
+  }
 }
 
 export type Questions = ReturnType<typeof createQuestions>

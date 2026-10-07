@@ -35,6 +35,18 @@ describe('verified turn activity', () => {
     t.activity.observe('s', 'turn_ended')
     expect(t.frame()?.state).toBe('idle')
   })
+  it('settles an expired claim idle when no turn is open, since nothing probes a closed turn', async () => {
+    // A cancel closes the turn and reads idle; the aborted tool's output lands after it and reads as work.
+    const t = setup(); t.runtime({ key: 'agent:session:pid:start', turnOpen: false })
+    t.activity.observe('s', 'turn_ended'); expect(t.frame()?.state).toBe('idle')
+    t.activity.observe('s', 'tool_end'); expect(t.frame()?.state).toBe('working')
+    t.advance(WORK_EVIDENCE_MS - 1); expect(t.frame()?.state).toBe('working')
+    t.advance(1); expect(t.frame()?.state).toBe('idle')
+    // Fresh evidence still reads as work, and an open turn still expires into unknown for the probe.
+    t.activity.observe('s', 'text_delta'); expect(t.frame()?.state).toBe('working')
+    t.runtime({ key: 'agent:session:pid:start', turnOpen: true })
+    t.advance(); expect(t.frame()?.state).toBe('unknown')
+  })
   it.each(['turn_started', 'text_delta', 'thinking_delta', 'thinking_title', 'tool_start', 'tool_end', 'subagent_finished'])(
     'renews evidence for live %s, but not a replay of it', type => {
       const t = setup(); t.activity.observe('s', type)

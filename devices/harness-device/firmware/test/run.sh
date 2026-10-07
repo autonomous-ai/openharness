@@ -76,6 +76,16 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 "$out/test_arc_bounds"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -I "$here/../main/ui/habitat" -o "$out/test_arc_ring" "$here/test_arc_ring.c" \
+   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
+"$out/test_arc_ring"
+
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
+   -I "$here/../main/ui/habitat" -o "$out/test_cell_zoom" "$here/test_cell_zoom.c" \
+   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
+"$out/test_cell_zoom"
+
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_voice_buffer" "$here/test_voice_buffer.c" "$here/../main/voice_buffer.c"
 "$out/test_voice_buffer"
 

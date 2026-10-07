@@ -18,9 +18,10 @@ class PublicationGuards(unittest.TestCase):
         self.fixture.runtime['versions'] = {'hn': '0.1.12', 'cli': '0.3.57'}
         self.fixture.make_package()
         self.bundle = self.fixture.root
-        (self.bundle / 'apply-update.py').write_text('# fixture bootstrap\n')
+        for name in publish.bootstrap_files():
+            (self.bundle / name).write_text('# fixture bootstrap\n')
         (self.bundle / 'SHA256SUMS').write_text(''.join(publish.digest(path) + '  ' + path.name + '\n' for path in
-            [self.fixture.package, self.bundle / 'package-manifest.json', self.bundle / 'apply-update.py']))
+            [self.fixture.package, self.bundle / 'package-manifest.json', *[self.bundle / name for name in publish.bootstrap_files()]]))
         self.run = dict(status='completed', conclusion='success', path='.github/workflows/os.yml', head_sha='a' * 40)
         self.receipt = dict(status='passed', update=dict(status='passed', source_commit='a' * 40, candidate=self.fixture.manifest['package']),
             fast_updates=dict(status='passed'), system_channel=dict(status='passed', package=self.fixture.manifest['package'],
@@ -28,6 +29,23 @@ class PublicationGuards(unittest.TestCase):
 
     def test_exact_package_and_complete_receipt_can_be_prepared(self):
         self.assertEqual(publish.validate(self.bundle, self.receipt, self.run)['source_commit'], 'a' * 40)
+
+    def test_bootstrap_cannot_omit_a_platform_helper(self):
+        path = self.bundle / 'SHA256SUMS'
+        path.write_text(''.join(line for line in path.read_text().splitlines(keepends=True)
+                                if not line.endswith('  boot_profile.py\n')))
+        with self.assertRaisesRegex(ValueError, 'complete bootstrap bundle'):
+            publish.validate(self.bundle, self.receipt, self.run)
+
+    def test_official_bundle_can_migrate_a_preview_through_its_existing_feed(self):
+        self.fixture.manifest['requires_os_version'] = '0.1.0'
+        self.fixture.manifest['upgrades_from'] = [self.fixture.base]
+        self.fixture.make_package()
+        (self.bundle / 'SHA256SUMS').write_text(''.join(publish.digest(path) + '  ' + path.name + '\n' for path in
+            [self.fixture.package, self.bundle / 'package-manifest.json', *[self.bundle / name for name in publish.bootstrap_files()]]))
+        self.assertEqual(publish.validate(self.bundle, self.receipt, self.run)['requires_os_version'], '0.1.0')
+        # The original installed updater must accept the explicit migration too.
+        test_runtime_update.update.validate_bundle(self.bundle, self.fixture.base)
 
     def test_failed_stale_or_missing_native_scopes_cannot_advance_the_feed(self):
         for field in ['update', 'fast_updates', 'system_channel']:

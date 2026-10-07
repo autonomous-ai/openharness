@@ -1,6 +1,7 @@
 /**
- * A self-update end to end, on real release bundles: the daemon finds a newer build in its manifest,
- * stages it, and harnessd's master restarts the core on it. A build that stays up is kept. One that
+ * A self-update end to end, on real release bundles: the master's updater, in a process of its own,
+ * finds a newer build in its manifest and stages it, and harnessd's master has the core hand over and
+ * restarts it on the new build. The core itself downloads nothing. A build that stays up is kept. One that
  * crashes is rolled back, remembered, and not tried again until a newer one is published — before,
  * every machine on it restarted once a minute until a fix shipped.
  *
@@ -15,11 +16,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, onTestFailed } from 'vitest'
 import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { atVersion, withFault } from './harness/release.js'
 
 const FIRST = '41.0.1'
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 const count = (text: string, part: string): number => text.split(part).length - 1
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms))
+const parentOf = (pid: number): number => Number(execFileSync('ps', ['-o', 'ppid=', '-p', String(pid)], { encoding: 'utf8' }).trim())
 
 describe('a self-update under harnessd', () => {
   let scratch = ''
@@ -33,6 +36,12 @@ describe('a self-update under harnessd', () => {
   const cliDir = () => join(scratch, 'cli')
   const installed = () => readFileSync(join(cliDir(), 'cli.js'))
   const rejected = () => JSON.parse(readFileSync(join(cliDir(), 'update-rejected.json'), 'utf8')) as string[]
+  /** The updater's process the master last started, while it runs. */
+  const updaterPid = (): number | null => {
+    const started = [...daemon!.log().matchAll(/\[harnessd\] service updater started \(pid (\d+)\)/g)].at(-1)
+    const pid = started ? Number(started[1]) : null
+    return pid && IsolatedDaemon.alive(pid) ? pid : null
+  }
   const running = async (): Promise<string | null> => {
     const health = await fetch(`http://127.0.0.1:${daemon!.port}/api/health`).then((response) => response.json()).catch(() => null)
     return (health as { version?: string } | null)?.version ?? null
@@ -49,9 +58,9 @@ describe('a self-update under harnessd', () => {
     // The version is baked in at build time; the others are the same bytes with it swapped.
     expect(count(first, FIRST)).toBeGreaterThanOrEqual(2)
     const release = (version: string, crashesOnStart = false): void => {
-      let source = first.replaceAll(FIRST, version)
+      let source = atVersion(first, FIRST, version)
       // Passes the updater's canary (`cli.js version`), then dies on every start as a core.
-      if (crashesOnStart) source = source.replace('\n', '\nif(process.argv[2]==="__run")process.exit(3);\n')
+      if (crashesOnStart) source = withFault(source, 'if(process.argv[2]==="__run")process.exit(3);')
       const file = join(out, `cli-${version}.js`)
       writeFileSync(file, source)
       expect(execFileSync(process.execPath, [file, 'version'], { encoding: 'utf8' }).trim()).toBe(version)
@@ -127,6 +136,11 @@ describe('a self-update under harnessd', () => {
     expect(existsSync(join(cliDir(), 'update-pending.json'))).toBe(false)
     expect(existsSync(join(cliDir(), 'update-rejected.json'))).toBe(false)
     expect(daemon!.pid).toBe(master)
+    // The updater is its own process, the master's child; the core asked to hand over, and ran no updater.
+    const updater = updaterPid()
+    expect(updater).not.toBeNull()
+    expect(parentOf(updater!)).toBe(master)
+    expect(daemon!.log()).toContain('[harnessd] the updater staged 41.0.2 — asking the core to hand over')
   })
 
   it('rolls back a build that crashes, and never stages it again', async () => {
@@ -149,8 +163,13 @@ describe('a self-update under harnessd', () => {
     expect(daemon!.pid).toBe(master)
   })
 
-  it('moves on when a newer build is published', async () => {
+  it('moves on when a newer build is published, after its updater was killed outright', async () => {
     showLog()
+    // Killed: the master starts it again, and the core never noticed.
+    const killed = updaterPid()!
+    process.kill(killed, 'SIGKILL')
+    await until('the master to start the updater again', () => { const now = updaterPid(); return now && now !== killed ? now : null }, 30_000, 250)
+    expect(await running()).toBe('41.0.2')
     offered = '41.0.4'
     await until('the core to run 41.0.4', async () => (await running()) === '41.0.4', 90_000, 250)
     await until('the master to keep it', () => count(daemon!.log(), 'the update stayed up — keeping it') === 2, 30_000)

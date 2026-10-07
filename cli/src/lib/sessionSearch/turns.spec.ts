@@ -179,8 +179,13 @@ describe('searchableText', () => {
     expect(time('?key'.repeat(100) + NOTE + '?key'.repeat(100))).toBeLessThan(200)
     // The secret patterns are cubic on a run with no whitespace in it: the note must leave the two
     // runs apart, so the cost is that of two runs, not (about four times) one run of their length.
+    // Checked by the runs themselves, not by timing them: a timed ratio of the two read 2.8 times on
+    // correct code when a CI runner was loaded, and failed unrelated PRs (#858, #845, #871). Glued, the
+    // longest stretch without whitespace is both runs; apart, it is one.
     const run = '?key'.repeat(300)
-    expect(time(run + NOTE + run)).toBeLessThan(2 * time(`${run} ${run}`) + 20)
+    const longestRun = (text: string): number => Math.max(...text.split(/\s+/).map((part) => part.length))
+    expect(longestRun(searchableText(run + NOTE + run, 100_000))).toBe(run.length)
+    expect(longestRun(searchableText(run + run, 100_000))).toBe(2 * run.length)
   })
 
   it('keeps line breaks and indentation, so a preview shows text as it was written', () => {

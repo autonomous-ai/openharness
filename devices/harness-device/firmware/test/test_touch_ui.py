@@ -40,11 +40,12 @@ code = r'''
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 '''
 # Keep real protocol capacities: a larger fake buffer can hide target truncation.
 code += defines('CABLE_READ_TOKEN_MAX','ID_MAX','CABLE_NAME_MAX','SWARM_ID_MAX','SWARMS_MAX','CABLE_MAX_AGENTS','MAX_PROJECTS')
 code += defines('NOTICES','QUESTION_MAX','OPTION_MAX','PANE_MEMORY_MAX','UI_FONT','Q_ROWS','DRAFT_ROWS',source=source)
-code += defines('FACE_CX', 'PANE_PITCH', 'PANE_ROWS', source=source)
+code += defines('FACE_CX', source=source)
 if '#define PANE_RESULT_BYTES ' in source:
     code += defines('PANE_RESULT_BYTES', source=source)
 code += face_geometry(source)
@@ -58,10 +59,12 @@ static struct {
     int brightness;
     char voice_target[CABLE_NAME_MAX], voice_engine[12];
     int pattern_mask, pattern_len, view, voice_return, offset, active, count, pressed, hit_count;
-    int draft_drag, tab_drag, pane_pos, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
+    int draft_drag, tab_drag, start_x, start_y, last_x, last_y, tab_count, machine_count, model_count, notice_count, pet_pose;
     uint32_t touch_started, coast_until, character_activity, pet_until, nap_until, last_celebration;
     uint32_t notice_sequence, voice_retry_until;
     uint8_t status_phase;
+    unsigned bell_unread;
+    uint32_t notice_ms;
     uint32_t pet_next_ms;
     cable_swarm_t tabs[SWARMS_MAX];
     struct { char id[64], name[96], state[16]; bool local; } machines[2];
@@ -102,6 +105,8 @@ static ht_form_t form;
 static ht_draft_t draft;
 static ht_workspace_t workspace;
 static ht_tab_carousel_t tab_carousel;
+static ht_tab_carousel_t pane_carousel;
+static ht_tab_carousel_t inbox_carousel;
 static int tab_switches;
 static char tab_target[64];
 static action_t tab_queued;
@@ -202,11 +207,11 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'focus_dot', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
-code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('render_focus_panes') + function('panes_move') + function('panes_settle') + function('render_agents') + function('tabs_move') + function('tab_name') + function('render_focus_tabs') + function('render_tabs') + function('page_controls') + function('render_notice') + function('render_focus_inbox') + function('render_list')
+code += function('focus_centred') + function('focus_header') + function('focus_clipped') + function('tabs_move') + function('tab_name') + function('tab_split') + function('tab_fade') + function('tab_neighbour') + function('focus_carousel') + function('tab_label') + function('render_focus_tabs') + function('pane_label') + function('render_focus_panes') + function('render_agents') + function('render_tabs') + function('page_controls') + function('render_notice') + function('css_line') + function('inbox_line') + function('inbox_page') + function('render_focus_inbox') + function('render_list')
 for name in ['notice_remove', 'notice_sync_view', 'notice_selection', 'notice_restore_selection', 'notice_add', 'ui_notify_task_done', 'ui_notif_seen', 'ui_notif_read', 'ui_notif_replace', 'ui_notif_open', 'ui_question_close', 'ui_answer_receipt']:
     code += function(name)
 for name in ['event', 'ui_project_emit', 'ui_project_restore_event', 'ui_project_clear_event', 'ui_project_set_name', 'ui_project_remove', 'ui_project_clear_all', 'ui_project_apply_order']:
@@ -252,10 +257,14 @@ static void dispatch(action_t a) {
     else if (a.kind == A_PET) boops++;
     else if (a.kind == A_TAB_LIST) tabs_open();                   // mirrors ui_habitat.c's dispatch
     else if (a.kind == A_AGENT) {
-        switches++; s.active = !strcmp(a.id, "b") ? 1 : 0; view(AGENT);
+        switches++; s.active = 0;                                   // the pane with that id, as ui_habitat.c's find
+        for (int i = 0; i < s.count; i++) if (!strcmp(s.agents[i].id, a.id)) s.active = i;
+        view(AGENT);
     } else if (a.kind == A_SETTINGS) view(SETTINGS);
     else if (a.kind == A_FIND) view(FORM);
-    else if (a.kind == A_AGENTS) view(AGENTS);
+    else if (a.kind == A_AGENTS) {                                 // mirrors ui_habitat.c: the pages open on the pane on the face
+        view(AGENTS); ht_tab_carousel_reset(&pane_carousel, s.count, s.active >= 0 && s.active < s.count ? s.active : 0);
+    }
     else if (a.kind == A_INBOX) notice_open();
     else if (a.kind == A_HOME) view(HOME);
     else if (a.kind == A_NOTICE) notice_action(a);
@@ -290,7 +299,7 @@ static void scene_take(void) {
 static void reset(void) {
     host_features=31; fake_ms=0; fake_asleep=false; present_scene=true;
     memset(&visit,0,sizeof visit); visit_sends=visit_wire=returns=0; question_pending=false;
-    memset(&tab_carousel,0,sizeof tab_carousel);
+    memset(&tab_carousel,0,sizeof tab_carousel); memset(&pane_carousel,0,sizeof pane_carousel); memset(&inbox_carousel,0,sizeof inbox_carousel);
     memset(&workspace,0,sizeof workspace); tab_switches=0; tab_target[0]=0;
     memset(&selection,0,sizeof(selection)); selections=0;
     memset(&carry,0,sizeof(carry)); carry_prepares=carry_drops=0; voice_context[0]=0;
@@ -359,7 +368,8 @@ static bool title_is(const char *text) {
 static void portrait(const char *dir, const char *name);
 static bool focus_inter(const ht_font_t *f) {
     return f==&ht_lv_inter_20.base || f==&ht_lv_inter_25.base || f==&ht_lv_inter_med_26.base ||
-           f==&ht_lv_inter_30.base || f==&ht_lv_inter_36.base;
+           f==&ht_lv_inter_30.base || f==&ht_lv_inter_36.base || f==&ht_lv_inter_28.base || f==&ht_lv_inter_44.base ||
+           f==&ht_lv_inter_bold_48.base;
 }
 static void focus_only_inter(void) {
     for (int i = 0; i < scene.count; i++) {
@@ -380,6 +390,57 @@ static void portrait_focus(const char *dir, const char *name) {
     focus_only_inter();
     portrait(dir, name);
 }
+// The design export (mockup/focus_design.py): every run of the portrait as JSON beside it — kind, place, face,
+// colours in panel order, text — and the touch targets, so a designer reads the exact numbers, not a guess.
+static const char *spec_font(const ht_font_t *f) {
+    static const struct { const ht_font_t *f; const char *name; } names[] = {
+        {&ht_lv_inter_20.base,"inter_20"},{&ht_lv_inter_25.base,"inter_25"},{&ht_lv_inter_med_26.base,"inter_med_26"},
+        {&ht_lv_inter_30.base,"inter_30"},{&ht_lv_inter_36.base,"inter_36"},
+        {&ht_lv_inter_28.base,"inter_28"},{&ht_lv_inter_44.base,"inter_44"},{&ht_lv_inter_bold_48.base,"inter_bold_48"},
+        {&ht_lv_montserrat_14.base,"montserrat_14"},
+        {&ht_lv_montserrat_22.base,"montserrat_22"},{&ht_done_28,"done_28"},{&ht_wave,"wave"},{&ht_spark,"spark"},
+        {&ht_mono_16,"mono_16"},{&ht_mono_20,"mono_20"},{&ht_mono_24,"mono_24"},{&ht_mono_28,"mono_28"}};
+    for (unsigned i = 0; i < sizeof names / sizeof names[0]; i++) if (names[i].f == f) return names[i].name;
+    return "other";
+}
+static void spec_string(FILE *fp, const char *t) {
+    fputc('"', fp);
+    for (; *t; t++) {
+        unsigned char c = (unsigned char)*t;
+        if (c == '"' || c == '\\') fprintf(fp, "\\%c", c);
+        else if (c < 0x20) fprintf(fp, "\\u%04x", c);
+        else fputc(c, fp);
+    }
+    fputc('"', fp);
+}
+static void portrait_spec(const char *dir, const char *name) {
+    char path[1024]; snprintf(path, sizeof(path), "%s/%s.json", dir, name);
+    FILE *fp = fopen(path, "wb"); assert(fp);
+    fprintf(fp, "{\"background\":%u,\"runs\":[", scene.background);
+    for (int i = 0; i < scene.count; i++) {
+        const ht_run_t *r = &scene.runs[i];
+        ht_rect_t b = ht_run_bounds(r);
+        const char *kind = r->ring.set ? "ring" : r->sprite.width ? "sprite" : r->box.h ? "box" : r->arc ? "arc" : "text";
+        fprintf(fp, "%s{\"kind\":\"%s\",\"x\":%d,\"y\":%d,\"w\":%d,\"bounds\":[%d,%d,%d,%d],\"fg\":%u,\"bg\":%u,\"font\":\"%s\",\"text\":",
+                i ? "," : "", kind, r->x, r->y, r->w, b.x, b.y, b.w, b.h, r->fg, r->bg, spec_font(r->font));
+        spec_string(fp, r->text);
+        fprintf(fp, ",\"line\":%d,\"measure\":%d,\"arc\":%d,\"arc_mid\":%d,\"gained\":%d",
+                r->font->height, r->text[0] && !r->box.h && !r->ring.set && !r->sprite.width ? ht_measure(r->font, r->text) : 0,
+                r->arc, r->arc_mid, r->gained);
+        if (r->box.h) fprintf(fp, ",\"box\":{\"h\":%u,\"radius\":%u,\"fill\":%u,\"border\":%u}", r->box.h, r->box.radius, r->box.fill, r->box.border);
+        if (r->sprite.width) fprintf(fp, ",\"sprite\":{\"w\":%u,\"h\":%u,\"cell\":%u,\"cells\":%d,\"icon\":%d}",
+                                     r->sprite.width, r->sprite.height, r->sprite.cell, r->sprite.cells != NULL, r->sprite.lvgl);
+        if (r->ring.set) fprintf(fp, ",\"ring\":{\"cx16\":%d,\"cy16\":%d,\"r16\":%u,\"w16\":%u,\"colour\":%u,\"ux\":%d,\"uy\":%d,\"cosh\":%d}",
+                                 r->ring.cx16, r->ring.cy16, r->ring.r16, r->ring.w16, r->ring.colour, r->ring.ux, r->ring.uy, r->ring.cosh);
+        fputc('}', fp);
+    }
+    fprintf(fp, "],\"hits\":[");
+    for (int i = 0; i < s.hit_count; i++)
+        fprintf(fp, "%s{\"rect\":[%d,%d,%d,%d],\"action\":%d,\"enabled\":%d}", i ? "," : "",
+                s.hits[i].rect.x, s.hits[i].rect.y, s.hits[i].rect.w, s.hits[i].rect.h, (int)s.hits[i].action, s.hits[i].enabled);
+    fprintf(fp, "]}\n");
+    fclose(fp);
+}
 static void portrait(const char *dir, const char *name) {
     if (!dir) return;
     char path[1024]; snprintf(path, sizeof(path), "%s/%s.ppm", dir, name);
@@ -397,6 +458,7 @@ static void portrait(const char *dir, const char *name) {
         }
     }
     fclose(fp);
+    portrait_spec(dir, name);
 }
 static void focus_inside(void) {
     for (int i = 0; i < scene.count; i++) {
@@ -1938,15 +2000,23 @@ int main(int argc, char **argv) {
         s.touch_down = false;
         s.view = HOME;
     }
-    // THE WORKING SCENE (claude): a busy agent's face is the large cooking Clawd, which changes every
-    // 110 ms, so s.pet_next_ms is the next step and surface_tick redraws then and not before.
+    // THE WORKING SCENE (claude): a busy agent's face is the large cooking Clawd, which changes on its step
+    // clock, so s.pet_next_ms is its next change and surface_tick redraws then and not before.
     {
         const ht_pet_scene_t *ws = ht_pets[0].working_scene;
         assert(!strcmp(ht_pets[0].engine, "claude") && ws);
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         s.agents[0].busy = true; strcpy(s.agents[0].tool, "Running firmware checks");
         fake_ms = 1200; scene_take();
-        uint32_t due = (1201 / ws->step_ms + 1) * ws->step_ms;
+        // the next step that draws differently (the pan's still steps draw the same)
+        unsigned now = 1201 / ws->step_ms, nx = now + 1;
+        const ht_pet_overlay_t *o = ws->overlay;
+        for (; nx < now + ws->steps; nx++) {
+            unsigned a = nx % ws->steps, b = now % ws->steps;
+            if (ws->loop[a] != ws->loop[b] || (ws->step_dy && ws->step_dy[a] != ws->step_dy[b]) ||
+                (o && (o->loop[a] != o->loop[b] || o->at[a][0] != o->at[b][0] || o->at[a][1] != o->at[b][1]))) break;
+        }
+        uint32_t due = nx * ws->step_ms;
         assert(s.pet_next_ms == due);
         bool scene_run = false, lower_arc = false;
         for (int i = 0; i < scene.count; i++) {
@@ -2010,44 +2080,82 @@ int main(int argc, char **argv) {
         #undef XRUN
         #undef XBARS
     }
-    // THE WORKING SCENE beside the bell: its status stays on the lower arc and the pill steps up to 376..408
-    // (the arc's glyphs start ~y 422). A footer control has the bottom band, so there the status is a straight line.
+    // THE WORKING SCENE and a notice (owner, 2026-10-05): no bell pill. For each engine with a scene the pet plays its
+    // alert once (its steps, its bubble in the overlay slot; Claude's is a bubble over the working scene), then a blue dot flies up round the rim, a
+    // ring goes out once, and the 12 px dot stays at 12 o'clock; a tap there opens the inbox, and a second notice
+    // plays the alert again. The run count never changes while it does.
     {
         const ht_pet_scene_t *ws = ht_pets[0].working_scene;
-        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
-        s.agents[0].busy = true; strcpy(s.agents[0].tool, "Running firmware checks");
+        static const char *engines[3] = {"claude", "codex", "muse"};
+        for (int e = 0; e < 3; e++) {
+            const ht_pet_t *pet = NULL;
+            for (unsigned i = 0; i < ht_pet_count; i++) if (!strcmp(ht_pets[i].engine, engines[e])) pet = &ht_pets[i];
+            assert(pet && pet->alert_scene && pet->alert_scene->overlay && pet->alert_scene->steps >= 10);
+            const ht_pet_scene_t *al = pet->alert_scene, *wk = pet->working_scene;
+            const uint32_t A = (uint32_t)al->steps * al->step_ms, S = al->step_ms;
+            #define HAS_SPRITE(sc_) ({ bool f_ = false; for (int i_ = 0; i_ < scene.count; i_++) \
+                f_ |= scene.runs[i_].sprite.cells && scene.runs[i_].sprite.width == (sc_)->w && \
+                      scene.runs[i_].sprite.height == (sc_)->h; f_; })
+            // The alert on the glass at a step: its own frames, or (Claude: a bubble only) the working scene under the
+            // step's bubble frame.
+            #define ALERT_AT(k_) ({ bool g_ = false; const ht_cell_frame_t *b_ = &al->overlay->frames[al->overlay->loop[k_]]; \
+                for (int i_ = 0; i_ < scene.count; i_++) g_ |= scene.runs[i_].sprite.cells == b_->cells; \
+                al->frames ? HAS_SPRITE(al) && g_ : HAS_SPRITE(wk) && g_; })
+            #define BLUE_BOX() ({ int f_ = -1; for (int i_ = 0; i_ < scene.count; i_++) if (scene.runs[i_].box.h && \
+                scene.runs[i_].box.fill == color(0x006fff)) f_ = i_; f_; })
+            reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, engines[e]);
+            s.agents[0].busy = true; strcpy(s.agents[0].tool, "Running firmware checks");
+            fake_ms = 1200; scene_take();
+            assert(HAS_SPRITE(wk) && BLUE_BOX() < 0 && !action_enabled(A_INBOX));
+            int runs = scene.count;
+            cable_notif_t note={.agent_id="b",.name="Other",.summary="Done"};
+            ui_notif_replace(&note,1);
+            fake_ms = 2000; scene_take();
+            uint32_t from = s.notice_ms;
+            assert(from && ALERT_AT(0) && BLUE_BOX() < 0);                         // the pet tells, no dot yet
+            for (int i = 0; i < scene.count; i++) {
+                assert(scene.runs[i].font != &ht_lv_montserrat_14.base || !scene.runs[i].text[0]);   // no bell
+                if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) assert(scene.runs[i].fg == ht_rgb(0x00ff2f));
+            }
+            // its next step (under a bubble only, or the working scene's next frame if that comes first)
+            assert(al->frames ? s.pet_next_ms == from + S : s.pet_next_ms > from && s.pet_next_ms <= from + S);
+            fake_ms = from + 5 * S + 3; scene_take();
+            assert(ALERT_AT(5) && (al->frames ? s.pet_next_ms == from + 6 * S :
+                                   s.pet_next_ms > fake_ms && s.pet_next_ms <= from + 6 * S));
+            fake_ms = from + A + 100; scene_take();                          // flying
+            int b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h > 12 && scene.runs[b].box.h < 28);
+            assert(HAS_SPRITE(wk) && s.pet_next_ms && s.pet_next_ms - fake_ms <= 40);
+            fake_ms = from + A + 550 + 100; scene_take();                    // landed, the ring going out
+            b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h == 12 && scene.runs[b].x == 227 && scene.runs[b].y == 6);
+            bool ring = false; for (int i = 0; i < scene.count; i++) ring |= scene.runs[i].ring.set && scene.runs[i].ring.w16;
+            assert(ring);
+            fake_ms = from + A + 550 + 500; scene_take();                    // settled
+            b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h == 12 && scene.runs[b].y == 6);
+            ring = false; for (int i = 0; i < scene.count; i++) ring |= scene.runs[i].ring.set && scene.runs[i].ring.w16;
+            assert(!ring && scene.count == runs + 2 && action_enabled(A_INBOX));
+            // The dot (ink inside r 230) is clear of the name's ink.
+            static uint16_t px[HT_WIDTH * HT_HEIGHT];
+            ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, px);
+            for (int y = 0; y < 26; y++) for (int x = 200; x < 266; x++) {
+                uint16_t v = px[y * HT_WIDTH + x];
+                bool blue = (uint16_t)((v >> 8) | (v << 8)) == color(0x006fff);   // panel order back
+                int dx = x - 233, dy = y - 12;
+                if (dx * dx + dy * dy > 8 * 8) assert(!blue);
+                if (dx * dx + dy * dy <= 4 * 4) assert(blue);
+            }
+            // A second notice: the alert again, the dot hidden while it plays.
+            cable_notif_t two[2] = {note, {.agent_id="c",.name="Third",.summary="Done"}};
+            fake_ms += 1000; ui_notif_replace(two,2); scene_take();
+            assert(s.notice_ms == (fake_ms | 1) && ALERT_AT(0) && BLUE_BOX() < 0);
+            // The dot opens the inbox, the name still the panes.
+            fake_ms += 3000; scene_take(); assert(BLUE_BOX() >= 0);
+            tap(fake_ms + 10, 233, 10); assert(s.view == INBOX);
+            #undef HAS_SPRITE
+            #undef ALERT_AT
+            #undef BLUE_BOX
+        }
         cable_notif_t note={.agent_id="b",.name="Other",.summary="Done"};
-        ui_notif_replace(&note,1);
-        fake_ms = 1200; scene_take();
-        assert(action_enabled(A_INBOX));
-        bool bell = false, scene_run = false, raised_arc = false, box = false;
-        for (int i = 0; i < scene.count; i++) {
-            bell |= scene.runs[i].font == &ht_lv_montserrat_14.base && !strcmp(scene.runs[i].text, HT_LV_BELL);
-            scene_run |= scene.runs[i].sprite.width == ws->w;
-            if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) { raised_arc = true; assert(scene.runs[i].fg == ht_rgb(0x00ff2f)); }
-            if (scene.runs[i].box.h == 32) { box = true; assert(scene.runs[i].y == 376); }
-            assert(scene.runs[i].font != &ht_lv_inter_30.base || !scene.runs[i].text[0]);
-        }
-        assert(bell && scene_run && raised_arc && box);
-        // Ink: the pill is rows 376..407; the arc's green text, under the pill's columns, starts below it
-        // (further out the arc rises past those rows, but beside the pill, not under it).
-        static uint16_t px[HT_WIDTH * HT_HEIGHT];
-        ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, px);
-        uint16_t bg = px[0];
-        int green_top = 999, green_bottom = -1, blue_top = 999, blue_bottom = -1, px0 = 0, px1 = 0;
-        for (int i = 0; i < scene.count; i++) if (scene.runs[i].box.h == 32) { px0 = scene.runs[i].x; px1 = px0 + scene.runs[i].w; }
-        for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++) {
-            uint16_t v = px[y * HT_WIDTH + x];
-            if (v == bg) continue;
-            uint16_t p = (uint16_t)((v >> 8) | (v << 8));   // panel order back to RGB565
-            bool green = (p >> 5 & 63) > 40 && (p >> 11) < 8 && (p & 31) < 12;
-            bool blue = (p & 31) > 20 && (p >> 11) < 4;
-            if (green && y > 326 && x >= px0 - 4 && x < px1 + 4) { if (y < green_top) green_top = y; if (y > green_bottom) green_bottom = y; }
-            if (blue && y >= 340) { if (y < blue_top) blue_top = y; if (y > blue_bottom) blue_bottom = y; }
-        }
-        assert(blue_top >= 376 && blue_bottom <= 407 && green_bottom >= green_top && green_top > blue_bottom);   // no ink overlap
-        // Tapping the raised bell opens the inbox.
-        tap(1500, 233, 392); assert(s.view == INBOX);
+        bool box = false, scene_run = false;
         // A recap or no scene (idle): the bell keeps 400.
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         ui_notif_replace(&note,1); fake_ms = 1200; scene_take();
@@ -2088,8 +2196,9 @@ int main(int argc, char **argv) {
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "b"}); scene_take();
         assert(s.view == VOICE && !strcmp(s.voice_engine, "claude") && VOICE_SCENE() && !VOICE_BARS());
         portrait_focus(dir,"focus-voice-listening");   // the Listening word on the lower arc, the scene in the middle
-        uint32_t due = (1201 / ls->step_ms + 1) * ls->step_ms;
-        assert(s.pet_next_ms == due);
+        // The next step, or sooner: Claude's sound arcs glide on a 50 ms tick.
+        uint32_t due = s.pet_next_ms;
+        assert(due > 1200 && due <= (1201 / ls->step_ms + 1) * ls->step_ms);
         s.touch_down = true; changes = 0;
         surface_tick(due - 1); assert(s.pet_next_ms == due);
         surface_tick(due); assert(!s.pet_next_ms && changes >= 1);
@@ -2112,14 +2221,14 @@ int main(int argc, char **argv) {
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a", .value = 7}); scene_take();
         assert(s.view == VOICE && !s.voice_engine[0] && !VOICE_SCENE() && VOICE_BARS() == 7 && !s.pet_next_ms);
-        // Sending to Claude: the rocket scene animates on its own 120 ms step; quiet holds it.
+        // Sending to Claude: the post box scene animates on its own step; quiet holds it.
         const ht_pet_scene_t *ss = ht_pets[0].sending_scene;
         assert(ss);
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
         fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); s.voice_waiting = true; scene_take();
         assert(s.view == VOICE && !strcmp(s.voice_engine, "claude") && !VOICE_BARS());
-        bool rocket = false; for (int i = 0; i < scene.count; i++) rocket |= scene.runs[i].sprite.width == ss->w && scene.runs[i].sprite.cells;
-        assert(rocket && s.pet_next_ms);
+        bool post = false; for (int i = 0; i < scene.count; i++) post |= scene.runs[i].sprite.width == ss->w && scene.runs[i].sprite.cells;
+        assert(post && s.pet_next_ms);
         portrait_focus(dir,"focus-voice-sending");
         due = s.pet_next_ms; assert(due > 1200 && due <= 1201 + ss->step_ms * ss->steps);
         changes = 0; surface_tick(due - 1); assert(s.pet_next_ms == due);
@@ -2128,18 +2237,62 @@ int main(int argc, char **argv) {
         #undef VOICE_SCENE
         #undef VOICE_BARS
     }
-    // THE FOCUS INBOX: the close pill, then a column of cards — machine, mark or dot + agent, message.
+    // THE FOCUS INBOX (design 2026-10-06; owner, 2026-10-06: four lines and arrows): the close pill, then the notices
+    // paged like the tabs. A notice is a block centred on the glass — machine (Inter 25, muted), mark + name (Inter 25,
+    // green), the message in the recap's Inter 30 on up to four lines — with a faint › on the side that has more, and
+    // "1/2" at y 400. The page shown is the one read. A swipe pages (s.offset follows), a tap on an arrow's side pages back,
+    // a tap on the page opens that agent, the cross goes back; the run count holds while the finger drags.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
     {
-        cable_notif_t rows[2]={{.agent_id="a",.name="Payments refactor",.machine="MacBook",.summary="Retry queue shipped."},
+        cable_notif_t rows[2]={{.agent_id="a",.name="Payments refactor",.machine="MacBook",
+                                .summary="Shipped the retry queue, moved the parser tests to new fixtures and fixed the flaky upload check on CI so the nightly build is green again."},
                                {.agent_id="b",.name="Landing page",.machine="Studio Mac",.summary="Hero and pricing are in."}};
         ui_notif_replace(rows,2); ui_notif_open(); scene_take(); portrait_focus(dir,"focus-inbox");
         assert(s.view == INBOX && scene.background == BG);   // black, like the face
-        int cards = 0;
-        for (int i = 0; i < s.hit_count; i++) cards += s.hits[i].action == A_NOTICE;
-        assert(cards == 2);
-        tap(1000, 233, 190); assert(desktop_opens == 1 && !strcmp(opened_agent, "a"));   // a card opens its agent
-        ui_notif_open(); scene_take(); tap(2000, 233, 32); assert(s.view == HOME);        // the cross goes back
+        assert(habitat_scene_receipt() == s.notice[0].display_revision);    // the page on the glass is the one read
+        bool machine=false, name=false, right=false, left=false; int lines = 0, last = 0, name_y = -1, first_y = 999;
+        for (int i = 0; i < scene.count; i++) {
+            const ht_run_t *r = &scene.runs[i];
+            if (!strcmp(r->text,"MacBook")) machine = r->font == &ht_lv_inter_25.base && r->fg == color(0x8a8a99) && abs(r->x + r->w/2 - 233) <= 1;
+            if (!strcmp(r->text,"Payments refactor")) { name = r->font == &ht_lv_inter_25.base && r->fg == color(0x04fe08); name_y = r->y; }
+            if (r->font == &ht_lv_inter_30.base && r->text[0]) {
+                assert(r->fg == color(0xd6d6d2) && abs(r->x + r->w/2 - 233) <= 1 && r->x >= 60 && r->x + r->w <= 406);
+                lines++; last = i; if (r->y < first_y) first_y = r->y;
+            }
+            right |= !strcmp(r->text,"\xe2\x80\xba") && r->x > 400;
+            left |= !strcmp(r->text,"\xe2\x80\xb9");
+            assert(!strstr(r->text,"Studio") && !strstr(r->text,"Landing"));   // no neighbour peeks in
+        }
+        assert(machine && name && right && !left && lines == 4 && name_y < first_y);
+        assert(strstr(scene.runs[last].text, "..."));                         // the fourth line is cut
+        int runs = scene.count;
+        for (int d = -200; d <= 200; d += 40) {
+            int keep = inbox_carousel.position; inbox_carousel.position = keep + d;
+            ht_scene_t dragged; ht_scene_clear(&dragged, BG); s.hit_count = 0; render_list(&dragged);
+            assert(dragged.count == runs);
+            for (int i = 0; i < dragged.count; i++) { ht_rect_t b = ht_run_bounds(&dragged.runs[i]); assert(b.x >= 0 && b.x + b.w <= HT_WIDTH); }
+            inbox_carousel.position = keep;
+        }
+        scene_take();
+        habitat_touch(true,300,233,1000);
+        for (int k=1;k<=5;k++) habitat_touch(true,300-k*12,233,1000+k*40);
+        habitat_touch(false,240,233,1260);
+        for (uint32_t t=1260;t<=1900;t+=16) surface_tick(t);
+        scene_take();
+        assert(s.view == INBOX && s.offset == 1 && !desktop_opens);
+        bool two=false, back=false, more=false;
+        for (int i = 0; i < scene.count; i++) {
+            two |= !strcmp(scene.runs[i].text,"2/2");
+            back |= !strcmp(scene.runs[i].text,"\xe2\x80\xb9") && scene.runs[i].x < 60;
+            more |= !strcmp(scene.runs[i].text,"\xe2\x80\xba");
+        }
+        assert(two && back && !more);
+        assert(habitat_scene_receipt() == s.notice[1].display_revision);   // and now the second one is read
+        tap(2000, 20, 233);                                                         // the left arrow's side pages back
+        for (uint32_t t=2100;t<=2600;t+=16) surface_tick(t);
+        scene_take(); assert(s.view == INBOX && s.offset == 0 && !desktop_opens);
+        tap(3000, 233, 233); assert(desktop_opens == 1 && !strcmp(opened_agent, "a"));   // a tap on the page opens it
+        ui_notif_open(); scene_take(); tap(3500, 233, 32); assert(s.view == HOME);        // the cross goes back
     }
     // An open question on Focus: shown on the home face, in the recap's place, and nowhere else.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, "claude");
@@ -2294,26 +2447,25 @@ int main(int argc, char **argv) {
     habitat_touch(false,233,100,1375); scene_take();
     assert(s.offset==4 && !strcmp(make_action(s.hits[4]).id,"pane-7"));
     portrait(dir,"panes-last");
-    // FOCUS'S PANES, in the LVGL TABS picker: the close pill, "PANES", one card a pane with its name
-    // alone; the pane on the face is the card with the accent rim.
+    // FOCUS'S PANES (design 2026-10-06): paged like the tabs. The pane on the face is the chosen page, Inter 44 green,
+    // "claude - Harness" on two balanced lines ("claude -" / "Harness"), the next one peeking in Inter 28; "PANES" on
+    // top, a green Done at the foot. A swipe browses and changes nothing; Done opens the chosen pane; no close pill.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=3; s.active=0;
     {
         const char *names[3]={"claude - Harness","Energy","Opencode"};
         for(int i=0;i<3;i++) { snprintf(s.agents[i].id,sizeof s.agents[i].id,"pane-%d",i); COPY(s.agents[i].name,names[i]); }
-        view(AGENTS); scene_take(); portrait_focus(dir,"focus-panes");
-        int rows=0, rims=0;
+        dispatch((action_t){.kind=A_AGENTS}); scene_take(); portrait_focus(dir,"focus-panes");
+        int big=0, small=0; bool done=false;
         for(int i=0;i<scene.count;i++) {
-            if (scene.runs[i].box.h == 58 && scene.runs[i].box.border == color(HT_THEME_VOICE)) {
-                rims++; assert(scene.runs[i].y + 29 < 233);                     // the first card, above the middle
+            const ht_run_t *r=&scene.runs[i];
+            if (r->font==&ht_lv_inter_44.base && r->text[0]) {
+                big++; assert(r->fg==color(HT_THEME_VOICE) && !strcmp(r->text, big==1 ? "claude -" : "Harness"));
+                assert(abs(r->x + r->w / 2 - 233) <= 1 && r->y == (big==1 ? 181 : 233) + (52 - ht_lv_inter_44.base.height) / 2);
             }
-            for(int k=0;k<3;k++) if(!strcmp(scene.runs[i].text,names[k])) {
-                rows++;
-                assert(scene.runs[i].font == &ht_lv_inter_30.base && scene.runs[i].fg == color(0xeaeaf0));
-                assert(scene.runs[i].w <= 360 - 2 - 32);   // the card's room: centred, never cut by the card
-                assert(scene.runs[i].x + scene.runs[i].w / 2 >= 232 && scene.runs[i].x + scene.runs[i].w / 2 <= 234);   // on the card's middle
-            }
+            if (r->font==&ht_lv_inter_28.base && r->text[0]) { small++; assert(r->x >= 393 && r->fg != color(0x6a6962)); }
+            done |= !strcmp(r->text,HT_DONE) && r->y==400 && r->fg==color(HT_THEME_VOICE);
         }
-        assert(rows==3 && rims==1);
+        assert(big==2 && small>=1 && done);
         // The header: "PANES" a letter to a run in Inter 20, grey, spaced 2 at y 62.
         {
             const char *letters = "PANES"; int at = -1, found = 0;
@@ -2325,50 +2477,82 @@ int main(int argc, char **argv) {
             }
             assert(found == 5);
         }
-        habitat_touch(true,233,300,1000); habitat_touch(true,233,200,1100); habitat_touch(false,233,200,1200);
-        assert(s.offset==0 && !switches);   // four or fewer: nothing moves
-        tap(2000,233,233); assert(switches==1 && s.view==AGENT);
-        view(AGENTS); scene_take(); tap(3000,233,30); assert(s.view==HOME);   // the cross goes back
+        int runs = scene.count;
+        // A swipe to the left: the next page, and nothing switched.
+        habitat_touch(true,300,233,1000);
+        for (int k=1;k<=5;k++) habitat_touch(true,300-k*12,233,1000+k*40);
+        habitat_touch(false,240,233,1260);
+        for (uint32_t t=1200;t<=1800;t+=16) surface_tick(t);
+        scene_take();
+        assert(ht_tab_carousel_index(&pane_carousel)==1 && !switches && s.view==AGENTS && scene.count==runs);
+        bool energy=false;
+        for(int i=0;i<scene.count;i++) energy |= scene.runs[i].font==&ht_lv_inter_44.base && !strcmp(scene.runs[i].text,"Energy");
+        assert(energy);
+        tap(2500,233,420); assert(switches==1 && s.view==AGENT && s.active==1);   // Done opens it
+        dispatch((action_t){.kind=A_AGENTS}); scene_take();
+        assert(ht_tab_carousel_index(&pane_carousel)==1);                       // and the pages open on it next time
+        for (int i = 0; i < scene.count; i++) assert(strcmp(scene.runs[i].text, HT_LV_CROSS));   // no close pill
+        switches=0;
+        tap(4500,233,233); assert(switches==1 && s.view==AGENT && s.active==1);   // a tap on the name opens it, as Done does
+        // The run count holds while the finger drags, and nothing leaves the glass.
+        dispatch((action_t){.kind=A_AGENTS}); scene_take(); runs = scene.count;
+        for (int d = -200; d <= 200; d += 40) {
+            int keep = pane_carousel.position; pane_carousel.position = keep + d;
+            ht_scene_t dragged; ht_scene_clear(&dragged, BG); s.hit_count = 0; render_agents(&dragged);
+            assert(dragged.count == runs);
+            for (int i = 0; i < dragged.count; i++) { ht_rect_t r = ht_run_bounds(&dragged.runs[i]); assert(r.x >= 0 && r.x + r.w <= HT_WIDTH); }
+            pane_carousel.position = keep;
+        }
     }
-    // The names are cut by focus_centred's rules with Inter too: a long and a Vietnamese one end in "..." inside the card.
+    // A long Vietnamese name: two balanced lines, each cut to 300 px with "…".
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=2; s.active=0;
     {
         COPY(s.agents[0].id,"p0"); COPY(s.agents[0].name,"Tri\xe1\xbb\x83n khai firmware m\xe1\xbb\x9bi nh\xe1\xba\xa5t cho m\xe1\xbb\x8di thi\xe1\xba\xbft b\xe1\xbb\x8b");
         COPY(s.agents[1].id,"p1"); COPY(s.agents[1].name,"Nguy\xe1\xbb\x85n V\xc4\x83n \xe1\xba\xbe");
-        view(AGENTS); scene_take(); portrait_focus(dir,"focus-panes-vietnamese");
-        int seen=0;
-        for(int i=0;i<scene.count;i++) if (scene.runs[i].font == &ht_lv_inter_30.base && scene.runs[i].text[0]) {
-            seen++; assert(scene.runs[i].w <= 360 - 2 - 32 && ht_measure(scene.runs[i].font, scene.runs[i].text) == scene.runs[i].w);
-            if(!strncmp(scene.runs[i].text,"Tri",3)) { size_t n=strlen(scene.runs[i].text); assert(n>3 && !strcmp(scene.runs[i].text+n-3,"...")); }
+        dispatch((action_t){.kind=A_AGENTS}); scene_take(); portrait_focus(dir,"focus-panes-vietnamese");
+        int seen=0; bool cut=false;
+        for(int i=0;i<scene.count;i++) if (scene.runs[i].font == &ht_lv_inter_44.base && scene.runs[i].text[0]) {
+            seen++; assert(scene.runs[i].w <= 300 && ht_measure(scene.runs[i].font, scene.runs[i].text) == scene.runs[i].w);
+            size_t n=strlen(scene.runs[i].text); cut |= n>3 && !strcmp(scene.runs[i].text+n-3,"\xe2\x80\xa6");
         }
-        assert(seen==2);
+        assert(seen==2 && cut);
+        bool whole=false;
+        for(int i=0;i<scene.count;i++) whole |= scene.runs[i].font == &ht_lv_inter_44.base && !strcmp(scene.runs[i].text,"Tri\xe1\xbb\x83n khai");
+        assert(whole);
     }
-    // The empty page: the message in Inter 30 on the middle, the header as ever, "Choose a tab" still Montserrat.
+    // The empty page (design 2026-10-06): "No panes in / this tab." on two Inter 44 lines centred on the glass, the header
+    // as ever, "Choose a tab" in Inter 28 on a 260 x 64 pill at (103, 333) that opens the tabs; loading on one line,
+    // the run count unchanged.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=0; s.connected=true;
     {
         view(AGENTS); scene_take(); portrait_focus(dir,"focus-panes-empty");
-        bool message=false, pill=false, header=false;
+        int lines=0; bool pill=false, box=false, header=false;
         for(int i=0;i<scene.count;i++) {
-            if(!strcmp(scene.runs[i].text,"No panes in this tab.")) { message = scene.runs[i].font == &ht_lv_inter_30.base && scene.runs[i].y == 180; }
-            if(!strcmp(scene.runs[i].text,"Choose a tab")) pill = scene.runs[i].font == &ht_lv_inter_25.base;
-            if(!strcmp(scene.runs[i].text,"P") && scene.runs[i].y == 62) header = scene.runs[i].font == &ht_lv_inter_20.base;
+            const ht_run_t *r=&scene.runs[i];
+            if(!strcmp(r->text,"No panes in")) { lines++; assert(r->font==&ht_lv_inter_44.base && r->y==181+(52-ht_lv_inter_44.base.height)/2); }
+            if(!strcmp(r->text,"this tab.")) { lines++; assert(r->font==&ht_lv_inter_44.base && r->y==233+(52-ht_lv_inter_44.base.height)/2); }
+            if(!strcmp(r->text,"Choose a tab")) pill = r->font == &ht_lv_inter_28.base && abs(r->x + r->w / 2 - 233) <= 1;
+            if(r->box.h==64) box = r->x==103 && r->y==333 && r->w==260 && r->box.radius==32 && r->box.fill==color(0x171718) && r->box.border==color(0x3a3f4b);
+            if(!strcmp(r->text,"P") && r->y == 62) header = r->font == &ht_lv_inter_20.base;
         }
-        assert(message && pill && header);
+        assert(lines==2 && pill && box && header);
+        int runs=scene.count;
+        tap(1000, 233, 365); assert(s.view==TABS);
+        reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=0; s.loading=true; view(AGENTS); scene_take();
+        bool loading=false;
+        for(int i=0;i<scene.count;i++) loading |= !strcmp(scene.runs[i].text,"Loading...") && scene.runs[i].y==207+(52-ht_lv_inter_44.base.height)/2;
+        assert(loading && scene.count==runs);
     }
-    // Past four the list scrolls a card per pitch, and a long name ends in "...".
-    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=9; s.active=0;
+    // Nine panes: the pages open on the pane on the face ("Pane 5" on two lines), neighbours on both sides.
+    reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.count=9; s.active=5;
     {
         for(int i=0;i<9;i++) { snprintf(s.agents[i].id,sizeof s.agents[i].id,"pane-%d",i); snprintf(s.agents[i].name,sizeof s.agents[i].name,"Pane %d",i); }
-        COPY(s.agents[8].name,"Payments refactor and the webhook retry queue");
-        view(AGENTS); scene_take(); assert(s.hit_count==PANE_ROWS+1);
-        habitat_touch(true,233,340,1000); habitat_touch(true,233,240,1100); habitat_touch(true,233,120,1200);
-        habitat_touch(false,233,120,1300); scene_take();
-        assert(s.offset==3 && !switches);   // 220 px: three cards' travel
-        s.offset=5; scene_take();           // the last page
-        bool cut=false;
-        for(int i=0;i<scene.count;i++) { const char *t=scene.runs[i].text; size_t n=strlen(t);
-            if(!strncmp(t,"Payments",8) && n>3 && !strcmp(t+n-3,"...")) cut=true; }
-        assert(cut);
+        dispatch((action_t){.kind=A_AGENTS}); scene_take();
+        int big=0, left=0, right=0;
+        for(int i=0;i<scene.count;i++) { const ht_run_t *r=&scene.runs[i];
+            if (r->font==&ht_lv_inter_44.base && r->text[0]) { big++; assert(!strcmp(r->text, big==1 ? "Pane" : "5")); }
+            if (r->font==&ht_lv_inter_28.base && r->text[0]) { if (r->x < 233) left++; else right++; } }
+        assert(big==2 && left>=1 && right>=1);
         portrait_focus(dir,"focus-panes-scrolled");
     }
     // And its tabs: the same carousel, the tab you are in green.
@@ -2378,21 +2562,56 @@ int main(int argc, char **argv) {
     dispatch((action_t){.kind=A_TABS}); scene_take(); portrait_focus(dir,"focus-tabs");
     {
         bool green=false;
+        // (design 2026-10-06: the chosen tab in Inter 44, green; a two-word name on two balanced lines)
         for(int i=0;i<scene.count;i++) if(strstr(scene.runs[i].text,"Harness") && scene.runs[i].fg==color(HT_THEME_VOICE) &&
-                                          scene.runs[i].font==&ht_lv_inter_30.base) green=true;
+                                          scene.runs[i].font==&ht_lv_inter_44.base) green=true;
         assert(green);
         bool title=false, arrow=false, done=false;
         for(int i=0;i<scene.count;i++) { title |= !strcmp(scene.runs[i].text,"T") && scene.runs[i].y==62;
                                          arrow |= !strcmp(scene.runs[i].text,"\xe2\x86\x90");
                                          done |= !strcmp(scene.runs[i].text,HT_DONE) && scene.runs[i].y==400; }
         assert(title && !arrow && done && action_enabled(A_TAB_DONE) && !action_enabled(A_HOME));
+        // The chosen "Harness repo" on two balanced lines of Inter 44 (52 px apart, centred on 233); the next tab, "Doi",
+        // in Inter 28 a letter to a run, each darker than #6a6962 and darker still toward the edge; the close pill
+        // is gone; the run count holds while the finger drags the pages.
+        int big_lines = 0, last_x = -1; uint16_t last_ink = 0xffff; bool darker = true;
+        for(int i=0;i<scene.count;i++) {
+            const ht_run_t *r=&scene.runs[i];
+            if (r->font==&ht_lv_inter_44.base && r->text[0]) {
+                big_lines++;
+                assert(!strcmp(r->text, big_lines == 1 ? "Harness" : "repo") && r->y == (big_lines == 1 ? 181 : 233) + (52 - ht_lv_inter_44.base.height) / 2);
+            }
+            if (r->font==&ht_lv_inter_28.base && r->text[0]) {
+                uint16_t c = r->fg;
+                assert(((c >> 5) & 63) < ((color(0x6a6962) >> 5) & 63));
+                if (last_x >= 0 && r->x > last_x) darker &= ((c >> 5) & 63) <= ((last_ink >> 5) & 63);
+                last_x = r->x; last_ink = c;
+            }
+        }
+        assert(big_lines == 2 && last_x >= 0 && darker);
+        int closes = 0;
+        for (int i = 0; i < s.hit_count; i++) closes += s.hits[i].action == A_TAB_DONE && s.hits[i].rect.y == 0;
+        for (int i = 0; i < scene.count; i++) assert(strcmp(scene.runs[i].text, HT_LV_CROSS));
+        assert(closes == 0);                                                   // no close pill (owner, 2026-10-06)
+        int runs = scene.count;
+        for (int d = -200; d <= 200; d += 40) {
+            int keep = tab_carousel.position; tab_carousel.position = keep + d;
+            ht_scene_t dragged; ht_scene_clear(&dragged, BG); s.hit_count = 0; render_tabs(&dragged);
+            assert(dragged.count == runs);
+            for (int i = 0; i < dragged.count; i++) { ht_rect_t b = ht_run_bounds(&dragged.runs[i]);
+                assert(b.x >= 0 && b.x + b.w <= HT_WIDTH); }
+            tab_carousel.position = keep;
+        }
+        scene_take();
         tap(3000,233,420); assert(s.view==HOME);
+        dispatch((action_t){.kind=A_TABS}); scene_take();
+        tap(4000,233,233); assert(s.view==HOME);                  // a tap on the chosen name is the check too
     }
     // The Focus states that say something plain: connecting (the wordmark) and a tab list with no tabs.
     reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); s.connected = false; scene_take();
     {
         bool brand = false;
-        for (int i = 0; i < scene.count; i++) brand |= !strcmp(scene.runs[i].text, "Harness") && scene.runs[i].font == &ht_lv_inter_36.base;
+        for (int i = 0; i < scene.count; i++) brand |= !strcmp(scene.runs[i].text, "Harness") && scene.runs[i].font == &ht_lv_inter_bold_48.base;
         assert(brand);
     }
     portrait_focus(dir,"focus-connecting");
@@ -2456,11 +2675,12 @@ int main(int argc, char **argv) {
         assert(action_enabled(A_INBOX));
         s.offset = 3; FOCUS_PAGE("lit-controls-scrolled");
         s.offset = 0; s.pressed = 1; FOCUS_PAGE("lit-controls-pressed");
-        // The empty inbox ("All caught up.") and the machines list.
+        // The empty inbox ("No notification", design 2026-10-06) and the machines list.
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(INBOX); s.notice_count = 0; FOCUS_PAGE("lit-inbox-empty");
         {
             bool caught = false;
-            for (int i = 0; i < scene.count; i++) caught |= !strcmp(scene.runs[i].text, "All caught up.") && focus_inter(scene.runs[i].font);
+            for (int i = 0; i < scene.count; i++) caught |= !strcmp(scene.runs[i].text, "No notification") && scene.runs[i].font == &ht_lv_inter_25.base &&
+                                                      scene.runs[i].fg == color(0xada6ad);
             assert(caught);
         }
         reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); view(MACHINES); s.machine_count = 2;
@@ -2491,6 +2711,40 @@ int main(int argc, char **argv) {
                 .text="Keep the public API.\n\nOnly change the parser.\nPreserve existing tests.\nAdd Unicode coverage.",.position=1,.total=2};
             ht_draft_open(&draft,&dp,draft_emit,NULL); FOCUS_PAGE("lit-draft");
             s.view=DRAFT_OPTIONS; FOCUS_PAGE("lit-draft-options");
+        }
+    }
+    // THE DESIGN EXPORT (mockup/focus_design.py): the Focus home and voice states once per engine with a scene, so
+    // Claude and Codex are both on the sheet. Pictures only; the checks above cover these states.
+    if (dir) {
+        static const char *engines[2] = {"claude", "codex"};
+        for (int e = 0; e < 2; e++) {
+            char name[64];
+            #define DESIGN(state) do { snprintf(name, sizeof name, "design-%s-%s", engines[e], state); portrait(dir, name); } while (0)
+            #define DESIGN_HOME() do { reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); \
+                strcpy(s.agents[0].engine, engines[e]); strcpy(s.agents[1].engine, engines[e]); \
+                strcpy(s.agents[0].name, "Payments refactor"); strcpy(s.agents[1].name, "Landing page"); } while (0)
+            DESIGN_HOME(); fake_ms = 1200; scene_take(); DESIGN("rest");
+            DESIGN_HOME();
+            ui_project_emit("a", "sess", "summary", "Shipped the retry queue and moved the parser tests to the new fixtures. All 44 checks pass.",
+                            "Shipped the retry queue and moved the parser tests to the new fixtures. All 44 checks pass.");
+            fake_ms = 1200; scene_take(); DESIGN("recap");
+            DESIGN_HOME(); s.agents[0].busy = true; strcpy(s.agents[0].tool, "Coalescing");
+            fake_ms = 1200; scene_take(); s.agents[0].busy_ms = 1; fake_ms = 34000 + 1200; scene_take(); DESIGN("working");
+            {
+                cable_notif_t note = {.agent_id = "b", .name = "Landing page", .machine = "MacBook", .summary = "Hero and pricing are in."};
+                ui_notif_replace(&note, 1);
+                fake_ms = 35000; scene_take(); DESIGN("working-notice");
+            }
+            DESIGN_HOME();
+            {
+                cable_notif_t asked = {.agent_id = "a", .name = "Payments refactor", .question = true,
+                                       .summary = "Which database should the retry queue use?"};
+                ui_notif_replace(&asked, 1); fake_ms = 1200; scene_take(); DESIGN("question");
+            }
+            DESIGN_HOME(); fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); scene_take(); DESIGN("voice-listening");
+            DESIGN_HOME(); fake_ms = 1200; dispatch((action_t){.kind = A_VOICE, .id = "a"}); s.voice_waiting = true; scene_take(); DESIGN("voice-sending");
+            #undef DESIGN_HOME
+            #undef DESIGN
         }
     }
     // Every advertised optional control is present, none appear for a legacy host.
@@ -2528,7 +2782,7 @@ with tempfile.TemporaryDirectory(prefix='harness-touch-ui-') as d:
                     '-fsanitize='+os.environ.get('SANITIZERS','undefined,bounds'),
                     *extra_includes, '-I',str(native),str(out/'touch_ui.c'), *extra_sources, str(native/'gestures.c'),
                     str(native/'form.c'),str(native/'visit.c'),str(native/'draft.c'), str(native/'scroll.c'),str(native/'selection.c'),str(native/'carry.c'),str(native/'tim.c'),str(native/'character_motion.c'),str(native/'character_layout.c'),str(native/'character.c'),str(native/'illustrated.c'),str(native/'tux.c'),str(native/'focus.c'),str(native/'lvgl_fonts.c'),str(native/'lvgl_icons.c'),str(native/'focus_marks.c'),str(native/'focus_faces.c'),str(native/'pets.c'),str(native/'terminal.c'),
-                    str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui')],check=True)
+                    str(native/'fonts.c'),str(native/'octopus.c'),str(native/'ascii_clip.c'),str(native/'octopus_font.c'),str(native/'workspace.c'),str(native/'command_face.c'),'-o',str(out/'touch_ui'),'-lm'],check=True)
     args=[str(out/'touch_ui')]
     if os.environ.get('HABITAT_PREVIEW_DIR'):
         dest=Path(os.environ['HABITAT_PREVIEW_DIR']);dest.mkdir(parents=True,exist_ok=True)

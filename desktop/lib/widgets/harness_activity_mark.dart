@@ -172,7 +172,7 @@ class _ActivityMarkState extends State<ActivityMark> {
         ? activitySpinnerFrames[clock.frame]
         : widget.activity.mark;
     final cell = workspaceBarCellSizeOf(context);
-    var style =
+    final style =
         workspaceBarTextStyle(
           color: widget.color,
           emphasized: widget.emphasized,
@@ -185,14 +185,6 @@ class _ActivityMarkState extends State<ActivityMark> {
             'DejaVu Sans',
           ],
         );
-    if (widget.activity == HarnessActivity.paused) {
-      // Two short ASCII pipes, tightened into the same cell as every other
-      // mark. Keep these metrics in sync with SwarmTabButton's native drawing.
-      style = style.copyWith(
-        fontSize: workspaceBarFontSize * .65,
-        letterSpacing: -cell.width * .25,
-      );
-    }
     final child = Semantics(
       label: widget.activity.label,
       child: ExcludeSemantics(

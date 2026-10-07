@@ -9,6 +9,10 @@ module.exports = {
     // '/cli/install.sh' and '/desktop/install.sh' moved to the CDN (see redirects() below) — nothing
     // left here to trace for either.
     '/flash-circle.sh': ['./src/app/flash-circle.sh/flash-circle.sh'],
+    '/hub/[id]': ['./public/open-harnesses/**/*'],
+    '/hub/[id]/fork': ['./public/open-harnesses/**/*'],
+    '/hub/[id]/download': ['./public/open-harnesses/**/*'],
+    '/hub/[id]/snapshot': ['./public/open-harnesses/**/*'],
   },
   turbopack: {},
   // Local dev is reached through the local-harness.autonomous.ai hostname (proxied to :3000) — allow it
@@ -27,6 +31,9 @@ module.exports = {
         permanent: true,
       })),
       { source: '/install', destination: '/download', permanent: true },
+      { source: '/explore', destination: '/hub', permanent: true },
+      { source: '/explore/:id', destination: '/hub/:id', permanent: true },
+      { source: '/explore/:id/fork', destination: '/hub/:id/fork', permanent: true },
       // The public CLI command uses this short URL; the script stays on the CDN.
       { source: '/install.sh', destination: 'https://cdn.autonomous.ai/harness/cli/install.sh', permanent: true },
       // Both installer scripts moved to the CDN-fronted public bucket (make upload-cli-install-sh /
@@ -48,12 +55,15 @@ module.exports = {
   compress: true,
   // Performance optimizations
   poweredByHeader: false,
-  // Everything user-facing is the Flutter app; this host only adds the routes below (install and
-  // download pages, download and installer redirects). Flutter's base
+  // The workspace is the Flutter app; this host also serves the public /hub community,
+  // install and download pages, and installer redirects. Flutter's base
   // href places its assets under /harness-web/ without changing the visible URL.
   async rewrites() {
     return {
       beforeFiles: [
+        // Older desktop builds consume snapshots without following redirects.
+        { source: '/explore/:id/snapshot', destination: '/hub/:id/snapshot' },
+        { source: '/explore/:id/download', destination: '/hub/:id/download' },
         { source: '/', destination: '/harness-web/index.html' },
         { source: '/s/:id', destination: '/harness-web/index.html' },
         { source: '/auth/callback', destination: '/harness-web/index.html' },
@@ -85,6 +95,11 @@ module.exports = {
         // Keep the standalone page intact: CDN analytics must not inject JavaScript.
         headers: [{ key: 'Cache-Control', value: 'no-store, no-transform' }],
       })),
+      {
+        source: '/os/latest',
+        // Cache the GitHub lookup on the server, never the release redirect in a browser or CDN.
+        headers: [{ key: 'Cache-Control', value: 'no-store, max-age=0' }],
+      },
       {
         source: '/harness-web/:path*',
         headers: [

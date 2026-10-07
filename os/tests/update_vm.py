@@ -14,6 +14,33 @@ import subprocess
 import threading
 import time
 from vm import VM, check_graphical_keyboard
+import session_update_vm
+
+
+def network_state(vm, name):
+    """Retain the real device state without repairing or reactivating it."""
+    state = {}
+    for command in [
+        'nmcli general status', 'nmcli networking', 'nmcli device show',
+        'nmcli -f NAME,UUID,TYPE,DEVICE,AUTOCONNECT connection show',
+        'ip -details link', 'ip address', 'ip route',
+        'sudo -n cat /var/lib/NetworkManager/NetworkManager.state',
+        'sudo -n journalctl -b -u NetworkManager -u systemd-logind -u systemd-suspend --no-pager',
+        'sudo -n journalctl -b -k --no-pager',
+    ]:
+        output, status = vm.command('env PAGER= LC_ALL=C ' + command, timeout=15, check=False)
+        state[command] = {'status': status, 'output': output}
+        (vm.folder / (name + '-network.json')).write_text(json.dumps(state, indent=2) + '\n')
+
+
+def network_roundtrip(vm, url, expected):
+    """Require an actual connection and exact HTTP payload, not just NM state."""
+    vm.command('nm-online -q --timeout=30', timeout=35)
+    vm.command('curl --fail --silent --show-error --max-time 15 ' +
+               shlex.quote(url + '/package-manifest.json') +
+               ' -o /tmp/harness-update-network.json', timeout=20)
+    assert vm.read_file('/tmp/harness-update-network.json') == expected, 'Network payload differs'
+    return {'bytes': len(expected), 'sha256': hashlib.sha256(expected).hexdigest()}
 
 
 def main():
@@ -27,6 +54,8 @@ def main():
         parser.error('This acceptance run requires native x86 KVM.')
     iso, bundle, folder = args.iso.resolve(), args.bundle.resolve(), args.output.resolve()
     image = json.loads(iso.with_name('manifest.json').read_text())
+    manifest = json.loads((bundle / 'package-manifest.json').read_text())
+    session_tools = session_update_vm.required(bundle)
     with iso.open('rb') as handle:
         assert hashlib.file_digest(handle, 'sha256').hexdigest() == image['iso']['sha256']
     folder.mkdir(parents=True, exist_ok=False)
@@ -39,8 +68,13 @@ def main():
     server = ThreadingHTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=str(served)))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    vm = VM(folder, iso, 'uefi', 2048)
-    receipt = {'status': 'running', 'started_at': time.time(), 'image': image, 'checks': []}
+    # Match the existing session/suspend gate. The pinned kernel's bochs driver
+    # resumes this virtual display; virtio-vga can leave its scanout inactive.
+    video = 'VGA' if session_tools else 'virtio-vga'
+    vm = VM(folder, iso, 'uefi', 2048, video=video)
+    receipt = {'status': 'running', 'started_at': time.time(), 'image': image,
+               'video': video, 'checks': [],
+               'limits': ['Virtual display and ACPI suspend; no physical laptop, panel, or GPU acceptance.']}
     config = dict(disk='/dev/vda', expected_serial='HN_OS_TEST', confirm_erase='/dev/vda',
                   username='me', hostname='harness', password='test-password-123', encrypt=True, serial_console=True)
     try:
@@ -67,6 +101,8 @@ def main():
             vm.command('curl --fail --silent --show-error --max-time 90 ' + shlex.quote(url + '/' + name) +
                        ' -o ' + shlex.quote('/home/me/update-bundle/' + name), timeout=100)
         vm.command('cd /home/me/update-bundle && sha256sum -c SHA256SUMS')
+        if session_tools:
+            receipt['session_dependencies'] = session_update_vm.prepare(vm, manifest)
         # The actual update/rollback must not require a package repository or network.
         vm.command('sudo nmcli networking off')
         output, status = vm.command('python3 /home/me/update-bundle/update_guest.py /home/me/update-bundle', timeout=600, check=False)
@@ -76,11 +112,17 @@ def main():
         result = json.loads(next(line.split(marker, 1)[1] for line in output.splitlines() if line.startswith(marker)))
         receipt['update'] = result
         vm.screenshot('updated-surviving-terminal')
+        if session_tools:
+            # The transactions above finish offline. Restore the ordinary
+            # connected session before the separate reboot/suspend checks.
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            vm.command('sudo -n nmcli networking on')
+            network_payload = (bundle / 'package-manifest.json').read_bytes()
+            receipt['network'] = {'after_offline_transactions': network_roundtrip(vm, url, network_payload)}
         vm.command('sync')
         vm.stop()
         vm.start(live=False)
         vm.login_installed(config)
-        manifest = json.loads((bundle / 'package-manifest.json').read_text())
         vm.command('test "$(pacman -Q harness-os)" = ' + shlex.quote('harness-os ' + manifest['package']['version']))
         vm.command('test -s ~/projects/update-survivor/keep.txt')
         receipt['keyboard'] = check_graphical_keyboard(vm, 'updated')
@@ -97,6 +139,13 @@ def main():
         vm.keys('ctrl', 'd')
         receipt['checks'].append('A rebooted upgrade preserves hn’s standard footer and Ctrl+b, c opens a real terminal tab')
         receipt['checks'].append('Updated encrypted machine reboots to hn, accepts physical-keyboard input and retains the project')
+        if session_tools:
+            vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            receipt['network']['before_suspend'] = network_roundtrip(vm, url, network_payload)
+            network_state(vm, 'before-session')
+            session_update_vm.exercise(vm, config, receipt['session_dependencies'])
+            receipt['network']['after_suspend'] = network_roundtrip(vm, url, network_payload)
+            network_state(vm, 'after-session')
         if args.fast_fixture:
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
             from fast_update_vm import exercise
@@ -121,10 +170,18 @@ def main():
             # Collect diagnostics after the failed assertion. The actual update
             # test cleared credentials; never block its error path on a prompt.
             vm.command('printf %s ' + shlex.quote(config['password'] + '\n') + ' | sudo -S -v')
+            network_state(vm, 'failure')
             output, _ = vm.command('sudo -n journalctl _UID=1000 --no-pager; '
                 'sudo -n cat /var/lib/harness-os/runtime-updates/*/receipt.json; '
                 'tail -n 100 /var/log/pacman.log; hn capture-pane -p -S -200 -t Updates; '
                 'cat ~/.local/state/harness-os/updates/*.json; hn list-windows -a; hn list-panes -a; '
+                'systemctl --user show hn-screen.service harness-apply-update.service '
+                '-p Id -p LoadState -p ActiveState -p SubState -p MainPID -p ExecMainStatus; '
+                'hn hn-list-clients -F "#{client_pid} #{session_id} #{client_tty}"; '
+                'for hn_update_pid in $(pgrep -u 1000 -x "hn|harness-tui|foot"); do '
+                'echo "client process $hn_update_pid"; '
+                'readlink /proc/$hn_update_pid/exe /proc/$hn_update_pid/fd/0; '
+                'cat /proc/$hn_update_pid/cgroup; done; '
                 'ps -u 1000 -o pid,ppid,args --width 200', timeout=30, check=False)
             (folder / 'update-diagnostics.log').write_text(output)
         except Exception:

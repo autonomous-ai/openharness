@@ -406,51 +406,7 @@ describe('restart route hold', () => {
   })
 })
 
-describe('verified process adoption', () => {
-  it('opens a sessionless agent through the normal discovery callback without another inventory scan', async () => {
-    let current: RegisteredSession[] = []
-    const candidate = observed([tmux])
-    const onDiscovered = vi.fn(async () => { current = [session([tmux])] })
-    const probeSnapshot = vi.fn(async () => {
-      throw new Error('verified adoption must not run the general probe')
-    })
-    let transactionCalls = 0
-    const transaction = async <T>(apply: () => T | Promise<T>): Promise<T> => {
-      transactionCalls += 1
-      return await apply()
-    }
-    const reconciler = new TerminalAgentReconciler({
-      current: () => current, backends: [], backendOrder: ['tmux'],
-      onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
-      probe: probeSnapshot, transaction,
-    })
-
-    const adopted = await reconciler.adoptVerified(candidate)
-
-    expect(adopted).toBe(current[0])
-    expect(adopted?.sessionId).toBe('')
-    expect(adopted?.processIdentity).toEqual(identity)
-    expect(onDiscovered).toHaveBeenCalledWith(candidate)
-    expect(transactionCalls).toBe(1)
-    expect(probeSnapshot).not.toHaveBeenCalled()
-  })
-
-  it('refreshes an already adopted process instead of opening a duplicate agent', async () => {
-    const existing = session([tmux])
-    const onDiscovered = vi.fn()
-    const onObserved = vi.fn()
-    const reconciler = new TerminalAgentReconciler({
-      current: () => [existing], backends: [], backendOrder: ['tmux'],
-      onDiscovered, onObserved, onDormant: vi.fn(), onRemoved: vi.fn(),
-    })
-
-    const adopted = await reconciler.adoptVerified(observed([tmux]))
-
-    expect(adopted).toBe(existing)
-    expect(onObserved).toHaveBeenCalledWith(observed([tmux]), existing)
-    expect(onDiscovered).not.toHaveBeenCalled()
-  })
-
+describe('a row matched by its route, before or without its process', () => {
   it('keeps a sessionless agent when the engine replaces its process inside the same pane', async () => {
     const existing = session([tmux])
     const replacement = {
@@ -547,16 +503,6 @@ describe('verified process adoption', () => {
     expect(onObserved).not.toHaveBeenCalled()
   })
 
-  it('reports no adopted agent when the registry callback rejects the process', async () => {
-    const onDiscovered = vi.fn()
-    const reconciler = new TerminalAgentReconciler({
-      current: () => [], backends: [], backendOrder: ['tmux'],
-      onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
-    })
-
-    expect(await reconciler.adoptVerified(observed([tmux]))).toBeUndefined()
-    expect(onDiscovered).toHaveBeenCalledOnce()
-  })
 })
 
 describe('start()', () => {
@@ -652,5 +598,55 @@ describe('a terminal pane (engine `terminal`)', () => {
     expect(onRemoved).not.toHaveBeenCalled()
     await reconciler.trigger()
     expect(onRemoved).toHaveBeenCalledWith(current, 'terminal runtime absent after 2 confirmed scans')
+  })
+})
+
+describe('a pass with a deadline', () => {
+  const available = (roots: Array<{ runtime: TerminalRuntimeRef; rootPid: number; cwd: string }> = []) =>
+    [{ instanceId: 'tmux:default', result: { state: 'available' as const, roots } }]
+
+  it('gives up a probe that has not answered by the deadline, applies nothing, and probes again on the next pass', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const onRemoved = vi.fn()
+    const onDormant = vi.fn()
+    let answer: TerminalAgentProbe | null = null
+    const probed = vi.fn(() => answer ? Promise.resolve(answer) : new Promise<TerminalAgentProbe>(() => {}))
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [session()], backends: [], backendOrder: ['tmux'],
+      onDiscovered: vi.fn(), onObserved: vi.fn(), onDormant, onRemoved, probe: probed, passDeadlineMs: 50,
+    })
+    // Before, this never returned: not to a hook waiting to bind, nor to anything after it. It says the
+    // pass was not done, so the hook knows to wait for its agent another way.
+    await expect(reconciler.triggerHint(tmux, 'claude')).resolves.toBe(false)
+    expect(warn).toHaveBeenCalledWith('[discovery] the terminal probe has not answered in 50 ms; this pass is given up, every agent kept as it is')
+    expect(onRemoved).not.toHaveBeenCalled()
+    expect(onDormant).not.toHaveBeenCalled()
+    answer = probe(available())
+    await expect(reconciler.trigger()).resolves.toBe(true)
+    expect(probed).toHaveBeenCalledTimes(2)
+    // The hint the given-up pass did not use is still there for the one that answered.
+    expect(probed.mock.calls[1]).toEqual([new Map([[terminalRouteKey(tmux), 'claude']])])
+    warn.mockRestore()
+  })
+
+  it('lets whoever waits for a pass go on when its apply does not finish, and keeps passes one at a time', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let release!: () => void
+    const stuck = new Promise<void>((resolve) => { release = resolve })
+    const onDiscovered = vi.fn(() => stuck)
+    const probed = vi.fn(async () => probe(available([{ runtime: tmux, rootPid: 1, cwd: '/work' }]), [observed([tmux])]))
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [], backends: [], backendOrder: ['tmux'],
+      onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(), probe: probed, passDeadlineMs: 50,
+    })
+    await reconciler.trigger()
+    expect(onDiscovered).toHaveBeenCalledTimes(1)
+    await reconciler.triggerHint(tmux, 'claude')
+    expect(warn.mock.calls).toEqual([['[discovery] a pass has run for 50 ms; whoever waits for it goes on without it']])
+    // No second pass beside the stuck one; the one asked for runs once it is done.
+    expect(probed).toHaveBeenCalledTimes(1)
+    release()
+    await vi.waitFor(() => expect(probed).toHaveBeenCalledTimes(2))
+    warn.mockRestore()
   })
 })

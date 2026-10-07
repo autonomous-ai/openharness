@@ -3,15 +3,12 @@
 import argparse
 import curses
 import os
-from pathlib import Path
 import subprocess
 import time
 import uuid
 import unicodedata
 
 WORDMARK = ('█ █ ▄▀█ █▀█ █▄ █ █▀▀ █▀ █▀', '█▀█ █▀█ █▀▄ █ ▀█ ██▄ ▄█ ▄█')
-INSTALL = 10
-OFFLINE = 11
 
 
 def nmcli(*args, secret=None, wait=8):
@@ -47,9 +44,13 @@ def connected():
         return False
 
 
-def scan(rescan=True):
+def scan(rescan=None):
+    # Opening the page should reuse a recent scan, especially just after a
+    # reconnect. NetworkManager refreshes results older than 30 seconds in auto
+    # mode. Force a scan only when the user chooses Rescan.
+    mode = 'auto' if rescan is None else 'yes' if rescan else 'no'
     result = nmcli('-t', '-e', 'yes', '-f', 'SSID,SIGNAL,SECURITY,DEVICE,BSSID,IN-USE',
-                   'device', 'wifi', 'list', '--rescan', 'yes' if rescan else 'no', wait=10)
+                   'device', 'wifi', 'list', '--rescan', mode, wait=10)
     if result.returncode:
         raise ValueError('Could not scan Wi-Fi. Check airplane mode, then choose Rescan.')
     networks = {}
@@ -70,8 +71,47 @@ def wired_devices():
     result = nmcli('-t', '-e', 'yes', '-f', 'DEVICE,TYPE,STATE', 'device', 'status', wait=3)
     if result.returncode:
         return []
+    # An unavailable Ethernet device can still recover through explicit
+    # activation, including after networking was disabled across suspend.
     return [row for line in result.stdout.splitlines()
-            if len(row := fields(line)) == 3 and row[1] == 'ethernet' and row[2] != 'unavailable']
+            if len(row := fields(line)) == 3 and row[1] == 'ethernet']
+
+
+def connect_wired(device, state):
+    if state == 'unavailable':
+        # After a disabled boot and sleep, NM can leave the link down and its
+        # available-profile list empty. Connecting then creates a new DHCP
+        # profile, ignoring saved settings. Raise only the selected link and
+        # let NM discover its profiles before requesting ordinary activation.
+        link = subprocess.run(['/usr/bin/ip', 'link', 'set', 'dev', device, 'up'],
+                              capture_output=True, text=True, timeout=3)
+        if link.returncode:
+            return False
+        deadline = time.monotonic() + 10
+        while True:
+            status = nmcli('-g', 'GENERAL.STATE', 'device', 'show', device, wait=2)
+            if status.returncode:
+                return False
+            value = status.stdout.strip().split(' ', 1)[0]
+            if value == '100':
+                return True
+            if value == '30':
+                break
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(.2)
+    return nmcli('device', 'connect', device, wait=30).returncode == 0
+
+
+def still_connected(network):
+    # The page can stay open through a lost connection or suspend. IN-USE is
+    # current NetworkManager state even without a new radio scan; never trust
+    # the Connected label captured when the page opened.
+    try:
+        return any(row['active'] and all(row[key] == network[key]
+                   for key in ('ssid', 'device', 'security')) for row in scan(rescan=False))
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
 
 
 def saved_connection(network):
@@ -151,8 +191,8 @@ def fit(text, width):
 
 
 class NetworkPage:
-    def __init__(self, screen, first_use=False, live=False):
-        self.screen, self.first_use, self.live = screen, first_use, live
+    def __init__(self, screen, first_use=False):
+        self.screen, self.first_use = screen, first_use
         self.networks, self.wired, self.selected, self.message = [], [], 0, ''
         screen.keypad(True)
         screen.timeout(800)
@@ -192,21 +232,26 @@ class NetworkPage:
         self.top = max(1, (height - 26) // 2)
         for row, text in enumerate(WORDMARK):
             self.line(row, text.center(self.width), accent=True)
-        if self.first_use:
-            self.line(3, 'The operating system built by agents, for agents.'.center(self.width))
-        self.line(6, 'Connect to Wi-Fi to get started' if self.first_use else 'Connect to Wi-Fi')
+        self.line(6, 'Connect to Wi-Fi')
         return height
 
-    def refresh(self):
+    def refresh(self, rescan=None):
         self.begin()
         self.line(8, 'Finding Wi-Fi…')
         self.screen.refresh()
         self.message = ''
+        self.networks, self.wired = [], []
         try:
             nmcli('radio', 'wifi', 'on', wait=3)
-            self.networks, self.wired = scan(), wired_devices()
+            self.networks = scan(rescan=rescan)
         except (OSError, subprocess.TimeoutExpired, ValueError) as error:
             self.message = str(error) if isinstance(error, ValueError) else 'Wi-Fi is unavailable. Choose Rescan to try again.'
+        # A missing or unavailable Wi-Fi radio must not hide the wired path.
+        try:
+            self.wired = wired_devices()
+        except (OSError, subprocess.TimeoutExpired):
+            if not self.message:
+                self.message = 'Could not check Ethernet. Choose Rescan to try again.'
         self.selected = 0
 
     def busy(self, name):
@@ -266,17 +311,15 @@ class NetworkPage:
                 checked = time.monotonic()
             rows = [('wifi', network) for network in self.networks] + [('rescan', None)]
             rows += [('wired', device) for device in self.wired]
-            if self.first_use:
-                rows += [('install' if self.live else 'offline', None)]
             self.selected = min(self.selected, len(rows) - 1)
             height = self.begin()
             try:
                 curses.curs_set(0)
             except curses.error:
                 pass
-            # Scroll networks only. Rescan, Ethernet and the offline escape stay
-            # below the list, even when a scan finds dozens of access points.
-            visible = max(1, min(10, height - self.top - 14 - len(self.wired) - (2 if self.first_use else 0)))
+            # Both entry points share the same layout. Super+t remains available
+            # from the compositor when setup cannot finish without a terminal.
+            visible = max(1, min(10, height - self.top - 14 - len(self.wired)))
             offset = max(0, min(self.selected, len(self.networks) - 1) - visible + 1)
             networks = self.networks[offset:offset + visible]
             for index, value in enumerate(networks, start=offset):
@@ -288,9 +331,6 @@ class NetworkPage:
             for index, device in enumerate(self.wired):
                 self.line(bottom + 2 + index, 'Ethernet  ' + device[0],
                           self.selected == len(self.networks) + 1 + index)
-            if self.first_use:
-                self.button(bottom + 3 + len(self.wired), 'Install without connecting' if self.live else 'Set up later',
-                            self.selected == len(rows) - 1)
             self.line(height - self.top - 2, self.message or ('' if self.networks else 'No Wi-Fi networks found. Rescan or use Ethernet.'))
             self.screen.refresh()
             try:
@@ -304,23 +344,19 @@ class NetworkPage:
             elif key in (curses.KEY_DOWN, '\t'):
                 self.selected = (self.selected + 1) % len(rows)
             elif key in ('r', 'R'):
-                self.refresh()
-            elif key in ('i', 'I') and self.first_use and self.live:
-                return INSTALL
+                self.refresh(rescan=True)
             elif key in ('\n', '\r', curses.KEY_ENTER):
                 kind, value = rows[self.selected]
-                if kind in ('install', 'offline'):
-                    return INSTALL if kind == 'install' else OFFLINE
                 if kind == 'rescan':
-                    self.refresh()
+                    self.refresh(rescan=True)
                     continue
                 self.busy(value['ssid'] if kind == 'wifi' else 'Ethernet')
                 try:
                     if kind == 'wired':
-                        if nmcli('device', 'connect', value[0], wait=30).returncode == 0:
+                        if connect_wired(value[0], value[2]):
                             return 0
                         self.message = 'Could not connect Ethernet. Check the cable and try again.'
-                    elif value['active'] or connect(value):
+                    elif (value['active'] and still_connected(value)) or connect(value):
                         return 0
                     elif value['security'] and value['security'] != '--':
                         if self.password(value):
@@ -343,7 +379,7 @@ def main():
         # workspace. Ordinary Wi-Fi and the password field still handle it as
         # their existing Back action. wrapper restores the terminal on exit.
         curses.raw()
-        return NetworkPage(screen, args.first_use, Path('/etc/harness-live').exists()).run()
+        return NetworkPage(screen, args.first_use).run()
     return curses.wrapper(page)
 
 

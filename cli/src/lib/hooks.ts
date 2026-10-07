@@ -29,11 +29,13 @@ const COPILOT_HOOKS_PATH = join(env.COPILOT_HOME, 'hooks', 'harness.json')
 
 // notify.mjs location depends on the layout (import.meta.url is the REAL executing file at runtime):
 //  - packaged/bundled: cli.js at ~/.harness/cli/cli.js → notify.mjs is a SIBLING (dist/ bundle too).
+//  - a core started from the lean bundle (leanEntry.ts): its file is lean/<sha>/ in the data folder, which
+//    holds no notify.mjs, and its script (process.argv[1]) is the cli.js it was read from: the sibling of that.
 //  - dev/per-file:      hooks.js at <appRoot>/{src,dist}/lib/ → notify.mjs at ../../hook/notify.mjs.
 // Prefer the sibling, fall back to the dev path.
 const cliDir = dirname(fileURLToPath(import.meta.url))
 const HOOK_SCRIPT =
-  [join(cliDir, 'notify.mjs'), join(cliDir, '..', '..', 'hook', 'notify.mjs')].find(existsSync) ??
+  [join(cliDir, 'notify.mjs'), ...(process.argv[1] ? [join(dirname(process.argv[1]), 'notify.mjs')] : []), join(cliDir, '..', '..', 'hook', 'notify.mjs')].find(existsSync) ??
   join(cliDir, '..', '..', 'hook', 'notify.mjs')
 
 // SessionStart/UserPromptSubmit bind mutable engine-session metadata to the process agent. SessionEnd
@@ -97,10 +99,11 @@ function isOurs(block: HookBlock): boolean {
   return Array.isArray(block?.hooks) && block.hooks.some((h) => h?.command?.includes('notify.mjs'))
 }
 
-export function installSessionHooks(port: number): void {
+/** `settingsPath`: another Claude Code home's settings, for a home the person moved (lib/engineHomes.ts). */
+export function installSessionHooks(port: number, settingsPath: string = SETTINGS_PATH): void {
   let settings: Settings = {}
   try {
-    settings = JSON.parse(readFileSync(SETTINGS_PATH, 'utf-8')) as Settings
+    settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Settings
   } catch {
     // missing / unreadable → start from empty settings
   }
@@ -134,12 +137,14 @@ export function installSessionHooks(port: number): void {
   }
 
   try {
-    mkdirSync(dirname(SETTINGS_PATH), { recursive: true })
-    writeFileSync(SETTINGS_PATH, JSON.stringify(settings, null, 2) + '\n')
+    mkdirSync(dirname(settingsPath), { recursive: true })
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n')
+    // Both name the file written: a daemon can write several (every moved home gets its own), and the
+    // end-to-end harness checks each one it names is inside its throwaway root.
     console.log(
       updated
-        ? `[hooks] updated (path/port changed) → ${HOOK_SCRIPT} --port ${port}`
-        : `[hooks] installed Claude session + turn (Stop/StopFailure) hooks → ${SETTINGS_PATH}`,
+        ? `[hooks] updated (path/port changed) → ${HOOK_SCRIPT} --port ${port} in ${settingsPath}`
+        : `[hooks] installed Claude session + turn (Stop/StopFailure) hooks → ${settingsPath}`,
     )
     console.log('[hooks] (takes effect on the next claude session start)')
   } catch (err) {

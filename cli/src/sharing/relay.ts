@@ -2,7 +2,8 @@ import { WebSocket } from 'ws'
 import { b64e, newEphemeral } from '../lib/e2ee/core.js'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import type { Frame, LocalClientSink } from '../backendSocket.js'
-import { DAEMON_LOCAL_ONLY_TYPES, type RelaySession } from '../lib/remoteRelay.js'
+import type { RelaySession } from '../lib/remoteRelay.js'
+import { DAEMON_LOCAL_ONLY_TYPES } from '../lib/relayFrames.js'
 import { recipientHandshake, type ObserverCipher } from './crypto.js'
 import { BACKEND_IDLE_DEADLINE_MS, watchSocketLiveness } from '../lib/wsLiveness.js'
 
@@ -18,7 +19,7 @@ export class SharingEndedError extends Error {}
 /** One invitation per connection. Never promoted into a full machine link or a shared connection pool. */
 export class HarnessShareRelay {
   private sessions = new Set<() => void>()
-  constructor(private readonly auth: AuthSessionManager, private readonly backendWsBase: string,
+  constructor(private readonly auth: Pick<AuthSessionManager, 'accessToken'>, private readonly backendWsBase: string,
     private readonly environment: string, private readonly discover: () => Promise<SharedMachineReference[]>) {}
   async acquire(machineId: string, shareId: string, sink: LocalClientSink,
     onClosed: (code: number, reason: string) => void): Promise<RelaySession> {

@@ -219,10 +219,11 @@ impl Form {
     }
     fn hint(&self) -> String {
         let page = matches!(self.surface, Surface::Window(_));
-        if self.starting { return if page { "Launch continues if you change windows" } else { "Esc close · launch continues" }.into() }
-        if self.attempt.is_some() { return if page { "Enter check status" } else { "Enter check status · Esc close" }.into() }
+        // The key hints read as every panel's do: `↑↓ move   enter run   esc back`.
+        if self.starting { return if page { "Launch continues if you change windows" } else { "esc close   launch continues" }.into() }
+        if self.attempt.is_some() { return if page { "enter check status" } else { "enter check status   esc close" }.into() }
         if self.focus == Field::Task {
-            return "Enter start · Tab fields · Alt-Enter newline".into();
+            return if page { "tab move   enter start   esc close" } else { "tab move   enter start   alt-enter newline   esc close" }.into();
         }
         if self.focus == Field::Project {
             if let Project::Folder(path) = &self.draft.project {
@@ -230,11 +231,11 @@ impl Form {
             }
         }
         if self.focus == Field::Create {
-            if page { "Enter start · Tab fields" } else { "↑/↓ fields · Enter start · Esc close" }.into()
+            if page { "tab move   enter start   esc close" } else { "↑↓ move   enter start   esc close" }.into()
         } else if page && matches!(self.focus, Field::Terminal | Field::Recent(_) | Field::Browse) {
-            "Enter open · Tab fields · Esc task".into()
+            "tab move   enter open   esc close window".into()
         } else {
-            "↑/↓ fields · Enter choose · Esc back".into()
+            "↑↓ move   enter choose   esc back".into()
         }
     }
     fn describe(&self, field: Field) -> (String, String) {
@@ -787,6 +788,18 @@ fn dismiss(app: &mut App, mut form: Box<Form>) {
     } else { form.surface = Surface::Dismissed; }
     store_form(app, form);
 }
+
+/// Esc on the empty home window's form: keep the draft and close the window, returning to the
+/// one the new-window came from. A mid-launch form (starting / attempting) is never closed here —
+/// dismiss() keeps its window so the launch can continue when looked at again.
+fn close_home_window(app: &mut App, mut form: Box<Form>) {
+    form.surface = Surface::Dismissed;
+    form.child = None;
+    form.child_active = false;
+    form.trail.clear();
+    store_form(app, form);
+    app.close_tab(app.active);
+}
 fn take_active(app: &mut App) -> Option<Box<Form>> {
     if matches!(app.modal, Some(Modal::NewHarness(_))) {
         let Some(Modal::NewHarness(form)) = app.modal.take() else { unreachable!() };
@@ -1331,6 +1344,10 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
     if key.code == KeyCode::Esc || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) {
         if back(app, &mut form) {
             store_form(app, form);
+        } else if matches!(form.surface, Surface::Window(_)) && !form.starting && form.attempt.is_none() && app.tabs.len() > 1 {
+            // The empty home window's form is not a modal you cancel with focus, it is the window
+            // itself: Esc closes the window and returns to the one it came from (tmux's last-window).
+            close_home_window(app, form);
         } else {
             dismiss(app, form);
         }
@@ -1359,8 +1376,8 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
     let mut launch = false;
     if !form.child_active && form.focus == Field::Task {
         match key.code {
-            KeyCode::Tab | KeyCode::BackTab => {
-                form.move_by(if key.code == KeyCode::BackTab { -1 } else { 1 });
+            KeyCode::Up | KeyCode::Down | KeyCode::Tab | KeyCode::BackTab => {
+                form.move_by(match key.code { KeyCode::Up | KeyCode::BackTab => -1, _ => 1 });
                 reveal(app, &mut form);
             }
             KeyCode::Enter if !key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => launch = true,
@@ -1969,6 +1986,61 @@ mod tests {
             assert_eq!(form.project_label(), "repo @ local");
             if pending { assert_eq!(form.attempt.as_ref().unwrap().machine, shell); }
         }
+    }
+
+    /// Up/Down move between the fields from the Task field (where the crop of the form lands),
+    /// so a user is not stuck using Tab alone — the task editor keeps Ctrl-P/Ctrl-N for its own
+    /// vertical cursor.
+    #[tokio::test]
+    async fn arrows_move_between_fields_from_the_task_field() {
+        let mut app = app();
+        open(&mut app, None, Some("/home/dev/project".into()));
+        let Some(Modal::NewHarness(form)) = app.modal.take() else { panic!() };
+        assert_eq!(form.focus, Field::Task);
+        // Down leaves the Task field for the next one.
+        key(&mut app, form, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+        assert_eq!(form.focus, Field::Agent);
+        // Up brings it back.
+        let Some(Modal::NewHarness(form)) = app.modal.take() else { panic!() };
+        key(&mut app, form, KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+        assert_eq!(form.focus, Field::Task);
+    }
+
+    #[tokio::test]
+    async fn esc_closes_an_empty_home_window_form_and_returns_to_its_last_window() {
+        let mut app = app();
+        // A window new-window came from, then the empty home window it made.
+        let from = app.tab().id.clone();
+        app.new_tab();
+        app.tab_mut().home = true;
+        ensure_welcome(&mut app, None, Some("/home/dev/project".into()));
+        let home = app.tab().id.clone();
+        assert!(app.home_visible(), "the home window shows the form");
+        assert!(app.welcome.forms.contains_key(&home));
+        let Some(form) = app.welcome.forms.remove(&home) else { panic!() };
+        key(&mut app, form, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        // The draft is kept for when `new` reopens it; the empty window is gone.
+        assert!(app.new_harness_draft.is_some(), "the draft survives closing the window");
+        assert!(!app.tabs.iter().any(|t| t.id == home), "the empty home window is closed");
+        assert_eq!(app.tabs.len(), 1);
+        assert_eq!(app.tab().id, from, "returns to the window it came from");
+    }
+
+    #[tokio::test]
+    async fn esc_keeps_the_only_home_window_open() {
+        let mut app = app();
+        app.tab_mut().home = true;
+        ensure_welcome(&mut app, None, Some("/home/dev/project".into()));
+        let home = app.tab().id.clone();
+        assert_eq!(app.tabs.len(), 1);
+        let Some(form) = app.welcome.forms.remove(&home) else { panic!() };
+        key(&mut app, form, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        // The only window cannot close: the form stays and focus goes to the task.
+        assert!(app.welcome.forms.contains_key(&home));
+        assert!(app.new_harness_draft.is_none());
+        assert_eq!(app.welcome.forms[&home].focus, Field::Task);
     }
 
     #[tokio::test]

@@ -8,22 +8,31 @@
 // read, the router is the one the backend already calls for remote machines, and the turn events arrive
 // as the very `commander_event` cards the WiFi device receives — teed at the socket rather than emitted
 // again here, so the two device surfaces cannot drift.
+//
+// Which machine an agent is on, and every turn, stop and answer sent to it, is the fleet's router
+// (services/fleetRouter.ts), shared with ⌘K and the window's voice route. This host asks it through the
+// core's port (`wiring.fleet`), never holding it (step D1): a dial in a process of its own asks the same
+// port across the service link. It keeps a router of its own for this computer alone, and uses it
+// whenever the fleet cannot answer — off, or its call failed — as the dial did before the fleet was a
+// service. Its tests give it a bare fleet to route over by itself.
 import { join } from 'node:path'
-import { notificationReadToken, type UnreadNotification } from './notificationRead.js'
+import { notificationReadToken, type UnreadNotification } from '../lib/notificationRead.js'
 
-import { AuthSessionManager, readAuthSession } from '../lib/authSession.js'
-import { registry, projectDisplayName, type RegisteredSession } from '../lib/registry.js'
+import type { RegisteredSession } from '../lib/registry.js'
 import { fetchRelease, loadImage, otaKeyForBoard, shouldOffer } from './fwPush.js'
 import { routeVoiceTask, type RouterAgent, type RouterContinuity } from '../lib/voiceRouter.js'
 import { env } from '../config/env.js'
-import { extendShortRecap } from '../lib/deviceRecap.js'
+import { FleetRouter } from '../services/fleetRouter.js'
+import type { ForkResult } from '../core/api.js'
+import type { FleetRouting } from '../services/fleet.js'
+import { ServiceUnavailableError } from '../core/serviceHost.js'
 
 import type { AppSwarms, CableAgent, CableHost, CableMachine, CableMachineSource, CableSwarm, CableTile, DialStatus, OpenReason, RouteDecision } from './cableSession.js'
 import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
-import { FleetError, type FleetMachine, type MachineFleet } from './machineFleet.js'
+import type { MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 
 /** One completed turn's recap, as the mirror keeps them. */
@@ -36,10 +45,16 @@ export interface RecentTurn {
 }
 
 export interface CableHostWiring {
+  /** The live agents the apps are shown, and the name they show for each: the router this host keeps for
+   *  this computer reads them (the core's `agents.advertised` and `agents.displayName`). */
+  sessions: () => RegisteredSession[]
+  displayName: (session: RegisteredSession) => string
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
-  recentAsks: (agentId: string) => string[]
+  recentAsks: (agentId: string) => string[] | Promise<string[]>
+  /** Read the agents again before a list is built from them (see FleetLocal.refresh). */
+  refresh?: () => Promise<void>
   machineName: () => string
   /** This computer's machineId, or '' when the daemon has never resolved one (signed out). */
   machineId: () => string
@@ -48,13 +63,21 @@ export interface CableHostWiring {
   /** Whether this computer holds an account. False → the dial serves THIS computer alone: the cloud
    *  lane (the other machines, and voice) is what an account buys, and it is not dialled without one. */
   signedIn?: () => boolean
+  /** The account's sign-in, for the transcriber: the core's (`account.accessToken`), never one of this
+   *  host's own. Absent, voice says to sign in. */
+  accessToken?: (opts?: { force?: boolean; failedToken?: string }) => Promise<string>
+  /** The account's environment, which the transcriber checks the upload against. */
+  environment?: () => string
+  /** A dial is on the wire on this computer, or none is any more: the core streams the turn cards and
+   *  makes the recaps for it, as for a device watching through the backend. */
+  watching?: (on: boolean) => void
   /** Deliver text into an agent. The SAME path the web and the WiFi device use — see cli.ts. */
   sendTurn: (agentId: string, text: string) => void
   stopTurn: (agentId: string) => void
   answer: (agentId: string, requestId: string, answers: Record<string, string>) => void
   answerReviewed?: (answer: ReviewedAnswer) => Promise<boolean>
   /** Recaps of an agent's last `n` completed turns — for routing, and for redrawing a reattached dial. */
-  recent: (agentId: string, n: number) => RecentTurn[]
+  recent: (agentId: string, n: number) => RecentTurn[] | Promise<RecentTurn[]>
   /** The opaque runtime-v1 profile, which is where the dial's Model/Effort chips come from. */
   runtimeProfile?: (session: RegisteredSession) => string | null
   updateAgent?: (agentId: string, model?: string, effort?: string) => void
@@ -87,51 +110,26 @@ export interface CableHostWiring {
   form?: (command: FormCommand) => Promise<FormResult>
   clearForm?: () => void
   log: (line: string) => void
+  /**
+   * Which machine an agent is on, and getting a turn, a stop or an answer there: the fleet service's
+   * routing, through the core's port (core/api.ts `FleetRouting`). Read at every call, and null while the
+   * fleet is off. Absent, this host routes by itself.
+   */
+  fleet?: () => FleetRouting | null
 }
 
-/**
- * A placeholder id for a machine this daemon does not know the real id of.
- *
- * A BELT, not a mode. `harness start` refuses to run without an SSO session and awaits
- * `resolveComputerMachine()` before it spawns the daemon, so by the time anything here runs the machineId
- * is real. The guard exists because the alternative failure is silent: an empty id makes a row that
- * renders, is tappable, and can never be selected. `cable:` is deliberately not machineId-shaped, so
- * nothing downstream mistakes it for one and announces it to the backend.
- */
-function placeholderId(computerId: string): string {
-  return `cable:${computerId}`
-}
-
-/** How often another machine's agent list is re-asked. Far slower than the dial's one-second tick: the
- *  list changes when a person starts an agent, not continuously. */
-const REMOTE_REFRESH_MS = 5_000
-/** How long a machine's last good list survives failures before its tiles leave the carousel. */
-const REMOTE_GRACE_MS = 30_000
-
-/** Whether an id is that placeholder rather than a machine the backend has heard of. */
+/** Whether an id is the router's placeholder for a machine with no id yet (`cable:` and the computer id;
+ *  see services/fleetRouter.ts) rather than a machine the backend has heard of. */
 function isPlaceholder(id: string): boolean {
   return id.startsWith('cable:')
 }
 
-/** A fleet row as the wire carries it. `authMode` does not travel: the dial has no use for the word, and
- *  `remote` is just `!local`, which the row already says. */
-function toCableMachine(m: FleetMachine): CableMachine {
-  return { id: m.machineId, name: m.name, state: m.state, local: false }
-}
-
-/** Split `runtime-v1:<sid>:<engine>:<model>@<effort>` back into the two words the dial's chips show. */
-function chipsFromProfile(profile: string | null | undefined): { model?: string; effort?: string } {
-  if (!profile || !profile.startsWith('runtime-v1:')) return {}
-  const tail = profile.split(':').slice(3).join(':')
-  if (!tail) return {}
-  const [model, effort] = tail.split('@')
-  return { model: model || undefined, effort: effort || undefined }
-}
-
 export class DaemonCableHost implements CableHost {
-  /** The last turn this daemon delivered, for [lastRouted]. In memory only: a conversation that spans a
-   *  daemon restart is not one the five-minute window would have carried anyway. */
-  private lastTurn?: { agentId: string; at: number }
+  /**
+   * This host's own router: over the bare fleet it is given (its tests), or over none, for this computer
+   * alone. Asked whenever the fleet service cannot answer — see route.
+   */
+  private readonly local: FleetRouter
 
   /**
    * The machine whose agents are on the dial right now. Defaults to — and falls back to — the local one:
@@ -143,15 +141,41 @@ export class DaemonCableHost implements CableHost {
    */
   private selected = ''
 
-  /** Each other machine's agents, as last read. `asked` throttles the round; `at` ages the answer. */
-  private readonly remoteAgents = new Map<string, { agents: CableAgent[]; at: number; asked: number }>()
-  /** Machines with a list RPC in flight, so a slow machine is asked once rather than every tick. */
-  private readonly inFlight = new Set<string>()
-  /** agentId → machineId, rebuilt from the snapshot last handed to the dial. */
-  private agentMachine = new Map<string, string>()
+  /**
+   * `fleet` is a bare lane to the other machines for this host's own router — its tests give it one. A
+   * daemon gives none: its dial reaches the fleet service's router through the core (`wiring.fleet`).
+   * With neither, the wheel is the local row and nothing else.
+   */
+  constructor(private readonly wiring: CableHostWiring, fleet?: MachineFleet) {
+    this.local = new FleetRouter({
+      ...wiring,
+      // The same set `agents_list` answers the apps with — see the router's localAgents.
+      sessions: () => wiring.sessions(),
+      displayName: (session) => wiring.displayName(session),
+      desk: () => this.desk,
+    }, fleet)
+  }
 
-  /** `undefined` = no lane to any other machine exists; the wheel is the local row and nothing else. */
-  constructor(private readonly wiring: CableHostWiring, private readonly fleet?: MachineFleet) {}
+  /**
+   * Ask the fleet service's router through the core's port, or this host's own when the fleet is off or
+   * its call came back unavailable (a failing port's fallback, core/api.ts FLEET_FALLBACKS). Either way the
+   * answer is a router's, refusals included: the dial never reads a made-up answer as the fleet's.
+   */
+  private viaFleet<T>(ask: (routing: FleetRouting) => T): T {
+    const fleet = this.wiring.fleet?.()
+    if (!fleet) return ask(this.local)
+    const unavailable = (error: unknown): T => {
+      if (error instanceof ServiceUnavailableError) return ask(this.local)
+      throw error
+    }
+    let answer: T
+    try {
+      answer = ask(fleet)
+    } catch (error) {
+      return unavailable(error)
+    }
+    return answer instanceof Promise ? answer.catch(unavailable) as T : answer
+  }
 
   /** The identity of the computer at the other end of the cable. */
   localMachine(): { id: string; name: string } {
@@ -159,7 +183,7 @@ export class DaemonCableHost implements CableHost {
   }
 
   private localId(): string {
-    return this.wiring.machineId() || placeholderId(this.wiring.computerId())
+    return this.local.localId()
   }
 
   /** Whether the dial is looking at THIS computer. Everything forks on this one question. */
@@ -171,27 +195,9 @@ export class DaemonCableHost implements CableHost {
     return this.selected || this.localId()
   }
 
-  async listMachines(): Promise<{ machines: CableMachine[]; source: CableMachineSource }> {
-    const local: CableMachine = {
-      id: this.localId(),
-      // The machine's own name. What makes this row recognisable as the cabled one is its second line,
-      // which the dial writes — see machine_meta_line.
-      name: this.wiring.machineName(),
-      // Always ready: the cable IS the evidence. Nothing else on this list can say that about itself.
-      state: 'ready',
-      local: true,
-    }
-    if (!this.fleet) return { machines: [local], source: 'signed-out' }
-    const { machines, source } = await this.fleet.list()
-    const rows: CableMachine[] = [local]
-    for (const m of machines) {
-      // The backend list contains THIS computer too. Dropped rather than rendered: the same machine on
-      // the wheel twice, under two names, with the ✓ able to mark only one of them. Its name is already
-      // here anyway — MACHINE_NAME_FILE is mirrored from the backend on every connect.
-      if (m.machineId === local.id) continue
-      rows.push(toCableMachine(m))
-    }
-    return { machines: rows, source }
+  /** The local row, then the fleet's — the router's list, which ⌘K reads too. */
+  listMachines(): Promise<{ machines: CableMachine[]; source: CableMachineSource }> {
+    return this.viaFleet((r) => r.listMachines())
   }
 
   async selectMachine(machineId: string): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
@@ -200,19 +206,15 @@ export class DaemonCableHost implements CableHost {
       // Let go of the REMOTE machine after a linger, keeping the socket — then announce where the dial
       // actually is. `activeMachineId` on the account is then true for this machine too, instead of
       // silently going stale on whatever was selected last.
-      this.fleet?.release()
+      this.viaFleet((r) => r.release())
       void this.announceSelection()
       return { ok: true }
     }
-    if (!this.fleet) {
+    if (!this.viaFleet((r) => r.hasLane())) {
       return { ok: false, code: 'UNAVAILABLE', message: 'Sign in on this computer to reach other machines' }
     }
-    try {
-      await this.fleet.select(machineId)
-    } catch (err) {
-      if (err instanceof FleetError) return { ok: false, code: err.code, message: err.message }
-      return { ok: false, code: 'UNREACHABLE', message: (err as Error).message }
-    }
+    const selected = await this.viaFleet((r) => r.select(machineId))
+    if (!selected.ok) return selected
     this.selected = machineId
     return { ok: true }
   }
@@ -226,8 +228,8 @@ export class DaemonCableHost implements CableHost {
    * it loses the race; a failure marks the machine unreachable rather than pretending it has no agents.
    */
   onDialAttached(): void {
-    if (!this.fleet) return
-    const fleet = this.fleet
+    this.wiring.watching?.(true)
+    if (!this.viaFleet((r) => r.hasLane())) return
     // Signed out there is no lane to open: the socket is authenticated, so dialling it would fail once
     // per plug-in and log a failure for something nobody asked for. The dial still works — it is on the
     // cable, and everything it shows on this computer is served in-process.
@@ -239,7 +241,8 @@ export class DaemonCableHost implements CableHost {
     void (async () => {
       // The socket first, and unconditionally: it is what makes the machine wheel's dots live, and it is
       // held for as long as the dial is plugged in whether or not anything is selected.
-      await fleet.online()
+      const online = await this.viaFleet((r) => r.online())
+      if (!online.ok) throw new Error(online.message)
       await this.announceSelection()
     })().catch((err) => this.wiring.log(`cable: could not open the lane (${(err as Error).message})`))
   }
@@ -254,16 +257,13 @@ export class DaemonCableHost implements CableHost {
    * Skipped only for the placeholder id, which is not a machineId and means nothing to the backend.
    */
   private async announceSelection(): Promise<void> {
-    if (!this.fleet) return
+    if (!this.viaFleet((r) => r.hasLane())) return
     const machineId = this.selectedMachine()
     if (isPlaceholder(machineId)) return
-    try {
-      await this.fleet.select(machineId)
-    } catch (err) {
-      // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
-      // one machine the cable can vouch for on its own.
-      this.wiring.log(`cable: could not announce ${machineId} (${(err as Error).message})`)
-    }
+    const selected = await this.viaFleet((r) => r.select(machineId))
+    // Never fatal. The local machine in particular must stay usable with no backend at all — it is the
+    // one machine the cable can vouch for on its own.
+    if (!selected.ok) this.wiring.log(`cable: could not announce ${machineId} (${selected.message})`)
   }
 
   /**
@@ -275,10 +275,11 @@ export class DaemonCableHost implements CableHost {
    * a screen that is not there.
    */
   onDialGone(): void {
+    this.wiring.watching?.(false)
     this.wiring.clearSelection?.()
     this.wiring.clearVisit?.()
     this.wiring.clearForm?.()
-    this.fleet?.release(true)
+    this.viaFleet((r) => r.release(true))
   }
 
   /**
@@ -315,71 +316,15 @@ export class DaemonCableHost implements CableHost {
     return locale.startsWith('vi') ? 'vi' : 'en'
   }
 
-  /** This computer's own agents, in the order every other surface reads them in. */
-  private localAgents(): CableAgent[] {
-    // `advertised()`, not `list()` — the SAME set `agents_list` answers the web and the desktop app with. They
-    // read one registry and must not disagree about what is on it: a dead agent holding a tile on the dial
-    // and nowhere else is a tile that cannot be driven and cannot be explained.
-    // Terminals INCLUDED. A shell has no turn to watch and no model to switch, and the dial does not
-    // pretend otherwise — it draws the tile and offers no Voice on it. What it does offer is the
-    // thing that was missing: the tile can be reached. The window draws a shell as a tile like any
-    // other, so a dial that skipped it disagreed with the app about what was on the desk, and a pane
-    // the carousel cannot walk to is a pane the dial cannot explain either. A terminal that has
-    // adopted an engine is that engine here, as everywhere.
-    //
-    // ⚠️ NOT the same question as `deviceAgentRow` in backendSocket.ts, which keeps shells out of the
-    // `agents_list` RPC a CLOUD device asks over the backend. This is the cable's own list, pulled by
-    // `listAgents()` on the session's tick; the two surfaces answer separately and always did.
-    const sessions = registry.advertised()
-    // Oldest → newest, and TOTAL: the id breaks a tie so the order cannot fall through to array position,
-    // which is Map insertion order and differs between daemon runs. Both producers sort identically, so
-    // the dial and the app cannot drift apart while reading the same registry.
-    sessions.sort((a, b) => a.registeredAt - b.registeredAt || a.agentId.localeCompare(b.agentId))
-    const machineId = this.localId()
-    const machine = this.wiring.machineName()
-    return sessions.map((s) => ({
-      id: s.agentId,
-      name: projectDisplayName(s),
-      engine: s.engine ?? '',
-      machineId,
-      machine,
-      ...chipsFromProfile(this.wiring.runtimeProfile?.(s)),
-    }))
-  }
-
   /**
-   * EVERY agent on EVERY machine, in the order the desktop app's rail reads them: this computer first,
-   * then each other machine in wheel order, and within a machine whatever order that machine returns.
-   *
-   * Read from a CACHE, never from a live RPC. This is called on the session's one-second tick, and a
-   * naive implementation would fire one cloud round trip per machine per second — the dial would spend
-   * its whole life waiting on the network to answer a question whose answer changes every few minutes.
-   * `refreshRemotes()` does the asking, off to the side, on its own slower clock.
-   */
-  /**
-   * The window's tiles on its active tab, in tile order. This IS the dial's list — see listAgents.
+   * The window's tiles on its active tab, in tile order. This IS the dial's list — see listAgents. A
+   * router this host builds for itself reads it to hold a tile whose machine dropped out; the fleet
+   * service's router reads the window's own report of it.
    */
   private desk: string[] = []
 
-
-  /**
-   * Every agent this daemon has listed since it started, by id.
-   *
-   * Kept for ONE purpose: a tile open in the window must always be a tile on the dial. A machine can
-   * leave the list for reasons that have nothing to do with its agents — the backend going quiet, the
-   * machine going offline while its work stays on screen — and a desk with a hole in it makes a swipe
-   * skip a tile and an agent chosen in the window have nowhere to land.
-   */
-  private knownAgents = new Map<string, CableAgent>()
-
-  /** Tiles currently held on the list from that memory, so it is logged once and not every tick. */
-  private deskHeld = new Set<string>()
-
   /** Last logged shape of the tab's list, so the line prints on change only. */
   private deskShape = ''
-
-  /** Size of the last flat list — see agentTotal. */
-  private flatCount = 0
 
   /**
    * The window changed which agents have a tile, or what order they are in.
@@ -457,7 +402,7 @@ export class DaemonCableHost implements CableHost {
    *   - no window (`swarms === null`)      → `[]`; the dial shows "Run OpenHarness on your computer".
    *   - a window with an empty tab         → `[]`; the dial shows "Nothing on this tab".
    *   - a window with panes                → those agents, in tile order; a tile whose machine dropped out
-   *                                          is held from `knownAgents` (see listAgentsFlat).
+   *                                          is held from the router's `knownAgents` (see listAgentsFlat).
    */
   async listAgents(): Promise<CableAgent[]> {
     return (await this.listAgentSnapshot()).agents
@@ -482,14 +427,13 @@ export class DaemonCableHost implements CableHost {
       this.deskShape = shape
       this.wiring.log(`cable: tab ${shape} · ${flat.length} in all`)
     }
-    return { agents: out, tab, total: this.flatCount }
+    return { agents: out, tab, total: this.viaFleet((r) => r.agentTotal()) }
   }
 
   /** How many agents the account has across every machine — the overview's number, sent beside the
-   *  tab's list rather than as 70 rows the dial would hold for a digit. Read from the last flat list,
-   *  minus the terminals in it: the list is every TILE, this is every AGENT. */
+   *  tab's list rather than as 70 rows the dial would hold for a digit. See the router's agentTotal. */
   agentTotal(): number {
-    return this.flatCount
+    return this.viaFleet((r) => r.agentTotal())
   }
 
   /** The active tab's id, or '' with no window. Travels on `agents.end` so the dial can tell an empty
@@ -500,107 +444,34 @@ export class DaemonCableHost implements CableHost {
 
   /**
    * Name, engine and machine of an agent this daemon has ever listed — for a `summary` or `question`
-   * about one the dial no longer holds. The dial used to look these up in its own copy of the fleet;
-   * with that copy gone, the frame has to say who it is about.
+   * about one the dial no longer holds. See the router's describe.
    */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined {
-    const a = this.knownAgents.get(agentId) ?? this.localAgents().find((x) => x.id === agentId)
-    if (a) return { name: a.name, engine: a.engine ?? '', machine: a.machine ?? '' }
-    // A remote agent whose machine has spoken (a question, a card) before its list was ever read: no
-    // name to give, but the machine's is better than nothing on a screen asking for a decision.
-    const machineId = this.seenOn.get(agentId)
-    const machine = machineId ? this.machineNames.get(machineId) ?? '' : ''
-    return machineId ? { name: '', engine: '', machine } : undefined
+    return this.viaFleet((r) => r.describe(agentId))
   }
 
   async activityText(agentId: string): Promise<string | null> {
-    if (!this.isLocalAgent(agentId)) return null
+    if (!this.viaFleet((r) => r.isLocalAgent(agentId))) return null
     return await this.wiring.activityText?.(agentId) ?? null
   }
 
-  /**
-   * A card arrived from a machine for an agent. Remembered so a `question` or `summary` about an agent
-   * this daemon has never LISTED — a remote machine's, before its list was read, or one on a tab the
-   * window has not opened — can still be described and, when tapped, opened: `machineOf` falls back to
-   * this, and without it the open was "ignored for unknown agent" and the tap did nothing.
-   */
+  /** A card arrived from a machine for an agent — see the router's noteAgent. */
   noteAgent(machineId: string, agentId: string): void {
-    if (machineId && agentId) this.seenOn.set(agentId, machineId)
-  }
-
-  /** agentId → machineId for agents heard from but not (yet) listed — see noteAgent. */
-  private readonly seenOn = new Map<string, string>()
-  /** machineId → name, from the last wheel read, for describe(). */
-  private machineNames = new Map<string, string>()
-
-  /**
-   * EVERY agent in LIST order — this computer first, then each machine in wheel order — the fleet the
-   * dial no longer holds.
-   *
-   * It is the order the desktop app's rail draws, and the two must not drift: ⌘K reads this to decide
-   * which agents a typed task is weighed against, and a person looking at their rail while they type has
-   * every right to expect "the first fifteen" to mean the first fifteen they can see. `listAgents()` is
-   * the DIAL's view of the same snapshot — the same agents, re-cut around the tiles the window has open,
-   * which is a different question with a different right answer.
-   */
-  async listAgentsFlat(): Promise<CableAgent[]> {
-    const out = this.localAgents()
-    const { machines } = await this.listMachines()
-    this.machineNames = new Map(machines.map((m) => [m.id, m.name]))
-    for (const m of machines) {
-      if (m.local) continue
-      const entry = this.remoteAgents.get(m.id)
-      if (entry) for (const a of entry.agents) out.push({ ...a, machineId: m.id, machine: m.name })
-    }
-    void this.refreshRemotes(machines)
-    // Rebuilt from the SAME snapshot that is about to be pushed, so the map can never name a machine an
-    // agent has already left. Every action the dial can take is routed through it.
-    const next = new Map<string, string>()
-    for (const a of out) if (a.machineId) next.set(a.id, a.machineId)
-    this.agentMachine = next
-
-    const byId = new Map(out.map((a) => [a.id, a]))
-
-    for (const a of out) this.knownAgents.set(a.id, a)
-    // A tile the window has open, whose agent has left the list. Put it back — under the name and
-    // machine it was last seen with, so the dial's tile keeps saying what the window's tile says.
-    //
-    // Gated on being ON THE DESK, and only that: an agent that was deleted, or one simply never
-    // opened, must not be resurrected by this memory. The window holding a tile is the whole warrant.
-    const missing = this.desk.filter((id) => !byId.has(id))
-    for (const id of missing) {
-      const remembered = this.knownAgents.get(id)
-      if (!remembered) continue
-      // Appended, not slotted back where it was. When a machine drops out none of its agents are left
-      // to sit beside, so the end of the list is the only honest place; the tab's list is drawn in TILE
-      // order by listAgents, so where it sits here does not matter. Never routed by position either —
-      // `agentMachine` below is what sends a turn home.
-      out.push(remembered)
-      byId.set(id, remembered)
-      if (remembered.machineId) this.agentMachine.set(id, remembered.machineId)
-      if (!this.deskHeld.has(id)) {
-        this.deskHeld.add(id)
-        this.wiring.log(`cable: holding ${id.slice(0, 8)} on the tab — the window has a tile for it`)
-      }
-    }
-    for (const id of [...this.deskHeld]) if (!missing.includes(id)) this.deskHeld.delete(id)
-
-    // The overview's number is AGENTS, and a shell is not one. The carousel carries shell tiles now —
-    // they are panes the window has and the dial can reach — but "12 agents · all idle" is read as how
-    // much work is in flight, and counting empty terminals in it would answer a question nobody asked.
-    // Two different numbers about the same desk, each honest about what it counts.
-    this.flatCount = out.filter((a) => a.engine !== 'terminal').length
-    return out
+    this.viaFleet((r) => r.noteAgent(machineId, agentId))
   }
 
   /**
-   * Which machine an agent lives on, or '' if the dial named one this daemon has never listed.
-   *
-   * NEVER falls back to the selected machine. A wrong answer here does not fail — it delivers the user's
-   * turn to a different computer, which is the worst outcome this whole feature can produce.
+   * EVERY agent in LIST order — this computer first, then each machine in wheel order. The router's flat
+   * list, the one ⌘K weighs a typed task against; `listAgents()` is the DIAL's view of the same snapshot,
+   * re-cut around the tiles the window has open.
    */
+  listAgentsFlat(): Promise<CableAgent[]> {
+    return this.viaFleet((r) => r.listAgentsFlat())
+  }
+
+  /** Which machine an agent lives on, or '' — never a guess. See the router's machineOf. */
   private machineOf(agentId: string): string {
-    return this.agentMachine.get(agentId) ?? this.seenOn.get(agentId) ?? ''
+    return this.viaFleet((r) => r.machineOf(agentId))
   }
 
   openAgent(agentId: string, reason?: OpenReason): void {
@@ -631,193 +502,54 @@ export class DaemonCableHost implements CableHost {
    * then an `open` for the new agent so the window gives it a tile — the fork's whole point on the dial
    * is "this one, again, beside it", and the person's hand is on the dial, not the mouse.
    */
-  async forkAgent(agentId: string): Promise<{ ok: true; agentId: string } | { ok: false; error: string; detail?: string }> {
-    const machineId = this.machineOf(agentId)
-    if (!machineId) return { ok: false, error: 'AGENT_NOT_FOUND', detail: 'The dial named an agent this daemon has never listed.' }
-    let result: { ok: true; agentId: string } | { ok: false; error: string; detail?: string }
-    if (this.isLocalAgent(agentId)) {
-      if (!this.wiring.forkAgent) return { ok: false, error: 'UNSUPPORTED', detail: 'This daemon cannot fork agents.' }
-      result = await this.wiring.forkAgent(agentId)
-    } else {
-      if (!this.fleet?.forkAgent) return { ok: false, error: 'UNSUPPORTED_ON_REMOTE' }
-      try {
-        result = { ok: true, agentId: await this.fleet.forkAgent(machineId, agentId) }
-      } catch (err) {
-        result = { ok: false, error: 'FORK_FAILED', detail: (err as Error).message }
+  forkAgent(agentId: string): Promise<ForkResult> {
+    // On the agent's own machine, through the router, which notes the new agent there. A fork it
+    // actually asked for is said, and opened in the window.
+    return this.viaFleet((r) => r.forkAgent(agentId)).then(({ result, machineId, asked }) => {
+      if (!asked) return result
+      if (result.ok) {
+        this.wiring.log(`cable: fork ${machineId}/${agentId} → ${result.agentId}`)
+        if (this.wiring.forked) this.wiring.forked(machineId, result.agentId, agentId)
+        else this.wiring.opened?.(machineId, result.agentId)
+      } else {
+        this.wiring.log(`cable: fork ${machineId}/${agentId} refused (${result.error}${result.detail ? `: ${result.detail}` : ''})`)
       }
-    }
-    if (result.ok) {
-      this.wiring.log(`cable: fork ${machineId}/${agentId} → ${result.agentId}`)
-      this.seenOn.set(result.agentId, machineId)
-      if (this.wiring.forked) this.wiring.forked(machineId, result.agentId, agentId)
-      else this.wiring.opened?.(machineId, result.agentId)
-    } else {
-      this.wiring.log(`cable: fork ${machineId}/${agentId} refused (${result.error}${result.detail ? `: ${result.detail}` : ''})`)
-    }
-    return result
+      return result
+    })
   }
 
   /** Whether this daemon's last list held that agent — see CableHost.knows. */
   knows(agentId: string): boolean {
-    return this.agentMachine.has(agentId)
-  }
-
-  /** True when the agent belongs to this computer (or is unknown, which is handled at the call site). */
-  private isLocalAgent(agentId: string): boolean {
-    const machineId = this.machineOf(agentId)
-    return !machineId || machineId === this.localId()
+    return this.viaFleet((r) => r.knows(agentId))
   }
 
   /**
-   * Refresh the other machines' agent lists, on their own clock.
-   *
-   * Only `ready` machines are asked. An offline one has nothing to say and an unlinked one cannot be
-   * read at all (no pinned key), and asking either costs a 15-second RPC timeout per machine per round.
-   *
-   * A machine that fails keeps its LAST GOOD list for `REMOTE_GRACE_MS` and only then goes empty. A cloud
-   * blip is the common case, and dropping every one of a machine's tiles off the carousel for a few
-   * seconds — then putting them back — is a far worse lie than briefly showing a list that is a minute
-   * old.
-   *
-   * `unknown` is NOT a reason to drop anything, and reading it as one cost a morning. It means the
-   * backend could not be asked — `MachineListCache.degrade()` sets every machine to it in one go when
-   * the list cannot be refreshed, on the stated principle that the rows are "stale but not wrong". The
-   * agents follow the rows: kept, with no timer, until the backend actually says offline. Measured on
-   * the real dial, the old reading emptied a remote machine off the carousel mid-session with no log
-   * line, while the window went on showing those agents — which is what made a swipe run out of agents
-   * early, and an agent chosen in the window have no tile to move to.
-   */
-  private refreshRemotes(machines: CableMachine[]): void {
-    if (!this.fleet) return
-    const now = Date.now()
-    for (const m of machines) {
-      if (m.local) continue
-      const entry = this.remoteAgents.get(m.id)
-      if (m.state === 'offline' || m.state === 'needs-link') {
-        // The machine ITSELF says it has nothing to offer, which is different from not being able to
-        // ask it. No grace period, but never silently: an agent leaving the carousel is exactly the
-        // event that is impossible to diagnose after the fact from its absence.
-        if (entry && entry.agents.length) {
-          this.remoteAgents.set(m.id, { agents: [], at: now, asked: entry.asked })
-          this.wiring.log(`cable: ${m.name} is ${m.state} — its ${entry.agents.length} agents left the carousel`)
-        }
-        continue
-      }
-      // Not ready and not refused: the backend could not be asked. Keep what it last said.
-      if (m.state !== 'ready') continue
-      if (entry && now - entry.asked < REMOTE_REFRESH_MS) continue
-      if (this.inFlight.has(m.id)) continue
-      this.inFlight.add(m.id)
-      this.remoteAgents.set(m.id, { agents: entry?.agents ?? [], at: entry?.at ?? 0, asked: now })
-      void this.fleet.listAgents(m.id)
-        .then((agents) => {
-          const before = this.remoteAgents.get(m.id)
-          this.remoteAgents.set(m.id, { agents, at: Date.now(), asked: Date.now() })
-          // One line per TRANSITION, not per round: this runs every few seconds forever, and a healthy
-          // machine that logs each time buries everything else in the file.
-          if (!before || before.agents.length !== agents.length) {
-            this.wiring.log(`cable: ${m.name} → ${agents.length} agents`)
-          }
-        })
-        .catch((err) => {
-          const before = this.remoteAgents.get(m.id)
-          const stale = before && Date.now() - before.at > REMOTE_GRACE_MS
-          if (stale) this.remoteAgents.set(m.id, { agents: [], at: Date.now(), asked: Date.now() })
-          if (before?.agents.length && stale) {
-            this.wiring.log(`cable: ${m.name} dropped off the carousel (${(err as Error).message})`)
-          }
-        })
-        .finally(() => this.inFlight.delete(m.id))
-    }
-  }
-
-  /**
-   * Deliver a turn, and SAY whether it could be.
-   *
-   * The remote leg is fire-and-forget by protocol — `message` frames carry no ack — so a machine that
-   * has stopped answering takes the turn and nothing comes back. Measured: the fleet's own `agents_list`
-   * was timing out every twenty seconds while a ⌘K route was handed to an agent on that machine, and
-   * every side stayed silent about it. The E2EE session still said `ready`, because it handshook while
-   * the machine was alive; the backend's list still called it online.
-   *
-   * So the check is the one thing that actually knows: did the LAST request to that machine come back.
-   * Never asked (null) is not a refusal — a cold start must not read as a failure.
-   *
-   * Callers that do not care may ignore the result; nothing here changes for them.
+   * Deliver a turn, and SAY whether it could be — through the router, on the agent's own machine, with
+   * the refusal for a machine whose last request did not come back. See the router's sendTurn.
    */
   sendTurn(agentId: string, text: string): { ok: true } | { ok: false; machine: string; reason: string } {
-    if (!this.isLocalAgent(agentId)) {
-      const machineId = this.machineOf(agentId)
-      const machine = this.knownAgents.get(agentId)?.machine || machineId.slice(0, 8)
-      if (!machineId) return { ok: false, machine, reason: 'that agent has no machine on this daemon' }
-      const seen = this.fleet?.reachable?.(machineId)
-      if (seen && !seen.ok) {
-        const ago = Math.round((Date.now() - seen.at) / 1000)
-        this.wiring.log(`cable: refused a turn for ${agentId.slice(0, 8)} — ${machine} last failed ${ago}s ago`)
-        return { ok: false, machine, reason: 'the last request to it did not come back' }
-      }
-      this.fleet!.sendTurn(machineId, agentId, text)
-      this.spokeTo(agentId)
-      return { ok: true }
-    }
-    this.wiring.sendTurn(agentId, text)
-    this.spokeTo(agentId)
-    return { ok: true }
+    return this.viaFleet((r) => r.sendTurn(agentId, text))
   }
 
-  /**
-   * Remember who this person is talking to.
-   *
-   * Recorded HERE because every path that actually delivers a turn passes through sendTurn — the
-   * window's palette, the dial naming a tile, and the router's own fallback — so there is one fact and
-   * one place it is written. Recorded only on a delivery that was accepted: a turn refused because its
-   * machine went deaf is not a conversation anybody is in the middle of.
-   */
-  private spokeTo(agentId: string): void {
-    if (agentId) this.lastTurn = { agentId, at: Date.now() }
-  }
-
-  /** Who the last delivered turn went to, and how long ago — the router's continuity signal. */
+  /** Who the last delivered turn went to, and how long ago — by any of the router's callers. */
   lastRouted(): RouterContinuity | undefined {
-    if (!this.lastTurn) return undefined
-    return { agentId: this.lastTurn.agentId, agoMs: Date.now() - this.lastTurn.at }
+    return this.viaFleet((r) => r.lastRouted())
   }
 
   stopTurn(agentId: string): void {
-    if (!this.isLocalAgent(agentId)) { this.fleet!.stopTurn(this.machineOf(agentId), agentId); return }
-    this.wiring.stopTurn(agentId)
+    this.viaFleet((r) => r.stopTurn(agentId))
   }
 
   canSpeakQuestion(agentId: string): boolean {
-    // Remote receiver capabilities are not negotiated yet; no free-text fallback.
-    return this.knows(agentId) && this.isLocalAgent(agentId) && !!this.wiring.answerReviewed
+    return this.viaFleet((r) => r.canSpeakQuestion(agentId))
   }
 
-  async answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
-    if (answer.freeTextKeys?.length && !this.canSpeakQuestion(answer.agentId))
-      return { ok: false, error: 'Use the terminal to type this answer.' }
-    if (!this.isLocalAgent(answer.agentId)) {
-      const machineId = this.machineOf(answer.agentId)
-      if (!machineId || !this.fleet || this.fleet.reachable?.(machineId)?.ok === false) {
-        return { ok: false, error: 'That machine is unavailable. Check its connection.' }
-      }
-      // Older remote drivers split multi-select labels on commas. Do not lose
-      // a selected label when that receiver cannot prove support for exact arrays.
-      if (answer.questions.some(q => q.multi && answer.selections[q.key]?.some(label => label.includes(',')))) {
-        return { ok: false, error: 'Use the terminal for this multi-select answer.' }
-      }
-      if (this.fleet.answerReviewed) this.fleet.answerReviewed(machineId, answer)
-      else this.fleet.answer(machineId, answer.agentId, answer.requestId, answer.answers)
-      return { ok: true, pending: true } // Handoff only; the dialog's close is authoritative.
-    }
-    if (!this.wiring.answerReviewed) return { ok: false, error: 'Update Harness to answer this question.' }
-    const ok = await this.wiring.answerReviewed(answer)
-    return ok ? { ok: true } : { ok: false, error: 'Could not confirm the answer. Check the terminal.' }
+  answerReviewed(answer: ReviewedAnswer): Promise<AnswerReceipt> {
+    return this.viaFleet((r) => r.answerReviewed(answer))
   }
 
   answer(agentId: string, requestId: string, answers: Record<string, string>): void {
-    if (!this.isLocalAgent(agentId)) { this.fleet!.answer(this.machineOf(agentId), agentId, requestId, answers); return }
-    this.wiring.answer(agentId, requestId, answers)
+    this.viaFleet((r) => r.answer(agentId, requestId, answers))
   }
 
 
@@ -876,40 +608,21 @@ export class DaemonCableHost implements CableHost {
   }
 
   updateAgent(agentId: string, model?: string, effort?: string): void {
-    if (!this.isLocalAgent(agentId)) { this.fleet!.updateAgent(this.machineOf(agentId), agentId, model, effort); return }
-    this.wiring.updateAgent?.(agentId, model, effort)
+    this.viaFleet((r) => r.updateAgent(agentId, model, effort))
   }
 
-  /** The last few turns, newest first, in the shape the dial's tile draws: a headline and a body. */
-  async recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>> {
-    const raw = this.isLocalAgent(agentId)
-      ? this.wiring.recent(agentId, 3)
-      : await this.fleet!.recentSummaries(this.machineOf(agentId), agentId)
-    return raw
-      .map((r) => ({ recap: extendShortRecap(r?.recap ?? '', r?.text ?? ''), text: r?.text ?? '', ask: r?.ask ?? '' }))
-      .filter((s) => s.recap || s.text || s.ask)
+  /** The last few turns, newest first, in the shape the dial's tile draws — from the agent's own machine. */
+  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>> {
+    return this.viaFleet((r) => r.recentSummaries(agentId))
   }
 
-  /**
-   * The person's own last questions to an agent, newest first — what the router ranks on.
-   *
-   * Its own trip rather than a field on [recentSummaries]: a question is recorded when it is asked and
-   * a recap when the answer is summarised, so the two lists are different lengths on any machine where
-   * a turn ended without one. Folding them together is what left the newest question — the one that
-   * says where the next one belongs — off the end.
-   */
-  async recentAsks(agentId: string): Promise<string[]> {
-    const raw = this.isLocalAgent(agentId)
-      ? this.wiring.recentAsks(agentId)
-      : await this.fleet!.recentAsks(this.machineOf(agentId), agentId)
-    return raw.map((a) => (a || '').replace(/\s+/g, ' ').trim()).filter(Boolean)
+  /** The person's own last questions to an agent, newest first — what the router ranks on. */
+  recentAsks(agentId: string): Promise<string[]> {
+    return this.viaFleet((r) => r.recentAsks(agentId))
   }
 
-  async listModels(agentId: string): Promise<string[]> {
-    if (!this.isLocalAgent(agentId)) return this.fleet!.listModels(this.machineOf(agentId), agentId)
-
-    const models = (await this.wiring.listModels?.(agentId)) ?? []
-    return models.map((m) => m.id).filter(Boolean)
+  listModels(agentId: string): Promise<string[]> {
+    return this.viaFleet((r) => r.listModels(agentId))
   }
 
   /**
@@ -1009,12 +722,12 @@ export class DaemonCableHost implements CableHost {
    * sentence to a clock is the one failure the person cannot work around.
    */
   async transcribe(pcm: Buffer, sampleRate: number, lang: string): Promise<string> {
-    const session = readAuthSession()
     // The text reaches the dial's glass as a toast, so it is addressed to the person holding it, not to
     // a terminal: signing in happens on the computer, and that is the one thing they need to know.
-    if (!session) throw new Error('Sign in on your computer to use voice')
+    const accessToken = this.wiring.accessToken
+    if (!accessToken || this.wiring.signedIn?.() === false) throw new Error('Sign in on your computer to use voice')
+    const autonomousEnv = this.wiring.environment?.() ?? ''
 
-    const auth = new AuthSessionManager(this.backendHttpBase())
     const url = `${this.backendHttpBase()}${env.CABLE_STT_PATH}?lang=${encodeURIComponent(lang)}`
     // The WAV is built ONCE: it is the same bytes on a retry, and re-encoding megabytes to say the same
     // thing twice is time taken out of a person's turn.
@@ -1026,20 +739,20 @@ export class DaemonCableHost implements CableHost {
         method: 'POST',
         headers: {
           authorization: `Bearer ${token}`,
-          'x-autonomous-env': session.autonomousEnv,
+          'x-autonomous-env': autonomousEnv,
           'content-type': `multipart/form-data; boundary=${boundary}`,
         },
         body,
       })
 
-    let token = await auth.accessToken()
+    let token = await accessToken()
     let res = await post(token)
     if (res.status === 401) {
       // `failedToken` is what makes this one refresh rather than a loop: the manager only refreshes when
       // the token that failed is still the current one, so two callers racing a stale token do not each
       // burn a refresh.
       await res.body?.cancel()
-      token = await auth.accessToken({ force: true, failedToken: token })
+      token = await accessToken({ force: true, failedToken: token })
       res = await post(token)
     }
     if (!res.ok) {

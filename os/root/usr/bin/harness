@@ -1,4 +1,9 @@
 #!/bin/sh
+case "${1:-}" in
+    install|upgrade|rollback)
+        /usr/bin/hn-os _require-pc-system || exit "$?"
+        ;;
+esac
 if [ "${1:-}" = hardware ]; then
     shift
     exec /usr/bin/python3 /usr/lib/harness-os/hardware.py report "$@"
@@ -23,6 +28,13 @@ if [ "${1:-}" = rollback ]; then
 fi
 if [ "${1:-}" = updates ]; then
     shift
+    if [ -t 0 ] && [ -z "${SSH_CONNECTION:-}${SSH_TTY:-}" ] &&
+       { [ "$#" = 0 ] || { [ "$#" = 1 ] && [ "$1" = screen ]; }; }; then
+        /usr/lib/harness-os/open-updates --view
+        updates_status=$?
+        # No hn client (or SSH): retain the ordinary terminal inspection.
+        [ "$updates_status" = 3 ] || exit "$updates_status"
+    fi
     exec /usr/bin/python3 /usr/lib/harness-os/live_update.py "$@"
 fi
 . /usr/lib/harness-os/runtime-path

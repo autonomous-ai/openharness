@@ -74,11 +74,6 @@ const CONTRACTS: Partial<Record<AgentEngine, (model: string, opencodeMajor: numb
   },
 }
 
-/** Engines that can be returned to a specific model. Everything else relaunches as it always did. */
-export function subscriptionModelEngines(): AgentEngine[] {
-  return Object.keys(CONTRACTS) as AgentEngine[]
-}
-
 /**
  * How to relaunch `engine` on its own login with `model` selected, or null when there is nothing
  * this module can say — an engine with no cited mechanism, or a model string it cannot use.

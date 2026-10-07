@@ -44,6 +44,12 @@ export function createAdoption({ bySession, byAgent, stoppedAgents, externalSess
     }
     if (!found) return { ok: false, error: 'SESSION_NOT_FOUND', detail: 'This conversation is no longer on this machine.' }
     if (found.engine !== engine) return { ok: false, error: 'INVALID_ENGINE', detail: `This is a ${found.engine} conversation.` }
+    // Codex will not resume a conversation it archived ("session <id> is archived. Run `codex unarchive
+    // <id>` to unarchive it first"), and search finds archived ones: opened, the pane only printed that
+    // error and the harness never started. Refused before anything starts or is stopped.
+    if (found.archived) {
+      return { ok: false, error: 'SESSION_ARCHIVED', detail: `Codex archived this conversation. Run \`codex unarchive ${found.sessionId}\` in a terminal, then open it here.` }
+    }
     // The Codex app keeps a thread in a folder of its own, which people tidy away. Checked before
     // anything is stopped: a take-over that then cannot open would only have closed it.
     if (!existsSync(found.cwd)) {

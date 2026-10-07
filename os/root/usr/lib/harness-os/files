@@ -1,0 +1,24 @@
+#!/bin/sh
+# The file manager windows, all hn's own file view run standalone (`hn files`) in foot:
+#   files [DIR]        Super+e: the explorer, full screen beside hn as the browser is (Super+b).
+#   files --open       Super+o: a small Open dialog in the middle of the screen. It launches
+#                      one of the two below through this script and closes.
+#   files --root DIR   the explorer rooted at DIR, and kept inside it.
+#   files --edit FILE  a text file in the built-in editor.
+. /usr/lib/harness-os/runtime-path
+cd "$HOME" || exit 1
+export HARNESS_OS=1 HARNESS_FILES_LAUNCH=/usr/lib/harness-os/files
+config=/usr/share/harness-os/foot.ini
+case ${1:-} in
+  --open)
+    shift
+    exec /usr/bin/foot --app-id=harness-open --title=Open --config="$config" \
+      -o initial-window-mode=windowed --window-size-chars=130x34 \
+      "$HARNESS_TUI_BIN" files --open "${1:-$HOME}" ;;
+  --root|--edit)
+    exec /usr/bin/foot --app-id=harness-files --title=Files --config="$config" \
+      "$HARNESS_TUI_BIN" files "$1" "${2:?}" ;;
+  *)
+    exec /usr/bin/foot --app-id=harness-files --title=Files --config="$config" \
+      "$HARNESS_TUI_BIN" files "${1:-$HOME}" ;;
+esac

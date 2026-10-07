@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
-import { execFileSync } from 'child_process'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { claudeContinuation } from './sessionRepair.js'
@@ -498,6 +498,147 @@ describe('session repair — Codex profiles', () => {
   })
 })
 
+describe('session repair — a Codex process names its own rollout', () => {
+  it('reads the native child of the npm launcher, never another launcher or a nested tool', async () => {
+    const { codexProcessFiles } = await import('./sessionRepair.js')
+    const own = '/tmp/profile/sessions/rollout-own.jsonl'
+    const sibling = '/tmp/profile/sessions/rollout-sibling.jsonl'
+    const files = vi.fn(async (pid: number) => pid === 43 ? [own] : pid === 50 ? [sibling] : ['/dev/null'])
+    const rows = [
+      { pid: 42, parentPid: 1, executable: '/usr/bin/node', args: 'node /opt/codex/bin/codex.js' },
+      { pid: 43, parentPid: 42, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
+      { pid: 50, parentPid: 1, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
+      { pid: 51, parentPid: 43, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
+    ]
+    await expect(codexProcessFiles(42, files, async () => rows)).resolves.toEqual(['/dev/null', own])
+    expect(files.mock.calls.map(([pid]) => pid)).toEqual([42, 43])
+    // macOS's comm column can truncate the full Node path; argv still names the executable.
+    await expect(codexProcessFiles(42, files, async () => rows.map(row => row.pid === 42
+      ? { ...row, executable: '/Users/demo/.ha', args: '/Users/demo/.harness/node/bin/node /tmp/bin/codex' } : row)))
+      .resolves.toEqual(['/dev/null', own])
+    await expect(codexProcessFiles(42, files, async () => null)).resolves.toEqual(['/dev/null'])
+    await expect(codexProcessFiles(42, files, async () => [])).resolves.toEqual(['/dev/null'])
+    await expect(codexProcessFiles(42, files, async () => rows.filter(row => row.pid !== 43))).resolves.toEqual(['/dev/null'])
+    await expect(codexProcessFiles(42, files, async () => [...rows, { ...rows[1], pid: 44 }])).resolves.toEqual(['/dev/null'])
+    // A native process owns its file directly. No walk into the tools it launched.
+    const table = vi.fn(async () => rows)
+    await expect(codexProcessFiles(43, files, table)).resolves.toEqual([own])
+    expect(table).not.toHaveBeenCalled()
+    await expect(codexProcessFiles(51, files, table)).resolves.toEqual(['/dev/null'])
+  })
+
+  it('does not give a starting process the only sibling rollout before its own file opens', async () => {
+    const profile = tempRoot()
+    const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000009'
+    writeCodexRollout(profile, sibling, CWD, Date.now())
+    vi.resetModules()
+    const { codexProcessSession, findLiveSession } = await import('./sessionRepair.js')
+    // October 6 full E2E: two Codex processes start together, but only one has written
+    // its rollout yet. This process holds neither: a directory match is not ownership.
+    await expect(codexProcessSession(process.pid, join(profile, 'sessions'), CWD)).resolves.toBeNull()
+    await expect(findLiveSession('codex', CWD, Date.now() - 1_000,
+      { codexHome: profile, bornOnly: true, pid: process.pid })).resolves.toBeNull()
+  })
+
+  it('names a fork among its siblings by the rollout its process holds open, where a scan must refuse', async () => {
+    const profile = tempRoot()
+    const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000003'
+    const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000004'
+    const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
+    const siblingFile = writeCodexRollout(profile, sibling, CWD, STARTED_AT + 2_000)
+    const elsewhere = writeCodexRollout(tempRoot(), 'a1b2c3d4-1111-4a4a-8a8a-000000000005', CWD, STARTED_AT)
+    vi.resetModules()
+    const { codexProcessSession, findLiveSession } = await import('./sessionRepair.js')
+    const sessions = join(profile, 'sessions')
+    // Two born in the folder since the process started: guessing would wire a tile to a sibling.
+    await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true })).resolves.toBeNull()
+    // The process holds one of them open, beside files that are not rollouts or not this profile's.
+    const held = async () => [forkFile, '/dev/null', join(profile, 'notes.jsonl'), elsewhere]
+    await expect(codexProcessSession(42, sessions, CWD, held)).resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+    // Two held, or one for another folder: nothing, rather than a guess.
+    await expect(codexProcessSession(42, sessions, CWD, async () => [forkFile, siblingFile])).resolves.toBeNull()
+    await expect(codexProcessSession(42, sessions, '/Users/demo/elsewhere', held)).resolves.toBeNull()
+    await expect(codexProcessSession(42, sessions, CWD, async () => [])).resolves.toBeNull()
+  })
+
+  it('reads a live process\'s open files, and binds the repair to the rollout it holds', async () => {
+    const profile = tempRoot()
+    const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000006'
+    const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
+    writeCodexRollout(profile, 'a1b2c3d4-1111-4a4a-8a8a-000000000007', CWD, STARTED_AT + 2_000)
+    // A stand-in for Codex: a process that keeps its rollout open.
+    const holder = spawn(process.execPath, ['-e', 'require("fs").openSync(process.argv[1], "r"); setInterval(() => {}, 60_000)', forkFile], { stdio: 'ignore' })
+    try {
+      vi.resetModules()
+      const { findLiveSession, openFiles } = await import('./sessionRepair.js')
+      await vi.waitFor(async () => expect(await openFiles(holder.pid!)).toContain(realpathSync(forkFile)), { timeout: 10_000, interval: 100 })
+      await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true, pid: holder.pid! }))
+        .resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+      expect(await openFiles(-1)).toEqual([])
+    } finally {
+      holder.kill()
+    }
+  })
+})
+
+// A home the person moved in their shell profile (CLAUDE_CONFIG_DIR, CODEX_HOME: lib/engineHomes.ts) is where
+// the engine they start by hand writes: Claude Code its transcript and its process record, Codex its rollout.
+// With no start-up hook to name the conversation (the engine's hooks not installed there yet, or the hook
+// lost to a daemon restart), the process repair is all that binds it, and it looked in the default folders
+// alone: the agent in a moved home stayed without a conversation.
+describe('session repair — homes the person moved', () => {
+  const lines = (...records: object[]) => `${records.map(r => JSON.stringify(r)).join('\n')}\n`
+  async function moved(claudeHome: string, codexHome: string) {
+    // Empty stand-in defaults, so nothing depends on this machine's own ~/.claude or ~/.codex.
+    process.env.CODEX_HOME = tempRoot()
+    const loaded = await load(join(tempRoot(), 'projects'))
+    const homes = await import('./engineHomes.js')
+    homes.adoptEngineHomes({ CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: codexHome }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
+    return loaded
+  }
+  afterEach(async () => {
+    delete process.env.CODEX_HOME
+    rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+    ;(await import('./engineHomes.js')).resetEngineHomes()
+  })
+
+  it('Claude Code: the process record and the transcript in CLAUDE_CONFIG_DIR', async () => {
+    const claudeHome = tempRoot()
+    const id = '11111111-2222-4333-8444-555555555501'
+    writeTranscript(join(claudeHome, 'projects'), 'project', id, CWD, STARTED_AT + 5_000)
+    mkdirSync(join(claudeHome, 'sessions'))
+    writeFileSync(join(claudeHome, 'sessions', '77.json'), JSON.stringify({ pid: 77, cwd: CWD, sessionId: id, procStart: new Date(STARTED_AT).toUTCString() }))
+    const { claudeProcessSession, findLiveSession } = await moved(claudeHome, tempRoot())
+    const transcriptPath = join(claudeHome, 'projects', 'project', `${id}.jsonl`)
+    await expect(claudeProcessSession(77, CWD, STARTED_AT)).resolves.toEqual({ sessionId: id, transcriptPath })
+    // And by the folder scan, when there is no process record to read.
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath })
+  })
+
+  it('Claude Code: a sub-agent\'s transcript in the moved home is still never an agent of its own', async () => {
+    const claudeHome = tempRoot()
+    const file = join(claudeHome, 'projects', 'proj', 'p-sess', 'subagents', 'agent-a1.jsonl')
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, lines({ type: 'user', cwd: CWD }))
+    utimesSync(file, new Date(STARTED_AT + 60_000), new Date(STARTED_AT + 60_000))
+    const { findLiveSession } = await moved(claudeHome, tempRoot())
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toBeNull()
+  })
+
+  it('Codex: the rollout in CODEX_HOME, by the file its process holds open and by the folder scan', async () => {
+    const codexHome = tempRoot()
+    const id = 'a1b2c3d4-1111-4a4a-8a8a-000000000101'
+    const file = writeCodexRollout(codexHome, id, CWD, STARTED_AT + 5_000)
+    const { codexProcessSession, findLiveSession } = await moved(tempRoot(), codexHome)
+    await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath: file })
+    const roots = [join(process.env.CODEX_HOME!, 'sessions'), join(codexHome, 'sessions')]
+    await expect(codexProcessSession(42, roots, CWD, async () => [file])).resolves.toEqual({ sessionId: id, transcriptPath: realpathSync(file) })
+    // One conversation in each home for this folder: two agents, and no guess.
+    writeCodexRollout(process.env.CODEX_HOME!, 'a1b2c3d4-1111-4a4a-8a8a-000000000102', CWD, STARTED_AT + 6_000)
+    await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toBeNull()
+  })
+})
+
 describe('claudeContinuation', () => {
   it('follows a continued-in marker to the new session file', async () => {
     const dir = tempRoot()
@@ -634,6 +775,30 @@ describe('findResumedTranscript', () => {
     const { findResumedTranscript } = await import('./sessionRepair.js')
 
     await expect(findResumedTranscript('codex', id, { codexHome: profile })).resolves.toBe(file)
+  })
+
+  // A home the person moved in their shell profile (CLAUDE_CONFIG_DIR, CODEX_HOME: lib/engineHomes.ts)
+  // holds the conversations their engine wrote there, and the registry takes them (#779). A resume of one
+  // typed into a pane was looked for in the default folders alone, found nowhere, and never bound.
+  it('finds a conversation in a home the person moved, Claude Code\'s and Codex\'s', async () => {
+    const claudeHome = tempRoot()
+    const codexHome = tempRoot()
+    const claudeId = 'f56f0a36-aa58-4af1-a6e2-a77386122399'
+    const codexId = 'a1b2c3d4-1111-4a4a-8a8a-000000000099'
+    writeTranscript(join(claudeHome, 'projects'), '-w', claudeId, CWD, STARTED_AT)
+    const rollout = writeCodexRollout(codexHome, codexId, CWD, STARTED_AT)
+    const { findResumedTranscript } = await load(tempRoot())
+    const homes = await import('./engineHomes.js')
+    homes.adoptEngineHomes({ CLAUDE_CONFIG_DIR: claudeHome, CODEX_HOME: codexHome }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
+    try {
+      await expect(findResumedTranscript('claude', claudeId)).resolves.toBe(join(claudeHome, 'projects', '-w', `${claudeId}.jsonl`))
+      await expect(findResumedTranscript('codex', codexId)).resolves.toBe(rollout)
+      // An agent's own Codex profile is its only home.
+      await expect(findResumedTranscript('codex', codexId, { codexHome: tempRoot() })).resolves.toBeNull()
+    } finally {
+      rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+      homes.resetEngineHomes()
+    }
   })
 
   it('never treats an argv value that is not a session id as one', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { reconcileGridAttach, createGridAccess, setUpWithin, type GridAttachDeps, type GridAttachResult } from './gridAttach.js'
+import { reconcileGridAttach, createGridAccess, type GridAttachDeps, type GridAttachResult } from './gridAttach.js'
 import type { GridHandoffResult } from './gridHandoff.js'
 import type { EnsureResult } from './gridEnsure.js'
 
@@ -266,33 +266,5 @@ describe('createGridAccess — grid set up when a feature asks', () => {
   it('an attempt that throws resolves as a failed hand-off — it never rejects on the caller', async () => {
     const grid = createGridAccess({ attempt: async () => { throw new Error('boom') }, signedIn: () => true, log: () => {} })
     await expect(grid.ensure()).resolves.toMatchObject({ status: 'handoff-failed', detail: 'boom' })
-  })
-})
-
-describe('setUpWithin: a set-up a create waits for, but not for long', () => {
-  it('answers done once a quick set-up lands', async () => {
-    await expect(setUpWithin(async () => ({ status: 'converged' }), 1_000)).resolves.toBe('done')
-  })
-
-  it('stops waiting at the bound and leaves the set-up running', async () => {
-    vi.useFakeTimers()
-    try {
-      let finish!: () => void
-      const running = new Promise<void>((resolve) => { finish = resolve })
-      let landed = false
-      const waited = setUpWithin(() => running.then(() => { landed = true }), 8_000)
-      await vi.advanceTimersByTimeAsync(8_000)
-      await expect(waited).resolves.toBe('pending')
-      finish()
-      await running
-      await Promise.resolve()
-      expect(landed).toBe(true)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('never throws: a failed set-up is for the next use of grid to say', async () => {
-    await expect(setUpWithin(async () => { throw new Error('offline') }, 1_000)).resolves.toBe('done')
   })
 })

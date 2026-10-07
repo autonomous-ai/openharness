@@ -2,10 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
+import { dispatchDown, relaySocket } from './testing/relaySocket.js'
 import { codexMessagesToEvents, windowCodexLines } from './engines/codex/normalizer.js'
 import { messagesToEvents, subagentStatsFromRawLines, windowRawLines } from './lib/normalize.js'
 import { registry } from './lib/registry.js'
+import { stoppedAgents } from './lib/stoppedAgents.js'
 import { tailFile } from './lib/transcriptTail.js'
+import { bindHistory } from './testing/socketCore.js'
 import { cl, claude, claudeScenario, codexScenario } from './testing/transcriptScenarios.js'
 
 // Transcripts are only served from the engines' own folders. Those default to this computer's real
@@ -40,7 +43,8 @@ describe.each([
     dir = mkdtempSync(join(root, 'history-'))
     file = join(dir, 'transcript.jsonl')
     writeFileSync(file, scenario().join('\n') + '\n')
-    socket = new BackendSocket('fixture')
+    socket = relaySocket('fixture')
+    bindHistory(socket)
     frames = []
     socket.registerLocalClient('local:history', { sendFrame: (frame) => { frames.push(frame as never); return true }, sendBinary: () => true })
     const paneId = `%${++pane}`
@@ -58,12 +62,26 @@ describe.each([
   let requests = 0
   async function ask(type: string, payload: Record<string, unknown>): Promise<Record<string, any>> {
     const requestId = `r${++requests}`
-    await (socket as any).dispatchDown({ type, payload: { requestId, ...payload } }, 'local:history', 'local')
+    await dispatchDown(socket, { type, payload: { requestId, ...payload } }, 'local:history', 'local')
     return frames.find((frame) => frame.type === `${type}_result` && frame.payload.requestId === requestId)!.payload
   }
 
   it('is bound to the transcript under test', () => {
     expect(registry.resolve(sessionId)?.transcriptPath).toBe(file)
+  })
+
+  it('is served from a conversation kept as a stopped one, once nothing live holds it', async () => {
+    const whole = (await ask('session_get', { sessionId })).events
+    // What a stop, or a relaunch that had to leave the conversation for a new one, keeps of it.
+    stoppedAgents.save(registry.resolve(sessionId)!)
+    registry.removeAgent(agentId)
+    try {
+      expect(registry.resolve(sessionId)).toBeUndefined()
+      expect((await ask('session_get', { sessionId })).events).toEqual(whole)
+    } finally {
+      stoppedAgents.remove(agentId)
+    }
+    expect((await ask('session_get', { sessionId })).error).toBe('NOT_FOUND')
   })
 
   it('pages back through the thread exactly as the whole-file read did, cursor for cursor', async () => {

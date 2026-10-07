@@ -52,6 +52,8 @@ export interface MasterChannel {
   memoryUsage(): { rss: number; heapUsed: number }
   /** The process that started this one: the master, when it holds the channel. */
   readonly parentPid: number
+  /** False once the channel to the master has closed (`process.connected`). */
+  readonly connected?: boolean
 }
 
 export interface CoreLink {
@@ -65,10 +67,16 @@ export interface CoreLink {
   /** Start-up is done and requests are served — or it gave way to safe mode, and why: the master stops
    *  waiting for it either way, and rolls back an update whose first core ends up in safe mode. */
   ready(safeMode?: string): void
+  /** Ask the master to start the process on demand that runs [service]: an experiment that is on (protocol 3),
+   *  or the devices, now that there is one (protocol 4). */
+  want(service: string): void
   /** Tell the master, every `heartbeatInterval`, that this core is alive and how big it is. */
   startHeartbeat(): void
   /** The master is gone. A core without one stops, so nothing is left holding the port. */
   onMasterGone(listener: () => void): void
+  /** The master's updater staged a build: hand over for it (`harnessd:update`). Heard from the start, as
+   *  a staged update may arrive while start-up is still under way. */
+  onUpdate(listener: (version: string) => void): void
   /** What the master last said about itself (restarts, the last exit), for `/api/status`. */
   status(): SupervisorStatus | null
   close(): void
@@ -81,6 +89,7 @@ export const processChannel: MasterChannel = {
   on: process.on.bind(process),
   memoryUsage: () => process.memoryUsage(),
   parentPid: process.ppid,
+  get connected() { return process.connected },
 }
 
 export function connectToMaster(
@@ -98,14 +107,38 @@ export function connectToMaster(
     if (!supervised) return
     try { channel.send!(message) } catch { /* closing */ }
   }
+  // The last update the master asked for, kept until something listens: the listener is set at start-up,
+  // but a master can stage one before, and a request missed is an update never applied.
+  let update: string | null = null
+  let updateListener: ((version: string) => void) | null = null
   if (supervised) {
-    channel.on('message', (message) => { if (isMasterMessage(message)) status = message.status })
+    channel.on('message', (message) => {
+      if (!isMasterMessage(message)) return
+      if (message.type === 'harnessd:status') { status = message.status; return }
+      if (updateListener) updateListener(message.version)
+      else update = message.version
+    })
+  }
+  // ⚠️ Listened for from the start and remembered, not from whenever the caller subscribes.
+  // runForeground subscribes some 1,100 lines into start-up, long after this core has bound and begun
+  // to beat, and 'disconnect' fires once, for whoever listens then: a master that died in between —
+  // killed while its core was still starting — went unnoticed, and the core ran on for good, holding
+  // the port the next start needs. Measured: 20 cores whose master died as they bound were all still
+  // running ten minutes later.
+  let masterGone = supervised && channel.connected === false
+  const goneListeners: Array<() => void> = []
+  if (supervised) {
+    channel.once('disconnect', () => {
+      masterGone = true
+      for (const listener of goneListeners.splice(0)) listener()
+    })
   }
   return {
     supervised,
     masterPid: supervised ? channel.parentPid : null,
     bound: (port) => send({ type: 'harnessd:bound', protocol: HARNESSD_PROTOCOL, port }),
     ready: (safeMode) => send(safeMode === undefined ? { type: 'harnessd:ready' } : { type: 'harnessd:ready', safeMode }),
+    want: (service) => send({ type: 'harnessd:want', service }),
     startHeartbeat: () => {
       if (!supervised || heartbeat) return
       delay = loopDelay()
@@ -118,7 +151,20 @@ export function connectToMaster(
       heartbeat = setInterval(beat, intervalMs)
       heartbeat.unref()
     },
-    onMasterGone: (listener) => { if (supervised) channel.once('disconnect', listener) },
+    onMasterGone: (listener) => {
+      if (!supervised) return
+      if (masterGone) queueMicrotask(listener)
+      else goneListeners.push(listener)
+    },
+    onUpdate: (listener) => {
+      if (!supervised) return
+      updateListener = listener
+      if (update !== null) {
+        const version = update
+        update = null
+        queueMicrotask(() => listener(version))
+      }
+    },
     status: () => status,
     close: () => {
       if (heartbeat) clearInterval(heartbeat)

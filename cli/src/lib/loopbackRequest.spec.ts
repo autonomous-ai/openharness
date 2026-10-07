@@ -6,7 +6,7 @@ const hosts = loopbackHosts(18473)
 const req = (headers: Record<string, string>) => ({ headers } as unknown as IncomingMessage)
 
 describe('isLoopbackRequest', () => {
-  it('serves the names every native caller and the dashboard use, on the bound port only', () => {
+  it('serves the names every native caller uses, on the bound port only', () => {
     for (const host of ['127.0.0.1:18473', 'localhost:18473', '[::1]:18473', 'LOCALHOST:18473']) {
       expect(isLoopbackRequest(req({ host }), hosts)).toBe(true)
     }

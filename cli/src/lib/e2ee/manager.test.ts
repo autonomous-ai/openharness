@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -105,6 +105,20 @@ class WebPeer {
   }
 }
 
+/**
+ * A joiner's stretched password, computed once per password for the whole file. `stretchPassword` is
+ * deterministic for a password and machine, and each call is a real scrypt (~0.5-1 s and 128 MB idle;
+ * the cost is a security control, never lowered for a test). Under a loaded full run (load 36, six
+ * workers) "keeps at most two password attempts in flight" spent five of them, one per joiner, and
+ * timed out. The manager's own stretch (`setRemotePassword`) is still real every time.
+ */
+const stretchedPasswords = new Map<string, Promise<Uint8Array>>()
+function stretchedOnce(password: string): Promise<Uint8Array> {
+  let stretched = stretchedPasswords.get(password)
+  if (!stretched) stretchedPasswords.set(password, stretched = stretchPassword(password, AGENT))
+  return stretched
+}
+
 /** A minimal remote-password joiner that runs the CPace 'b' role directly against the manager via
  *  handleFrame — mirrors WebPeer above, but for the persistent remote-password flow: no human "arm"
  *  step (intent() carries the stretched password straight away), and connId-keyed on the manager side
@@ -118,7 +132,7 @@ class PwPeer {
 
   async intent(password: string): Promise<Frame> {
     const sid = C.newPairId()
-    const stretched = await stretchPassword(password, AGENT)
+    const stretched = await stretchedOnce(password)
     this.pr = { sid, sidB64: C.b64e(sid), stretched }
     return { type: 'e2e_pw_pair_intent', payload: { requestId: 'pwr1', sid: this.pr.sidB64 } }
   }
@@ -327,6 +341,99 @@ describe('E2eeManager pairing', () => {
     expect(mgr.hasSession('c4')).toBe(false)
   })
 
+  describe('a hello from a key the device key log may name (onUnknownHello)', () => {
+    /** A signed-in browser this machine has not trusted yet: the hook stands for the log's read. */
+    const label = 'Chrome · macOS'
+
+    it('waits for the log to trust the key, then opens the session', async () => {
+      const web = new WebPeer()
+      const seen: string[] = []
+      const h = machine({
+        onUnknownHello: async (pub) => { seen.push(pub); h.mgr.trustPeer({ pub, label, kind: 'viewer' }) },
+      })
+      h.mgr.handleFrame('w1', web.hello())
+      await vi.waitFor(() => expect(h.lastFor('w1', 'e2e_welcome')).toBeTruthy())
+      expect(seen).toEqual([C.b64e(web.identity.pub)])
+      expect(h.lastFor('w1', 'e2e_denied')).toBeUndefined()
+      const machinePub = (JSON.parse(readFileSync(join(process.env.ADAPTER_DATA_DIR as string, 'e2e', 'identity.json'), 'utf8')) as { pub: string }).pub
+      web.onWelcome(h.lastFor('w1', 'e2e_welcome')!, C.b64d(machinePub))
+      expect(h.mgr.hasSession('w1')).toBe(true)
+    })
+
+    it('denies the hello as unpaired when the log does not trust the key within the bound', async () => {
+      vi.useFakeTimers()
+      try {
+        const h = machine({ onUnknownHello: () => new Promise<void>(() => {}) })
+        h.mgr.handleFrame('w2', new WebPeer().hello())
+        await vi.advanceTimersByTimeAsync(3_999)
+        expect(h.lastFor('w2', 'e2e_denied')).toBeUndefined()
+        await vi.advanceTimersByTimeAsync(1)
+        expect((h.lastFor('w2', 'e2e_denied')!.payload as Record<string, unknown>).reason).toBe('unpaired')
+        expect(h.mgr.hasSession('w2')).toBe(false)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('denies at once, as unpaired, when the read fails', async () => {
+      const h = machine({ onUnknownHello: async () => { throw new Error('offline') } })
+      h.mgr.handleFrame('w3', new WebPeer().hello())
+      await vi.waitFor(() => expect(h.lastFor('w3', 'e2e_denied')).toBeTruthy())
+      expect((h.lastFor('w3', 'e2e_denied')!.payload as Record<string, unknown>).reason).toBe('unpaired')
+    })
+
+    it('never reads the log for a hello whose signature does not verify', () => {
+      const hook = vi.fn(async () => {})
+      const h = machine({ onUnknownHello: hook })
+      const hello = new WebPeer().hello()
+      ;(hello.payload as Record<string, unknown>).sig = C.b64e(new Uint8Array(64))
+      h.mgr.handleFrame('w4', hello)
+      expect(hook).not.toHaveBeenCalled()
+      expect((h.lastFor('w4', 'e2e_denied')!.payload as Record<string, unknown>).reason).toBe('bad_sig')
+    })
+
+    it('drops the answer to a hello a newer one on the same connection replaced', async () => {
+      const web = new WebPeer()
+      const pending: Array<() => void> = []
+      const h = machine({ onUnknownHello: (pub) => new Promise<void>((resolve) => pending.push(() => { h.mgr.trustPeer({ pub, label }); resolve() })) })
+      h.mgr.handleFrame('w5', web.hello())
+      const first = C.b64e(web.session!.myEph.pub)
+      h.mgr.handleFrame('w5', web.hello())
+      await vi.waitFor(() => expect(pending).toHaveLength(2))
+      // The first read trusts the key; the hello it was for is not answered, the newer one still waits.
+      pending[0]()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(h.sent.filter((s) => s.connId === 'w5')).toEqual([])
+      pending[1]()
+      await vi.waitFor(() => expect(h.lastFor('w5', 'e2e_welcome')).toBeTruthy())
+      const answers = h.sent.filter((s) => s.connId === 'w5')
+      expect(answers).toHaveLength(1)
+      expect((answers[0].frame.payload as Record<string, unknown>).webEphPub).toBe(C.b64e(web.session!.myEph.pub))
+      expect((answers[0].frame.payload as Record<string, unknown>).webEphPub).not.toBe(first)
+    })
+
+    it('answers nothing for a connection that went while its hello waited', async () => {
+      let release: () => void = () => {}
+      const h = machine({ onUnknownHello: (pub) => new Promise<void>((resolve) => { release = () => { h.mgr.trustPeer({ pub, label }); resolve() } }) })
+      h.mgr.handleFrame('w6', new WebPeer().hello())
+      h.mgr.dropSession('w6')
+      release()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(h.sent.filter((s) => s.connId === 'w6')).toEqual([])
+      expect(h.mgr.hasSession('w6')).toBe(false)
+    })
+
+    it('answers a paired key at once, without reading the log', () => {
+      const hook = vi.fn(async () => {})
+      const h = machine({ onUnknownHello: hook })
+      const web = new WebPeer()
+      h.mgr.trustPeer({ pub: C.b64e(web.identity.pub), label })
+      h.mgr.handleFrame('w7', web.hello())
+      expect(h.lastFor('w7', 'e2e_welcome')).toBeTruthy()
+      expect(hook).not.toHaveBeenCalled()
+    })
+  })
+
   it('a second concurrent pair_intent is rejected as PAIRING_BUSY while active', async () => {
     const { mgr, takeLast } = machine()
     const web = new WebPeer()
@@ -425,7 +532,9 @@ describe('E2eeManager revoke', () => {
   })
 })
 
-describe('E2eeManager persistent remote-password pairing', () => {
+// Every case here runs at least one real scrypt in the manager (`setRemotePassword`) and one for its
+// joiner: PW_SCRYPT_TEST_TIMEOUT_MS, the budget the lockout cases already carried, for all of them.
+describe('E2eeManager persistent remote-password pairing', { timeout: PW_SCRYPT_TEST_TIMEOUT_MS }, () => {
   const PASSWORD = 'correct horse battery staple'
 
   it('NO_REMOTE_PASSWORD when no password has been set', async () => {
@@ -609,5 +718,71 @@ describe('E2eeManager persistent remote-password pairing', () => {
     const joiner = new PwPeer()
     mgr.handleFrame('pwcleared', await joiner.intent(PASSWORD))
     expect(takeLast('e2e_pw_pair_result').payload).toMatchObject({ ok: false, error: 'NO_REMOTE_PASSWORD' })
+  })
+})
+
+describe('a sealed frame for a session this process never had', () => {
+  const sealed = { type: 'message', payload: { __e2e: { v: 1, k: 'p', n: 7, ct: 'AAAA' } } }
+
+  it('tells the client its session is gone, naming the frame, at most once a second per connection', () => {
+    let now = 1_000
+    const mgr = new makeManager({ machineId: AGENT, sendTo: () => {}, isConnected: () => true }, () => now)
+    expect(mgr.sessionGone('conn-old', sealed)).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'message', n: 7 } } })
+    expect(mgr.sessionGone('conn-old', sealed)).toBeNull()
+    now += 999
+    expect(mgr.sessionGone('conn-old', sealed)).toBeNull()
+    now += 1
+    expect(mgr.sessionGone('conn-old', sealed)).not.toBeNull()
+    // Another connection is its own; a frame with no counter to name is named by its type.
+    expect(mgr.sessionGone('conn-other', { type: 'agents_list', payload: { __e2e: { n: 'x' } } })).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'agents_list' } } })
+    expect(mgr.sessionGone('conn-bare', { type: 'agents_list' })).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'agents_list' } } })
+  })
+
+  it('says nothing to a connection that has a session: a frame that does not open there is the relay\'s', () => {
+    const h = machine()
+    const peer = new WebPeer()
+    h.mgr.trustPeer({ pub: C.b64e(peer.identity.pub), label: 'phone' })
+    h.mgr.handleFrame('live', peer.hello())
+    expect(h.mgr.hasSession('live')).toBe(true)
+    expect(h.mgr.sessionGone('live', sealed)).toBeNull()
+  })
+
+  it('remembers a bounded number of the connections it told, the oldest let go first', () => {
+    const mgr = new makeManager({ machineId: AGENT, sendTo: () => {}, isConnected: () => true }, () => 5_000)
+    for (let n = 0; n <= 256; n++) expect(mgr.sessionGone(`conn-${n}`, sealed)).not.toBeNull()
+    // The first was let go, so it is told again at once; the last is still remembered.
+    expect(mgr.sessionGone('conn-0', sealed)).not.toBeNull()
+    expect(mgr.sessionGone('conn-256', sealed)).toBeNull()
+  })
+})
+
+describe('terminal bytes sealed for a session this process never had', () => {
+  const keystrokes = async (counter: number) => {
+    const { sealTerminalBinary } = await import('./terminalSeal.js')
+    return sealTerminalBinary(new Uint8Array(32).fill(9), counter, { kind: 1, streamId: '00112233-4455-6677-8899-aabbccddeeff', seq: 1, bytes: new TextEncoder().encode('ls\r'), compressed: false })!
+  }
+
+  it('tells the client its session is gone, naming the bytes by their clear kind and counter', async () => {
+    const mgr = new makeManager({ machineId: AGENT, sendTo: () => {}, isConnected: () => true }, () => 1_000)
+    expect(mgr.terminalSessionGone('conn-old', await keystrokes(5))).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'terminal_binary', kind: 1, n: 5 } } })
+    // Bytes that are not a terminal frame at all are named by what they claim to be.
+    expect(mgr.terminalSessionGone('conn-garbled', new Uint8Array([1, 2, 3]))).toEqual({ type: 'e2e_session_unknown', payload: { refused: { type: 'terminal_binary' } } })
+  })
+
+  it('shares the once-a-second allowance per connection with sealed frames', async () => {
+    let now = 1_000
+    const mgr = new makeManager({ machineId: AGENT, sendTo: () => {}, isConnected: () => true }, () => now)
+    expect(mgr.sessionGone('conn-old', { type: 'message', payload: { __e2e: { n: 1 } } })).not.toBeNull()
+    expect(mgr.terminalSessionGone('conn-old', await keystrokes(2))).toBeNull()
+    now += 1_000
+    expect(mgr.terminalSessionGone('conn-old', await keystrokes(3))).not.toBeNull()
+  })
+
+  it('says nothing to a connection that has a session', async () => {
+    const h = machine()
+    const peer = new WebPeer()
+    h.mgr.trustPeer({ pub: C.b64e(peer.identity.pub), label: 'phone' })
+    h.mgr.handleFrame('live', peer.hello())
+    expect(h.mgr.terminalSessionGone('live', await keystrokes(4))).toBeNull()
   })
 })

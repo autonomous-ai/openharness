@@ -6,6 +6,10 @@ ConditionPathExists=!/etc/harness-live
 Type=exec
 Environment=ADAPTER_UPDATE_DISABLE=true
 Environment=HARNESS_OS=1
+# `start --foreground` runs harnessd's master, as launchd does; here it keeps running the core alone, one
+# process, as the memory and zram checks in os/tests measure it (self-update is off, so no update needs
+# the master to judge it).
+Environment=HARNESS_NO_MASTER=1
 Environment=HARNESS_TUI_BIN=/usr/lib/harness/hn
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
 Environment=npm_config_prefix=%h/.local

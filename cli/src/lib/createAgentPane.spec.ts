@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'fs'
-import { tmpdir } from 'os'
+import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import type { TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
 import { createAndRegisterPane } from './createAgentPane.js'
@@ -54,8 +54,21 @@ describe('createAndRegisterPane', () => {
 
     expect(result.ok).toBe(true)
     expect(tmuxBackend.create).toHaveBeenCalledTimes(1)
-    expect(tmuxBackend.create).toHaveBeenCalledWith(expect.objectContaining({ label: 'harness-claude-1' }))
+    expect(tmuxBackend.create).toHaveBeenCalledWith(expect.objectContaining({ label: 'harness-claude-1', cwd: homedir() }))
     expect(tmuxBackend.kill).not.toHaveBeenCalled()
+  })
+
+  it('starts an explicit-argv terminal in its folder without evaluating its arguments', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const tmuxBackend = fakeTmux([succeeded('%1')])
+    const argv = ['/bin/zsh', '/work/a script', '$(touch injected)', 'a; echo b', '']
+    const result = await createAndRegisterPane({
+      tmuxBackend, registry, engine: 'terminal', cwd: '/work/project with spaces',
+      spawnCwd: '/work/project with spaces', sessionLabel: 'harness-shell-1', argv,
+    })
+    expect(result.ok).toBe(true)
+    expect(tmuxBackend.create).toHaveBeenCalledWith({ label: 'harness-shell-1', cwd: '/work/project with spaces', command: argv })
   })
 
   it('retries past a stale registration collision and succeeds on the next pane', async () => {

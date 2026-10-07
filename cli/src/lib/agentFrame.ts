@@ -29,7 +29,7 @@ import type { AgentTokenUsage } from './agentTokenUsage.js'
 import type { AgentOutputStats } from './agentOutputStats.js'
 import type { GridAssignment } from './gridAssignment.js'
 import type { GridWebSearchStatus } from './gridLaunch.js'
-import { gridAnnotation, type GridAnnotation } from './gridModels.js'
+import type { AgentGridTarget, GridAnnotation } from './gridAnnotation.js'
 import { projectDisplayName, sessionDisplayTitle, type RegisteredSession } from './registry.js'
 import { engineCanFork } from './forkAgent.js'
 import { resumeMode, type ResumeMode } from './resumeCapability.js'
@@ -149,6 +149,9 @@ export interface AgentFrameContext {
   tokenUsage?: AgentTokenUsage | null
   /** The DSH companions' state for this agent; absent when the caller has none to give. */
   dsh?: AgentDshContext | null
+  /** What the models service says of the grid the agent is on (core/api.ts `ModelsPort.annotation`): from
+   *  memory, never I/O. Absent when the caller has none to give, and then the frame says nothing of it. */
+  gridAnnotation?: (grid: AgentGridTarget) => GridAnnotation | null
 }
 
 /**
@@ -189,7 +192,7 @@ const gitContexts = new SessionGitContextReader()
 
 export async function agentFrame(
   s: RegisteredSession,
-  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity }: AgentFrameContext,
+  { selectedModel, terminalAvailable, dsh, tokenUsage, activity: contextActivity, gridAnnotation }: AgentFrameContext,
 ): Promise<AgentFrame> {
   // The git context is git's own display projection and keeps reading git directly; the frame's
   // `project` goes through the SCM seam. Both resolve through agentProject's shared reader, so the
@@ -236,7 +239,7 @@ export async function agentFrame(
     // the block — decided by the launch, kept on the row — so it is gone the moment the block is. So do
     // that grid's `state` and a `note` when the agent's model will not answer (issue 03), read from what
     // the model list last showed — no I/O, and absent for a grid this daemon is not tracking.
-    grid: s.grid ? { ...s.grid, ...(s.gridWebSearch ? { webSearch: s.gridWebSearch } : {}), ...gridAnnotation(s.grid) } : null,
+    grid: s.grid ? { ...s.grid, ...(s.gridWebSearch ? { webSearch: s.gridWebSearch } : {}), ...gridAnnotation?.(s.grid) } : null,
     // The Codex profile folder this agent launched against, if one was chosen instead of the
     // engine's own login. Codex only; null is a real answer ("uses ~/.codex") for the same reason
     // `grid: null` is above.

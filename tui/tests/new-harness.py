@@ -218,7 +218,7 @@ try:
     assert not re.search(field_at('Options|Machine'), form_screen()), 'settings are direct fields; machine belongs in Project'
     choose_field('Approvals', 'read only'); shows('Read only')
     task_text = 'Fix café login.\n\nKeep 界 and 🦀 intact.\nAdd a regression test.'
-    field('Task'); shows('Enter start')
+    field('Task'); shows('enter start')
     assert field_position('Task') == anchor, 'the task editor keeps the form visible and fixed'
     raw('\x1b[200~Fix café login.\r\n\r\nKeep 界 and 🦀 intact.\x1b[201~')
     shows('Keep 界 and 🦀 intact.')
@@ -314,7 +314,7 @@ try:
     shows('autonomous-harness @ local'); shows('[x]')
     tmux('resize-window', '-t', 'test', '-x', '150', '-y', '42'); settle_ui()
     snapshot('new-harness-flat')
-    field('Task'); shows('Enter start')
+    field('Task'); shows('enter start')
     raw('\x1b[200~Improve the New Harness keyboard flow.\nKeep the launch settings visible.\x1b[201~')
     shows('Keep the launch settings visible.'); snapshot('new-harness-task')
     keys('Escape'); new_form(); shows('Improve the New Harness keyboard flow.')

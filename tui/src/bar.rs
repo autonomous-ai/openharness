@@ -822,7 +822,7 @@ mod tests {
     // ── box panes ──
 
     /// Box panes: each pane its own frame, a cell apart (never one line shared by two panes) — the
-    /// focused one's in the accent, the one waiting on you in the attention colour, the others quiet.
+    /// focused one's in the status bar's background colour, the one waiting on you in the attention colour, the others quiet.
     #[test]
     fn each_pane_is_its_own_box_in_the_focus_and_attention_colours() {
         let _colours = crate::term_out::colours_lock();
@@ -836,26 +836,44 @@ mod tests {
         let frame = |id: u64| { let r = app.rects.iter().find(|(p, _)| *p == id).map(|(_, r)| *r).unwrap(); crate::pane_frame::boxed_in(r, app.window_area(app.tab()), app.box_inner(app.tab()), app.pane_status(app.tab())).surface };
         let (left, top_right, below) = (frame(1), frame(2), frame(3));
         let mid = left.y + left.height / 2;
-        // The left box's right edge, then at once the right box's left edge: `││`.
+        // Each box is its own frame: the left box's right edge and the right box's left edge touch
+        // (`││`), no blank column between, never two boxes on one line.
         assert_eq!(buf[(left.right() - 1, mid)].symbol(), "│", "{s}");
         assert_eq!(top_right.x, left.right(), "the boxes touch:\n{s}");
         assert_eq!(buf[(top_right.x, top_right.y + 1)].symbol(), "│", "{s}");
-        assert_eq!(buf[(left.right() - 1, left.y)].symbol(), "┐", "each box its own corners, not a joint:\n{s}");
+        // Each frame is its own, with its own corners — never joined.
+        assert_eq!(buf[(left.right() - 1, left.y)].symbol(), "┐", "the left box's own corner:\n{s}");
         assert_eq!(buf[(left.x, left.y)].symbol(), "┌");
-        assert_eq!(buf[(top_right.x, top_right.y)].symbol(), "┌", "the right box is its own, not a joint:\n{s}");
-        let (accent, attention) = (theme::paint(theme::accent()), theme::paint(theme::ATTENTION));
-        assert_eq!(buf[(left.right() - 1, mid)].fg, accent, "the focused pane's frame");
-        assert_eq!(buf[(top_right.x, top_right.y + 1)].fg, attention, "the waiting pane's frame");
-        assert_ne!(buf[(below.x, below.y + 1)].fg, accent, "a quiet frame");
-        assert_ne!(buf[(below.x, below.y + 1)].fg, attention, "a quiet frame");
+        assert_eq!(buf[(top_right.x, top_right.y)].symbol(), "┌", "the right box's own corner:\n{s}");
+        let (status_bg, attention) = (theme::paint(app.status_style().bg.unwrap_or(Color::Reset)), theme::paint(theme::ATTENTION));
+        // Each box keeps its own colour on its own (unshared) lines.
+        assert_eq!(buf[(left.right() - 1, mid)].fg, status_bg, "the focused pane's frame");
+        assert_eq!(buf[(top_right.right() - 1, top_right.y + top_right.height / 2)].fg, attention, "the waiting pane's frame");
+        assert_ne!(buf[(below.right() - 1, below.y + below.height / 2)].fg, status_bg, "a quiet frame");
+        assert_ne!(buf[(below.right() - 1, below.y + below.height / 2)].fg, attention, "a quiet frame");
         // The program is inside its frame.
         assert_eq!(app.content_of(app.tab(), app.rects.iter().find(|(p, _)| *p == 1).unwrap().1), Rect::new(left.x + 1, left.y + 1, left.width - 2, left.height - 2));
     }
 
+    /// The status bar is the same whichever focus style: blurred panes do not recolour it.
+    #[test]
+    fn the_status_bar_keeps_its_colours_when_panes_are_blurred() {
+        let _colours = crate::term_out::colours_lock();
+        let mut app = app((120, 36), "bottom");
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        let mut styles = Vec::new();
+        for focus in ["line", "surface"] {
+            let _ = app.options.set("@hn-focus", Some(focus), &global, "", 0);
+            styles.push((app.status_style(), app.style_of("window-status-current-style", app.active, None)));
+        }
+        assert_eq!(styles[0], styles[1]);
+    }
+
     /// Two boxes next to each other touch (`││`); two blurred surfaces have one cell between
-    /// them — across and down, pane titles off and on top, the status line at the bottom or the
-    /// bar at a side: never each pane's space added to the other's. At the window's edges and the
-    /// status line a pane has none (beside the bar, its blank edge is the one cell).
+    /// them across, and down too — unless a pane title fills that row, then the surfaces meet as
+    /// the boxes do (the title is the divider). Pane titles off and on top, the status line at the
+    /// bottom or the bar at a side: never each pane's space added to the other's. At the window's
+    /// edges and the status line a pane has none (beside the bar, its blank edge is the one cell).
     #[test]
     fn panes_side_by_side_touch_or_are_a_cell_apart_and_meet_the_edges() {
         for focus in ["line", "surface"] { for (side, titles) in [("bottom", "off"), ("bottom", "top"), ("left", "off"), ("left", "top"), ("right", "top")] {
@@ -872,17 +890,19 @@ mod tests {
                 let r = app.rects.iter().find(|(p, _)| p == id).unwrap().1;
                 if boxes { crate::pane_frame::boxed_in(r, canvas, inner, status).surface } else { crate::pane_frame::frame(r, canvas, inner, status).surface }
             }).collect();
-            let gap = if boxes { 0 } else { 1 };
+            // Boxes and blurred surfaces alike touch both ways (0), as the bottom ones touch the
+            // status line.
+            let (gap_across, gap_down): (i32, i32) = (0, 0);
             let at = format!("{focus}, {side}, titles {titles}:\n{s}");
             // Across: the left edge (the bar's blank column when it is on the left), between, the right edge.
             assert_eq!(f[0].x, canvas.x, "left edge {at}");
             if side == "left" { assert_eq!(canvas.x, app.bar_width(), "the bar's blank edge is the gap {at}"); }
-            assert_eq!(f[1].x - f[0].right(), gap, "between, across {at}");
+            assert_eq!(f[1].x as i32 - f[0].right() as i32, gap_across, "between, across {at}");
             assert_eq!(f[1].right(), canvas.right(), "right edge {at}");
             if side == "right" { assert_eq!(app.size.0 - app.bar_width(), canvas.right(), "the bar's blank edge is the gap {at}"); }
             // Down: the top edge, between the two stacked panes, the bottom edge (the status line).
             assert_eq!(f[0].y, canvas.y, "top edge {at}");
-            assert_eq!(f[2].y - f[1].bottom(), gap, "between, down {at}");
+            assert_eq!(f[2].y as i32 - f[1].bottom() as i32, gap_down, "between, down {at}");
             assert_eq!((f[0].bottom(), f[2].bottom()), (canvas.bottom(), canvas.bottom()), "bottom edge {at}");
         } }
     }

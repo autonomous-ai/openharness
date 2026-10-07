@@ -1,8 +1,9 @@
 import { readFile } from 'fs/promises'
-import { dirname, join } from 'path'
+import { join } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { env } from '../config/env.js'
+import { sessionClaudeHome, sessionCodexHome } from './engineHomes.js'
 import { parseMuseSettings } from '../engines/muse/runtimeProfile.js'
 import { parseAmpSession } from '../engines/amp/runtimeProfile.js'
 import type { AgentEngine } from '../engines/types.js'
@@ -46,6 +47,7 @@ import {
 } from '../engines/pi/runtimeProfile.js'
 import { parseGrokFooterProfile } from '../engines/grok/runtimeProfile.js'
 import { parseAgyFooterProfile } from '../engines/agy/runtimeProfile.js'
+import { parseCodexCatalog, type CodexCatalogModel } from '../engines/codex/modelPicker.js'
 
 export interface RuntimeProfile {
   id: string
@@ -131,7 +133,12 @@ interface CodexCache {
 }
 
 const PROFILE_RE = /^runtime-v1:([^:]+):(claude|codex|cursor|commandcode|pi|devin|opencode|hermes|muse|amp|kilo|grok|agy|copilot):([^@]+)@([a-z0-9_-]+)$/i
-const CODEX_EFFORTS = new Set(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+/**
+ * `persistent` came with Codex 0.160 (`ReasoningEffort::Persistent`, "Continue working until put to
+ * sleep"): without it here a thread on it read as no effort at all, so its chip showed nothing and a
+ * switch to it could never be confirmed.
+ */
+const CODEX_EFFORTS = new Set(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent'])
 const CLAUDE_EFFORTS = new Set(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
 const CURSOR_EFFORTS = new Set(['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'])
 const EFFORTS = new Set([
@@ -170,6 +177,8 @@ const BASIC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const CLAUDE_ALIASES = ['default', 'opus', 'fable', 'sonnet', 'haiku'] as const
 const CHANGE_DEBOUNCE_MS = 120
 const CLAUDE_ULTRACODE_MIN_VERSION: [number, number, number] = [2, 1, 209]
+/** The first Codex whose `/model` picker was driven by hand (see supportsNativeRuntimeControl). */
+const CODEX_CONTROL_MIN_VERSION: [number, number, number] = [0, 144, 0]
 const CURSOR_CONTROLLED_BUILD = '2026.07.20-8cc9c0b'
 const CURSOR_CATALOG_TTL_MS = 5 * 60_000
 /** Shared TTL for the stdout catalogs (devin, pi) — same rationale as the cursor one. */
@@ -264,14 +273,27 @@ export function supportsNativeRuntimeControl(session: RegisteredSession): boolea
   // would otherwise still drive a CLI the owner took off the switchable list.
   if (session.engine === 'claude') return versionAtLeast(session.cliVersion, [2, 1, 153])
   if (session.engine !== 'codex') return false
-  if (session.engine !== 'codex') return false
-  const version = parseVersion(session.cliVersion)
-  return !!version && version[0] === 0 && (version[1] === 144 || version[1] === 145)
+  // Open upward, like Claude Code's. It allowed exactly 0.144 and 0.145, the two releases whose picker
+  // was driven by hand, so every Codex kept up to date (0.160 on 2026-10-05) could not be switched at
+  // all. The controller now reads the picker by what it says rather than by release: rows by slug or
+  // catalog display name, the rows read again before a digit, and nothing pressed when the row is not
+  // found exactly (engines/codex/modelPicker.ts).
+  return versionAtLeast(session.cliVersion, CODEX_CONTROL_MIN_VERSION)
 }
 
-export function codexEffortAllowed(model: string, effort: string): boolean {
+/**
+ * Whether Codex can be asked for this effort on this model. `listed` is what Codex's own catalog
+ * (`models_cache.json`) gives the model, or null when the catalog cannot be read or does not have it.
+ *
+ * Max and Ultra follow the catalog: Codex offers them in its picker exactly where the catalog lists them
+ * (model_popups.rs), and 0.160's lists them for gpt-6-astra, gpt-6.1-sol and gpt-6-sol, which the slug
+ * list below left out of reach (owner, 2026-10-05). The slug list is what was known from 0.145, kept for
+ * when there is no catalog to ask.
+ */
+export function codexEffortAllowed(model: string, effort: string, listed: readonly string[] | null = null): boolean {
   if (!CODEX_EFFORTS.has(effort)) return false
   if (effort !== 'max' && effort !== 'ultra') return true
+  if (listed) return listed.includes(effort)
   return /^gpt-5\.6(?:-|$)/i.test(model) || model.toLowerCase() === 'codex-auto-review'
 }
 
@@ -547,7 +569,7 @@ async function readText(file: string): Promise<string> {
 }
 
 function claudeSettingsFiles(session: RegisteredSession): string[] {
-  const root = dirname(env.CLAUDE_PROJECTS_DIR)
+  const root = sessionClaudeHome(session)
   const files = [join(root, 'settings.json')]
   if (session.cwd) {
     files.push(join(session.cwd, '.claude', 'settings.json'))
@@ -617,37 +639,6 @@ function claudeStartupBanner(pane: string): { model: string; effort?: string } |
     model: `claude-${match[1].toLowerCase()}-${match[2].replace(/\./g, '-')}${match[3] ? '[1m]' : ''}`,
     ...(match[4] ? { effort: match[4].toLowerCase() } : {}),
   }
-}
-
-/**
- * Read-only evidence for a ready, pre-conversation CLI. Callers must scope this to the live process;
- * it deliberately never enters RuntimeProfileManager's conversation cache under an empty session ID.
- */
-export async function readStartupProfile(session: RegisteredSession, pane: string): Promise<string | null> {
-  if (session.sessionId || !session.active || session.grid || session.gridLaunch || session.gateway) return null
-  pane = stripAnsi(pane).trimEnd()
-  // A banner above an onboarding dialog is not a ready agent. Do not accept a numbered menu cursor.
-  if (/trust this (?:folder|directory)|trust the files|sign in|log in|select a login|choose.*theme/i.test(pane)) return null
-  if (session.engine === 'claude') {
-    const banner = claudeStartupBanner(pane)
-    if (!banner || !/^\s*❯\s*(?:Try\s+[^\n]*)?$/mu.test(pane)) return null
-    // Slash commands can change the selection before a first conversational turn binds the session.
-    const change = [...pane.matchAll(/(?:^|\n)\s*(?:⎿\s*)?Set model to\s+([^\n]+)/gi)].at(-1)
-    const model = change ? normalizeClaudeDisplay(change[1]) : banner.model
-    if (!model) return null
-    const effort = banner.effort ?? await claudeConfiguredEffort(session)
-    return encodeRuntimeProfile({ sessionId: session.agentId, engine: 'claude',
-      model: claudeAliasForModel(model) ?? model, effort })
-  }
-  if (session.engine === 'codex') {
-    if (!/\bOpenAI Codex\b/.test(pane) || !/^\s*›(?!\s*\d+\.)[^\n]*$/mu.test(pane)) return null
-    const matches = [...pane.matchAll(/\b(gpt-[a-z0-9][a-z0-9._-]*)\s+(low|medium|high|xhigh|max|ultra|default)\s*[·│]/gi)]
-    const match = matches.at(-1)
-    if (!match) return null
-    return encodeRuntimeProfile({ sessionId: session.agentId, engine: 'codex', model: match[1].toLowerCase(),
-      effort: match[2].toLowerCase() === 'default' ? 'auto' : match[2].toLowerCase() })
-  }
-  return null
 }
 
 function addOption(
@@ -866,7 +857,7 @@ export class RuntimeProfileManager {
     paneText = stripAnsi(paneText)
     const currentUi = currentPaneUi(paneText)
     if (session.engine === 'codex') {
-      const matches = [...paneText.matchAll(/\b(gpt-[a-z0-9][a-z0-9._-]*)\s+(low|medium|high|xhigh|max|ultra|default)\s*[·│]/gi)]
+      const matches = [...paneText.matchAll(/\b(gpt-[a-z0-9][a-z0-9._-]*)\s+(low|medium|high|xhigh|max|ultra|persistent|default)\s*[·│]/gi)]
       const latest = matches[matches.length - 1]
       if (latest) {
         state.model = latest[1].toLowerCase()
@@ -1206,9 +1197,7 @@ export class RuntimeProfileManager {
    * answered "There's an issue with the selected model (opencode/big-pickle). It may not exist".
    *
    * So `''` gets no entry in this conversation cache, and writes land in a throwaway rather than a
-   * bucket the next agent will read. A ready startup banner can be read separately with
-   * readStartupProfile, whose caller must scope that observation to the live process. Transcript
-   * state is re-read once a real conversation binds.
+   * bucket the next agent will read. Transcript state is re-read once a real conversation binds.
    */
   private unbound(sessionId: string): boolean {
     return !sessionId
@@ -1339,30 +1328,47 @@ export class RuntimeProfileManager {
     return output
   }
 
+  /**
+   * The catalog Codex builds its own `/model` picker from, read fresh: what the controller matches the
+   * picker's rows against (engines/codex/modelPicker.ts). Empty when there is no cache to read.
+   */
+  async codexCatalog(session: RegisteredSession): Promise<CodexCatalogModel[]> {
+    return parseCodexCatalog(await this.readCodexCache(session))
+  }
+
+  /**
+   * Found by QA on a quiet machine: the picker read the daemon's login instead of the agent's.
+   * Use the bound conversation's home, or the launch shell's, with an explicit Codex profile first.
+   */
+  private async readCodexCache(session: RegisteredSession): Promise<CodexCache> {
+    try {
+      const cache: unknown = JSON.parse(await readFile(join(sessionCodexHome(session), 'models_cache.json'), 'utf8'))
+      return record(cache) ?? {}
+    } catch {
+      return {}
+    }
+  }
+
   private async codexModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
     const output: RuntimeModelOption[] = []
     const seen = new Set<string>()
-    let cache: CodexCache = {}
-    // This agent's own CODEX_HOME profile, when it has one other than the default (see
-    // RegisteredSession.codexHome) — otherwise the picker would show the default profile's cached
-    // models for an agent that is not actually running on it.
-    try { cache = JSON.parse(await readFile(join(session.codexHome || env.CODEX_HOME, 'models_cache.json'), 'utf8')) as CodexCache } catch { /* current state fallback below */ }
+    const cache = await this.readCodexCache(session)
+    const catalog = parseCodexCatalog(cache)
     for (const item of Array.isArray(cache.models) ? cache.models : []) {
       const model = text(item.slug)
       if (!model || item.visibility === 'hide') continue
       const label = text(item.display_name) || runtimeModelLabel(model)
       addOption(output, seen, session, model, 'auto', label)
-      for (const level of Array.isArray(item.supported_reasoning_levels) ? item.supported_reasoning_levels : []) {
-        const effort = text(level.effort).toLowerCase()
-        if (CODEX_EFFORTS.has(effort) && effort !== 'auto' && codexEffortAllowed(model, effort)) {
-          addOption(output, seen, session, model, effort, label)
-        }
+      const listed = catalog.find((entry) => entry.slug === model)?.efforts ?? []
+      for (const effort of listed) {
+        if (effort !== 'auto' && codexEffortAllowed(model, effort, listed)) addOption(output, seen, session, model, effort, label)
       }
     }
     const state = this.states.get(session.sessionId)
     if (state?.model) {
       addOption(output, seen, session, state.model, 'auto')
-      if (state.effort && codexEffortAllowed(state.model, state.effort)) {
+      const listed = catalog.find((entry) => entry.slug === state.model)?.efforts ?? null
+      if (state.effort && codexEffortAllowed(state.model, state.effort, listed)) {
         addOption(output, seen, session, state.model, state.effort)
       }
     }

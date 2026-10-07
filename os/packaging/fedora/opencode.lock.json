@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "name": "OpenCode",
+  "version": "1.18.34",
+  "architecture": "aarch64",
+  "license": "MIT",
+  "upstream": "https://github.com/anomalyco/opencode",
+  "archives": {
+    "binary": {
+      "package": "opencode-linux-arm64",
+      "url": "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.18.34.tgz",
+      "bytes": 60094599,
+      "sha256": "6f212b830b26bf72012f1665559ddb5fd7e928294971d3d1c99a0f9097a3d311"
+    },
+    "license": {
+      "package": "opencode-ai",
+      "url": "https://registry.npmjs.org/opencode-ai/-/opencode-ai-1.18.34.tgz",
+      "bytes": 3047,
+      "sha256": "279923bb5754e810b173a8a7401cf17699fccad3c1159500c10c477887f0b53b"
+    }
+  },
+  "files": {
+    "opencode": {
+      "archive": "binary",
+      "member": "package/bin/opencode",
+      "bytes": 185116816,
+      "sha256": "415487fcd9b3f06addd6877435783f3d5a236c029066b0dd6597d64980b15351"
+    },
+    "LICENSE": {
+      "archive": "license",
+      "member": "package/LICENSE",
+      "bytes": 1065,
+      "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
+    }
+  }
+}

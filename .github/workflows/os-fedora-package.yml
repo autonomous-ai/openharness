@@ -1,0 +1,128 @@
+name: Harness OS private Fedora package
+
+on:
+  workflow_dispatch:
+    inputs:
+      runtime_run_id:
+        description: 'Verified private ARM runtime fixture run'
+        type: string
+        required: true
+      runtime_source:
+        description: 'Exact producer commit recorded in that runtime artifact'
+        type: string
+        required: true
+      prepare_fixture:
+        description: 'Also prepare a fresh private ARM disk for accelerated graphical acceptance'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-fedora-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    env:
+      RUNTIME_RUN: ${{ inputs.runtime_run_id }}
+      RUNTIME_SOURCE: ${{ inputs.runtime_source }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Check the selected producer and private package inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$RUNTIME_RUN" =~ ^[0-9]+$ ]]
+          [[ "$RUNTIME_SOURCE" =~ ^[a-f0-9]{40}$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUNTIME_RUN" > "$RUNNER_TEMP/producer.json"
+          python3 - "$RUNNER_TEMP/producer.json" <<'PY'
+          import json, os, sys
+          run = json.load(open(sys.argv[1]))
+          assert run['head_sha'] == os.environ['RUNTIME_SOURCE']
+          assert run['path'] == '.github/workflows/os-runtime-updates.yml'
+          assert run['status'] == 'completed' and run['conclusion'] == 'success'
+          assert run['repository']['full_name'] == os.environ['GITHUB_REPOSITORY']
+          PY
+          make -C os check
+      - uses: actions/download-artifact@v6
+        with:
+          name: harness-runtime-update-fixture-aarch64
+          run-id: ${{ env.RUNTIME_RUN }}
+          github-token: ${{ github.token }}
+          path: os/work/fedora-runtime-input
+      - name: Verify the pinned upstream default agent
+        run: python3 os/tools/opencode_payload.py --archives os/work/opencode-archives --output os/work/opencode-payload
+      - name: Build two identical packages and a real RPM upgrade
+        run: |
+          image=$(python3 -c 'import json; print(json.load(open("os/tests/arm-session.lock.json"))["root_image"])')
+          mkdir -p os/work/fedora-package-output
+          docker pull --platform linux/arm64 "$image"
+          docker image inspect "$image" > os/work/fedora-package-output/container-image.json
+          docker run --rm --platform linux/arm64 \
+            --mount "type=bind,source=$PWD,target=/source,readonly" \
+            --mount "type=bind,source=$PWD/os/work/fedora-package-output,target=/output" \
+            -e RUNTIME_SOURCE "$image" /bin/bash -euo pipefail -c '
+              manager=$(command -v dnf5 || command -v microdnf)
+              "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True --nodocs python3 git rpm-build tar gzip
+              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --agent /source/os/work/opencode-payload --output /output/first --release 1
+              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --agent /source/os/work/opencode-payload --output /output/repeat --release 1
+              python3 /source/os/tools/build-fedora-package.py --runtime /source/os/work/fedora-runtime-input/runtime --runtime-source "$RUNTIME_SOURCE" --agent /source/os/work/opencode-payload --output /output/upgrade --release 2
+            '
+      - name: Install, upgrade and remove in a fresh Fedora root
+        run: |
+          image=$(python3 -c 'import json; print(json.load(open("os/tests/arm-session.lock.json"))["root_image"])')
+          mkdir -p os/test-results/fedora-package
+          docker run --rm --platform linux/arm64 \
+            --mount "type=bind,source=$PWD,target=/source,readonly" \
+            --mount "type=bind,source=$PWD/os/test-results/fedora-package,target=/evidence" \
+            -e RUNTIME_SOURCE -e PACKAGE_SOURCE="$GITHUB_SHA" -e ROOT_IMAGE="$image" \
+            "$image" /bin/bash -euo pipefail -c '
+              manager=$(command -v dnf5 || command -v microdnf)
+              "$manager" install -y --setopt=install_weak_deps=False --setopt=gpgcheck=True --nodocs python3 shadow-utils glibc-common
+              python3 /source/os/tests/fedora_package_lifecycle.py \
+                --first /source/os/work/fedora-package-output/first \
+                --repeat /source/os/work/fedora-package-output/repeat \
+                --upgrade /source/os/work/fedora-package-output/upgrade \
+                --source "$PACKAGE_SOURCE" --runtime-source "$RUNTIME_SOURCE" \
+                --runtime /source/os/work/fedora-runtime-input/runtime \
+                --root-image "$ROOT_IMAGE" --output /evidence/lifecycle
+            '
+      - name: Prepare a fresh private graphical fixture from the same package
+        if: inputs.prepare_fixture
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-system-arm e2fsprogs rpm libarchive-tools zstd gnupg python3-pil tesseract-ocr
+          python3 os/tests/arm_session.py --package os/work/fedora-package-output/first --output os/test-results/arm-session --prepare-only
+      - name: Retain exact package and lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-fedora-package
+          path: |
+            os/work/fedora-package-output/container-image.json
+            os/work/fedora-package-output/first/
+            os/work/fedora-package-output/upgrade/
+            os/test-results/fedora-package/
+            os/test-results/arm-session/receipt.json
+            os/test-results/arm-session/host.log
+            os/test-results/arm-session/packages.tsv
+            os/test-results/arm-session/agent-lock.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Retain the private fixture for accelerated acceptance
+        if: success() && inputs.prepare_fixture
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-arm-session-fixture
+          path: os/test-results/arm-session/fixture/
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0

@@ -96,6 +96,22 @@ describe('binding a registered session to its agent', () => {
     })
   })
 
+  it('still tells the app of a binding when the record it resumes from cannot be saved, as on a full disk', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const run = setup()
+    const entry = agent({ boundAt: Date.parse('2026-10-04T10:00:00Z'), resumeOnly: true })
+    run.byAgent.set('a1', entry)
+    vi.mocked(run.deps.stoppedAgents.save).mockImplementationOnce(() => { throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' }) })
+    await run.binding.handleRegistered(entry, meta({ isNew: true }))
+    expect(error).toHaveBeenCalledWith('[agent] a1 could not save the record it resumes from: ENOSPC: no space left on device')
+    expect(run.deps.stoppedAgents.finishResume).toHaveBeenCalledWith('a1')
+    expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
+    expect(run.deps.clients.send).toHaveBeenCalledWith(expect.objectContaining({ type: 'session_synced' }))
+    vi.mocked(run.deps.stoppedAgents.save).mockImplementationOnce(() => { throw 'disk gone' })
+    await run.binding.handleRegistered(entry, meta({ isNew: true }))
+    expect(error).toHaveBeenLastCalledWith('[agent] a1 could not save the record it resumes from: disk gone')
+  })
+
   it('stops after the attach for a session it already had, and finishes a resume it was waiting for', async () => {
     const run = setup()
     const entry = agent({ resumeOnly: true } as Partial<RegisteredSession>)
@@ -117,6 +133,22 @@ describe('binding a registered session to its agent', () => {
     expect(run.deps.registry.unbindSession).toHaveBeenCalledWith('s1')
     expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
     expect(run.deps.syncRecapPool).not.toHaveBeenCalled()
+  })
+
+  it('keeps the binding of an agent a stop or a restart owns: its pane reads as gone only because of it', async () => {
+    // The old engine's late SessionStart, registered as a stop or a restart ended that engine. Unbound,
+    // the stop gave up with its engine already signalled, and a queued restart found nothing to resume.
+    const run = setup({ attachSession: vi.fn(async () => false) })
+    const changing = vi.fn((agentId: string) => agentId === 'a1')
+    run.binding.whileChanging(changing)
+    const entry = agent()
+    await run.binding.handleRegistered(entry, meta())
+    expect(changing).toHaveBeenCalledWith('a1')
+    expect(run.deps.registry.unbindSession).not.toHaveBeenCalled()
+    expect(run.deps.announceSession).toHaveBeenCalledWith(entry)
+    // An agent nothing owns is unbound as before.
+    await run.binding.handleRegistered(agent({ agentId: 'a2', sessionId: 's2' }), meta())
+    expect(run.deps.registry.unbindSession).toHaveBeenCalledWith('s2')
   })
 
   it('hands a rebound agent its name and recap, and lets the stale session go', async () => {

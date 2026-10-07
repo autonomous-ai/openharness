@@ -11,7 +11,7 @@ import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime } from './deleteAgentFallback.js'
 import { listTmuxPanes } from './tmuxAgentDiscovery.js'
 import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, tmuxPaneState } from './tmux.js'
-import { buildEngineLaunchArgv, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
+import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
 
@@ -79,6 +79,7 @@ beforeEach(() => {
     retainExitedSession: vi.fn((row, alive) => { store.save(row); if (alive) registry.releaseEngine(row.agentId, true); else registry.removeAgent(row.agentId) }),
     announceSession: vi.fn(), relaunchOverrides: vi.fn(async () => ({ ok: true as const, overrides: { env: {}, extraArgs: [], clearEnv: [] } })),
     prepareSessionResume: vi.fn(), refreshGridWebSearch: vi.fn(), clearDeleted: vi.fn(), attachDsh: vi.fn(),
+    attachSession: vi.fn(async () => true),
   }
 })
 afterEach(() => { vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(dir, { recursive: true, force: true }) })
@@ -105,14 +106,15 @@ describe('production resume handler', () => {
 
   it('notes where the relaunched engine\'s writing begins, after the history is prepared and before the launch', async () => {
     writeFileSync(saved.transcriptPath!, '{"type":"session_meta"}\n')
-    const note = vi.fn((_sessionId: string, _offset: number) => {
+    const note = vi.fn((_sessionId: string, _offset: number, _engineStarted?: boolean) => {
       // The pane is not allocated yet: the engine has written nothing of its own.
       expect(create).not.toHaveBeenCalled()
     })
     vi.mocked(deps.prepareSessionResume).mockImplementation(() => { writeFileSync(saved.transcriptPath!, '{"type":"session_meta"}\n{"prepared":true}\n') })
     deps = { ...deps, relaunchMarks: { note } }
     expect(await start()).toMatchObject({ ok: true, resumed: true })
-    expect(note).toHaveBeenCalledWith(saved.sessionId, Buffer.byteLength('{"type":"session_meta"}\n{"prepared":true}\n'))
+    // A resume always starts a new engine: a turn left open before it is over.
+    expect(note).toHaveBeenCalledWith(saved.sessionId, Buffer.byteLength('{"type":"session_meta"}\n{"prepared":true}\n'), true)
   })
 
   it('notes nothing for a conversation with no file to tail, or a file that is gone', async () => {
@@ -193,6 +195,42 @@ describe('production resume handler', () => {
     expect(deps.announceSession).toHaveBeenLastCalledWith(expect.objectContaining({ processIdentity: identity }))
     registry.load()
     expect(registry.byAgent(saved.agentId)?.processIdentity).toEqual(identity)
+  })
+
+  it('attaches a resume its own process confirmed when no hook registered it, and says so if that fails', async () => {
+    // Round 23: the SessionStart was refused, and discovery, finding the row ready already, did not
+    // attach it either, so the resumed agent never showed a turn.
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+    expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+    expect(deps.attachSession).toHaveBeenCalledTimes(1)
+    expect(deps.attachSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId, sessionId: saved.sessionId, processIdentity: identity }))
+
+    for (const row of registry.list()) registry.removeAgent(row.agentId)
+    deps.stoppedAgents.finishResume(saved.agentId)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(deps.attachSession).mockRejectedValueOnce(new Error('transcript unreadable'))
+    expect(await start()).toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'transcript unreadable'))
+    vi.mocked(deps.attachSession).mockRejectedValueOnce('gone')
+    for (const row of registry.list()) registry.removeAgent(row.agentId)
+    deps.stoppedAgents.finishResume(saved.agentId)
+    expect(await start()).toMatchObject({ ok: true })
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} attach failed:`, 'gone'))
+    error.mockRestore()
+  })
+
+  it('attaches nothing for a resume that started a new conversation: the engine has yet to name it', async () => {
+    // A stopped harness that never had a conversation resumes into a new one.
+    rewrite({ sessionId: '', transcriptPath: '' })
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(identity)
+    expect(await start()).toMatchObject({ ok: true, resumed: false, session: { launch: { state: 'ready' } } })
+    expect(deps.attachSession).not.toHaveBeenCalled()
+  })
+
+  it('leaves the attach to the hook that registered the resume first', async () => {
+    // The fixture's probe imitates a hook that already landed (`lastHookAt`): its registration attached it.
+    expect(await start()).toMatchObject({ ok: true, session: { launch: { state: 'ready' } } })
+    expect(deps.attachSession).not.toHaveBeenCalled()
   })
 
   it('opens a retained terminal as a new shell without a vendor resume argument', async () => {
@@ -396,8 +434,72 @@ describe('existing runtime and readiness verification', () => {
     if (mode === 'exit dead pane') vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: true } as any)
     if (mode === 'exit unknown process') vi.mocked(checkPidRuntime).mockResolvedValue({ state: 'unknown', reason: 'fixture' })
     if (mode === 'cancel process probe') vi.mocked(checkPidRuntime).mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId); return { state: 'gone', reason: 'fixture' } })
-    if (mode === 'cancel pane probe') vi.mocked(tmuxPaneState).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId); return null })
+    if (mode === 'cancel pane probe') vi.mocked(tmuxPaneState).mockImplementationOnce(async () => { deps.restartJobs.cancel(saved.agentId); return 'gone' })
     expect(await start()).toMatchObject({ ok: false })
     expect(create).not.toHaveBeenCalled(); expect(deps.stoppedAgents.get(saved.agentId)).not.toBeNull()
   })
+  it.each([
+    ['gone', false], ['unknown', true],
+  ] as const)('an exited engine whose pane tmux reads as %s keeps its row as a terminal: %s', async (pane, kept) => {
+    // Only a pane known to be gone loses its row. One tmux could not read (a call that timed out while
+    // the daemon's event loop was held) keeps it, for the reconciler to judge with scans that agree.
+    live()
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue(null)
+    vi.mocked(tmuxPaneState).mockResolvedValueOnce({ dead: false, engineExit: 1 } as any).mockResolvedValueOnce(pane)
+    expect(await start()).toMatchObject({ ok: false, error: 'RESUME_FAILED' })
+    expect(deps.retainExitedSession).toHaveBeenCalledWith(expect.objectContaining({ agentId: saved.agentId }), kept)
+  })
 })
+
+describe('resume edges the desk sees', () => {
+  // The probe proves a new process, and the row must record it before anyone is told the harness is up:
+  // an engine that is "ready" with no recorded process cannot be attached to or stopped.
+  it('does not confirm a resume off a process the registry cannot record, and keeps its reservation', async () => {
+    vi.mocked(resolvePaneEngineProcess).mockResolvedValue({ ...identity, pid: 0 })
+    expect(await start()).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(registry.byAgent(saved.agentId)?.launch?.state).not.toBe('ready')
+    expect(deps.stoppedAgents.beginResume(saved.agentId)).toBeNull()
+  })
+
+  // A verdict another path set on the row (a hook's mismatch guard) is reported as itself, and said in the
+  // log as it is, with no "undefined" where a reason would be.
+  it('reports a failure the row was given elsewhere, without a reason, as itself', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.mocked(resolvePaneEngineProcess).mockImplementation(async () => {
+      registry.setLaunch(saved.agentId, { state: 'failed', error: 'RESUME_MISMATCH' } as never)
+      return null
+    })
+    const result = await start()
+    expect(result).toMatchObject({ ok: false, error: 'RESUME_MISMATCH' })
+    expect(registry.byAgent(saved.agentId)?.launch).toMatchObject({ state: 'failed', error: 'RESUME_MISMATCH' })
+    const said = log.mock.calls.map(([line]) => String(line)).find((line) => line.startsWith('[resume]') && line.includes('RESUME_MISMATCH'))
+    expect(said).toBe(`[resume] ${saved.agentId.slice(0, 8)} RESUME_MISMATCH · engine=codex`)
+  })
+
+  // Asking the engine whether it takes the chosen permission flag can take a while (its --help); a Stop
+  // or another Open in that time wins, and this one allocates nothing.
+  it('allocates nothing when the harness changes while the engine is asked about the permission flag', async () => {
+    vi.mocked(refusePermissionFlagIfUnsupported).mockImplementation(async () => { deps.restartJobs.cancel(saved.agentId); return null })
+    expect(await createResumeAgentService(deps)(saved.agentId, 'ask')).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  // An engine downgraded since the pause no longer takes the saved permission flag (openharness#285): the
+  // harness still comes back, in Ask, and the log says how to get the saved mode back.
+  it.each([
+    ['plan', false, 'plan'],
+    [undefined, true, 'Auto'],
+  ] as const)('resumes in Ask when the engine no longer takes the saved %s flag, and says how to get it back', async (mode, bypass, named) => {
+    rewrite({ permissionMode: mode, bypassPermission: bypass })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(dropPermissionFlagIfUnsupported).mockResolvedValueOnce({
+      choice: { permissionMode: null, bypassPermission: false }, droppedFlag: '--permission-mode',
+    })
+    expect(await start()).toMatchObject({ ok: true, resumed: true })
+    expect(buildEngineLaunchArgv).toHaveBeenCalledWith('codex', expect.objectContaining({ bypassPermission: false }))
+    expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).not.toHaveProperty('permissionMode')
+    expect(warn).toHaveBeenCalledWith(`[resume] ${saved.agentId.slice(0, 8)} · codex does not take --permission-mode`
+      + ` · resuming in Ask · update codex to get ${named} back`)
+  })
+})
+

@@ -3,19 +3,17 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { DaemonCableHost, cableEventFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
+import type { FleetRouting } from '../services/fleet.js'
+import { ServiceUnavailableError } from '../core/serviceHost.js'
+import type { RegisteredSession } from '../lib/registry.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string }> = []
-vi.mock('../lib/registry.js', () => ({
-  registry: {
-    list: () => AGENTS,
-    active: () => AGENTS.filter((a) => a.active),
-    advertised: () => AGENTS.filter((a) => a.terminalAvailable),
-  },
-  projectDisplayName: (s: { agentId: string }) => s.agentId,
-}))
 
 function wiring(over: Partial<CableHostWiring> = {}): CableHostWiring {
   return {
+    // The core's advertised agents and their names: what the router this host keeps for itself reads.
+    sessions: () => AGENTS.filter((a) => a.terminalAvailable) as unknown as RegisteredSession[],
+    displayName: (s) => s.agentId,
     machineName: () => 'MacbookPro.local',
     machineId: () => 'mine',
     computerId: () => 'abc-123',
@@ -748,5 +746,145 @@ describe('spoken question capability', () => {
     expect((await host.answerReviewed({ ...answer, agentId: 'spoken-remote' })).ok).toBe(false)
     expect(fleet.answer).not.toHaveBeenCalled(); expect(fleet.answerReviewed).not.toHaveBeenCalled()
     expect(answerReviewed).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('the dial reaches the fleet through the core\'s port', () => {
+  /** The fleet service's routing as the port carries it, every answer scripted. */
+  function port(over: Partial<FleetRouting> = {}): FleetRouting {
+    return {
+      listMachines: vi.fn(async () => ({ machines: [{ id: 'mine', name: 'MacbookPro.local', state: 'ready' as const, local: true }, { id: 'other', name: 'office-imac', state: 'ready' as const, local: false }], source: 'backend' as const })),
+      listAgentsFlat: vi.fn(async () => [{ id: 'r1', name: 'api', machineId: 'other', machine: 'office-imac' }]),
+      agentTotal: vi.fn(() => 7),
+      describe: vi.fn(() => ({ name: 'api', engine: 'claude', machine: 'office-imac' })),
+      noteAgent: vi.fn(),
+      machineOf: vi.fn(() => 'other'),
+      knows: vi.fn(() => true),
+      isLocalAgent: vi.fn(() => false),
+      sendTurn: vi.fn(() => ({ ok: true as const })),
+      lastRouted: vi.fn(() => ({ agentId: 'r1', agoMs: 5 })),
+      stopTurn: vi.fn(),
+      canSpeakQuestion: vi.fn(() => false),
+      answerReviewed: vi.fn(async () => ({ ok: true as const, pending: true })),
+      answer: vi.fn(),
+      updateAgent: vi.fn(),
+      recentSummaries: vi.fn(async () => [{ recap: 'Shipped', text: 'Shipped', ask: 'ship it' }]),
+      recentAsks: vi.fn(async () => ['ship it']),
+      listModels: vi.fn(async () => ['opus']),
+      forkAgent: vi.fn(async () => ({ result: { ok: true as const, agentId: 'r1-fork' }, machineId: 'other', asked: true })),
+      hasLane: vi.fn(() => true),
+      online: vi.fn(async () => ({ ok: true as const })),
+      select: vi.fn(async () => ({ ok: true as const })),
+      release: vi.fn(),
+      ...over,
+    }
+  }
+  const unavailable = () => new ServiceUnavailableError('fleet')
+
+  it('asks the fleet\'s router for every route, and holds no answer of its own', async () => {
+    AGENTS.length = 0
+    const fleet = port()
+    const w = wiring({ fleet: () => fleet, focused: vi.fn(), opened: vi.fn() })
+    const host = new DaemonCableHost(w)
+    expect((await host.listMachines()).machines.map((m) => m.id)).toEqual(['mine', 'other'])
+    expect((await host.listAgentsFlat()).map((a) => a.id)).toEqual(['r1'])
+    expect(host.agentTotal()).toBe(7)
+    expect(host.describe('r1')).toEqual({ name: 'api', engine: 'claude', machine: 'office-imac' })
+    host.noteAgent('other', 'r9')
+    expect(fleet.noteAgent).toHaveBeenCalledWith('other', 'r9')
+    expect(host.knows('r1')).toBe(true)
+    expect(host.sendTurn('r1', 'ship it')).toEqual({ ok: true })
+    expect(fleet.sendTurn).toHaveBeenCalledWith('r1', 'ship it')
+    expect(w.sendTurn).not.toHaveBeenCalled()
+    expect(host.lastRouted()).toEqual({ agentId: 'r1', agoMs: 5 })
+    host.stopTurn('r1'); host.answer('r1', 'q', { k: 'v' }); host.updateAgent('r1', 'opus')
+    expect(fleet.stopTurn).toHaveBeenCalledWith('r1')
+    expect(fleet.answer).toHaveBeenCalledWith('r1', 'q', { k: 'v' })
+    expect(fleet.updateAgent).toHaveBeenCalledWith('r1', 'opus', undefined)
+    expect(host.canSpeakQuestion('r1')).toBe(false)
+    expect(await host.answerReviewed({ agentId: 'r1', requestId: 'q', questions: [], answers: {}, selections: {} })).toEqual({ ok: true, pending: true })
+    expect(await host.recentSummaries('r1')).toEqual([{ recap: 'Shipped', text: 'Shipped', ask: 'ship it' }])
+    expect(await host.recentAsks('r1')).toEqual(['ship it'])
+    expect(await host.listModels('r1')).toEqual(['opus'])
+    // An agent the router places on another machine has no terminal footer here.
+    expect(await host.activityText('r1')).toBeNull()
+    host.focus('r1')
+    expect(w.focused).toHaveBeenCalledWith('other', 'r1')
+    expect(await host.forkAgent('r1')).toEqual({ ok: true, agentId: 'r1-fork' })
+    expect(w.opened).toHaveBeenCalledWith('other', 'r1-fork')
+    expect(w.log).toHaveBeenCalledWith('cable: fork other/r1 → r1-fork')
+  })
+
+  it('routes this computer by itself while the fleet is off, or when a call comes back unavailable', async () => {
+    AGENTS.length = 0
+    AGENTS.push({ agentId: 'local-1', registeredAt: 1, active: true, terminalAvailable: true, engine: 'claude' })
+    let fleet: FleetRouting | null = null
+    const w = wiring({ fleet: () => fleet })
+    const host = new DaemonCableHost(w)
+    // Off: this computer alone, as before the fleet was a service.
+    expect(await host.listMachines()).toEqual({ machines: [{ id: 'mine', name: 'MacbookPro.local', state: 'ready', local: true }], source: 'signed-out' })
+    expect((await host.listAgentsFlat()).map((a) => a.id)).toEqual(['local-1'])
+    host.sendTurn('local-1', 'hello')
+    expect(w.sendTurn).toHaveBeenCalledWith('local-1', 'hello')
+    // On, but failing: a sync call that throws unavailable, an async one that rejects unavailable.
+    fleet = port({
+      sendTurn: vi.fn(() => { throw unavailable() }),
+      listAgentsFlat: vi.fn(async () => { throw unavailable() }),
+    })
+    expect(host.sendTurn('local-1', 'again')).toEqual({ ok: true })
+    expect(w.sendTurn).toHaveBeenLastCalledWith('local-1', 'again')
+    expect((await host.listAgentsFlat()).map((a) => a.id)).toEqual(['local-1'])
+  })
+
+  it('lets any other failure through, as before: only an unavailable fleet is routed around', async () => {
+    const host = new DaemonCableHost(wiring({ fleet: () => port({
+      knows: vi.fn(() => { throw new TypeError('a bug') }),
+      recentAsks: vi.fn(async () => { throw new Error('a far-end bug') }),
+    }) }))
+    expect(() => host.knows('r1')).toThrow('a bug')
+    await expect(host.recentAsks('r1')).rejects.toThrow('a far-end bug')
+  })
+
+  it('holds the lane through the port: opens it, announces where the dial is, says when it will not, and lets go', async () => {
+    const fleet = port()
+    const log = vi.fn()
+    const host = new DaemonCableHost(wiring({ fleet: () => fleet, log }))
+    host.onDialAttached()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(fleet.online).toHaveBeenCalled()
+    expect(fleet.select).toHaveBeenCalledWith('mine')
+    expect(await host.selectMachine('other')).toEqual({ ok: true })
+    expect(host.selectedMachine()).toBe('other')
+    fleet.select = vi.fn(async () => ({ ok: false as const, code: 'NEEDS_LINK', message: 'Link office-imac to this computer first' }))
+    expect(await host.selectMachine('third')).toEqual({ ok: false, code: 'NEEDS_LINK', message: 'Link office-imac to this computer first' })
+    expect(host.selectedMachine()).toBe('other')
+    expect(await host.selectMachine('mine')).toEqual({ ok: true })
+    expect(fleet.release).toHaveBeenCalledWith()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(log).toHaveBeenCalledWith('cable: could not announce mine (Link office-imac to this computer first)')
+    fleet.online = vi.fn(async () => ({ ok: false as const, message: 'backend unreachable' }))
+    host.onDialAttached()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(log).toHaveBeenCalledWith('cable: could not open the lane (backend unreachable)')
+    host.onDialGone()
+    expect(fleet.release).toHaveBeenLastCalledWith(true)
+    // No lane to hold: nothing is opened, and a remote machine cannot be chosen.
+    fleet.hasLane = vi.fn(() => false)
+    fleet.online = vi.fn(async () => ({ ok: true as const }))
+    host.onDialAttached()
+    expect(fleet.online).not.toHaveBeenCalled()
+    expect(await host.selectMachine('other')).toMatchObject({ ok: false, code: 'UNAVAILABLE' })
+  })
+
+  it('says nothing of a fork that was refused before anyone was asked, and says a refused one that was', async () => {
+    const fleet = port({ forkAgent: vi.fn(async () => ({ result: { ok: false as const, error: 'AGENT_NOT_FOUND' }, machineId: '', asked: false })) })
+    const w = wiring({ fleet: () => fleet, opened: vi.fn() })
+    const host = new DaemonCableHost(w)
+    expect(await host.forkAgent('ghost')).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })
+    expect(w.log).not.toHaveBeenCalled()
+    fleet.forkAgent = vi.fn(async () => ({ result: { ok: false as const, error: 'FORK_FAILED', detail: 'busy' }, machineId: 'other', asked: true }))
+    expect(await host.forkAgent('r1')).toEqual({ ok: false, error: 'FORK_FAILED', detail: 'busy' })
+    expect(w.log).toHaveBeenCalledWith('cable: fork other/r1 refused (FORK_FAILED: busy)')
+    expect(w.opened).not.toHaveBeenCalled()
   })
 })

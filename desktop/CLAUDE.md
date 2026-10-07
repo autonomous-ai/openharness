@@ -138,6 +138,11 @@ PKCE transaction; conditional adapters handle storage and native-only services.
 `platform_auth_web.dart` serializes shared login/refresh/logout with Web Locks
 and reloads other tabs when the account changes. Auth and E2EE keys persist in
 origin-local storage; only the OAuth transaction is in session storage.
+Each relay connection also negotiates a WebRTC data channel to the machine
+(`web/p2p/`, the phone's `../mobile/lib/p2p` on the browser's own
+`RTCPeerConnection` — no `flutter_webrtc`, so native builds gain no plugin);
+terminal frames take it when it is up and fall back to the relay. Keep
+`terminal_p2p_{plugin,link,policy}.dart` in step with the phone's copies.
 Shared sessions use `ObserverRelayCodec` and `/api/observer-ws`, verifying the
 owner and permitting only observation and authenticated comments. `/s/:id#key=…`
 opens `SharedAgentPage` without restoring the visitor's workspace. Public links
@@ -194,6 +199,13 @@ The native desktop target uses the CLI for cloud access and SSO tokens:
   `LocalCliDiscovery`, which runs `harness start` when needed). The CLI terminates E2EE for relayed
   machines; the app carries no crypto. Close code `4404`/`NO_PEER_LINK` means the machine needs
   `harness link import` — surfaced as `MachineState.needsLink` and polled via `_linkRetryTimers`.
+  A viewer build settles its own `NO_PEER_LINK`/`E2E_DENIED` first (`_settleTrust`): it joins the
+  device log if it is not in it (`ViewerDeviceLog.ensureRegistered`), reads it and dials again,
+  showing the machine as connecting; only a refusal that outlasts two rounds (~15s), or a frozen
+  log, asks for the password. The desk frames (`app_focus`, `app_panes`, `app_swarms`, `app_unread`,
+  `agent_seen`) are for this computer's daemon and only ride a loopback connection. A viewer with no
+  machine connected hears no push, so it re-reads the machine list every 20s while that lasts
+  (`deafMachineListInterval`) and when the tab comes back to the front.
 - **Both REST and the local WS prefer the daemon's Unix socket** (`lib/ws/local_daemon_transport.dart`;
   CLI `lib/localSocket.ts`): `~/.harness/cli/data/daemon-<port>.sock`, 0600, named for the port in
   `localCliBaseUrl` so it always leads to the same daemon as the TCP fallback. The loopback port takes
@@ -289,10 +301,12 @@ waiting-for-input, draft, or unknown sessions share one confirmation for the who
 their names, activity, and the number of sessions that will stop. Its only choices are Cancel
 and Stop; Cancel is the default. Stop saves and stops every reviewed session before the tab
 closes. Idle-only closes retain the daemon's activity guard; newly active work gets one review
-of the remaining sessions. Failures keep the view and identify confirmed stops separately
-from uncertain ones. Previously queued daemon close
-plans remain compatible. Layout cleanup, moving panes, switching tabs, and sign-out retain their view-only behavior. A failed save
-or unconfirmed close keeps the pane. Older daemons retain their existing behavior until updated.
+of the remaining sessions. Failures identify confirmed stops separately from uncertain ones
+and default to Keep open. Close pane / Close Tab dismisses the captured views through the
+normal recently-closed history path without another stop request; unconfirmed sessions may
+still be running, and their views in other tabs remain open. Previously queued daemon close
+plans remain compatible. Layout cleanup, moving panes, switching tabs, and sign-out retain
+their view-only behavior. Older daemons retain their existing behavior until updated.
 
 `HarnessMonitor` supplies the global running-harness count without process sampling
 in the footer. Clicking it opens the reusable `autonomous/harness-monitor` DSH tab

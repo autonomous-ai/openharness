@@ -27,7 +27,9 @@ two commands each spawning every CPU is not useful parallelism.
 
 Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`, or `full`
 (the default). `cli` includes typecheck, all CLI tests, updater coverage, release
-bundle checks, and the serial/login-shell OS/Node matrix. `tui` includes its native
+bundle checks, the serial/login-shell OS/Node matrix, and the per-file 100% coverage
+gates (`test:core`, `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`,
+`test:remote-viewers`, `test:portability`). `tui` includes its native
 CLI integration tests. Select `full` for cross-component changes or uncertain impact.
 The workflow remains on demand; this change does not introduce new required gates.
 
@@ -66,6 +68,22 @@ ordering within each shard; the normal local configuration, including file
 shuffling, is unchanged. Use `--config vitest.ci.config.ts --shard=N/4` to reproduce
 the CI assignment locally. The aggregate still requires every discovered file
 exactly once, independent of these estimates.
+
+The CLI's end-to-end suite (`cli/e2e`) runs in its own workflow, **CLI end to end**
+(`.github/workflows/cli-e2e.yml`): after each merge to `main` that touches `cli/`, nightly,
+and on demand from a branch (Actions → CLI end to end → Run workflow).
+Eight Linux runners each take a shard, planned from `cli/ci-e2e-durations.json` the same
+way (`--config vitest.e2e.ci.config.ts --shard=N/8` reproduces one locally). Each shard
+installs tmux, zsh, tcsh and dash, starts every daemon from one bundle (`E2E_BUNDLE=1`) and
+runs its files one at a time. The full-disk tests, which need macOS disk images, run on one
+macOS runner with `DISKFULL=1`. `e2e-summary` applies the default suite's rule: every
+discovered file exactly once, every shard passing. Its summary records each file's duration
+for refreshing the hints. A failing test's complete daemon logs and engine hook logs are
+uploaded as `cli-e2e-daemon-logs-N`, by file and test (`E2E_ARTIFACTS_DIR`, which works
+locally too). It is advisory, and so it does not run on pull requests: a failed check makes
+GitHub report a PR unstable, which `make merge-pr` refuses to merge. Once it has stayed
+green, run it on pull requests, make `e2e-summary` required and add it to the evidence
+collector.
 
 For repository process tooling only, `scope=process` runs its Python regression
 tests without installing or building unrelated components. It does not validate

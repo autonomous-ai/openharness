@@ -15,10 +15,16 @@ private let kMenuChannel = "harness/app_menu"
 /// holds (`readFilePaths`), which Flutter's `Clipboard` cannot see either.
 private let kClipboardImageChannel = "harness/clipboard_image"
 
+/// Channel Dart asks for the font families installed on this Mac, for the terminal font picker
+/// (`lib/terminal/installed_fonts.dart`). `NSFontManager` answers in a fraction of a second where
+/// `system_profiler SPFontsDataType` takes ~10s, and it can say which families are monospaced.
+private let kFontsChannel = "harness/fonts"
+
 class MainFlutterWindow: NSWindow {
   private var swarmTitlebar: SwarmTitlebar?
   private var menuChannel: FlutterMethodChannel?
   private var clipboardImageChannel: FlutterMethodChannel?
+  private var fontsChannel: FlutterMethodChannel?
   private var notifications: HarnessNotifications?
 
   override func awakeFromNib() {
@@ -28,6 +34,7 @@ class MainFlutterWindow: NSWindow {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    AppDelegate.installCommunityLinks(messenger: flutterViewController.engine.binaryMessenger)
 
     menuChannel = FlutterMethodChannel(
       name: kMenuChannel,
@@ -35,6 +42,7 @@ class MainFlutterWindow: NSWindow {
     )
     swarmTitlebar = SwarmTitlebar(window: self, messenger: flutterViewController.engine.binaryMessenger)
     installClipboardImageChannel(messenger: flutterViewController.engine.binaryMessenger)
+    installFontsChannel(messenger: flutterViewController.engine.binaryMessenger)
     notifications = HarnessNotifications(messenger: flutterViewController.engine.binaryMessenger)
 
     // Flutter's own theme does not reach AppKit — every native surface (the
@@ -321,6 +329,57 @@ class MainFlutterWindow: NSWindow {
 
   @objc private func resetTerminalFontSize(_ sender: Any?) {
     menuChannel?.invokeMethod("resetTerminalFontSize", arguments: nil)
+  }
+
+  private func installFontsChannel(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(name: kFontsChannel, binaryMessenger: messenger)
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "listFonts" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      DispatchQueue.global(qos: .userInitiated).async {
+        let fonts = MainFlutterWindow.installedFontFamilies()
+        DispatchQueue.main.async { result(fonts) }
+      }
+    }
+    fontsChannel = channel
+  }
+
+  /// Every installed family as `{family, mono}`, hidden system families (a leading `.`) left out.
+  ///
+  /// CoreText, not `NSFontManager`: this runs off the main thread so a large font catalog never
+  /// stalls the window, and AppKit's font manager is not documented safe there; CoreText is.
+  private static func installedFontFamilies() -> [[String: Any]] {
+    guard let names = CTFontManagerCopyAvailableFontFamilyNames() as? [String] else { return [] }
+    var fonts: [[String: Any]] = []
+    for family in names where !family.hasPrefix(".") {
+      let descriptor = CTFontDescriptorCreateWithAttributes(
+        [kCTFontFamilyNameAttribute: family] as CFDictionary)
+      let font = CTFontCreateWithFontDescriptor(descriptor, 12, nil)
+      fonts.append(["family": family, "mono": isMonospaced(font)])
+    }
+    return fonts
+  }
+
+  /// The font's own monospace trait, OR equal advances for `i`, `W` and `m` — some monospaced
+  /// families (Nerd Fonts among them) do not set the trait. A symbol font (Wingdings and the like)
+  /// is never monospaced here, whatever its advances: its letters are pictures.
+  private static func isMonospaced(_ font: CTFont) -> Bool {
+    let traits = CTFontGetSymbolicTraits(font)
+    let fontClass = CTFontStylisticClass(
+      rawValue: traits.rawValue & CTFontSymbolicTraits.traitClassMask.rawValue)
+    if fontClass == .classSymbolic { return false }
+    if traits.contains(.traitMonoSpace) { return true }
+    var characters = Array("iWm".utf16)
+    var glyphs = [CGGlyph](repeating: 0, count: characters.count)
+    guard CTFontGetGlyphsForCharacters(font, &characters, &glyphs, characters.count),
+      !glyphs.contains(0)
+    else { return false }
+    var advances = [CGSize](repeating: .zero, count: glyphs.count)
+    CTFontGetAdvancesForGlyphs(font, .horizontal, glyphs, &advances, glyphs.count)
+    guard let first = advances.first?.width, first > 0 else { return false }
+    return advances.allSatisfy { abs($0.width - first) < 0.01 }
   }
 
   private func installClipboardImageChannel(messenger: FlutterBinaryMessenger) {

@@ -1,31 +1,40 @@
 import { describe, expect, it, vi } from 'vitest'
 import { BackendSocket } from './backendSocket.js'
+import { DEVICES_REQUESTS, type Asker } from './core/api.js'
+import { dispatchDown, gatewayOf, relaySocket } from './testing/relaySocket.js'
 
+// The Devices tab's requests are the devices' own (services/devices.ts): the socket only routes them, with
+// who asked as it established it, and the devices answer the owner alone.
 describe('Devices host ownership', () => {
-  it.each(['harness_devices_list', 'harness_device_settings'])('requires sealed owner requests for %s and replies to that connection', async type => {
-    const socket = new BackendSocket('fixture'), internals = socket as any
-    const status = vi.fn(() => ({ attached: true, devices: [{ id: 'usb', attached: true, settings: { brightness: 80 } }] }))
-    const set = vi.fn(async () => ({ ok: true }))
-    socket.harnessDevices = { status: status as any, set }
-    vi.spyOn(socket.e2ee, 'hasSession').mockReturnValue(true)
-    const role = vi.spyOn(socket.e2ee, 'sessionRole').mockReturnValue('web')
+  it.each(DEVICES_REQUESTS)('routes %s to the devices only sealed from afar, saying who asked, and replies to that connection', async type => {
+    const socket: BackendSocket = relaySocket('fixture')
+    const routed: Asker[] = []
+    socket.serviceRouter = (asked, _payload, asker, reply) => {
+      if (asked !== type) return false
+      routed.push(asker)
+      reply({ ok: true, owner: asker.owner })
+      return true
+    }
+    vi.spyOn(gatewayOf(socket).e2ee, 'hasSession').mockReturnValue(true)
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('web')
     const clear = { type, payload: { requestId: 'one', id: 'usb', patch: { brightness: 35 } } }
-    vi.spyOn(socket.e2ee, 'unwrapDown').mockReturnValue(clear)
-    const reply = vi.spyOn(socket.e2ee, 'wrapRpcReply').mockReturnValue({ type: `${type}_result`, payload: { __e2e: 'sealed' } })
-    await internals.dispatchDown(clear, 'remote')
-    expect(status).not.toHaveBeenCalled()
+    vi.spyOn(gatewayOf(socket).e2ee, 'unwrapDown').mockReturnValue(clear)
+    const reply = vi.spyOn(gatewayOf(socket).e2ee, 'wrapRpcReply').mockReturnValue({ type: `${type}_result`, payload: { __e2e: 'sealed' } })
+    // In the clear from afar: never routed.
+    await dispatchDown(socket, clear, 'remote')
+    expect(routed).toEqual([])
     const sealed = { type, payload: { __e2e: { v: 1, k: 'p', n: 1, ct: 'fixture' } } }
+    // A device's session may ask, but not as the owner; the owner's own app may.
     role.mockReturnValue('device')
-    await internals.dispatchDown(sealed, 'remote')
-    expect(status).not.toHaveBeenCalled()
+    await dispatchDown(socket, sealed, 'remote')
     role.mockReturnValue('web')
-    await internals.dispatchDown(sealed, 'remote')
-    expect(status).toHaveBeenCalled()
-    expect(reply).toHaveBeenLastCalledWith('remote', `${type}_result`, 'one', expect.objectContaining(type.endsWith('list') ? { protocol: 1 } : { ok: true }))
-    if (type.endsWith('settings')) expect(set).toHaveBeenCalledExactlyOnceWith('usb', { brightness: 35 })
+    await dispatchDown(socket, sealed, 'remote')
+    expect(routed).toEqual([{ local: false, owner: false, connection: 'remote', requestId: 'one' }, { local: false, owner: true, connection: 'remote', requestId: 'one' }])
+    expect(reply).toHaveBeenLastCalledWith('remote', `${type}_result`, 'one', { ok: true, owner: true })
     const local: unknown[] = []
     socket.registerLocalClient('local:tool', { sendFrame: frame => { local.push(frame); return true }, sendBinary: () => true }, { tool: true })
-    await internals.dispatchDown(clear, 'local:tool')
+    await dispatchDown(socket, clear, 'local:tool')
+    expect(routed.at(-1)).toEqual({ local: true, owner: true, connection: 'local:tool', requestId: 'one' })
     expect(local).toContainEqual(expect.objectContaining({ type: `${type}_result`, payload: expect.objectContaining({ requestId: 'one' }) }))
     await socket.stop()
   })

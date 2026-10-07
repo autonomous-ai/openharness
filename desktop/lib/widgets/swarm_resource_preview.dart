@@ -60,6 +60,13 @@ class SearchPreviewControls {
   }
 }
 
+/// A block of text a person copies as it is — a command — drawn monospace and selectable by
+/// [_SwarmResourcePreviewState._details].
+class _Code {
+  const _Code(this.text);
+  final String text;
+}
+
 class _ResourceAction {
   const _ResourceAction(
     this.label,
@@ -400,6 +407,17 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
           final selected = row!;
           unawaited(_run(() => widget.search.getModel(selected)));
         }
+        // A Jev model has nothing to Use: Enter starts one of yours that is downloaded, and copies
+        // how to call one that is on a grid.
+        if (row != null && widget.search.canStartJev(row)) {
+          final selected = row!;
+          unawaited(_run(() => widget.search.startJev(selected)));
+        } else if (widget.search.models?.entries[row?.modelId] case final jev?
+            when jev.isJev &&
+                jev.gridModel != null &&
+                !widget.search.canGetModel(row)) {
+          _copyJevRequest(jev);
+        }
         if (row?.isCreate == true) _addApi();
         // Model rows perform Use/Get directly; unavailable rows stay put.
         return true;
@@ -727,9 +745,12 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
               widget.search.canGetModel(row) ||
               widget.search.isModelDownloadsRow(row) ||
               widget.search.isGridSetupRow(row) ||
-              widget.search.canExpandApi(row))
+              widget.search.canExpandApi(row) ||
+              widget.search.isJevRow(row))
         '$enter ${managing
             ? 'select'
+            : widget.search.isJevRow(row)
+            ? widget.search.actionLabel(row)
             : widget.search.canSelectModel(row)
             ? 'Use'
             : widget.search.canGetModel(row)
@@ -840,6 +861,48 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
       final local = model?.local;
       final api = model?.api;
       final owner = model?.controller ?? catalog.manager;
+      if (model case final jev? when jev.isJev) {
+        final mine = jev.local;
+        final operating =
+            mine != null && owner.operationFor(mine)?.active == true;
+        return [
+          if (mine != null && mine.canStop)
+            _ResourceAction(
+              'Stop',
+              busy || operating || owner.busy
+                  ? null
+                  : () => unawaited(
+                      _run(() async {
+                        await owner.control(mine, 'stop');
+                        return owner.error;
+                      }),
+                    ),
+              command: 'picker.model_stop',
+            )
+          else if (mine != null && !mine.downloaded)
+            _ResourceAction(
+              'Get',
+              !busy && search.canGetModel(selected)
+                  ? () => unawaited(_run(() => search.getModel(selected)))
+                  : null,
+              command: 'picker.model_download',
+            )
+          else if (mine != null)
+            _ResourceAction(
+              'Start',
+              !busy && search.canStartJev(selected)
+                  ? () => unawaited(_run(() => search.startJev(selected)))
+                  : null,
+              command: 'picker.model_start',
+            ),
+          if (jev.gridModel != null)
+            _ResourceAction(
+              'Copy request',
+              () => _copyJevRequest(jev),
+              command: 'picker.accept',
+            ),
+        ];
+      }
       if (local != null) {
         final enabled =
             !busy &&
@@ -1200,6 +1263,7 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     final opActive = operation?.active == true;
     // API entries have their own dedicated preview; keep main's dispatch.
     if (entry.api != null) return _apiPreview(entry);
+    if (entry.isJev) return _jevPreview(entry);
 
     String windowLabel(double? seconds) {
       if (seconds == null) return '—';
@@ -1509,6 +1573,88 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
     ], controls: true);
   }
 
+  /// A Jev model's pane: what it is, and how to call it — no harness runs on it.
+  Widget _jevPreview(ModelSearchEntry entry) {
+    final served = entry.gridModel;
+    final local = entry.local;
+    final catalog = widget.search.models!;
+    final owner = entry.controller ?? catalog.manager;
+    final grid = served?.grid ?? '';
+    final state = catalog.manager.sections
+        .where((section) => section.name == grid)
+        .firstOrNull
+        ?.state;
+    final operation = local == null ? null : owner.operationFor(local);
+    final here = thisComputerName();
+    final machine = local != null
+        ? '${here[0].toUpperCase()}${here.substring(1)}'
+        : entry.node;
+    return _details([
+      entry.name,
+      ['Jev model', ?machine, if (grid.isNotEmpty) grid].join(' · '),
+      '',
+      'Answers questions about a state with probabilities: a choice between named options, '
+          'yes or no, or a score. It does not chat, so no harness runs on it.',
+      if (local != null) ...[
+        '',
+        if (operation?.active == true)
+          catalog.localStatus(local, controller: owner)
+        else if (operation?.error case final error?)
+          error
+        else if (local.running)
+          'Running on $here, on your grid.'
+        else if (local.downloaded)
+          'Downloaded. Start runs it on your grid, beside the models already running there.'
+        else
+          'Get downloads it${local.sizeBytes == null ? '' : ' (${gigabytesLabel(local.sizeBytes!)})'}, '
+              'updates Grid\'s model engine first if it is too old to serve Jev models, and runs it '
+              'on your grid, beside the models already running there.',
+        '',
+        if (local.sizeBytes case final size?) ('Size', gigabytesLabel(size)),
+        ('Runs in', 'Grid\'s llama.cpp'),
+      ],
+      if (served == null)
+        ...[]
+      else if (served.unavailable case final away?) ...[
+        '',
+        '${away.machine} seems offline. It answers again when that computer is back.',
+      ] else if (state == GridSectionState.asleep ||
+          state == GridSectionState.waking) ...[
+        '',
+        'Its grid is resting. Your first request wakes it, which takes a few seconds.',
+      ],
+      if (served != null) ...[
+        '',
+        ('Model', entry.name),
+        if (grid.isNotEmpty) ('Grid', grid),
+        ('Endpoint', 'POST \$OPENAI_BASE_URL/systemone'),
+        '',
+        'Call it from a terminal:',
+        _Code(jevRequest(grid, entry.name)),
+        ?_messages[row!.id],
+        '',
+        'The first line loads this grid\'s address and key into your shell; the key is never '
+            'shown here. Each question is a choice (named options), a noul (yes or no) or a score '
+            '(2–10 ordered levels).',
+      ],
+    ], controls: true);
+  }
+
+  void _copyJevRequest(ModelSearchEntry entry) {
+    final id = row?.id;
+    unawaited(
+      Clipboard.setData(
+        ClipboardData(
+          text: jevRequest(entry.gridModel?.grid ?? '', entry.name),
+        ),
+      ).then((_) {
+        if (mounted && id != null) {
+          setState(() => _messages[id] = 'Copied. Paste it into a terminal.');
+        }
+      }),
+    );
+  }
+
   Widget _machinePreview() {
     final machine = app.stateOf(row!.machineId!);
     if (machine == null) return _details([row!.title, 'Unavailable']);
@@ -1592,6 +1738,22 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
                 label,
                 value,
               ),
+              final _Code code => Container(
+                margin: const EdgeInsets.only(top: 4, bottom: 4),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: DesktopChrome.field,
+                  border: Border.all(color: DesktopChrome.rim),
+                  borderRadius: BorderRadius.circular(
+                    DesktopChrome.controlRadius,
+                  ),
+                ),
+                child: SelectableText(
+                  code.text,
+                  style: DesktopChrome.text(size: 11.5)
+                      .copyWith(fontFamily: grid.AppType.monoFamily),
+                ),
+              ),
               final line => Padding(
                 padding: EdgeInsets.only(bottom: i == 0 ? 5 : 3),
                 child: Text(
@@ -1625,6 +1787,10 @@ class _SwarmResourcePreviewState extends State<SwarmResourcePreview> {
         for (var i = 0; i < lines.length; i++)
           switch (lines[i]) {
             '' => SizedBox(height: cell.height),
+            final _Code code => SelectableText(
+              code.text,
+              style: terminalContentStyle(color: theme.foreground),
+            ),
             (final String label, final String value) => Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

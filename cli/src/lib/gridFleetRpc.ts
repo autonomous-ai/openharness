@@ -1,9 +1,11 @@
 /** Grid's complete argv API, carried over the existing paired-machine connection. No shell. */
 import { spawn } from 'node:child_process'
 import { gridBinaryPath, gridChildEnv } from './gridExec.js'
+import { GRID_FLEET_MAX_TIMEOUT_MS } from './gridFleetProtocol.js'
 
-export const GRID_FLEET_PROTOCOL = 1
-export const GRID_FLEET_MAX_TIMEOUT_MS = 30 * 60_000
+// The handshake's own module, which the socket answers it from (gridFleetProtocol.ts).
+export { GRID_FLEET_MAX_TIMEOUT_MS, GRID_FLEET_PROTOCOL } from './gridFleetProtocol.js'
+
 const MAX_OUTPUT = 512 * 1024
 export interface GridFleetRequest { args: string[]; timeoutMs: number; thinking?: boolean }
 export interface GridFleetResult { ok: boolean; code: number; stdout: string; stderr: string; error: string | null }

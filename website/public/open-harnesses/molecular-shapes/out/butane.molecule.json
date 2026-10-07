@@ -1,0 +1,330 @@
+{
+ "spec": "rdkit-molecule/1",
+ "name": "butane",
+ "smiles": "CCCC",
+ "inchi": "InChI=1S/C4H10/c1-3-4-2/h3-4H2,1-2H3",
+ "inchikey": "IJDNQMDRQITEOD-UHFFFAOYSA-N",
+ "formula": "C4H10",
+ "sdf": "butane.sdf",
+ "svg": "butane.svg",
+ "properties": {
+  "formula": "C4H10",
+  "smiles": "CCCC",
+  "mw": 58.12,
+  "logp": 1.81,
+  "tpsa": 0.0,
+  "hbd": 0,
+  "hba": 0,
+  "rotatable_bonds": 1,
+  "rings": 0,
+  "heavy_atoms": 4,
+  "qed": 0.431,
+  "aromatic_rings": 0,
+  "formal_charge": 0,
+  "fsp3": 1.0,
+  "mr": 20.58,
+  "exact_mass": 58.0783,
+  "stereocenters": 0,
+  "unspecified_stereocenters": 0,
+  "lipinski_violations": 0,
+  "lipinski": [],
+  "veber_violations": 0,
+  "veber": []
+ },
+ "rules": {
+  "lipinski": {
+   "pass": true,
+   "violations": []
+  },
+  "veber": {
+   "pass": true,
+   "violations": []
+  }
+ },
+ "flags": [
+  {
+   "level": "good",
+   "text": "Passes Lipinski's rule of five (MW \u2264 500, cLogP \u2264 5, HBD \u2264 5, HBA \u2264 10)."
+  },
+  {
+   "level": "good",
+   "text": "Passes Veber (\u2264 10 rotatable bonds, TPSA \u2264 140 \u00c5\u00b2)."
+  },
+  {
+   "level": "good",
+   "text": "cLogP 1.81 sits in the 0\u20133 range most oral drugs occupy."
+  },
+  {
+   "level": "good",
+   "text": "TPSA 0 \u00c5\u00b2 is under 90 \u2014 compatible with brain penetration as well as oral absorption."
+  }
+ ],
+ "stereocentres": [],
+ "groups": [],
+ "alerts": [],
+ "atoms": [
+  {
+   "i": 0,
+   "el": "C",
+   "q": -0.0654,
+   "logp": 0.144,
+   "tpsa": 0,
+   "hyb": "sp3",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 3,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 1,
+   "el": "C",
+   "q": -0.0564,
+   "logp": 0.144,
+   "tpsa": 0,
+   "hyb": "sp3",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 2,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 2,
+   "el": "C",
+   "q": -0.0564,
+   "logp": 0.144,
+   "tpsa": 0,
+   "hyb": "sp3",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 2,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 3,
+   "el": "C",
+   "q": -0.0654,
+   "logp": 0.144,
+   "tpsa": 0,
+   "hyb": "sp3",
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 3,
+   "on": null,
+   "cip": null
+  },
+  {
+   "i": 4,
+   "el": "H",
+   "q": 0.023,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 0,
+   "cip": null
+  },
+  {
+   "i": 5,
+   "el": "H",
+   "q": 0.023,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 0,
+   "cip": null
+  },
+  {
+   "i": 6,
+   "el": "H",
+   "q": 0.023,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 0,
+   "cip": null
+  },
+  {
+   "i": 7,
+   "el": "H",
+   "q": 0.0264,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 1,
+   "cip": null
+  },
+  {
+   "i": 8,
+   "el": "H",
+   "q": 0.0264,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 1,
+   "cip": null
+  },
+  {
+   "i": 9,
+   "el": "H",
+   "q": 0.0264,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 2,
+   "cip": null
+  },
+  {
+   "i": 10,
+   "el": "H",
+   "q": 0.0264,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 2,
+   "cip": null
+  },
+  {
+   "i": 11,
+   "el": "H",
+   "q": 0.023,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 3,
+   "cip": null
+  },
+  {
+   "i": 12,
+   "el": "H",
+   "q": 0.023,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 3,
+   "cip": null
+  },
+  {
+   "i": 13,
+   "el": "H",
+   "q": 0.023,
+   "logp": 0.123,
+   "tpsa": 0,
+   "hyb": null,
+   "arom": false,
+   "ring": false,
+   "fc": 0,
+   "h": 0,
+   "on": 3,
+   "cip": null
+  }
+ ],
+ "depiction": {
+  "width": 93,
+  "height": 17,
+  "aligned_to_parent": false,
+  "atoms": [
+   [
+    0,
+    82.4,
+    1.1,
+    1.2992,
+    0.249
+   ],
+   [
+    1,
+    58.2,
+    15.0,
+    0.4328,
+    -0.2504
+   ],
+   [
+    2,
+    34.0,
+    1.0,
+    -0.4328,
+    0.2504
+   ],
+   [
+    3,
+    9.8,
+    15.0,
+    -1.2992,
+    -0.249
+   ]
+  ],
+  "bonds": [
+   [
+    0,
+    1
+   ],
+   [
+    1,
+    2
+   ],
+   [
+    2,
+    3
+   ]
+  ]
+ },
+ "conformers": {
+  "count": 3,
+  "forcefield": "MMFF94",
+  "energies": [
+   -5.076,
+   -4.294,
+   -4.294
+  ],
+  "delta": [
+   0.0,
+   0.782,
+   0.782
+  ],
+  "file": "butane.conformers.sdf"
+ },
+ "parent": null,
+ "updatedAt": "2026-10-05T08:55:27Z",
+ "sdfSha1": "b8c4db1c3121ee76ae17ff2c9c1d229376825af1"
+}

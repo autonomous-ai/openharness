@@ -309,6 +309,10 @@ class DeviceLogRebaseline {
   final bool otherAccount;
 }
 
+/// What [ViewerDeviceLog.ensureRegistered] found: this app's key already in the log, put there just now,
+/// kept out by a frozen log, or still missing (no log to read, the backend down, a refusal).
+enum DeviceLogRegistration { active, registered, frozen, missing }
+
 class ViewerDeviceLog {
   ViewerDeviceLog({
     required this.keys,
@@ -362,6 +366,10 @@ class ViewerDeviceLog {
   /// Set while [register] runs.
   bool _registering = false;
 
+  /// The [register] under way, which [ensureRegistered] lets finish before it judges.
+  Future<void>? _registerRun;
+  Future<DeviceLogRegistration>? _ensuring;
+
   /// Moves on with each [beginSignIn]: a read that began after one, outside [register], ends what it
   /// set — a sign-in by hand that never registers must not keep this app's own removal from signing
   /// it out for good.
@@ -399,7 +407,15 @@ class ViewerDeviceLog {
   /// A sign-in by hand is also what lets this app's copy of the log move to another account (keeping
   /// the one it leaves, to restore if it comes back) — for a short while after it ([_resetWindowMs]).
   /// Its id is minted by [beginSignIn], which [register] calls itself when it was not called before.
-  Future<void> register({bool freshSignIn = false}) async {
+  Future<void> register({bool freshSignIn = false}) {
+    final run = _register(freshSignIn: freshSignIn);
+    _registerRun = run;
+    return run.whenComplete(() {
+      if (identical(_registerRun, run)) _registerRun = null;
+    });
+  }
+
+  Future<void> _register({required bool freshSignIn}) async {
     if (freshSignIn && !_freshPending) beginSignIn(fresh: true);
     final fresh = _freshPending;
     _freshPending = false;
@@ -444,11 +460,41 @@ class ViewerDeviceLog {
         await _sleep(Duration(milliseconds: 200 + _random.nextInt(800) * (attempt + 1)));
       }
     } catch (_) {
-      // The next sign-in, resume or push tries again.
+      // [ensureRegistered] tries again: a machine refusing this app, a socket back, the app in front.
     } finally {
       _signingInAgain = false;
       _registering = false;
     }
+  }
+
+  /// Put this app's key into the log when it is not there yet. [register] can end without it — no log
+  /// to read, the backend down, five lost races, a refusal — and then no machine will trust this app,
+  /// so this is asked again whenever that matters: a machine refusing this app, a socket coming back,
+  /// the app in front again. A frozen log is left as it is: only a review unfreezes it. Concurrent
+  /// calls share one run. Never throws.
+  Future<DeviceLogRegistration> ensureRegistered() =>
+      _ensuring ??= _ensureRegistered().whenComplete(() => _ensuring = null);
+
+  Future<DeviceLogRegistration> _ensureRegistered() async {
+    try {
+      // A register already under way (the boot's) decides first: a second one beside it would race it.
+      await _registerRun;
+      await refresh();
+      if (await _registration() case final known?) return known;
+      await register();
+      return await _registration() == DeviceLogRegistration.active
+          ? DeviceLogRegistration.registered
+          : DeviceLogRegistration.missing;
+    } catch (_) {
+      return DeviceLogRegistration.missing;
+    }
+  }
+
+  /// Where this app's key stands in the file: null when it is not there and nothing keeps it out.
+  Future<DeviceLogRegistration?> _registration() async {
+    final file = await _read();
+    if (file.state?.active.containsKey(await _selfPub()) ?? false) return DeviceLogRegistration.active;
+    return file.frozen != null ? DeviceLogRegistration.frozen : null;
   }
 
   /// The app knows who is signed in — call it synchronously, before anything that reads the log (a

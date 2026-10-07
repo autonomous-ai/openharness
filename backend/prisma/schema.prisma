@@ -7,6 +7,73 @@ generator client {
   provider = "prisma-client-js"
 }
 
+/// Explicitly published, portable single-session snapshots. Live shares remain a separate protocol.
+model CommunityHarness {
+  id            String   @id @default(uuid()) @map("_id")
+  autonomousEnv String   @default("prod")
+  authorId      String
+  authorName    String
+  title         String
+  description   String
+  category      String
+  engine        String
+  harnessId     String?
+  viewerPath    String
+  files         Json
+  conversation  Json
+  cover         String?
+  forkedFrom    String?
+  credits       Json     @default("[]")
+  deletedAt     DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([autonomousEnv, deletedAt, createdAt])
+  @@index([autonomousEnv, authorId])
+  @@map("community_harnesses")
+}
+
+model CommunityLike {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  autonomousEnv String   @default("prod")
+  harnessId     String
+  userId        String
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, harnessId, userId])
+  @@index([autonomousEnv, harnessId])
+  @@map("community_likes")
+}
+
+model CommunityComment {
+  id            String   @id @default(uuid()) @map("_id")
+  autonomousEnv String   @default("prod")
+  harnessId     String
+  userId        String
+  authorName    String
+  body          String
+  clientId      String
+  parentId      String?
+  parentAuthorName String?
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, harnessId, userId, clientId])
+  @@index([autonomousEnv, harnessId, createdAt])
+  @@index([autonomousEnv, userId, createdAt])
+  @@map("community_comments")
+}
+
+model CommunityFollow {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  autonomousEnv String   @default("prod")
+  authorId      String
+  userId        String
+  createdAt     DateTime @default(now())
+
+  @@unique([autonomousEnv, authorId, userId])
+  @@index([autonomousEnv, userId])
+  @@map("community_follows")
+}
+
 /// A thin MIRROR of a product user. Identity is the normalized email authenticated by Autonomous
 /// SSO. The two Autonomous account planes issue different subjects for the same email, so production
 /// and staging subjects are stored separately. Lives in the SAME MongoDB the agent-manager uses, but
@@ -39,11 +106,28 @@ model User {
   // Null on rows that predate it or when the request did not come through Cloudflare.
   lastCountryCode String?
   lastCountryAt   DateTime?
+  // The `utm_*` and `rid` a sign-in arrived with (lib/signInAttribution.ts), recorded by /api/auth/exchange.
+  // `signUpAttribution` is the tags the account was created with — how it was acquired — written once,
+  // by the sign-in that created the row (or claimed a device's provisional row). Unset for an account
+  // created untagged or elsewhere, so a later tagged sign-in never claims the acquisition.
+  // `lastAttribution` is the latest tagged sign-in.
+  signUpAttribution SignInAttribution?
+  lastAttribution   SignInAttribution?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
   @@index([stagExternalId])
   @@map("users")
+}
+
+type SignInAttribution {
+  source     String?
+  medium     String?
+  campaign   String?
+  term       String?
+  content    String?
+  rid        String? // Autonomous referral id
+  recordedAt DateTime
 }
 
 /// A machine: the unit that groups N agents and the thing a user creates, names, pays for and

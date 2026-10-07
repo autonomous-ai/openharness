@@ -4,7 +4,7 @@
  * reflows it; one window takes a terminal from another, or watches it without taking it; a window that
  * goes, closes, freezes or floods its terminal costs only that stream, never the agent or the daemon.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { TerminalBinaryKind, type TerminalBinaryClear } from '../src/lib/terminalBinary.js'
@@ -47,9 +47,12 @@ class Terminal {
 
   /** Opens it, or rejects with the `terminal_error` code the daemon answered. */
   static async open(client: LocalClient, agentId: string, options: Record<string, unknown> = {}): Promise<Terminal> {
+    // Found by QA on a quiet machine: ws can deliver the keyframe alongside terminal_ready,
+    // before this await continues. Keep every frame from the request onward.
+    const since = client.binaries.length
     const answer = await Terminal.answer(client, { agentId, cols: 100, rows: 30, ...options })
     if (answer.type !== 'terminal_ready') throw new Error(String(answer.payload?.code))
-    return new Terminal(client, agentId, answer.payload!, client.binaries.length)
+    return new Terminal(client, agentId, answer.payload!, since)
   }
 
   /** The frame `terminal_open` is answered with: `terminal_ready`, or `terminal_error` naming why. */
@@ -119,6 +122,35 @@ class Terminal {
   }
 }
 
+it('keeps the opening screen when terminal_ready and its keyframe arrive together', async () => {
+  const keyframe: TerminalBinaryClear = {
+    kind: TerminalBinaryKind.keyframe, streamId: 'opened', seq: 0, compressed: false,
+    bytes: Buffer.from('the engine is ready'),
+  }
+  const binaries: TerminalBinaryClear[] = [{ ...keyframe, streamId: 'older' }]
+  let accepts!: (frame: Frame) => boolean
+  let answer!: (frame: Frame) => void
+  const client = {
+    binaries,
+    next(test: (frame: Frame) => boolean) {
+      accepts = test
+      return new Promise<Frame>((resolve) => { answer = resolve })
+    },
+    send(_type: string, payload: Record<string, unknown>) {
+      const ready = { type: 'terminal_ready', payload: { requestId: payload.requestId, streamId: 'opened' } }
+      expect(accepts(ready)).toBe(true)
+      // Found by QA on a quiet machine: ws can deliver both frames in one socket callback,
+      // before the await of terminal_ready continues. The test window must keep that screen.
+      answer(ready)
+      binaries.push({ ...keyframe, streamId: 'another-window' }, keyframe)
+    },
+  } as unknown as LocalClient
+
+  const terminal = await Terminal.open(client, 'agent')
+  expect(terminal.frames()).toEqual([keyframe])
+  expect(terminal.screen()).toBe('the engine is ready')
+})
+
 describe('the terminal', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
@@ -160,6 +192,20 @@ describe('the terminal', () => {
     client.close()
   })
 
+  it.each(engines)('%s: asked what its pane runs and where (terminal_info, as hn asks), it says, from tmux', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `info-${engine}`)
+    const info = await client.request('terminal_info', { agentId: agent.id }, 10_000)
+    expect(info.error, JSON.stringify(info)).toBeUndefined()
+    expect(realpathSync(info.path)).toBe(realpathSync(join(d.projectsDir, `info-${engine}`)))
+    expect(Number.isSafeInteger(info.pid)).toBe(true)
+    expect(info.tty).toMatch(/^\/dev\//)
+    expect(typeof info.command).toBe('string')
+    expect(await client.request('terminal_info', { agentId: 'no-such-agent' }, 10_000)).toMatchObject({ error: 'AGENT_NOT_FOUND' })
+    client.close()
+  })
+
   it.each(engines)('%s: keystrokes out of order type nothing and say which one was expected; JSON keystrokes are refused', async (engine) => {
     const d = await fresh()
     const client = await LocalClient.connect(d)
@@ -189,7 +235,9 @@ describe('the terminal', () => {
     const words = 'pasted ' + 'words '.repeat(400).trim()
     const started = client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
     terminal.paste(words)
-    await until('the paste to reach the composer', async () => (await d.capture(agent.tmuxPane)).includes('words words') || null, 15_000, 100)
+    // Shown in the composer as the engines show a large paste, a placeholder, and sent whole on Enter.
+    const shown = engine === 'claude' ? '[Pasted text #1]' : `[Pasted Content ${words.length} chars]`
+    await until('the paste to reach the composer', async () => (await d.capture(agent.tmuxPane)).includes(shown) || null, 15_000, 100)
     terminal.type('\r')
     expect((await started).payload?.userMessage).toBe(words)
     client.close()
