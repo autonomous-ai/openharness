@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ddcd29dfde2828fde27adac662bd7d49cd12ad66
+          ref: 74a17225cb4a7ab795f45340ba4c587effe9eae1
       - uses: actions/checkout@v7
         with:
           ref: 08c80d76dd2143f7fa81ee8192923925d694c4a3
@@ -104,7 +104,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: detached-core-updater-auth-${{ matrix.suite }}
+          name: detached-core-memory-grid-${{ matrix.suite }}
           path: .harness/validation/
           if-no-files-found: error
           include-hidden-files: true
