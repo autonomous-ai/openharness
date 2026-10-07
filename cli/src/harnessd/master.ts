@@ -9,14 +9,14 @@ import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from 'nod
 import { performance } from 'node:perf_hooks'
 import { ignoreLogWriteErrors, trimLogFile, ts } from '../lib/log.js'
 import { folderFingerprint } from './leanBundle.js'
-import { leanServices } from './leanServices.js'
+import { CORE, leanServices } from './leanServices.js'
 import { platformFromEnv, type PlatformName } from './platform.js'
 import { baseNode, namedNode } from './processName.js'
-import type { MasterMessage } from './protocol.js'
+import { LEAN_CORE_SCRIPT_ENV, type MasterMessage } from './protocol.js'
 import {
   PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
 } from './reexec.js'
-import { SERVICE_HOSTS, ServiceSupervisor, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
+import { SERVICE_HOSTS, ServiceSupervisor, UPDATER_HOST, UPDATER_PROCESS, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
 import {
   DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
 } from './supervisor.js'
@@ -31,15 +31,15 @@ export interface MasterConfig {
   /** The managed runtime's folder: a node inside it runs each process under its own name
    *  (./processName.ts); any other node runs as `node`. */
   runtimeDir?: string
-  /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx): what the core runs, and what an update
-   *  replaces on disk. */
+  /** The CLI entry (`cli.js`, or `src/cli.ts` under tsx): what the core and the services fall back on,
+   *  and what an update replaces on disk. */
   scriptPath: string
-  /** What the services run instead, when it is not the CLI entry: the lean bundle the entry carries
-   *  (./leanBundle.ts), so each service parses its own code and not the whole CLI's. Only ever an
-   *  optimisation: a service starts from `scriptPath` whenever it cannot be used (./leanServices.ts). */
+  /** What the services and the core run instead, when it is not the CLI entry: the lean bundle the entry
+   *  carries (./leanBundle.ts), so each parses its own code and not the whole CLI's. Only ever an
+   *  optimisation: each starts from `scriptPath` whenever it cannot be used (./leanServices.ts). */
   serviceScriptPath?: string
   /** What the lean bundle's folder fingerprints to as this master starts (./leanBundle.ts
-   *  `leanFingerprint`): checked before every service is started from it. */
+   *  `leanFingerprint`): checked before every service and every core is started from it. */
   leanFingerprint?: string
   /** The sha256 of the bundle this master's code came from, when the master was not started on
    *  `scriptPath` itself but on the lean bundle read from it: the bundle it runs is the one it was read
@@ -67,6 +67,8 @@ export interface MasterConfig {
   /** The version of the update the bundle with this fingerprint is, when it is one no master kept or
    *  rolled back (`selfUpdate.unjudgedUpdate`); null otherwise. Left out, never. */
   unjudgedUpdate?: (bundle: string | null) => string | null
+  /** Run the updater (`UPDATER_HOST`): the installed copy, with updates on (masterProcess.ts). */
+  updater?: boolean
 }
 
 export type Execve = (file: string, args: string[], env: NodeJS.ProcessEnv) => void
@@ -295,7 +297,10 @@ export function runMaster(config: MasterConfig): Supervisor {
     folderFingerprint, exists: existsSync, sameBundle: () => bundle() === own, log,
   })
   const specs = serviceSpecs(env, SERVICE_HOSTS)
-  const services = new ServiceSupervisor(specs, {
+  // The updater beside them, whatever HARNESSD_SERVICES says: the core neither routes to it nor runs it.
+  const processes = config.updater ? [...specs, { name: UPDATER_PROCESS, ...UPDATER_HOST }] : specs
+  let supervisor: Supervisor | null = null
+  const services = new ServiceSupervisor(processes, {
     spawnService: (spec, extra) => {
       const script = lean.scriptFor(spec.name)
       // One process for every service it hosts, each on its own link to the core (services/process.ts).
@@ -311,6 +316,8 @@ export function runMaster(config: MasterConfig): Supervisor {
     setTimer: (run, ms) => setTimeout(run, ms),
     clearTimer: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
     log,
+    // The updater staged a build: the core is asked to hand over for it, and the new core judged.
+    staged: (version) => supervisor?.updateStaged(version),
   }, serviceOptions(env), { HARNESSD_SERVICE_TOKEN: token })
   const reexec = markerFile ? createReexec({
     own, current: bundle, nodePath: named('harnessd'), execArgv: config.execArgv, scriptPath: config.scriptPath, env, pid: process.pid,
@@ -324,12 +331,24 @@ export function runMaster(config: MasterConfig): Supervisor {
     now: () => Date.now(),
     log,
   }) : null
-  const supervisor = new Supervisor({
-    spawnCore: (extra) => coreHandle(spawn(named('harnessd-core'), [...execArgv, config.scriptPath, '__run'], {
-      // Told which services this master runs, so it routes to exactly those and runs the rest itself.
-      env: { ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs) },
-      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-    })),
+  supervisor = new Supervisor({
+    spawnCore: (extra) => {
+      // From the lean bundle on the core's own code when it can be, as a service is, by the same rules
+      // (./leanServices.ts), and from cli.js otherwise. The supervisor judges the core it is given the
+      // same either way: an update's first core, lean or not, is on probation as before.
+      const script = lean.scriptFor(CORE)
+      const handle = coreHandle(spawn(named('harnessd-core'), [...execArgv, script, '__run'], {
+        // Told which services this master runs, so it routes to exactly those and runs the rest itself;
+        // and, from the lean bundle, which cli.js is its CLI (leanCoreEntry.ts).
+        env: {
+          ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs),
+          ...(script === config.scriptPath ? {} : { [LEAN_CORE_SCRIPT_ENV]: config.scriptPath }),
+        },
+        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      }))
+      lean.started(CORE, script, handle)
+      return handle
+    },
     now: () => performance.now(),
     wallClock: () => Date.now(),
     writeStatus: (status) => { if (config.statusFile) writeStatusFile(config.statusFile, { ...status, masterPid: process.pid, ...(platform ? { platform } : {}) }) },
@@ -345,8 +364,9 @@ export function runMaster(config: MasterConfig): Supervisor {
     confirmUpdate: config.confirmUpdate,
     bundle,
     log,
-    // An experiment's process, started once the core says it is on (./services.ts `onDemand`).
+    // A process on demand, started once the core asks (./services.ts `onDemand`), or as a core too old to ask binds.
     want: (service) => services.want(service),
+    unasked: (protocol) => services.unasked(protocol),
     // The services go with the master, after the core: none is left holding the core's socket.
     exit: (code) => {
       stopping = true

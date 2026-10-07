@@ -15,13 +15,14 @@
  * it asks for (`service_query`), each time it needs it: a service keeps no credential.
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
+import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
 import type { AgentGridTarget, GridGlance } from '../lib/gridAnnotation.js'
 import { parseGridLaunchOverride } from '../lib/gridLaunch.js'
 import { gridGlances, onGridModelsChanged } from '../lib/gridModels.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { startModels } from './models.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
+import { UNASKED } from './processCoreApi.js'
 
 type Payload = Record<string, unknown>
 
@@ -54,8 +55,10 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
   const told = (query: string, payload: Payload = {}): void => { void ask(query, payload).catch(() => {}) }
   return {
     dataDir,
+    conversations: CONVERSATIONS_OFF,
     // Models opens no terminal.
     terminals: TERMINALS_OFF,
+    machine: UNASKED.machine,
     agents: {
       all: () => [],
       live: () => [],
@@ -74,10 +77,11 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       ...AGENT_ACTIONS_OFF,
+      activityText: UNASKED.activityText,
     },
-    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
+    turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory: () => undefined },
+    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
     external: {
       sessions: { list: () => [], scan: async () => [] },
       open: { known: () => new Map(), fresh: async () => new Map() },
@@ -104,15 +108,19 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
       // Models never reaches another machine: the fleet's lane is not its to seal.
       lane: LANE_OFF,
       ...ACCOUNT_BACKEND_OFF,
+      ...UNASKED.account,
     },
     clients: {
       viewerChanged: () => {},
+      viewerFrame: () => false,
       gridNamed: (name) => told('gridNamed', { name }),
       gridModelsChanged: () => told('gridModelsChanged'),
       dshInstallStatus: () => {},
-      windows: () => {},
+      windows: () => {}, observer: () => false,
+      ...UNASKED.clients,
     },
     daemon: DAEMON_UNKNOWN,
+    wifi: UNASKED.wifi,
   }
 }
 

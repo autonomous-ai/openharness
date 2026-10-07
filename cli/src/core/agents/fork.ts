@@ -14,7 +14,7 @@ import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear } from '../../dsh/launch.js'
 import { forkRuntimeKey, harnessLaunchOrRefusal, prepareHarnessLaunch } from '../../dsh/runtime.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
-import type { CommanderMirror } from '../../lib/commander.js'
+import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
@@ -32,7 +32,7 @@ type ForkAgent = NonNullable<BackendSocket['onForkAgent']>
 export interface ForkAgentDeps {
   tmuxBackend: TmuxBackend | null
   registry: typeof registry
-  mirror: Pick<CommanderMirror, 'isBusy' | 'recentAsks' | 'recent' | 'lastFullText'>
+  mirror: Pick<TurnRecaps, 'isBusy' | 'recentAsks' | 'recent' | 'lastFullText'>
   /** Forks whose session has not reported in yet, to the source session whose recap they inherit (bind.ts). */
   pendingForkInherit: Map<string, string>
   watchNewPane: ReturnType<typeof createPaneWatcher>

@@ -185,6 +185,9 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
   /** The core took this connection (`connected`): only then does its end mean the service was cut off. */
   let opened = false
   const pending = new Map<string, { resolve: (payload: Payload) => void; reject: (error: Error) => void }>()
+  /** The requests being answered, each with the connection that asked (`Asker.connection`): what that
+   *  connection closing aborts, and what the core going aborts all of, since nobody is left to answer. */
+  const answering = new Map<AbortController, string | undefined>()
 
   const send = (frame: { type: string; payload: Payload }): void => {
     try { socket?.send(JSON.stringify(frame)) } catch { /* the socket is going; the core answers for us */ }
@@ -231,6 +234,10 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       } catch (error) { failed(error) }
       return
     }
+    if (frame.type === 'service_connection_closed') {
+      for (const [closed, asked] of answering) if (asked === payload.connection) closed.abort()
+      return
+    }
     if (frame.type === 'service_query_result') {
       const waiting = pending.get(String(payload.requestId))
       if (!waiting) return
@@ -251,18 +258,24 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       ...(typeof frame.asker?.connection === 'string' ? { connection: frame.asker.connection } : {}),
       ...(typeof frame.asker?.requestId === 'string' ? { requestId: frame.asker.requestId } : {}),
     }
+    // Aborted when that connection closes (`service_connection_closed`), or when the core goes.
+    const closed = new AbortController()
+    answering.set(closed, asker.connection)
     // A request that fails here is answered as failed, never left for the core's timeout, and in the
     // words the core's host uses: what went wrong goes to the log, not to whoever asked.
     void Promise.resolve()
       .then(() => {
         if (faults.calls.has(type)) throw new Error(`injected fault: ${options.name}.${type}`)
-        return handle(payload, asker)
+        return handle(payload, asker, closed.signal)
       })
       .catch((error: unknown) => {
         log(`[service ${options.name}] ${type} failed · ${describe(error)}`)
         return { error: 'SERVICE_FAILED', service: options.name }
       })
-      .then((result) => send({ type: `${type}_result`, payload: { ...result, requestId } }))
+      .then((result) => {
+        answering.delete(closed)
+        send({ type: `${type}_result`, payload: { ...result, requestId } })
+      })
   }
 
   // Only ever run at start and from the reconnect timer, which `stop` clears.
@@ -283,6 +296,8 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       socket = null
       opened = false
       for (const [id, waiting] of pending) { pending.delete(id); waiting.reject(new Error('the core went away')) }
+      // The core that asked is gone, and every connection it routed with it: nobody can read these answers.
+      for (const closed of answering.keys()) closed.abort()
       if (wasOpen) {
         try { options.onDisconnected?.() } catch (error) { log(`[service ${options.name}] disconnect failed · ${describe(error)}`) }
       }

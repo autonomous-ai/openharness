@@ -1,6 +1,6 @@
 import { basename } from 'node:path'
 import { sessionCodexHome } from './engineHomes.js'
-import { terminalActivityReading } from '../cable/terminalActivity.js'
+import { terminalActivityReading } from './terminalActivity.js'
 import { connectCodexControl, type CodexControl } from './codexSessionLifecycle.js'
 import { codexStoppedGoal } from './codexTurnRecovery.js'
 import { argvTokens, processRows, type ProcessRow } from './tmux.js'

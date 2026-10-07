@@ -2,10 +2,17 @@ import { fork, spawn, spawnSync } from "child_process";
 import { join } from "path";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 // vitest runs from cli/, so this is cli/scripts/install.sh — the file published to the CDN.
 const installer = join(process.cwd(), "scripts", "install.sh");
+
+// Every test here runs the real installer under /bin/sh, with fake commands it writes fresh. On macOS the
+// first run of a freshly written executable waits on the system's check of it: 220 ms at a load of 100,
+// 600 ms with 12 busy loops more, against 16 ms for one already run (2026-10-06). A test runs up to a
+// dozen of them, and vitest's 5 s timed out 11 of these tests in one loaded unit run. The tests that
+// already set 20 s did so for the same reason.
+vi.setConfig({ testTimeout: 20_000 });
 
 describe('installer interrupted downloads', () => {
   it('recovers real truncated HTTP responses without mixing manifest or binary bytes', async () => {
@@ -408,7 +415,9 @@ describe("scripts/install.sh command contract", () => {
             execArgv: ["--import", "tsx"],
             env: { ...process.env, ...daemonEnv },
             silent: true,
-            timeout: 5_000,
+            // A node with tsx compiling the backend's modules, then two tmux creates through fresh fakes:
+            // seconds on a loaded machine (see the timeout above), never 5 s of a quiet one.
+            timeout: 15_000,
           });
           let response: Record<string, unknown> | undefined;
           let stderr = "";

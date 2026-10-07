@@ -34,11 +34,12 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(api.agents.fork('a1')).resolves.toEqual({ ok: false, error: 'UNSUPPORTED' })
     api.turns.send('a1', 'text')
     api.turns.stop('a1')
-    expect(api.turns.recent('a1', 3)).toEqual([])
-    expect(api.turns.asks('a1')).toEqual([])
+    expect(await api.turns.recent('a1', 3)).toEqual([])
+    expect(await api.turns.asks('a1')).toEqual([])
     api.questions.answer('a1', 'q', {})
     await expect(api.questions.answerReviewed({} as never)).resolves.toBe(false)
     expect(api.transcripts.databaseHistory(agent('a1'))).toBeUndefined()
+    expect(await api.transcripts.lastTurn('s1')).toBeNull()
     expect(api.external.sessions.list()).toEqual([])
     await expect(api.external.sessions.scan()).resolves.toEqual([])
     expect(api.external.open.known().size).toBe(0)
@@ -49,9 +50,25 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(api.account.privateGridName()).resolves.toBeNull()
     expect(api.account.machineName()).toBeNull()
     api.clients.viewerChanged('a1')
+    expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
     api.clients.gridNamed('grid')
     api.clients.gridModelsChanged()
     api.clients.dshInstallStatus({ phase: 'clone' })
+    // What only the devices ask (services/devices.ts): nothing, from every other service.
+    expect([api.machine.id(), api.machine.computerId(), api.machine.name()]).toEqual(['', '', ''])
+    await expect(api.agents.activityText('a1')).resolves.toBeNull()
+    expect(api.account.signedIn()).toBe(false)
+    expect(api.account.environment()).toBe('')
+    await expect(api.account.machines()).resolves.toEqual({ status: 503, body: {} })
+    api.clients.sendLocal({ type: 'dial_focus', payload: {} })
+    expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
+    expect(api.clients.hasWindow()).toBe(false)
+    api.clients.devicesChanged({})
+    api.clients.dialWatching(true)
+    // What only the recaps ask (services/recaps.ts): nothing, from every other service.
+    api.clients.turnCard({ type: 'commander_event', agentId: 'a', dbSessionId: 's', payload: {} })
+    api.clients.turnSummary({ type: 'turn_summary' })
+    expect(await api.transcripts.lastTurn('s1')).toBeNull()
     // With no way to ask the core, it acts on nothing: no agent made, no turn, no window told.
     await expect(api.agents.create({ engine: 'claude', cwd: '/w', dsh: null, prompt: 'p', name: 'n', bypassPermission: false }))
       .resolves.toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE' })
@@ -96,7 +113,7 @@ describe('the core API a light service runs on in its own process', () => {
     const shown = { ...agent('a1'), displayName: 'Planner', terminalAvailable: true, dshContext: { viewerUrl: 'http://127.0.0.1:1/', viewerName: 'CAD' } } as unknown as ShownAgent
     const api = processCoreApi('/data', 'orchestrator', {
       live: () => [shown, agent('a2')], ask, deliveries: turnsLink(ask),
-      daemon: () => ({ command: `'node' 'cli.js'`, port: 18473, machineId: () => 'm' }),
+      daemon: () => ({ command: `'node' 'cli.js'`, port: 18473, machineId: () => 'm', autonomousEnv: 'staging' }),
     })
     const request = { engine: 'claude' as const, cwd: '/w', dsh: null, prompt: 'p', name: 'n', bypassPermission: false }
     expect(await api.agents.create(request)).toEqual({ ok: true, agentId: 'made' })
@@ -127,9 +144,41 @@ describe('the core API a light service runs on in its own process', () => {
     expect(api.daemon.machineId()).toBe('m')
   })
 
+  it('has Share\'s welcomes signed and its observers\' frames sent through the core, and watches through the link it is given', async () => {
+    const answers: Record<string, Record<string, unknown> | Error> = { observer_key: { key: 'a2V5' }, observer_send: { sent: true } }
+    const ask = vi.fn(async (query: string) => {
+      const answer = answers[query]
+      if (answer instanceof Error) throw answer
+      return answer
+    })
+    const watch = { frame: vi.fn(async () => {}), close: vi.fn(async () => {}), onOutput: vi.fn(() => () => {}) }
+    const api = processCoreApi('/data', 'sharing', { ask, watch, daemon: () => ({ command: 'x', port: 1, machineId: () => 'm', autonomousEnv: 'staging' }) })
+    expect(await api.account.observerKey.publicKey()).toBe('a2V5')
+    expect(await api.account.observerKey.signWelcome('m', 's', 'cA==', 'ZQ==')).toBe('a2V5')
+    expect(ask).toHaveBeenCalledWith('observer_key', { op: 'public' })
+    expect(ask).toHaveBeenCalledWith('observer_key', { op: 'sign', machineId: 'm', shareId: 's', peer: 'cA==', ephemeral: 'ZQ==' })
+    answers.observer_key = { error: 'not a welcome to an observer' }
+    await expect(api.account.observerKey.signWelcome('m', 's', 'x', 'y')).rejects.toThrow('not a welcome to an observer')
+    answers.observer_key = {}
+    await expect(api.account.observerKey.publicKey()).rejects.toThrow('did not answer')
+    expect(api.clients.observer('observer:k', 'observer_frame', { a: 1 })).toBe(true)
+    answers.observer_send = new Error('the link went')
+    expect(api.clients.observer('observer:k', 'observer_frame', {})).toBe(true)
+    await new Promise((settle) => setTimeout(settle, 0))
+    expect(ask).toHaveBeenCalledWith('observer_send', { connId: 'observer:k', type: 'observer_frame', payload: { a: 1 } })
+    expect(api.terminals.watch).toBe(watch)
+    expect(api.daemon.autonomousEnv).toBe('staging')
+    // Without the core to ask, it signs nothing and sends nothing.
+    const alone = processCoreApi('/data', 'sharing')
+    expect(alone.clients.observer('observer:k', 'observer_frame', {})).toBe(false)
+    await expect(alone.account.observerKey.publicKey()).rejects.toThrow('no E2EE identity')
+    expect(alone.daemon.autonomousEnv).toBe('prod')
+  })
+
   it('reads the daemon\'s address out of the core\'s answer, and nothing out of anything else', () => {
     const address = daemonIn({ command: 'harness', port: 18473, machineId: 'm' })!
-    expect(address).toMatchObject({ command: 'harness', port: 18473 })
+    expect(address).toMatchObject({ command: 'harness', port: 18473, autonomousEnv: 'prod' })
+    expect(daemonIn({ command: 'harness', port: 18473, machineId: 'm', autonomousEnv: 'staging' })!.autonomousEnv).toBe('staging')
     expect(address.machineId()).toBe('m')
     expect(daemonIn({ command: 'harness', port: '18473', machineId: 'm' })).toBeNull()
     expect(daemonIn({ command: 'harness', port: 18473 })).toBeNull()

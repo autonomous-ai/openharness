@@ -49,6 +49,14 @@ import { launchScriptOf } from '../testing/launchScript.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
 
+// What these cases test is what real shells make of the scripts this module writes: sh, dash, bash and
+// zsh run each one, and nothing here could be faked without faking the subject. Each run carries its own
+// bound (a probe's 5 s in engineLaunch.ts, the 10 s of the runs below), and vitest's 5 s default sat under
+// them: a slow shell timed the case out instead of answering as its bound says. Under a full run at load
+// 36 (six workers), 11 cases here hit it, one of them on a single probe; under 8 busy and 8 spawning loops
+// the four-probe case took 4.9 s. Room for four probes at their limit, and a margin.
+vi.setConfig({ testTimeout: 30_000 })
+
 // The launch script names the `grid` the daemon resolved, and a developer's own HARNESS_GRID_BIN
 // would resolve to THEIR grid. The suite's runtime dir is already a throwaway (vitest.setup.ts), so
 // with the override gone every case below resolves to the bare name.

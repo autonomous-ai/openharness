@@ -13,9 +13,10 @@
  * alone: a hang or a crash in it costs workspaces, and the master starts them again.
  */
 import type { CoreApi } from '../core/api.js'
-import { ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
+import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
+import { UNASKED } from './processCoreApi.js'
 import { startWorkspaces } from './workspaces.js'
 
 export interface WorkspacesServiceOptions {
@@ -45,7 +46,9 @@ export function workspacesCoreApi(
 ): CoreApi {
   return {
     dataDir,
+    conversations: CONVERSATIONS_OFF,
     terminals: TERMINALS_OFF,
+    machine: UNASKED.machine,
     agents: {
       all: () => {
         const agents = view.inUse()
@@ -64,11 +67,12 @@ export function workspacesCoreApi(
       setRuntime: () => {},
       fork: async () => ({ ok: false, error: 'UNSUPPORTED' }),
       ...AGENT_ACTIONS_OFF,
+      activityText: UNASKED.activityText,
     },
     // The workspaces drive no agent: these are never asked of them.
-    turns: { send: () => {}, stop: () => {}, recent: () => [], asks: () => [], ...DELIVERIES_OFF },
+    turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
-    transcripts: { databaseHistory: () => undefined },
+    transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
     external: {
       sessions: { list: () => [], scan: async () => [] },
       open: { known: () => new Map(), fresh: async () => new Map() },
@@ -80,9 +84,11 @@ export function workspacesCoreApi(
       privateGridName: async () => null,
       machineName: () => null,
       ...ACCOUNT_BACKEND_OFF,
+      ...UNASKED.account,
     },
-    clients: { viewerChanged: () => {}, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {} },
+    clients: { viewerChanged: () => {}, viewerFrame: () => false, gridNamed: () => {}, gridModelsChanged: () => {}, dshInstallStatus: () => {}, windows: () => {}, observer: () => false, ...UNASKED.clients },
     daemon: DAEMON_UNKNOWN,
+    wifi: UNASKED.wifi,
   }
 }
 

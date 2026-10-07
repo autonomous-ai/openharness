@@ -111,50 +111,6 @@ export function clearSafeModeMarker(dataDir: string): void {
   try { rmSync(safeModeFile(dataDir), { force: true }) } catch { /* ignore */ }
 }
 
-export interface BootHandoffDeps {
-  /** The bound control port, if start-up ever got that far. */
-  closeServer: () => void
-  /** Whether the staged bundle's master answers its probe, synchronously: null when it does, why not otherwise. */
-  probeMaster: () => string | null
-  /** Put the build before back (`selfUpdate.restore`), remembering this one as rejected. */
-  rollBack: () => void
-  /** Start harnessd's master on the bundle now on disk, named in the pid file: it starts the core, and
-   *  judges the update. */
-  startMaster: () => void
-  exit: (code: number) => never
-  log: (message: string) => void
-}
-
-/**
- * Hand the machine to a newer build without finishing start-up.
- *
- * SYNCHRONOUS END TO END, and that is the whole safety argument: never awaiting means the half-built
- * boot cannot interleave between the port closing and the exit, so it can never reach the code that
- * would bind the port the successor is about to take. Two daemons are impossible by construction.
- * That is also why it does not supervise the child the way a normal update restart does — waiting
- * would leave this process running alongside the new one for up to a minute, both reconciling tmux
- * and writing the registry.
- *
- * It spawns rather than merely exiting because nothing supervises this core: on a machine with no
- * desktop app nothing else would ever start the successor. What it spawns is harnessd's master, which
- * judges the update its core starts on; the core it once spawned ran the update unjudged. The staged
- * bundle's master is probed first, as a master asks before it re-executes on a new bundle, and
- * synchronously like the rest: one that cannot start would leave nothing running and nothing to judge, so
- * the build before goes back and its master is started instead.
- */
-export function runBootHandoff(from: string, to: string, deps: BootHandoffDeps): void {
-  deps.log(`[update] ${from} → ${to} staged during start-up — handing off to harnessd's master without finishing boot`)
-  const refused = deps.probeMaster()
-  if (refused !== null) {
-    deps.log(`[update] ${to}'s master did not answer its probe (${refused}) — rolled back; ${from} goes on under a master of its own`)
-    deps.rollBack()
-  }
-  deps.closeServer()
-  deps.startMaster()
-  deps.log('[update] boot handoff · this process is leaving')
-  deps.exit(0)
-}
-
 /** The marker, or null — including for one left behind by a process that is no longer running. */
 export function readSafeModeMarker(
   dataDir: string,

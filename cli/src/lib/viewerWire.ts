@@ -1,8 +1,6 @@
 import { Duplex } from 'node:stream'
 
-/** Pairwise encrypted JSON frames; no payload may be logged or broadcast. */
-export const VIEWER_DOWN_TYPES = new Set(['viewer_request', 'viewer_data', 'viewer_ack', 'viewer_end', 'viewer_close'])
-export const VIEWER_UP_TYPES = new Set(['viewer_response', 'viewer_data', 'viewer_ack', 'viewer_end', 'viewer_close'])
+export { VIEWER_DOWN_TYPES, VIEWER_UP_TYPES, viewerStreamId } from './viewerFrames.js'
 export const VIEWER_CHUNK_BYTES = 32 * 1024
 export const VIEWER_WINDOW_BYTES = 128 * 1024
 export const VIEWER_MAX_STREAMS = 64
@@ -17,10 +15,6 @@ export function viewerTarget(raw: unknown): URL | null {
     return url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
       && !url.username && !url.password && Number(url.port) > 0 ? url : null
   } catch { return null }
-}
-
-export function viewerStreamId(value: unknown): value is string {
-  return typeof value === 'string' && /^[a-zA-Z0-9-]{1,64}$/.test(value)
 }
 
 /**

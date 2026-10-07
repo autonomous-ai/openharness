@@ -1,0 +1,29 @@
+[Unit]
+Description=Set up Harness
+After=local-fs.target systemd-vconsole-setup.service systemd-user-sessions.service
+Wants=getty-pre.target
+Before=getty-pre.target display-manager.service
+ConditionPathExists=/usr/share/harness-os/image.json
+ConditionPathExists=!/var/lib/harness-os/firstboot.done
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/chvt 1
+ExecStart=/usr/bin/python3 -I /usr/lib/harness-os/firstboot.py
+ExecStartPost=/usr/bin/systemctl daemon-reload
+ExecStartPost=/usr/bin/systemctl --no-block start graphical.target
+StandardInput=tty
+StandardOutput=tty
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+Environment=TERM=linux
+TimeoutStartSec=0
+RemainAfterExit=yes
+UMask=0077
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

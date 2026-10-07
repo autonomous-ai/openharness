@@ -18,7 +18,8 @@ import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } fro
 import { psEnv } from './childLocale.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { neutralizePasteControls } from './pasteText.js'
-import { patientExec } from './patientExec.js'
+import { patientDeadline, patientExec } from './patientExec.js'
+import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
@@ -1152,12 +1153,33 @@ function tmuxEnter(pane: string): Promise<boolean> {
   })
 }
 
+/**
+ * How long a buffer may take to load before the paste is given up. A tmux client waits as long as its
+ * server does not answer, and this one runs in the gate's notify room (tmuxControlGate.ts): unbounded, it
+ * held every terminal open, session made or killed, and terminal closed behind it for as long. The other
+ * tmux commands here get 2 s; this one also carries the text over stdin.
+ */
+export const LOAD_BUFFER_TIMEOUT_MS = 5_000
+
 /** Stage text in a NAMED tmux buffer via stdin (avoids arg-length limits + the user's default buffer). */
 function tmuxLoadBuffer(name: string, content: string): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false
+    let cancel = (): void => {}
+    const settle = (loaded: boolean): void => {
+      if (settled) return
+      settled = true
+      cancel()
+      resolve(loaded)
+    }
     const c = spawn('tmux', ['load-buffer', '-b', name, '-'])
-    c.on('error', () => resolve(false))
-    c.on('close', (code) => resolve(code === 0))
+    // Answered without waiting for its pipes to close: a client killed here may leave one open behind it.
+    cancel = patientDeadline(LOAD_BUFFER_TIMEOUT_MS, () => {
+      c.kill('SIGKILL')
+      settle(false)
+    })
+    c.on('error', () => settle(false))
+    c.on('close', (code) => settle(code === 0))
     c.stdin.on('error', () => { /* EPIPE if tmux died first — 'close' still resolves false */ })
     c.stdin.end(content)
   })
@@ -1337,8 +1359,15 @@ function tmuxDeleteBuffer(name: string): Promise<void> {
 
 /** Paste text from a uniquely named stdin-loaded buffer so its bytes never enter argv or errors. A
  *  bracketed paste carries text and nothing else (pasteText.ts), not even its own end marker; an
- *  unbracketed one is typing, and is typed as it was given. */
-async function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
+ *  unbracketed one is typing, and is typed as it was given.
+ *
+ *  A buffer set and deleted is a notification to every control client, which on a tmux before 3.7
+ *  crashed the server while one was attaching: the paste waits for none to be (tmuxControlGate.ts). */
+function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
+  return inTmuxRoom('notify', () => pasteThroughBuffer(pane, content, bracketed))
+}
+
+async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean): Promise<boolean> {
   const bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
   if (!(await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content))) {
     await tmuxDeleteBuffer(bufferName)

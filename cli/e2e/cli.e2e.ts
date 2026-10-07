@@ -103,6 +103,9 @@ const panes = (m: Machine) => m.daemon.tmux.run('list-panes', '-a', '-F', '#{pan
 /** A process's command line, as ps prints it. */
 const commandOf = (pid: number): string => execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf8' }).trim()
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** The core a master starts on an installed bundle: from the core's entry in the lean bundle it carries,
+ *  written out into the data folder. */
+const leanCore = (m: Machine) => new RegExp(` ${escape(join(m.daemon.dataDir, 'lean'))}/[0-9a-f]{16}/harnessd-core\\.mjs __run$`)
 const statusOf = async (m: Machine) => await (await fetch(`http://127.0.0.1:${m.daemon.port}/api/status`)).json() as Record<string, any>
 
 describe('harness start, stop and status from the installed bundle', () => {
@@ -188,9 +191,10 @@ describe('harness start, stop and status from the installed bundle', () => {
     const core = status.corePid as number
     expect(core).not.toBe(master)
     seen.add(master).add(core)
-    // harnessd's master (it retitles itself), running the installed bundle's core.
+    // harnessd's master (it retitles itself), running the installed bundle's core: from the lean bundle that
+    // bundle carries, written out into the data folder (src/harnessd/leanBundle.ts).
     expect(commandOf(master)).toBe('harnessd')
-    expect(commandOf(core)).toMatch(new RegExp(` ${escape(m.cli)} __run$`))
+    expect(commandOf(core)).toMatch(leanCore(m))
 
     const running = await harness(m, 'status')
     expect(running.stdout).toMatch(/status +● running · this computer only \(not signed in\)/)
@@ -233,7 +237,7 @@ describe('harness start, stop and status from the installed bundle', () => {
     expect(commandOf(first)).toBe('harnessd')
     const firstCore = (await statusOf(m)).corePid as number
     seen.add(firstCore)
-    expect(commandOf(firstCore)).toMatch(new RegExp(` ${escape(m.cli)} __run$`))
+    expect(commandOf(firstCore)).toMatch(leanCore(m))
     const definition = readFileSync(m.definition, 'utf8')
     expect(definition).toContain(m.node)
     expect(definition).toContain(m.cli)

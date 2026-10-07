@@ -168,7 +168,7 @@ function edgePids(d: IsolatedDaemon): number[] {
     .filter(([, pid, command]) => command.trim() === 'harnessd-edge' && ours.has(Number(pid))).map(([, pid]) => Number(pid))
 }
 /** The services the edge host runs, each on its own link to the core. */
-const EDGE = ['workspaces', 'usage', 'monitor', 'projects']
+const EDGE = ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps']
 /** How many times each of the edge host's services has connected to the core. */
 const edgeConnections = (d: IsolatedDaemon): number => Math.min(...EDGE.map((service) => d.log().split(`[services] ${service} connected`).length - 1))
 /** The edge host answers, through the core: the home folder's subfolders, and the machine's own totals. */

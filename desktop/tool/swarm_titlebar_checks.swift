@@ -98,7 +98,7 @@ private extension SwarmTabStrip {
     }
     let states: [(String, String)] = [("⠋", "Working"), ("?", "Needs your input"),
       ("✗", "Failed"), ("✓", "Finished · unread"), ("", "Idle"),
-      ("◌", "Starting"), ("||", "Paused"), ("⊘", "Offline")]
+      ("◌", "Starting"), ("■", "Stopped"), ("⊘", "Offline")]
     update(["enabled": true, "activeId": "activity", "tabs": [
       ["id": "activity", "name": "desktop", "label": "1:desktop", "activity": payload("⠋", "Working", working: true)]
     ]])
@@ -546,13 +546,42 @@ private extension SwarmTabButton {
 
   func drawWithHoverControl() {
     draw(bounds)
-    guard !closeButton.isHidden else { return }
-    NSGraphicsContext.saveGraphicsState()
-    let transform = NSAffineTransform()
-    transform.translateX(by: closeButton.frame.minX, yBy: closeButton.frame.minY)
-    transform.concat()
-    closeButton.draw(closeButton.bounds)
-    NSGraphicsContext.restoreGraphicsState()
+    for control in [selectButton, closeButton] where !control.isHidden {
+      NSGraphicsContext.saveGraphicsState()
+      let transform = NSAffineTransform()
+      transform.translateX(by: control.frame.minX, yBy: control.frame.minY)
+      transform.concat()
+      control.draw(control.bounds)
+      NSGraphicsContext.restoreGraphicsState()
+    }
+  }
+
+  func checkSelectionSurface() throws {
+    frame = NSRect(x: 0, y: 0, width: 256, height: 40)
+    layoutSubtreeIfNeeded()
+    let hover = NSEvent.mouseEvent(with: .mouseMoved, location: .zero, modifierFlags: [],
+      timestamp: 0, windowNumber: 0, context: nil, eventNumber: 0, clickCount: 0, pressure: 0)!
+    for appearance in [NSAppearance.Name.darkAqua, .aqua] {
+      self.appearance = NSAppearance(named: appearance)
+      for active in [false, true] {
+        selected = active
+        for pressed in [false, true] {
+          selectButton.performClick(nil)
+          selectButton.mouseEntered(with: hover)
+          selectButton.highlight(pressed)
+          let bitmap = selectButton.renderedBitmap()
+          let paintsOverTab = (0..<bitmap.pixelsWide).contains { x in
+            (0..<bitmap.pixelsHigh).contains { y in
+              (bitmap.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0
+            }
+          }
+          try checkTitlebar(!paintsOverTab,
+            "The selection target adds no second surface over the tab in \(appearance.rawValue), selected=\(active), pressed=\(pressed)")
+          selectButton.highlight(false)
+          selectButton.mouseExited(with: hover)
+        }
+      }
+    }
   }
 
   func checkClickOwnership() throws {
@@ -1775,7 +1804,12 @@ private extension SwarmTabStrip {
     let buttons = tab.accessibilityChildren()!.compactMap { $0 as? NSButton }
     try checkTitlebar(buttons.count == 2, "Hover exposes selection and close to native accessibility")
     for button in buttons {
+      let beforeFocus = tab.renderedPixels()
       try checkTitlebar(window.makeFirstResponder(button), "An enabled tab action accepts keyboard focus")
+      if button === buttons[0] {
+        try checkTitlebar(tab.renderedPixels() != beforeFocus,
+          "Explicit keyboard focus still outlines the native tab control")
+      }
       try tab.checkCenteredLabel()
       try checkTitlebar(scroll.documentVisibleRect.contains(tab.frame),
         "Keyboard focus reveals the entire overflowed tab")
@@ -1858,8 +1892,7 @@ private extension SwarmTabStrip {
 }
 
 private extension SwarmTabStrip {
-  /// Dart's `tabsFocused`: closing the active tab left the keyboard on the
-  /// strip, so the selected tab is drawn focused until the person goes in.
+  /// Dart's `tabsFocused`: Close parks keys without adding a visual outline.
   func checkKeyboardOnTabs() throws {
     let rows = (0..<3).map { ["id": "strip-\($0)", "name": "Strip \($0)", "label": "\($0 + 1):work"] }
     update(["enabled": true, "activeId": "strip-1", "tabs": rows])
@@ -1868,9 +1901,9 @@ private extension SwarmTabStrip {
     update(["enabled": true, "activeId": "strip-1", "tabs": rows, "tabsFocused": true])
     try checkTitlebar(tabs.map(\.keyboardFocus) == [false, true, false],
       "Only the selected tab shows the strip's keyboard focus")
-    try checkTitlebar(tabs[1].renderedPixels() != resting[1] &&
+    try checkTitlebar(tabs[1].renderedPixels() == resting[1] &&
       tabs[0].renderedPixels() == resting[0] && tabs[2].renderedPixels() == resting[2],
-      "The selected tab is drawn focused and its neighbours are unchanged")
+      "Closing a tab keeps the normal selected appearance without an automatic focus ring")
     let select = tabs[1].accessibilityChildren()!.compactMap { $0 as? NSButton }.first!
     try checkTitlebar(select.accessibilityHelp()?.contains("Return") == true,
       "VoiceOver hears that Return types in the selected tab")
@@ -2606,6 +2639,7 @@ do {
   try strip.checkActivityMarks()
   try SwarmTabButton(id: "label-measurements").checkLabelMeasurementChanges()
   try SwarmTabButton(id: "close-shortcuts").checkHoverCloseAndShortcutHints()
+  try SwarmTabButton(id: "selection-surface").checkSelectionSurface()
   try strip.checkTabPresentationAndCapture()
   try SwarmTabButton(id: "hover-fixture").checkHoverStyleAndTooltips()
   try strip.checkDaemon()

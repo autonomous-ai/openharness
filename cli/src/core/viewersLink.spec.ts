@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { createViewersLink } from './viewersLink.js'
+import { VIEWERS_UNAVAILABLE } from './api.js'
+import { createViewersLink, SURFACE_WAIT_MS, VIEWERS_BUFFER_LIMIT } from './viewersLink.js'
 
 const agent = (over: Partial<RegisteredSession> = {}) =>
   ({ agentId: 'a1', sessionId: 's1', engine: 'claude', dsh: 'acme/blender', cwd: '/work/scene', ...over }) as RegisteredSession
@@ -45,33 +46,22 @@ describe('the viewers in their own process, as the core keeps them', () => {
     expect(link.answer('context', { agentId: 'a1', context: said, forwardingUrl: 'http://127.0.0.1:7001/', requestId: 'q1', query: 'context' })).toEqual({ kept: true })
     expect(port.frameContext(agent())).toEqual(said)
     expect(port.forwardingUrl('a1')).toBe('http://127.0.0.1:7001/')
-    expect(core.clients.viewerChanged).toHaveBeenCalledWith('a1')
     expect(core.agents.sync).toHaveBeenCalledWith(agent())
     // An agent without a harness has nothing to say on its frame, whatever was kept under its id.
     expect(port.frameContext(agent({ dsh: undefined }))).toBeNull()
   })
 
-  it('a change that moves no viewer sends the frame without disturbing the viewer panes; no change does nothing', () => {
+  it('a change sends the frame again; no change does nothing', () => {
     const { core, link, port } = setup()
     port.attach(agent())
     link.answer('context', { agentId: 'a1', context: context(), forwardingUrl: null })
-    // Its first word moved nothing a viewer pane follows: no viewer yet.
-    expect(core.clients.viewerChanged).not.toHaveBeenCalled()
     expect(core.agents.sync).toHaveBeenCalledTimes(1)
     const verdict = { ready: true, summary: 'ok', errors: 0, warnings: 0, artifact: null, phases: [], updatedAt: null }
     link.answer('context', { agentId: 'a1', context: context({ verdict }), forwardingUrl: null })
     expect(port.frameContext(agent())).toMatchObject({ verdict })
-    expect(core.clients.viewerChanged).not.toHaveBeenCalled()
     expect(core.agents.sync).toHaveBeenCalledTimes(2)
     expect(link.answer('context', { agentId: 'a1', context: context({ verdict }), forwardingUrl: null })).toEqual({ kept: true })
     expect(core.agents.sync).toHaveBeenCalledTimes(2)
-  })
-
-  it('follows a viewer URL that moves even when nothing forwards to it', () => {
-    const { core, link, port } = setup()
-    port.attach(agent())
-    link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://elsewhere.test/' }), forwardingUrl: null })
-    expect(core.clients.viewerChanged).toHaveBeenCalledWith('a1')
   })
 
   it('waits for the terminal before sending a frame, which would otherwise read as "agent gone"', () => {
@@ -107,22 +97,14 @@ describe('the viewers in their own process, as the core keeps them', () => {
     expect(port.forwardingUrl('a1')).toBeNull()
   })
 
-  it('a detach forgets the agent, lets the viewer panes go of a viewer it had, and is held until the process hears it', () => {
-    const { core, notify, link, port } = setup()
+  it('a detach forgets the agent, and is held until the process hears it', () => {
+    const { notify, link, port } = setup()
     port.attach(agent())
     link.answer('context', { agentId: 'a1', context: context({ viewerUrl: 'http://127.0.0.1:7001/' }), forwardingUrl: 'http://127.0.0.1:7001/' })
-    vi.mocked(core.clients.viewerChanged).mockClear()
     port.detach('a1')
-    expect(core.clients.viewerChanged).toHaveBeenCalledWith('a1')
     expect(notify).toHaveBeenLastCalledWith({ type: 'service_event', payload: { kind: 'detach', agentId: 'a1' } }, { untilDelivered: true })
     expect(port.frameContext(agent())).toBeNull()
-    // One with no viewer, or never heard of, has no viewer pane to let go of.
-    vi.mocked(core.clients.viewerChanged).mockClear()
-    port.attach(agent({ agentId: 'a2' }))
-    link.answer('context', { agentId: 'a2', context: null, forwardingUrl: null })
-    port.detach('a2')
-    port.detach('never')
-    expect(core.clients.viewerChanged).not.toHaveBeenCalled()
+    expect(port.forwardingUrl('a1')).toBeNull()
   })
 
   it('answers from what it last knew while the process cannot hear anything', () => {
@@ -145,5 +127,78 @@ describe('the viewers in their own process, as the core keeps them', () => {
     const { notify, port } = setup()
     await expect(port.stop()).resolves.toBeUndefined()
     expect(notify).not.toHaveBeenCalled()
+  })
+})
+
+describe('a viewer served to a client over its connection, through the viewers\' process', () => {
+  const streaming = (buffered = 0) => {
+    const core = fakeCore()
+    const notify = vi.fn(() => true)
+    const call = vi.fn(async (_type: string, payload: Record<string, unknown>) => ({ data: 'jpeg', asked: payload }))
+    const link = createViewersLink(core, notify, { call, buffered: () => buffered })
+    return { core, notify, call, link, port: link.port }
+  }
+
+  it('tells the process each frame of a client\'s stream as it comes, never held for a process that is down', () => {
+    const { notify, port } = streaming()
+    expect(port.stream('c1', 'viewer_request', { streamId: 's1' })).toBe(true)
+    expect(notify).toHaveBeenCalledWith({ type: 'service_event', payload: { kind: 'stream', connId: 'c1', type: 'viewer_request', frame: { streamId: 's1' } } })
+    notify.mockReturnValue(false)
+    expect(port.stream('c1', 'viewer_data', { streamId: 's1' })).toBe(false)
+    expect(notify).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses a stream\'s frame while the process is not reading, rather than keep it', () => {
+    const { notify, port } = streaming(VIEWERS_BUFFER_LIMIT + 1)
+    expect(port.stream('c1', 'viewer_request', { streamId: 's1' })).toBe(false)
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('asks the process for a client\'s rendered frame, with the connection it came over, waiting no longer than a client does', async () => {
+    const { call, port } = streaming()
+    await expect(port.surface('c1', { surfaceId: 'v' })).resolves.toEqual({ data: 'jpeg', asked: { surfaceId: 'v', connId: 'c1' } })
+    expect(call).toHaveBeenCalledWith('surface', { surfaceId: 'v', connId: 'c1' }, SURFACE_WAIT_MS)
+  })
+
+  it('without a link to the process, a surface is answered unavailable and a stream is not taken', async () => {
+    const link = createViewersLink(fakeCore(), vi.fn(() => false))
+    await expect(link.port.surface('c1', {})).resolves.toEqual(VIEWERS_UNAVAILABLE)
+    expect(link.port.stream('c1', 'viewer_request', { streamId: 's1' })).toBe(false)
+  })
+
+  it('tells the process a connection went, or every one did', () => {
+    const { notify, port } = streaming()
+    port.closed('c1')
+    port.closed()
+    expect(notify.mock.calls).toEqual([
+      [{ type: 'service_event', payload: { kind: 'closed', connId: 'c1' } }],
+      [{ type: 'service_event', payload: { kind: 'closed' } }],
+    ])
+  })
+
+  it('hands what a stream answers to its connection, and ends the stream in the process when it cannot', () => {
+    const { core, notify, link } = streaming()
+    vi.mocked(core.clients.viewerFrame).mockReturnValue(true)
+    link.notice({ kind: 'viewer', connId: 'c1', type: 'viewer_response', payload: { streamId: 's1', status: 200 } })
+    expect(core.clients.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_response', { streamId: 's1', status: 200 })
+    expect(notify).not.toHaveBeenCalled()
+    vi.mocked(core.clients.viewerFrame).mockReturnValue(false)
+    link.notice({ kind: 'viewer', connId: 'c1', type: 'viewer_data', payload: { streamId: 's1', data: 'AA==' } })
+    expect(notify).toHaveBeenCalledWith({ type: 'service_event', payload: {
+      kind: 'stream', connId: 'c1', type: 'viewer_close', frame: { streamId: 's1', error: 'Viewer connection closed' },
+    } })
+    // A close that could not be delivered, or a frame of no stream, needs nothing more.
+    link.notice({ kind: 'viewer', connId: 'c1', type: 'viewer_close', payload: { streamId: 's1' } })
+    link.notice({ kind: 'viewer', connId: 'c1', type: 'viewer_data' })
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(core.clients.viewerFrame).toHaveBeenLastCalledWith('c1', 'viewer_data', {})
+  })
+
+  it('ignores a notice that is not a stream\'s frame for a connection', () => {
+    const { core, link } = streaming()
+    link.notice({ kind: 'other', connId: 'c1', type: 'viewer_data' })
+    link.notice({ kind: 'viewer', connId: 7, type: 'viewer_data' })
+    link.notice({ kind: 'viewer', connId: 'c1' })
+    expect(core.clients.viewerFrame).not.toHaveBeenCalled()
   })
 })

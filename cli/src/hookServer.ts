@@ -13,7 +13,6 @@ import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes
 import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
-import { LOCAL_WEB_HTML } from './webui.js'
 import { sid } from './lib/log.js'
 import { VERSION } from './version.js'
 import { env } from './config/env.js'
@@ -21,8 +20,7 @@ import { hookCredentialMatches, loadOrCreateHookCredential } from './lib/hookAut
 import { routeStoreRequest, type StoreHandler } from './lib/storeProxy.js'
 import type { HookTerminalHint } from './lib/terminalTypes.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
-import type { CommandBarService } from './lib/commandBar.js'
-import { handleCommandBarHttp } from './lib/commandBarHttp.js'
+import { handleCommandBarHttp, type CommandBarDoor } from './lib/commandBarHttp.js'
 import { isLoopbackRequest, loopbackHosts } from './lib/loopbackRequest.js'
 import { isTrustedLocal, listenLocalSocket, type LocalSocketServer } from './lib/localSocket.js'
 
@@ -56,7 +54,7 @@ export interface PairOutcome {
 }
 
 export interface HookServerHandlers {
-  onCommandBar?: Pick<CommandBarService, 'status' | 'decide'>
+  onCommandBar?: CommandBarDoor
   onAutonomousDeviceRequest?: (method: string, target: string, body?: unknown) => Promise<{ status: number; body: unknown }>
 
   onRegistered: (
@@ -129,12 +127,8 @@ export interface HookServerHandlers {
   onDevicesHistory?: () => Promise<PairOutcome>
   /** `harness devices dismiss` and the window's "It's mine" / "Got it" — mark new devices as seen. */
   onDevicesDismiss?: (body: { pub?: string; pubs?: string[]; baseline?: boolean }) => PairOutcome | Promise<PairOutcome>
-  /** Local dashboard status snapshot (GET /api/status). */
+  /** The daemon's status (GET /api/status): what `harness status`, the desktop's discovery and scripts read. */
   onStatus?: () => Record<string, unknown> | Promise<Record<string, unknown>>
-  /** Recent adapter log tail (GET /api/logs). */
-  onLogs?: () => string
-  /** Stop the adapter from the local dashboard (POST /api/stop). */
-  onStop?: () => void
   /** GET /api/machines — proxy the user's full machine list from backend using this daemon's own
    *  saved SSO session, so a local GUI client never needs a token of its own. */
   onMachinesList?: () => Promise<PairOutcome>
@@ -436,9 +430,9 @@ export function startHookServer(
         }
       }
       // CSRF guard for mutating endpoints: a cross-origin browser page cannot set a custom header on a
-      // simple request (it forces a CORS preflight we never allow), so only our same-origin dashboard
-      // (and the CLI, which sends it too) can trigger actions. A local process could still call it —
-      // same trust level as the CLI, which is acceptable on loopback.
+      // simple request (it forces a CORS preflight we never allow), so only the CLI and the apps, which
+      // send it, can trigger actions. A local process could still call it — same trust level as the
+      // CLI, which is acceptable on loopback.
       const localOk = req.headers['x-adapter-local'] === '1'
       const hookOk = hookCredentialMatches(hookCredential, req.headers['x-harness-hook-token'])
 
@@ -463,19 +457,12 @@ export function startHookServer(
 
       if (await handleCommandBarHttp(req, res, handlers.onCommandBar)) return
 
-      // Local dashboard (self-contained page) + its read-only status/logs.
-      if (req.method === 'GET' && (url === '/' || url === '/index.html')) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end(LOCAL_WEB_HTML); return
-      }
+      // The local web dashboard that `GET /` served, with its log tail (`/api/logs`) and stop button
+      // (`/api/stop`), is gone: no app, website, script or the backend opened it, and the web client
+      // it linked from retired with the browser setup links (#348). `harness stop` stops the daemon
+      // through its pid, never through here.
       if (req.method === 'GET' && url === '/api/status') {
         json(200, handlers.onStatus ? await handlers.onStatus() : { supported: false }); return
-      }
-      if (req.method === 'GET' && url === '/api/logs') {
-        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end(handlers.onLogs ? handlers.onLogs() : ''); return
-      }
-      if (req.method === 'POST' && url === '/api/stop') {
-        if (!localOk) { json(403, { error: 'FORBIDDEN' }); return }
-        json(200, { ok: true }); handlers.onStop?.(); return
       }
 
       // SessionStart AND UserPromptSubmit both POST here (the catch hook re-registers so a session

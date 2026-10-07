@@ -9,10 +9,10 @@
  * in. The two controllers' dependencies are built by `sessionInputDeps` and `deviceInputDeps`, each given
  * the other controller lazily: each one calls into the other.
  */
-import { AutonomousDeviceInput, type DeviceInputDeps } from '../lib/autonomous-device/input.js'
-import type { AutonomousDeviceService } from '../lib/autonomous-device/service.js'
+import { AutonomousDeviceInput, type DeviceInputDeps } from './deviceInput.js'
+import type { WifiFeed } from './wifi.js'
 import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js'
-import { deviceErrorText } from '../lib/deviceErrors.js'
+import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../lib/normalize.js'
@@ -38,14 +38,17 @@ export interface InputDeps {
     /** Whether a team delivery still holds control of its pane. */
     canWrite: (deliveryId: string) => boolean
   }
-  /** The Harness device service, once it exists. */
-  device: () => Pick<AutonomousDeviceService, 'delivery' | 'inputDispatched' | 'inputStatus' | 'agentGone'> | undefined
+  /** The Wi-Fi device's service, wherever it runs (core/wifi.ts). */
+  device: () => Pick<WifiFeed, 'delivery' | 'inputDispatched' | 'inputStatus' | 'agentGone'> | undefined
   /** The app (`send`) and the dial (`sendCommander`). */
   clients: { send(frame: Frame): void; sendCommander(frame: Frame): void }
   agentIdFor: (sessionId: string) => string
   /** Command Code's normalizer for a session, which opens its turn on our paste. */
   commandcode: (sessionId: string) => CommandCodeNormalizer | undefined
   emit: (sessionId: string, events: LiveEvent[]) => void
+  /** A prompt is about to be typed, and `capture` is the pane as read right before: what is on it belongs
+   *  to the turns before the one it starts (the question watcher's, lib/askQuestion.ts `notePrompt`). */
+  promptTyped?: (session: RegisteredSession, capture: string | null) => void
 }
 
 /**
@@ -61,7 +64,7 @@ export interface InputDeps {
  * reason. `submitTerminalAction` is called here and nowhere else in this file, and input.spec.ts keeps
  * it so.
  */
-export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction } }: Pick<InputDeps, 'resolve' | 'terminal'>) {
+export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped'>) {
   return async (id: string, text: string, hold?: (session: RegisteredSession, capture: string | null) => string | null): Promise<TerminalActionResult> => {
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
@@ -74,6 +77,7 @@ export function messageWriter({ resolve, terminal: { captureTerminal, validateTe
     const capture = await captureTerminal(id)
     const reason = hold?.(session, capture) ?? messageHold(session.engine, capture)
     if (reason) return terminalActionNotStarted(reason)
+    promptTyped?.(session, capture)
     return submitTerminalAction(id, text, {
       beforeEnter: async () => {
         // A read that came back empty, or a composer caught between frames, is asked again for a moment

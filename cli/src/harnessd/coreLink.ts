@@ -67,12 +67,16 @@ export interface CoreLink {
   /** Start-up is done and requests are served — or it gave way to safe mode, and why: the master stops
    *  waiting for it either way, and rolls back an update whose first core ends up in safe mode. */
   ready(safeMode?: string): void
-  /** Ask the master to start the experiment's process that runs [service]: it is on (protocol 3). */
+  /** Ask the master to start the process on demand that runs [service]: an experiment that is on (protocol 3),
+   *  or the devices, now that there is one (protocol 4). */
   want(service: string): void
   /** Tell the master, every `heartbeatInterval`, that this core is alive and how big it is. */
   startHeartbeat(): void
   /** The master is gone. A core without one stops, so nothing is left holding the port. */
   onMasterGone(listener: () => void): void
+  /** The master's updater staged a build: hand over for it (`harnessd:update`). Heard from the start, as
+   *  a staged update may arrive while start-up is still under way. */
+  onUpdate(listener: (version: string) => void): void
   /** What the master last said about itself (restarts, the last exit), for `/api/status`. */
   status(): SupervisorStatus | null
   close(): void
@@ -103,8 +107,17 @@ export function connectToMaster(
     if (!supervised) return
     try { channel.send!(message) } catch { /* closing */ }
   }
+  // The last update the master asked for, kept until something listens: the listener is set at start-up,
+  // but a master can stage one before, and a request missed is an update never applied.
+  let update: string | null = null
+  let updateListener: ((version: string) => void) | null = null
   if (supervised) {
-    channel.on('message', (message) => { if (isMasterMessage(message)) status = message.status })
+    channel.on('message', (message) => {
+      if (!isMasterMessage(message)) return
+      if (message.type === 'harnessd:status') { status = message.status; return }
+      if (updateListener) updateListener(message.version)
+      else update = message.version
+    })
   }
   // ⚠️ Listened for from the start and remembered, not from whenever the caller subscribes.
   // runForeground subscribes some 1,100 lines into start-up, long after this core has bound and begun
@@ -142,6 +155,15 @@ export function connectToMaster(
       if (!supervised) return
       if (masterGone) queueMicrotask(listener)
       else goneListeners.push(listener)
+    },
+    onUpdate: (listener) => {
+      if (!supervised) return
+      updateListener = listener
+      if (update !== null) {
+        const version = update
+        update = null
+        queueMicrotask(() => listener(version))
+      }
     },
     status: () => status,
     close: () => {

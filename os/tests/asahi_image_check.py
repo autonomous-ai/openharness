@@ -54,7 +54,7 @@ def partition_layout(table, image_bytes):
     return partitions
 
 
-def inspect_root(root, boot, esp, identity):
+def inspect_root(root, boot, esp, identity, owner_uid=0):
     manifest = identity['session_package']
     if json.loads((root / 'usr/share/harness-os/image.json').read_text()) != identity:
         raise ValueError('The image lost its exact build/package provenance.')
@@ -65,6 +65,26 @@ def inspect_root(root, boot, esp, identity):
     for relative, expected in manifest['symlinks'].items():
         if os.readlink(root / relative) != expected:
             raise ValueError('Actual image link differs: ' + relative)
+    first_boot = identity['first_boot']['files']
+    if set(first_boot) != {'usr/lib/harness-os/firstboot.py',
+                          'usr/lib/systemd/system/harness-firstboot.service',
+                          'usr/lib/systemd/system-preset/01-harness-firstboot.preset'}:
+        raise ValueError('Incomplete first-boot payload declaration.')
+    for relative, expected in first_boot.items():
+        path = root / relative
+        if (path.is_symlink() or not path.is_file() or digest(path) != expected['sha256'] or
+                stat.S_IMODE(path.stat().st_mode) != expected['mode'] or path.stat().st_uid != owner_uid):
+            raise ValueError('Actual first-boot payload differs: ' + relative)
+    enabled = root / 'etc/systemd/system/multi-user.target.wants/harness-firstboot.service'
+    if not enabled.is_symlink() or os.readlink(enabled) != '/usr/lib/systemd/system/harness-firstboot.service':
+        raise ValueError('Harness first boot is not enabled.')
+    for target in ('graphical.target', 'multi-user.target'):
+        if os.path.lexists(root / ('etc/systemd/system/' + target + '.wants/initial-setup.service')):
+            raise ValueError('The competing account wizard is still enabled.')
+    for name in ('var/lib/harness-os/firstboot.json', 'var/lib/harness-os/firstboot.done',
+                 'var/lib/harness-os/session-setup.json', 'etc/reconfigSys'):
+        if os.path.lexists(root / name):
+            raise ValueError('The image has already entered account setup: ' + name)
     if (root / 'var/tmp/harness-image-input').exists():
         raise ValueError('Image still contains temporary builder inputs.')
     accounts = [row.split(':') for row in (root / 'etc/passwd').read_text().splitlines()]

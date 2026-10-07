@@ -206,8 +206,8 @@ describe('startSelfUpdater', () => {
 
   it('is already stopped when onStaged runs — a handler that defers loses the updater for good', async () => {
     // `done = true` and `stop()` happen BEFORE `onStaged`, so a handler that returns without handing
-    // the machine over leaves no timer and no way back. This is why the daemon's boot-time handler
-    // always takes over and exits rather than waiting for start-up to finish (`runBootHandoff`).
+    // the machine over leaves no timer and no way back. This is why the updater's process, once it has
+    // staged, exits to be started again as the new build (services/updaterProcess.ts).
     serveUpdate()
     const dir = tempDir()
     let staged = 0

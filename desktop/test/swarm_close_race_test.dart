@@ -159,7 +159,7 @@ void main() {
         try {
           await mount(tester, app, nativeTabs: true);
           var reviewed = false;
-          app.reviewSessionClose = (targets, {tabName}) {
+          app.reviewSessionClose = (targets, {tabName, canStop}) {
             reviewed = true;
             return review.future;
           };

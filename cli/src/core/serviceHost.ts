@@ -34,6 +34,14 @@ export function later<T>(value: T): Later<T> {
   return { [LATER]: value }
 }
 
+/** A fallback read: whether its member returns a promise (`later`), and what it answers. A service that
+ *  guards parts of its own the way this host guards services reads its fallbacks with this
+ *  (services/devicesGuard.ts). */
+export function readFallback(fallback: unknown): { deferred: boolean; value: unknown } {
+  const deferred = typeof fallback === 'object' && fallback !== null && LATER in fallback
+  return { deferred, value: deferred ? (fallback as Later<unknown>)[LATER] : fallback }
+}
+
 /** For every member of a port, what the core gets when that member fails or its service is off. */
 export type PortFallbacks<P> = {
   [K in keyof P]-?: P[K] extends (...args: never[]) => infer R
@@ -85,6 +93,8 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   const stoppers = new Map<string, () => void>()
   /** The service that answers each request type, and its handler once it has started. */
   const owners = new Map<string, { service: string; answer: ServiceRequest | null }>()
+  /** The requests still being answered, each with the connection that asked: what its closing aborts. */
+  const answering = new Map<AbortController, string | undefined>()
 
   const inject = (target: string): void => {
     if (faults.has(target)) throw new Error(`injected fault: ${target}`)
@@ -112,8 +122,7 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
   const guard = <K extends PortName>(name: K, port: Port<K>, fallbacks: PortFallbacks<Port<K>>): Port<K> => {
     const guarded: Record<string, Member> = {}
     for (const [member, fallback] of Object.entries(fallbacks) as Array<[string, unknown]>) {
-      const deferred = typeof fallback === 'object' && fallback !== null && LATER in fallback
-      const value = deferred ? (fallback as Later<unknown>)[LATER] : fallback
+      const { deferred, value } = readFallback(fallback)
       const answer = (cause?: unknown): unknown => {
         if (value === FAIL) {
           const error = new ServiceUnavailableError(name, cause)
@@ -238,19 +247,28 @@ export function createServiceHost(ports: CorePorts, options: ServiceHostOptions 
         failed(service, type, error)
         reply({ error: 'SERVICE_FAILED', service })
       }
+      // Aborted when its connection closes (`closeConnection`); a request with none is its own, never closed.
+      const closed = new AbortController()
+      answering.set(closed, asker.connection)
+      const settled = (): void => { answering.delete(closed) }
       let result: ReturnType<ServiceRequest>
       try {
         inject(`${service}.${type}`)
-        result = answer(payload, asker)
+        result = answer(payload, asker, closed.signal)
       } catch (error) {
+        settled()
         failedWith(error)
         return true
       }
       void Promise.resolve(result).then((value) => {
         if (typeof value === 'object' && value !== null) reply(value)
         else failedWith(new Error(`${type} was answered with no reply`))
-      }, failedWith)
+      }, failedWith).finally(settled)
       return true
+    },
+    /** A connection closed: abort what it asked that is still being answered. Its answers go nowhere. */
+    closeConnection(connection: string): void {
+      for (const [closed, asked] of answering) if (asked === connection) closed.abort()
     },
     /** Run `handler` once, when `name` is switched off. */
     onOff(name: string, handler: () => void): void {

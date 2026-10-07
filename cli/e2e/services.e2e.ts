@@ -54,7 +54,7 @@ const QUICK_TO_PARK = { HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_INI
 /** The processes the services run in by default, and what makes every one of them fail as it starts. The
  *  experiments' (the teams', the orchestrator's) start only once they are on: e2e/experiments.e2e.ts. */
 const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'models'] as const
-const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,models'
+const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,handoff,recaps,models'
 
 describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
@@ -97,7 +97,7 @@ describe('a failing service never takes the core down', () => {
   })
 
   it('with services in their own processes failing on every request and event, each request is answered failed, every turn reaches the client, and nothing restarts', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,workspaces.nameBranches,workspaces.sweep,monitor.resources,projects.fs_list_dir' } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search.touch,search.session_search,workspaces.nameBranches,workspaces.sweep,monitor.resources,projects.fs_list_dir,recaps.lifecycle' } })
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
@@ -121,6 +121,8 @@ describe('a failing service never takes the core down', () => {
       '[service search] touch failed · injected fault: search.touch',
       '[service search] session_search failed · injected fault: search.session_search',
       '[service workspaces] nameBranches failed · injected fault: workspaces.nameBranches',
+      // The recaps failing on every turn event: those turns have no recap, and every one of them still ends.
+      '[service recaps] lifecycle failed · injected fault: recaps.lifecycle',
     ]) await until(line, () => d.log().includes(line) || null, 15_000, 250)
     const agent = await row(client, agentId)
     expect(agent?.sessionId).toBeTruthy()
@@ -133,15 +135,18 @@ describe('a failing service never takes the core down', () => {
   })
 
   it('with every service in the core failing to start, the core starts, runs an agent through turns and a restart, and says each service is off', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces,store,usage,monitor,projects', ...IN_THE_CORE } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces,store,usage,monitor,projects,recaps', ...IN_THE_CORE } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
-    for (const service of ['search', 'viewers', 'models', 'workspaces', 'store', 'usage', 'monitor', 'projects']) {
+    for (const service of ['search', 'viewers', 'models', 'workspaces', 'store', 'usage', 'monitor', 'projects', 'recaps']) {
       expect(daemon.log()).toContain(`[services] ${service} did not start · injected fault: ${service} · the core runs without it`)
     }
     const client = await LocalClient.connect(daemon)
     const agentId = await boundAgent(daemon, client, 'no-services')
     await turn(client, agentId, 'first, with no services')
+    // With the recaps off a turn has no recap, and ends all the same.
+    await new Promise((done) => setTimeout(done, 1_000))
+    expect(client.frames.filter((frame) => frame.type === 'turn_summary')).toEqual([])
     // Off, never UNSUPPORTED: the apps read that as "update the CLI".
     expect(await client.request('session_search', { query: 'first' })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false })
     for (const type of ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_remove']) {
@@ -261,7 +266,7 @@ describe('a failing service never takes the core down', () => {
     const d = daemon
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-80).join('\n')}`) })
     await d.start()
-    for (const service of ['usage', 'monitor', 'projects']) {
+    for (const service of ['usage', 'monitor', 'projects', 'recaps']) {
       await until(`${service} to connect`, () => d.log().includes(`[services] ${service} connected`) || null, 30_000, 200)
     }
     expect(d.log()).toContain('[service workspaces] did not start · injected fault: workspaces')
@@ -279,7 +284,7 @@ describe('a failing service never takes the core down', () => {
   })
 
   it('the monitor\'s readings failing on every call in the core leave the list its rows, then switch the monitor off; the core runs on', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'monitor.resources,projects.fs_list_dir', ...IN_THE_CORE } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'monitor.resources,projects.fs_list_dir,recaps.lifecycle', ...IN_THE_CORE } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
     const client = await LocalClient.connect(daemon)
@@ -295,6 +300,9 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('fs_list_dir', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'projects' })
     expect(await client.request('project_preview', { path: '/no/such/folder' })).not.toHaveProperty('service')
     await turn(client, agentId, 'with the monitor off')
+    // The recaps failing on every turn event in the core: switched off by its guard, and the turns go on.
+    await until('the recaps to be switched off', () => daemon?.log().includes('[services] recaps switched off after 5 failures') || null, 15_000, 250)
+    await turn(client, agentId, 'with the recaps off')
     expect(daemon.coresStarted()).toBe(1)
     client.close()
   })
@@ -331,15 +339,17 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('route_send', { agentId, text: 'sent by cmd-k' })).toMatchObject({ ok: true })
     expect((await started).payload?.userMessage).toBe('sent by cmd-k')
     await ended
-    expect(daemon.log()).toContain('[devices] dial failed · injected fault: dial')
+    // ⌘K started the devices (core/devicesWake.ts); the window's tab, as a desktop says it, reaches the dial.
+    client.send('app_panes', { agentIds: [agentId], foreground: true })
+    await until('the dial to fail', () => daemon?.log().includes('[devices] dial failed · injected fault: dial') || null, 15_000, 100)
     expect(daemon.coresStarted()).toBe(1)
     client.close()
   })
 
   it('with the fleet not starting, or failing on every call, ⌘K says so and the core runs its agents on', async () => {
     for (const [faults, reason, said] of [
-      ['fleet', 'no agent list yet', '[services] fleet did not start · injected fault: fleet · the core runs without it'],
-      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[services] fleet.routeSend failed · injected fault: fleet.routeSend'],
+      ['fleet', 'no agent list yet', '[devices] fleet did not start · injected fault: fleet · the devices run without it'],
+      ['fleet.routeTask,fleet.routeSend', 'the fleet service is unavailable', '[devices] fleet.routeSend failed · injected fault: fleet.routeSend'],
     ]) {
       daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults } })
       const d = daemon
@@ -349,6 +359,38 @@ describe('a failing service never takes the core down', () => {
       const agentId = await boundAgent(d, client, `fleet-${faults.length}`)
       expect(await routeTask(client, 'fix the parser')).toMatchObject({ agentId: '', reason, candidates: [] })
       expect(await client.request('route_send', { agentId, text: 'not delivered' })).toMatchObject({ ok: false, machine: '', reason })
+      await turn(client, agentId, `the core runs on (${faults})`)
+      expect(d.log()).toContain(said)
+      expect(d.coresStarted()).toBe(1)
+      client.close()
+      await d.close()
+      daemon = undefined
+    }
+  })
+
+  it('with the devices not starting in the core\'s process, or the Devices tab failing, ⌘K and the tab say so and the core runs on', async () => {
+    // In their own process this is e2e/devicesProcess.e2e.ts's crash loop; here, the service host's guard.
+    for (const [faults, said] of [
+      ['devices', '[services] devices did not start · injected fault: devices · the core runs without it'],
+      ['devices.harness_devices_list', '[services] devices.harness_devices_list failed · injected fault: devices.harness_devices_list'],
+    ]) {
+      daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: faults, ...IN_THE_CORE } })
+      const d = daemon
+      onTestFailed(() => { console.log(`---- daemon log (${faults})\n${d.log().split('\n').slice(-80).join('\n')}`) })
+      await d.start()
+      const client = await LocalClient.connect(d)
+      const agentId = await boundAgent(d, client, `devices-${faults.length}`)
+      if (faults === 'devices') {
+        // ⌘K has no router without the devices: it says so, and sends nothing.
+        expect(await routeTask(client, 'fix the parser')).toMatchObject({ agentId: '', reason: 'the devices service is unavailable', candidates: [] })
+        expect(await client.request('route_send', { agentId, text: 'not delivered' })).toMatchObject({ ok: false, reason: 'the devices service is unavailable' })
+        expect(await client.request('harness_devices_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'devices' })
+      } else {
+        expect(await client.request('harness_devices_list', {})).toMatchObject({ error: 'SERVICE_FAILED', service: 'devices' })
+        // Its other request, and ⌘K, are the devices' own answers still.
+        expect(await client.request('harness_device_settings', { id: 'dial-1', patch: { brightness: 3 } })).toMatchObject({ error: 'DEVICE_OFFLINE' })
+        expect(await routeTask(client, 'fix the parser')).toMatchObject({ agentId, confidence: 1 })
+      }
       await turn(client, agentId, `the core runs on (${faults})`)
       expect(d.log()).toContain(said)
       expect(d.coresStarted()).toBe(1)

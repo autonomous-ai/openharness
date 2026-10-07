@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/api/api_client.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/models.dart';
 import 'package:harness/state/desk_sync.dart';
 import 'package:harness/state/pane_arrangement.dart';
 import 'package:harness/state/pane_layout_store.dart';
@@ -78,6 +79,89 @@ void main() {
   setUpAll(() async {
     if (captureDir != null) await loadPreviewFonts();
   });
+  for (final confirm in [true, false]) {
+    test(
+      'desk pruning during close preserves the full tab (confirm: $confirm)',
+      () async {
+        final api = _DeskApi();
+        final app = createApp()..api = api;
+        addTearDown(app.dispose);
+        app.stateOf('m')!.agents = [
+          for (var i = 0; i < 4; i++)
+            Agent(
+              id: 'a$i',
+              name: 'Work $i',
+              engine: 'codex',
+              sessionId: 'conversation-$i',
+              closeSupported: true,
+              terminalAvailable: i != 3,
+              status: i == 3 ? 'stopped' : 'active',
+              createdAt: DateTime.utc(2026, 10, 6),
+            ),
+        ];
+        await app.deskStartForTest();
+        for (var i = 0; i < 4; i++) {
+          app.adoptSessionForTest(terminal('a$i', []));
+        }
+        final work = app.activeSwarm;
+        app.renameSwarm(work.id, 'Hardware');
+        final shape = PaneArrangement(PanePreset.quad.tilesFor(4));
+        work.savePaneSizes('4:manual', shape);
+        await app.deskFlushForTest();
+        final original = work.panes.toList();
+        final paneIds = original.map((p) => p.agentId).toList();
+        var reviewed = 0;
+        app.reviewSessionClose = (targets, {tabName, canStop}) async {
+          reviewed++;
+          expect(targets, hasLength(3));
+          for (var i = 0; i < targets.length; i++) {
+            final (machineId, agent) = targets[i];
+            await app.handleEventForTest(machineId, {
+              'type': 'agent_deleted',
+              'payload': {'agentId': agent.id},
+            });
+            // Another window receives that stop and prunes its shared desk.
+            api.doc = DeskDoc(
+              revision: api.doc!.revision + 1,
+              tabs: [
+                if (i < targets.length - 1)
+                  tab(
+                    work.id,
+                    name: 'Hardware',
+                    custom: true,
+                    agents: paneIds.skip(i + 1).cast<String>().toList(),
+                  ),
+              ],
+            );
+            await app.deskFetchForTest();
+            expect(work.panes, original);
+            expect(work.paneSizes['4:manual']!.tiles, shape.tiles);
+            expect(app.swarms, contains(work));
+            expect(app.deskSyncForTest.pending, isEmpty);
+            expect(api.doc!.tabs.expand((t) => t.panes).length, i < targets.length - 1 ? 3 - i : 0);
+          }
+          return confirm;
+        };
+        await app.requestCloseSwarm(work.id);
+        expect(reviewed, 1);
+        expect(app.lastError, isNull);
+        if (confirm) {
+          expect(app.swarms, isNot(contains(work)));
+          final saved = app.closedSwarms.single;
+          expect(saved.panes.map((p) => p.agentId), paneIds);
+          expect(saved.paneSizes['4:manual']!.tiles, shape.tiles);
+          app.reopenClosed();
+          expect(app.activeSwarm.name, 'Hardware');
+          expect(app.panes.map((p) => p.agentId), paneIds);
+        } else {
+          expect(work.panes, original);
+          await app.deskFlushForTest();
+          expect(api.doc!.tabs.single.panes.map((p) => p.agentId), paneIds);
+        }
+      },
+    );
+  }
+
   test(
     'closing syncs the default layout and reopening restores split order',
     () async {

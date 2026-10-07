@@ -1,9 +1,19 @@
+/**
+ * The pane writer lock, and the Wi-Fi device's queued turns behind it: one writer at a time into an
+ * agent's pane, whoever is writing (a device's turn, a window's message, a team's), and a device turn
+ * held until the pane can take it.
+ *
+ * The core's, not the device's: every write the core makes into a pane takes this lock (core/input.ts),
+ * so it has to be where the writes are. It lived beside the Wi-Fi device (lib/autonomous-device/input.ts)
+ * until the devices moved into a process of their own (docs/design/2026-10-06-core-boundary-next.md,
+ * step 9): a lock that every pane write waits on cannot sit on the far side of a process boundary.
+ */
 import { createHash } from 'node:crypto'
-import type { RegisteredSession } from '../registry.js'
-import type { SessionInputDelivery } from '../sessionInput.js'
-import type { LiveEvent } from '../normalize.js'
-import { isMessageHold } from '../messageHold.js'
-import { enterWithheldReason, type TerminalActionResult } from '../terminalTypes.js'
+import type { RegisteredSession } from '../lib/registry.js'
+import type { SessionInputDelivery } from '../lib/sessionInput.js'
+import type { LiveEvent } from '../lib/normalize.js'
+import { isMessageHold } from '../lib/messageHold.js'
+import { enterWithheldReason, type TerminalActionResult } from '../lib/terminalTypes.js'
 
 const NATIVE = new Set(['claude', 'codex'])
 const VERIFY_MS = 1500

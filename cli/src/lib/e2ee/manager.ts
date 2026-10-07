@@ -166,10 +166,6 @@ export class E2eeManager {
   private helloWaits = new Map<string, number>()
   private helloSeq = 0
   private now: () => number
-  /** Local dashboard port (loopback) — surfaced to the web in e2e_status so it can link there to
-   *  approve pairing. Not sensitive (a localhost port); set by the adapter after the hook server binds. */
-  dashboardPort: number | null = null
-
   constructor(private deps: E2eeManagerDeps, now: () => number = () => Date.now()) {
     this.store.init()
     this.groupKey = crypto32()
@@ -223,7 +219,7 @@ export class E2eeManager {
     }
   }
 
-  /** A browser currently waiting to pair (for the local dashboard), or null. `active` = CPace running. */
+  /** A browser currently waiting to pair (for `/api/status`), or null. `active` = CPace running. */
   pendingConnection(): string | null { return this.slot?.connId ?? null }
   pendingPair(): PendingPairInfo | null {
     if (!this.slot) return null
@@ -495,7 +491,6 @@ export class E2eeManager {
         enabled: true, // mandatory: user events are always group-encrypted
         paired: identityPub ? this.store.isPaired(identityPub) : false,
         fingerprint: this.fingerprint(),
-        dashboardPort: this.dashboardPort, // so the web can link to the local dashboard to approve
       },
     })
     return true

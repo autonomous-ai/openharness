@@ -1,12 +1,10 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
-import { TEAMS_REQUESTS, type Asker, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
+import { SHARE_REQUESTS, TEAMS_REQUESTS, type Asker, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
+import type { ViewerStreams } from './core/viewerStreams.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
-import type { HarnessShareOwner } from './sharing/owner.js'
-import { SHARE_REQUEST_TYPES } from './sharing/protocol.js'
-import { deviceRelayOverGateway, type DeviceRelayOverGateway } from './lib/autonomous-device/overGateway.js'
-import type { AutonomousDeviceService, AutonomousDeviceFrame } from './lib/autonomous-device/service.js'
+import type { WifiCore } from './core/wifi.js'
 /**
  * BackendSocket — the clients' hub and the request dispatch: the windows and tools on this computer
  * (localWsServer.ts), and the remote clients the gateway hands on (gateway/gateway.ts), each in its own
@@ -31,15 +29,12 @@ import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
 import { resolveApiTarget } from './lib/apiModels.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
 import { probeEngines } from './lib/engineProbe.js'
-import { harnessDevicesRequest, type HarnessDevicesService } from './lib/harnessDevices.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
 import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFrame.js'
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
-import { ViewerForwarder } from './lib/viewerForwarder.js'
-import { InteractiveViewers } from './lib/interactiveViewer.js'
-import { OwnerCommands, OWNER_COMMAND_TYPES } from './lib/ownerCommands.js'
-import { VIEWER_DOWN_TYPES } from './lib/viewerWire.js'
+import { OwnerCommands, OWNER_COMMAND_TYPES, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
+import { VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { encodeTerminalLocal, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
@@ -52,6 +47,8 @@ export { isLocalClientId, type DownTransport }
 const MAX_REQUESTS_BEFORE_READY = 256
 /** The teams' requests, which the frame log leaves out: they carry what agents ask each other. */
 const TEAM_REQUESTS: ReadonlySet<string> = new Set(TEAMS_REQUESTS)
+/** Share's requests, which the frame log leaves out as well: they carry who a harness is shared with. */
+const SHARE_REQUEST_TYPES: ReadonlySet<string> = new Set(SHARE_REQUESTS)
 
 export type Frame = Record<string, unknown>
 
@@ -61,7 +58,6 @@ export interface LocalClientSink {
 }
 
 export class BackendSocket {
-  harnessDevices: HarnessDevicesService | null = null
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
    *  until the first one arrives. */
   private machineDisplayName: string | null = null
@@ -167,19 +163,19 @@ export class BackendSocket {
     Promise<{ ok: true; session: RegisteredSession } | { ok: false; error: string; detail?: string }>) | null = null
   /** Called on `remote_terminal_handoff` — cli.ts names the agent whose tile is that tmux pane, or null. */
   onTerminalHandoff: ((tmuxPane: string) => string | null) | null = null
+  /** Share's observers, as the relay hands their frames over and drops them all with the link (services/sharing.ts,
+   *  through its port). Null answers none, as a daemon without Share did. */
+  observers: { receive(connId: string, type: string, payload: Record<string, unknown>): Promise<void> | void; closeAll(): void } | null = null
   /** What the daemon knows about an agent's DSH companions (viewer URL, verdict); null when nothing. */
-  harnessSharing: HarnessShareOwner | null = null
   activityFrameProvider: ((session: RegisteredSession) => ActivityFrame | null) | null = null
   dshFrameProvider: ((session: RegisteredSession) => AgentDshContext | null) | null = null
-  viewerTargetProvider: ((agentId: string) => string | null) | null = null
-  readonly interactiveViewers = new InteractiveViewers(agentId => this.viewerTargetProvider?.(agentId) ?? null)
-  readonly viewerForwarder = new ViewerForwarder({
-    target: (agentId) => this.viewerTargetProvider?.(agentId) ?? null,
-    send: (connId, type, payload) => {
-      if (this.localClients.has(connId)) { this.sendTo(connId, { type, payload }); return true }
-      return this.throughGateway('viewer', (gateway) => gateway.target(connId, type, payload), false)
-    },
-  })
+  /** This machine's viewers, served to a client over its connection: the viewers' (core/viewerStreams.ts). */
+  viewerStreams: ViewerStreams | null = null
+  /** A viewer stream's frame to the one connection that opened it: false when it cannot reach it. */
+  sendViewerFrame(connId: string, type: string, payload: Record<string, unknown>): boolean {
+    if (this.localClients.has(connId)) { this.sendTo(connId, { type, payload }); return true }
+    return this.throughGateway('viewer', (gateway) => gateway.target(connId, type, payload), false)
+  }
   /** Injectable for queue-isolation tests; production uses the machine-local probe. */
   engineProbeProvider: typeof probeEngines = probeEngines
   readonly ownerCommands = new OwnerCommands()
@@ -255,11 +251,6 @@ export class BackendSocket {
   /** Answers `sessions_list` with the whole reply: the conversation an agent holds and how many lines it
    *  has (cli.ts binds core/transcripts/history.ts). Null answers UNSUPPORTED. */
   sessionsProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
-  /** Answers `agent_handoff_prepare` through its last argument, for the owner alone: the structured handoff
-   *  file for an agent whose engine is about to change, written where it says, never text for the next
-   *  engine (cli.ts binds core/agents/handoff.ts over lib/agentHandoff.ts). Null answers UNSUPPORTED. */
-  handoffRequestProvider: ((payload: Record<string, unknown>, asker: { local: boolean; owner: boolean },
-    reply: (result: Record<string, unknown>) => void) => void) | null = null
   /** How each agent's last turn ended, from the turn frames this socket sends: the monitor's activity
    *  once a turn is over (`agents_list`, core/agents/list.ts). */
   readonly monitorCompletions = new MonitorCompletions()
@@ -300,12 +291,12 @@ export class BackendSocket {
     return this.localClients.size > this.toolClients.size
   }
 
-  /** True after a paired device has completed the E2EE hello/welcome session (the local dashboard's dot). */
+  /** True after a paired device has completed the E2EE hello/welcome session (`/api/status`). */
   deviceE2eeConnected(): boolean {
     return [...this.remoteClients.values()].some((client) => client.role === 'device')
   }
 
-  /** Live backend link state (local dashboard), as the gateway last said. */
+  /** Live backend link state (`/api/status`), as the gateway last said. */
   isConnected(): boolean {
     return this.linkUp
   }
@@ -339,22 +330,22 @@ export class BackendSocket {
     frame: (connId, frame, transport, role) => this.enqueueDown(frame, connId, transport, role),
     binary: (connId, clear) => this.enqueueTerminalBinary(connId, clear),
     client: (connId, client) => {
+      this.wifi?.session(connId, client)
       if (client) { this.remoteClients.set(connId, client); return }
       if (!this.remoteClients.delete(connId)) return
-      this.viewerForwarder.closeConnection(connId); this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
+      this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     },
     disconnected: async (connId) => {
-      this.autonomousDeviceRelay?.drop(connId)
+      this.wifi?.dropped(connId)
       this.remoteClients.delete(connId)
-      this.viewerForwarder.closeConnection(connId)
-      this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
+      this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
       await this.terminalStreams?.closeConnection(
         connId,
         'client connection closed',
         false,
       )
     },
-    observer: async (connId, type, payload) => { await this.harnessSharing?.receive(connId, type, payload) },
+    observer: async (connId, type, payload) => { await this.observers?.receive(connId, type, payload) },
     toLocal: (connId, frame) => {
       if (connId) { this.sendLocalTo(connId, frame); return }
       for (const [id, sink] of this.localClients) if (!sink.sendFrame(frame)) void this.unregisterLocalClient(id)
@@ -364,9 +355,8 @@ export class BackendSocket {
       this.onStatus(connected)
     },
     linkDown: () => {
-      this.harnessSharing?.closeAll()
-      this.viewerForwarder.closeAll()
-      this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
+      this.observers?.closeAll()
+      this.viewerStreams?.closedAll(); this.ownerCommands.closeAll(); for (const connId of this.remoteClients.keys()) this.onConnectionClosed?.(connId)
       void this.terminalStreams?.closeConnectionsWhere(
         (connId) => !isLocalClientId(connId),
         'backend disconnected',
@@ -394,26 +384,21 @@ export class BackendSocket {
     },
     revoked: () => this.onRevoked?.(),
     busy: () => this.onBusy?.(),
-    device: async (connId, frame, opened) => { await this.autonomousDeviceRelay?.handle(connId, frame, opened) },
-    deviceRevoked: (identity) => this.autonomousDeviceRelay?.revoke(identity),
+    device: (connId, frame, opened) => this.wifi?.request(connId, frame, opened),
+    deviceRevoked: (identity) => this.wifi?.revoked(identity),
     toWindows: (frame) => this.sendLocal(frame),
   }
 
-  /** The Wi-Fi device's application protocol, beside the device service it answers for, over the
-   *  gateway's sessions (lib/autonomous-device/overGateway.ts). */
-  private autonomousDeviceRelay?: DeviceRelayOverGateway
-  setAutonomousDeviceService(service: AutonomousDeviceService, onRemoteRevoke: (identity: string) => void): void {
-    this.autonomousDeviceRelay = deviceRelayOverGateway({
-      client: (connId) => this.remoteClients.get(connId),
-      send: (connId, type, payload) => { this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false) },
-      service, machineId: this.machineId, onReady: () => this.onCommanderJoin?.(), onRemoteRevoke,
-      onClient: (connId, identity) => this.gatewayPort?.deviceClient(connId, identity),
-    })
+  /** The Wi-Fi device's sessions and requests, as the gateway hands them on, for its service with the
+   *  devices (core/wifi.ts, services/wifi.ts). */
+  private wifi?: WifiCore['fromGateway']
+  useWifi(wifi: WifiCore['fromGateway']): void { this.wifi = wifi }
+  /** The Wi-Fi device's answers and events, sealed to one session; and which identity's app said hello on
+   *  one. Through the gateway, guarded as every frame of the core's is. */
+  deviceFrame(connId: string, type: string, payload: Record<string, unknown>): void {
+    this.throughGateway('device', (gateway) => gateway.device(connId, type, payload), false)
   }
-  /** Wi-Fi device sessions on a direct link that said hello to the device service. */
-  directAutonomousDeviceSessions(): number { return this.autonomousDeviceRelay?.directSessions() ?? 0 }
-  autonomousDeviceConnected(): boolean { return this.autonomousDeviceRelay?.connected() ?? false }
-  emitAutonomousDeviceEvent(frame: AutonomousDeviceFrame, deviceId?: string): void { this.autonomousDeviceRelay?.emit(frame, deviceId) }
+  deviceClient(connId: string, identity: string | null): void { this.toGateway('device', (gateway) => gateway.deviceClient(connId, identity)) }
 
   setTerminalStreamManager(manager: TerminalStreamManager): void {
     this.terminalStreams = manager
@@ -464,11 +449,9 @@ export class BackendSocket {
   async stop(): Promise<void> {
     this.closed = true
     this.closeAgentService?.dispose()
-    this.viewerForwarder.closeAll()
-    this.interactiveViewers.closeAll(); this.ownerCommands.closeAll()
+    this.viewerStreams?.closedAll(); this.ownerCommands.closeAll()
     await this.terminalStreams?.stop()
     await this.gatewayPort?.stop()
-    await this.harnessSharing?.stop()
   }
 
   /** What the gateway does with a frame of the core's, guarded: a throw there (sealing one, say) costs
@@ -629,6 +612,8 @@ export class BackendSocket {
   /** Routes a request to the service that answers it, in its own process (core/serviceLinks.ts) or in
    *  this one (core/serviceHost.ts): false when none does and the socket answers it itself. */
   serviceRouter: ((type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void) => boolean) | null = null
+  /** A connection that asked the services something closed: they abort what it asked (`Asker.connection`). */
+  onConnectionClosed: ((connId: string) => void) | null = null
   /** A window (or `hn`) on this computer attached or went away — the pair brain thinks only while one is here. */
   onLocalClient: ((connId: string, attached: boolean) => void) | null = null
 
@@ -637,8 +622,7 @@ export class BackendSocket {
     if (!this.localClients.delete(connId)) return
     if (!this.toolClients.delete(connId)) this.onLocalClient?.(connId, false)
     this.rowStateWindows.delete(connId)
-    this.viewerForwarder.closeConnection(connId)
-    this.interactiveViewers.closeConnection(connId); this.ownerCommands.closeConnection(connId)
+    this.viewerStreams?.closed(connId); this.ownerCommands.closeConnection(connId); this.onConnectionClosed?.(connId)
     // The last one leaving before any link could hear it attach: nothing happened, as far as the backend
     // is concerned, and the gateway does not tell a later link otherwise.
     this.gatewayPort?.localClients(this.localClients.size)
@@ -815,19 +799,13 @@ export class BackendSocket {
       && ['agent_close', 'agent_delete', 'agent_resume', 'agent_restart', 'agent_retarget', 'agent_update'].includes(type)) {
       reply(type, (frame.payload as { requestId?: unknown }).requestId, { error: 'DELETE_IN_PROGRESS' }); return
     }
-    if (SHARE_REQUEST_TYPES.has(type)) {
-      const p = (frame.payload ?? {}) as Record<string, unknown>
-      const result = await this.harnessSharing?.manage(type, p).catch(() => ({ error: 'SHARING_UNAVAILABLE', detail: 'Sharing is temporarily unavailable. Try again.' }))
-      reply(type, p.requestId, result ?? { error: 'UNSUPPORTED' })
-      return
-    }
     const payload = (frame.payload ?? {}) as Record<string, unknown>
     const requestId = payload.requestId
     const answer = (result: Record<string, unknown>): void => reply(type, requestId, result)
 
     // A paired owner can run the machine's orchestrator; observers and device sessions cannot.
     // Both requests and replies are encrypted, including project artifacts.
-    if (OWNER_COMMAND_TYPES.has(type)) {
+    if (ROUTE_COMMAND_TYPES.has(type)) {
       if (!owner) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
       void this.ownerCommands.request(connId, type, payload).then(result => reply(type, requestId, result))
       return
@@ -845,7 +823,7 @@ export class BackendSocket {
     if (type === 'viewer_surface') {
       if (!owner) return
       // Rendering and input never hold up terminal traffic on the ordered machine queue.
-      void this.interactiveViewers.request(connId, payload)
+      void (this.viewerStreams?.surface(connId, payload) ?? Promise.reject(new Error('no viewers')))
         .then(result => reply(type, requestId, result))
         .catch(() => reply(type, requestId, { error: 'VIEWER_UNAVAILABLE' }))
       return
@@ -859,9 +837,7 @@ export class BackendSocket {
     }
 
     if (type.startsWith('viewer_')) {
-      if (VIEWER_DOWN_TYPES.has(type) && owner) {
-        this.viewerForwarder.handle(connId, type, payload)
-      }
+      if (VIEWER_DOWN_TYPES.has(type) && owner) this.viewerStreams?.frame(connId, type, payload)
       return
     }
 
@@ -978,12 +954,6 @@ export class BackendSocket {
         // An agent's last turn summaries and questions, for a device's tiles (core/turns/recaps.ts, bound by cli.ts).
         case 'agent_recent':
           reply(type, requestId, this.agentRecentProvider ? this.agentRecentProvider(payload) : { error: 'UNSUPPORTED' })
-          return
-
-        // "Change agent": what the old engine did, written for the new one (core/agents/handoff.ts, bound by cli.ts).
-        case 'agent_handoff_prepare':
-          if (this.handoffRequestProvider) this.handoffRequestProvider(payload, asker, answer)
-          else answer({ error: 'UNSUPPORTED' })
           return
 
         // A rename, a model and effort, or an app opening the agent (core/agents/update.ts, bound by cli.ts).
@@ -1139,17 +1109,6 @@ export class BackendSocket {
         case 'question_response':
           this.questionProvider?.(payload, answer)
           return
-
-        // Physical devices belong to this machine; only its owner or loopback tools may manage them.
-        case 'harness_devices_list':
-        case 'harness_device_settings': {
-          if (!owner) {
-            reply(type, requestId, { error: 'OWNER_REQUIRED' })
-            return
-          }
-          reply(type, requestId, await harnessDevicesRequest(this.harnessDevices, type, payload))
-          return
-        }
 
         // The colours the desktop paints its panes with (core/terminals/requests.ts, bound by cli.ts).
         case 'theme_set':

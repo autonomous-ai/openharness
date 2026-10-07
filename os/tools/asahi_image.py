@@ -2,8 +2,8 @@
 """Prepare a private Asahi disk-image recipe from declared upstream/RPM inputs.
 
 This does not partition a computer, publish an installer, or build shared clients.
-Fedora/Asahi owns boot, firmware, kernel, filesystems and initial setup. The next
-integration steps are Harness first boot, encryption and base update/recovery.
+Fedora/Asahi owns boot, firmware, kernel and filesystems. Harness owns the first
+account screen. Encryption and base update/recovery remain separate work.
 """
 import argparse
 import hashlib
@@ -23,6 +23,11 @@ PLATFORM_PACKAGES = (
     'greetd', 'chromium', 'mesa-dri-drivers', 'mesa-vulkan-drivers',
     'asahi-audio', 'speakersafetyd',
 )
+FIRST_BOOT_FILES = {
+    'usr/lib/harness-os/firstboot.py': ('firstboot.py', 0o755),
+    'usr/lib/systemd/system/harness-firstboot.service': ('harness-firstboot.service', 0o644),
+    'usr/lib/systemd/system-preset/01-harness-firstboot.preset': ('01-harness-firstboot.preset', 0o644),
+}
 
 
 def digest(path):
@@ -121,7 +126,10 @@ def prepare(upstream, package, package_source, output, source=ROOT):
         'source_commit': source_commit, 'base': lock, 'architecture': 'aarch64',
         'profile': 'Harness', 'session_package': metadata,
         'release_ready': False,
-        'pending': ['Harness first-boot account setup', 'Disk encryption',
+        'first_boot': {'files': {name: {'sha256': digest(source / 'os/platforms/apple-silicon' / local),
+                                      'mode': mode}
+                                 for name, (local, mode) in FIRST_BOOT_FILES.items()}},
+        'pending': ['Disk encryption',
                     'Fedora base updates and recovery', 'Physical Apple hardware acceptance'],
     }
     output.mkdir(parents=True, exist_ok=False)
@@ -144,6 +152,11 @@ def prepare(upstream, package, package_source, output, source=ROOT):
         else:
             shutil.copy2(origin, target)
     extend_recipe(description, dependencies, identity)
+    for name, (local, mode) in FIRST_BOOT_FILES.items():
+        target = description / 'root' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / 'os/platforms/apple-silicon' / local, target)
+        target.chmod(mode)
     inputs = description / 'root/var/tmp/harness-image-input'
     shutil.copyfile(artifact, inputs / artifact.name)
     shutil.copyfile(source / 'os/platforms/apple-silicon/configure.py', inputs / 'configure.py')

@@ -9,7 +9,8 @@ import { SERVICE_USAGE, serviceCommand, serviceCommandDeps, type ServiceCommandD
 
 /**
  * A computer in a temporary folder: a home, a data folder, an installed bundle, a pid file, and fake
- * launchctl or systemctl that run a stand-in master (pid 4242) and write its pid as the real one does.
+ * launchctl or systemctl, run in this process, that run a stand-in master (pid 4242) and write its pid as
+ * the real one does.
  */
 function computer(platform: PlatformName) {
   const dir = mkdtempSync(join(tmpdir(), 'service-command-'))
@@ -27,7 +28,9 @@ function computer(platform: PlatformName) {
   const err: string[] = []
   const stops: string[] = []
   const relaunches: number[] = []
-  const service = new PlatformService(platform, defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home }))
+  // The fakes run in this process (`fake.run`): these tests are about the command, not how launchctl and
+  // systemctl start, and as processes the systemd ones timed out under load (fakePlatform.ts).
+  const service = new PlatformService(platform, { ...defaultPlatformDeps({ env: { PATH: fake.bin }, uid: 501, home }), run: fake.run })
   const readPid = (): number | null => { try { return Number(readFileSync(pidFile, 'utf8')) || null } catch { return null } }
   const deps: ServiceCommandDeps = {
     service,

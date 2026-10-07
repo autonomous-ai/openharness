@@ -39,6 +39,8 @@ export interface EngineConfig {
   version?: string
   without?: string[]
   startDelayMs?: number
+  /** Hold startup before the transcript opens until this disposable path's .release file exists. */
+  startupGate?: string
   firstHookDelayMs?: number
   updateAvailable?: string
   /** Ask whether to trust a folder the engine's own config has no answer for, as the real CLIs do. */
@@ -57,6 +59,8 @@ export interface DaemonOptions {
   noMaster?: boolean
   /** Start as a supervisor does, `harness start -f`: the master in the foreground, the core its child. */
   foreground?: boolean
+  /** Start with these arguments to node instead (a launcher the test provides), in the daemon's environment. */
+  launch?: string[]
   /** Run this bundle (an installed `cli.js`) instead of the checkout's source. */
   scriptPath?: string
   /** Keep the daemon's data folder here instead of under the throwaway root (a test volume). The fake
@@ -308,7 +312,7 @@ export class IsolatedDaemon {
     // A test's own bundle (an old release), the run's bundle (`E2E_BUNDLE`, see bundle.ts), or the sources.
     const bundle = this.options.scriptPath ?? process.env.E2E_BUNDLE_PATH
     const script = bundle ? [bundle] : ['--import', 'tsx', 'src/cli.ts']
-    const child = spawn(process.execPath, [...heap, ...script, ...entry], {
+    const child = spawn(process.execPath, this.options.launch ?? [...heap, ...script, ...entry], {
       cwd: CLI_ROOT, env: this.env, stdio: ['ignore', 'pipe', 'pipe'],
     })
     this.child = child

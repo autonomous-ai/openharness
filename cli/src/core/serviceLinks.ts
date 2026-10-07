@@ -6,8 +6,10 @@
  * alike, so no other local process can stand in for one. The core then routes the requests the service
  * answers to it and relays each answer back to the client that asked; a request that finds the service
  * down, or not answering in time, is answered SERVICE_UNAVAILABLE with `retryable: true` — the core never
- * waits on a service in line. The core tells a service what it needs to know with `notify`, and answers
- * the few questions a service may ask it (`service_query`), nothing more.
+ * waits on a service in line. A routed request carries the connection it came over (`Asker.connection`),
+ * and the core says when that connection closes (`closeConnection`). The core tells a service what it
+ * needs to know with `notify`, and answers the few questions a service may ask it (`service_query`),
+ * nothing more.
  */
 import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Asker } from './api.js'
@@ -55,11 +57,12 @@ export interface ServiceLinksOptions {
   /** Longer waits for the answers that take longer, by service and then by type (core/api.ts
    *  `LONG_ANSWERS`): a grid command, grid's set-up, a harness's install. */
   waits?: Readonly<Record<string, Readonly<Record<string, number>>>>
-  /** The experiments: services whose process runs only once it is on (core/api.ts `EXPERIMENTS`). A request
-   *  for one that has not connected yet asks for it (`want`) and waits for it to connect, within the same
-   *  time. One that has connected and is down again is answered as any service is, at once. */
+  /** The services whose process runs only once asked for: the experiments (core/api.ts `EXPERIMENTS`) and the
+   *  devices (core/devicesWake.ts). A request for one that has not connected yet asks for it (`want`) and waits
+   *  for it to connect, within the same time. One that has connected and is down again is answered as any
+   *  service is, at once; so is one that did not connect within a request's wait, until it does. */
   onDemand?: ReadonlySet<string>
-  /** Ask the master for an experiment's process (harnessd/coreLink.ts `want`). */
+  /** Ask the master for a process on demand (harnessd/coreLink.ts `want`). */
   want?(service: string): void
   log?: (line: string) => void
   newId?: () => string
@@ -98,6 +101,10 @@ export function createServiceLinks(options: ServiceLinksOptions) {
   const links = new Map<string, Connected>()
   /** The services that have connected in this core's life: an experiment among them is on, not off. */
   const seen = new Set<string>()
+  /** Asked for and not connected within a request's wait: the master could not start it (it ends as it starts,
+   *  and is parked). Its requests are answered at once, as a service that is down is, instead of each waiting
+   *  the whole wait again (⌘K's 25 s, found end to end with the devices crashing on every start). */
+  const unstarted = new Set<string>()
   const waiting = new Map<string, Waiting>()
   /** What a service must hear even if it is down when it is said (a purge's forgetting), delivered on
    *  its next connection; bounded, the oldest dropped first. */
@@ -127,21 +134,25 @@ export function createServiceLinks(options: ServiceLinksOptions) {
    *  not connected is asked for, and the request goes once it connects: off, it costs nothing until asked. */
   const ask = (service: string, type: string, payload: Record<string, unknown>, asker: Asker, reply: (result: Record<string, unknown>) => void, waitMs?: number): void => {
     const link = links.get(service)
-    const starting = !link && !!options.onDemand?.has(service) && !seen.has(service)
+    const starting = !link && !!options.onDemand?.has(service) && !seen.has(service) && !unstarted.has(service)
     if (!link && !starting) { reply(unavailable(service)); return }
     const id = newId()
     const frame: ServiceFrame = { type, payload: { ...payload, requestId: id }, asker }
     const entry: Waiting = { service, type, reply, timer: null, ...(starting ? { frame } : {}) }
     // Cleared whenever the entry is settled, so it only ever fires for one still waiting.
-    entry.timer = setTimer(() => settle(id, entry, unavailable(service)), waitMs ?? waitFor(service, type))
+    entry.timer = setTimer(() => {
+      if (entry.frame) unstarted.add(service)
+      settle(id, entry, unavailable(service))
+    }, waitMs ?? waitFor(service, type))
     waiting.set(id, entry)
     if (starting) { options.want?.(service); return }
     if (!link!.sink.sendFrame(frame)) settle(id, entry, unavailable(service))
   }
 
   return {
-    /** A service connecting. Null — and the socket closes it — unless the master started it. */
-    accept(service: string, token: string, sink: ServiceSink, close: (code: number, reason: string) => void): ServiceLink | null {
+    /** A service connecting. Null — and the socket closes it — unless the master started it.
+     *  `accepted` acknowledges the authenticated connection before its queued traffic is delivered. */
+    accept(service: string, token: string, sink: ServiceSink, close: (code: number, reason: string) => void, accepted?: () => void): ServiceLink | null {
       if (!Object.hasOwn(options.owned, service) || !tokenMatches(token)) {
         log(`[services] a connection as service "${service.slice(0, 40)}" was refused`)
         return null
@@ -152,6 +163,9 @@ export function createServiceLinks(options: ServiceLinksOptions) {
       links.set(service, connected)
       seen.add(service)
       log(`[services] ${service} connected`)
+      // Found by QA on a quiet machine: a cold Share received its request before `connected`, so it
+      // read agents without a core connection and answered HARNESS_NOT_FOUND. Welcome it first.
+      accepted?.()
       const owed = held.get(service) ?? []
       held.delete(service)
       for (const frame of owed) sink.sendFrame(frame)
@@ -208,6 +222,17 @@ export function createServiceLinks(options: ServiceLinksOptions) {
      *  or slow. Never rejects. The types it asks are no client's to route: only the core sends them. */
     call(service: string, type: string, payload: Record<string, unknown>, waitMs?: number): Promise<Record<string, unknown>> {
       return new Promise((resolve) => { ask(service, type, payload, THE_CORE, resolve, waitMs) })
+    },
+
+    /** A connection closed: every service connected is told (`service_connection_closed`), and aborts what
+     *  that connection asked it that it is still answering (services/process.ts). Not held for a service
+     *  that is down: what it was answering went with it. What it asked of an experiment still starting is
+     *  never sent: nobody is left to read the answer, and the work would run for no one. */
+    closeConnection(connection: string): void {
+      for (const [id, entry] of waiting) {
+        if (entry.frame && (entry.frame.asker as Asker | undefined)?.connection === connection) settle(id, entry, unavailable(entry.service))
+      }
+      for (const link of links.values()) link.sink.sendFrame({ type: 'service_connection_closed', payload: { connection } })
     },
 
     /** Bytes for a service that carries terminals; false when it is not connected or would not take them. */

@@ -81,12 +81,32 @@ const lean = await esbuild.build({
   write: false,
   logLevel: 'warning',
 })
+// The core, bundled apart from them (src/leanCoreEntry.ts): built as one more entry of the same build, it
+// shared their files, and each file a build splits out holds what any entry that loads it uses, so the
+// master and every service loaded what only the core uses. Its files are named `core-*`, so the two never
+// meet in the folder they are written to.
+const leanCore = await esbuild.build({
+  ...options,
+  entryPoints: { 'harnessd-core': 'src/leanCoreEntry.ts' },
+  outdir: 'lean',
+  splitting: true,
+  chunkNames: 'core-[name]-[hash]',
+  outExtension: { '.js': '.mjs' },
+  write: false,
+  logLevel: 'warning',
+})
 const leanFiles = Object.fromEntries(lean.outputFiles.map((file) => [basename(file.path), file.contents]))
+for (const file of leanCore.outputFiles) {
+  const name = basename(file.path)
+  if (name in leanFiles) throw new Error(`the core's lean file ${name} has the name of one of the master's and the services'`)
+  leanFiles[name] = file.contents
+}
 
 await esbuild.build({
   ...options,
   // Still one file, which the self-updater downloads, verifies and swaps whole. Its entry decides what a
-  // process loads (src/entry.ts), and the master starts itself and the services from the lean bundle.
+  // process loads (src/entry.ts), and the master starts itself, the core and the services from the lean
+  // bundle.
   entryPoints: ['src/entry.ts'],
   outfile: `${outDir}/cli.js`,
 })

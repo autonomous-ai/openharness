@@ -110,3 +110,36 @@ it('delivers correlated summaries by default only to the originating identity, i
   await f.request({ type: 'hello', proto: 1, requestId: randomUUID() })
   f.relay.emit(result); expect(results()).toHaveLength(0)
 })
+
+describe('a session served on after the service restarted (services/wifi.ts)', () => {
+  it('is served without a new hello, told to resync, and said to have said hello', async () => {
+    const f = fixture()
+    const clients = vi.fn()
+    const relay = new AutonomousDeviceRelay({ sessionRole: () => 'device', sessionIdentity: () => 'trusted-device',
+      unwrapDown: (_c: string, frame: Record<string, unknown>) => ({ ...frame, payload: (frame.payload as { __e2e: unknown }).__e2e }),
+      wrapTarget: (_c: string, type: string, payload: Record<string, unknown>) => ({ type, payload: { __e2e: payload } }) },
+    f.send, f.service, 'machine', undefined, undefined, clients)
+    expect(relay.helloed()).toEqual([])
+    relay.restore('conn', 'trusted-device')
+    expect(relay.helloed()).toEqual(['conn'])
+    expect(clients).toHaveBeenCalledWith('conn', 'trusted-device')
+    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ type: 'autonomous_device_event', payload: { __e2e: { type: 'resync', reason: 'instance_changed' } } })
+    // Its requests are answered as after its hello.
+    await relay.handle('conn', { type: 'autonomous_device_request', payload: { __e2e: { type: 'agents.list', requestId: randomUUID() } } })
+    expect(f.send.mock.calls.at(-1)?.[1]).toMatchObject({ payload: { __e2e: { type: 'agents.list_result', machineId: 'machine' } } })
+    // Already served: nothing again.
+    f.send.mockClear()
+    relay.restore('conn', 'trusted-device')
+    expect(f.send).not.toHaveBeenCalled()
+  })
+
+  it('is not served when the session is no longer that identity\'s device', () => {
+    const f = fixture()
+    f.setRole('web')
+    f.relay.restore('conn', 'trusted-device')
+    f.setRole('device')
+    f.relay.restore('conn', 'another-device')
+    expect(f.relay.helloed()).toEqual([])
+    expect(f.send).not.toHaveBeenCalled()
+  })
+})
