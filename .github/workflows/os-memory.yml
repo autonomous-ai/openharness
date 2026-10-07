@@ -8,9 +8,6 @@ on:
         type: string
         default: '37149350400'
         required: true
-  push:
-    branches: ['os-polish/runtime-memory']
-    paths: ['os/tests/memory_*.py', '.github/workflows/os-memory.yml']
 
 permissions:
   contents: read

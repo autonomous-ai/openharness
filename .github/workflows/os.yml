@@ -57,9 +57,6 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    branches: ['os/**']
-    paths: ['os/**', 'tui/**', 'cli/**', '.github/workflows/os.yml']
 
 permissions:
   contents: read

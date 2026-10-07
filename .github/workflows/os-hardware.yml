@@ -8,9 +8,6 @@ on:
         type: string
         default: '37142219550'
         required: true
-  push:
-    branches: ['os-polish/hardware-*']
-    paths: ['os/tests/broadcom_*.py', '.github/workflows/os-hardware.yml']
 
 permissions:
   contents: read

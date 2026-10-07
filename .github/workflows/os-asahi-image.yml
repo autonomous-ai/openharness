@@ -11,14 +11,6 @@ on:
         description: 'Exact source commit recorded in that producer run and RPM manifest'
         type: string
         required: true
-  push:
-    branches: ['os-polish/asahi-image']
-    paths:
-      - 'os/platforms/apple-silicon/**'
-      - 'os/tools/asahi_image.py'
-      - 'os/tests/asahi_image_check.py'
-      - 'os/tests/test_asahi_image.py'
-      - '.github/workflows/os-asahi-image.yml'
 
 permissions:
   contents: read
