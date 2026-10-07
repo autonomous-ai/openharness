@@ -13,10 +13,8 @@
  * store rewrite in `sessionModel.ts`, a write the built-in binding is not used for).
  */
 import { binaryOnPath } from './binaryOnPath.js'
-import { builtinSqlite } from './sqliteRead.js'
-
-/** Engines that cannot be mirrored without the CLI. Keep in sync with the readers listed above. */
-export const SQLITE_BACKED_ENGINES = ['opencode', 'kilo', 'hermes', 'devin'] as const
+import { builtinSqlite } from './sqliteBuiltin.js'
+import { SQLITE_BACKED_ENGINES } from './sqliteRead.js'
 
 let cached: boolean | null = null
 

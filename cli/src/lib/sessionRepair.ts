@@ -24,7 +24,6 @@ import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/roll
 import { agyConversationForPid, findAgyTranscript } from '../engines/agy/session.js'
 import { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from '../engines/copilot/session.js'
 import { hermesDbPath, listHermesHomes } from '../engines/hermes/home.js'
-import { sqlitePreflightMessage } from './sqliteAvailability.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 import { piSessionFolder, readPiHead } from './sessionSearch/externals/pi.js'
 import { claudeProjectsRoots, codexHomeRoots } from './engineHomes.js'
@@ -227,9 +226,10 @@ async function fileEngineSession(
 let missingSqliteReported = false
 
 /** The store-backed repair branch cannot work without a SQLite reader; warn on the first miss only. */
-function reportMissingSqliteOnce(): void {
+async function reportMissingSqliteOnce(): Promise<void> {
   if (missingSqliteReported) return
   missingSqliteReported = true
+  const { sqlitePreflightMessage } = await import('./sqliteAvailability.js')
   console.warn(sqlitePreflightMessage() ?? '[preflight] no SQLite reader available')
 }
 
@@ -239,7 +239,7 @@ async function dbEngineSession(dbPath: string, sql: string, params: SqliteParam[
   if (!result.ok) {
     // No reader at all is not a transient DB lock, and repair returning null forever with no signal is
     // how "my opencode agents never appear on Ubuntu" looks from the outside. Say it once.
-    if (result.reason === 'missing') reportMissingSqliteOnce()
+    if (result.reason === 'missing') await reportMissingSqliteOnce()
     return null
   }
   const rows = result.rows
