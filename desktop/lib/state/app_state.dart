@@ -665,6 +665,23 @@ class AppNotifier extends ChangeNotifier {
 
   /// Words from the dial, for whoever can put a palette on screen.
   Stream<SpokenTaskRequest> get spokenTasks => _spokenTasks.stream;
+
+  final StreamController<void> _deviceWindowRequests =
+      StreamController<void>.broadcast();
+
+  /// Explicit gestures at this computer's device that need its window visible.
+  /// Automatic question displays and status updates never request activation.
+  Stream<void> get deviceWindowRequests => _deviceWindowRequests.stream;
+
+  void _requestDeviceWindow(MachineState source) {
+    if (!_disposed &&
+        viewer == null &&
+        source.usesLocalTransport &&
+        !source.machine.isShared) {
+      _deviceWindowRequests.add(null);
+    }
+  }
+
   final StreamController<void> _modelsRequests =
       StreamController<void>.broadcast();
 
@@ -15671,6 +15688,9 @@ class AppNotifier extends ChangeNotifier {
           'up' => 2,
           _ => 1,
         };
+        // A finger going down is the gesture; moves and the inertial tail
+        // must not keep asking macOS for focus after the person switches away.
+        if (phase == 0) _requestDeviceWindow(machine);
         activeTerminal?.scroll(
           phase,
           (payload['dy'] as num?)?.round() ?? 0,
@@ -15718,6 +15738,7 @@ class AppNotifier extends ChangeNotifier {
         if (agentId is String && agentId.isNotEmpty) {
           final targetMachineId = _dialFocusMachine(payload, agentId);
           if (targetMachineId != null) {
+            _requestDeviceWindow(machine);
             unawaited(selectAgentFromDial(targetMachineId, agentId));
           }
         }
@@ -15754,6 +15775,9 @@ class AppNotifier extends ChangeNotifier {
         // line follow from that — nothing is answered to the dial directly.
         final swarmId = payload['swarmId'];
         if (swarmId is String && swarmId.isNotEmpty) {
+          if (swarms.any((swarm) => swarm.id == swarmId)) {
+            _requestDeviceWindow(machine);
+          }
           _fromDevice(() => selectSwarm(swarmId));
         }
         break;
@@ -15766,6 +15790,7 @@ class AppNotifier extends ChangeNotifier {
         if (forkId is String && forkId.isNotEmpty) {
           final targetMachineId = _dialFocusMachine(payload, forkId);
           if (targetMachineId != null) {
+            _requestDeviceWindow(machine);
             unawaited(
               _fromDevice(
                 () => placeFork(
@@ -15911,6 +15936,7 @@ class AppNotifier extends ChangeNotifier {
         if (openId is String && openId.isNotEmpty) {
           final targetMachineId = _dialFocusMachine(payload, openId);
           if (targetMachineId != null) {
+            if (payload['reason'] != 'question') _requestDeviceWindow(machine);
             unawaited(
               openAgentFromDial(
                 targetMachineId,
@@ -16385,6 +16411,7 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     unawaited(_spokenTasks.close());
+    unawaited(_deviceWindowRequests.close());
     unawaited(_zooPushes.close());
     unawaited(_daemonFrames.close());
     unawaited(_modelsRequests.close());
