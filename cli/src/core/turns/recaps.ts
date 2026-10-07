@@ -49,6 +49,8 @@ export interface TurnRecaps {
   inheritSummary(fromSessionId: string, toSessionId: string): void
   noteEngineStopped(sessionId: string): void
   replayAll(): void
+  /** The session attached with its last turn already over: the recaps recap it if they have not. */
+  settled(sessionId: string): void
   /** A turn is open on the session right now: a fork waits for it to end. */
   isBusy(sessionId: string): boolean
   recent(sessionId: string, n?: number): RecentRecap[]
@@ -115,6 +117,7 @@ export function createRecaps({
       const working = live().map((s) => s.sessionId).filter((sessionId) => !!sessionId && turnActivity.snapshot(sessionId)?.state === 'working')
       tell({ kind: 'rejoined', working })
     },
+    settled: (sessionId) => { tell({ kind: 'settled', session: session(sessionId) }) },
     isBusy: (sessionId) => sessionTurnOpen(sessionId),
     recent: (sessionId, n) => recentRecaps(read(sessionId), n),
     recentAsks: (sessionId, n) => recentAsks(read(sessionId), n),

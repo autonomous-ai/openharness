@@ -400,6 +400,23 @@ describe('attaching a session', () => {
       expect(vi.mocked(run.deps.emit).mock.calls.filter((call) => call[2]?.resumed).map((call) => call[0])).toEqual(['agy-2', 'copilot-2'])
     })
 
+    it('tells the recaps when the last turn was already over at attach, never for one open or killed', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const settled = vi.fn()
+      const run = setup({ settled })
+      const ended = (payload = {}) => ({ type: 'turn_ended', payload })
+      // It ended while the daemon was stopped: its end is history, and only the recaps can still recap it.
+      await run.attach.attachSession(session('pi', transcript([{ events: [started()], open: true }, { events: [ended()], close: true }])))
+      await run.attach.attachSession(session('pi', transcript([{ events: [started()], open: true }]), { sessionId: 'open' }))
+      await run.attach.attachSession(session('pi', transcript([{ events: [started()], open: true }, { events: [ended({ aborted: true })], close: true }]), { sessionId: 'killed' }))
+      await run.attach.attachSession(session('pi', transcript([{}]), { sessionId: 'none' }))
+      // Read from the end (Claude Code, Codex), only the last turn's start is history: closed, it ended.
+      await run.attach.attachSession(session('pi', transcript([{ events: [started()], open: true }, { close: true }]), { sessionId: 'from-end' }))
+      await run.attach.attachSession(session('codex', transcript([{ events: [started()], open: true }, { close: true }])))
+      await run.attach.attachSession(session('codex', transcript([{ events: [started()], open: true }]), { sessionId: 'codex-open' }))
+      expect(settled.mock.calls).toEqual([['pi-s'], ['from-end'], ['codex-s']])
+    })
+
     it('does not resume a turn left open when its history holds no turn start', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
