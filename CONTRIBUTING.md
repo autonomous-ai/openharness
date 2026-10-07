@@ -176,10 +176,11 @@ Security reports go through [SECURITY.md](SECURITY.md).
 4. **Review together.** A maintainer checks the change while automatic CI selects complete
    component suites from its Git diff. Native, browser, real-engine and hardware acceptance
    still need the checks relevant to the change; report those separately.
-5. **Merge and release.** Reviewed PRs enter the merge queue, which validates them with current
-   `main` and changes ahead in the queue before squash merging. Rebase to resolve conflicts;
-   ordinary main movement does not require another manual validation/rebase cycle. Harness
-   catalog changes publish after merge; app, CLI and firmware releases keep their schedules.
+5. **Merge and release.** After review and required checks pass, squash-merge the reviewed PR
+   with the [merge helper](docs/validation-and-release.md#merge-an-already-reviewed-pr).
+   No merge queue is required. If `main` moved, inspect and integrate its changes, reusing
+   validation where the tested inputs still match. Harness catalog changes publish after
+   merge; app, CLI and firmware releases keep their schedules.
 
 ## Conventions across this repository
 
