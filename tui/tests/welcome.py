@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PORT = int(os.environ.get('HN_WELCOME_TEST_PORT', '19787'))
 assert 19780 <= PORT <= 19789
 PREFIX = f'hn-welcome-{os.getpid()}'
+OUTER_GENERATION = 0
 BASE = Path(tempfile.mkdtemp(prefix='hn-welcome-', dir='/tmp')).resolve()
 PROJECT = BASE / 'autonomous-harness'
 PROJECT.mkdir()
@@ -26,7 +27,7 @@ HN = BASE / 'hn'
 shutil.copy2(os.environ.get('HN_WELCOME_TEST_BINARY', ROOT / 'target/release/harness-tui'), HN)
 TMUX = shutil.which('tmux')
 assert TMUX
-ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH') if k in os.environ}
+ENV = {k: os.environ[k] for k in ('PATH', 'LANG', 'LC_ALL', 'TZ', 'NODE_PATH', 'LLVM_PROFILE_FILE') if k in os.environ}
 ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE), HN_SOCKET_NAME=PREFIX, PORT=str(PORT),
            TERM='xterm-256color', COLORTERM='truecolor', SHELL='/bin/sh', RUST_BACKTRACE='1',
            HARNESS_TUI_DESK='off', HARNESS_TUI_NOTIFY='off', HN_DESKTOP='off',
@@ -43,7 +44,7 @@ def hn(*args, ok=True):
 
 
 def tmux(*args, ok=True):
-    result = subprocess.run([TMUX, '-L', PREFIX + '-outer', *args], env=ENV, cwd=PROJECT,
+    result = subprocess.run([TMUX, '-L', f'{PREFIX}-outer-{OUTER_GENERATION}', *args], env=ENV, cwd=PROJECT,
                             text=True, capture_output=True, timeout=10)
     if ok: assert result.returncode == 0, (args, result.stderr)
     return result.stdout
@@ -87,11 +88,16 @@ def paste(text): raw('\x1b[200~' + text + '\x1b[201~')
 
 def position(label):
     lines = screen().splitlines()
-    width = int(tmux('display', '-p', '-t', 'test', '#{pane_width}').strip())
-    left = (width - min(60, max(0, width - 4))) // 2
+    # Wide welcome controls are chips; test their hit targets instead of old
+    # field labels that no longer appear in this composer.
     for y, line in enumerate(lines[:-1]):
-        text = line[left:left+60]
-        if text[3:].startswith(label): return left + 3, y
+        chips = list(re.finditer(r'\[ .*? ▾ \]', line))
+        if len(chips) >= 3:
+            if label == 'Task': return chips[0].start() + 3, y + 2
+            index = {'Agent': 0, 'Machine': 1, 'Project': 2}.get(label)
+            if index is not None: return chips[index].start() + 2, y
+    for y, line in enumerate(lines[:-1]):
+        if label in line: return line.index(label), y
 
 
 def click(label):
@@ -99,6 +105,7 @@ def click(label):
     x, y = position(label)
     raw(f'\x1b[<0;{x+1};{y+1}M\x1b[<0;{x+1};{y+1}m')
     time.sleep(.12)
+    if label == 'Task': keys('C-e')
 
 
 def choose(label, query):
@@ -116,6 +123,15 @@ def snapshot(name):
 
 def created(): return [p for p in state().get('created', []) if p['engine'] != 'terminal']
 def window(): return hn('display', '-p', '#{window_id}')
+def new_tab():
+    hn('workspace-menu', 'new-tab')
+    shows('What task should this agent work on?')
+def initial_gui():
+    wait(lambda: hn('display', '-p', '#{window_panes}', ok=False) == '1', 'initial shell ready')
+    shell = window()
+    new_tab()
+    hn('kill-window', '-t', shell)
+
 def resize(width, height):
     tmux('resize-window', '-t', 'test', '-x', str(width), '-y', str(height))
     time.sleep(.2)
@@ -123,6 +139,10 @@ def resize(width, height):
 
 
 def launch():
+    global OUTER_GENERATION
+    # kill-server acknowledges before tmux has finished shutting down. Give each
+    # outer terminal its own socket; hn still restarts on the same tested socket.
+    OUTER_GENERATION += 1
     command = shlex.join(['env', '-u', 'TMUX', '-u', 'TMUX_PANE', '-u', 'HN_SOCKET',
                           *[f'{k}={v}' for k, v in ENV.items()], str(HN), '-L', PREFIX,
                           '--port', str(PORT), '-f', '/dev/null'])
@@ -143,7 +163,7 @@ try:
     else: raise AssertionError('mock startup timeout')
     launch()
     started = True
-    shows('Welcome to Harness')
+    initial_gui()
     shows('Finding saved sessions')
     snapshot('welcome-discovering')
     anchor = position('Task')
@@ -158,7 +178,7 @@ try:
     assert not created(), 'typing a digit or pasting must not launch/resume'
     assert not state('reconnect')['inputs'], 'the backing shell never receives task text'
     state('welcome', {'history': 'empty'})
-    keys('C-r'); shows('No recent sessions')
+    keys('C-r'); shows('No recent harnesses')
     assert position('Task') == anchor
     snapshot('welcome-first-task')
     state('welcome', {'history': 'ready'})
@@ -170,13 +190,13 @@ try:
 
     # The default agent must work without opening a chooser. In particular, a form
     # created before the connection arrives must acquire its Git state automatically.
-    shows('Start OpenCode')
+    shows('New Harness')
     assert 'Could not read Git' not in screen(), screen()
     state('welcome', {'delay': 1200})
     keys('Enter', 'Enter')
     shows('Starting')
     snapshot('welcome-starting')
-    keys('C-b', 'c'); shows('New Window')
+    new_tab()
     second = window()
     assert second != first
     type_text('second window draft')
@@ -193,7 +213,17 @@ try:
     snapshot('new-window-draft')
     print('PASS welcome: immediate first task, duplicate prevention, delayed placement and independent drafts', flush=True)
 
-    keys('C-b', 'N'); shows('New Harness')
+    keys('Down'); shows('Search agents')
+    keys('Up'); type_text('!'); shows('second window draft!')
+    keys('BSpace')
+    wait(lambda: 'second window draft!' not in screen(), 'Backspace edits the task after returning from Agent')
+    keys('Escape', 'Escape'); shows('Mock opencode (mock)')
+    assert window() == first, 'Escape returns to the previous window'
+    keys('C-b', 'l'); shows('second window draft')
+    click('Task')
+    print('PASS welcome: task arrow navigation, Escape back and preserved draft', flush=True)
+
+    hn('workspace-menu', 'new-harness'); shows('New Harness')
     type_text('a separate modal task')
     shows('a separate modal task'); snapshot('new-harness-immediate-task')
     keys('Escape'); shows('second window draft')
@@ -211,7 +241,7 @@ try:
     hn('set', '-g', 'prefix', 'C-b'); hn('unbind', '-n', 'x')
     choose('Agent', 'codex'); click('Task')
     resize(80, 24)
-    for text in ('Task', 'Agent', 'Project', 'Branch', 'Worktree', 'Model', 'Approvals', 'Profile', 'Start Codex', 'Open Terminal', 'Browse All Sessions'):
+    for text in ('Codex', 'OpenAI', 'Worktree', 'Auto-approve', 'Default', 'New Harness', 'New Terminal', 'All'):
         shows(text)
     snapshot('new-window-80x24')
     click('Project'); shows('Search projects'); snapshot('new-window-picker-narrow')
@@ -232,8 +262,8 @@ try:
     shows('Some history is unavailable')
     snapshot('welcome-history-unavailable')
     state('welcome', {'history': 'ready'}); keys('C-r')
-    shows('Recent sessions')
-    click('Browse All Sessions'); shows('Search harnesses')
+    shows('Recent harnesses')
+    click('All'); shows('Search harnesses')
     keys('Escape'); shows('second window draft')
     count = len(created())
     click('Continue NFC device chat')
@@ -242,22 +272,25 @@ try:
     resumed = created()[-1]
     assert resumed['resumeSessionId'] == 'ext-codex-nfc' and 'prompt' not in resumed
     assert window() == second
-    keys('C-b', 'c'); shows('New Window')
+    new_tab()
     third = window()
-    click('Open Terminal'); shows('Mock terminal (mock)')
+    click('New Terminal'); shows('Mock terminal (mock)')
     assert window() == third
-    assert len(created()) == count + 1, 'Open Terminal never launches the selected coding agent'
+    assert len(created()) == count + 1, 'New Terminal never launches the selected coding agent'
     # Replacing the backing shell may delete one already. Closing the opened terminal
     # must also end its shell, exactly as closing a tmux window does.
     deleted = len(state().get('deleted', []))
     hn('kill-window')
-    wait(lambda: len(state().get('deleted', [])) > deleted, 'closing Open Terminal ends its shell')
-    keys('C-b', 'c'); shows('New Window')
+    wait(lambda: len(state().get('deleted', [])) > deleted, 'closing New Terminal ends its shell')
+    new_tab()
     type_text('Keep this task away from the terminal')
-    choose('Agent', 'Terminal'); shows('Mock terminal (mock)')
-    assert len(created()) == count + 1, 'the Terminal picker action never starts a coding agent'
-    assert not state('reconnect')['inputs'], 'the Terminal picker action never sends the task'
-    keys('C-b', 'N'); shows('a separate modal task')
+    click('Agent'); type_text('Terminal')
+    shows('No matches')
+    keys('Escape')
+    click('New Terminal'); shows('Mock terminal (mock)')
+    assert len(created()) == count + 1, 'New Terminal never starts a coding agent'
+    assert not state('reconnect')['inputs'], 'New Terminal never sends the task'
+    hn('workspace-menu', 'new-harness'); shows('a separate modal task')
     keys('Escape'); hn('kill-window')
     print('PASS welcome: discovery recovery, browse all, existing-session resume and explicit terminal', flush=True)
 
@@ -302,27 +335,111 @@ try:
             if creation.poll() is None:
                 creation.kill(); creation.communicate(timeout=5)
         state('welcome', {'holdTerminals': False})
+    hn('kill-server', ok=False); tmux('kill-server')
     ENV.pop('HARNESS_OS'); ENV.pop('HARNESS_OS_LIVE'); ENV.pop('ADAPTER_DATA_DIR')
+    ENV.update(HOME=str(BASE), HN_TMPDIR=str(BASE))
+    launch()
+    wait(lambda: hn('display', '-p', '#{window_panes}', ok=False) == '1', 'normal startup after OS test')
     print('PASS welcome: USB startup and concurrent terminal creation stay in their own windows in both reply orders', flush=True)
 
+    # A deliberate remote selection survives disconnecting. Never carry its
+    # absolute folder across to the local machine merely because it is online.
+    new_tab()
+    choose('Agent', 'codex')
+    choose('Machine', 'mock-remote')
+    choose('Project', 'open folder'); shows('Use this folder')
+    keys('C-l', 'C-a', 'C-k'); type_text('/srv/remote-project'); keys('Enter')
+    shows('Use this folder'); keys('Enter'); shows('[ remote-project ▾ ]'); shows('[ mock-remote ▾ ]')
+    shows('[x]'); click('Worktree'); click('New Harness'); shows('Mock codex (mock)')
+    assert state()['created'][-1]['gitSource'] == '/srv/remote-project'
+    assert hn('display', '-p', '#{pane_machine}') == 'mock-remote'
+    remote_pane = hn('display', '-p', '#{pane_id}')
+    remote = 'mock0000000000000000000000000002'
+    new_tab()
+    choose('Machine', 'mock-remote')
+    choose('Project', 'open folder'); shows('Use this folder')
+    keys('C-l', 'C-a', 'C-k'); type_text('/srv/remote-project'); keys('Enter')
+    shows('Use this folder'); keys('Enter'); shows('[ remote-project ▾ ]'); shows('[x]')
+    state('reconnect', {'action': 'offline', 'machine': remote})
+    wait(lambda: hn('display', '-p', '-t', remote_pane, '#{pane_agent_state}') == 'offline', 'remote disconnect reaches the client')
+    count = len(state().get('created', []))
+    shows('[ remote-project ▾ ]'); shows('[ mock-remote ▾ ]')
+    click('Task')
+    type_text('Keep this task on the remote machine')
+    keys('Enter', 'Enter'); shows('That machine is not connected')
+    assert len(state().get('created', [])) == count, 'offline creation must not fall back locally'
+    click('New Terminal')
+    assert len(state().get('created', [])) == count, 'offline terminal must not fall back locally'
+    shows('Keep this task on the remote machine')
+    snapshot('new-window-remote-offline')
+    state('reconnect', {'action': 'online', 'machine': remote})
+    wait(lambda: hn('display', '-p', '-t', remote_pane, '#{pane_agent_state}') not in ('', 'offline'),
+         'the remote connection and agent roster recover', 20)
+    wait(lambda: '[x]' in screen(), 'remote Git state recovers without replacing the draft', 20)
+    click('Worktree'); click('New Harness'); shows('Mock codex (mock)')
+    assert hn('display', '-p', '#{pane_machine}') == 'mock-remote'
+    request = state()['created'][-1]
+    assert request['gitSource'] == '/srv/remote-project' and request['projectSource'] == 'branch', request
+    assert request['prompt'] == 'Keep this task on the remote machine', request
+    assert len(state()['created']) == count + 1, 'one remote launch after reconnect'
+    print('PASS welcome: offline remote context, no local agent/shell fallback, reconnect and one launch', flush=True)
+
+    # An immediate submit must survive a slow initial Git check. Later input or
+    # leaving the form cancels the pending start instead of launching edited work.
+    state('welcome', {'gitDelay': 1800, 'delay': 0})
+    for trigger in ['keyboard', 'mouse']:
+        count = len(created())
+        new_tab(); shows('Checking Git')
+        text = 'Start after checking Git by ' + trigger
+        type_text(text)
+        if trigger == 'keyboard': keys('Enter', 'Enter')
+        else: click('New Harness')
+        shows('Checking the project')
+        shows('Mock codex (mock)')
+        assert len(created()) == count + 1 and created()[-1]['prompt'] == text
+    for cancel in ['escape', 'typing', 'paste', 'mouse', 'another-window']:
+        count = len(created())
+        new_tab(); shows('Checking Git')
+        type_text('Keep this draft after ' + cancel)
+        keys('Enter', 'Enter'); shows('Checking the project')
+        if cancel == 'escape': keys('Escape')
+        elif cancel == 'typing': type_text('!')
+        elif cancel == 'paste': paste(' more')
+        elif cancel == 'mouse': click('Agent')
+        else: keys('C-b', 'p')
+        if cancel in ('escape', 'another-window'):
+            time.sleep(2)
+            keys('C-b', 'l')
+        shows('[x]')
+        assert len(created()) == count, 'cancelled project check launched a harness: ' + cancel
+        shows('Keep this draft after ' + cancel)
+        hn('kill-window')
+    state('welcome', {'gitDelay': 0})
+    print('PASS welcome: submit during Git discovery once, keyboard/mouse cancellation and hidden windows', flush=True)
+
     # A new user can arrive without the daemon. Keep the task, explain how to connect,
-    # and let Open Terminal use a real local PTY without executing any draft text.
+    # and let New Terminal use a real local PTY without executing any draft text.
     hn('kill-server', ok=False)
     tmux('kill-server')
     mock.terminate(); mock.wait(timeout=5); mock = None
     offline = BASE / 'offline'
     offline.mkdir()
+    # Upgrading a user who last chose Terminal must start with a real agent,
+    # without retaining Terminal's name or specialized harness identity.
+    defaults = offline / '.harness/tui/new-harness.json'
+    defaults.parent.mkdir(parents=True, exist_ok=True)
+    defaults.write_text(json.dumps({'engine': 'terminal', 'label': 'Terminal', 'dsh': 'old/shell'}))
     ENV.update(HOME=str(offline), HN_TMPDIR=str(offline))
     launch()
-    shows('Welcome to Harness')
-    shows('Run `harness start` to connect agents.')
+    initial_gui()
+    shows('New Harness')
     type_text('Preserve this offline task')
-    keys('Enter')
+    keys('Enter', 'Enter')
     shows('task stays here.')
     shows('Preserve this offline task')
     snapshot('welcome-offline')
-    click('Open Terminal')
-    wait(lambda: 'Welcome to Harness' not in screen(), 'local terminal opened')
+    click('New Terminal')
+    wait(lambda: 'New Harness' not in screen(), 'local terminal opened')
     assert 'Preserve this offline task' not in hn('capture-pane', '-p'), 'draft leaked into the local shell'
     type_text("printf 'HN_OFFLINE_TERMINAL_%s\\n' OK")
     keys('Enter'); shows('HN_OFFLINE_TERMINAL_OK')

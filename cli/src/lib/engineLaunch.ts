@@ -1120,6 +1120,15 @@ export function gridPanePrelude(binary: string): string {
   return [...onPath, `${GRID_NO_UPDATE_CHECK_VAR}=1`, `export ${GRID_NO_UPDATE_CHECK_VAR}`, ''].join('\n')
 }
 
+/** Install if needed, then run an exact native argv from an existing interactive prompt.
+ * The parent shell keeps its helpers and environment when the agent exits. */
+export function shellAgentArgv(binary: string, args: string[], recipe: EngineInstallRecipe,
+  runtimeNode: string = managedNodePath()): string[] {
+  return ['/bin/sh', '-c', RAISE_OPEN_FILES_SH + STOP_PROOF_FUNCTIONS
+    + installIfMissingScript(recipe, runtimeNode) + 'shift\nexec "$harness_engine_bin" "$@"\n',
+    'harness-shell-agent', binary, ...args]
+}
+
 /**
  * Install-if-missing has to resolve twice: before installing, and again after it returns.
  *
