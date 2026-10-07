@@ -15,6 +15,29 @@ SERVICES src/services/     everything else: search, viewers, models, workspaces,
                            Reaches the core only through core/api.ts; can fail without the core.
 ```
 
+### The processes
+
+The master runs the core and every service process (`SERVICE_HOSTS` in `src/harnessd/services.ts`). Each
+service process runs one or more services, each on its own link to the core. In Activity Monitor and `ps`
+they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd/processName.ts`).
+
+| Process | Runs | Started |
+|---|---|---|
+| master | supervision only (`src/harnessd/`) | by `harness start`, `harness start -f`, or launchd or systemd after `harness service install` |
+| core | sessions (`src/core/`), and the shell service | always |
+| search | session search | always |
+| viewers | the harness viewers, their remote streams and rendered surfaces, and the Store | always |
+| edge | workspaces, usage, the monitor, the project readers, the change-agent handoff, the recaps | always |
+| gateway | the relay and its E2EE (`src/gateway/`) | always |
+| models | grid, local models, the Model Manager | always |
+| updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
+| devices | the dials, the window bridges, the fleet, the voice router, the Wi-Fi device | on demand: once there is a device |
+| orchestrator, teams (with Tab collaboration), sharing, commandBar | the experiments | on demand: on a request, or saved state at start |
+
+`HARNESSD_SERVICES` names a subset to run in their own processes, by service or by process.
+`HARNESSD_SERVICES=none` runs every service in the core's process, for debugging or a quick way back. How
+to add a service, and how to make one start on demand, is in [src/services/AGENTS.md](src/services/AGENTS.md).
+
 `src/core/main.ts` `runForeground()` is the composition root: it creates the modules and wires them
 together. It is the core's own entry (`harness __run`), which the master starts; `src/cli.ts` is the CLI,
 and calls in for `__run`. `harness start -f` runs the master in the foreground, as launchd and systemd do.
@@ -22,7 +45,8 @@ The updater is the master's, in a process of its own (`src/services/updaterProce
 downloads a build. When it stages one, the master has the core hand over (`harnessd:update`) and judges the
 new build. A core with no master gets no updates: one an older release's own handoff started hands itself
 to a master once that release has gone, and one `HARNESS_NO_MASTER=1` asked for runs as it is
-(`src/core/updateHandoff.ts`). `src/backendSocket.ts` is the transport: it receives frames and dispatches
+(`src/core/updateHandoff.ts`). A core under a master too old to run the updater starts it beside itself, in
+its own process (`src/core/updaterBeside.ts`). `src/backendSocket.ts` is the transport: it receives frames and dispatches
 them.
 `src/gateway/` is the relay: the backend link, the E2EE sessions and keys, and every rule about what a
 remote client may send and how what it is sent is sealed. It runs in a process of its own

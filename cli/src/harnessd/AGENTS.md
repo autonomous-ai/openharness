@@ -44,3 +44,7 @@ It keeps the core and the services running, and nothing else.
    the new core on probation, as before. The master itself still makes no network call. Every core this
    master starts hears `HARNESSD_UPDATES=master`; a core under a master from before that runs the updater
    beside itself, in its own process (`../core/updaterBeside.ts`).
+10. **A process on demand starts only when the core asks** (`onDemand` in `SERVICE_HOSTS`, `services.ts`).
+   The core sends `harnessd:want` for one of its services; from then on it is kept running like any other.
+   A core that speaks an older protocol than the process's `askedSince` never asks, so `unasked` starts it
+   as that core binds. Making a process on demand bumps `HARNESSD_PROTOCOL` and sets `askedSince` to it.
