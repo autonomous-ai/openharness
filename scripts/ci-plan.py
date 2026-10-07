@@ -60,6 +60,8 @@ def select(paths):
             # Keep existing source-input contracts conservative. Workflow/helper
             # changes invalidate all core suites until narrower contracts exist.
             scopes |= CORE
+            if path in {".github/workflows/ci.yml", "scripts/ci-plan.py"}:
+                scopes |= SUITES  # The shared planner/job graph controls every component.
             workflow = path.removeprefix(".github/workflows/")
             if workflow in SPECIAL_WORKFLOWS:
                 scopes.add(SPECIAL_WORKFLOWS[workflow])
@@ -67,6 +69,7 @@ def select(paths):
                 scopes.add("os")
         elif root == "cli":
             scopes |= CORE  # Desktop/TUI/companions consume CLI inputs.
+            scopes.add("mobile")  # Phone protocol contracts read the CLI's frame definitions.
         elif root == "desktop":
             scopes.add("desktop")
             if path.startswith("desktop/assets/engine-icons/"):

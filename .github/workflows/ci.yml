@@ -703,6 +703,12 @@ jobs:
             components/esp_rom
       - name: Prepare the SDK's pinned cJSON source
         run: git -C "$IDF_PATH" submodule update --init --depth 1 components/json/cJSON
+      - name: Use Clang for the host fixture warning and sanitizer contracts
+        run: |
+          clang-18 --version
+          mkdir -p "$RUNNER_TEMP/firmware-bin"
+          ln -s "$(command -v clang-18)" "$RUNNER_TEMP/firmware-bin/cc"
+          echo "$RUNNER_TEMP/firmware-bin" >> "$GITHUB_PATH"
       - name: Run every host firmware contract (physical acceptance remains separate)
         run: |
           python3 - <<'PY'

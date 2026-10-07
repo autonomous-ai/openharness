@@ -17,9 +17,16 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(planner.select(["docs/images/poster.png"])[0], {"desktop"})
 
     def test_cli_and_process_changes_keep_conservative_core_coverage(self):
-        for path in ["cli/src/lib/engineLaunch.ts", "scripts/ci-plan.py", ".github/workflows/ci.yml", "Makefile"]:
+        for path in ["scripts/merge-validated-pr.py", "Makefile"]:
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], planner.CORE)
+
+    def test_cli_changes_include_phone_protocol_contracts(self):
+        self.assertEqual(planner.select(["cli/src/lib/relayFrames.ts"])[0], planner.CORE | {"mobile"})
+
+    def test_shared_planner_or_job_graph_changes_validate_every_component(self):
+        for path in ["scripts/ci-plan.py", ".github/workflows/ci.yml"]:
+            self.assertEqual(planner.select([path])[0], planner.SUITES)
 
     def test_known_component_and_browser_inputs(self):
         for path, expected in {

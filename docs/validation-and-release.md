@@ -447,7 +447,8 @@ executes no contributor code with release credentials.
 Coarse component selection retains the existing complete CLI coverage/native
 matrix and Desktop inventory on both platforms. Shared CLI and process/workflow
 inputs conservatively select all core suites; source boundaries are not narrowed
-as part of rollout. Website, Store experiences/browser, logging, OS source contracts,
+as part of rollout. CLI changes also select Mobile's protocol contracts; changes to
+the shared planner or CI job graph select every component. Website, Store experiences/browser, logging, OS source contracts,
 provider, firmware host tests, Mobile VM tests and daemon contracts are selected
 for their declared inputs. Physical devices, full OS images/VM journeys, real engines,
 visual inspection and other acceptance selected by review remain separate required

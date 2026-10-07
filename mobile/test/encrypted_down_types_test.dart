@@ -52,7 +52,10 @@ void main() {
     );
     final frames = cli('lib/e2ee/applicationFrames.ts');
     machineRequests = namesIn(frames, 'MACHINE_REQUESTS = new Set([');
-    pairRequests = namesIn(frames, 'PAIR_REQUESTS = new Set([');
+    pairRequests = namesIn(
+      cli('lib/relayFrames.ts'),
+      'PAIR_REQUESTS = new Set([',
+    );
     unwrapped = {
       ...pairRequests,
       ...core,
