@@ -1,10 +1,15 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   TMUX_SESSION_ENV_MIN, parseTmuxVersion, resetTmuxVersionCache, supportsSessionEnv, tmuxFeaturesOf, tmuxVersion,
 } from './tmuxVersion.js'
+
+// The fake tmux below is a /bin/sh script; whether its answer is kept, not how fast it came, is what is
+// tested (testing/patientExecWithoutDeadline.ts).
+vi.mock('./patientExec.js', async (importOriginal) =>
+  (await import('../testing/patientExecWithoutDeadline.js')).withoutDeadline(await importOriginal()))
 
 describe('parseTmuxVersion', () => {
   it('reads the shapes tmux -V actually prints', () => {

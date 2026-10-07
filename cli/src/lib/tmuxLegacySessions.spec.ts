@@ -1,10 +1,15 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isLegacyHarnessSession } from './harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions } from './tmuxAgentDiscovery.js'
 import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
+
+// The fake binaries below are /bin/sh scripts; their answers, not their speed, are what is tested
+// (testing/patientExecWithoutDeadline.ts).
+vi.mock('./patientExec.js', async (importOriginal) =>
+  (await import('../testing/patientExecWithoutDeadline.js')).withoutDeadline(await importOriginal()))
 
 const originalPath = process.env.PATH
 const dirs: string[] = []
