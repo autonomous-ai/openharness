@@ -25,6 +25,7 @@ use ratatui::style::{Color, Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, At, Placement};
+use crate::buttons::{Answer, Button, Row as ButtonRow};
 use crate::keys::{self, Chord, MouseKind};
 use crate::layout::Dir;
 use crate::theme;
@@ -176,7 +177,7 @@ impl Prompt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Doom { Trash(PathBuf), Purge(PathBuf, String) }
 
-/// A confirmation: its question and which of its two buttons (0 yes, 1 no) has the keys.
+/// A confirmation: its question and which of its two buttons (0 Cancel, 1 Delete) has the keys.
 #[derive(Clone, Debug)]
 struct Confirm { doom: Doom, focus: usize }
 
@@ -808,14 +809,24 @@ impl Files {
     }
 
     fn confirm_key(&mut self, k: Chord) -> Outcome {
-        let Some(c) = self.confirm.as_mut() else { return Outcome::None };
-        match () {
-            _ if matches!(k.code, KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab) || is_char(&k, 'h') || is_char(&k, 'l') => c.focus ^= 1,
-            _ if k.code == KeyCode::Enter || is_ctrl(&k, 'm') => { if c.focus == 0 { self.confirmed() } else { self.confirm = None } }
-            _ if k.code == KeyCode::Esc || is_char(&k, 'q') || is_char(&k, 'n') || is_ctrl(&k, 'g') || is_ctrl(&k, 'c') => self.confirm = None,
-            _ => {}
+        if self.confirm.is_none() { return Outcome::None }
+        let mut row = self.confirm_row();
+        let code = if is_ctrl(&k, 'm') { KeyCode::Enter } else { k.code };
+        match row.key(code, k.mods) {
+            Answer::Moved => if let Some(c) = self.confirm.as_mut() { c.focus = row.chosen },
+            Answer::Chosen(1) => self.confirmed(),
+            Answer::Chosen(_) | Answer::Cancel => self.confirm = None,
+            // The files' own way out besides Esc: q and n.
+            Answer::Ignored => if is_char(&k, 'q') || is_char(&k, 'n') { self.confirm = None },
         }
         Outcome::None
+    }
+
+    /// The confirmation's buttons, Cancel first, the one with the keys chosen.
+    fn confirm_row(&self) -> ButtonRow {
+        let yes = match self.confirm.as_ref().map(|c| &c.doom) { Some(Doom::Purge(..)) => "Delete Permanently", _ => "Delete" };
+        let button = |label: &str| Button { label: label.into(), key: None };
+        ButtonRow { buttons: vec![button("Cancel"), button(yes)], chosen: self.confirm.as_ref().map_or(0, |c| c.focus), hint: String::new() }
     }
 
     /// Yes to the confirmation: to the Trash — or, when it can't go there, a second question before
@@ -825,7 +836,7 @@ impl Files {
         match c.doom {
             Doom::Trash(path) => match ops::trash(&path, &self.trash) {
                 Ok(_) => { self.gone(&path); self.message = Some(format!("Moved '{}' to the Trash", name_of(&path))); self.reload() }
-                Err(e) => self.confirm = Some(Confirm { doom: Doom::Purge(path, e.to_string()), focus: 1 }),
+                Err(e) => self.confirm = Some(Confirm { doom: Doom::Purge(path, e.to_string()), focus: 0 }),
             },
             Doom::Purge(path, _) => match ops::remove_all(&path) {
                 Ok(()) => { self.gone(&path); self.message = Some(format!("Deleted '{}'", name_of(&path))); self.reload() }
@@ -852,7 +863,7 @@ impl Files {
     fn click_at(&mut self, x: u16, y: u16, double: bool, g: Geom) -> Outcome {
         if self.confirm.is_some() {
             let (_, _, buttons, by) = self.confirm_layout(g);
-            if let Some(b) = buttons.iter().position(|(a, z, _)| y == by && x >= *a && x < *z) { if b == 0 { self.confirmed() } else { self.confirm = None } }
+            if let Some(b) = buttons.iter().position(|(a, z, _)| y == by && x >= *a && x < *z) { if b == 1 { self.confirmed() } else { self.confirm = None } }
             return Outcome::None;
         }
         if self.prompt.is_some() {
@@ -1183,27 +1194,27 @@ impl Files {
             let r = at(r);
             frame(buf, r, look.warn);
             for (k, line) in lines.iter().enumerate() { put(buf, r.x + 2, r.y + 1 + k as u16, r.width.saturating_sub(4), line, look.text); }
-            let focus = self.confirm.as_ref().map(|c| c.focus).unwrap_or(1);
-            for (b, (a, _, label)) in buttons.iter().enumerate() { put(buf, area.x + a, area.y + by, label.width() as u16, label, if b == focus { look.mode } else { look.text }); }
+            let right = buttons.last().map_or(0, |b| b.1);
+            self.confirm_row().draw(buf, area.x, area.x + right, area.y + by, &crate::settings::chrome());
         }
     }
 
     /// The confirmation's box (in the middle of the view), its lines, its buttons' columns and
     /// words, and their row.
     fn confirm_layout(&self, g: Geom) -> ConfirmLayout {
-        let (lines, yes) = match self.confirm.as_ref().map(|c| &c.doom) {
-            Some(Doom::Trash(p)) => ([format!("Delete '{}'?", fit(&name_of(p), 40)), "It goes to the Trash.".to_string()], "Delete"),
-            Some(Doom::Purge(p, why)) => ([format!("'{}' can't go to the Trash: {why}.", fit(&name_of(p), 30)), "Delete it permanently? This can't be undone.".to_string()], "Delete Permanently"),
-            None => ([String::new(), String::new()], ""),
+        let lines = match self.confirm.as_ref().map(|c| &c.doom) {
+            Some(Doom::Trash(p)) => [format!("Delete '{}'?", fit(&name_of(p), 40)), "It goes to the Trash.".to_string()],
+            Some(Doom::Purge(p, why)) => [format!("'{}' can't go to the Trash: {why}.", fit(&name_of(p), 30)), "Delete it permanently? This can't be undone.".to_string()],
+            None => [String::new(), String::new()],
         };
-        let labels = [format!("[ {yes} ]"), "[ Cancel ]".to_string()];
-        let need = lines.iter().map(|l| l.width()).max().unwrap_or(0).max(labels.iter().map(|l| l.width() + 2).sum::<usize>()) as u16 + 4;
+        let row = self.confirm_row();
+        let need = lines.iter().map(|l| l.width()).max().unwrap_or(0).max(row.buttons_width() as usize) as u16 + 4;
         let w = need.min(g.size.0);
         let h = 6u16.min(g.size.1);
         let r = Rect::new(g.size.0.saturating_sub(w) / 2, g.size.1.saturating_sub(h) / 2, w, h);
         let by = r.y + 4;
-        let mut x = (r.x + r.width).saturating_sub(2 + labels.iter().map(|l| l.width() as u16 + 2).sum::<u16>() - 2);
-        let buttons = labels.map(|l| { let w = l.width() as u16; let b = (x, x + w, l); x += w + 2; b });
+        let cells = row.cells((r.x + r.width).saturating_sub(2));
+        let buttons = [0, 1].map(|i| { let (_, x, w) = cells[i]; (x, x + w, format!("[ {} ]", row.buttons[i].label)) });
         (r, lines, buttons, by)
     }
 }
@@ -2125,11 +2136,12 @@ mod tests {
         assert_eq!(names(&f)[f.selected], "a copy 2.txt");
         // Delete: asked first; Cancel leaves it.
         press(&mut f, KeyCode::Delete);
-        assert!(matches!(f.confirm.as_ref().map(|c| &c.doom), Some(Doom::Trash(_))));
-        press(&mut f, KeyCode::Right);
+        assert!(matches!(f.confirm.as_ref().map(|c| (&c.doom, c.focus)), Some((Doom::Trash(_), 0))), "a risky action starts on Cancel");
         press(&mut f, KeyCode::Enter);
         assert!(f.confirm.is_none() && s.0.join("a copy 2.txt").exists());
         press(&mut f, KeyCode::Delete);
+        press(&mut f, KeyCode::Right);
+        assert_eq!(f.confirm.as_ref().map(|c| c.focus), Some(1));
         press(&mut f, KeyCode::Enter);
         assert!(!s.0.join("a copy 2.txt").exists());
         assert!(s.0.join(".Trash/files/a copy 2.txt").exists() && s.0.join(".Trash/info/a copy 2.txt.trashinfo").exists());
@@ -2157,16 +2169,43 @@ mod tests {
         std::fs::write(s.0.join("not-a-folder"), "").unwrap();
         f.trash = s.0.join("not-a-folder/Trash");
         press(&mut f, KeyCode::Delete);
+        press(&mut f, KeyCode::Right);
         press(&mut f, KeyCode::Enter);
-        assert!(matches!(f.confirm.as_ref().map(|c| (&c.doom, c.focus)), Some((Doom::Purge(..), 1))), "asked again, Cancel first");
+        assert!(matches!(f.confirm.as_ref().map(|c| (&c.doom, c.focus)), Some((Doom::Purge(..), 0))), "asked again, Cancel first");
         assert!(s.0.join("x.txt").exists());
         press(&mut f, KeyCode::Enter);
         assert!(f.confirm.is_none() && s.0.join("x.txt").exists(), "Enter on Cancel keeps it");
         press(&mut f, KeyCode::Delete);
+        press(&mut f, KeyCode::Right);
         press(&mut f, KeyCode::Enter);
-        press(&mut f, KeyCode::Left);
+        press(&mut f, KeyCode::Right);
         press(&mut f, KeyCode::Enter);
         assert!(!s.0.join("x.txt").exists());
+    }
+
+    #[test]
+    fn the_delete_confirm_is_one_row_cancel_first_the_chosen_button_lifted() {
+        let s = Scratch::new(&["x.txt"]);
+        let mut f = files(&s);
+        press(&mut f, KeyCode::Delete);
+        let (area, g) = (Rect::new(0, 0, 100, 30), geom(100, 30, f.view));
+        let (_, _, buttons, by) = f.confirm_layout(g);
+        let labels: Vec<&str> = buttons.iter().map(|b| b.2.as_str()).collect();
+        assert_eq!(labels, ["[ Cancel ]", "[ Delete ]"]);
+        assert!(buttons[0].1 + 2 <= buttons[1].0, "two columns apart");
+        let bg = |f: &mut Files, b: usize| { let mut buf = Buffer::empty(area); f.draw(&mut buf, area, &Look::default()); buf[(buttons[b].0 + 2, by)].bg };
+        let c = crate::settings::chrome();
+        if !crate::theme::no_color() {
+            assert_eq!(bg(&mut f, 0), c.selected.bg.unwrap());
+            assert_ne!(bg(&mut f, 1), c.selected.bg.unwrap());
+            press(&mut f, KeyCode::Tab);
+            assert_eq!(bg(&mut f, 1), c.selected.bg.unwrap());
+        }
+        // A click on Cancel closes; between the buttons nothing runs.
+        f.click_at(buttons[0].1 + 1, by, false, g);
+        assert!(f.confirm.is_some());
+        f.click_at(buttons[0].0 + 1, by, false, g);
+        assert!(f.confirm.is_none() && s.0.join("x.txt").exists());
     }
 
     #[test]

@@ -319,7 +319,7 @@ impl Editor {
 
     pub(super) fn key(&mut self, k: Chord) -> EdOut {
         self.message = None;
-        if let Some(focus) = self.asking { return self.ask_key(k, focus) }
+        if self.asking.is_some() { return self.ask_key(k) }
         if self.bar.is_some() { self.bar_key(k); self.fit(); return EdOut::None }
         let (shift, ctrl) = (k.mods.contains(KeyModifiers::SHIFT), k.mods.contains(KeyModifiers::CONTROL));
         let ctrl_is = |c: char| ctrl && matches!(k.code, KeyCode::Char(x) if x.eq_ignore_ascii_case(&c));
@@ -382,28 +382,35 @@ impl Editor {
 
     /// Esc, Ctrl+Q, Ctrl+W: closed — after asking, when there are changes to lose.
     fn close(&mut self) -> EdOut {
-        if self.modified() { self.asking = Some(0); EdOut::None } else { EdOut::Close }
+        if self.modified() { self.asking = Some(2); EdOut::None } else { EdOut::Close }
+    }
+
+    /// The "Save changes?" buttons, in the order shown, the one with the keys chosen.
+    fn ask_row(&self) -> crate::buttons::Row {
+        let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
+        crate::buttons::Row { buttons: vec![button("Don't save"), button("Cancel"), button("Save")], chosen: self.asking.unwrap_or(2), hint: String::new() }
     }
 
     /// The "Save changes?" question's keys: Left/Right/Tab between its buttons, Enter, Esc cancels.
-    fn ask_key(&mut self, k: Chord, focus: usize) -> EdOut {
-        match k.code {
-            KeyCode::Left | KeyCode::BackTab => self.asking = Some((focus + 2) % 3),
-            KeyCode::Right | KeyCode::Tab => self.asking = Some((focus + 1) % 3),
-            KeyCode::Esc => self.asking = None,
-            KeyCode::Enter => return self.answer(focus),
-            _ => {}
+    fn ask_key(&mut self, k: Chord) -> EdOut {
+        use crate::buttons::Answer;
+        let mut row = self.ask_row();
+        match row.key(k.code, k.mods) {
+            Answer::Moved => self.asking = Some(row.chosen),
+            Answer::Chosen(i) => return self.answer(i),
+            Answer::Cancel => self.asking = None,
+            Answer::Ignored => {}
         }
         EdOut::None
     }
 
-    /// Save (0), Don't save (1) or Cancel (2).
+    /// Don't save (0), Cancel (1) or Save (2).
     fn answer(&mut self, button: usize) -> EdOut {
         self.asking = None;
         match button {
-            0 => match self.save() { Ok(()) => EdOut::Close, Err(e) => { self.message = Some(e); EdOut::None } },
-            1 => EdOut::Close,
-            _ => EdOut::None,
+            0 => EdOut::Close,
+            1 => EdOut::None,
+            _ => match self.save() { Ok(()) => EdOut::Close, Err(e) => { self.message = Some(e); EdOut::None } },
         }
     }
 
@@ -525,24 +532,25 @@ impl Editor {
         };
         let st = if self.message.is_some() && self.bar.is_none() { look.accent } else { look.muted };
         put(buf, ox + 1, sy, w.saturating_sub(2), &super::fit(&status, w.saturating_sub(2) as usize), st);
-        if let Some(focus) = self.asking {
-            let (r, buttons, by) = self.ask_layout();
+        if self.asking.is_some() {
+            let (r, _, by) = self.ask_layout();
             let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height).intersection(area);
             frame(buf, r, look.warn);
             put(buf, r.x + 2, r.y + 1, r.width.saturating_sub(4), &format!("Save changes to '{}'?", name_of(&self.path)), look.text);
-            for (b, (a, _, label)) in buttons.iter().enumerate() { put(buf, ox + a, oy + by, label.width() as u16, label, if b == focus { look.mode } else { look.text }); }
+            self.ask_row().draw(buf, r.x, (r.x + r.width).saturating_sub(2), oy + by, &crate::settings::chrome());
         }
     }
 
     /// The "Save changes?" box in the middle, its buttons' columns and words, and their row.
     fn ask_layout(&self) -> (Rect, [(u16, u16, &'static str); 3], u16) {
-        const LABELS: [&str; 3] = ["[ Save ]", "[ Don't save ]", "[ Cancel ]"];
+        const LABELS: [&str; 3] = ["[ Don't save ]", "[ Cancel ]", "[ Save ]"];
+        let row = self.ask_row();
         let q = format!("Save changes to '{}'?", name_of(&self.path)).width() as u16 + 4;
-        let w = q.max(LABELS.iter().map(|l| l.width() as u16 + 2).sum::<u16>() + 2).min(self.size.0);
+        let w = q.max(row.buttons_width() + 4).min(self.size.0);
         let r = Rect::new(self.size.0.saturating_sub(w) / 2, self.size.1.saturating_sub(5) / 2, w, 5);
         let by = r.y + 3;
-        let mut x = r.x + 2;
-        let buttons = LABELS.map(|l| { let b = (x, x + l.width() as u16, l); x += l.width() as u16 + 2; b });
+        let cells = row.cells((r.x + r.width).saturating_sub(2));
+        let buttons = [0, 1, 2].map(|i| { let (_, x, w) = cells[i]; (x, x + w, LABELS[i]) });
         (r, buttons, by)
     }
 }
@@ -690,14 +698,43 @@ mod tests {
         assert_eq!(e.key(k(KeyCode::Esc)), EdOut::Close, "nothing changed: closed at once");
         typing(&mut e, "y");
         assert_eq!(e.key(k(KeyCode::Esc)), EdOut::None);
-        assert_eq!(e.asking, Some(0));
-        e.key(k(KeyCode::Right));
-        e.key(k(KeyCode::Right));
+        assert_eq!(e.asking, Some(2), "Save is chosen");
+        e.key(k(KeyCode::Left));
+        assert_eq!(e.asking, Some(1));
         assert_eq!(e.key(k(KeyCode::Enter)), EdOut::None, "Cancel: still editing");
         assert!(e.asking.is_none() && e.modified());
         e.key(ctrl('q'));
         assert_eq!(e.key(k(KeyCode::Enter)), EdOut::Close, "Save, then closed");
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "yx\n");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn save_changes_is_one_row_dont_save_cancel_save_with_the_chosen_one_lifted() {
+        let (p, d) = scratch("b.txt", b"x\n");
+        let mut e = Editor::open(&p, "b.txt".into()).unwrap();
+        typing(&mut e, "y");
+        e.key(k(KeyCode::Esc));
+        let (_, buttons, by) = e.ask_layout();
+        assert_eq!(buttons.map(|b| b.2), ["[ Don't save ]", "[ Cancel ]", "[ Save ]"]);
+        let area = Rect::new(0, 0, 80, 24);
+        let bg = |e: &mut Editor, b: usize| { let mut buf = Buffer::empty(area); e.draw(&mut buf, area, &Look::default()); buf[(buttons[b].0 + 2, by)].bg };
+        if !crate::theme::no_color() {
+            let c = crate::settings::chrome();
+            assert_eq!(bg(&mut e, 2), c.selected.bg.unwrap());
+            assert_ne!(bg(&mut e, 0), c.selected.bg.unwrap());
+            e.key(k(KeyCode::Left)); e.key(k(KeyCode::Left));
+            assert_eq!(bg(&mut e, 0), c.selected.bg.unwrap());
+        }
+        // Esc (and C-c) leave the editor open on the text; Don't save closes it unsaved.
+        e.key(k(KeyCode::Esc));
+        assert!(e.asking.is_none() && e.modified());
+        e.key(ctrl('q'));
+        assert_eq!(e.key(ctrl('c')), EdOut::None);
+        assert!(e.asking.is_none());
+        e.key(ctrl('q')); e.key(k(KeyCode::Left)); e.key(k(KeyCode::Left));
+        assert_eq!(e.key(k(KeyCode::Enter)), EdOut::Close);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "x\n");
         let _ = std::fs::remove_dir_all(d);
     }
 
