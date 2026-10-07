@@ -103,6 +103,8 @@ import 'search_when.dart';
 import 'session_content_search.dart';
 import 'session_preview.dart';
 import 'session_tail.dart';
+import 'window_names.dart';
+import '../shared/theme/appearance_prefs_store.dart';
 import '../usage/models_menu_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
@@ -2956,6 +2958,8 @@ class AppNotifier extends ChangeNotifier {
     this.agentUnread.addListener(_announceUnreadToDial);
     experimentalFeatures.addListener(_devicesExperimentChanged);
     addListener(_syncDeviceHosts);
+    _autoRenameTabs = appearancePrefsStore.value.autoRenameTabs;
+    appearancePrefsStore.addListener(_autoRenameChanged);
   }
 
   /// Through the local CLI in a desktop build; straight to the backend, signed, in a viewer.
@@ -10197,6 +10201,51 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Names for tabs from their machines' daemons, asked only while
+  /// [autoRenameTabs] is on (see `workspaceTabNames`).
+  late final windowNames = WindowNames(
+    ask: (machineId, agentIds) => _conn(machineId).request(
+      'window_name',
+      payload: {'agentIds': agentIds},
+      timeout: const Duration(seconds: 10),
+    ),
+    onChanged: () {
+      if (!_disposed) notifyListeners();
+    },
+  );
+
+  /// Settings ▸ Appearance ▸ Auto rename.
+  bool get autoRenameTabs => _autoRenameTabs;
+  bool _autoRenameTabs = false;
+
+  void _autoRenameChanged() {
+    final enabled = appearancePrefsStore.value.autoRenameTabs;
+    if (enabled == _autoRenameTabs) return;
+    _autoRenameTabs = enabled;
+    // Every tab label switches between the daemon's name and the voted one.
+    if (!_disposed) notifyListeners();
+  }
+
+  /// The daemon's name for one tab's [request], or null to keep the voted
+  /// label. Only this computer's own daemon is asked: a relayed machine's
+  /// request would cross the relay unsealed, since `window_name` is not in the
+  /// e2ee lists (cli/src/lib/e2ee/core.ts) yet. A machine that is offline or
+  /// shared view-only is not asked either: its silence would read as an
+  /// older daemon and quiet it for long.
+  String? windowNameFor(WindowNameRequest request) {
+    final machine = machineStates[request.machineId];
+    return windowNames.nameFor(
+      request,
+      reachable:
+          machine != null &&
+          machine.isLocalMachine &&
+          !machine.machine.isShared &&
+          !machine.needsLink &&
+          machine.nodeOnline != false &&
+          machine.connectionStatus == ConnectionStatus.connected,
+    );
+  }
+
   Future<MachineUsage?> _readMachineUsage(MachineState machine) async {
     try {
       final reply = await _conn(machine.machine.machineId)
@@ -16300,6 +16349,8 @@ class AppNotifier extends ChangeNotifier {
     }
     grid.AppTheme.palette.removeListener(_announceTerminalThemeEverywhere);
     terminalThemeStore.removeListener(_announceTerminalThemeEverywhere);
+    appearancePrefsStore.removeListener(_autoRenameChanged);
+    windowNames.dispose();
     _localGitProjects.dispose();
     sessionPreviews.dispose();
     agentPulse.dispose();

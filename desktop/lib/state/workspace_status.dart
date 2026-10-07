@@ -6,6 +6,7 @@ import '../widgets/engine_identity.dart';
 import 'app_state.dart';
 import 'swarm.dart';
 import 'terminal_pane.dart';
+import 'window_names.dart';
 
 /// A tab's type describes its harness panes. Viewers never cast a second vote
 /// for their owner. Ties follow pane order, independently of keyboard focus.
@@ -41,8 +42,55 @@ enum _TabTrait { type, project, machine }
 
 typedef _TabName = ({_TabTrait trait, String label, int count});
 
+/// What `window_name` asks for [tab]: the machine most of its harness panes in
+/// a git repo are on (a tie: the first such pane's), with every agent of the
+/// tab on that machine in pane order — the daemon picks the repo ones itself.
+/// Null for a custom-named or special tab, or one with no harness in a repo.
+WindowNameRequest? windowNameRequest(AppNotifier app, Swarm tab) {
+  if (tab.nameIsCustom ||
+      tab.isStore ||
+      tab.isCompanions ||
+      tab.isDevices ||
+      tab.isOrchestrator) {
+    return null;
+  }
+  final agents = <String, List<Agent>>{};
+  final inRepo = <String, int>{};
+  for (final pane in tab.panes) {
+    final agent = pane.isViewer
+        ? null
+        : _agentFor(app, pane.machineId, pane.agentId);
+    if (agent == null) continue;
+    final mine = agents.putIfAbsent(pane.machineId, () => []);
+    if (mine.any((other) => other.id == agent.id)) continue;
+    mine.add(agent);
+    if (agent.project?.branch?.isNotEmpty == true &&
+        !isTerminalEngine(agent.engine)) {
+      inRepo.update(pane.machineId, (n) => n + 1, ifAbsent: () => 1);
+    }
+  }
+  if (inRepo.isEmpty) return null;
+  // Machines enter [inRepo] in pane order, so a tie keeps the earlier one.
+  final machineId = inRepo.entries
+      .reduce((a, b) => b.value > a.value ? b : a)
+      .key;
+  return (
+    machineId: machineId,
+    agentIds: [for (final agent in agents[machineId]!) agent.id],
+    names: [for (final agent in agents[machineId]!) agent.displayName],
+  );
+}
+
+/// The daemon's name for [tab] while Auto rename is on; null keeps the vote.
+String? _autoName(AppNotifier app, Swarm tab) {
+  if (!app.autoRenameTabs) return null;
+  final request = windowNameRequest(app, tab);
+  return request == null ? null : app.windowNameFor(request);
+}
+
 /// Prefer the strongest shared trait, then the one least repeated in other
 /// tabs. Type wins otherwise equal choices; focus and custom names never vote.
+/// With Auto rename on, a name from the tab's machine replaces the vote.
 Map<String, String> workspaceTabNames(AppNotifier app) {
   final candidates = <String, List<_TabName>>{};
   for (final tab in app.swarms) {
@@ -98,6 +146,7 @@ Map<String, String> workspaceTabNames(AppNotifier app) {
         ),
       )
       .length;
+  final autoNames = {for (final tab in app.swarms) tab.id: _autoName(app, tab)};
   return {
     for (final tab in app.swarms)
       tab.id: tab.nameIsCustom
@@ -110,6 +159,8 @@ Map<String, String> workspaceTabNames(AppNotifier app) {
           ? Swarm.devicesName
           : tab.isOrchestrator
           ? 'orchestrator'
+          : autoNames[tab.id] != null
+          ? autoNames[tab.id]!
           : candidates[tab.id]!.isEmpty
           ? Swarm.defaultName
           : candidates[tab.id]!.reduce((a, b) {

@@ -600,6 +600,10 @@ class WsConn {
     'agent_handoff_prepare_result',
     'project_preview',
     'project_preview_result',
+    // A name made from the panes' titles, asked again every few seconds
+    // while the daemon is still writing it.
+    'window_name',
+    'window_name_result',
     'git_project_info',
     'git_project_info_result',
     'terminal_output',
