@@ -11,6 +11,7 @@ import {
   engineProcessMatch,
   engineProcessMatchScore,
   isNoTmuxServerError,
+  LOAD_BUFFER_TIMEOUT_MS,
   LSTART_MARKER_RE,
   liveProcessRows,
   parseProcessRow,
@@ -710,4 +711,37 @@ if [ "$1" = "load-buffer" ]; then cat > /dev/null; fi
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it('gives up a paste whose tmux never takes its buffer, so the terminals waiting behind it open', async () => {
+    // A tmux client whose server does not answer waits as long as the server does. Inside the notify room
+    // that held every terminal open, every session made or killed, and every terminal closed with it.
+    const dir = mkdtempSync(join(tmpdir(), 'harness-tmux-hung-'))
+    writeFileSync(join(dir, 'tmux'), `#!/bin/sh
+if [ "$1" = "load-buffer" ]; then exec sleep 30; fi
+`)
+    chmodSync(join(dir, 'tmux'), 0o700)
+    const previous = process.env.PATH
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      process.env.PATH = `${dir}:${previous ?? ''}`
+      assumeTmuxVersion({ major: 3, minor: 4 })
+      const started = performance.now()
+      const pasted = pasteRawIntoTmux('%7', 'clipboard')
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const opened = await Promise.race([
+        tmuxControlGate.enter('attach').then((leave) => { leave(); return performance.now() - started }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 12_000)),
+      ])
+      expect(opened, 'a terminal opens behind a paste whose tmux does not answer').not.toBeNull()
+      expect(opened).toBeGreaterThanOrEqual(LOAD_BUFFER_TIMEOUT_MS - 50)
+      expect(await pasted).toBe(false)
+      expect(error).toHaveBeenCalledWith('[tmux] load-buffer for %7 failed')
+    } finally {
+      error.mockRestore()
+      resetTmuxVersionCache()
+      if (previous === undefined) delete process.env.PATH
+      else process.env.PATH = previous
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
 })
