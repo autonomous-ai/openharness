@@ -399,6 +399,22 @@ def mounted(device, path, options):
         run('umount', path)
 
 
+def inspect_cold(mapper, boot, work):
+    """Reject unsupported trees without replaying either filesystem's journal.
+
+    Ordinary ro mounts can write during journal replay. After this inspection,
+    normal kernel replay is necessary to retain committed work from a crash;
+    the normal mounts and Engine must validate the resulting trees again.
+    """
+    with mounted(mapper, work / 'inspect-root', 'ro,subvolid=5,nologreplay,noatime') as top:
+        validate_layout(top)
+        if (top / 'root').exists():
+            boundary(top / 'root')
+    with mounted(boot, work / 'inspect-boot', 'ro,noload,noatime') as boot_path:
+        checked(boot_path, 'efi')
+        inventory(boot_path, exclude=('efi',))
+
+
 @contextmanager
 def installation(plan_path, mapper):
     if platform.system() != 'Linux' or os.geteuid() != 0:
@@ -455,8 +471,11 @@ def installation(plan_path, mapper):
         identity.update(esp_partuuid=plan['esp_uuid'], disk_guid=plan['original']['id'],
                         plan_sha256=storage.fingerprint(plan), storage_sha256=storage.fingerprint(state))
         with storage.work_directory() as work:
+            inspect_cold(mapper, boot, work)
             with mounted(mapper, work / 'top', 'ro,subvolid=5,noatime') as top, mounted(boot, work / 'boot', 'ro,noatime') as boot_path:
                 validate_layout(top)
+                if (top / 'root').exists():
+                    boundary(top / 'root')
                 yield Engine(top, boot_path, esp, identity)
     finally:
         os.close(fd)

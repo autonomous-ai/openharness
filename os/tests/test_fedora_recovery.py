@@ -1,5 +1,6 @@
 """Cold recovery safety boundaries; real Btrfs/SELinux/boot need native acceptance."""
 import copy
+from contextlib import contextmanager
 import importlib.util
 import json
 import os
@@ -390,6 +391,22 @@ class MountBoundary(unittest.TestCase):
         self.info.write_text('1 0 0:1 / /owned-esp/m1n1 rw - tmpfs tmpfs rw\n')
         with self.assertRaisesRegex(recovery.Error, 'below the owned ESP'):
             recovery.unmounted(('/dev/root-target',), '/dev/esp', Path('/owned-esp'), 'fixture')
+
+
+class ColdInspection(unittest.TestCase):
+    def test_unsupported_layout_is_refused_before_normal_journal_replay(self):
+        with tempfile.TemporaryDirectory() as area:
+            path = Path(area)
+            (path / 'root').mkdir()
+            options = []
+            @contextmanager
+            def mount(device, destination, value):
+                options.append(value)
+                yield path
+            with patch.object(recovery, 'mounted', mount), patch.object(recovery, 'validate_layout', side_effect=recovery.Error('nested subvolume')):
+                with self.assertRaisesRegex(recovery.Error, 'nested subvolume'):
+                    recovery.inspect_cold('/mapper', '/boot', path)
+            self.assertEqual(options, ['ro,subvolid=5,nologreplay,noatime'])
 
 
 class TrustedCommands(unittest.TestCase):
