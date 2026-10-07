@@ -47,6 +47,10 @@ const CHANGED_FIELDS: Array<[RegExp, string, { optional?: boolean }?]> = [
   // Whether the search index had finished its first build when the query came, and how many conversations
   // it still had to read, is timing; search runs in its own process now (#829) and is often ready sooner.
   [/^\.session_search [^.]*\.(ready|pending)$/, 'the index\'s readiness, and what it still has to read, at the moment of the query is timing', { optional: true }],
+  // A row created with no mode learns it from the engine's arguments once discovery sees the process
+  // (core/agents/discovery.ts, fill-only), in both builds. Whether that lands before agent_create answers
+  // is timing: the release check of 08548179c met null against "auto" once, and its earlier run met none.
+  [/^\.agent_create [^.]*\.agent\.permissionMode$/, 'the permission mode is read back from the engine\'s arguments, before or after the answer', { optional: true }],
 ]
 
 type Engine = 'claude' | 'codex'
