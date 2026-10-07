@@ -308,6 +308,27 @@ class VM:
             time.sleep(2)
         raise TimeoutError('The Harness graphical unlock prompt was not rendered.')
 
+    def screen_shows(self, name, text, timeout=20):
+        """OCR the framebuffer until `text` is shown: hn's dialogs float over the panes, so
+        `hn capture-pane`, which reads a pane, never contains them."""
+        from PIL import Image, ImageOps
+        deadline = time.monotonic() + timeout
+        while True:
+            self.screenshot(name)
+            # Light text on hn's dark dialog reads as click_word reads controls: inverted, doubled.
+            readable = self.folder / (name + '-ocr.png')
+            with Image.open(self.folder / (name + '.png')) as image:
+                inverted = ImageOps.invert(image.convert('L')).resize((image.width * 2, image.height * 2))
+                ImageOps.expand(inverted, border=24, fill=255).save(readable)
+            seen = subprocess.check_output(['tesseract', str(readable), 'stdout', '--psm', '11'],
+                                           text=True, stderr=subprocess.DEVNULL, timeout=15)
+            if text.lower() in seen.lower():
+                return True
+            if time.monotonic() >= deadline:
+                (self.folder / (name + '.txt')).write_text(seen)
+                return False
+            time.sleep(1)
+
     def screenshot(self, name):
         ppm = self.folder / (name + '.ppm')
         self.monitor('screendump', filename=str(ppm))
@@ -668,7 +689,7 @@ def check_first_use(vm, user, folder, installed=False):
     vm.keys('ret')
     # Sign in opens hn's own account page (#897): Google, Apple, the phone, or keep using locally.
     # The phone needs no browser in the VM. Its `harness login` is hn's child, and Esc cancels it.
-    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -q "Sign in with your phone" && exit 0; sleep .5; done; exit 1')), timeout=20)
+    assert vm.screen_shows('01d-account', 'with your phone'), 'Sign in must open the account page'
     vm.keys('down')
     vm.keys('down')
     vm.keys('ret')
@@ -681,8 +702,7 @@ def check_first_use(vm, user, folder, installed=False):
     vm.command('for n in $(seq 1 20); do ! pgrep -u 1000 -f ' + shlex.quote(login_process) +
                ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
     # Back to the work it was opened over, whether Esc closed the page or only stopped sign-in.
-    _, still_open = vm.command(user('sh -c ' + shlex.quote('hn capture-pane -p | grep -q "Your Harness account"')), check=False)
-    if still_open == 0:
+    if vm.screen_shows('01d-account-cancelled', 'harness account', timeout=2):
         vm.keys('esc')
     time.sleep(1)
     if not installed:
