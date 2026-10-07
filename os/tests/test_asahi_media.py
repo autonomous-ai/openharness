@@ -1,0 +1,135 @@
+import copy
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+import xml.etree.ElementTree as ET
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'os/tools'))
+import asahi_media as build
+
+spec = importlib.util.spec_from_file_location('asahi_media_runtime', ROOT / 'os/platforms/apple-silicon/media.py')
+media = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(media)
+
+
+class Media(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.payload = self.root / 'payload.raw'
+        self.payload.write_bytes(b'private image fixture')
+        self.image_source = 'a' * 40
+        self.producer = {'head_sha': self.image_source, 'id': 123, 'path': '.github/workflows/os-asahi-image.yml',
+                         'repository': {'full_name': 'autonomous-ai/openharness'},
+                         'status': 'completed', 'conclusion': 'success'}
+        self.receipt = {'status': 'passed', 'image': {'kind': 'harness-asahi-image-construction',
+            'source_commit': self.image_source, 'profile': 'Harness', 'published': False, 'release_ready': False},
+            'artifact': {'bytes': self.payload.stat().st_size, 'sha256': build.digest(self.payload)}}
+        self.identity = {'schema': 1, 'kind': 'harness-asahi-installer-media', 'source_commit': 'b' * 40,
+            'published': False, 'release_ready': False, 'payload': {'source_commit': self.image_source,
+                'bytes': self.payload.stat().st_size, 'sha256': build.digest(self.payload)}}
+        self.manifest = self.root / 'media.json'
+        self.manifest.write_text(json.dumps(self.identity))
+
+    def test_only_successfully_inspected_same_repository_image_is_packaged(self):
+        good = build.payload_identity(self.payload, self.receipt, self.producer, self.image_source)
+        self.assertEqual(good['sha256'], build.digest(self.payload))
+        for key, value in [('head_sha', 'c' * 40), ('conclusion', 'failure'),
+                           ('repository', {'full_name': 'other/repo'}), ('path', 'unrelated.yml')]:
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                build.payload_identity(self.payload, self.receipt, {**self.producer, key: value}, self.image_source)
+        bad = copy.deepcopy(self.receipt)
+        bad['image']['source_commit'] = 'c' * 40
+        with self.assertRaisesRegex(ValueError, 'provenance'):
+            build.payload_identity(self.payload, bad, self.producer, self.image_source)
+
+    def test_corrupt_and_symlink_payloads_cannot_be_packaged(self):
+        link = self.root / 'link.raw'
+        link.symlink_to(self.payload)
+        with self.assertRaisesRegex(ValueError, 'differs'):
+            build.payload_identity(link, self.receipt, self.producer, self.image_source)
+        self.payload.write_bytes(b'X' * self.payload.stat().st_size)
+        with self.assertRaisesRegex(ValueError, 'differs'):
+            build.payload_identity(self.payload, self.receipt, self.producer, self.image_source)
+
+    def test_live_manifest_rejects_missing_identity_size_and_writable_files(self):
+        self.assertEqual(media.identity(self.root, os.geteuid()), self.identity)
+        for key, value in [('sha256', 'bad'), ('source_commit', 'main'), ('bytes', 0)]:
+            bad = copy.deepcopy(self.identity)
+            bad['payload'][key] = value
+            self.manifest.write_text(json.dumps(bad))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'manifest'):
+                media.identity(self.root, os.geteuid())
+        self.manifest.write_text(json.dumps(self.identity))
+        self.payload.chmod(0o666)
+        with self.assertRaisesRegex(ValueError, 'files have changed'):
+            media.identity(self.root, os.geteuid())
+        self.payload.chmod(0o644)
+        original = self.root / 'original.raw'
+        self.payload.rename(original)
+        self.payload.symlink_to(original)
+        with self.assertRaisesRegex(ValueError, 'files have changed'):
+            media.identity(self.root, os.geteuid())
+
+    def test_live_loop_is_readonly_4096_byte_and_detached_after_failed_install(self):
+        calls = []
+        def run(*args):
+            calls.append(args)
+            return '/dev/loop9' if '--find' in args else ''
+        with patch.object(media, 'identity', return_value=self.identity), \
+                patch.object(media.installer.storage, 'run', side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, 'install failed'):
+                with media.payload_device(self.root) as payload:
+                    self.assertEqual(payload.sha256, self.identity['payload']['sha256'])
+                    self.assertEqual(payload.device, '/dev/loop9')
+                    raise RuntimeError('install failed')
+        self.assertEqual(calls[0], ('losetup', '--find', '--show', '--read-only', '--partscan',
+                                   '--sector-size', '4096', self.payload))
+        self.assertEqual(calls[-1], ('losetup', '--detach', '/dev/loop9'))
+
+    def test_device_settle_failure_also_releases_owned_loop(self):
+        calls = []
+        def run(*args):
+            calls.append(args)
+            if args[0] == 'udevadm':
+                raise RuntimeError('settle failed')
+            return '/dev/loop9' if '--find' in args else ''
+        with patch.object(media, 'identity', return_value=self.identity), \
+                patch.object(media.installer.storage, 'run', side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, 'settle failed'):
+                with media.payload_device(self.root):
+                    self.fail('Must not start without the source devices')
+        self.assertEqual(calls[-1], ('losetup', '--detach', '/dev/loop9'))
+
+    def test_recipe_keeps_signed_asahi_boot_without_installed_or_desktop_profiles(self):
+        includes = ('repositories/core.xml', 'repositories/asahi.xml', 'components/boot.xml',
+                    'components/base.xml', 'platforms/minimal.xml', 'platforms/workstation.xml')
+        (self.root / 'config.xml').write_text('<image name="Fedora-Asahi-Remix"><description><specification/>'
+            '</description><preferences><release-version>44</release-version><rpm-check-signatures>true'
+            '</rpm-check-signatures></preferences>' + ''.join('<include from="this://./' + p + '"/>'
+                                                             for p in includes) + '</image>')
+        build.live_recipe(self.root)
+        recipe = ET.parse(self.root / 'config.xml')
+        self.assertEqual({n.get('from') for n in recipe.findall('include')},
+            {'this://./' + p for p in includes[:3]})
+        live = recipe.find('preferences/type')
+        self.assertEqual(live.get('flags'), 'overlay')
+        self.assertEqual(live.get('filesystem'), 'squashfs')
+        self.assertEqual(live.get('hybridpersistent'), 'false')
+        self.assertNotIn('rd.live.overlay.persistent', live.get('kernelcmdline'))
+        self.assertEqual(recipe.findtext('preferences/rpm-check-signatures'), 'true')
+        selected = {p.get('name') for p in recipe.findall('packages/package')}
+        self.assertTrue({'dracut-kiwi-live', 'cryptsetup', 'rsync', 'grub2-efi-aa64-cdboot'} <= selected)
+        self.assertFalse(selected & {'harness-os-session', 'greetd', 'chromium', 'initial-setup'})
+
+
+if __name__ == '__main__':
+    unittest.main()
