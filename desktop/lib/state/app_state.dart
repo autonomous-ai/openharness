@@ -39,6 +39,7 @@ import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/sleep_aware.dart';
 import '../core/agent_git_context.dart';
+import '../core/agent_inventory.dart';
 import '../core/agent_names.dart';
 import '../core/agent_preference.dart';
 import '../core/launch_setup.dart';
@@ -343,6 +344,7 @@ class MachineState {
   // crypto/pairing state the app has any data for.
   bool needsLink = false;
   List<Agent> agents = [];
+  final _agentInventory = AgentInventory();
   AgentLoadStatus agentLoadStatus = AgentLoadStatus.idle;
   bool agentsRefreshing = false;
   String? agentsLoadError;
@@ -6632,21 +6634,19 @@ class AppNotifier extends ChangeNotifier {
     final connection = _conn(machine.machine.machineId);
     final nameRevision = machine._agentRevision;
     try {
-      final response = await connection.request(
-        'agents_list',
-        payload: const {'includeStopped': true},
-        timeout: const Duration(seconds: 10),
+      final incoming = await machine._agentInventory.read(
+        (sync) => connection.request(
+          'agents_list',
+          payload: {'includeStopped': true, 'sync': sync},
+          timeout: const Duration(seconds: 10),
+        ),
+        observe: () => machine.agents,
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
         return;
       }
-      final agents = _agentSnapshot(
-        machine,
-        (response['agents'] as List<dynamic>? ?? [])
-            .map((item) => Agent.fromJson(item as Map<String, dynamic>))
-            .toList(),
-        nameRevision,
-      );
+      if (incoming == null) return;
+      final agents = _agentSnapshot(machine, incoming, nameRevision);
       if (agentsEqual(machine.agents, agents)) return;
       _replaceAgents(machine, agents);
       notifyListeners();
@@ -8473,21 +8473,28 @@ class AppNotifier extends ChangeNotifier {
         revision,
         discoveryRevision,
       );
-      final response = await connection.request(
-        'agents_list',
-        payload: const {'includeStopped': true},
-        timeout: remaining,
+      final incoming = await machine._agentInventory.read(
+        (sync) => connection.request(
+          'agents_list',
+          payload: {'includeStopped': true, 'sync': sync},
+          timeout: remaining,
+        ),
+        observe: () => machine.agents,
       );
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
         return;
       }
-      final agents = _agentSnapshot(
-        machine,
-        (response['agents'] as List<dynamic>? ?? [])
-            .map((item) => Agent.fromJson(item as Map<String, dynamic>))
-            .toList(),
-        nameRevision,
-      );
+      if (incoming == null) {
+        machine.agentsRefreshing = false;
+        if (machine.agentLoadStatus == AgentLoadStatus.loading) {
+          machine.agentLoadStatus = machine.agents.isEmpty
+              ? AgentLoadStatus.idle
+              : AgentLoadStatus.loaded;
+        }
+        notifyListeners();
+        return;
+      }
+      final agents = _agentSnapshot(machine, incoming, nameRevision);
       _replaceAgents(machine, agents);
       machine.agentLoadStatus = AgentLoadStatus.loaded;
       machine.agentsRefreshing = false;
@@ -8587,6 +8594,7 @@ class AppNotifier extends ChangeNotifier {
   /// the old futures immediately; their completions keep their original revision.
   void _resetMachineDiscovery(MachineState machine) {
     machine._discoveryRevision++;
+    machine._agentInventory.reset();
     _offlineRecoveryInFlight.remove(machine.machine.machineId);
     machine.agentsLoadInFlight = null;
     machine.terminalCapabilityLoadInFlight = null;

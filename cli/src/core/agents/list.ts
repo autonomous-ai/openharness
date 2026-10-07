@@ -7,6 +7,7 @@
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md), with the
  * device trimming it alone used.
  */
+import { createAgentInventory } from './inventory.js'
 import { isTerminalEngine, PROCESS_ENGINES, type ProcessEngine } from '../../engines/types.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import type { MonitorActivity, MonitorCompletions } from '../../lib/harnessMonitor.js'
@@ -81,6 +82,7 @@ export function createAgentList({
   registry, stoppedAgents, toProject, toStoppedProject, harnessResourcesReader, harnessStorageReader,
   monitorActivityProvider, monitorCompletions,
 }: AgentListDeps) {
+  const inventory = createAgentInventory()
   /**
    * Answers `agents_list` through `reply`: before it returns, or, for the monitor's readings, once
    * they are read. `sessionRole` is the asking connection's paired role, read where the list needs it.
@@ -137,7 +139,7 @@ export function createAgentList({
           } }
         }), sharedResources: snapshot.shared ?? [], sampledAt: snapshot.sampledAt })
       })().catch(() => reply({ error: 'UNAVAILABLE' }))
-    } else reply({ agents: projects })
+    } else reply(inventory(projects, payload, JSON.stringify([sessionRole(), payload.includeStopped === true])))
   }
 
   return { agentsList }

@@ -255,11 +255,34 @@ describe('the gateway in its own process', () => {
       const before = connections(f.a.daemon)
       const viaA = await LocalClient.connect(f.a.daemon, { machineId: f.b.machineId })
       clients.push(viaA)
-      for (let read = 0; read < 3; read++) {
-        const list = await viaA.request<{ agents: Array<{ id: string }> }>('agents_list', {}, 10_000)
-        expect(Buffer.byteLength(JSON.stringify(list))).toBeGreaterThan(512 * 1024)
-        expect(list.agents.map((agent) => agent.id)).toEqual(expect.arrayContaining(agentIds))
-      }
+      type Inventory = { agents: Array<{ id: string; name: string }>; sync: { revision: string; base?: string; order?: string[] } }
+      const legacy = await viaA.request<Inventory>('agents_list', {}, 10_000)
+      expect(Buffer.byteLength(JSON.stringify(legacy))).toBeGreaterThan(512 * 1024)
+      expect(legacy.sync).toBeUndefined()
+      const first = await viaA.request<Inventory>('agents_list', { sync: { version: 1 } }, 10_000)
+      expect(first.agents.map(agent => agent.id)).toEqual(expect.arrayContaining(agentIds))
+      expect(first.sync.base).toBeUndefined()
+      let revision = first.sync.revision
+      const unchanged = await until('a stable inventory to send no rows', async () => {
+        const reply = await viaA.request<Inventory>('agents_list', { sync: { version: 1, since: revision } }, 10_000)
+        const same = reply.sync.base === revision && reply.sync.revision === revision
+        revision = reply.sync.revision
+        return same ? reply : null
+      }, 10_000, 100)
+      expect(unchanged.agents).toEqual([])
+      expect(Buffer.byteLength(JSON.stringify(unchanged))).toBeLessThan(512)
+      expect((await onB.request('agent_update', { agentId: agentIds[0], name: 'renamed remote pane' })).error).toBeUndefined()
+      const changed = await viaA.request<Inventory>('agents_list', { sync: { version: 1, since: revision } }, 10_000)
+      expect(changed.sync.base).toBe(revision)
+      expect(changed.sync.order).toEqual(expect.arrayContaining(agentIds))
+      expect(changed.agents).toEqual(expect.arrayContaining([expect.objectContaining({ id: agentIds[0], name: 'renamed remote pane' })]))
+      expect(changed.agents.find(agent => agent.id === agentIds[1])).toBeUndefined()
+      // A new window and an unknown cache token recover from a full snapshot.
+      const freshWindow = await LocalClient.connect(f.a.daemon, { machineId: f.b.machineId })
+      clients.push(freshWindow)
+      const fallback = await freshWindow.request<Inventory>('agents_list', { sync: { version: 1, since: 'f'.repeat(64) } }, 10_000)
+      expect(fallback.sync.base).toBeUndefined()
+      expect(fallback.agents.map(agent => agent.id)).toEqual(expect.arrayContaining(agentIds))
       const ended = viaA.next(isTurn('turn_ended', agentIds[0]), 30_000, 'a turn after the large agent list')
       viaA.send('message', { agentId: agentIds[0], content: 'still connected after the large roster' })
       await ended
