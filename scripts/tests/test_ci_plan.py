@@ -93,6 +93,17 @@ class GitPlanTests(unittest.TestCase):
         self.assertEqual(len(plan["paths"]), 351)
         self.assertEqual(plan["suites"], ["website"])
 
+    def test_sparse_checkout_keeps_complete_component_selection(self):
+        self.write("cli/src/changed.ts")
+        self.write("desktop/lib/changed.dart")
+        self.write("scripts/planner.py")
+        self.commit()
+        self.git("sparse-checkout", "set", ".github", "scripts")
+        self.assertFalse((self.root / "cli/src/changed.ts").exists())
+        plan = self.plan()
+        self.assertEqual(plan["paths"], ["cli/src/changed.ts", "desktop/lib/changed.dart", "scripts/planner.py"])
+        self.assertEqual(plan["suites"], ["cli", "desktop"])
+
     def test_rename_selects_old_and_new_components(self):
         self.write("website/source.txt")
         self.base = self.commit()

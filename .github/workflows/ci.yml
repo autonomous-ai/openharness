@@ -69,6 +69,12 @@ jobs:
         with:
           ref: ${{ env.CI_SOURCE_SHA }}
           fetch-depth: 0
+          # Run 37659523265 spent the entire 5-minute planning budget fetching blobs for every
+          # historical asset. Keep all commits/trees for merge-base and the complete diff, but
+          # materialize only the workflow and planner sources this job reads.
+          sparse-checkout: |
+            .github
+            scripts
       - name: Validate the integration workflows
         run: >-
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12

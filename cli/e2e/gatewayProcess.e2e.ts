@@ -114,6 +114,8 @@ describe('the gateway in its own process', () => {
     expect(pids.length).toBe(1)
     for (const pid of pids) process.kill(pid, 'SIGKILL')
     await until('the gateway link to go away', () => !backend.nodeUp(machine.machineId) && gatewayPids(d).length === 0 || null, 5000, 50)
+    const pairings = await desk.request('e2ee_pairings_list', {}, 5000)
+    expect(pairings).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'gateway', retryable: true })
     const cached = await machines()
     expect(cached.status).toBe(200)
     expect(cached.body.data).toMatchObject({ machines: first.body.data.machines, stale: true, staleSince: expect.any(String) })

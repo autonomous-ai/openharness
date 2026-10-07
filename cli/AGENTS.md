@@ -24,10 +24,10 @@ they show as `harnessd`, `harnessd-core` and `harnessd-<process>` (`src/harnessd
 | Process | Runs | Started |
 |---|---|---|
 | master | supervision only (`src/harnessd/`) | by `harness start`, `harness start -f`, or launchd or systemd after `harness service install` |
-| core | sessions (`src/core/`), and the shell service | always |
+| core | sessions (`src/core/`) | always |
 | search | session search | always |
 | viewers | the harness viewers, their remote streams and rendered surfaces, and the Store | always |
-| edge | workspaces, usage, the monitor, the project readers, the change-agent handoff, the recaps | always |
+| edge | the shell service, workspaces, usage, the monitor, the project readers, the change-agent handoff, the recaps | always |
 | gateway | the relay and its E2EE (`src/gateway/`) | on demand: as the core starts when signed in or anything is paired here, or when something needs it (a pairing, a window's E2EE request, a key command, the Wi-Fi device) |
 | models | grid, local models, the Model Manager | on demand: once grid is in use here (a managed grid, saved grid pictures, local models), or on a models request |
 | updater | checks, downloads and stages a new build (`src/services/updaterProcess.ts`) | by the master, for the installed copy only |
