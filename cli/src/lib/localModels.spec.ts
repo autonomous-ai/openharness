@@ -2011,6 +2011,8 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
   })
 
   it('offers none it cannot size, but keeps listing the ones already here, at the quant that is here', async () => {
+    // Sparse weight fixtures declare their disk budget, independent of the developer's free space.
+    vi.mocked(statfs).mockResolvedValue({ bavail: 100 * GiB, bsize: 1 } as Awaited<ReturnType<typeof statfs>>)
     await writeFile(join(home, 'models', 'Kev-9B-Q8_0.gguf'), '')
     await (await import('node:fs/promises')).truncate(join(home, 'models', 'Kev-9B-Q8_0.gguf'), 9_529_735_648)
     await writeFile(join(home, 'models', 'Clef-Q4_K_M.gguf.part'), 'half')
@@ -2040,6 +2042,8 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
   })
 
   it('updates an engine new enough for Jev models but not for Clef, whose architecture came later', async () => {
+    // Sparse weight fixtures declare their disk budget, independent of the developer's free space.
+    vi.mocked(statfs).mockResolvedValue({ bavail: 100 * GiB, bsize: 1 } as Awaited<ReturnType<typeof statfs>>)
     await engine('0.5.0-dev (build 11365, commit 1a2b3c4d5)')
     const models = jevService({}, {}, { ...card10, usable_bytes: 48 * GiB })
     await models.act('home', LAYA, 'start'); await models.settled()

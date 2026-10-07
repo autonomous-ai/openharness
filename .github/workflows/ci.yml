@@ -1,25 +1,19 @@
 name: CI
 
-# Modelled on autonomous-harness-desktop's ci.yml. Like that one, this runs ON DEMAND only.
-#
-# It used to run on every pull request as well (2026-09-10 → 2026-09-16). That was switched off
-# deliberately: the suite is timing-sensitive on the shared ubuntu runner (real tmux server, shell
-# scripts, sqlite3 polls), so a red check on a PR said more about the runner than about the change,
-# and every contributor had to read the log to find out which. The verdict on a branch is still one
-# click away — Actions -> CI -> Run workflow, pick the branch — which is what a reviewer does when
-# they want it. If per-PR CI comes back, use `pull_request`, never `pull_request_target`: a fork's PR
-# must run with a read-only token and no secrets, since this job executes the contributor's code.
-#
-# There is no `push` trigger either. Nobody pushes to main directly (CONTRIBUTING.md step 2) and
-# merges are squashed, so a push run would re-test a commit somebody already ran by hand.
+# Automatic PR and merge-candidate validation use the same coarse suite planner.
+# Contributor code runs with a read-only token and no release credentials.
 on:
-  # The only way this runs on its own: Actions -> CI -> Run workflow, on any branch.
+  pull_request:
+    branches: [main, 'ci-rollout/**']
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
     inputs:
       scope:
-        description: 'Affected components (full for shared protocols or uncertain impact)'
+        description: 'Affected component; full for core suites, all for every component'
         type: choice
-        options: [full, cli, tui, backend, desktop, process]
+        options: [full, cli, tui, backend, desktop, process, all, companions, website, experience, authoring, home-assistant, desktop-logging, os, provider, firmware, mobile, daemons]
         default: full
   # Callable as a reusable workflow. release.yml used to gate on this and take the Node pin from
   # its output; it no longer does (see the note above `publish` there) and pins the same version
@@ -41,21 +35,74 @@ permissions:
 # The managed runtime shipped by the CLI; keep release.yml's pin in sync.
 env:
   CLI_NODE_VERSION: 22.23.2
+  CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
-concurrency:
-  group: cli-ci-${{ github.workflow }}-${{ github.ref }}-${{ inputs.scope || 'full' }}
-  # Every run here was started by a person or by a release, and is the record of whether that commit
-  # was green — never killed to make room for a newer one.
-  cancel-in-progress: false
+# Supersede individual PR jobs, not the whole workflow: an always-running final
+# gate on an obsolete revision must not hold the next revision's scheduling lock.
+# Every matrix row has its own group. Explicit runs and merge candidates use run
+# IDs, so their requested validation is preserved. Summaries and the final gate
+# have no lock: an older aggregate can finish after newer work without cancelling it.
 
 jobs:
+  plan:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-plan
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      plan: ${{ steps.select.outputs.plan }}
+      ready: ${{ steps.select.outputs.ready }}
+      cli: ${{ steps.select.outputs.cli }}
+      desktop: ${{ steps.select.outputs.desktop }}
+      tui: ${{ steps.select.outputs.tui }}
+      backend: ${{ steps.select.outputs.backend }}
+      companions: ${{ steps.select.outputs.companions }}
+      website: ${{ steps.select.outputs.website }}
+      experience: ${{ steps.select.outputs.experience }}
+      authoring: ${{ steps.select.outputs.authoring }}
+      home-assistant: ${{ steps.select.outputs.home-assistant }}
+      desktop-logging: ${{ steps.select.outputs.desktop-logging }}
+      os: ${{ steps.select.outputs.os }}
+      provider: ${{ steps.select.outputs.provider }}
+      firmware: ${{ steps.select.outputs.firmware }}
+      mobile: ${{ steps.select.outputs.mobile }}
+      daemons: ${{ steps.select.outputs.daemons }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+          fetch-depth: 0
+      - name: Validate the integration workflows
+        run: >-
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          .github/workflows/ci.yml .github/workflows/cli-e2e.yml .github/workflows/ci-health.yml
+          .github/workflows/website-checks.yml .github/workflows/experience-checks.yml
+          .github/workflows/authoring-browser-checks.yml .github/workflows/home-assistant-checks.yml
+          .github/workflows/desktop-logging-checks.yml
+      - id: select
+        env:
+          CI_SCOPE: ${{ inputs.scope || 'full' }}
+        run: python3 scripts/ci-plan.py --scope "$CI_SCOPE" --output "$RUNNER_TEMP/ci-plan.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-plan
+          path: ${{ runner.temp }}/ci-plan.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
   process-checks:
-    if: ${{ contains(fromJSON('["full","cli","tui","backend","desktop","process"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-process-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.CI_SOURCE_SHA }}
           sparse-checkout: |
             /.github/
             /scripts/
@@ -79,16 +126,12 @@ jobs:
           overwrite: true
           retention-days: 7
 
-  # workflow_dispatch restricts the choice; reusable callers can pass any string.
-  # Fail invalid calls rather than reporting success after skipping every check.
-  invalid-scope:
-    if: ${{ !contains(fromJSON('["full","cli","tui","backend","desktop","process"]'), inputs.scope || 'full') }}
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo '::error::scope must be full, cli, tui, backend, desktop, or process'; exit 1
-
   desktop-tests:
-    if: ${{ contains(fromJSON('["full","desktop"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-desktop-tests-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop == 'true'
     name: desktop-tests (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -100,6 +143,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.CI_SOURCE_SHA }}
           sparse-checkout: |
             /.github/
             /scripts/
@@ -141,13 +185,14 @@ jobs:
           retention-days: 7
 
   desktop-test-summary:
-    needs: desktop-tests
-    if: ${{ !cancelled() && contains(fromJSON('["full","desktop"]'), inputs.scope || 'full') }}
+    needs: [plan, desktop-tests]
+    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop == 'true' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 3
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.CI_SOURCE_SHA }}
           sparse-checkout: |
             /desktop/test/
             /scripts/
@@ -178,7 +223,11 @@ jobs:
   # binary backpressure and unplug behavior on both supported OSes and runtimes.
   # These are disposable PTYs; no USB device or existing daemon is touched.
   serial-native:
-    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-serial-native-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -191,6 +240,8 @@ jobs:
         working-directory: cli
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
@@ -207,7 +258,11 @@ jobs:
   # Build both slices and execute each host architecture. All process/tmux
   # fixtures are private; no installed agent or running session is controlled.
   process-images-native:
-    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-process-images-native-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -219,6 +274,8 @@ jobs:
         working-directory: cli
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22.23.2
@@ -241,7 +298,11 @@ jobs:
   # The optional product has its own dependencies, bundle and suites. CLI-only CI
   # deliberately checks core without installing or building this package.
   companion-subsystems:
-    if: ${{ (inputs.scope || 'full') == 'full' }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-companion-subsystems
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.companions == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -249,6 +310,8 @@ jobs:
         working-directory: companions
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
@@ -268,7 +331,11 @@ jobs:
 
   # Typecheck and contract checks run alongside the default suite's four shards.
   cli-contracts:
-    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-contracts
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -278,6 +345,8 @@ jobs:
         working-directory: cli
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
 
       # THE runtime pin — release.yml's `publish` job carries the same value; bump them together.
       #
@@ -356,7 +425,11 @@ jobs:
   # remembered: test:resume had slipped to 93% of stoppedAgents.ts and test:orchestrator below 100% by
   # 5 October 2026 without anyone noticing. One step per gate, so a red run names the gate.
   cli-coverage-gates:
-    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-coverage-gates
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -364,6 +437,8 @@ jobs:
         working-directory: cli
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
@@ -392,7 +467,11 @@ jobs:
           retention-days: 7
 
   cli-tests:
-    if: ${{ contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-cli-tests-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -404,6 +483,8 @@ jobs:
         working-directory: cli
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.CLI_NODE_VERSION }}
@@ -432,8 +513,8 @@ jobs:
   # Preserve the original aggregate check/output for callers. A missing, failed
   # or skipped shard/contract job cannot turn into a green aggregate check.
   typecheck-test:
-    needs: [cli-contracts, cli-tests]
-    if: ${{ !cancelled() && contains(fromJSON('["full","cli"]'), inputs.scope || 'full') }}
+    needs: [plan, cli-contracts, cli-tests]
+    if: ${{ !cancelled() && needs.plan.outputs.ready == 'true' && needs.plan.outputs.cli == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
     outputs:
@@ -441,6 +522,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ env.CI_SOURCE_SHA }}
           # This job reads only the shard reports and this stdlib-only verifier.
           # Avoid fetching/materializing the app, fixtures and performance assets again.
           sparse-checkout: scripts/verify-cli-test-shards.py
@@ -470,7 +552,11 @@ jobs:
   # Native shell lifecycle checks on the Linux platforms used over SSH. This workflow
   # remains on demand; it builds and tests without publishing or installing a release.
   tui-test:
-    if: ${{ contains(fromJSON('["full","tui"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-tui-test-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.tui == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -484,6 +570,8 @@ jobs:
         working-directory: tui
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -569,7 +657,11 @@ jobs:
           retention-days: 14
 
   backend-desk:
-    if: ${{ contains(fromJSON('["full","backend"]'), inputs.scope || 'full') }}
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-backend-desk
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.backend == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -577,6 +669,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22.23.2
@@ -585,3 +679,206 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Shared desk layout compatibility
         run: npm test -- src/routes/desk.test.ts
+
+  website-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-website-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.website == 'true'
+    uses: ./.github/workflows/website-checks.yml
+
+  experience-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-experience-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.experience == 'true'
+    uses: ./.github/workflows/experience-checks.yml
+
+  authoring-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-authoring-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.authoring == 'true'
+    uses: ./.github/workflows/authoring-browser-checks.yml
+
+  home-assistant-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-home-assistant-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.home-assistant == 'true'
+    uses: ./.github/workflows/home-assistant-checks.yml
+
+  desktop-logging-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-desktop-logging-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.desktop-logging == 'true'
+    uses: ./.github/workflows/desktop-logging-checks.yml
+
+  os-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-os-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.os == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - name: OS source, installer and update contracts
+        run: make -C os check
+
+  provider-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-provider-checks-${{ strategy.job-index }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.provider == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [reference-provider, example-provider]
+    defaults:
+      run:
+        working-directory: provider/${{ matrix.package }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: provider/${{ matrix.package }}/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+
+  firmware-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-firmware-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.firmware == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      IDF_PATH: ${{ github.workspace }}/.ci-esp-idf
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: actions/checkout@v7
+        with:
+          repository: espressif/esp-idf
+          ref: 8c750b088c7cd857d079c0eeb495da199b359461 # v5.5
+          path: .ci-esp-idf
+          sparse-checkout: |
+            components/json
+            components/esp_rom
+      - name: Prepare the SDK's pinned cJSON source
+        run: git -C "$IDF_PATH" submodule update --init --depth 1 components/json/cJSON
+      - name: Use Clang for the host fixture warning and sanitizer contracts
+        run: |
+          clang-18 --version
+          mkdir -p "$RUNNER_TEMP/firmware-bin"
+          ln -s "$(command -v clang-18)" "$RUNNER_TEMP/firmware-bin/cc"
+          echo "$RUNNER_TEMP/firmware-bin" >> "$GITHUB_PATH"
+      - name: Run every host firmware contract (physical acceptance remains separate)
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+          files = sorted(Path('devices/harness-device/firmware/test').glob('test_*.py'))
+          assert files, 'firmware test inventory is empty'
+          failures = []
+          for path in files:
+              print(path, flush=True)
+              try:
+                  subprocess.run(['python3', str(path)], check=True, timeout=120)
+              except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                  failures.append(str(path))
+          if failures:
+              raise SystemExit('Failed firmware contracts: ' + ', '.join(failures))
+          print(f'Passed all {len(files)} firmware host contracts')
+          PY
+
+  mobile-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-mobile-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.mobile == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - id: toolchain
+        run: |
+          version="$(sed -n "s/^  FLUTTER_VERSION: '\([^']*\)'.*/\1/p" .github/workflows/release-desktop.yml)"
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.toolchain.outputs.version }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+        working-directory: mobile
+      - run: flutter test --no-pub --concurrency 4 --reporter expanded
+        working-directory: mobile
+
+  daemons-checks:
+    concurrency:
+      group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}-daemons-checks
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    needs: plan
+    if: needs.plan.outputs.ready == 'true' && needs.plan.outputs.daemons == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.CLI_NODE_VERSION }}
+      - run: node --test daemons/tools/card.test.mjs
+
+  required:
+    name: ci/required
+    needs: [plan, process-checks, desktop-tests, desktop-test-summary, serial-native, process-images-native,
+            companion-subsystems, cli-contracts, cli-coverage-gates, cli-tests, typecheck-test, tui-test,
+            backend-desk, website-checks, experience-checks, authoring-checks, home-assistant-checks,
+            desktop-logging-checks, os-checks, provider-checks, firmware-checks, mobile-checks, daemons-checks]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+          sparse-checkout: scripts/
+      - name: Require every selected job and complete coverage summaries
+        env:
+          CI_PLAN: ${{ needs.plan.outputs.plan }}
+          CI_NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci-plan.py --verify --output "$RUNNER_TEMP/ci-required.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-required
+          path: ${{ runner.temp }}/ci-required.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
