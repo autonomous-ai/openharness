@@ -77,7 +77,7 @@ class Recovery(unittest.TestCase):
             (self.root / name).mkdir()
         for name in ('usr/lib/sysimage/rpm', 'var/lib/selinux', 'var/lib/alternatives', recovery.DNF_STATE, recovery.DNF_DATA):
             (self.root / name).mkdir(parents=True, exist_ok=True)
-        self.write(self.root, 'usr/lib/os-release', 'ID=fedora\n')
+        self.write(self.root, 'usr/lib/os-release', 'ID=fedora-asahi-remix\n')
         self.write(self.root, 'usr/lib/rpm/macros', '%_usr /usr\n%_dbpath %{_usr}/lib/sysimage/rpm\n')
         self.write(self.root, 'usr/share/harness-os/runtime.json', '{"system_profile":"fedora"}')
         self.write(self.root, 'etc/selinux/semanage.conf', 'module-store = direct\n')
@@ -358,6 +358,18 @@ class Recovery(unittest.TestCase):
     def test_custom_package_state_layout_is_not_partially_restored(self):
         (self.root / 'etc/alternatives.admindir').write_text('/var/other')
         with self.assertRaisesRegex(recovery.Error, 'Custom RPM or alternatives'):
+            self.engine.checkpoint(self.name)
+        self.assertFalse(self.writes)
+
+    def test_profile_requires_the_installed_asahi_identity_and_fedora_session(self):
+        for identity in ('fedora', 'arch', 'ubuntu', 'fedora-asahi-remix-other'):
+            self.write(self.root, 'usr/lib/os-release', 'ID=' + identity + '\n')
+            with self.subTest(identity=identity), self.assertRaisesRegex(recovery.Error, 'Fedora Asahi Remix'):
+                self.engine.checkpoint(self.name)
+            self.assertFalse(self.writes)
+        self.write(self.root, 'usr/lib/os-release', 'ID=fedora-asahi-remix\n')
+        self.write(self.root, 'usr/share/harness-os/runtime.json', '{"system_profile":"arch"}')
+        with self.assertRaisesRegex(recovery.Error, 'Fedora Asahi Remix'):
             self.engine.checkpoint(self.name)
         self.assertFalse(self.writes)
 

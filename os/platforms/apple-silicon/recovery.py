@@ -225,8 +225,8 @@ def profile(root):
     """Check the narrow layout without executing the installation's programs."""
     release = text_file(root, 'usr/lib/os-release')
     runtime = json.loads(text_file(root, 'usr/share/harness-os/runtime.json'))
-    if not re.search(r'^ID=[\"\']?fedora[\"\']?$', release, re.M) or runtime.get('system_profile') != 'fedora':
-        raise Error('This checkpoint requires the Fedora session installation.')
+    if not re.search(r'^ID=[\"\']?fedora-asahi-remix[\"\']?$', release, re.M) or runtime.get('system_profile') != 'fedora':
+        raise Error('This checkpoint requires the Fedora Asahi Remix session installation.')
     if (not checked(root, 'usr/lib/sysimage/rpm').is_dir() or
             not (root / 'var/lib/rpm').is_symlink() or
             os.readlink(root / 'var/lib/rpm') not in ('../../usr/lib/sysimage/rpm', '/usr/lib/sysimage/rpm') or

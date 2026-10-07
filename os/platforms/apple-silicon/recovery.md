@@ -58,7 +58,8 @@ either its kernel has no active SELinux policy, or the process has CAP_MAC_ADMIN
 and its policy permits `mac_admin`. The engine refuses policy-translated label
 reads. It does not disable SELinux or load a different policy.
 
-The checkpoint profile requires Fedora, the packaged Fedora session marker,
+The checkpoint profile requires `ID=fedora-asahi-remix`, matching the private
+installer's first-boot contract, and the packaged `system_profile=fedora` session marker,
 RPMDB in `/usr/lib/sysimage/rpm` with the standard `/var/lib/rpm` symlink, the
 default `/var/lib/alternatives`, and the local SELinux store in `/var/lib/selinux`.
 The explicit RPM `_dbpath` and `_usr` definitions are checked conservatively: the database definition must
