@@ -85,7 +85,7 @@ void main() {
   }
 
   Future<void> scan(WidgetTester tester, String link) async {
-    await tester.tap(find.text('Scan to connect ›'));
+    await tester.tap(find.byKey(const ValueKey('set-up-scan')));
     await tester.pumpAndSettle();
     tester
         .widget<ScanToConnectPage>(find.byType(ScanToConnectPage))
@@ -103,12 +103,16 @@ void main() {
   ) async {
     await pump(tester);
     expect(find.byType(SetUpComputerPage), findsOneWidget);
-    expect(find.text('Apple Silicon'), findsOneWidget);
     expect(find.textContaining('Waiting for your computer'), findsOneWidget);
     expect(find.text('Try the sample ›'), findsOneWidget);
     // The old page's second way of saying all this is gone.
     expect(find.text('Email me the setup link'), findsNothing);
     expect(find.textContaining('remote-password'), findsNothing);
+    // The download menu is step 1's sheet.
+    expect(find.text('Apple Silicon · M1 or later'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('set-up-send')));
+    await tester.pumpAndSettle();
+    expect(find.text('Apple Silicon · M1 or later'), findsOneWidget);
     await unmount(tester);
   });
 

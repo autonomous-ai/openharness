@@ -194,7 +194,11 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
     final menu = _menu;
     if (menu != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (menu.isActive) menu.navigator?.removeRoute(menu);
+        // The whole app going in the same frame takes the navigator, and the menu, with it.
+        final navigator = menu.navigator;
+        if (navigator != null && navigator.mounted && menu.isActive) {
+          navigator.removeRoute(menu);
+        }
       });
     }
     super.dispose();
