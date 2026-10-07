@@ -77,13 +77,15 @@ describe('device key routes', () => {
     expect(r.json().error.code).toBe('WRONG_CHANNEL')
   })
 
-  it('says when each key was last seen, and nothing when that cannot be read', async () => {
-    m.seen.mockResolvedValue({ k: 5 })
+  it('says when each key was last seen, and fails — never "nothing seen" — when that cannot be read', async () => {
+    m.seen.mockResolvedValue({ seen: { k: 5 }, since: 3 })
     const r = await app.inject({ method: 'GET', url: '/api/device-keys/seen', headers: auth })
-    expect(r.json().data).toEqual({ seen: { k: 5 } })
+    expect(r.json().data).toEqual({ seen: { k: 5 }, since: 3 })
     expect(m.seen).toHaveBeenCalledWith('user-1')
     m.seen.mockRejectedValue(new Error('redis down'))
-    expect((await app.inject({ method: 'GET', url: '/api/device-keys/seen', headers: auth })).json().data).toEqual({ seen: {} })
+    const down = await app.inject({ method: 'GET', url: '/api/device-keys/seen', headers: auth })
+    expect(down.statusCode).toBe(503)
+    expect(down.json().error.code).toBe('SEEN_UNAVAILABLE')
   })
 
   it('limits how often one account appends', async () => {
