@@ -341,15 +341,16 @@ void main() {
   test('signing in by hand as another account starts that account\'s list over', () async {
     // Account A: this browser joined its log.
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     final me = b64e((await keys.identity()).pub);
     expect(backend.state.active[me]?.kind, 'viewer');
 
     // Signed in as B in the same browser, by hand: B's log is another account's, and this sign-in is
-    // new — a new list, not a backend that lies. The profile is not waited for.
+    // new — a new list, not a backend that lies. A fresh sign-in's profile names the same account
+    // as its signed log; restored-session profile mismatches are exercised below.
     final other = _Backend('acct-2');
     await other.add(phone, 'viewer', '', 'Phone');
-    final b = await openAs(other, 'user-b', byHand: true);
+    final b = await openAs(other, other.acct, byHand: true);
     final listing = await logOf(b).list();
     expect(
       listing.frozen,
@@ -366,7 +367,7 @@ void main() {
 
   test('a restored session whose /me id differs does not reset the list', () async {
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     await backend.add(phone, 'viewer', '', 'Phone');
     final first = await openAs(backend, 'user-a');
     expect(first.newDevices.map((d) => d.label), ['Phone']);
@@ -956,7 +957,7 @@ void main() {
   test('the sign-in is known to the log before the boot reads anything else (a pane restore reads it first)', () async {
     // Account A: this browser joined its log by hand.
     await backend.add(box2, 'machine', 'b' * 32, 'box2');
-    await openAs(backend, 'user-a', byHand: true);
+    await openAs(backend, backend.acct, byHand: true);
     final me = b64e((await keys.identity()).pub);
     // A's sign-in is long past: only a sign-in made just now may start another account's list.
     const old = 'a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0@1000';

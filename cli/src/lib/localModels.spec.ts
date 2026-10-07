@@ -2011,6 +2011,8 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
   })
 
   it('offers none it cannot size, but keeps listing the ones already here, at the quant that is here', async () => {
+    // The sparse weight fixture needs a declared disk budget, independent of the developer's disk.
+    vi.mocked(statfs).mockResolvedValue({ bavail: 100 * GiB, bsize: 1 } as Awaited<ReturnType<typeof statfs>>)
     await writeFile(join(home, 'models', 'Kev-9B-Q8_0.gguf'), '')
     await (await import('node:fs/promises')).truncate(join(home, 'models', 'Kev-9B-Q8_0.gguf'), 9_529_735_648)
     await writeFile(join(home, 'models', 'Clef-Q4_K_M.gguf.part'), 'half')
@@ -2040,6 +2042,7 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
   })
 
   it('updates an engine new enough for Jev models but not for Clef, whose architecture came later', async () => {
+    vi.mocked(statfs).mockResolvedValue({ bavail: 100 * GiB, bsize: 1 } as Awaited<ReturnType<typeof statfs>>)
     await engine('0.5.0-dev (build 11365, commit 1a2b3c4d5)')
     const models = jevService({}, {}, { ...card10, usable_bytes: 48 * GiB })
     await models.act('home', LAYA, 'start'); await models.settled()
@@ -2330,6 +2333,19 @@ describe('Jev models: Get brings Grid\'s llama.cpp up to a build that serves the
     const tev1: AppModel = { id: TEV, name: 'tev1', app: 'ollama', engine: 'ollama', ref: 'tev1:latest', binary: '/usr/local/bin/ollama',
       sizeBytes: 4_480_000_000, quant: 'MXFP8', kind: 'decision' }
     const tev = async (models: LocalModels) => (await models.list('home', true)).models.filter(m => m.id === TEV)
+
+    it('keeps a decision engine stoppable after its app no longer lists the model', async () => {
+      let scanned = [tev1]
+      const models = jevService({}, { appModels: async () => scanned })
+      await models.act('home', TEV, 'start'); await models.settled()
+      scanned = []
+
+      expect(await tev(models)).toEqual([expect.objectContaining({ name: 'tev1', kind: 'decision',
+        app: 'Ollama', state: 'running', canStart: false, canStop: true })])
+      await models.act('home', TEV, 'stop'); await models.settled()
+      expect(ops.stop).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ modelId: TEV, grid: 'home' }))
+      expect(await tev(models)).toEqual([])
+    })
 
     it('is listed once, as a decision model in its own app, and started there beside a chat model', async () => {
       const models = jevService({}, { appModels: async () => [gemma, tev1] })
