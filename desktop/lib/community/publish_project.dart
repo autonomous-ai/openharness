@@ -19,8 +19,12 @@ Future<Map<String, dynamic>> buildPublicationDraft({
   Map<String, dynamic>? tail,
 }) async {
   final marker = hubHarnessMarkers[harnessId];
-  final selection = await selectProjectFiles(folder, marker: marker);
   final previous = await _openHarness(folder);
+  final selection = await selectProjectFiles(
+    folder,
+    marker: marker,
+    viewer: previous['viewerPath'] is String ? previous['viewerPath'] : null,
+  );
   final conversation = publicationTurns(tail);
   final hasMarker = selection.files.any((file) => file['path'] == marker);
   final agent = hubEngines[engine];

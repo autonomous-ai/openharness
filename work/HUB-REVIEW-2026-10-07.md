@@ -189,6 +189,14 @@ Steps 1–5 are done on `fix/hub-review`:
 - **S2:** `Detail`, `Feed` and the publish page are split into hooks (`useHarnessDetail`, `useFeed`,
   `usePublishDraft`, `useSignedIn`) and small components.
 
+- **The output stays required.** The Hub (#890) publishes what a session made: the output at 70%
+  beside its conversation, forking into the same viewer and agent workspace. A code review that made
+  nothing to look at was given an app's `index.html` that showed blank and could not be removed.
+  Instead of making the output optional (tried, then reverted), the desktop and the folder picker
+  now choose only `preview.html`, or the page a fork was published with. Without one, the desktop
+  asks for a preview.html that runs on its own (for a review, a page presenting it). The review page
+  asks for one too, and names files or addresses an output loads that the sandbox cannot reach.
+
 Checks: backend typecheck and the full suite (1153 tests), website `tsc`, the full suite (103) and
 lint (no new findings), desktop `flutter analyze` and the community, fork and share tests (89), and
 the CI planner tests. `next build` was not run locally.

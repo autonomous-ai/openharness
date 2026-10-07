@@ -5,6 +5,7 @@ import { communityRequest } from '@/lib/community/client';
 import { missingMarker } from '@/lib/community/contract';
 import { validateDraft } from '@/lib/community/drafts';
 import { previewDocument } from '@/lib/community/preview';
+import { outsideResources } from '@/lib/community/outputCheck';
 import { findSecrets } from '@/lib/community/secrets';
 import { Header, SignIn } from '../components/Header';
 import { useSignedIn } from '../components/useSignedIn';
@@ -27,7 +28,8 @@ export default function PublishPage() {
   // The acknowledgement is for these findings: a new one needs checking again.
   const findingsKey = JSON.stringify(findings), secretsChecked = !findings.length || checkedSecrets === findingsKey;
   const marker = missingMarker(draft.harnessId, draft.files.map(file => file.path));
-  const html = draft.files.find(file => file.path === draft.viewerPath)?.content;
+  const html = draft.files.find(file => file.path === draft.viewerPath && !file.encoding)?.content;
+  const outside = useMemo(() => html ? outsideResources(html) : [], [html]);
   const ready = !!signedIn && !!html && confirmed && !marker && secretsChecked;
 
   /** A changed project has to be reviewed again before it is published. */
@@ -75,7 +77,7 @@ export default function PublishPage() {
       {draft.contextNote && <p className={styles.notice}>{draft.contextNote}</p>}
       {html && <section className={styles.publishPreview}><h2>Review your output</h2><iframe title="Publication preview" sandbox="allow-scripts" referrerPolicy="no-referrer" srcDoc={previewDocument(html)} /></section>}
       {draft.forkedFrom && <p className={styles.notice}>The original harness will stay credited on your publication.</p>}
-      <PublishChecks findings={findings} acknowledged={secretsChecked} onAcknowledge={value => setCheckedSecrets(value ? findingsKey : '')} missingMarker={marker} />
+      <PublishChecks noOutput={!!draft.files.length && html === undefined} outside={outside} missingMarker={marker} findings={findings} acknowledged={secretsChecked} onAcknowledge={value => setCheckedSecrets(value ? findingsKey : '')} />
       <label className={styles.check}><input required type="checkbox" name="confirmation" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} /><span>I have permission to publish these files and this conversation under the MIT license. I have reviewed them for private information.</span></label>
       {(error || saveError) && <p className={styles.error} role="alert">{error || saveError}</p>}
       <button className={styles.primary} disabled={busy || !ready}>{busy ? 'Publishing…' : 'Publish harness'}</button>

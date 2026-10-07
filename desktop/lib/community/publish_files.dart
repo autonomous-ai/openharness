@@ -51,26 +51,31 @@ class _Candidate {
 ///
 /// The output is chosen first and the harness's own source second; the rest are added shallowest
 /// first while they fit. A file that does not fit is named, never a reason to publish nothing.
+///
+/// The output is [viewer] (the page a fork was published with) or else `preview.html`. Any other
+/// page is never assumed: an app's `index.html` usually needs files the Hub's sandbox cannot load.
 Future<ProjectSelection> selectProjectFiles(
   String folder, {
   String? marker,
+  String? viewer,
 }) async {
   final root = Directory(await Directory(folder).resolveSymbolicLinks());
   final (candidates, scannedAll) = await _candidates(root);
-  final viewer = _viewer(candidates);
-  if (viewer == null) {
+  final output = _output(candidates, viewer);
+  if (output == null) {
     throw const FormatException(
-      'Ask your agent to create a self-contained preview.html, then publish again.',
+      'The Hub shows what a session made. Ask your agent for a preview.html that runs on its own '
+      '(for a review, a page presenting it), then publish again.',
     );
   }
-  final rest = candidates.where((c) => c != viewer && c.path != marker).toList()
+  final rest = candidates.where((c) => c != output && c.path != marker).toList()
     ..sort(
       (a, b) =>
           a.depth != b.depth ? a.depth - b.depth : a.path.compareTo(b.path),
     );
   final ordered = [
-    viewer,
-    ...candidates.where((c) => c.path == marker && c != viewer),
+    output,
+    ...candidates.where((c) => c.path == marker && c != output),
     ...rest,
   ];
   final files = <Map<String, String>>[], leftOut = <String>[];
@@ -85,9 +90,9 @@ Future<ProjectSelection> selectProjectFiles(
         content.length <= hubMaxFileChars &&
         size + weight <= hubMaxProjectChars;
     if (!fits) {
-      if (candidate == viewer) {
+      if (candidate == output) {
         throw FormatException(
-          '${viewer.path} is too large to publish. Keep the preview under 3 MB.',
+          '${output.path} is too large to publish. Keep the preview under 3 MB.',
         );
       }
       leftOut.add(candidate.path);
@@ -103,21 +108,21 @@ Future<ProjectSelection> selectProjectFiles(
   files.sort((a, b) => a['path']!.compareTo(b['path']!));
   return ProjectSelection(
     files: files,
-    viewerPath: viewer.path,
+    viewerPath: output.path,
     leftOut: leftOut..sort(),
     scannedAll: scannedAll,
   );
 }
 
-/// preview.html, then index.html, then the first page in the folder.
-_Candidate? _viewer(List<_Candidate> candidates) {
-  final pages = candidates.where((c) => c.path.endsWith('.html')).toList()
-    ..sort((a, b) => a.path.compareTo(b.path));
-  for (final name in ['preview.html', 'index.html']) {
-    final page = pages.where((c) => c.path == name).firstOrNull;
+/// The page readers see: the one this project was published with, or else its preview.html.
+_Candidate? _output(List<_Candidate> candidates, String? viewer) {
+  for (final name in [?viewer, 'preview.html']) {
+    final page = candidates
+        .where((c) => c.path == name && c.path.endsWith('.html'))
+        .firstOrNull;
     if (page != null) return page;
   }
-  return pages.firstOrNull;
+  return null;
 }
 
 /// The file as the Hub stores it, or null when a text file is not UTF-8 or too large to read.

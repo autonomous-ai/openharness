@@ -38,9 +38,11 @@ export async function readProjectFolder(selected: Iterable<File>, preferredViewe
     if (size > communityLimits.projectBytes) throw new Error(`Keep the project under 6 MB as sent. ${sentNote}`);
     files.push({ path, content, ...(encoded ? { encoding: 'base64' as const } : {}) });
   }
-  const viewer = [preferredViewer, 'preview.html'].map(name => files.find(f => f.path === name)).find(Boolean) || files.find(f => f.path.endsWith('.html'));
-  if (!viewer) throw new Error('Include a self-contained preview.html or index.html.');
-  return { files, viewerPath: viewer.path, origin };
+  // The page already chosen, or else preview.html. Any other page is offered, never assumed: an app's
+  // index.html usually needs files the Hub's sandbox cannot load.
+  const viewer = [preferredViewer, 'preview.html'].map(name => files.find(f => f.path === name && f.path.endsWith('.html') && !f.encoding)).find(Boolean);
+  if (!files.length) throw new Error('This folder has no portable project files.');
+  return { files, viewerPath: viewer?.path ?? preferredViewer, origin };
 }
 
 /** A cover as the data URL the Hub stores, or an error naming what it accepts. */

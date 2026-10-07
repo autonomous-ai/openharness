@@ -52,4 +52,21 @@ describe('explicit publication', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     expect(screen.getByRole('button', { name: 'Publish harness' })).toBeEnabled();
   });
+  it('never assumes an app page is the output, and says what a chosen page cannot load', async () => {
+    render(<PublishPage />); await act(async () => {});
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Code review' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'What changed and why' } });
+    fireEvent.change(screen.getByLabelText('Message 1'), { target: { value: 'Review this.' } });
+    const folder = [['index.html', '<script src="app.js"></script>'], ['app.js', 'go()']].map(([path, text]) => Object.assign(new File([text], path), { webkitRelativePath: `project/${path}`, text: async () => text }));
+    fireEvent.change(screen.getByLabelText('Choose project folder'), { target: { files: folder } });
+    await screen.findByText(/The Hub shows what a session made/);
+    expect(screen.queryByTitle('Publication preview')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('combobox', { name: /^Output preview/ }), { target: { value: 'index.html' } });
+    expect(await screen.findByText(/Your output loads app.js/)).toBeInTheDocument();
+    expect(screen.queryByText(/The Hub shows what a session made/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeEnabled();
+  });
 });

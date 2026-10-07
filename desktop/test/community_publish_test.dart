@@ -65,25 +65,55 @@ void main() {
   });
   test('never follows source symlinks outside the selected project', () async {
     final secret = await file('.private/key.json', 'private');
-    await file('index.html', '<p>Public</p>');
+    await file('preview.html', '<p>Public</p>');
     await Link('${root.path}/leak.json').create(secret.path);
     final draft = await buildPublicationDraft(
       folder: root.path,
       title: 'Safe',
       engine: 'codex',
     );
-    expect((draft['files'] as List).map((f) => f['path']), ['index.html']);
+    expect((draft['files'] as List).map((f) => f['path']), ['preview.html']);
   }, skip: Platform.isWindows);
-  test('refuses only a missing or oversized viewer', () async {
-    await file('code.py', 'print(1)');
-    Future<Map<String, dynamic>> build() => buildPublicationDraft(
+  test(
+    'asks for a preview.html, never assuming an app page is the output',
+    () async {
+      await file('code.py', 'print(1)');
+      await file('index.html', '<script src="app.js"></script>');
+      Future<Map<String, dynamic>> build() => buildPublicationDraft(
+        folder: root.path,
+        title: 'Test',
+        engine: 'codex',
+      );
+      await expectLater(
+        build(),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('preview.html'),
+          ),
+        ),
+      );
+      await file('preview.html', 'x' * 3000001);
+      await expectLater(build(), throwsFormatException);
+    },
+  );
+  test('a fork keeps the page it was published with', () async {
+    await file('index.html', '<h1>Moonlight</h1>');
+    await file(
+      'OPEN-HARNESS.json',
+      jsonEncode({
+        'forkedFrom': 'starter-moonlight',
+        'viewerPath': 'index.html',
+      }),
+    );
+    final draft = await buildPublicationDraft(
       folder: root.path,
-      title: 'Test',
+      title: 'My moonlight',
       engine: 'codex',
     );
-    await expectLater(build(), throwsFormatException);
-    await file('index.html', 'x' * 3000001);
-    await expectLater(build(), throwsFormatException);
+    expect(draft['viewerPath'], 'index.html');
+    expect(draft['forkedFrom'], 'starter-moonlight');
   });
   test('leaves out what does not fit and names it, keeping the output and the harness source', () async {
     await file('preview.html', '<p>Ready</p>');
@@ -114,7 +144,7 @@ void main() {
     expect(draft['contextNote'], contains('and 11 more'));
   });
   test('publishes without a harness whose source is missing, and asks for an unknown agent', () async {
-    await file('index.html', '<p>Ready</p>');
+    await file('preview.html', '<p>Ready</p>');
     final draft = await buildPublicationDraft(
       folder: root.path,
       title: 'Lamp',
