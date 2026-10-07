@@ -100,23 +100,41 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
     _scanFailed = failed;
   });
 
-  /// The code the new computer's Add Phone shows: the phone pairs with it there and then. The
-  /// computer is asked for first — it may have joined the account a moment ago, too recently for
-  /// the list the phone holds.
-  ///
-  /// ⚠️ **A code is never dropped because this page went.** At home this page is there only while
-  /// the account has no computer, so the computer this code is for turning up — in the 5-second
-  /// watch while the camera was open, or in the refresh below — takes the page away, and the code
-  /// went with it: the person had just scanned, and was shown "Scan its code" again. Gone, the page
-  /// hands the code to the home screen instead ([AppNotifier.holdPendingPairing]), which pairs with
-  /// it the way it pairs a code scanned at sign-in.
+  /// A scan under way, from the camera to its answer: a second press of "Scan to connect" while
+  /// one is still being looked up or paired is not a second pairing by the same one-time code.
+  bool _scanning = false;
+
+  /// How long the account gets to say whether it has the scanned computer before the page says it
+  /// is still looking — and goes on looking ([_lookUp]).
+  static const _lookUpPatience = Duration(seconds: 5);
+
   Future<void> _scanToPair() async {
+    if (_scanning) return;
+    _scanning = true;
+    try {
+      await _scanAndPair();
+    } finally {
+      _scanning = false;
+    }
+  }
+
+  /// The code the new computer's Add Phone shows: the phone pairs with it. The computer is asked
+  /// for first — it may have joined the account a moment ago, too recently for the list the phone
+  /// holds.
+  ///
+  /// ⚠️ **At home, the home screen pairs, not this page.** Here this page is up only while the
+  /// account has no computer, so the computer the code is for turning up — in the 5-second watch
+  /// while the camera was open, or in the look-up below, which is what most often brings it —
+  /// takes the page away. A page still pairing then lost its answer: a code that failed showed
+  /// nothing, and "Scan its code" on the screen that replaced it started a second pairing while the
+  /// first ran (PAIRING_BUSY). So the code goes to the home screen ([AppNotifier.holdPendingPairing])
+  /// the moment the computer is known, and its pairing page pairs by it and says how it went —
+  /// the way a code scanned at sign-in is paired. Pushed from Computers, which nothing takes away,
+  /// the page pairs itself, and goes back on success. Gone either way, it hands the code over.
+  Future<void> _scanAndPair() async {
     // Read before the camera: once this page is gone, its widget is not to be reached through.
     final notifier = widget.notifier;
-    void holdIfGone(String machineId, String pairCode) {
-      if (!mounted) notifier.holdPendingPairing(machineId, pairCode);
-    }
-
+    final atHome = widget.onBack == null;
     final code = await scanForCode(
       context,
       fallbackLabel: 'Not now',
@@ -127,13 +145,8 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
     );
     if (code == null) return;
     final machineId = code.machineId, pairCode = code.pairCode;
-    if (!mounted) {
-      if (machineId != null && pairCode != null) {
-        holdIfGone(machineId, pairCode);
-      }
-      return;
-    }
     if (machineId == null || pairCode == null) {
+      if (!mounted) return;
       _say(
         'That isn’t an Add Phone code. Open Add Phone… on the computer and '
         'scan its code.',
@@ -141,44 +154,32 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
       );
       return;
     }
-    _say('Pairing…');
-    if (!widget.notifier.machineStates.containsKey(machineId)) {
-      // Bounded: a slow network is a reason to say so, not to leave "Pairing…" up for good.
-      try {
-        await widget.notifier.refreshMachines().timeout(
-          const Duration(seconds: 5),
-          onTimeout: () {},
-        );
-      } catch (_) {
-        // ⚠️ A list that could not be read says nothing about whether the computer is on the
-        // account, so it is not "isn't on your account" — and thrown on from here, it left
-        // "Pairing…" up for good.
-        if (!mounted) {
-          holdIfGone(machineId, pairCode);
-          return;
-        }
-        _say(
-          "Couldn't reach your account. Check your connection and scan again.",
-          failed: true,
-        );
-        return;
-      }
-    }
-    // The refresh is what most often brings the computer in — and with it, at home, the page that
-    // replaces this one.
-    if (!mounted) {
-      holdIfGone(machineId, pairCode);
-      return;
-    }
-    if (!widget.notifier.machineStates.containsKey(machineId)) {
+    if (mounted) _say('Pairing…');
+    final lookup = await _lookUp(notifier, machineId);
+    if (lookup == _Lookup.missing) {
+      // The account answered, and the computer is not on it: no code to hold for it.
+      if (!mounted) return;
       _say(
         "That computer isn't on your account. Sign in to Harness on it "
-        'with ${widget.notifier.currentUser?.email ?? 'this account'}.',
+        'with ${notifier.currentUser?.email ?? 'this account'}.',
         failed: true,
       );
       return;
     }
-    final error = await widget.notifier.connectWithCode(machineId, pairCode);
+    if (lookup == _Lookup.unreachable && mounted) {
+      _say(
+        "Couldn't reach your account. Check your connection and scan again.",
+        failed: true,
+      );
+      return;
+    }
+    // Known — or, with this page gone, not known either way: a list that answers without the
+    // computer lets a held code go by itself (`AppNotifier._refreshMachines`).
+    if (atHome || !mounted) {
+      notifier.holdPendingPairing(machineId, pairCode);
+      return;
+    }
+    final error = await notifier.connectWithCode(machineId, pairCode);
     if (!mounted) return;
     if (error == null) {
       HapticFeedback.mediumImpact();
@@ -190,6 +191,37 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
       HapticFeedback.heavyImpact();
       _say(error, failed: true);
     }
+  }
+
+  /// Whether the account has [machineId], asked of the account when the list held here does not
+  /// have it yet.
+  ///
+  /// ⚠️ **Slow is not "no".** The look used to be cut at 5 seconds and the list read as it stood:
+  /// a slow `/api/machines` came back as "That computer isn't on your account" — right under "Not
+  /// you? Sign out", about a computer that was on it — and the answer landing a moment later took
+  /// the page away with the scanned code. Past [_lookUpPatience] the page says it is still looking,
+  /// and waits for the account's actual answer.
+  Future<_Lookup> _lookUp(AppNotifier notifier, String machineId) async {
+    if (notifier.machineStates.containsKey(machineId)) return _Lookup.found;
+    final refresh = notifier.refreshMachines();
+    try {
+      final answered = await refresh
+          .then((_) => true)
+          .timeout(_lookUpPatience, onTimeout: () => false);
+      if (!answered) {
+        if (mounted) _say('Still looking for that computer on your account…');
+        await refresh;
+      }
+    } catch (_) {
+      // A list that could not be read says nothing about whether the computer is on the account —
+      // unless it already has it.
+      return notifier.machineStates.containsKey(machineId)
+          ? _Lookup.found
+          : _Lookup.unreachable;
+    }
+    return notifier.machineStates.containsKey(machineId)
+        ? _Lookup.found
+        : _Lookup.missing;
   }
 
   @override
@@ -319,4 +351,16 @@ class _WatchingState extends State<_Watching> {
       ),
     );
   }
+}
+
+/// What the account said of a scanned computer ([_ConnectComputerPageState._lookUp]).
+enum _Lookup {
+  /// On the account.
+  found,
+
+  /// The account answered without it.
+  missing,
+
+  /// The account could not be asked.
+  unreachable,
 }

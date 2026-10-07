@@ -17,6 +17,8 @@ import 'daemon_chip.dart';
 import 'desk_groups.dart';
 import 'link_page.dart';
 import 'machines_tab.dart';
+import 'phone_navigation.dart' show phoneRoute;
+import 'settings_page.dart' show PhoneSettingsButton;
 import 'tty_controls.dart';
 import 'tty.dart';
 import 'welcome/connect_computer.dart';
@@ -145,16 +147,54 @@ class _AgentHomeState extends State<AgentHome> {
   bool _gaveUpWaiting = false;
   Timer? _loadingDeadline;
 
-  /// The launch's wait is over — the screen has something other than a loading message to show —
-  /// so [_loadingTimeout] has nothing left to guard, and must not fire into a screen that has
-  /// stopped waiting: it would hold back every loading message after it.
+  /// How long the loading screen waits on its own before it says so and offers a way off it —
+  /// Settings, and the computers list ([_loadingSlow]). Past a slow-but-fine launch, short of
+  /// [_loadingTimeout].
+  static const _slowAfter = Duration(seconds: 15);
+  Timer? _slowTimer;
+
+  /// The loading screen has been up for [_slowAfter] without a break.
+  bool _loadingSlow = false;
+
+  void _giveUpWaiting() {
+    if (!mounted || _gaveUpWaiting) return;
+    setState(() => _gaveUpWaiting = true);
+  }
+
+  /// The loading screen is what [build] draws: its [_loadingTimeout] and [_slowAfter] run, each
+  /// from the moment this wait began.
   ///
-  /// Called from [build], on each way out of the loading screen; only the first does anything.
+  /// ⚠️ **Every wait, not the launch's alone.** The deadline used to be armed once, in
+  /// [initState], and ended for good by the first screen that was not a loading one — which on a
+  /// first sign-in is "Waiting for your computer…". The computer turning up then brought
+  /// "Connecting to your computer…" back with no deadline at all, over a machine whose agent list
+  /// can stall (see [_loadingTimeout]): a spinner with no end and nothing on screen to leave it by.
+  ///
+  /// Called from [build]: it starts timers and never sets state itself.
+  void _holdLaunchWait() {
+    if (!_gaveUpWaiting) {
+      _loadingDeadline ??= Timer(_loadingTimeout, _giveUpWaiting);
+    }
+    if (!_loadingSlow) {
+      _slowTimer ??= Timer(_slowAfter, () {
+        if (!mounted) return;
+        setState(() => _loadingSlow = true);
+      });
+    }
+  }
+
+  /// The wait is over — the screen has something other than a loading message to show — so
+  /// [_loadingTimeout] has nothing left to guard, and must not fire into a screen that has stopped
+  /// waiting: it would hold back every loading message after it. A later wait starts its own
+  /// ([_holdLaunchWait]).
+  ///
+  /// Called from [build], on each way out of the loading screen.
   void _endLaunchWait() {
-    final deadline = _loadingDeadline;
-    if (deadline == null) return;
+    _loadingDeadline?.cancel();
     _loadingDeadline = null;
-    deadline.cancel();
+    _slowTimer?.cancel();
+    _slowTimer = null;
+    _loadingSlow = false;
   }
 
   @override
@@ -166,10 +206,7 @@ class _AgentHomeState extends State<AgentHome> {
     widget.openMachineId?.addListener(_onLinkedMachineChanged);
     _requestedAgent = widget.openAgent?.value;
     widget.openAgent?.addListener(_onAgentRequested);
-    _loadingDeadline = Timer(_loadingTimeout, () {
-      if (!mounted || _gaveUpWaiting) return;
-      setState(() => _gaveUpWaiting = true);
-    });
+    _loadingDeadline = Timer(_loadingTimeout, _giveUpWaiting);
     _readLast();
   }
 
@@ -178,6 +215,7 @@ class _AgentHomeState extends State<AgentHome> {
     widget.openMachineId?.removeListener(_onLinkedMachineChanged);
     widget.openAgent?.removeListener(_onAgentRequested);
     _loadingDeadline?.cancel();
+    _slowTimer?.cancel();
     _restoreDeadline?.cancel();
     _terminalWait?.cancel();
     super.dispose();
@@ -284,6 +322,17 @@ class _AgentHomeState extends State<AgentHome> {
   Timer? _restoreDeadline;
   bool _restoreGaveUp = false;
 
+  /// The account's machine list could not be read: not answered in this sign-in, not being asked
+  /// for, and a failure on record ([AppNotifier.lastError], which every sign-in clears). Not an
+  /// empty account — nothing says what the account has until a Try again answers.
+  bool get _machinesUnreadable {
+    final notifier = widget.notifier;
+    return notifier.machines.isEmpty &&
+        !notifier.machinesLoading &&
+        !notifier.machinesAnswered &&
+        notifier.lastError != null;
+  }
+
   /// Whether [machineId] is on its way — connecting, or connected with its agent list still owed —
   /// rather than answered, offline, or wanting a password.
   ///
@@ -304,8 +353,13 @@ class _AgentHomeState extends State<AgentHome> {
       // removed, or one of another account's (it is never cleared). Read as "not answered yet", it
       // held an account with no computer on "Connecting to your computer…" for the whole
       // [_restoreTimeout] before its set-up page came up.
+      //
+      // Nor while a list that FAILED waits on a Try again: nothing is on its way until then, and
+      // the wait held "Connecting to your computer…" over the error for the whole timeout.
       return notifier.machinesLoading ||
-          (notifier.machines.isEmpty && !notifier.machinesAnswered);
+          (notifier.machines.isEmpty &&
+              !notifier.machinesAnswered &&
+              !_machinesUnreadable);
     }
     return switch (phoneMachineStatusOf(machine)) {
       PhoneMachineStatus.needsPassword => false,
@@ -710,7 +764,11 @@ class _AgentHomeState extends State<AgentHome> {
       // the QR's code — no password. See `welcome/connect_code.dart`.
       if (widget.notifier.pendingPairing case final pending?) {
         final machine = widget.notifier.machineStates[pending.machineId];
-        if (machine != null && machine.needsLink) {
+        // ⚠️ Kept up once its pairing has begun ([AppNotifier.pendingPairingTried]), not only while
+        // the machine reads locked: a redial that unlocks it for a moment took the page down
+        // mid-pairing, and built it again to spend the one-time code a second time.
+        if (machine != null &&
+            (machine.needsLink || widget.notifier.pendingPairingTried)) {
           _endLaunchWait();
           return PairingWithCode(
             key: ValueKey('pairing-${pending.machineId}'),
@@ -739,7 +797,14 @@ class _AgentHomeState extends State<AgentHome> {
         // two are built to read as one sequence.
         final loading = _loadingMessage() ?? _restoreMessage();
         _traceLoading(loading);
-        if (loading != null) return _AgentHomeLoading(message: loading);
+        if (loading != null) {
+          _holdLaunchWait();
+          return _AgentHomeLoading(
+            message: loading,
+            notifier: widget.notifier,
+            slow: _loadingSlow,
+          );
+        }
         _endLaunchWait();
         // ⚠️ **No machine is open → this is a MACHINE problem, so the machine screen is what the
         // person gets.** An "Agents" header over "No machines are open yet" named the thing that is
@@ -755,6 +820,15 @@ class _AgentHomeState extends State<AgentHome> {
           // but locked or asleep: the machines list, with its password form.
           if (widget.notifier.machines.isEmpty &&
               !widget.notifier.machinesLoading) {
+            // ⚠️ **A list that could not be read is not an empty account.** A first fetch that
+            // failed leaves the list empty and not loading, exactly as an account with no computer
+            // does, and this drew "Get Harness for your computer" — with "Not you? Sign out" — for
+            // somebody who has computers, over a reason ("Could not load machines…") said nowhere.
+            // The machines screen says it, with its Try again. A list neither answered nor failed
+            // still gets the set-up page, whose watch asks again every few seconds.
+            if (_machinesUnreadable) {
+              return MachinesTab(notifier: widget.notifier);
+            }
             return ConnectComputerPage(
               notifier: widget.notifier,
               onTrySample: openSampleMode,
@@ -1088,11 +1162,26 @@ class _AgentHomeState extends State<AgentHome> {
 /// screen is one centred line saying what is happening, which is also what [_Attaching] in
 /// `terminal_page.dart` looks like — same spinner, same size, same type — so the two read as one
 /// sequence rather than two unrelated waits.
+///
+/// ⚠️ **Until the wait is [slow].** Then it says so, and offers the two ways off it: the computers,
+/// with what each one needs, and Settings — Sign out among it — at the top right, where every
+/// screen before the first harness has it. Without them a wait that stalled ("Connecting to your
+/// computer…" over an agent list that never came) was a spinner with nothing on screen to leave
+/// it by.
 class _AgentHomeLoading extends StatelessWidget {
-  const _AgentHomeLoading({required this.message});
+  const _AgentHomeLoading({
+    required this.message,
+    required this.notifier,
+    this.slow = false,
+  });
 
   /// The step in progress, in the person's words — see [_AgentHomeState._loadingMessage].
   final String message;
+
+  final AppNotifier notifier;
+
+  /// Up for [_AgentHomeState._slowAfter] without a break.
+  final bool slow;
 
   @override
   Widget build(BuildContext context) {
@@ -1100,36 +1189,106 @@ class _AgentHomeLoading extends StatelessWidget {
     return Scaffold(
       backgroundColor: AppPalette.windowBg,
       body: SafeArea(
-        child: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              SizedBox.square(
-                dimension: 22,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: AppPalette.accent,
-                ),
-              ),
-              const SizedBox(height: 14),
-              // ⚠️ Keyed by the text so a change between steps CROSS-FADES rather than snapping.
-              // These lines replace each other while somebody is reading them, and a hard swap at
-              // that moment reads as a glitch instead of as progress.
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 220),
-                child: Text(
-                  message,
-                  key: ValueKey(message),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: AppPalette.textSecondary,
-                    fontSize: 14,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The row Settings stands in on the screens before the first harness — empty until the
+            // wait is slow, so a launch that is merely loading stays one centred line.
+            SizedBox(
+              height: 44,
+              child: slow
+                  ? Align(
+                      alignment: Alignment.centerRight,
+                      child: PhoneSettingsButton(notifier: notifier),
+                    )
+                  : null,
+            ),
+            Expanded(
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox.square(
+                        dimension: 22,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppPalette.accent,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      // ⚠️ Keyed by the text so a change between steps CROSS-FADES rather than
+                      // snapping. These lines replace each other while somebody is reading them,
+                      // and a hard swap at that moment reads as a glitch instead of as progress.
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        child: Text(
+                          message,
+                          key: ValueKey(message),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: AppPalette.textSecondary,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ),
+                      AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        child: slow
+                            ? _SlowWaitHint(
+                                key: const ValueKey('home-wait-slow'),
+                                notifier: notifier,
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                    ],
                   ),
                 ),
               ),
-            ],
-          ),
+            ),
+            // The top row's height again, so the line stays where it was: the screen's middle.
+            const SizedBox(height: 44),
+          ],
         ),
+      ),
+    );
+  }
+}
+
+/// Under a wait that has gone on: what is true, and the computers — each with what it needs, a
+/// password form behind a locked one — over the wait rather than in place of it, so back returns
+/// to it and a wait that ends meanwhile still lands where it would have.
+class _SlowWaitHint extends StatelessWidget {
+  const _SlowWaitHint({super.key, required this.notifier});
+
+  final AppNotifier notifier;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 18),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'This is taking longer than usual.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppPalette.textSecondary, fontSize: 13),
+          ),
+          const SizedBox(height: 4),
+          TtyTextButton(
+            key: const ValueKey('home-wait-computers'),
+            label: 'See your computers ›',
+            onPressed: () => unawaited(
+              Navigator.of(context).push(
+                phoneRoute(
+                  (_) => MachinesTab(notifier: notifier, large: false),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1167,15 +1326,19 @@ class _AgentHomeEmpty extends StatelessWidget {
     return Scaffold(
       backgroundColor: tty.ground,
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(Tty.origin, 16, Tty.origin, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // The machine, and the paired daemon at the line's right end —
-              // where a terminal's title carries it. See `daemon_chip.dart`.
-              Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // The machine, and the paired daemon at the line's right end — where a terminal's title
+            // carries it (see `daemon_chip.dart`) — then Settings, at the top right as on every
+            // screen before the first harness. ⚠️ This is the first screen a new account stands on
+            // once its computer is open, and nothing else on it leads to Settings — or Sign out:
+            // Find and a terminal's menu, the other ways there, both need a harness.
+            SizedBox(
+              height: 44,
+              child: Row(
                 children: [
+                  const SizedBox(width: Tty.origin),
                   Expanded(
                     child: TtyText(
                       machine.displayName,
@@ -1184,29 +1347,47 @@ class _AgentHomeEmpty extends StatelessWidget {
                     ),
                   ),
                   const DaemonChip(margin: EdgeInsets.only(left: 12)),
+                  PhoneSettingsButton(notifier: notifier),
                 ],
               ),
-              const Spacer(),
-              TtyText(
-                'Nothing running yet.',
-                size: 24,
-                weight: FontWeight.w600,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Tty.origin,
+                  0,
+                  Tty.origin,
+                  16,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Spacer(),
+                    TtyText(
+                      'Nothing running yet.',
+                      size: 24,
+                      weight: FontWeight.w600,
+                    ),
+                    const SizedBox(height: 12),
+                    // ⚠️ No "Swipe right any time to find one started elsewhere": the swipe is the
+                    // terminal's (`terminal_page.dart`), it does nothing here, and with no harness on
+                    // any open computer there is nothing elsewhere to find.
+                    Text(
+                      'Start a harness — an agent on a project on your computer — and '
+                      'watch it work from here.',
+                      style: tty.style(size: TtySize.row, color: tty.faint),
+                    ),
+                    const Spacer(),
+                    TtyPrimaryButton(
+                      label: 'Start a harness',
+                      onPressed: () =>
+                          openNewAgent(context, notifier, machine.machineId),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(height: 12),
-              Text(
-                'Start a harness — an agent on a project on your computer — and '
-                'watch it work from here. Swipe right any time to find one '
-                'started elsewhere.',
-                style: tty.style(size: TtySize.row, color: tty.faint),
-              ),
-              const Spacer(),
-              TtyPrimaryButton(
-                label: 'Start a harness',
-                onPressed: () =>
-                    openNewAgent(context, notifier, machine.machineId),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

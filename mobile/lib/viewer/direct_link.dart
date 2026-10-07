@@ -3,6 +3,7 @@ import '../auth/link_errors.dart';
 import '../auth/peer_link_client.dart';
 import '../core/config.dart';
 import '../e2ee/keys.dart';
+import '../logging/app_log.dart';
 import 'direct_auth.dart';
 import 'direct_auth_api.dart';
 import 'code_link.dart';
@@ -92,16 +93,7 @@ class DirectLink implements PeerLinkClient {
         final name = displayName == null || displayName.isEmpty
             ? 'the computer'
             : displayName;
-        return CliLinkConnectResult(
-          error: switch (code) {
-            'CODE_MISMATCH' =>
-              'That code didn’t match. Scan the new one on $name.',
-            'TIMEOUT' => 'Keep “Add Phone” open on $name, then scan again.',
-            'PAIRING_BUSY' =>
-              '$name is pairing with something else. Try again.',
-            _ => 'Couldn’t connect to $name ($code).',
-          },
-        );
+        return CliLinkConnectResult(error: _codePairingError(code, name));
     }
   }
 
@@ -206,4 +198,37 @@ class DirectLink implements PeerLinkClient {
 String _asCliPrints(DateTime at) {
   String two(int n) => n.toString().padLeft(2, '0');
   return '${at.year}-${two(at.month)}-${two(at.day)} ${two(at.hour)}:${two(at.minute)}';
+}
+
+/// A failed pairing by an Add Phone code ([linkWithCode]) as the sentence the pairing screen shows,
+/// [name] the computer's.
+///
+/// ⚠️ **Never the bare code.** The fallback used to be "Couldn’t connect to $name ($code)." — and
+/// most failures took it: every socket error (CONNECTION_ERROR), a socket closed mid-pairing, a
+/// computer the relay could not reach, the computer's own refusal, and whatever string a computer
+/// sends back. Each now says what to do instead, and the code goes to the log.
+String _codePairingError(String code, String name) {
+  appLog.warn('pair', 'pairing by code failed: $code');
+  // Where the name starts the sentence: "the computer", for one with no name, would not.
+  final subject = name.isEmpty
+      ? name
+      : '${name[0].toUpperCase()}${name.substring(1)}';
+  if (code.startsWith('CONNECTION_CLOSED')) {
+    return 'The connection to $name dropped before pairing finished. Scan again.';
+  }
+  return switch (code) {
+    'CODE_MISMATCH' => 'That code didn’t match. Scan the new one on $name.',
+    'TIMEOUT' => 'Keep “Add Phone” open on $name, then scan again.',
+    'PAIRING_BUSY' => '$subject is pairing with something else. Try again.',
+    'CONNECTION_ERROR' =>
+      'Couldn’t reach $name. Check your connection, then scan again.',
+    'SELECT_FAILED' =>
+      'Couldn’t find $name, or it’s offline. Make sure Harness is open there, then scan again.',
+    'PAIR_REFUSED' || 'PAIR_FAILED' =>
+      '$subject didn’t finish pairing. Open Add Phone… on it again and scan the new code.',
+    'PROTOCOL_ERROR' =>
+      'Pairing with $name went wrong. Make sure Harness is up to date there, then scan again.',
+    _ =>
+      'Couldn’t pair with $name. Open Add Phone… on it again and scan the new code.',
+  };
 }

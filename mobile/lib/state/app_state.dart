@@ -1607,6 +1607,23 @@ class AppNotifier extends ChangeNotifier {
     _keptScreenStore?.clear();
     unawaited(_pool?.closeAll());
     _pool = null;
+    // ⚠️ **The account's machines go with it, as on a sign-out by hand ([_endSession]).** Kept,
+    // the next sign-in — perhaps another account's — started on this account's list: it was not
+    // empty, so no "Looking for your computers…", and this account's computers were drawn as the
+    // next one's until its own fetch landed. The warm-start cache on disk went on naming them too,
+    // and the next launch dialled them with the new session.
+    _stopAllOfflineRetries();
+    _stopAllAgentSyncTimers();
+    _relaySaid.clear();
+    // Reads [machineStates], so before it is emptied.
+    _clearAllTurnActivity();
+    machines = [];
+    machineStates.clear();
+    unawaited(_machineCache?.clear());
+    sessionPreviews.clear();
+    agentNotices.reset();
+    expandedMachines.clear();
+    selectedMachineId = null;
     // ⚠️ The saved session goes too. The socket that said so (a refresh refused, 4403) is the only
     // judge of it, and a session left on disk signed the NEXT launch straight back in — only to be
     // refused again, with the person never told why. Best effort, as [logout]'s own: a store that
@@ -2951,6 +2968,72 @@ class AppNotifier extends ChangeNotifier {
     }
     pendingPairing = (machineId: machineId, code: code);
     notifyListeners();
+  }
+
+  /// The pairing [pendingPairing]'s code is being spent on, while it runs — see [pairPendingCode].
+  ({String machineId, String code, Future<String?> result})? _pairingRun;
+
+  /// The code [pendingPairing] held when the home screen began pairing by it — see
+  /// [pendingPairingTried].
+  ({String machineId, String code})? _pairingTried;
+
+  /// Whether the home screen has begun pairing by the code [pendingPairing] holds now.
+  ///
+  /// From then on its pairing page (`phone/welcome/pairing_with_code.dart`) stays up until the code
+  /// is spent or dropped, and not only while the machine reads locked: a redial that clears
+  /// [MachineState.needsLink] for a moment — the vouched redials of a fresh sign-in
+  /// ([_redialOnceVouched]) — took the page down mid-pairing, hid an error it then had, and built
+  /// it again a second later to pair a second time by the same one-time code.
+  bool get pendingPairingTried {
+    final pending = pendingPairing, tried = _pairingTried;
+    return pending != null &&
+        tried != null &&
+        pending.machineId == tried.machineId &&
+        pending.code == tried.code;
+  }
+
+  /// Pairs with [machineId] by [code], the code [pendingPairing] holds — once per code at a time.
+  ///
+  /// ⚠️ **A second call for the same code while the first runs joins it.** The code is one-time: a
+  /// pairing page built again while one is still pairing (see [pendingPairingTried]) spent it a
+  /// second time, and the computer, mid-pairing, answered PAIRING_BUSY or CODE_MISMATCH while the
+  /// first went through. A call after one that has FINISHED pairs again: "Scan again" after a
+  /// timeout reads the same code back off Add Phone, and it is good again.
+  ///
+  /// Success lets the code go here, not on the page: the page can be gone by then.
+  Future<String?> pairPendingCode(String machineId, String code) {
+    final running = _pairingRun;
+    if (running != null &&
+        running.machineId == machineId &&
+        running.code == code) {
+      return running.result;
+    }
+    _pairingTried = (machineId: machineId, code: code);
+    late final Future<String?> result;
+    result = () async {
+      String? error;
+      try {
+        error = await connectWithCode(machineId, code);
+      } catch (e) {
+        // [connectWithCode] answers with a result, not an exception; one that slips through must
+        // not leave "Connecting to…" up with nothing behind it.
+        appLog.warn('pair', 'pairing by code with $machineId threw: $e');
+        error = 'Couldn’t connect. Scan again.';
+      } finally {
+        if (identical(_pairingRun?.result, result)) _pairingRun = null;
+      }
+      final pending = pendingPairing;
+      if (error == null &&
+          pending != null &&
+          pending.machineId == machineId &&
+          pending.code == code) {
+        pendingPairing = null;
+        notifyListeners();
+      }
+      return error;
+    }();
+    _pairingRun = (machineId: machineId, code: code, result: result);
+    return result;
   }
 
   /// Pairs with [machineId] by the one-time code its desktop app showed, then reconnects it — the

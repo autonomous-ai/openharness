@@ -51,12 +51,13 @@ class _PairingWithCodeState extends State<PairingWithCode> {
     unawaited(_pair(widget.code));
   }
 
+  /// Through [AppNotifier.pairPendingCode], which joins a pairing by this code already under way
+  /// rather than spending the one-time code twice, and lets the code go on success itself.
   Future<void> _pair(String code) async {
-    final error = await widget.notifier.connectWithCode(widget.machineId, code);
+    final error = await widget.notifier.pairPendingCode(widget.machineId, code);
     if (!mounted) return;
     if (error == null) {
       HapticFeedback.mediumImpact();
-      widget.notifier.pendingPairing = null;
       return;
     }
     setState(() => _error = error);

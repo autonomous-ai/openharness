@@ -1,10 +1,13 @@
 import 'dart:async';
 
+import 'package:dio/dio.dart' show DioException, DioExceptionType;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/api/api_client.dart'
+    show ApiException, describeApiError;
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/shared/widgets/app_dialog.dart'
     show appDialogButtonStyle, kDialogControlRadius, showAppDialog;
@@ -43,7 +46,8 @@ Future<void> approveComputerSignIn(
     asking = await notifier.api.signInLookup(code.code);
   } catch (error) {
     if (context.mounted) {
-      await _tell(context, "Couldn't read that code", scanAgain == null ? '$error' : '$error $scanAgain');
+      final reason = _reason(error);
+      await _tell(context, "Couldn't read that code", scanAgain == null ? reason : '$reason $scanAgain');
     }
     return;
   }
@@ -82,8 +86,41 @@ Future<void> approveComputerSignIn(
       await notifier.api.denySignIn(code.code);
     }
   } catch (error) {
-    if (context.mounted) await _tell(context, "Couldn't answer", '$error');
+    if (context.mounted) await _tell(context, "Couldn't answer", _reason(error));
   }
+}
+
+/// Why a request failed, as a sentence for the person.
+///
+/// ⚠️ **Never the exception's own text.** `'$error'` put "DioException [connection error]: The
+/// connection errored: Failed host lookup: …" in the snackbar for a phone that was merely offline.
+/// The backend's own message ([ApiException]) is said as it is — "That code has expired" — and a
+/// failure to reach it in [describeApiError]'s words; anything else, in plain ones.
+String _reason(Object error) {
+  if (error is ApiException) return _sentence(error.message);
+  if (error is DioException) {
+    return switch (error.type) {
+      DioExceptionType.connectionError ||
+      DioExceptionType.connectionTimeout ||
+      DioExceptionType.sendTimeout ||
+      DioExceptionType.receiveTimeout ||
+      DioExceptionType.badResponse => _sentence(describeApiError(error)),
+      DioExceptionType.badCertificate ||
+      DioExceptionType.cancel ||
+      DioExceptionType.transformTimeout ||
+      DioExceptionType.unknown =>
+        'Couldn’t reach Harness. Check your connection and try again.',
+    };
+  }
+  return 'Something went wrong. Try again.';
+}
+
+/// [describeApiError] words its reasons to follow a colon ("could not reach Harness. …"); here
+/// they start a sentence.
+String _sentence(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) return 'Something went wrong. Try again.';
+  return '${trimmed[0].toUpperCase()}${trimmed.substring(1)}';
 }
 
 /// One line of news where the person is: the answer went through, or why it did not.
