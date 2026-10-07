@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
+import { SERVICE_HOSTS } from '../src/harnessd/services.js'
 
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true })).agents)
@@ -54,7 +55,10 @@ const QUICK_TO_PARK = { HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_INI
 /** The processes the services run in by default, and what makes every one of them fail as it starts. The
  *  experiments' (the teams', the orchestrator's) start only once they are on: e2e/experiments.e2e.ts. */
 const SERVICE_PROCESSES = ['search', 'viewers', 'edge', 'models'] as const
-const EVERY_PROCESS_FAILING = 'search,viewers,store,workspaces,usage,monitor,projects,handoff,recaps,windowNames,models'
+// Follow the host inventory: leaving the newly extracted shell alive kept edge running, so the old
+// fixture waited forever for a crash loop it no longer caused (E2E run 37659523605).
+const EVERY_PROCESS_FAILING = Object.entries(SERVICE_HOSTS).filter(([name]) => (SERVICE_PROCESSES as readonly string[]).includes(name))
+  .flatMap(([, host]) => host.services).join(',')
 
 describe('a failing service never takes the core down', () => {
   let daemon: IsolatedDaemon | undefined
@@ -80,6 +84,7 @@ describe('a failing service never takes the core down', () => {
     expect(await client.request('fs_list_dir', { path: d.projectsDir })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: true })
     expect(await client.request('window_name', { agentIds: [agentId] })).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'windowNames', retryable: true })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: true })
+    expect(await client.request('shell_capabilities', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'shell', retryable: true })
     // Models is on demand and never came up: its request waits no longer than a start (core/serviceLinks.ts
     // `ON_DEMAND_START_MS`), and every one after it is answered at once.
     expect(await client.request('grid_fleet_models_list', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'models', retryable: true })
@@ -141,10 +146,10 @@ describe('a failing service never takes the core down', () => {
   })
 
   it('with every service in the core failing to start, the core starts, runs an agent through turns and a restart, and says each service is off', async () => {
-    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: 'search,viewers,models,workspaces,store,usage,monitor,projects,recaps,windowNames', ...IN_THE_CORE } })
+    daemon = await IsolatedDaemon.create({ env: { HARNESSD_TEST_FAULTS: EVERY_PROCESS_FAILING, ...IN_THE_CORE } })
     onTestFailed(() => { console.log(`---- daemon log\n${daemon?.log().split('\n').slice(-80).join('\n')}`) })
     await daemon.start()
-    for (const service of ['search', 'viewers', 'models', 'workspaces', 'store', 'usage', 'monitor', 'projects', 'recaps', 'windowNames']) {
+    for (const service of EVERY_PROCESS_FAILING.split(',')) {
       expect(daemon.log()).toContain(`[services] ${service} did not start · injected fault: ${service} · the core runs without it`)
     }
     const client = await LocalClient.connect(daemon)
@@ -166,6 +171,7 @@ describe('a failing service never takes the core down', () => {
     // usage_read is asked only here, with its service off: on, it reads the vendors' credentials.
     expect(await client.request('usage_read', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'usage', retryable: false })
     expect(await client.request('machine_resources', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'monitor', retryable: false })
+    expect(await client.request('shell_capabilities', {})).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'shell', retryable: false })
     for (const type of ['git_pull_request', 'git_project_info', 'project_preview', 'fs_list_dir', 'agent_read_file']) {
       expect(await client.request(type, { agentId, path: daemon.projectsDir }), type).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'projects', retryable: false })
     }
