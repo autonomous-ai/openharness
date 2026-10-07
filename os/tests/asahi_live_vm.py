@@ -97,6 +97,7 @@ with storage.mounted('/dev/vdb2',esp/'mounted','ro') as boot:
      storage.run('chroot',root,'grubby','--update-kernel=ALL','--args=console=ttyAMA0 console=tty0')
      storage.run('chroot',root,'dracut','--regenerate-all','--force','--no-hostonly',timeout=180)
      storage.run('chroot',root,'grub2-mkconfig','-o','/boot/grub2/grub.cfg')
+     startup.label_files(root,'/boot')
 '''
     put(vm, '/var/tmp/harness-media-observer.py', script)
     vm.command('unshare --mount --propagation private python3 /var/tmp/harness-media-observer.py', timeout=240)

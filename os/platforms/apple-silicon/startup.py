@@ -234,7 +234,7 @@ def label_files(root, *paths):
 def build_boot(root, configs):
     for name, content in configs.items():
         atomic(checked(root, name), content.encode(), 0o600 if name == 'etc/crypttab' else 0o644)
-    label_files(root, *('/' + name for name in configs))
+    label_files(root, *('/' + name for name in configs), '/boot')
     run('chroot', root, 'grubby', '--update-kernel=ALL', '--remove-args=root rd.luks.uuid rd.luks.name',
         '--args=' + configs['etc/kernel/cmdline'].strip())
     run('chroot', root, 'grub2-mkconfig', '-o', '/boot/grub2/grub.cfg')

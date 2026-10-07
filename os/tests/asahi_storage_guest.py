@@ -128,10 +128,17 @@ def verify_copy(state):
         with storage.work_directory() as root, ExitStack() as mounts:
             top = mounts.enter_context(storage.mounted(mapper, root / 'top', 'ro,rescue=nologreplay,subvolid=5'))
             boot = mounts.enter_context(storage.mounted('/dev/vdb5', root / 'boot', 'ro,noload'))
-            for src, dst, excludes in [(source.root, top / 'root', ['/boot/***', '/home/***']),
-                                        (source.home, top / 'home', []), (source.boot, boot, ['/efi/***'])]:
+            separate = ('boot', 'home', 'dev', 'proc', 'sys', 'run')
+            for name in separate:
+                directory = top / 'root' / name
+                assert directory.is_dir() and not directory.is_symlink() and not list(directory.iterdir()), name
+            for src, dst, excludes, filters in [
+                    (source.root, top / 'root', ['/' + name + '/***' for name in separate], []),
+                    (source.home, top / 'home', [], []),
+                    (source.boot, boot, ['/efi/***'], ['--filter=-x system.*', '--filter=-x security.selinux'])]:
                 changes = storage.run('rsync', '-aHAXnci', '--numeric-ids', '--one-file-system', '--delete',
-                                      *('--exclude=' + value for value in excludes), str(src) + '/', str(dst) + '/', timeout=180)
+                                      *filters, *('--exclude=' + value for value in excludes),
+                                      str(src) + '/', str(dst) + '/', timeout=180)
                 assert not changes, changes
             image = json.loads((top / 'root/usr/share/harness-os/image.json').read_text())
             manifest = image['session_package']['files']
@@ -139,7 +146,8 @@ def verify_copy(state):
                 assert fixture.digest(top / 'root' / name) == expected, name
             for name, expected in image['first_boot']['files'].items():
                 assert fixture.digest(top / 'root' / name) == expected['sha256'], name
-            return {'runtime_files_checked': len(manifest), 'source_commit': image['source_commit'],
+            return {'runtime_files_checked': len(manifest), 'empty_mountpoints': list(separate),
+                    'source_commit': image['source_commit'],
                     'root_uuid': storage.probe(mapper)['UUID'], 'boot_uuid': storage.probe('/dev/vdb5')['UUID']}
 
 

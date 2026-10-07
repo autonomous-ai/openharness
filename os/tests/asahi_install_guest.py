@@ -44,6 +44,14 @@ def inspect():
                             name: sorted(p.name for p in (root / name).iterdir())
                             for name in ('dev', 'proc', 'sys', 'run')}
                         assert all(not entries for entries in result['runtime_mountpoints'].values())
+                        # Check the actual installation before the observer adds
+                        # QEMU console/input settings or rebuilds any boot files.
+                        with ui.startup.mount_at('/dev/vdb5', root / 'boot', 'ro,noload'):
+                            entries = sorted((root / 'boot/loader/entries').glob('*.conf'))
+                            assert entries
+                            labels = ['/boot/grub2/grub.cfg', *('/' + str(p.relative_to(root)) for p in entries)]
+                            ui.storage.run('chroot', root, '/usr/sbin/matchpathcon', '-V', *labels)
+                            result['boot_labels_verified'] = labels
         Path('/var/tmp/harness-install-inspection.json').write_text(json.dumps(result, indent=2) + '\n')
     finally:
         fixture.run('umount', fixture.ROOT)

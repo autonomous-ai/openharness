@@ -258,9 +258,15 @@ def subvolumes(top):
         run('btrfs', 'subvolume', 'show', path)
 
 
-def copy_tree(source, destination, excludes=()):
+def copy_tree(source, destination, excludes=(), *, copy_selinux=True):
+    # Some generated boot files are unlabeled. Keep destination labels until
+    # startup applies the installed policy, rather than removing those labels
+    # under enforcement. Root/home retain their source labels. An explicit
+    # xattr rule also requires preserving rsync's system.* exclusion.
+    filters = () if copy_selinux else ('--filter=-x system.*', '--filter=-x security.selinux')
     run('rsync', '-aHAX', '--numeric-ids', '--one-file-system', '--delete', '--checksum',
-        *('--exclude=' + value for value in excludes), str(source) + '/', str(destination) + '/', timeout=300)
+        *filters, *('--exclude=' + value for value in excludes),
+        str(source) + '/', str(destination) + '/', timeout=300)
 
 
 def mountpoint(source, destination):
@@ -330,7 +336,7 @@ def install(plan_path, payload, password, progress=None):
                 copy_root(payload.root, top / 'root')
                 mountpoint(payload.boot / 'efi', boot_path / 'efi')
                 copy_tree(payload.home, top / 'home')
-                copy_tree(payload.boot, boot_path, excludes=('/efi/***',))
+                copy_tree(payload.boot, boot_path, excludes=('/efi/***',), copy_selinux=False)
                 run('sync', '-f', top)
                 run('sync', '-f', boot_path)
                 current = target.read_table(plan['original']['device'])
