@@ -918,14 +918,11 @@ imports and identifiers as what they are.
 3. **The bar for each step:** `tsc`; `npm run test:core` and `npm run test:harnessd` at 100% per file;
    the full unit suite; the e2e files that exercise the moved code, from the bundle
    (`E2E_BUNDLE=1 E2E_WORKERS=2`); the rule test's counts do not rise.
-4. **One group at a time, every engine at once.** Why not engine by engine: moving Claude Code's
-   behaviour everywhere, then Codex's, would touch every shared file fourteen times and leave each call
-   site half-branching, half-interface while it happened; the core would be more tangled in the middle
-   than it is now. Group by group touches each call site once, gives each step a small set of files, and
-   lets the e2e suite prove the Claude Code and Codex half of every step while the pinned unit tests
-   prove the other twelve. Claude Code and Codex still come first in the sense that matters: they are
-   the engines the first steps are proven on end to end, the two built into the registry from step 1,
-   and the first two folders written in full.
+4. **A few popular engines per batch (owner direction, 2026-10-07).** Start with Claude Code and Codex
+   and move coherent facets with their existing behavior pinned. Shared callers retain explicit legacy
+   paths for engines outside the current batch. This supersedes the original all-fourteen-at-once
+   migration rule; it does not relax the boundary, fallback or validation requirements. Add subsequent
+   engines in small reviewed batches rather than carrying every recovered lane into one change.
 5. **While the moves run, facets are tables.** Each facet has a table file in `src/engines/`
    (`transcripts.ts`, `screens.ts`, …) mapping every engine to its facet object, and `registry.ts`
    assembles an `Engine` from the tables. A lane adds its own table file, its facet files in each engine
