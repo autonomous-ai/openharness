@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'support/agent_inventory_pages.dart';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -454,6 +456,91 @@ void main() {
       connection.agents.last.complete(_agents);
       await tester.pump();
       expect(machine.agents, isEmpty);
+      app.dispose();
+      disposed = true;
+    },
+  );
+
+  test(
+    'expired page errors from WsConn restart the complete fetch once',
+    () async {
+      final load = app.reloadMachineData('m');
+      final pages = inventoryPages({
+        'agents': [
+          {'id': 'a', 'name': 'x' * 150000},
+        ],
+        'sync': {'version': 1, 'revision': '1' * 64},
+      });
+      await _tick();
+      connection.capabilities.single.complete(_capabilities);
+      connection.agents.single.complete(pages.first);
+      await _tick();
+      expect(connection.agents, hasLength(2));
+      expect(machine.agents, isEmpty);
+      connection.agents.last.completeError(
+        const WsRequestFailure(
+          responseType: 'agents_list_result',
+          code: 'INVENTORY_RESET_REQUIRED',
+        ),
+      );
+      await _tick();
+      expect(connection.agents, hasLength(3));
+      expect(connection.inventoryRequests.last['sync'], {
+        'version': 1,
+        'pages': true,
+      });
+      connection.agents.last.complete(_agents);
+      await load;
+      expect(machine.agents.single.id, 'a');
+      expect(machine.agentsLoadError, isNull);
+    },
+  );
+
+  for (final code in ['INVENTORY_TOO_LARGE', 'UNAUTHORIZED']) {
+    test(
+      'a $code socket refusal is surfaced without restarting inventory',
+      () async {
+        final load = app.reloadMachineData('m');
+        await _tick();
+        connection.capabilities.single.complete(_capabilities);
+        connection.agents.single.completeError(
+          WsRequestFailure(responseType: 'agents_list_result', code: code),
+        );
+        await load;
+        expect(connection.agents, hasLength(1));
+        expect(machine.agents, isEmpty);
+        expect(machine.agentsLoadError, isNotNull);
+      },
+    );
+  }
+
+  testWidgets(
+    'all initial pages share one deadline and a late page cannot clear panes',
+    (tester) async {
+      final load = app.reloadMachineData('m');
+      final pages = inventoryPages({
+        'agents': [
+          {'id': 'a', 'name': 'x' * 300000},
+        ],
+        'sync': {'version': 1, 'revision': '1' * 64},
+      });
+      await tester.pump();
+      connection.capabilities.single.complete(_capabilities);
+      await tester.pump(const Duration(seconds: 8));
+      connection.agents.single.complete(pages.first);
+      await tester.pump();
+      expect(connection.agents, hasLength(2));
+      expect(machine.agents, isEmpty);
+      await tester.pump(const Duration(seconds: 2));
+      await load;
+      connection.agents.last.complete(pages[1]);
+      await tester.pump();
+      expect(
+        connection.agents,
+        hasLength(2),
+      ); // No third page after expiration.
+      expect(machine.agents, isEmpty);
+      expect(machine.agentsLoadError, contains('offline'));
       app.dispose();
       disposed = true;
     },

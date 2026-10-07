@@ -9,8 +9,8 @@
  * Nothing here reaches beyond this machine: the daemon's every server setting is the fake backend's.
  */
 import { execFileSync } from 'node:child_process'
-import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -259,12 +259,60 @@ describe('the gateway in its own process', () => {
       const legacy = await viaA.request<Inventory>('agents_list', {}, 10_000)
       expect(Buffer.byteLength(JSON.stringify(legacy))).toBeGreaterThan(512 * 1024)
       expect(legacy.sync).toBeUndefined()
-      const first = await viaA.request<Inventory>('agents_list', { sync: { version: 1 } }, 10_000)
-      expect(first.agents.map(agent => agent.id)).toEqual(expect.arrayContaining(agentIds))
+      // Saved conversation history is the dominant real-world payload. Seed a
+      // stopped catalog whose complete projection exceeds the 6 MiB guard, with
+      // each archive/history file valid and below its own on-disk limits.
+      const savedDir = join(f.b.daemon.dataDir, 'stopped-agents')
+      const historyDir = join(f.b.daemon.dataDir, 'session-git-history')
+      mkdirSync(savedDir, { recursive: true, mode: 0o700 })
+      mkdirSync(historyDir, { recursive: true, mode: 0o700 })
+      const savedIds = Array.from({ length: 21 }, (_, i) => `saved-${i}`)
+      for (const id of savedIds) {
+        writeFileSync(join(savedDir, `${id}.json`), JSON.stringify({ version: 1, session: {
+          schemaVersion: 2, agentId: id, sessionId: `conversation-${id}`, engine: 'claude',
+          active: false, projectDir: f.b.daemon.projectsDir, cwd: f.b.daemon.projectsDir,
+          primaryRuntimeKey: '', runtimes: [{ backend: 'tmux', paneId: '%9000' }], tmuxPane: '%9000',
+          processIdentity: null, registeredAt: 1_700_000_000_000, defaultName: id,
+        } }), { mode: 0o600 })
+        const key = createHash('sha256').update(JSON.stringify(['claude', '', `conversation-${id}`, null])).digest('hex')
+        writeFileSync(join(historyDir, `${key}.json`), JSON.stringify({
+          branches: Array.from({ length: 100 }, (_, i) => ({ cwd: f.b.daemon.projectsDir,
+            remote: null, branch: `history-${i}-${'b'.repeat(3200)}`, at: '2026-10-07T00:00:00Z' })),
+          pullRequests: [], truncated: false,
+        }), { mode: 0o600 })
+      }
+      const fetch = async (client: LocalClient, since?: string, during?: () => void) => {
+        let reply = await client.request<Record<string, any>>('agents_list', { includeStopped: true, sync: { version: 1, pages: true, ...(since ? { since } : {}) } }, 10_000)
+        if (!reply.inventoryPage) return reply as Inventory
+        const first = reply.inventoryPage, chunks: Buffer[] = []
+        during?.()
+        let offset = 0
+        while (true) {
+          const p = reply.inventoryPage
+          expect(Buffer.byteLength(JSON.stringify(reply))).toBeLessThan(180 * 1024)
+          expect(p).toMatchObject({ version: 1, id: first.id, totalBytes: first.totalBytes, sha256: first.sha256, offset })
+          const bytes = Buffer.from(p.data, 'base64')
+          chunks.push(bytes); offset += bytes.length
+          if (p.nextOffset === null) break
+          expect(p.nextOffset).toBe(offset)
+          reply = await client.request('agents_list', { includeStopped: true, sync: { version: 1, pages: true, page: { id: p.id, offset } } }, 10_000)
+        }
+        const bytes = Buffer.concat(chunks)
+        expect(bytes.length).toBe(first.totalBytes)
+        expect(createHash('sha256').update(bytes).digest('hex')).toBe(first.sha256)
+        return JSON.parse(bytes.toString('utf8')) as Inventory
+      }
+      const first = await fetch(viaA, undefined, () => unlinkSync(join(savedDir, `${savedIds[0]}.json`)))
+      expect(Buffer.byteLength(JSON.stringify(first))).toBeGreaterThan(6 * 1024 * 1024)
+      // Deleting a row halfway through cannot tear the frozen first snapshot.
+      expect(first.agents.map(agent => agent.id)).toEqual(expect.arrayContaining([...agentIds, ...savedIds]))
       expect(first.sync.base).toBeUndefined()
-      let revision = first.sync.revision
+      const removed = await fetch(viaA, first.sync.revision)
+      expect(removed.sync.base).toBe(first.sync.revision)
+      expect(removed.sync.order).not.toContain(savedIds[0])
+      let revision = removed.sync.revision
       const unchanged = await until('a stable inventory to send no rows', async () => {
-        const reply = await viaA.request<Inventory>('agents_list', { sync: { version: 1, since: revision } }, 10_000)
+        const reply = await fetch(viaA, revision)
         const same = reply.sync.base === revision && reply.sync.revision === revision
         revision = reply.sync.revision
         return same ? reply : null
@@ -272,7 +320,7 @@ describe('the gateway in its own process', () => {
       expect(unchanged.agents).toEqual([])
       expect(Buffer.byteLength(JSON.stringify(unchanged))).toBeLessThan(512)
       expect((await onB.request('agent_update', { agentId: agentIds[0], name: 'renamed remote pane' })).error).toBeUndefined()
-      const changed = await viaA.request<Inventory>('agents_list', { sync: { version: 1, since: revision } }, 10_000)
+      const changed = await fetch(viaA, revision)
       expect(changed.sync.base).toBe(revision)
       expect(changed.sync.order).toEqual(expect.arrayContaining(agentIds))
       expect(changed.agents).toEqual(expect.arrayContaining([expect.objectContaining({ id: agentIds[0], name: 'renamed remote pane' })]))
@@ -280,7 +328,7 @@ describe('the gateway in its own process', () => {
       // A new window and an unknown cache token recover from a full snapshot.
       const freshWindow = await LocalClient.connect(f.a.daemon, { machineId: f.b.machineId })
       clients.push(freshWindow)
-      const fallback = await freshWindow.request<Inventory>('agents_list', { sync: { version: 1, since: 'f'.repeat(64) } }, 10_000)
+      const fallback = await fetch(freshWindow, 'f'.repeat(64))
       expect(fallback.sync.base).toBeUndefined()
       expect(fallback.agents.map(agent => agent.id)).toEqual(expect.arrayContaining(agentIds))
       const ended = viaA.next(isTurn('turn_ended', agentIds[0]), 30_000, 'a turn after the large agent list')

@@ -1,3 +1,8 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import '../e2ee/bytes.dart' show hexOf;
+import '../e2ee/primitives.dart' show sha256;
 import 'models.dart';
 
 typedef AgentInventorySnapshot = ({List<Agent> agents, bool Function() commit});
@@ -28,11 +33,22 @@ class AgentInventory {
       final observed = observe();
       final since = full ? null : _revision;
       final baseline = _agents;
-      final response = await request({'version': 1, 'since': ?since});
+      final response = await request({
+        'version': 1,
+        'pages': true,
+        'since': ?since,
+      });
       if (generation != _generation) return null;
       if (!identical(observed, observe())) continue;
       try {
-        final next = _decode(response, since, baseline);
+        final assembled = await _assemble(
+          response,
+          request,
+          () => generation == _generation && identical(observed, observe()),
+        );
+        if (generation != _generation) return null;
+        if (assembled == null || !identical(observed, observe())) continue;
+        final next = _decode(assembled, since, baseline);
         var committed = false;
         return (
           agents: next.agents,
@@ -57,6 +73,85 @@ class AgentInventory {
       }
     }
     return null;
+  }
+
+  /// A page belongs to one immutable server snapshot. Assemble bytes before
+  /// decoding UTF-8 (a character may span pages), and publish nothing until the
+  /// sequence, size and checksum agree. The caller's single awake-time deadline
+  /// covers every page and the one allowed restart.
+  Future<Map<String, dynamic>?> _assemble(
+    Map<String, dynamic> response,
+    Future<Map<String, dynamic>> Function(Map<String, dynamic>) request,
+    bool Function() current,
+  ) async {
+    const pageBytes = 128 * 1024, maxBytes = 16 * 1024 * 1024;
+    Never invalid() => throw const FormatException('Invalid inventory page');
+    void checkError() {
+      if (response['error'] == 'INVENTORY_TOO_LARGE') {
+        throw StateError('Pane inventory exceeds the supported snapshot size');
+      }
+    }
+
+    checkError();
+    if (!response.containsKey('inventoryPage')) return response;
+    final bytes = BytesBuilder(copy: false);
+    String? id, digest;
+    int? total;
+    var offset = 0;
+    while (true) {
+      checkError();
+      final page = response['inventoryPage'];
+      if (page is! Map || page['version'] != 1) invalid();
+      final pageId = page['id'],
+          hash = page['sha256'],
+          size = page['totalBytes'];
+      final encoded = page['data'];
+      if (pageId is! String ||
+          pageId.isEmpty ||
+          pageId.length > 64 ||
+          hash is! String ||
+          !_token.hasMatch(hash) ||
+          size is! int ||
+          size <= 0 ||
+          size > maxBytes ||
+          page['offset'] != offset ||
+          encoded is! String ||
+          encoded.length > ((pageBytes + 2) ~/ 3) * 4) {
+        invalid();
+      }
+      id ??= pageId;
+      digest ??= hash;
+      total ??= size;
+      if (pageId != id || hash != digest || size != total) invalid();
+      final chunk = base64Decode(encoded);
+      if (chunk.isEmpty ||
+          chunk.length > pageBytes ||
+          offset + chunk.length > total) {
+        invalid();
+      }
+      offset += chunk.length;
+      final next = page['nextOffset'];
+      if (!page.containsKey('nextOffset') ||
+          (offset == total
+              ? next != null
+              : next != offset || chunk.length != pageBytes)) {
+        invalid();
+      }
+      bytes.add(chunk);
+      if (next == null) break;
+      if (!current()) return null;
+      response = await request({
+        'version': 1,
+        'pages': true,
+        'page': {'id': id, 'offset': next},
+      });
+      if (!current()) return null;
+    }
+    final complete = bytes.takeBytes();
+    if (hexOf(sha256(complete)) != digest) invalid();
+    final decoded = jsonDecode(utf8.decode(complete));
+    if (decoded is! Map<String, dynamic>) invalid();
+    return decoded;
   }
 
   ({List<Agent> agents, String? revision}) _decode(

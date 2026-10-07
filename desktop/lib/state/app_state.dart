@@ -6626,13 +6626,24 @@ class AppNotifier extends ChangeNotifier {
     // One awake-time budget spans both attempts. A closed lid must not turn a
     // retried inventory into an immediate offline transition on wake.
     return awakeTimeout(
-      machine._agentInventory.read((sync) {
+      machine._agentInventory.read((sync) async {
         if (expired) throw const WsRequestTimeout('agents_list');
-        return connection.request(
-          'agents_list',
-          payload: {'includeStopped': true, 'sync': sync},
-          timeout: budget,
-        );
+        try {
+          return await connection.request(
+            'agents_list',
+            payload: {'includeStopped': true, 'sync': sync},
+            timeout: budget,
+          );
+        } on WsRequestFailure catch (failure) {
+          // WsConn raises error replies before the inventory sees the payload.
+          // Restore only its protocol errors; authentication/transport errors
+          // must retain their normal failure semantics.
+          if (failure.code == 'INVENTORY_RESET_REQUIRED' ||
+              failure.code == 'INVENTORY_TOO_LARGE') {
+            return {'error': failure.code};
+          }
+          rethrow;
+        }
       }, observe: () => machine.agents),
       budget,
       onTimeout: () {

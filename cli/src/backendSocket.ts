@@ -251,7 +251,7 @@ export class BackendSocket {
    *  asked for (cli.ts binds core/agents/list.ts). The second argument reads the asker's paired role.
    *  Null answers UNSUPPORTED. */
   agentsProvider: ((payload: Record<string, unknown>, sessionRole: () => string | null,
-    reply: (result: Record<string, unknown>) => void) => Promise<void>) | null = null
+    reply: (result: Record<string, unknown>) => void, connectionId: string) => Promise<void>) | null = null
   /** Answers `session_get` with the whole reply: a conversation's history, a page at a time (cli.ts binds
    *  core/transcripts/history.ts). Null answers UNSUPPORTED. */
   historyProvider: ((payload: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null
@@ -896,7 +896,7 @@ export class BackendSocket {
 
         // The agents on this machine, live and, when asked, stopped (core/agents/list.ts, bound by cli.ts).
         case 'agents_list':
-          if (this.agentsProvider) await this.agentsProvider(payload, () => (local ? null : role), answer)
+          if (this.agentsProvider) await this.agentsProvider(payload, () => (local ? null : role), answer, connId)
           else reply(type, requestId, { error: 'UNSUPPORTED' })
           return
 

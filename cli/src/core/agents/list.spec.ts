@@ -29,12 +29,48 @@ function setup(live: RegisteredSession[], saved: RegisteredSession[] = [], over:
   }
   const replies: Array<Record<string, any>> = []
   const list = createAgentList(deps)
-  const ask = (payload: Record<string, unknown>, role: string | null = 'web') =>
-    list.agentsList(payload, () => role, (result) => { replies.push(result) })
-  return { deps, created, replies, ask }
+  const ask = (payload: Record<string, unknown>, role: string | null = 'web', connectionId = '') =>
+    list.agentsList(payload, () => role, (result) => { replies.push(result) }, connectionId)
+  return { deps, created, replies, ask, close: list.closeConnection }
 }
 
 describe('the agents a window asks for', () => {
+  it('fetches the initial list without repeating projection, and closes cached pages with their connection', async () => {
+    const large = { ...frame(session('live'), '2026-10-05T10:00:00Z'), name: 'x'.repeat(200_000) }
+    const { ask, replies, deps, close } = setup([session('live')], [], { toProject: vi.fn(async () => large) })
+    const sync = { version: 1, pages: true }
+    // A caller without a connection identity keeps the compatible full contract.
+    await ask({ sync })
+    expect(replies.pop()!.agents).toHaveLength(1)
+    await ask({ sync }, 'web', 'a')
+    const first = replies.pop()!.inventoryPage
+    large.name = 'changed during fetch'
+    const continuation = { ...sync, page: { id: first.id, offset: first.nextOffset } }
+    await ask({ sync: continuation }, 'web', 'a')
+    const last = replies.pop()!.inventoryPage
+    expect(JSON.parse(Buffer.concat([Buffer.from(first.data, 'base64'), Buffer.from(last.data, 'base64')]).toString()).agents[0].name).toHaveLength(200_000)
+    expect(deps.toProject).toHaveBeenCalledTimes(2)
+    await ask({ sync: continuation, includeStopped: true }, 'web', 'a')
+    expect(replies.pop()).toEqual({ error: 'INVENTORY_RESET_REQUIRED' })
+    close('a')
+    await ask({ sync: continuation }, 'web', 'a')
+    expect(replies.pop()).toEqual({ error: 'INVENTORY_RESET_REQUIRED' })
+  })
+  it('a disconnect cannot retain private snapshot bytes when in-flight projections finish', async () => {
+    const resolvers: Array<(f: AgentFrame) => void> = []
+    const { ask, replies, close } = setup([session('live')], [], {
+      toProject: () => new Promise(resolve => resolvers.push(resolve)),
+    })
+    const one = ask({ sync: { version: 1, pages: true } }, 'web', 'a')
+    const two = ask({ sync: { version: 1, pages: true } }, 'web', 'a')
+    resolvers[0](frame(session('live'), '2026-10-05T10:00:00Z'))
+    await one
+    expect(replies.pop()!.agents).toHaveLength(1)
+    close('a')
+    resolvers[1](frame(session('live'), '2026-10-05T10:00:00Z'))
+    await two
+    expect(replies.pop()).toEqual({ error: 'INVENTORY_RESET_REQUIRED' })
+  })
   it('sends complete rows once, then an unchanged reply for an opted-in desktop', async () => {
     const { ask, replies } = setup([session('live')], [session('saved')])
     await ask({ includeStopped: true, sync: { version: 1 } })

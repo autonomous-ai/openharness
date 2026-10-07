@@ -3,7 +3,8 @@
  * Measures projection-independent sync/serialization/encryption/decode cost;
  * the list's Git and archive projection still runs for every request. */
 import { performance } from 'node:perf_hooks'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { createInventoryPages } from '../src/core/agents/inventoryPages.js'
 import { createAgentInventory } from '../src/core/agents/inventory.js'
 import type { AgentFrame } from '../src/lib/agentFrame.js'
 import { wrapPayload, unwrapPayload } from '../src/lib/e2ee/core.js'
@@ -27,29 +28,57 @@ const key = randomBytes(32)
 let counter = 0
 function roundTrip(payload: Record<string, unknown>) {
   const json = JSON.stringify(payload)
-  const wrapped = wrapPayload(key, 's', ++counter, 'agents_list_result', 'benchmark', payload)
+  const wrapped = wrapPayload(key, 'p', ++counter, 'agents_list_result', 'benchmark', payload)
   const wire = JSON.stringify(wrapped)
   const envelope = JSON.parse(wire).__e2e
   const clear = unwrapPayload(key, envelope, 'agents_list_result', 'benchmark')
   if (!clear) throw new Error('benchmark round trip failed')
   return { payloadBytes: Buffer.byteLength(json), encryptedJsonBytes: Buffer.byteLength(wire) }
 }
-function measure(name: string, run: () => Record<string, unknown>) {
-  for (let i = 0; i < 5; i++) roundTrip(run())
+function measure(name: string, run: () => Record<string, unknown>, transport = roundTrip) {
+  for (let i = 0; i < 5; i++) transport(run())
   global.gc?.()
   const cpu = process.cpuUsage(), start = performance.now(), samples: number[] = []
   let sizes = { payloadBytes: 0, encryptedJsonBytes: 0 }
   for (let i = 0; i < 40; i++) {
-    const at = performance.now(); sizes = roundTrip(run()); samples.push(performance.now() - at)
+    const at = performance.now(); sizes = transport(run()); samples.push(performance.now() - at)
   }
   const elapsed = performance.now() - start, used = process.cpuUsage(cpu)
   samples.sort((a, b) => a - b)
   return { name, iterations: 40, ...sizes, elapsedMs: elapsed, cpuMs: (used.user + used.system) / 1000,
     medianMs: samples[20], p95Ms: samples[38] }
 }
+const pages = createInventoryPages()
+let initialPageCount = 0, largestEncryptedPageBytes = 0
+function pagedRoundTrip(payload: Record<string, unknown>) {
+  let reply = pages.start(payload, 'benchmark', 'web:stopped')
+  let payloadBytes = 0, encryptedJsonBytes = 0
+  const chunks: Buffer[] = []
+  initialPageCount = 0
+  while (true) {
+    const sizes = roundTrip(reply)
+    payloadBytes += sizes.payloadBytes; encryptedJsonBytes += sizes.encryptedJsonBytes
+    largestEncryptedPageBytes = Math.max(largestEncryptedPageBytes, sizes.encryptedJsonBytes)
+    const p = reply.inventoryPage as { id: string; data: string; nextOffset: number | null; sha256: string } | undefined
+    if (!p) break
+    initialPageCount++
+    chunks.push(Buffer.from(p.data, 'base64'))
+    if (p.nextOffset === null) {
+      const bytes = Buffer.concat(chunks)
+      if (createHash('sha256').update(bytes).digest('hex') !== p.sha256) throw new Error('page checksum mismatch')
+      JSON.parse(bytes.toString('utf8'))
+      break
+    }
+    reply = pages.next({ id: p.id, offset: p.nextOffset }, 'benchmark', 'web:stopped')
+  }
+  return { payloadBytes, encryptedJsonBytes }
+}
 const legacy = measure('full inventory each poll', () => ({ agents }))
 const sync = createAgentInventory()
 const first = sync(agents, { sync: { version: 1 } }, 'web:stopped')
+const firstSyncPayloadBytes = Buffer.byteLength(JSON.stringify(first))
+const paginated = measure('initial paginated inventory', () => first, pagedRoundTrip)
+pages.close('benchmark')
 let revision = (first.sync as { revision: string }).revision
 const unchanged = measure('unchanged inventory', () => sync(agents, { sync: { version: 1, since: revision } }, 'web:stopped'))
 let flip = false
@@ -70,5 +99,7 @@ global.gc?.()
 const retainedHeapDeltaBytes = process.memoryUsage().heapUsed - before
 console.log(JSON.stringify({ node: process.version, rows: 380, stopped: 358,
   scope: 'Synthetic projection-independent protocol round trip; unchanged Git/archive projection cost excluded',
-  firstSyncPayloadBytes: Buffer.byteLength(JSON.stringify(first)), results: [legacy, unchanged, changed],
+  firstSyncPayloadBytes, results: [legacy, paginated, unchanged, changed],
+  pagination: { initialPageCount, largestEncryptedPageBytes, retainedSnapshotBytes: firstSyncPayloadBytes,
+    pageBytes: 131072, maxSnapshotBytes: 16777216, maxCacheBytes: 33554432, maxSnapshots: 8, ttlMs: 30000 },
   retainedHeapDeltaBytes, cacheCaps: { snapshots: 8, rows: 8192, accountedBytes: 1048576 } }, null, 2))
