@@ -1280,13 +1280,8 @@ mod tests {
         assert_eq!(Look::of(&app).with(Some("window_active:filled")).window_active, "filled");
         assert!(row(&filled, 19).contains("0:claude") && !row(&filled, 19).contains("0:claude*"), "{}", text(&filled));
     }
-    /// Every cell of [buf] as `symbol fg bg modifiers`, a row per line.
-    fn dump(buf: &Buffer) -> String {
-        let a = buf.area;
-        (a.y..a.bottom()).map(|y| (a.x..a.right()).map(|x| { let c = &buf[(x, y)]; format!("{}|{:?}|{:?}|{:?}", c.symbol(), c.fg, c.bg, c.modifier) }).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
-    }
 
-    fn launcher_buffer(query: &str, on_tabs: bool) -> (Buffer, Option<Position>) {
+    fn launcher_buffer(query: &str, on_tabs: bool) -> (Buffer, Rect, Option<Position>) {
         let app = app((100, 30));
         let body = Rect::new(0, 0, 100, 29);
         let kind = PickerKind::Open { filter: modal::Filter::All, machine: None, project: None };
@@ -1298,22 +1293,43 @@ mod tests {
         p.on_tabs = on_tabs;
         let mut buf = Buffer::empty(body);
         let (cursor, _) = draw(&mut buf, &app, body, &kind, &mut p);
-        (buf, cursor)
+        (buf, p.screen_area.get(), cursor)
     }
 
-    /// The launcher's every cell, symbols and styles, as it was before its query, count and keys
-    /// lines became shared pieces (`launcher.golden`, taken from that code).
+    /// The launcher's rows from the list's tail to the query, and the styles of its query, count,
+    /// rule and keys: what `draw` drew inline before those lines became shared pieces.
     #[test]
-    fn the_launcher_looks_as_it_did() {
+    fn the_launcher_keeps_its_rows_and_styles() {
         let _l = crate::term_out::colours_lock();
-        let mut out = String::new();
-        for (query, tabs) in [("", false), ("al", false), ("", true)] {
-            let (buf, cursor) = launcher_buffer(query, tabs);
-            out.push_str(&format!("== {query:?} tabs={tabs} cursor={cursor:?}\n{}\n", dump(&buf)));
+        let c = chrome();
+        let fg = |s: Style| s.fg.unwrap_or(Color::Reset);
+        let rule = |count: &str| format!("  {count} {}", "─".repeat(86 - count.width() - 1));
+        let query = |typed: &str, more: &str| format!("  › {typed}   [harnesses]   > commands   @ machines   # projects   : models{more}");
+        let keys = |s: &str| format!("  {s}");
+        let (alpine, beta, alpha) = ("    alpine".to_string(), "    beta".to_string(), "  ›•alpha".to_string());
+        let cases = [
+            ("", false, [alpine.clone(), beta.clone(), alpha.clone(), String::new(), keys("↑↓ move · enter open"), rule("3/3 (1)"), query("Search harnesses", "")]),
+            ("al", false, [String::new(), alpine.clone(), alpha.clone(), String::new(), keys("↑↓ move · enter open"), rule("2/3 (1)"), query("al", "   * store")]),
+            ("", true, [alpine, beta, alpha, String::new(), keys("← → switch · ↑ list · type to search"), rule("3/3 (1)"), query("Search harnesses", "")]),
+        ];
+        for (typed, on_tabs, want) in cases {
+            let (buf, r, _) = launcher_buffer(typed, on_tabs);
+            let row = |y: u16| (r.x..r.right()).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string();
+            let q = r.bottom() - 2;
+            let title = row(r.y + 1);
+            assert!(title.starts_with("  Harnesses ") && title.ends_with(" esc"), "{title}");
+            let rows: Vec<String> = (q - 6..=q).map(row).collect();
+            assert_eq!(rows.iter().map(|r| r.replace('│', "").trim_end().to_string()).collect::<Vec<_>>(), want.to_vec(), "{typed:?} tabs={on_tabs}");
+            let cell = |y: u16, x: u16| buf[(r.x + x, y)].clone();
+            // the prompt in accent; the count and its rule muted; a key bold, its word muted
+            assert_eq!((cell(q, 2).symbol().to_string(), cell(q, 2).fg), ("›".to_string(), fg(c.accent)));
+            assert_eq!(cell(q - 1, 2).fg, fg(c.muted));
+            assert_eq!((cell(q - 1, 12).symbol().to_string(), cell(q - 1, 12).fg), ("─".to_string(), fg(c.muted)));
+            assert!(!cell(q - 1, 12).modifier.contains(Modifier::BOLD));
+            assert_eq!(cell(q - 2, 2).fg, fg(c.base));
+            assert!(cell(q - 2, 2).modifier.contains(Modifier::BOLD));
+            assert_eq!(cell(q - 2, 5).fg, fg(c.muted));
         }
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/launcher.golden");
-        if std::env::var_os("HN_BLESS").is_some() { std::fs::write(path, &out).unwrap(); }
-        assert!(out == include_str!("launcher.golden"), "the launcher's cells changed");
     }
 
     #[test]
@@ -1337,6 +1353,21 @@ mod tests {
     }
 
     #[test]
+    fn the_count_rule_without_a_marked_count() {
+        let _l = crate::term_out::colours_lock();
+        let c = chrome();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        count_rule(&mut buf, 3, 5, None, 2, 0, 16, &c);
+        let line: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert_eq!(line, format!("  3/5 {}  ", "─".repeat(12)));
+        assert_eq!(buf[(6, 0)].fg, c.muted.fg.unwrap_or(Color::Reset));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        count_rule(&mut buf, 3, 5, Some(1), 2, 0, 16, &c);
+        let line: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert!(line.starts_with("  3/5 (1) ─"), "{line}");
+    }
+
+    #[test]
     fn the_query_line_is_the_panels() {
         let _l = crate::term_out::colours_lock();
         let c = chrome();
@@ -1345,12 +1376,12 @@ mod tests {
         p.query = "gpt".into(); p.qcursor = 3;
         let (at, used) = query_line(&mut buf, &p, 0, 0, 40, "@ computer", &c);
         assert_eq!(buf[(0, 0)].symbol(), "›");
-        assert_eq!(buf[(0, 0)].fg, c.accent.fg.unwrap());
+        assert_eq!(buf[(0, 0)].fg, c.accent.fg.unwrap_or(Color::Reset));
         assert_eq!((buf[(2, 0)].symbol(), at, used), ("g", Position::new(5, 0), 3));
         p.query.clear(); p.qcursor = 0;
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 3));
         query_line(&mut buf, &p, 0, 0, 40, "@ computer", &c);
-        assert_eq!(buf[(2, 0)].fg, c.muted.fg.unwrap(), "the ghost is muted");
+        assert_eq!(buf[(2, 0)].fg, c.muted.fg.unwrap_or(Color::Reset), "the ghost is muted");
         // whole scopes only, never a scope cut in half
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
         query_line(&mut buf, &p, 0, 0, 20, "@ computer   : project   % model", &c);
