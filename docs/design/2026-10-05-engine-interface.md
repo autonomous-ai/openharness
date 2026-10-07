@@ -1,8 +1,13 @@
 # Engines behind one interface
 
-> **Status, 2026-10-07: paused by the owner.** Steps 1–5 and lanes S, B, H, L and I+O+U are on unmerged
-> branches (`engine-interface-1..5`, `engine-lane-*`), and step 1 is in draft PR #842. Claude Code and
-> Codex come first when it resumes; the owner names the next engine.
+> **Status, 2026-10-07: resumed by the owner, a few engines per batch.** The first batch moves Claude
+> Code and Codex launch contracts, paged history and last-turn reads behind an `Engine` interface. It
+> preserves their existing argv and transcript behavior. Launch metadata loads separately from readers.
+> Hooks, discovery/resume, live ingestion, screen/input, models and one-shot handling remain to migrate.
+> The older all-engine branches (`engine-interface-1..5`, `engine-lane-*`, draft PR #842) are retained as
+> reference work; they are not the implementation currently landing. The phased plan below is the
+> target architecture, not a claim that all facets or engine isolation are already complete.
+
 
 
 Status: plan, approved for implementation on 2026-10-05. Scope: `cli/` (the daemon, harnessd).
