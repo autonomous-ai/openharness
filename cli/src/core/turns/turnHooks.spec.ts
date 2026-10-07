@@ -127,6 +127,67 @@ describe('turn hooks', () => {
       expect(String(log.mock.calls[0][0])).toContain('force-closed by StopFailure hook')
     })
 
+    // Found by the soak run (e2e/endurance.e2e.ts): a turn's Stop reached the daemon 6 s late under load, after
+    // the next prompt's turn had opened, and force-closed that turn with a question open in it.
+    it('leaves a turn that opened after the Stop arrived, the next prompt\'s, to its own end, unless the Stop is a failure', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = setup('claude')
+      // The Stop's own turn closed already; the drain reads the next prompt's turn opening.
+      const state = { turnOpen: false, opened: 1, pendingTools: new Map() } as unknown as TurnState
+      run.normalizers.turnStates.set('s1', state)
+      vi.mocked(run.deps.drain).mockImplementationOnce(async () => { state.turnOpen = true; state.opened = 2 })
+      run.hooks.onTurnStop({ sessionId: 's1' })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(state.turnOpen).toBe(true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      // Open as the Stop arrived, closed by the transcript in the drain, and the next one opened: left too.
+      vi.mocked(run.deps.drain).mockImplementationOnce(async () => { state.opened = 3 })
+      run.hooks.onTurnStop({ sessionId: 's1' })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(state.turnOpen).toBe(true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      // The engine's state started over meanwhile (the session attached again): not the turn the Stop found.
+      run.normalizers.turnStates.set('s1', { turnOpen: true, opened: 3, pendingTools: new Map() } as unknown as TurnState)
+      vi.mocked(run.deps.drain).mockImplementationOnce(async () => { run.normalizers.turnStates.set('s1', { ...state }) })
+      run.hooks.onTurnStop({ sessionId: 's1' })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      // A StopFailure closes whatever is open.
+      run.normalizers.turnStates.set('s1', state)
+      run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(state.turnOpen).toBe(false)
+      expect(run.deps.emit).toHaveBeenCalledWith('s1', END)
+      expect(String(log.mock.calls[0][0])).toContain('force-closed by StopFailure hook')
+    })
+
+    it('closes nothing with a Stop its engine ran before the session\'s latest prompt hook, a failure included', async () => {
+      const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+      const run = setup('claude')
+      const state = { turnOpen: true, opened: 2, pendingTools: new Map() } as unknown as TurnState
+      run.normalizers.turnStates.set('s1', state)
+      run.hooks.onPromptHook('s1', 2_000)
+      // An older prompt hook, arriving late, does not move it back.
+      run.hooks.onPromptHook('s1', 1_500)
+      for (const status of [undefined, 'error']) {
+        run.hooks.onTurnStop({ sessionId: 's1', status, firedAt: 1_000 })
+        await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      }
+      expect(state.turnOpen).toBe(true)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      // Run after it: about the open turn, which it closes once the grace is over, as before.
+      run.hooks.onTurnStop({ sessionId: 's1', firedAt: 3_000 })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(state.turnOpen).toBe(false)
+      expect(String(log.mock.calls[0][0])).toContain('force-closed by Stop hook')
+      // Remembered for a bounded number of sessions: the oldest goes first.
+      for (let i = 0; i < 600; i++) run.hooks.onPromptHook(`s${i + 2}`, 5_000)
+      state.turnOpen = true
+      run.hooks.onTurnStop({ sessionId: 's1', firedAt: 1_000 })
+      await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
+      expect(state.turnOpen).toBe(false)
+    })
+
     it('says Stop for a clean stop', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup('claude')

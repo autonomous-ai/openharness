@@ -11,7 +11,7 @@ export default defineConfig({
     coverage: {
       enabled: true,
       provider: 'v8',
-      include: ['src/core/**/*.ts', 'src/services/**/*.ts', 'src/lib/windowPresence.ts'],
+      include: ['src/core/**/*.ts', 'src/services/**/*.ts'],
       // core/main.ts is the composition root: wiring only. src/architecture.spec.ts checks its import
       // boundaries; the end-to-end suite runs it as `harness __run`, which no unit test loads.
       exclude: ['src/core/**/*.spec.ts', 'src/services/**/*.spec.ts', 'src/core/main.ts'],

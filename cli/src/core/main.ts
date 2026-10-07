@@ -1701,6 +1701,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onTurnStart: turnHooks.onTurnStart,
     onToolStart: turnHooks.onToolStart,
     onTurnStop: turnHooks.onTurnStop,
+    onPromptHook: turnHooks.onPromptHook,
+    stopHookDelayMs: Number(process.env.HARNESSD_TEST_STOP_HOOK_DELAY_MS) || 0,
     // `harness pair`, `unpair`, `remote-password`, `link connect`, `group` and `devices`: the keys are the
     // gateway's, and so are these answers (gateway/start.ts).
     onPair: (code) => gatewayOps.pair(code),

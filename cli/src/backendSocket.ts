@@ -1,6 +1,7 @@
 import type { PurgeAgentService } from './lib/purgeAgentService.js'
 import { SHARE_REQUESTS, TEAMS_REQUESTS, type Asker, type LocalWindows, type WindowSurface, type BackendNotice, type GatewayEvents, type GatewayPort, type ModelsPort, type RemoteClient, type RemoteRole, type RemoteTransport } from './core/api.js'
 import { ServiceUnavailableError } from './core/serviceHost.js'
+import { countWindows } from './lib/windowSurfaces.js'
 import type { ViewerStreams } from './core/viewerStreams.js'
 import type { ActivityFrame } from './lib/turnActivity.js'
 import { MonitorCompletions } from './lib/harnessMonitor.js'
@@ -612,10 +613,7 @@ export class BackendSocket {
   }
 
   /** The windows attached now, per surface; tools are not windows. */
-  private localWindows(): LocalWindows {
-    const windows = this.localClients.size - this.toolClients.size
-    return { desktop: windows - this.tuiClients.size, tui: this.tuiClients.size }
-  }
+  private localWindows(): LocalWindows { return countWindows(this.localClients.size, this.toolClients.size, this.tuiClients.size) }
 
   /** A loopback client that said it is a tool (`harness pair`, the MCP server), not a window. */
   isToolClient(connId: string): boolean { return this.toolClients.has(connId) }

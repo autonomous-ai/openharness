@@ -1014,11 +1014,11 @@ export type BackendNotice =
   | { type: 'machines_changed'; reason: string }
   | { type: 'device_keys_changed' }
 
-/** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
-/** What a person has open on this computer: the desktop app, or `harness tui`. Each is its own presence. */
-export type WindowSurface = 'desktop' | 'tui'
-export type LocalWindows = Record<WindowSurface, number>
+/** What a person has open on this computer, per surface (lib/windowSurfaces.ts). */
+export type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
+import type { LocalWindows, WindowSurface } from '../lib/windowSurfaces.js'
 
+/** What the core asks of the gateway: everything bound for a remote client, and the link's state. */
 export interface GatewayPort {
   /** Dial the backend: this daemon is signed in. */
   connect(): void
