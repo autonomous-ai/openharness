@@ -27,3 +27,14 @@ printf 'KEYMAP=us\nFONT=eurlatgr\n' > /etc/vconsole.conf
 sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
 sed -i 's/DEFAULTKERNEL=kernel-core/DEFAULTKERNEL=kernel-16k-core/' /etc/sysconfig/kernel
 rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary
+
+# Use the verified installed image's policy before the live kernel ever reads
+# source labels. Unknown types would otherwise be copied as unlabeled_t.
+# Move whole trees after RPM transactions so no stale live-only modules remain.
+policy=/usr/share/harness-installer/policy
+test -f "$policy/etc/selinux/targeted/contexts/files/file_contexts"
+test -f "$policy/var/lib/selinux/targeted/active/policy.kern"
+rm -rf /etc/selinux/targeted /var/lib/selinux/targeted
+mv "$policy/etc/selinux/targeted" /etc/selinux/targeted
+mv "$policy/var/lib/selinux/targeted" /var/lib/selinux/targeted
+rm -rf "$policy"

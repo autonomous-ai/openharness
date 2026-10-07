@@ -9,10 +9,13 @@ import re
 import stat
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 
 from asahi_image_check import digest
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+from asahi_media import policy_inventory
 
 
 def efi_partition(document, image_bytes):
@@ -82,6 +85,10 @@ def inspect_root(root, identity):
         raise ValueError('Installer media contains machine secrets.')
     if not re.search('^SELINUX=enforcing$', (root / 'etc/selinux/config').read_text(), re.M):
         raise ValueError('Installer SELinux is not enforcing.')
+    if policy_inventory(root) != identity.get('selinux'):
+        raise ValueError('The live policy differs from the verified installed image policy.')
+    if (data / 'policy').exists():
+        raise ValueError('The live root still contains temporary policy staging files.')
     if (root / 'boot/efi/m1n1/boot.bin').exists():
         raise ValueError('Removable media must not manage m1n1.')
     enabled = root / 'etc/systemd/system/multi-user.target.wants/harness-installer.service'

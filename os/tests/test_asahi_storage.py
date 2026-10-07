@@ -75,6 +75,14 @@ class StorageState(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(self.read()['phase'], 'copied')
 
+    def test_failed_checkpoint_flush_does_not_advance_the_transaction(self):
+        storage.save_state(self.path, self.state)
+        with patch.object(storage.target, 'sync_directory', side_effect=OSError('flush failed')):
+            with self.assertRaises(OSError):
+                storage.advance(self.path, self.state, 'copying')
+        self.assertEqual(self.state['phase'], 'planned')
+        self.assertFalse(list(self.root.glob('.storage-*')))
+
     def test_loose_parent_symlink_and_fifo_are_refused(self):
         storage.save_state(self.path, self.state)
         self.root.chmod(0o777)

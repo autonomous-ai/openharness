@@ -178,5 +178,83 @@ class FirmwareMedia(unittest.TestCase):
                 check.inspect_efi(esp)
 
 
+class PolicyMedia(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.source = self.root / 'source'
+        for name in ('etc/selinux/targeted/policy/policy.35',
+                     'etc/selinux/targeted/contexts/files/file_contexts',
+                     'var/lib/selinux/targeted/active/policy.kern'):
+            path = self.source / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(name.encode())
+
+    def test_installed_policy_and_store_are_copied_exactly(self):
+        output = self.root / 'stage'
+        expected = build.policy_inventory(self.source, os.geteuid())
+        self.assertEqual(build.stage_policy(self.source, output, os.geteuid()), expected)
+        self.assertEqual(build.policy_inventory(output, os.geteuid()), expected)
+        for name in expected:
+            self.assertEqual((self.source / name).read_bytes(), (output / name).read_bytes())
+
+    def test_incomplete_or_ambiguous_compiled_policy_is_refused(self):
+        binary = self.source / 'etc/selinux/targeted/policy/policy.35'
+        binary.rename(binary.with_name('policy.34'))
+        binary.write_bytes(b'Other policy')
+        with self.assertRaisesRegex(ValueError, 'complete installed SELinux policy'):
+            build.policy_inventory(self.source, os.geteuid())
+        binary.unlink()
+        (self.source / 'var/lib/selinux/targeted/active/policy.kern').unlink()
+        with self.assertRaisesRegex(ValueError, 'complete installed SELinux policy'):
+            build.policy_inventory(self.source, os.geteuid())
+
+    def test_redirected_writable_and_special_policy_files_are_refused(self):
+        binary = self.source / 'etc/selinux/targeted/policy/policy.35'
+        binary.chmod(0o666)
+        with self.assertRaisesRegex(ValueError, 'unexpected type, owner or mode'):
+            build.policy_inventory(self.source, os.geteuid())
+        binary.unlink()
+        binary.symlink_to(self.root / 'outside')
+        with self.assertRaisesRegex(ValueError, 'unexpected type, owner or mode'):
+            build.policy_inventory(self.source, os.geteuid())
+        binary.unlink()
+        os.mkfifo(binary, 0o600)
+        with self.assertRaisesRegex(ValueError, 'unexpected type, owner or mode'):
+            build.policy_inventory(self.source, os.geteuid())
+
+    def test_policy_parent_cannot_redirect_the_copy(self):
+        parent = self.source / 'etc/selinux'
+        original = parent.with_name('saved-selinux')
+        parent.rename(original)
+        parent.symlink_to(original)
+        with self.assertRaisesRegex(ValueError, 'path was redirected'):
+            build.stage_policy(self.source, self.root / 'stage', os.geteuid())
+        self.assertFalse((self.root / 'stage').exists())
+
+    def test_failed_unmount_never_deletes_the_source_tree(self):
+        mount = self.root / 'mount'
+        mount.mkdir()
+        sentinel = mount / 'keep'
+        calls = []
+        def run(*args):
+            calls.append(args)
+            if args[0] == 'losetup':
+                return '/dev/loop9'
+            if args[0] == 'mount':
+                sentinel.write_text('Read-only source data')
+            if args[0] == 'umount':
+                raise RuntimeError('Unmount failed')
+            return ''
+        with patch.object(build.tempfile, 'mkdtemp', return_value=str(mount)), \
+                patch.object(build, 'run', side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, 'Unmount failed'):
+                with build.image_root(self.root / 'verified.raw'):
+                    pass
+        self.assertEqual(sentinel.read_text(), 'Read-only source data')
+        self.assertFalse(any('--detach' in command for command in calls))
+
+
 if __name__ == '__main__':
     unittest.main()

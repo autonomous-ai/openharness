@@ -5,16 +5,19 @@ Only the installer userspace is built. The installed system and every shared
 client remain the exact previously tested image, supplied as an offline payload.
 """
 import argparse
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import re
 import shutil
 import stat
+import tempfile
 import xml.etree.ElementTree as ET
 
 from asahi_image import ROOT, digest, read_lock, run, upstream_identity
 
 INSTALLER_FILES = ('media.py', 'install.py', 'target.py', 'storage.py', 'startup.py')
+POLICY_DIRS = ('etc/selinux/targeted', 'var/lib/selinux/targeted')
 PACKAGES = (
     'fedora-release', 'systemd', 'systemd-udev', 'dbus', 'bash', 'python3',
     'util-linux', 'cryptsetup', 'btrfs-progs', 'e2fsprogs', 'dosfstools', 'gdisk',
@@ -45,6 +48,66 @@ def payload_identity(image, receipt, producer, source_commit):
         raise ValueError('The offline payload differs from its verified image.')
     return {'source_commit': source_commit, 'producer_run_id': producer['id'],
             'sha256': artifact['sha256'], 'bytes': info.st_size}
+
+
+@contextmanager
+def image_root(image):
+    """Read the already verified payload without ever replaying its filesystem."""
+    folder = Path(tempfile.mkdtemp(prefix='harness-media-policy-'))
+    loop = None
+    mounted = False
+    try:
+        loop = run('losetup', '--find', '--show', '--read-only', '--partscan',
+                   '--sector-size', '4096', image)
+        if not re.fullmatch('/dev/loop[0-9]+', loop):
+            raise ValueError('Unexpected policy source device.')
+        run('mount', '-t', 'btrfs', '-o', 'ro,rescue=nologreplay,subvol=root', loop + 'p3', folder)
+        mounted = True
+        yield folder
+    finally:
+        if mounted:
+            run('umount', folder)
+        if loop is not None and re.fullmatch('/dev/loop[0-9]+', loop):
+            run('losetup', '--detach', loop)
+        # A failed unmount must never become a recursive source-image deletion.
+        folder.rmdir()
+
+
+def policy_inventory(root, owner_uid=0):
+    files = {}
+    for prefix in POLICY_DIRS:
+        base = root / prefix
+        for part in [base, *base.parents]:
+            if part == root:
+                break
+            if part.is_symlink():
+                raise ValueError('The SELinux policy path was redirected.')
+        for path in [base, *sorted(base.rglob('*'))]:
+            info = path.lstat()
+            if (info.st_uid != owner_uid or info.st_mode & 0o022 or
+                    not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode))):
+                raise ValueError('The SELinux policy has an unexpected type, owner or mode.')
+            if stat.S_ISREG(info.st_mode):
+                files[str(path.relative_to(root))] = {'sha256': digest(path), 'bytes': info.st_size,
+                                                     'mode': stat.S_IMODE(info.st_mode)}
+    binaries = [name for name in files if re.fullmatch(r'etc/selinux/targeted/policy/policy\.\d+', name)]
+    required = {'etc/selinux/targeted/contexts/files/file_contexts',
+                'var/lib/selinux/targeted/active/policy.kern'}
+    if len(binaries) != 1 or not required <= files.keys():
+        raise ValueError('Use a complete installed SELinux policy and module store.')
+    return files
+
+
+def stage_policy(root, destination, owner_uid=0):
+    # With a smaller live policy, source labels unknown to its kernel appear as
+    # unlabeled_t to rsync. Carry the installed policy and its module store so
+    # the live kernel can preserve every source type from the start.
+    files = policy_inventory(root, owner_uid)
+    for prefix in POLICY_DIRS:
+        shutil.copytree(root / prefix, destination / prefix, dirs_exist_ok=True)
+    if policy_inventory(destination, owner_uid) != files:
+        raise ValueError('The staged SELinux policy differs from the verified image.')
+    return files
 
 
 def live_recipe(description):
@@ -116,13 +179,15 @@ def prepare(upstream, image, receipt_path, producer_path, image_source, output, 
         else:
             shutil.copy2(origin, target)
     live_recipe(description)
+    with image_root(image) as mounted:
+        identity['selinux'] = stage_policy(mounted, description / 'root/usr/share/harness-installer/policy')
     platform = source / 'os/platforms/apple-silicon'
     # Upstream config.sh configures an installed OS, including boot.bin. Its
     # bootstrap guard stays; this live-specific hook never generates that file.
     shutil.copyfile(platform / 'configure-media.sh', description / 'config.sh')
     (description / 'config.sh').chmod(0o755)
     data = description / 'root/usr/share/harness-installer'
-    data.mkdir(parents=True)
+    data.mkdir(parents=True, exist_ok=True)
     (data / 'media.json').write_text(json.dumps(identity, indent=2) + '\n')
     run('cp', '--sparse=always', '--reflink=auto', image, data / 'payload.raw')
     (data / 'payload.raw').chmod(0o444)

@@ -110,7 +110,7 @@ def save_state(path, state):
             os.fsync(stream.fileno())
         os.replace(temporary, path)
         temporary = None
-        os.fsync(directory)
+        target.sync_directory(directory)
     finally:
         if temporary is not None:
             os.unlink(temporary)

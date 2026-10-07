@@ -162,7 +162,8 @@ def main():
         started = time.monotonic()
         vm.keys('ret')
         vm.frame('03-progress', 'Checking installation files', seconds=60)
-        vm.frame('04-complete', ['Harness is installed', 'Shut down'], seconds=480)
+        vm.frame('04-complete', ['Harness is installed', 'Shut down'], seconds=480,
+                 fatal=['Installation stopped'])
         receipt['install_seconds'] = round(time.monotonic() - started, 3)
         vm.stop_drain()
         vm.keys('ret')
