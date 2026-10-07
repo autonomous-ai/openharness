@@ -18,7 +18,7 @@ describe('explicit publication', () => {
     expect(screen.getByTitle('Publication preview')).toHaveAttribute('sandbox', 'allow-scripts');
     expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
     expect(mocks.request).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Publish harness' }));
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/hub/published-fixture'));
     expect(mocks.request.mock.calls[0][1].body).toMatchObject({ forkedFrom: 'starter-orbit', confirmed: true, license: 'MIT', files: project.files, conversation: project.conversation });
@@ -33,9 +33,23 @@ describe('explicit publication', () => {
     fireEvent.change(screen.getByLabelText('Message 1'), { target: { value: 'Make it.' } });
     fireEvent.change(screen.getByLabelText('Upload HTML output'), { target: { files: [Object.assign(new File(['<h1>Test</h1>'], 'index.html'), { text: async () => '<h1>Test</h1>' })] } });
     await waitFor(() => expect(screen.getByTitle('Publication preview')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('checkbox')); mocks.request.mockRejectedValue(new Error('Service unavailable'));
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ })); mocks.request.mockRejectedValue(new Error('Service unavailable'));
     fireEvent.click(screen.getByRole('button', { name: 'Publish harness' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Service unavailable');
     expect(screen.getByDisplayValue('Keep this draft')).toBeInTheDocument(); expect(mocks.push).not.toHaveBeenCalled();
+  });
+  it('holds back a publication that looks like it carries a credential or lacks its harness source', async () => {
+    render(<PublishPage />);
+    const bundle = { ...project, harnessId: 'autonomous/blender', files: [...project.files, { path: 'config.json', content: '{ "apiKey": "abcd1234efgh5678" }' }] };
+    const file = Object.assign(new File([JSON.stringify(bundle)], 'OPEN-HARNESS.json', { type: 'application/json' }), { text: async () => JSON.stringify(bundle) });
+    fireEvent.change(screen.getByLabelText('Import fork bundle'), { target: { files: [file] } });
+    await screen.findByText('config.json looks like it holds a password or secret.');
+    expect(screen.getByText(/This harness needs scenes\/hello.py/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /None of them is a real credential/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeEnabled();
   });
 });

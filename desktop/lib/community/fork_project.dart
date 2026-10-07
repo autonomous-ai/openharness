@@ -6,18 +6,9 @@ import 'package:path/path.dart' as p;
 import '../core/harness_cli_runner.dart';
 import '../core/project_folder.dart';
 import 'fork_link.dart';
+import 'hub_contract.dart';
 
-const communityHarnesses = {
-  'autonomous/blender',
-  'autonomous/marp',
-  'autonomous/typst',
-  'autonomous/circuitjs',
-  'autonomous/godogen',
-  'autonomous/jev-sheets',
-  'autonomous/mujoco',
-  'autonomous/rdkit',
-  'autonomous/strudel',
-};
+final communityHarnesses = hubHarnessMarkers.keys.toSet();
 
 const _communityViewers = {
   'autonomous/web-viewer',

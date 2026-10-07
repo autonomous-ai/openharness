@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/community/hub_return.dart';
+import 'package:harness/community/publish_conversation.dart';
 import 'package:harness/community/publish_project.dart';
 
 void main() {
@@ -73,30 +74,73 @@ void main() {
     );
     expect((draft['files'] as List).map((f) => f['path']), ['index.html']);
   }, skip: Platform.isWindows);
-  test(
-    'refuses a missing viewer and oversized projects without publishing',
-    () async {
-      await file('code.py', 'print(1)');
-      await expectLater(
-        buildPublicationDraft(
-          folder: root.path,
-          title: 'Test',
-          engine: 'codex',
-        ),
-        throwsFormatException,
-      );
-      await file('index.html', '<p>Ready</p>');
-      await file('large.json', 'x' * 3000001);
-      await expectLater(
-        buildPublicationDraft(
-          folder: root.path,
-          title: 'Test',
-          engine: 'codex',
-        ),
-        throwsFormatException,
-      );
-    },
-  );
+  test('refuses only a missing or oversized viewer', () async {
+    await file('code.py', 'print(1)');
+    Future<Map<String, dynamic>> build() => buildPublicationDraft(
+      folder: root.path,
+      title: 'Test',
+      engine: 'codex',
+    );
+    await expectLater(build(), throwsFormatException);
+    await file('index.html', 'x' * 3000001);
+    await expectLater(build(), throwsFormatException);
+  });
+  test('leaves out what does not fit and names it, keeping the output and the harness source', () async {
+    await file('preview.html', '<p>Ready</p>');
+    await file('sim/hello.py', 'print("marker")');
+    for (var i = 0; i < 40; i++) {
+      await file('src/deep/part$i.ts', 'export const n = $i');
+    }
+    await file('large.json', 'x' * 3000001);
+    await File('${root.path}/latin1.csv')
+        .writeAsBytes([0x63, 0x61, 0x66, 0xe9]);
+    final draft = await buildPublicationDraft(
+      folder: root.path,
+      title: 'Robot',
+      engine: 'codex',
+      harnessId: 'autonomous/mujoco',
+    );
+    final paths = (draft['files'] as List).map((f) => f['path']).toList();
+    expect(paths, hasLength(30));
+    expect(paths, containsAll(['preview.html', 'sim/hello.py']));
+    expect(paths, isNot(contains('large.json')));
+    expect(paths, isNot(contains('latin1.csv')));
+    expect(draft['viewerPath'], 'preview.html');
+    expect(draft['harnessId'], 'autonomous/mujoco');
+    expect(
+      draft['contextNote'],
+      contains('Left out large.json, latin1.csv, src/deep/'),
+    );
+    expect(draft['contextNote'], contains('and 11 more'));
+  });
+  test('publishes without a harness whose source is missing, and asks for an unknown agent', () async {
+    await file('index.html', '<p>Ready</p>');
+    final draft = await buildPublicationDraft(
+      folder: root.path,
+      title: 'Lamp',
+      engine: 'grok',
+      harnessId: 'autonomous/blender',
+    );
+    expect(draft, isNot(contains('harnessId')));
+    expect(draft, isNot(contains('engine')));
+    expect(draft['contextNote'], contains('Without scenes/hello.py'));
+    expect(draft['contextNote'], contains('does not list grok'));
+  });
+  test('keeps the newest turns of a long session', () async {
+    final rows = [
+      for (var i = 0; i < 50; i++) {'ask': 'ask $i', 'answer': 'answer $i'},
+    ];
+    final turns = publicationTurns({'rows': rows});
+    expect(turns, hasLength(80));
+    expect(turns.first, {'role': 'user', 'text': 'ask 10'});
+    expect(turns.last, {'role': 'assistant', 'text': 'answer 49'});
+    final long = publicationTurns({
+      'rows': [
+        {'ask': 'x' * 25000},
+      ],
+    });
+    expect(long.map((turn) => turn['text']!.length), [12000, 12000, 1000]);
+  });
   test('one-use browser handoff posts a draft only to the configured Hub', () async {
     final draft = {
       'version': 1,

@@ -36,6 +36,7 @@ class SelectionTests(unittest.TestCase):
             "store/agents/home-assistant/src/a.py": {"desktop", "experience", "home-assistant"},
             "store/tools/runtimes.sh": {"desktop", "experience", "home-assistant", "authoring"},
             "desktop/test/log_redact_test.dart": {"desktop", "desktop-logging"},
+            "backend/src/lib/communityContract.ts": {"backend", "website", "desktop"},
         }.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], expected)

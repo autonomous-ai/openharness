@@ -30,6 +30,7 @@ AUTHORING = {"generative-art", "music-studio", "creative-direction", "voxel-worl
 LOGGING = ["desktop/lib/logging/*", "desktop/test/app_log_test.dart", "desktop/test/buffered_log_test.dart",
            "desktop/test/crash_log_test.dart", "desktop/test/dial_log_tail_test.dart", "desktop/test/log_*_test.dart",
            "desktop/test/export_logs_dialog_test.dart", "desktop/test/cli_transcript_test.dart", "desktop/tool/log_append_probe.dart"]
+HUB_CONTRACT = {"backend/src/lib/communityContract.ts", "backend/src/lib/communityAccess.ts"}
 SPECIAL_WORKFLOWS = {"website-checks.yml": "website", "experience-checks.yml": "experience",
                      "authoring-browser-checks.yml": "authoring", "home-assistant-checks.yml": "home-assistant",
                      "desktop-logging-checks.yml": "desktop-logging"}
@@ -78,6 +79,8 @@ def select(paths):
                 scopes.add("desktop-logging")
         elif root in {"tui", "backend", "companions", "website", "os", "provider"}:
             scopes.add(root)
+            if path in HUB_CONTRACT:
+                scopes |= {"website", "desktop"}  # Their copies of the Hub's rules are tested against it.
         elif root == "devices":
             scopes |= {"firmware", "cli", "desktop"}
         elif root == "mobile":
