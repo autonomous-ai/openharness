@@ -109,30 +109,9 @@ Future<void> showPhoneSheet(
   List<PhoneSheetSection> sections = const [],
   String? titleBranch,
 }) {
-  assert(debugCheckHasMediaQuery(context));
-  assert(debugCheckHasMaterialLocalizations(context));
-  // What `showModalBottomSheet` does, with [_PhoneSheetRoute] pushed in place of its route —
-  // that function has no way to take another. Every argument below is one it would pass for the
-  // same call; the veil is the only difference.
-  final navigator = Navigator.of(context, rootNavigator: true);
-  final localizations = MaterialLocalizations.of(context);
-  return navigator.push(
-    _PhoneSheetRoute<void>(
-      capturedThemes: InheritedTheme.capture(
-        from: context,
-        to: navigator.context,
-      ),
-      barrierLabel: localizations.scrimLabel,
-      barrierOnTapHint: localizations.scrimOnTapHint(
-        localizations.bottomSheetLabel,
-      ),
-      // The terminal's ground, a rounded top like every sheet New opens, no handle.
-      showDragHandle: false,
-      backgroundColor: Tty.of(context).ground,
-      isScrollControlled: true,
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.sizeOf(context).height * 0.85,
-      ),
+  return Navigator.of(context, rootNavigator: true).push(
+    phoneSheetRoute<void>(
+      context,
       builder: (sheetContext) => SafeArea(
         child: _TmuxMenu(
           title: title,
@@ -146,6 +125,41 @@ Future<void> showPhoneSheet(
         ),
       ),
     ),
+  );
+}
+
+/// The route [showPhoneSheet] pushes, around content of the caller's own — for a sheet that is not
+/// a menu of actions (the download menu of "Get Harness for your computer"). Push it on the root
+/// navigator; held, it can be taken away again ([NavigatorState.removeRoute]) when the page that
+/// opened it goes.
+ModalBottomSheetRoute<T> phoneSheetRoute<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+}) {
+  assert(debugCheckHasMediaQuery(context));
+  assert(debugCheckHasMaterialLocalizations(context));
+  // What `showModalBottomSheet` does, with [_PhoneSheetRoute] pushed in place of its route —
+  // that function has no way to take another. Every argument below is one it would pass for the
+  // same call; the veil is the only difference.
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final localizations = MaterialLocalizations.of(context);
+  return _PhoneSheetRoute<T>(
+    capturedThemes: InheritedTheme.capture(
+      from: context,
+      to: navigator.context,
+    ),
+    barrierLabel: localizations.scrimLabel,
+    barrierOnTapHint: localizations.scrimOnTapHint(
+      localizations.bottomSheetLabel,
+    ),
+    // The terminal's ground, a rounded top like every sheet New opens, no handle.
+    showDragHandle: false,
+    backgroundColor: Tty.of(context).ground,
+    isScrollControlled: true,
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.sizeOf(context).height * 0.85,
+    ),
+    builder: builder,
   );
 }
 
@@ -341,9 +355,9 @@ class _TmuxMenuState extends State<_TmuxMenu> {
   }
 }
 
-/// The route [showPhoneSheet] pushes: Material's own bottom sheet, standing on the app's sheet veil
-/// rather than a flat `black54` — the page dimmed to [kSheetVeilOpacity] and blurred at
-/// [kDialogVeilBlur], as it is under the search sheet.
+/// The route [showPhoneSheet] and [phoneSheetRoute] push: Material's own bottom sheet, standing on
+/// the app's sheet veil rather than a flat `black54` — the page dimmed to [kSheetVeilOpacity] and
+/// blurred at [kDialogVeilBlur], as it is under the search sheet.
 ///
 /// ⚠️ **Blurred, because what is behind these sheets is usually a live terminal.** Dimmed text is
 /// still text: under the flat tint its lines stayed legible — and moving — and the eye went on

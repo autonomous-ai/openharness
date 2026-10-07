@@ -15,24 +15,27 @@ import 'scan_to_connect.dart';
 import 'set_up_computer.dart';
 
 /// Setting up a computer, for a phone that is signed in — the same page as the first screen's "Not
-/// yet" ([SetUpComputerPage]: the website's download menu, sent to the computer), and the one thing
-/// only a signed-in phone can do on it: watch for the computer to appear (every few seconds, since
-/// nothing tells the phone) and pair with it by the code its Harness ▸ Add Phone… shows.
+/// yet" ([SetUpComputerPage]: three steps, the first sending the download to the computer), and the
+/// one thing only a signed-in phone can do on it: watch for the computer to appear (every few
+/// seconds, since nothing tells the phone) and pair with it by the code its Harness ▸ Add Phone…
+/// shows.
 ///
 /// ```
-/// Get Harness for
+/// Get Harness for                              ⚙
 /// your computer
 /// [| Signed in as ada@… Waiting for your computer…]
+/// Not you? Sign out
 ///
-/// Send it to your computer:   (the download menu)
-/// …
-/// Then, on your computer:
-/// 1  Install Harness, and open it.
-/// 2  Sign in with Google or Apple, as ada@… — the account on this phone.
-/// 3  Open Add Phone… and scan its code. On a Mac, it’s in the Harness menu.
-/// Scan to connect ›
+/// 1  Install Harness on your computer.
+///    [⇪ Send it to your computer ›]   (the download menu, in a sheet)
+///    or open harness.autonomous.ai/desktop there.
+/// 2  Open it, and sign in with Google or Apple, as ada@… — the account on this phone.
+/// 3  Open Add Phone… and scan its code.
+///    On a Mac, it’s in the Harness menu.
+///    [Scan to connect]
+/// ───
+/// Try the sample ›
 /// See how it works ▶
-/// Try the sample while you wait
 /// ```
 ///
 /// It replaces a page of its own — an email of the steps, a Terminal/Mac tab, four commands to
