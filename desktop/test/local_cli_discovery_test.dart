@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/harness_cli_runner.dart';
@@ -764,48 +765,72 @@ void main() {
     },
   );
 
-  test('startSupervising waits for more than one quiet tick before spawning into an update gap', () async {
-    const computerId = '0123456789abcdef0123456789abcdef';
-    final identityFile = File('${scratch.path}/computer-id')
-      ..writeAsStringSync(computerId);
-    // The port goes quiet — the old daemon closed it, the new one is about to bind — then answers
-    // again. That is a handoff, not a crash, and must not cost a spawn. `spawnAfter: 3` against a
-    // gap of ~1.5 ticks: however the gap lands on the tick phase, at most two ticks can see it.
-    final port = await freePort();
-    server = await serveStatus(port, () => readyStatus(computerId));
-    var spawnCount = 0;
-    final discovery = discoveryFor(
-      port,
-      identityFile,
-      spawnCommand: () async {
-        spawnCount++;
-      },
-    );
+  test('startSupervising waits for more than one quiet tick before spawning into an update gap', () {
+    fakeAsync((clock) {
+      final ready = LocalCliProbe.ready(
+        LocalCliEndpoint(
+          computerId: '0123456789abcdef0123456789abcdef',
+          wsUri: Uri.parse('ws://127.0.0.1/api/local-ws'),
+          protocolVersion: localWsProtocolVersion,
+          terminalProtocolVersion: localTerminalProtocolVersion,
+        ),
+      );
+      const down = LocalCliProbe.down('handoff gap');
+      var seen = ready;
+      var spawnCount = 0;
+      final discovery = _SupervisionProbe(
+        readProbe: () async => seen,
+        spawnCommand: () async {
+          spawnCount++;
+        },
+      );
+      const interval = Duration(milliseconds: 20);
+      final timer = discovery.startSupervising(
+        checkInterval: interval,
+        // This fixture tests consecutive probes, not grace/backoff durations.
+        graceWindow: Duration.zero,
+        initialBackoff: Duration.zero,
+        maxBackoff: Duration.zero,
+        spawnAfter: 3,
+        stillSignedIn: () async => true,
+      );
+      void tick() {
+        clock.elapse(interval);
+        clock.flushMicrotasks();
+      }
 
-    final timer = discovery.startSupervising(
-      checkInterval: const Duration(milliseconds: 20),
-      graceStep: const Duration(milliseconds: 10),
-      graceWindow: const Duration(milliseconds: 50),
-      initialBackoff: const Duration(milliseconds: 20),
-      maxBackoff: const Duration(milliseconds: 20),
-      spawnAfter: 3,
-      stillSignedIn: () async => true,
-    );
-    addTearDown(timer.cancel);
+      try {
+        tick();
+        // Real socket/timer delays can stretch a nominal 30 ms gap on busy
+        // runners. Specify the observations: two quiet ticks, then recovery.
+        seen = down;
+        tick();
+        tick();
+        expect(spawnCount, 0, reason: 'a short gap is a handoff, not a crash');
+        seen = ready;
+        tick();
+        expect(spawnCount, 0);
 
-    await Future.delayed(const Duration(milliseconds: 60));
-    await server!.close(force: true);
-    server = null;
-    await Future.delayed(const Duration(milliseconds: 30)); // the gap
-    server = await serveStatus(port, () => readyStatus(computerId));
-    await Future.delayed(const Duration(milliseconds: 150));
-    expect(spawnCount, 0, reason: 'a short gap is a handoff, not a crash');
-
-    // Quiet for good: now it is down, and the spawn is the fix.
-    await server!.close(force: true);
-    server = null;
-    await Future.delayed(const Duration(milliseconds: 250));
-    expect(spawnCount, greaterThan(0));
+        // Recovery must reset the count. Only three NEW consecutive quiet
+        // probes may start a replacement daemon.
+        seen = down;
+        tick();
+        tick();
+        expect(
+          spawnCount,
+          0,
+          reason: 'quiet ticks before recovery do not accumulate',
+        );
+        tick();
+        expect(
+          spawnCount,
+          1,
+          reason: 'confirmed failure starts one replacement',
+        );
+      } finally {
+        timer.cancel();
+      }
+    });
   });
 
   test('startSupervising backs off between failed spawn attempts instead of spawning every tick', () async {
@@ -1039,4 +1064,17 @@ void main() {
     await Future.delayed(Duration.zero);
     expect(signedOutCalls, 1, reason: 'a late answer is still told');
   });
+}
+
+/// Control probe results while exercising the real supervisor and its timers.
+class _SupervisionProbe extends LocalCliDiscovery {
+  _SupervisionProbe({
+    required this.readProbe,
+    required Future<void> Function() spawnCommand,
+  }) : super(config: AppConfig.dev, spawnCommand: spawnCommand);
+
+  final Future<LocalCliProbe> Function() readProbe;
+
+  @override
+  Future<LocalCliProbe> probe({String? expectedComputerId}) => readProbe();
 }
