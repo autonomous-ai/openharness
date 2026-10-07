@@ -146,6 +146,12 @@ def finish(client, root, number, head, base, output, *, merge=False, wait_timeou
         pr = state(client, number, head, branch)
         if pr["state"] != "OPEN":
             raise ValueError("PR state changed before enqueueing")
+        entry = pr.get("mergeQueueEntry")
+        # Resuming a queued PR must include the candidate created by its earlier
+        # enqueue. A fresh command's start time would exclude that valid run.
+        record["candidate_search_since"] = entry["enqueuedAt"] if entry else record["started_at"]
+        if entry:
+            record["queue_entry"] = entry
         record["status"] = "ready_for_queue"
         save()
         if merge:
@@ -171,7 +177,7 @@ def finish(client, root, number, head, base, output, *, merge=False, wait_timeou
                         if not all(re.fullmatch(r"[0-9a-f]{40}", v or "") for v in [ci_sha, tree]):
                             raise ValueError("merged PR has an invalid commit/tree")
                         client.deadline = time.monotonic() + timeout
-                        evidence = merged_gate(client, tree, branch, record["started_at"], output / "candidate-ci")
+                        evidence = merged_gate(client, tree, branch, record["candidate_search_since"], output / "candidate-ci")
                         return dict(commit=ci_sha, tree=tree, merged_at=current["mergedAt"], evidence=evidence)
                     entry = current["mergeQueueEntry"]
                     if current["state"] != "OPEN" or not entry:

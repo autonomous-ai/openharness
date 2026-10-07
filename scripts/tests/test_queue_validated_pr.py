@@ -68,6 +68,18 @@ class QueueTests(unittest.TestCase):
         self.assertIn("enqueue_error", result)
         self.assertEqual(len(self.client.writes), 1)
 
+    def test_resuming_existing_queue_entry_verifies_earlier_candidate_without_reenqueue(self):
+        entry = dict(id="entry", state="AWAITING_CHECKS", position=1, enqueuedAt="2026-10-06T20:00:00Z")
+        opened = dict(state="OPEN", mergeQueueEntry=entry)
+        merged = dict(state="MERGED", mergeCommit={"oid": self.client.merged,
+                      "tree": {"oid": self.client.candidate_tree}}, mergedAt="2026-10-07T03:00:00Z")
+        with mock.patch.object(queue, "state", side_effect=[opened, opened, merged]):
+            result = self.finish()
+        self.assertEqual(result["status"], "merged")
+        self.assertEqual(self.client.writes, [])
+        self.assertEqual(result["candidate_search_since"], entry["enqueuedAt"])
+        self.assertTrue(any("created=%3E%3D2026-10-06T20:00:00Z" in path for path in self.client.read_paths))
+
     def test_unconfirmed_enqueue_or_queue_removal_cannot_report_success(self):
         self.client.drop = True
         result = self.finish()
@@ -117,6 +129,7 @@ class FakeClient:
     def __init__(self, fixture):
         self.fixture = fixture
         self.writes, self.enqueued, self.polls = [], False, 0
+        self.read_paths = []
         self.drop = self.change_head = self.lost_response = False
         self.receipt_patch = {}
         self.candidate, self.candidate_tree, self.merged = "c" * 40, "d" * 40, "b" * 40
@@ -150,6 +163,7 @@ class FakeClient:
         raise AssertionError(path)
 
     def pages(self, path, key):
+        self.read_paths.append(path)
         if key == "workflow_runs":
             return [copy.deepcopy(self.runs[123 if "event=pull_request" in path else 124])]
         run = self.runs[int(path.split("/")[2])]
