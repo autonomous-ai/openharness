@@ -198,11 +198,10 @@ while developing. Shared state, authentication, protocols, dependencies, and cha
 with an unclear impact also need the full CLI suite. A passing CI run on the tested
 source satisfies that full-suite check; do not run it again locally before release.
 Manual CI offers `cli`, `tui`, `backend`, `desktop`, and `full` scopes; `full` remains the default.
-CLI scope includes the supported OS/Node shell and serial matrix. Cross-component
-changes need all affected scopes or `full`.
-Desktop scope runs the complete VM suite in four shards on both macOS and Linux,
-with a verified coverage summary. Changed Dart analysis, browser tests and native
-integration checks remain separate requirements when relevant.
+CLI scope runs the typecheck and the default Vitest suite in four Linux shards.
+Desktop scope runs the VM suite in four Linux shards. PR CI runs only the suites of
+the components a PR changes; native, macOS, coverage-gate and end-to-end checks run in
+the release workflows.
 
 Two further suites exist and are
 **opt-in**, because they need software the machine may not have — they skip themselves rather than
