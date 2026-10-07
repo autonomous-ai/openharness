@@ -64,7 +64,8 @@ def live_recipe(description):
     locale = root.find('preferences/locale')
     if locale is None:
         locale = ET.SubElement(root.find('preferences'), 'locale')
-    locale.text = 'C.UTF-8'
+    # KIWI's schema takes "C" and setup_locale appends the UTF-8 suffix.
+    locale.text = 'C'
     keep = {'this://./repositories/core.xml', 'this://./repositories/asahi.xml', 'this://./components/boot.xml'}
     for node in list(root.findall('include')):
         if node.get('from') not in keep:
