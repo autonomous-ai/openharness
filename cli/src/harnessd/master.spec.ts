@@ -53,8 +53,13 @@ describe('the core\'s flags', () => {
   })
 
   it('gives the core exactly the heap limit its budget is a share of, or V8\'s own when that is 0', () => {
-    expect(coreExecArgv(['--import', 'tsx', '--max-old-space-size=256'], 512)).toEqual(['--import', 'tsx', '--max-old-space-size=512'])
-    expect(coreExecArgv(['--max_old_space_size=256'], 0)).toEqual([])
+    expect(coreExecArgv(['--import', 'tsx', '--max-old-space-size=256'], 512))
+      .toEqual(['--import', 'tsx', '--max-semi-space-size=4', '--max-old-space-size=512'])
+    expect(coreExecArgv(['--max_old_space_size=256'], 0)).toEqual(['--max-semi-space-size=4'])
+  })
+
+  it('keeps a young-generation size the master was given', () => {
+    expect(coreExecArgv(['--max_semi_space_size=8'], 512)).toEqual(['--max_semi_space_size=8', '--max-old-space-size=512'])
   })
 })
 
@@ -285,6 +290,11 @@ describe('runMaster', { timeout: 60_000 }, () => {
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); process.title = title })
 
   /** Wait for [test] to hold. The deadline only names what never came, well before the test's own. */
+  /** What the children appended to [path] so far, one JSON line each: whole lines only. Polled while they
+   *  run, so a line still being appended is not read half-written (and thrown on as JSON). */
+  const jsonLines = <T = Record<string, any>>(path: string): T[] =>
+    existsSync(path) ? readFileSync(path, 'utf8').split('\n').slice(0, -1).map((line) => JSON.parse(line) as T) : []
+
   const until = async (what: string, test: () => boolean, ms = 30_000) => {
     const deadline = Date.now() + ms
     while (!test()) {
@@ -302,8 +312,12 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const ran = join(dir, 'ran')
     const core = join(dir, 'core.cjs')
     writeFileSync(core, `
-      // The services run this script too (as \`__service <name>\`); each records its own.
-      require('node:fs').writeFileSync(${JSON.stringify(ran)} + (process.argv[3] ?? ''), process.execPath)
+      // The services run this script too (as \`__service <name>\`); each records its own. Written whole, then
+      // renamed: the test waits for the file to exist, and once read it empty, a service caught between the
+      // write's create and its bytes on a loaded machine.
+      const fs = require('node:fs'), mine = ${JSON.stringify(ran)} + (process.argv[3] ?? '')
+      fs.writeFileSync(mine + '.tmp', process.execPath)
+      fs.renameSync(mine + '.tmp', mine)
       process.send({ type: 'harnessd:bound', protocol: ${HARNESSD_PROTOCOL}, port: 1 })
       process.send({ type: 'harnessd:ready' })
       // A device: the core asks for the devices' process, which runs only on demand.
@@ -414,7 +428,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
     await until('the core to be ready', () => readStatusFile(statusFile, process.pid)?.state === 'running')
-    expect(JSON.parse(readFileSync(flags, 'utf8'))).toEqual(['--max-old-space-size=300'])
+    expect(JSON.parse(readFileSync(flags, 'utf8'))).toEqual(['--max-semi-space-size=4', '--max-old-space-size=300'])
     signals.get('SIGTERM')!()
     await until('the master to finish', () => exits.length > 0)
     expect(readStatusFile(statusFile, process.pid)).toMatchObject({ state: 'stopped', lastExitReason: 'stopped' })
@@ -471,15 +485,15 @@ describe('runMaster', { timeout: 60_000 }, () => {
       env: { ...process.env, HARNESSD_SERVICES: 'search,unknown,monitor,usage', HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '10' },
       exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
     })
-    const lines = (): Array<Record<string, any>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+    const lines = (): Array<Record<string, any>> => jsonLines(seen)
     await until('the crashed service to be restarted', () => lines().filter((line) => line.role === 'service:search').length === 2)
     // The light services share one process, the edge host, which runs each of those named.
     await until('the edge host to start', () => lines().some((line) => line.role === 'service:usage,monitor'))
-    expect(lines().find((line) => line.role === 'service:usage,monitor')).toMatchObject({ name: 'edge', flags: ['--max-old-space-size=384'] })
+    expect(lines().find((line) => line.role === 'service:usage,monitor')).toMatchObject({ name: 'edge', flags: ['--max-semi-space-size=4', '--max-old-space-size=384'] })
     const core = lines().find((line) => line.role === '__run')!
     const services = lines().filter((line) => line.role === 'service:search')
     expect(services.map((service) => service.restarts)).toEqual(['0', '1'])
-    expect(services[0]).toMatchObject({ name: 'search', flags: ['--max-old-space-size=1024'] })
+    expect(services[0]).toMatchObject({ name: 'search', flags: ['--max-semi-space-size=4', '--max-old-space-size=1024'] })
     expect(services[0].token).toMatch(/^[0-9a-f]{48}$/)
     expect(core.token).toBe(services[0].token)
     // The core is told exactly what runs out here, in a form a core from before the list reads too.
@@ -518,12 +532,53 @@ describe('runMaster', { timeout: 60_000 }, () => {
         env: { ...process.env, HARNESSD_SERVICES: 'none', HARNESSD_UPDATE_PROBATION_MS: '50' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
       })
-      const said = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+      const said = (): Array<Record<string, string>> => jsonLines(seen)
       await until('the core to hand over and a new one to start', () => said().filter((line) => line.role === '__run' && line.what === 'started').length === 2)
       expect(said().filter((line) => line.role.startsWith('service:')).map((line) => line.role)).toEqual(['service:updater'])
       expect(said()).toContainEqual({ role: '__run', what: 'asked for 9.9.9', restarts: '0' })
       expect(lines.some((line) => line.endsWith('[harnessd] the updater staged 9.9.9 — asking the core to hand over'))).toBe(true)
       expect(lines.some((line) => line.endsWith('[harnessd] core exited (code 75) for an update — restarting'))).toBe(true)
+      signals.get('SIGTERM')!()
+      await until('the master to finish', () => exits.length > 0)
+    } finally { log.mockRestore() }
+  })
+
+  it('hands over for a staged build only when the updater staged it, never another service', async () => {
+    const pidFile = join(dir, 'adapter.pid')
+    const seen = join(dir, 'seen')
+    const script = join(dir, 'daemon.cjs')
+    // Search says it staged a build, as only the updater may: the core must not be asked to hand over.
+    writeFileSync(script, `
+      const { appendFileSync } = require('node:fs')
+      const role = process.argv[2] === '__service' ? 'service:' + process.argv[3] : process.argv[2]
+      const say = (what) => appendFileSync(${JSON.stringify(seen)}, JSON.stringify({ role, what }) + '\\n')
+      say('started')
+      if (role === '__run') {
+        process.send({ type: 'harnessd:bound', protocol: 4, port: 1 }); process.send({ type: 'harnessd:ready' })
+        process.on('message', (message) => { if (message.type === 'harnessd:update') { say('asked for ' + message.version); process.exit(75) } })
+      }
+      if (role === 'service:search') setTimeout(() => { process.send({ type: 'harnessd:staged', version: '6.6.6' }); say('staged') }, 100)
+      setInterval(() => process.send({ type: 'harnessd:heartbeat', rssBytes: 1, heapUsedBytes: 1, loopDelayMs: 0 }), 50)
+      process.on('SIGTERM', () => process.exit(0))
+    `)
+    const exits: number[] = []
+    const signals = new Map<string, () => void>()
+    const lines: string[] = []
+    const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
+    try {
+      runMaster({
+        nodePath: process.execPath, execArgv: [], scriptPath: script, pidFile, updater: true,
+        restoreUpdate: () => {}, confirmUpdate: () => {},
+        env: { ...process.env, HARNESSD_SERVICES: 'search' },
+        exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
+      })
+      const said = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+      await until('search to say it staged a build', () => said().some((line) => line.role === 'service:search' && line.what === 'staged'))
+      // Long enough for a handover the master had asked for to reach the core.
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      expect(said().filter((line) => line.role === '__run')).toEqual([{ role: '__run', what: 'started' }])
+      expect(lines.some((line) => line.includes('asking the core to hand over'))).toBe(false)
+      expect(lines.some((line) => line.endsWith('[harnessd] service search said it staged 6.6.6, which only the updater may — ignored'))).toBe(true)
       signals.get('SIGTERM')!()
       await until('the master to finish', () => exits.length > 0)
     } finally { log.mockRestore() }
@@ -559,7 +614,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         env: { ...process.env, HARNESSD_SERVICES: 'search' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
       })
-      const roles = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+      const roles = (): Array<Record<string, string>> => jsonLines(seen)
       await until('the core and the service', () => roles().length >= 2)
       expect(roles().sort((a, b) => a.role.localeCompare(b.role))).toEqual([{ role: '__run', from: 'lean core', cli }, { role: 'service:search', from: 'lean', cli: null }])
       expect(lines.some((line) => line.endsWith(`[harnessd] services run from ${lean}`))).toBe(true)
@@ -633,7 +688,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
     const log = vi.spyOn(console, 'log').mockImplementation((line: string) => { lines.push(line) })
     const exits: number[] = []
     const signals = new Map<string, () => void>()
-    const services = (): Array<{ from: string; pid: number }> => (existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
+    const services = (): Array<{ from: string; pid: number }> => jsonLines<{ role: string; from: string; pid: number }>(seen)
       .filter((line) => line.role === 'service:search')
     /** End the service running now, and wait for the master to start the next: where it started it from. */
     const restart = async (): Promise<string> => {

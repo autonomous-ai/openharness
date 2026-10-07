@@ -13,6 +13,7 @@ import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { isApiLaunch } from '../../lib/gridLaunch.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
 import { sid } from '../../lib/log.js'
+import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 
 export interface LaunchHelperDeps {
@@ -32,6 +33,7 @@ export function createLaunchHelpers({ prepareApiTools, savedApis, launchOverride
   // An agent on a saved API's model relaunches with that API's endpoint and key as saved now, so a key
   // pasted since takes effect, and a removed API is refused rather than kept on its old key.
   const relaunchOverrides = async (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
+    await prepareInstructionWrites(session.cwd)
     prepareApiTools(session.cwd, session.engine)
     let gridLaunch = source.gridLaunch ?? null
     if (gridLaunch && isApiLaunch(gridLaunch)) {
@@ -45,7 +47,7 @@ export function createLaunchHelpers({ prepareApiTools, savedApis, launchOverride
         }
       }
     }
-    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, ...source, gridLaunch }, session.agentId)
+    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch }, session.agentId)
   }
 
   /**

@@ -1,0 +1,11 @@
+{
+  "status": 1,
+  "data": {
+    "id": "65f1a2b3c4d5e6f708192a3b",
+    "email": "grid-contract@example.com",
+    "full_name": "Grid Contract",
+    "customer_socials": [
+      { "source": "google", "uid": "104857600000000000042" }
+    ]
+  }
+}

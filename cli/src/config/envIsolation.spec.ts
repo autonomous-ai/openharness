@@ -7,8 +7,9 @@
  * managed runtime BEFORE PATH, by design), so the suite would measure this machine's managed
  * binaries instead of the code under test.
  */
-import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { realpathSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { env } from './env.js'
 import { AUTH_DIR } from '../lib/authSession.js'
@@ -16,6 +17,16 @@ import { AUTH_DIR } from '../lib/authSession.js'
 const productRoot = join(homedir(), '.harness')
 
 describe('test environment isolation', () => {
+  // The home folder is the suite's own (vitest.setup.ts), so every default rooted there is too: a spec that
+  // named no folder of its own read the developer's ~/.claude, ~/.codex and ~/.harness before it was.
+  it('runs in a throwaway home folder, so no default folder of an engine or of Harness is the developer\'s', () => {
+    const inTemp = (path: string) => realpathSync(path).startsWith(realpathSync(tmpdir()) + sep)
+    expect(inTemp(homedir())).toBe(true)
+    for (const folder of [env.CLAUDE_PROJECTS_DIR, env.CODEX_HOME, env.CURSOR_HOME, env.GROK_HOME, env.COPILOT_HOME, env.HERMES_HOME, env.OPENCODE_DATA_DIR]) {
+      expect(folder.startsWith(homedir() + sep), folder).toBe(true)
+    }
+  })
+
   it('keeps the data dir off the developer\'s ~/.harness', () => {
     expect(env.ADAPTER_DATA_DIR.startsWith(productRoot)).toBe(false)
   })

@@ -16,7 +16,7 @@ import { LEAN_CORE_SCRIPT_ENV, type MasterMessage } from './protocol.js'
 import {
   PROBE_ANSWER, RESUME_ENV, createReexec, decodeResume, fingerprint, readMarker, recoverFailedReexec, removeMarker, runProbe, writeMarker,
 } from './reexec.js'
-import { SERVICE_HOSTS, ServiceSupervisor, UPDATER_HOST, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
+import { SERVICE_HOSTS, ServiceSupervisor, UPDATER_HOST, UPDATER_PROCESS, serviceOptions, serviceProcessesEnv, serviceSpecs } from './services.js'
 import {
   DEFAULT_SUPERVISOR_OPTIONS, Supervisor, type CoreHandle, type SupervisorDeps, type SupervisorOptions, type SupervisorStatus,
 } from './supervisor.js'
@@ -132,6 +132,10 @@ export function supervisorOptions(env: NodeJS.ProcessEnv, execArgv: readonly str
 /** The flags the core runs with: the master's own, with the heap limit its budget is a share of. */
 export function coreExecArgv(execArgv: readonly string[], heapLimitMiB: number): string[] {
   const rest = execArgv.filter((flag) => !/^--max[-_]old[-_]space[-_]size=/.test(flag))
+  // Node lets the young generation grow to 16 MiB per semi-space and keeps it: the core sat at 32 MB
+  // of new space holding 2.6 MB, 13 hours in (measured 2026-10-07). 4 MiB returns ~24 MB a process;
+  // scavenges run more often, each as cheap, since what survives one is that same small set.
+  if (!rest.some((flag) => /^--max[-_]semi[-_]space[-_]size=/.test(flag))) rest.push('--max-semi-space-size=4')
   return heapLimitMiB > 0 ? [...rest, `--max-old-space-size=${heapLimitMiB}`] : rest
 }
 
@@ -298,7 +302,7 @@ export function runMaster(config: MasterConfig): Supervisor {
   })
   const specs = serviceSpecs(env, SERVICE_HOSTS)
   // The updater beside them, whatever HARNESSD_SERVICES says: the core neither routes to it nor runs it.
-  const processes = config.updater ? [...specs, { name: 'updater', ...UPDATER_HOST }] : specs
+  const processes = config.updater ? [...specs, { name: UPDATER_PROCESS, ...UPDATER_HOST }] : specs
   let supervisor: Supervisor | null = null
   const services = new ServiceSupervisor(processes, {
     spawnService: (spec, extra) => {
