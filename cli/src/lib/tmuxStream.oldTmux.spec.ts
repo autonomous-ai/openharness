@@ -9,6 +9,7 @@ import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { tmuxControlGate } from './tmuxControlGate.js'
 import { TmuxControlStream } from './tmuxStream.js'
 import { assumeTmuxVersion, resetTmuxVersionCache, type TmuxVersion } from './tmuxVersion.js'
 
@@ -24,7 +25,7 @@ afterEach(() => {
 })
 
 /** A control client that answers every command, `display-message` with [meta], and records what it was sent. */
-function controlClient(version: TmuxVersion, meta = '$1|@1|1|80|24|80|24|0|0|0|1|0|0|0|0|0') {
+function controlClient(version: TmuxVersion, meta = '$1|@1|1|80|24|80|24|0|0|0|1|0|0|0|0|0', answersAttach = true) {
   assumeTmuxVersion(version)
   const sent: string[] = []
   const child = new EventEmitter() as {
@@ -56,15 +57,15 @@ function controlClient(version: TmuxVersion, meta = '$1|@1|1|80|24|80|24|0|0|0|1
   vi.mocked(spawn).mockImplementation(() => {
     setImmediate(() => {
       child.emit('spawn')
-      setImmediate(() => child.stdout.emit('data', Buffer.from('%begin 1 0 0\n%end 1 0 0\n')))
+      if (answersAttach) setImmediate(() => child.stdout.emit('data', Buffer.from('%begin 1 0 0\n%end 1 0 0\n')))
     })
     return child
   })
   return { sent }
 }
 
-async function open(size = { cols: 80, rows: 24 }) {
-  const opened = await TmuxControlStream.open('%1', size, { onData: () => {}, onClose: () => {} })
+async function open(size = { cols: 80, rows: 24 }, readOnly = false) {
+  const opened = await TmuxControlStream.open('%1', size, { onData: () => {}, onClose: () => {} }, readOnly)
   expect(opened.state).toBe('succeeded')
   if (opened.state !== 'succeeded') throw new Error('stream did not open')
   return opened.value
@@ -130,5 +131,75 @@ describe('the terminal on an older tmux', () => {
       ])
       await stream.close()
     }
+  })
+})
+
+describe('a terminal on a tmux that crashes when one attaches as another goes (tmuxControlGate.ts)', () => {
+  const tick = () => new Promise((resolve) => setImmediate(resolve))
+  const empty = { room: null, inside: 0, waiting: 0 }
+  afterEach(() => { vi.useRealTimers() })
+
+  it('attaches in the attach room until tmux answers, and goes in the other, asking tmux once more before it leaves', async () => {
+    const client = controlClient({ major: 3, minor: 4 })
+    const atSpawn: unknown[] = []
+    const attach = vi.mocked(spawn).getMockImplementation()!
+    vi.mocked(spawn).mockImplementation(((...args: Parameters<typeof spawn>) => {
+      atSpawn.push(tmuxControlGate.state)
+      return attach(...args)
+    }) as typeof spawn)
+    const stream = await open()
+    await stream.attached
+    expect(atSpawn).toEqual([{ room: 'attach', inside: 1, waiting: 0 }])
+    expect(tmuxControlGate.state).toEqual(empty)
+
+    // Another terminal attaching: this one's `detach-client` waits for it.
+    const attaching = await tmuxControlGate.enter('attach')
+    vi.mocked(execFile).mockClear()
+    const closing = stream.close()
+    await tick()
+    expect(client.sent).not.toContain('detach-client')
+    attaching()
+    await closing
+    expect(client.sent.at(-1)).toBe('detach-client')
+    // tmux tells the others it went only once it reads the socket close: one more answer comes after that.
+    expect(vi.mocked(execFile).mock.calls.map((call) => call[1])).toEqual([['display-message', '-p', '#{pid}']])
+    expect(tmuxControlGate.state).toEqual(empty)
+  })
+
+  it('on tmux 3.7 neither waits nor asks again', async () => {
+    const client = controlClient({ major: 3, minor: 7 })
+    const stream = await open()
+    const attaching = await tmuxControlGate.enter('attach')
+    vi.mocked(execFile).mockClear()
+    try {
+      await stream.close()
+      expect(client.sent.at(-1)).toBe('detach-client')
+      expect(vi.mocked(execFile)).not.toHaveBeenCalled()
+    } finally {
+      attaching()
+    }
+  })
+
+  it('leaves the attach room when its client cannot start', async () => {
+    controlClient({ major: 3, minor: 4 })
+    vi.mocked(spawn).mockImplementation((() => {
+      const child = new EventEmitter()
+      setImmediate(() => child.emit('error', new Error('spawn tmux ENOENT')))
+      return child
+    }) as unknown as typeof spawn)
+    const opened = await TmuxControlStream.open('%1', { cols: 80, rows: 24 }, { onData: () => {}, onClose: () => {} })
+    expect(opened).toEqual({ state: 'failed', reason: 'tmux control client could not start' })
+    expect(tmuxControlGate.state).toEqual(empty)
+  })
+
+  it('keeps the others waiting no longer than its first command may take, when tmux never answers its attach', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    controlClient({ major: 3, minor: 4 }, undefined, false)
+    const watching = await open(undefined, true)
+    expect(tmuxControlGate.state).toEqual({ room: 'attach', inside: 1, waiting: 0 })
+    vi.advanceTimersByTime(3_000)
+    expect(tmuxControlGate.state).toEqual(empty)
+    await watching.close()
+    expect(tmuxControlGate.state).toEqual(empty)
   })
 })
