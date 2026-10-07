@@ -666,15 +666,24 @@ def check_first_use(vm, user, folder, installed=False):
     # normal local sign-in flow, with a cancellable return to the trial.
     vm.type_probe('sign in')
     vm.keys('ret')
+    # Sign in opens hn's own account page (#897): Google, Apple, the phone, or keep using locally.
+    # The phone needs no browser in the VM. Its `harness login` is hn's child, and Esc cancels it.
+    vm.command(user('sh -c ' + shlex.quote('for n in $(seq 1 20); do hn capture-pane -p | grep -q "Sign in with your phone" && exit 0; sleep .5; done; exit 1')), timeout=20)
+    vm.keys('down')
+    vm.keys('down')
+    vm.keys('ret')
     login_process = '[/]usr/lib/harness/cli.mjs login'
     vm.command('for n in $(seq 1 20); do pgrep -u 1000 -f ' + shlex.quote(login_process) +
                ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
     time.sleep(2)
     vm.screenshot('01d-connect-sign-in')
-    vm.keys('ctrl', 'c')
+    vm.keys('esc')
     vm.command('for n in $(seq 1 20); do ! pgrep -u 1000 -f ' + shlex.quote(login_process) +
                ' >/dev/null && exit 0; sleep 1; done; exit 1', timeout=30)
-    vm.keys('ret')
+    # Back to the work it was opened over, whether Esc closed the page or only stopped sign-in.
+    _, still_open = vm.command(user('sh -c ' + shlex.quote('hn capture-pane -p | grep -q "Your Harness account"')), check=False)
+    if still_open == 0:
+        vm.keys('esc')
     time.sleep(1)
     if not installed:
         # F10 reaches the dock without consuming the agent's ordinary Tab key.
