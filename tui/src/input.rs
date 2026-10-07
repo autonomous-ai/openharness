@@ -1650,6 +1650,8 @@ pub(crate) fn modal_key(app: &mut App, key: KeyEvent) {
                 let command = match b.row.key(key.code, key.modifiers) {
                     Answer::Chosen(i) => b.actions.get(i).cloned(),
                     Answer::Cancel => b.actions.first().cloned(),
+                    // q leaves like Esc; j, k and the rest do nothing.
+                    Answer::Ignored if key.code == KeyCode::Char('q') && !ctrl => b.actions.first().cloned(),
                     Answer::Moved | Answer::Ignored => None,
                 };
                 if let Some(command) = command { return commands::execute_in(app, &command, menu.mouse.clone()) }
@@ -3573,7 +3575,12 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
     let (px, py, width) = (menu.x, menu.y, menu.width);
     if m.x < px || m.x > px + 4 + width || m.y < py + 1 || m.y > py + count {
         let close = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
-        if close { return }
+        if close {
+            // A confirmation closed from outside is a cancel, not a vanished question.
+            let cancel = menu.buttons.as_ref().and_then(|b| b.actions.first().cloned());
+            if let Some(command) = cancel { commands::execute_in(app, &command, menu.mouse.clone()) }
+            return;
+        }
         menu.choice = None;
         app.modal = Some(Modal::Menu(menu));
         return;
@@ -3714,6 +3721,14 @@ mod tests {
         handle(&mut app, CEvent::Mouse(press(cells[1].1 + 2, y)));
         assert!(app.modal.is_none());
         assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("stop"));
+
+        // A press outside the box cancels: the question never just vanishes.
+        let mut app = App::new(19789, tokio::sync::mpsc::unbounded_channel().0, (100, 30));
+        app.mouse = true;
+        ask(&mut app);
+        handle(&mut app, CEvent::Mouse(press(0, 0)));
+        assert!(app.modal.is_none());
+        assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("cancel"));
     }
 
     #[test]

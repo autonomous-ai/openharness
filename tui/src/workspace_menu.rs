@@ -78,7 +78,10 @@ fn fit(menu: &mut Menu, size: (u16, u16)) -> bool {
 pub fn resize(app: &mut App) {
     if let Some(Modal::Menu(menu)) = &mut app.modal {
         if !fit(menu, app.size) {
+            // A confirmation going away is a cancel: what it was asking about must not stay pending.
+            let cancel = menu.buttons.as_ref().and_then(|b| b.actions.first().cloned());
             app.modal = None;
+            if let Some(command) = cancel { crate::commands::execute(app, &command) }
             app.say("Make the terminal larger to show this menu", crate::theme::WARN);
         }
     }
@@ -179,5 +182,15 @@ mod tests {
         app.size = (20, 20); resize(&mut app);   // 16 columns: the buttons cannot fit
         assert!(app.modal.is_none(), "refused, never overlapped");
         assert!(!open_buttons(&mut app, "Hi", vec![note("Stop?")], confirm(""), vec!["x".into(), "y".into()]));
+    }
+
+    #[test]
+    fn a_confirmation_removed_by_a_resize_runs_its_cancel_action() {
+        let (tx, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19799, tx, (100, 20));
+        assert!(open_buttons(&mut app, "Hi", vec![note("Stop?")], confirm(""), vec!["set -g @clicked cancel".into(), "set -g @clicked stop".into()]));
+        app.size = (20, 20); resize(&mut app);
+        assert!(app.modal.is_none());
+        assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("cancel"));
     }
 }

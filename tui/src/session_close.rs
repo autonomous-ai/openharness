@@ -446,6 +446,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_way_out_of_the_buttons_cancels_and_other_keys_do_nothing() {
+        let press = |app: &mut App, code, mods| crate::input::modal_key(app, KeyEvent::new(code, mods));
+        let ask = || { let mut app = app(); pane(&mut app, 1); answer(&mut app, "inspect", json!({"activity":"working"})); app };
+        for (code, mods) in [(KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE),
+            (KeyCode::Char('c'), KeyModifiers::CONTROL), (KeyCode::Char('g'), KeyModifiers::CONTROL)] {
+            let mut app = ask();
+            press(&mut app, code, mods);
+            assert!(app.modal.is_none(), "{code:?} {mods:?} leaves the dialog");
+            assert!(app.session_close.operation.is_none(), "{code:?} {mods:?} must not leave the close pending");
+            assert_eq!(modes(&app), ["inspect"], "{code:?} {mods:?} stops nothing");
+        }
+        let mut app = ask();
+        for (code, mods) in [(KeyCode::Char('j'), KeyModifiers::NONE), (KeyCode::Char('k'), KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::CONTROL),
+            (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::BackTab, KeyModifiers::SHIFT)] {
+            press(&mut app, code, mods);
+            assert!(matches!(app.modal, Some(Modal::Menu(_))), "{code:?} keeps the dialog");
+            assert_eq!(modes(&app), ["inspect"]);
+        }
+        let Some(Modal::Menu(m)) = &app.modal else { unreachable!() };
+        assert_eq!(m.buttons.as_ref().unwrap().row.chosen, 0, "Tab then Shift-Tab returns to Cancel");
+    }
+
+    #[tokio::test]
     async fn explicit_stop_keeps_its_target_when_focus_moves() {
         let mut app = app();
         pane(&mut app, 1);
