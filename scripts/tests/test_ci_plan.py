@@ -12,36 +12,26 @@ spec.loader.exec_module(planner)
 
 
 class SelectionTests(unittest.TestCase):
-    def test_docs_still_require_process_checks_and_assets_are_inputs(self):
-        self.assertEqual(planner.select(["docs/guide.md", "README.md"])[0], set())
-        self.assertEqual(planner.select(["docs/images/poster.png"])[0], {"desktop"})
-
-    def test_cli_and_process_changes_keep_conservative_core_coverage(self):
-        for path in ["scripts/merge-validated-pr.py", "Makefile"]:
+    def test_docs_workflows_scripts_and_unknown_paths_need_only_process_checks(self):
+        for path in ["docs/guide.md", "README.md", "docs/images/poster.png", "scripts/ci-plan.py",
+                     ".github/workflows/ci.yml", "Makefile", "store/tools/runtimes.sh", "surprise.py"]:
             with self.subTest(path=path):
-                self.assertEqual(planner.select([path])[0], planner.CORE)
+                self.assertEqual(planner.select([path])[0], set())
 
-    def test_cli_changes_include_phone_protocol_contracts(self):
-        self.assertEqual(planner.select(["cli/src/lib/relayFrames.ts"])[0], planner.CORE | {"mobile"})
-
-    def test_shared_planner_or_job_graph_changes_validate_every_component(self):
-        for path in ["scripts/ci-plan.py", ".github/workflows/ci.yml"]:
-            self.assertEqual(planner.select([path])[0], planner.SUITES)
-
-    def test_known_component_and_browser_inputs(self):
+    def test_each_component_selects_only_its_own_suite(self):
         for path, expected in {
+            "cli/src/lib/relayFrames.ts": {"cli"}, "tests/fixture.ts": {"cli"},
+            "desktop/test/log_redact_test.dart": {"desktop"}, "tui/src/main.rs": {"tui"},
+            "backend/src/app.ts": {"backend"}, "companions/src/a.ts": {"companions"},
             "website/app/page.tsx": {"website"}, "os/root/usr/lib/session": {"os"},
-            "mobile/pubspec.lock": {"mobile", "desktop"}, "tui/src/main.rs": {"tui"},
-            "provider/spec.md": {"provider"}, "devices/harness-device/firmware/main/main.c": {"firmware", "cli", "desktop"},
-            "store/agents/home-assistant/src/a.py": {"desktop", "experience", "home-assistant"},
-            "store/tools/runtimes.sh": {"desktop", "experience", "home-assistant", "authoring"},
-            "desktop/test/log_redact_test.dart": {"desktop", "desktop-logging"},
+            "provider/spec.md": {"provider"}, "devices/harness-device/firmware/main/main.c": {"firmware"},
+            "mobile/pubspec.lock": {"mobile"}, "daemons/tools/card.mjs": {"daemons"},
         }.items():
             with self.subTest(path=path):
                 self.assertEqual(planner.select([path])[0], expected)
 
-    def test_unknown_paths_fail_instead_of_getting_an_empty_green_plan(self):
-        for path in ["new-component/code.ts", "surprise.py", "../cli/code.ts", "/absolute"]:
+    def test_invalid_paths_fail(self):
+        for path in ["../cli/code.ts", "/absolute", ""]:
             with self.subTest(path=path), self.assertRaises(ValueError):
                 planner.select([path])
 
@@ -86,7 +76,7 @@ class GitPlanTests(unittest.TestCase):
         self.assertFalse(ready["draft"])
         self.assertEqual(draft["suites"], ready["suites"])
         self.assertEqual(draft["required_jobs"], ready["required_jobs"])
-        self.assertIn("mobile-checks", draft["required_jobs"])
+        self.assertIn("cli-tests", draft["required_jobs"])
         with self.assertRaisesRegex(ValueError, "invalid PR draft state"):
             self.plan(draft="false")
 
@@ -119,13 +109,15 @@ class GitPlanTests(unittest.TestCase):
         self.commit()
         self.assertEqual(self.plan(base=main)["suites"], ["website"])
 
-    def test_group_includes_every_change_ahead_of_this_pr(self):
+    def test_group_records_every_change_but_reruns_only_process_checks(self):
         self.write("website/new.txt")
         self.commit()
         self.write("os/new.txt")
         self.commit()
         plan = self.plan("merge_group")
-        self.assertEqual(set(plan["suites"]), {"os", "website"})
+        self.assertEqual(plan["paths"], ["os/new.txt", "website/new.txt"])
+        self.assertEqual(plan["suites"], [])
+        self.assertEqual(plan["required_jobs"], ["process-checks"])
         self.assertEqual(plan["base"], self.base)
 
     def test_wrong_head_event_or_nonancestor_group_fails(self):

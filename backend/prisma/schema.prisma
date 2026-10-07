@@ -864,6 +864,26 @@ model DeviceKeyLogEntry {
   @@map("device_key_log")
 }
 
+/// The account's device key log as of entry `seq` (lib/deviceKeyLog.ts), so an append does not verify
+/// the whole log again. Only a cache of `device_key_log`: it is checked against the log's real head on
+/// every read, a log that moved on is replayed from here, and one that does not fit is replayed from
+/// the start. Devices never see it.
+model DeviceKeyLogState {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @unique
+  seq       Int
+  hash      String
+  /// Active keys by pub, as `DevLogState.active`.
+  active    Json
+  /// Pubs a `remove` took out, as `DevLogState.removed`.
+  removed   Json
+  /// pub → the Harness session that added that key (`DeviceKeyLogEntry.sessionId`), for active keys.
+  sessions  Json
+  updatedAt DateTime @updatedAt
+
+  @@map("device_key_log_state")
+}
+
 /// Public/private link metadata only. The owner daemon keeps the final policy and encrypted discussion.
 model HarnessLink {
   id             String    @id @map("_id")

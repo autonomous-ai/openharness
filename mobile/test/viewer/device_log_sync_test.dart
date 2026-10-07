@@ -162,7 +162,11 @@ class _Backend {
     return (acct: acct, head: head, entries: [for (final e in log) if (e.seq > since) e.toJson()]);
   }
 
+  /// Every append is refused with this code while set.
+  String? refuse;
+
   Future<DeviceLogAppendAnswer?> append(DevLogEntry entry) async {
+    if (refuse case final code?) return (head: null, error: code);
     if (entry.seq != state.head.seq + 1 || entry.prev != state.head.hash) {
       return (head: state.head, error: 'STALE_HEAD');
     }
@@ -203,6 +207,31 @@ void main() {
     signedOut = 0;
     box2 = await E2eeIdentity.fromSeed(List.filled(32, 2));
     box3 = await E2eeIdentity.fromSeed(List.filled(32, 3));
+  });
+
+  test('a refusal to register is kept for the listing until a register lands; no answer is no refusal', () async {
+    var reachable = false;
+    final log = ViewerDeviceLog(
+      keys: keys,
+      fetch: backend.fetch,
+      append: (e) async => reachable ? backend.append(e) : null,
+      label: () => 'my-phone',
+      now: () => 5000,
+      sleep: (_) async {},
+    );
+    await log.register();
+    expect((await log.list()).registerError, isNull);
+    reachable = true;
+    backend.refuse = 'TOO_MANY';
+    await log.register();
+    expect((await log.list()).registerError, 'TOO_MANY');
+    // Nothing of it is written down.
+    expect((await keys.deviceLog())! as Map, isNot(contains('registerError')));
+    backend.refuse = null;
+    await log.register();
+    final me = b64e((await keys.identity()).pub);
+    expect(backend.state.active[me], isNotNull);
+    expect((await log.list()).registerError, isNull);
   });
 
   test('registers this app and pins every machine already in the log, announcing none', () async {
@@ -838,6 +867,39 @@ void main() {
       await log.refresh();
       expect(announced.map((m) => m.label), ['evil']);
       expect((await log.list()).pending, [b64e(evil.pub)]);
+    });
+
+    /// The backend's answers one entry at a time: a log of n entries is n pages.
+    Future<DeviceLogFetched?> onePerPage(int since) async {
+      final got = await backend.fetch(since);
+      return got == null ? null : (acct: got.acct, head: got.head, entries: got.entries.take(1).toList());
+    }
+
+    Future<void> addViewers(int n) async {
+      for (var i = 0; i < n; i++) {
+        await backend.add(await E2eeIdentity.fromSeed(List.filled(32, 100 + i)), 'viewer', '', 'app $i');
+      }
+    }
+
+    test('a first read longer than the usual page cap is all joined: none of it is news', () async {
+      await addViewers(25);
+      final log = logWith(onePerPage);
+      await log.refresh();
+      await log.refresh();
+      expect(announced, isEmpty);
+      expect((await log.list()).joinedSeq, 25);
+      // Past the join, the usual cap (and news) again.
+      await backend.add(evil, 'viewer', '', 'evil');
+      await log.refresh();
+      expect(announced.map((m) => m.label), ['evil']);
+    });
+
+    test('a review reads a list longer than the usual page cap', () async {
+      await addViewers(25);
+      final preview = await logWith(onePerPage).rebaseline(confirm: false);
+      expect(preview, isNotNull);
+      expect(preview!.head, backend.state.head);
+      expect(preview.added, hasLength(25));
     });
 
     test('a head that is not a position is not read at all', () async {

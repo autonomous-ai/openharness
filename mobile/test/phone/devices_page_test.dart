@@ -301,6 +301,28 @@ void main() {
     expect(panel, findsNothing);
   });
 
+  testWidgets(
+    'a refusal to register is a row: too many devices plainly, any other with its code',
+    (tester) async {
+      await pump(tester);
+      expect(find.byKey(const ValueKey('devices-refused')), findsNothing);
+      app.registerError = 'TOO_MANY';
+      await tester.pumpWidget(const SizedBox());
+      await pump(tester);
+      expect(find.text('This device couldn’t join'), findsOneWidget);
+      expect(
+        find.text(
+          'Your account has too many devices. Remove ones you no longer use.',
+        ),
+        findsOneWidget,
+      );
+      app.registerError = 'FORBIDDEN';
+      await tester.pumpWidget(const SizedBox());
+      await pump(tester);
+      expect(find.textContaining('(FORBIDDEN)'), findsOneWidget);
+    },
+  );
+
   testWidgets('no baseline panel once it was seen', (tester) async {
     await pump(tester);
     expect(find.byKey(const Key('account-devices-baseline')), findsNothing);

@@ -19,6 +19,7 @@ import '../shared/theme/appearance_prefs_store.dart';
 // `hide TerminalKey`: this file's own shortcut-label class, unused here, collides with xterm's
 // `TerminalKey` (needed for the local image-drop Ctrl+V nudge — see `_dropImage`).
 import '../shortcuts/app_shortcuts.dart' hide TerminalKey;
+import '../state/account_devices.dart' show registerRefusalSentence;
 import '../state/app_state.dart';
 import '../state/pane_preset.dart';
 import '../state/pane_arrangement.dart';
@@ -1579,14 +1580,21 @@ class _PaneContent extends StatelessWidget {
               : 'Waiting for this machine. Retained output is read only.',
         );
       } else if (needsLink) {
-        // A frozen device list may be why it asks: the band says so, beside
-        // the password.
-        final review = notifier.deviceListNeedsReview;
+        // A frozen device list — or an account with no room for this device —
+        // may be why it asks: the band says so, beside the password.
+        final review =
+            notifier.deviceListNeedsReview || notifier.deviceListTooMany;
         notice = terminalNotice(
           label: 'Link required',
           icon: AppIcons.unlink,
           detail: review
-              ? '${machine.machine.displayName} needs linking. Your device list needs a review.'
+              ? [
+                  '${machine.machine.displayName} needs linking.',
+                  if (notifier.deviceListNeedsReview)
+                    'Your device list needs a review.',
+                  if (notifier.deviceListTooMany)
+                    registerRefusalSentence('TOO_MANY'),
+                ].join(' ')
               : '${machine.machine.displayName} needs linking. Retained output is read only.',
           // A tile still showing its last screen gets the same way out as an
           // empty one — the band's button asks for the remote password.

@@ -90,29 +90,30 @@ def destination():
 def install(root, plan, payload, password, progress):
     validate_password(password, password)
     progress('Checking installation files…')
-    # An invalid source must not even create destination partitions or a receipt.
+    # Verify before any destination change, then keep this read-only source open
+    # through copying and startup. Each stage still verifies when used alone.
     with payload.open():
         verify_destination(plan)
-    progress('Preparing storage…')
-    storage.run('mount', '-o', 'remount,rw', root)
-    path = root / RECORD
-    if os.path.lexists(path):
-        if target.load_plan(path) != plan:
-            raise target.TargetError('The installation plan changed. Keep it for recovery.')
-    else:
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        target.save_plan(path, plan)
-    target.apply_plan(path)
-    storage.install(path, payload, password, progress=progress)
-    progress('Preparing startup…')
-    def phase(value):
-        progress({'boot': 'Setting up your account…', 'account': 'Finishing installation…',
-                  'complete': 'Harness is installed.'}[value])
-    state = startup.finish(path, payload, password, progress=phase)
-    if state['phase'] != 'complete':
-        raise storage.StorageError('Installation has not finished. Start the installer again to continue.')
-    storage.run('sync', '-f', root)
-    return state
+        progress('Preparing storage…')
+        storage.run('mount', '-o', 'remount,rw', root)
+        path = root / RECORD
+        if os.path.lexists(path):
+            if target.load_plan(path) != plan:
+                raise target.TargetError('The installation plan changed. Keep it for recovery.')
+        else:
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            target.save_plan(path, plan)
+        target.apply_plan(path)
+        storage.install(path, payload, password, progress=progress)
+        progress('Preparing startup…')
+        def phase(value):
+            progress({'boot': 'Setting up your account…', 'account': 'Finishing installation…',
+                      'complete': 'Harness is installed.'}[value])
+        state = startup.finish(path, payload, password, progress=phase)
+        if state['phase'] != 'complete':
+            raise storage.StorageError('Installation has not finished. Start the installer again to continue.')
+        storage.run('sync', '-f', root)
+        return state
 
 
 def diagnostic(error):

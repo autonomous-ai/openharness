@@ -1,10 +1,14 @@
 """State ownership and non-destructive retry checks for private Asahi storage."""
 import copy
+from contextlib import contextmanager, ExitStack
+import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -75,6 +79,14 @@ class StorageState(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), before)
         self.assertEqual(self.read()['phase'], 'copied')
 
+    def test_failed_checkpoint_flush_does_not_advance_the_transaction(self):
+        storage.save_state(self.path, self.state)
+        with patch.object(storage.target, 'sync_directory', side_effect=OSError('flush failed')):
+            with self.assertRaises(OSError):
+                storage.advance(self.path, self.state, 'copying')
+        self.assertEqual(self.state['phase'], 'planned')
+        self.assertFalse(list(self.root.glob('.storage-*')))
+
     def test_loose_parent_symlink_and_fifo_are_refused(self):
         storage.save_state(self.path, self.state)
         self.root.chmod(0o777)
@@ -131,6 +143,107 @@ class StorageState(unittest.TestCase):
         destination.symlink_to(source)
         with self.assertRaises(storage.StorageError):
             storage.mountpoint(source, destination)
+
+
+class PayloadLifetime(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.image = self.root / 'payload.raw'
+        self.image.write_bytes(b'verified installation source')
+        self.payload = storage.Payload(self.image, hashlib.sha256(self.image.read_bytes()).hexdigest(), 'a' * 40)
+        self.mounts = set()
+
+    @contextmanager
+    def devices(self):
+        original_stat = os.stat
+        def source_stat(path, *args, **kwargs):
+            if path == str(self.image):
+                return SimpleNamespace(st_mode=stat.S_IFBLK)
+            return original_stat(path, *args, **kwargs)
+        def run(*args):
+            self.assertEqual(args[0], 'blockdev')
+            return {'--getro': '1', '--getss': '4096',
+                    '--getsize64': str(self.image.stat().st_size)}[args[1]]
+        @contextmanager
+        def work():
+            yield self.root
+        @contextmanager
+        def mount(device, path, options):
+            self.assertIn('ro', options.split(','))
+            self.mounts.add(path)
+            try:
+                yield path
+            finally:
+                self.mounts.remove(path)
+        parts = [{'node': str(self.image) + str(n)} for n in (1, 2, 3)]
+        with ExitStack() as stack:
+            for owner, name, options in [
+                (storage.os, 'stat', {'side_effect': source_stat}),
+                (storage, 'run', {'side_effect': run}),
+                (storage.target, 'read_table', {'return_value': {}}),
+                (storage.target, 'normalize', {'return_value': {'partitions': parts}}),
+                (storage.target, 'verify_gpt', {}),
+                (storage, 'probe', {'side_effect': [{'TYPE': kind} for kind in ('vfat', 'ext4', 'btrfs')] * 4}),
+                (storage, 'work_directory', {'side_effect': work}),
+                (storage, 'mounted', {'side_effect': mount}),
+            ]:
+                stack.enter_context(patch.object(owner, name, **options))
+            verify = stack.enter_context(patch.object(self.payload, 'verify_pristine'))
+            digest = stack.enter_context(patch.object(storage.hashlib, 'file_digest', wraps=hashlib.file_digest))
+            yield verify, digest
+
+    def test_nested_stages_keep_one_verified_source_mounted(self):
+        with self.devices() as (verify, digest):
+            with self.payload.open():
+                root = self.payload.root
+                for _ in range(2):
+                    with self.payload.open() as current:
+                        self.assertIs(current, self.payload)
+                        self.assertEqual(current.root, root)
+                        self.assertEqual(len(self.mounts), 3)
+                    self.assertEqual(self.payload.root, root)
+                self.assertEqual(digest.call_count, 1)
+                verify.assert_called_once()
+            self.assertFalse(self.mounts)
+            self.assertIsNone(self.payload.root)
+            with self.payload.open():
+                self.assertEqual(digest.call_count, 2)
+
+    def test_changed_source_is_rejected_on_next_independent_attempt(self):
+        with self.devices() as (verify, digest):
+            with self.payload.open():
+                pass
+            self.image.write_bytes(b'corrupted installation source')
+            with self.assertRaisesRegex(storage.StorageError, 'checksum'):
+                with self.payload.open():
+                    self.fail('Must not reuse a verification from a previous attempt')
+            self.assertEqual(digest.call_count, 2)
+            verify.assert_called_once()
+            self.assertFalse(self.mounts)
+
+    def test_failed_pristine_check_releases_mounts_and_rechecks_next_time(self):
+        with self.devices() as (verify, digest):
+            verify.side_effect = [storage.StorageError('Configured source'), None]
+            with self.assertRaisesRegex(storage.StorageError, 'Configured'):
+                with self.payload.open():
+                    self.fail('Invalid source must never become reusable')
+            self.assertFalse(self.mounts)
+            self.assertIsNone(self.payload.root)
+            with self.payload.open():
+                self.assertEqual(digest.call_count, 2)
+
+    def test_stage_failure_releases_the_outer_source(self):
+        with self.devices() as (_, digest):
+            with self.assertRaisesRegex(RuntimeError, 'copy failed'):
+                with self.payload.open():
+                    with self.payload.open():
+                        raise RuntimeError('copy failed')
+            self.assertFalse(self.mounts)
+            self.assertIsNone(self.payload.root)
+            with self.payload.open():
+                self.assertEqual(digest.call_count, 2)
 
 
 if __name__ == '__main__':

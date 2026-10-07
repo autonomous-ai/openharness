@@ -108,6 +108,11 @@ class DeviceConflict {
   }
 }
 
+/// What the Devices list says when the backend refused this device a place on the account ([code]).
+String registerRefusalSentence(String code) => code == 'TOO_MANY'
+    ? 'This device couldn’t join: your account has too many devices. Remove ones you no longer use.'
+    : 'This device couldn’t join your account’s device list ($code).';
+
 /// The account's devices and whether the list can be trusted as it stands.
 class AccountDevices {
   const AccountDevices({
@@ -121,6 +126,7 @@ class AccountDevices {
     this.conflict,
     this.historyAvailable = true,
     this.departed = const [],
+    this.registerError,
   });
 
   final List<AccountDevice> devices;
@@ -151,6 +157,10 @@ class AccountDevices {
   /// Keys that joined and left before anyone looked, as this listing read them: the list is not where
   /// they are cleared (their own "Got it" is), so opening it must not mark them seen.
   final List<String> departed;
+
+  /// Why the backend last refused this end a place in the log (`TOO_MANY`, …); null when it did not,
+  /// or the daemon predates the field.
+  final String? registerError;
 
   /// The keys the log's own listing named as the baseline panel's (`baseline`), when it sent them; null
   /// from a daemon that predates it, which falls back to the `seq <= joinedSeq` rule.
@@ -233,6 +243,7 @@ class AccountDevices {
     conflict: conflict,
     historyAvailable: historyAvailable,
     departed: departed,
+    registerError: registerError,
   );
 
   static AccountDevices? fromDaemon(Map<String, dynamic>? raw) {
@@ -253,6 +264,7 @@ class AccountDevices {
       conflict: DeviceConflict.fromJson(raw['conflict']),
       historyAvailable: pending is List,
       departed: [for (final d in DeviceLogDeparted.listFromJson(raw['departed'])) d.pub],
+      registerError: raw['registerError'] is String ? raw['registerError'] as String : null,
     ).withLastSeen(parseLastSeen(raw['lastSeen']));
   }
 
@@ -265,6 +277,7 @@ class AccountDevices {
     baselineSeen: listing.baselineSeen,
     baselineKeys: listing.baseline,
     departed: [for (final d in listing.departed) d.pub],
+    registerError: listing.registerError,
   );
 }
 

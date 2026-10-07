@@ -973,6 +973,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hermesDb: (s) => hermesDbForSession(s),
     concurrency: ATTACH_CONCURRENCY,
     relaunchMarks,
+    // Built further down: told when an attach finds its last turn already over, never now.
+    settled: (sessionId) => mirror.settled(sessionId),
   })
   const attaches = attach.attaches
   const attachSession = attach.attachSession

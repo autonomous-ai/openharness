@@ -30,6 +30,7 @@ abstract final class AppIcons {
   static const bookOpen = LucideIcons.bookOpen400;
   static const bot = LucideIcons.bot400;
   static const box = LucideIcons.box400;
+  static const brain = LucideIcons.brain400;
   static const brainCircuit = LucideIcons.brainCircuit400;
   static const bug = LucideIcons.bug400;
   static const calendarDays = LucideIcons.calendarDays400;

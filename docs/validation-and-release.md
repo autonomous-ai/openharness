@@ -25,38 +25,34 @@ compiling, or starting a broad suite. Do not clean other sessions' files to make
 Run independent checks concurrently, with enough capacity for their workers;
 two commands each spawning every CPU is not useful parallelism.
 
-Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`, or `full`
-(the default). `cli` includes typecheck, all CLI tests, updater coverage, release
-bundle checks, the serial/login-shell OS/Node matrix, and the per-file 100% coverage
-gates (`test:core`, `test:harnessd`, `test:resume`, `test:orchestrator`, `test:sharing`,
-`test:remote-viewers`, `test:portability`). `tui` includes its native
-CLI integration tests. Select `full` for cross-component changes or uncertain impact.
-Automatic PR and merge-group runs select all affected component scopes; manual scopes remain available.
+PR CI is deliberately fast. Each changed component runs only its own Linux suite:
 
-`desktop` runs all Desktop VM files on both macOS and Linux, split into four
-isolated runners per platform. It uses the release's pinned Flutter SDK and shared
-dependency caches. Each shard has four test workers and the bounded runner's
-ten-minute budget; startup recovery retains the same narrow rules below. `full`
-includes this matrix alongside the existing component checks. Changed Dart
-analysis and browser/native integration checks remain separate where relevant.
+| Changed directory | PR check |
+| --- | --- |
+| `cli/`, `tests/` | `cli-typecheck` and `cli-tests` (default Vitest suite, four shards) |
+| `desktop/` | `desktop-tests` (VM suite, four Linux shards) |
+| `tui/` | `tui-test` (`cargo test`) |
+| `backend/`, `companions/`, `website/`, `os/`, `provider/`, `mobile/`, `daemons/` | that component's check |
+| `devices/` | `firmware-checks` |
+| anything else (docs, workflows, scripts, store) | `process-checks` only |
 
-The Desktop aggregate reads each raw test log, verifies its hash and complete-file
-result, and compares every shard's inventory with the checked-out test files.
-Every file must finish exactly once per platform. Failed jobs, missing or duplicate
-files, changed source/environment, malformed reports and incomplete tests fail it.
-Platform-specific skips and any pre-test loader recovery remain explicit in the
-summary. Logs, receipts and the summary are retained for seven days. Collect the
-result with `scripts/record-ci-validation.py RUN_ID --scope desktop --pr PR_NUMBER`.
+`plan` (actionlint and suite selection), `process-checks` and `ci/required` always
+run. Merge-queue runs rerun only those three jobs: the PR run already tested the
+change. macOS, native process and serial, per-file coverage gates, browser
+acceptance and CLI end-to-end checks run in the release workflows, on the nightly
+CLI end-to-end run, or on demand from their own workflows. A release failure is a
+code failure.
+
+Manual **CI → Run workflow** accepts `scope`: `cli`, `tui`, `backend`, `desktop`,
+`full` (the default, all five core components), `all`, or one extra component.
+
+`desktop-tests` uses the release's pinned Flutter SDK and shared dependency caches.
+Each shard has four test workers and the bounded runner's ten-minute budget. Logs
+and receipts are retained for seven days.
 
 CLI's default Vitest suite runs as four file shards on separate runners, retaining
-its worker cap and isolation. Typecheck, lockfile checks, guard fuzz, registry and
-release-bundle integration, and updater coverage run alongside them. Guard fuzz
-keeps its own process and timing budget. The existing `typecheck-test` job is the
-aggregate: it requires passing shard/contract jobs and verifies that their JSON
-reports cover every discovered file exactly once. Missing, duplicated, failed or
-unfinished results fail it. Review the complete workflow result, including the
-serial/login-shell matrix, rather than one early finishing job. Shard reports,
-inventories and the combined summary are retained as artifacts for seven days.
+its worker cap and isolation. Shard reports and inventories are retained as
+artifacts for seven days.
 
 CI's `vitest.ci.config.ts` uses the slow-file timing hints in `cli/ci-test-durations.json`
 to distribute estimated work across the same four runners. The complete discovered
@@ -70,8 +66,8 @@ the CI assignment locally. The aggregate still requires every discovered file
 exactly once, independent of these estimates.
 
 The CLI's end-to-end suite (`cli/e2e`) runs in its own workflow, **CLI end to end**
-(`.github/workflows/cli-e2e.yml`): after each merge to `main` that touches `cli/`, nightly,
-and on demand from a branch (Actions → CLI end to end → Run workflow).
+(`.github/workflows/cli-e2e.yml`): nightly and on demand from a branch
+(Actions → CLI end to end → Run workflow).
 Eight Linux runners each take a shard, planned from `cli/ci-e2e-durations.json` the same
 way (`--config vitest.e2e.ci.config.ts --shard=N/8` reproduces one locally). Each shard
 installs tmux, zsh, tcsh and dash, starts every daemon from one bundle (`E2E_BUNDLE=1`) and

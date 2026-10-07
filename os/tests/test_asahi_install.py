@@ -4,6 +4,7 @@ import curses
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -91,6 +92,40 @@ class Installer(unittest.TestCase):
             with self.subTest(password=repr(password)), self.assertRaises(ValueError):
                 install.install(Path('/unused'), {}, payload, password, lambda _: None)
             payload.open.assert_not_called()
+
+    def test_source_stays_open_until_startup_finishes_or_fails(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as tmp:
+                active = False
+                @contextmanager
+                def opened():
+                    nonlocal active
+                    active = True
+                    try:
+                        yield
+                    finally:
+                        active = False
+                def require_source(*args, **kwargs):
+                    self.assertTrue(active)
+                def finish(*args, **kwargs):
+                    require_source()
+                    if failure:
+                        raise RuntimeError('startup failed')
+                    return {'phase': 'complete'}
+                payload = SimpleNamespace(open=opened)
+                with patch.object(install, 'verify_destination', side_effect=require_source), \
+                        patch.object(install.storage, 'run', side_effect=require_source), \
+                        patch.object(install.target, 'save_plan', side_effect=require_source), \
+                        patch.object(install.target, 'apply_plan', side_effect=require_source), \
+                        patch.object(install.storage, 'install', side_effect=require_source), \
+                        patch.object(install.startup, 'finish', side_effect=finish):
+                    if failure:
+                        with self.assertRaisesRegex(RuntimeError, 'startup failed'):
+                            install.install(Path(tmp), {}, payload, 'pw', lambda _: None)
+                    else:
+                        result = install.install(Path(tmp), {}, payload, 'pw', lambda _: None)
+                        self.assertEqual(result, {'phase': 'complete'})
+                self.assertFalse(active)
 
     def test_lost_screen_does_not_interrupt_disk_progress(self):
         view = self.page()
