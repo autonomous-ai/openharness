@@ -105,6 +105,17 @@ pub fn scroll_settle_in(scrolled_at: Option<Instant>, now: Instant) -> Option<Du
     scrolled_at.map(|at| (at + SCROLL_SETTLE).saturating_duration_since(now))
 }
 
+/// A frame that wrote more cells than this, one by one, is a burst worth one settle rewrite.
+pub const SETTLE_CELLS: usize = 400;
+
+/// When the next settle repaint was last owed: now when the overlay drawn last frame is gone or no
+/// longer covers where it was (it closed, shrank or moved: cells under its old edge may be kept
+/// wrongly), or the frame wrote over SETTLE_CELLS cells; otherwise what was owed already.
+pub fn settle_due(overlay_before: Option<Rect>, overlay_now: Option<Rect>, cells: usize, owed_since: Option<Instant>, now: Instant) -> Option<Instant> {
+    let uncovered = overlay_before.is_some_and(|b| overlay_now.is_none_or(|n| n.intersection(b) != b));
+    if uncovered || cells > SETTLE_CELLS { Some(now) } else { owed_since }
+}
+
 pub fn use_order() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -491,10 +502,14 @@ pub struct App {
     pub repeat_until: Option<Instant>,
     /// Redraw everything next frame (refresh-client).
     pub redraw_all: bool,
-    /// When the wheel last turned. A scroll rewrites most of the screen cell by cell; once it stops
+    /// When the settle rewrite was last owed (the wheel turned, an overlay closed or shrank, or a
+    /// frame wrote a great many cells). A scroll rewrites most of the screen cell by cell; once it stops
     /// for SCROLL_SETTLE the whole screen is written once more, so a cell the terminal missed
     /// (a ghost of the old text) is overwritten whatever the reason it was missed.
     pub scrolled_at: Option<Instant>,
+    /// Where the last frame drew an overlay (a list, menu, form, popup, prompt or notice), set by
+    /// `ui::draw`: a frame that finds it gone or smaller owes a settle rewrite.
+    pub overlay_drawn: Option<Rect>,
     /// tmux `status-position`.
     pub status_top: bool,
     pub mouse: bool,
@@ -1006,6 +1021,7 @@ impl App {
             repeat_until: None,
             redraw_all: false,
             scrolled_at: None,
+            overlay_drawn: None,
             status_top: false,
             mouse: true,
             loop_seen: Vec::new(),
@@ -6544,6 +6560,23 @@ mod scroll_settle_tests {
         // Rested for long enough: due now (zero), and never negative.
         assert_eq!(scroll_settle_in(Some(t0), t0 + SCROLL_SETTLE), Some(Duration::ZERO));
         assert_eq!(scroll_settle_in(Some(t0), t0 + SCROLL_SETTLE * 4), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn a_closed_or_smaller_overlay_or_a_large_cell_by_cell_frame_owes_one_settle_repaint() {
+        let t0 = Instant::now();
+        let big = Some(Rect::new(10, 5, 40, 12));
+        assert_eq!(settle_due(big, None, 10, None, t0), Some(t0), "an overlay closed");
+        assert_eq!(settle_due(big, big, 10, None, t0), None, "still open, as it was");
+        assert_eq!(settle_due(None, big, 10, None, t0), None, "one opened: nothing under it is stale");
+        assert_eq!(settle_due(big, Some(Rect::new(10, 5, 40, 4)), 10, None, t0), Some(t0), "its rows dropped from 10 to 2");
+        assert_eq!(settle_due(big, Some(Rect::new(12, 5, 40, 12)), 10, None, t0), Some(t0), "it moved");
+        assert_eq!(settle_due(big, Some(Rect::new(8, 4, 44, 14)), 10, None, t0), None, "it grew over where it was");
+        assert_eq!(settle_due(None, None, SETTLE_CELLS + 1, None, t0), Some(t0), "many cells one by one");
+        assert_eq!(settle_due(None, None, 3, None, t0), None, "a key echo");
+        let earlier = t0 - Duration::from_millis(100);
+        assert_eq!(settle_due(big, None, 10, Some(earlier), t0), Some(t0), "a new burst pushes it later");
+        assert_eq!(settle_due(None, None, 3, Some(earlier), t0), Some(earlier), "a quiet frame leaves what is owed as it was");
     }
 }
 

@@ -294,7 +294,25 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
+    app.overlay_drawn = overlay_area(app, body, status);
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
+}
+
+/// Where this frame drew an overlay, for the settle rewrite: one that is gone or no longer covers
+/// the cells it did may have left some kept wrongly (see `app::settle_due`).
+fn overlay_area(app: &App, body: Rect, status: Rect) -> Option<Rect> {
+    let spoken = app.toast.as_ref().is_some_and(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms()));
+    let area = match &app.modal {
+        Some(Modal::Picker { picker, .. }) => picker.screen_area.get(),
+        Some(Modal::Menu(m)) => Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 2),
+        Some(Modal::NewHarness(form)) => form.area(),
+        Some(Modal::Popup { x, y, width, height, .. }) => Rect::new(*x, *y, *width, *height),
+        Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) => status,
+        Some(Modal::DisplayPanes { .. }) => body,
+        Some(Modal::Copy { .. }) | None if spoken => status,
+        Some(Modal::Copy { .. }) | None => return None,
+    };
+    Some(area).filter(|r| r.width > 0 && r.height > 0)
 }
 
 /// tmux's menu (menu_draw_cb, screen_write_menu, screen_write_box): a box width + 4 wide at its
@@ -3180,6 +3198,36 @@ mod theme_render_tests {
         assert!(matches!(kind, PickerKind::Commands), "{s}");
         assert_eq!(picker.current_id().as_deref(), Some("cmd:theme"));
         assert_eq!(picker.screen_area.get(), at, "back in the palette's place");
+    }
+
+    /// A panel whose rows drop from 10 to 2 is smaller in the next frame: the cells it covered
+    /// before are owed one settle rewrite; the same panel again, or a bigger one, owes none.
+    #[test]
+    fn a_panel_that_shrinks_or_closes_owes_one_settle_rewrite() {
+        let t0 = std::time::Instant::now();
+        let mut app = app();
+        let open = |app: &mut App, n: usize| {
+            let mut picker = Picker::new("layout", "");
+            picker.set_rows((0..n).map(|i| crate::picker::Row::new(&format!("r{i}"), &format!("row {i}"))).collect());
+            app.modal = Some(Modal::Picker { kind: PickerKind::Layout, picker });
+        };
+        assert_eq!(app.overlay_drawn, None);
+        open(&mut app, 10);
+        screen(&mut app);
+        let ten = app.overlay_drawn.expect("a panel was drawn");
+        open(&mut app, 10);
+        screen(&mut app);
+        assert_eq!(crate::app::settle_due(Some(ten), app.overlay_drawn, 5, None, t0), None, "the same panel");
+        open(&mut app, 2);
+        screen(&mut app);
+        let two = app.overlay_drawn.expect("a panel was drawn");
+        assert!(two.height < ten.height, "{two:?} {ten:?}");
+        assert_eq!(crate::app::settle_due(Some(ten), Some(two), 5, None, t0), Some(t0), "10 rows down to 2");
+        assert_eq!(crate::app::settle_due(Some(two), Some(ten), 5, None, t0), None, "2 up to 10 covers what it did");
+        app.modal = None;
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, None);
+        assert_eq!(crate::app::settle_due(Some(two), app.overlay_drawn, 5, None, t0), Some(t0), "closed");
     }
 
     // ── tabs ──

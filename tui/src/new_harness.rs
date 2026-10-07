@@ -140,6 +140,9 @@ pub struct Form {
     modes: HashMap<String, String>,
 }
 impl Form {
+    /// Where the form was last drawn (empty before its first frame).
+    pub(crate) fn area(&self) -> Rect { self.area }
+
     fn project_payload(&self) -> Result<(Option<String>, Value), String> {
         // A confirmed failure may have already made a clone or worktree. Reuse that
         // exact folder until the user explicitly chooses another project/branch.

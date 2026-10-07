@@ -30,6 +30,9 @@ pub struct TmuxBackend<W: Write> {
     /// silent, as tmux is — a terminal's or an outer tmux's activity mark stays clear).
     cursor_at: Option<Position>,
     cursor_shown: Option<bool>,
+    /// How many cells the last frame wrote (0 for one that wrote nothing): a large one is a
+    /// burst the settle rewrite follows.
+    last_cells: usize,
 }
 
 /// Whether a frame is wrapped in synchronized output (?2026): yes, unless `HARNESS_TUI_SYNC=off`
@@ -173,11 +176,14 @@ impl<W: Write> TmuxBackend<W> {
         Self { sync_ok, ..Self::with_sync(writer) }
     }
 
-    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None } }
+    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None, last_cells: 0 } }
 
     /// The next `clear()` does not erase the screen: every row is written again, each erased and
     /// rewritten in the same write, so a stale cell goes but the screen is never seen blank.
     pub fn soft_clear_next(&mut self) { self.soft = true }
+
+    /// The cells the last frame wrote.
+    pub fn last_cells(&self) -> usize { self.last_cells }
 
     /// Opens the frame's synchronized update (once); `flush` closes it. A clear belongs inside it,
     /// so the terminal shows the erase and the redraw together, never the blank between them.
@@ -562,6 +568,7 @@ impl<W: Write> Backend for TmuxBackend<W> {
         self.extra_shadow = extras;
         // Nothing changed: nothing written.
         let all = std::mem::take(&mut self.force_whole);
+        self.last_cells = cells.len();
         if cells.is_empty() && !all { return Ok(()) }
         // A row that holds (or held) a cluster the terminal may count otherwise is written again
         // whole from its first column, as fzf writes a line: a cell-by-cell update there would
@@ -672,6 +679,19 @@ mod tests {
         let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 2);
         pane.feed(&written);
         assert_eq!(pane.term.grid()[Line(0)][Column(2)].c, 'b', "b lands where hn drew it");
+    }
+
+    #[test]
+    fn a_frame_knows_how_many_cells_it_wrote() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        let mut c = Cell::default();
+        c.set_char('a');
+        backend.draw([(0u16, 0u16, &c), (1, 0, &c), (2, 0, &c)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        assert_eq!(backend.last_cells(), 3);
+        backend.draw(std::iter::empty()).unwrap();
+        assert_eq!(backend.last_cells(), 0, "a frame with no change wrote none");
     }
 
     #[test]

@@ -508,6 +508,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // A full repaint asked for, kept until the pass that draws: its clear and its frame are one
     // synchronized update, never split across passes.
     let mut repaint_due = false;
+    // Where the frame before drew an overlay (the settle rewrite follows one that closed or shrank).
+    let mut overlay_before: Option<ratatui::layout::Rect> = None;
     // The size the terminal was last drawn at: a repaint erases only when it differs.
     let mut drawn_size = term.size()?;
     // Rendered animation and timed UI messages schedule their next frame.
@@ -608,6 +610,7 @@ async fn run(config: config::Config) -> io::Result<()> {
             // A changed size is cleared by `draw`'s own resize, inside the frame's update; a clear
             // here would be a second erase, and a soft one would leave text outside the new rows.
             let size_changed = !term_out::repaint_is_soft(drawn_size, term.size()?);
+            let repainting = repaint_due || size_changed;
             if std::mem::take(&mut repaint_due) && !size_changed {
                 term.backend_mut().soft_clear_next();
                 term.clear()?;
@@ -624,6 +627,11 @@ async fn run(config: config::Config) -> io::Result<()> {
             let done = term.draw(|frame| ui::draw(frame, &mut app))?;
             if let Some(v) = verifier.as_mut() { v.check(done.buffer) }
             drawn_size = term.size()?;
+            // A burst of cell updates, or an overlay gone or smaller, owes one soft rewrite once the
+            // screen rests. The rewrite itself writes every cell, so it counts none: it owes no second.
+            let cells = if repainting { 0 } else { term.backend().last_cells() };
+            app.scrolled_at = app::settle_due(overlay_before, app.overlay_drawn, cells, app.scrolled_at, Instant::now());
+            overlay_before = app.overlay_drawn;
             // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
             let code = format!("{shape:?}");
