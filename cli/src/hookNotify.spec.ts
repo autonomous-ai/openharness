@@ -770,11 +770,13 @@ describe('hook notify terminal scope', () => {
       hermesHome: join(dir, 'hermes'),
       dataDir,
       hermesSource: 'cli',
-      // 1.5 s against the shipped 3 s limit: a store slower than the old 1 s limit still binds. Twice the
-      // shipped budget doubles both (3 s against 6 s), and leaves a loaded machine 3 s to start sqlite3,
-      // rather than the 20 s limit and 10 s wait the suite's 30 s budget would make of them.
-      hermesDelaySeconds: 1.5,
-      env: { HARNESS_HOOK_DEADLINE_MS: '9000' },
+      // 1.2 s against the shipped 3 s limit: a store slower than the old 1 s limit still binds. Four times
+      // the shipped budget stretches all three (4.8 s against 12 s; the old limit would be 4 s, so this
+      // still tells them apart) and leaves a loaded machine over 7 s for what is not the store: starting
+      // the hook's fake tmux, ps and sqlite3. At twice the budget (3 s against 6 s, 9 s in all) the earlier
+      // steps under a full run at load 110 left sqlite3 less than its 3 s, and nothing was registered.
+      hermesDelaySeconds: 1.2,
+      env: { HARNESS_HOOK_DEADLINE_MS: '18000' },
       input: { hook_event_name: 'on_session_start', session_id: '20260810_120003_a1b2c3' },
     })
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))).toMatchObject([{

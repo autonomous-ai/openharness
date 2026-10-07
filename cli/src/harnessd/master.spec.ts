@@ -860,10 +860,14 @@ describe('runMaster', { timeout: 60_000 }, () => {
 
     it('abandons a probe still running when it is stopped, and replaces nothing', async () => {
       const script = bundle(`if (process.env.HARNESSD_RESTARTS === '0') setTimeout(() => { fs.appendFileSync(__filename, '\\n// a newer build\\n'); process.exit(75) }, 100)`,
-        `fs.writeFileSync(${JSON.stringify(join(dir, 'probing'))}, String(process.pid)); setInterval(() => {}, 1000)`)
+        `fs.writeFileSync(${JSON.stringify(join(dir, 'probing.tmp'))}, String(process.pid)); fs.renameSync(${JSON.stringify(join(dir, 'probing.tmp'))}, ${JSON.stringify(join(dir, 'probing'))}); setInterval(() => {}, 1000)`)
       const master = start(script)
+      // Written whole, then renamed into place: the file seen created but not yet written read as pid 0,
+      // and `kill(0, 0)` asks after this process's own group, which is always there. The probe was never
+      // seen gone (a full unit run under 12 busy loops, load 87).
       await until('the probe to be running', () => existsSync(join(dir, 'probing')))
       const probe = Number(readFileSync(join(dir, 'probing'), 'utf8'))
+      expect(probe).toBeGreaterThan(0)
       await master.stop()
       await until('the probe to be gone', () => { try { process.kill(probe, 0); return false } catch { return true } })
       expect(master.execs).toEqual([])

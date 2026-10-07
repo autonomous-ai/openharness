@@ -96,9 +96,12 @@ describe('real loopback orchestrator transport', () => {
     expect(peer.received[0]).toEqual({ type: 'machine_select', payload: { machineId: 'test-machine', localProtocolVersion: 1 } })
     expect(peer.received[1].payload).toMatchObject({ action: 'list', requestId: expect.stringMatching(/^[a-f0-9]{32}$/) })
   })
-  it.each([['disconnect', /disconnected/], ['invalid', /invalid response/], ['silent', /did not confirm/]] as const)('fails safely on %s without retrying', async (mode, message) => {
+  // Only the silent daemon is waited out; a disconnect and a bad answer end the request as they arrive. At one
+  // 50 ms deadline for all three, a full unit run under load (12 busy loops, load 122) ran out of it before
+  // the close reached the client, and the disconnect read as a daemon that did not confirm.
+  it.each([['disconnect', /disconnected/, 20_000], ['invalid', /invalid response/, 20_000], ['silent', /did not confirm/, 50]] as const)('fails safely on %s without retrying', async (mode, message, deadline) => {
     const peer = await server(mode)
-    await expect(localOrchestratorRequest(peer.port, 'machine', { action: 'list' }, 50)).rejects.toThrow(message)
+    await expect(localOrchestratorRequest(peer.port, 'machine', { action: 'list' }, deadline)).rejects.toThrow(message)
     expect(peer.received.filter(frame => frame.type === 'machine_select')).toHaveLength(1)
   })
   it('surfaces connection errors and command exit codes', async () => {
