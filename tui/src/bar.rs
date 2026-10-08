@@ -12,6 +12,8 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Clear, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::App;
@@ -205,14 +207,15 @@ fn repo(project: &str, branch: &str, width: usize) -> Vec<String> {
     }
 }
 
-/// [spans] from column [x] of row [y], no further than [right]. Returns the column after them.
+/// [spans] from column [x] of row [y], no further than [right], each a `Span` cut with `…` to the
+/// room left. Returns the column after them.
 fn put(buf: &mut Buffer, mut x: u16, y: u16, right: u16, spans: &[(String, Style)]) -> u16 {
     for (text, style) in spans {
         if x >= right { break }
-        let room = (right - x) as usize;
-        let shown = cut(text, room);
-        buf.set_stringn(x, y, &shown, room, *style);
-        x += shown.width() as u16;
+        let shown = cut(text, (right - x) as usize);
+        let width = shown.width() as u16;
+        Span::styled(shown, *style).render(Rect::new(x, y, right - x, 1), buf);
+        x += width;
     }
     x
 }
@@ -413,7 +416,8 @@ pub fn draw(buf: &mut Buffer, app: &mut App) {
     let c = colours();
     let mut hits = Vec::new();
     crate::term_out::clear_extras(bar);
-    for y in bar.y..bar.bottom() { for x in bar.x..bar.right() { if let Some(cell) = buf.cell_mut((x, y)) { cell.reset(); cell.set_style(Style::default().bg(c.bg)); } } }
+    Clear.render(bar, buf);
+    Block::new().style(Style::default().bg(c.bg)).render(bar, buf);
     // The separator: the bar's last column facing the panes (its first, on the right) — the
     // handle that resizes it, in the accent while it does.
     let sx = if bar.x == 0 { bar.right() - 1 } else { bar.x };
@@ -990,6 +994,38 @@ mod tests {
     }
 
     fn harness(m: &str, a: &str) -> Hit { Hit::Harness(m.into(), a.into()) }
+
+    /// `put` with `Span`s writes what it wrote with `set_stringn` (2026-10-08): marks, wide and
+    /// cut names, on a screen already written over, up to and past the right edge.
+    #[test]
+    fn put_as_spans_draws_what_set_stringn_did() {
+        fn old_put(buf: &mut Buffer, mut x: u16, y: u16, right: u16, spans: &[(String, Style)]) -> u16 {
+            for (text, style) in spans {
+                if x >= right { break }
+                let room = (right - x) as usize;
+                let shown = cut(text, room);
+                buf.set_stringn(x, y, &shown, room, *style);
+                x += shown.width() as u16;
+            }
+            x
+        }
+        let bold = Style::default().fg(Color::Rgb(9, 9, 9)).add_modifier(Modifier::BOLD);
+        let sets: [Vec<(String, Style)>; 4] = [
+            vec![("✓".into(), bold), (" ".into(), Style::default()), ("Mac Auto".into(), bold)],
+            vec![("├─ ".into(), Style::default()), ("⠹ ".into(), bold), ("Harness TUI LMStudio work".into(), Style::default())],
+            vec![("日本語の名前の機械".into(), bold), ("offline".into(), Style::default())],
+            vec![],
+        ];
+        let area = Rect::new(0, 0, 30, 1);
+        for spans in &sets { for x in [0u16, 5, 29] { for right in [0u16, 3, 12, 26, 30] {
+            let mut ground = Buffer::empty(area);
+            for p in area.positions() { ground[p].set_symbol("x").set_style(Style::default().fg(Color::Red).bg(Color::Blue)); }
+            let (mut old, mut new) = (ground.clone(), ground);
+            let was = old_put(&mut old, x, 0, right, spans);
+            assert_eq!(put(&mut new, x, 0, right, spans), was, "{spans:?} at {x} to {right}");
+            assert_eq!(new, old, "{spans:?} at {x} to {right}");
+        } } }
+    }
 
     #[test]
     fn a_machine_lists_its_harnesses_not_open_here_three_then_more() {

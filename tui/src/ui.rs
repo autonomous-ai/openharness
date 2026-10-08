@@ -12,7 +12,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{StatefulWidget, Widget};
+use ratatui::widgets::{Block, Clear, StatefulWidget, Widget};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -347,16 +347,14 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     let style = plain(crate::draw::style_over(&opt("menu-style", "default"), base));
     let selected = plain(crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base));
     let border = plain(crate::draw::style_over(&opt("menu-border-style", "default"), style));
-    let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
+    let (.., hz, _, lj, rj) = box_set(&lines);
     let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
     let (x0, y0) = (m.x, m.y);
-    crate::term_out::clear_extras(Rect::new(x0, y0, w, h));
-    let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
-    for y in y0..y0 + h { for x in x0..x0 + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
-    let (x1, y1) = (x0 + w - 1, y0 + h - 1);
-    for x in x0 + 1..x1 { put(buf, x, y0, hz, border); put(buf, x, y1, hz, border) }
-    for y in y0 + 1..y1 { put(buf, x0, y, vt, border); put(buf, x1, y, vt, border) }
-    put(buf, x0, y0, tl, border); put(buf, x1, y0, tr, border); put(buf, x0, y1, bl, border); put(buf, x1, y1, br, border);
+    let area = Rect::new(x0, y0, w, h);
+    crate::term_out::clear_extras(area);
+    // The box: cleared, in menu-style, its border in menu-border-lines and menu-border-style.
+    Clear.render(area, buf);
+    Block::bordered().border_set(dialog_border(&lines)).border_style(border).style(style).render(area, buf);
     let draw_at = |buf: &mut Buffer, x: u16, y: u16, text: &str, st: Style, avail: u16| {
         for (i, cell) in crate::draw::format_draw_over(text, st, avail).into_iter().enumerate() {
             if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((x + i as u16, y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
@@ -366,14 +364,13 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     for (i, it) in m.items.iter().enumerate() {
         let y = y0 + 1 + i as u16;
         if it.separator {
-            put(buf, x0, y, lj, border);
-            for x in x0 + 1..x1 { put(buf, x, y, hz, border) }
-            put(buf, x1, y, rj, border);
+            // A rule across, joined to the sides.
+            Line::from_iter([Span::styled(lj, border), Span::styled(hz.repeat(w.saturating_sub(2) as usize), border), Span::styled(rj, border)]).render(Rect::new(x0, y, w, 1), buf);
             continue;
         }
         // screen_write_menu: the row padded first, then a disabled item's words drawn dim.
         let pad = if m.choice == Some(i) && !it.disabled { selected } else { style };
-        for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", pad) }
+        Block::new().style(pad).render(Rect::new(x0 + 1, y, m.width + 2, 1), buf);
         let st = if it.disabled { style.add_modifier(Modifier::DIM) } else { pad };
         draw_at(buf, x0 + 2, y, &menu_text(it), st, m.width);
     }
@@ -474,13 +471,12 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) -> Option<Rect> {
     let panel = Style::default().bg(pal.surface);
     let border = Style::default().fg(pal.border).bg(pal.surface);
     crate::term_out::clear_extras(area);
-    for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(panel); } } }
-    for x in area.x..area.x + area.width { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + area.height - 1, "─", border) }
-    for y in area.y..area.y + area.height { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + area.width - 1, y, "│", border) }
-    buf.set_string(area.x, area.y, "┌", border); buf.set_string(area.x + area.width - 1, area.y, "┐", border);
-    buf.set_string(area.x, area.y + area.height - 1, "└", border); buf.set_string(area.x + area.width - 1, area.y + area.height - 1, "┘", border);
+    // The box: cleared, on the surface, bordered, the prefix's name over its top rule from its
+    // third column (a `Block`'s title starts by the corner: one more of the rule first).
     let title = format!(" {} ", crate::keys::name(&app.keymap.prefix));
-    buf.set_string(area.x + 2, area.y, &title, Style::default().fg(pal.foreground).bg(pal.surface).add_modifier(Modifier::BOLD));
+    let title = Line::from_iter([Span::styled("─", border), Span::styled(title, Style::default().fg(pal.foreground).bg(pal.surface).add_modifier(Modifier::BOLD))]);
+    Clear.render(area, buf);
+    Block::bordered().border_style(border).style(panel).title(title).render(area, buf);
     let inner_rows = area.height.saturating_sub(2) as usize;
     // Column-major, like ls: read down, then across.
     let fits = cols * inner_rows.max(1);
@@ -3790,6 +3786,163 @@ mod which_key_tests {
                 for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if buf[(x, y)].style().bg == Some(surface) { any = true } } }
                 assert!(any, "the shortcut box should draw on the themed pane surface ({w}x{h})");
             }
+        }
+    }
+}
+
+/// tmux's menu and the prefix's key hints as they were drawn cell by cell (2026-10-08), before
+/// their boxes were `Block`s, and the checks that the `Block`s draw the very same buffers.
+#[cfg(test)]
+mod box_oracle_tests {
+    use super::*;
+    use crate::app::App;
+
+    fn old_menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
+        let opt = |name: &str, default: &str| Some(app.style_spec(name, app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| default.to_string());
+        let lines = opt("menu-border-lines", "single");
+        let base = Style::default();
+        let plain = |mut st: Style| { st.add_modifier = Modifier::empty(); st.sub_modifier = Modifier::empty(); st };
+        let style = plain(crate::draw::style_over(&opt("menu-style", "default"), base));
+        let selected = plain(crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base));
+        let border = plain(crate::draw::style_over(&opt("menu-border-style", "default"), style));
+        let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
+        let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
+        let (x0, y0) = (m.x, m.y);
+        let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
+        for y in y0..y0 + h { for x in x0..x0 + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
+        let (x1, y1) = (x0 + w - 1, y0 + h - 1);
+        for x in x0 + 1..x1 { put(buf, x, y0, hz, border); put(buf, x, y1, hz, border) }
+        for y in y0 + 1..y1 { put(buf, x0, y, vt, border); put(buf, x1, y, vt, border) }
+        put(buf, x0, y0, tl, border); put(buf, x1, y0, tr, border); put(buf, x0, y1, bl, border); put(buf, x1, y1, br, border);
+        let draw_at = |buf: &mut Buffer, x: u16, y: u16, text: &str, st: Style, avail: u16| {
+            for (i, cell) in crate::draw::format_draw_over(text, st, avail).into_iter().enumerate() {
+                if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((x + i as u16, y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
+            }
+        };
+        if !m.title.is_empty() { draw_at(buf, x0 + 2, y0, &m.title, border, w.saturating_sub(4)) }
+        for (i, it) in m.items.iter().enumerate() {
+            let y = y0 + 1 + i as u16;
+            if it.separator {
+                put(buf, x0, y, lj, border);
+                for x in x0 + 1..x1 { put(buf, x, y, hz, border) }
+                put(buf, x1, y, rj, border);
+                continue;
+            }
+            let pad = if m.choice == Some(i) && !it.disabled { selected } else { style };
+            for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", pad) }
+            let st = if it.disabled { style.add_modifier(Modifier::DIM) } else { pad };
+            draw_at(buf, x0 + 2, y, &menu_text(it), st, m.width);
+        }
+    }
+
+    /// The key hints as they were drawn, box and items.
+    fn old_which_key(buf: &mut Buffer, app: &App, body: Rect) -> Option<Rect> {
+        if body.width < 16 || body.height < 4 { return None }
+        let mut items: Vec<(String, String)> = Vec::new();
+        let mut digits = false;
+        for b in &app.keymap.prefix_table {
+            let key = crate::keys::name(&b.chord);
+            if b.command.starts_with("select-window -t ") && key.len() == 1 && key.chars().all(|c| c.is_ascii_digit()) { digits = true; continue }
+            let what = if b.note.is_empty() { b.command.clone() } else { b.note.clone() };
+            items.push((key, what));
+        }
+        if digits { items.insert(0, ("0-9".into(), "Select window 0 to 9".into())) }
+        const FIRST: &[&str] = &["c", "N", "n", "p", "l", "0-9", "w", "s", "d", "%", "\"", "x", "z", "o", ";", "[", "]", ":", "?", "&", ",", "$", "!", "q", "t", "{", "}", "Space"];
+        items.sort_by_key(|(k, _)| FIRST.iter().position(|f| f == k).unwrap_or(FIRST.len()));
+        let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
+        let col_w: usize = key_w + if body.width >= 150 { 44 } else { 32 };
+        let cols = ((body.width as usize).saturating_sub(4) / col_w).max(1);
+        let col_w = ((body.width as usize).saturating_sub(4) / cols).max(col_w);
+        let rows_needed = items.len().div_ceil(cols);
+        let height = (rows_needed as u16 + 2).min((body.height / 3).max(4)).min(body.height);
+        let area = Rect::new(body.x, body.y + body.height - height, body.width, height);
+        let pal = theme::pane_palette();
+        let panel = Style::default().bg(pal.surface);
+        let border = Style::default().fg(pal.border).bg(pal.surface);
+        for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(panel); } } }
+        for x in area.x..area.x + area.width { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + area.height - 1, "─", border) }
+        for y in area.y..area.y + area.height { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + area.width - 1, y, "│", border) }
+        buf.set_string(area.x, area.y, "┌", border); buf.set_string(area.x + area.width - 1, area.y, "┐", border);
+        buf.set_string(area.x, area.y + area.height - 1, "└", border); buf.set_string(area.x + area.width - 1, area.y + area.height - 1, "┘", border);
+        let title = format!(" {} ", crate::keys::name(&app.keymap.prefix));
+        buf.set_string(area.x + 2, area.y, &title, Style::default().fg(pal.foreground).bg(pal.surface).add_modifier(Modifier::BOLD));
+        let inner_rows = area.height.saturating_sub(2) as usize;
+        let fits = cols * inner_rows.max(1);
+        if items.len() > fits && fits > 0 {
+            let more = format!(" +{} more — {} ? ", items.len() - fits + 1, crate::keys::name(&app.keymap.prefix));
+            let mx = (area.x + area.width).saturating_sub(more.width() as u16 + 2);
+            buf.set_string(mx, area.y + area.height - 1, &more, Style::default().fg(pal.muted).bg(pal.surface).add_modifier(Modifier::DIM));
+        }
+        for (i, (key, what)) in items.iter().enumerate() {
+            let (col, row) = (i / inner_rows.max(1), i % inner_rows.max(1));
+            if col >= cols || (items.len() > fits && i + 1 >= fits) { break }
+            let x = area.x + 2 + (col * col_w) as u16;
+            let y = area.y + 1 + row as u16;
+            buf.set_string(x, y, format!("{key:>key_w$}"), Style::default().fg(theme::accent()).bg(pal.surface).add_modifier(Modifier::BOLD));
+            let room = col_w - key_w - 3;
+            buf.set_stringn(x + key_w as u16 + 1, y, clip(what, room), room, Style::default().fg(pal.foreground).bg(pal.surface));
+        }
+        Some(area)
+    }
+
+    fn app(size: (u16, u16)) -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        App::new(19789, sink, size)
+    }
+
+    /// A screen already written over, so a cell the old drawing left alone shows.
+    fn ground(area: Rect) -> Buffer {
+        let mut buf = Buffer::empty(area);
+        for p in area.positions() { buf[p].set_symbol("x").set_style(Style::default().fg(Color::Red).bg(Color::Blue).add_modifier(Modifier::ITALIC)); }
+        buf
+    }
+
+    /// tmux's menu box as a `Block` draws what it did: items, keys, a disabled note, rules, the
+    /// chosen row and none, a `#[…]` title, in each menu-border-lines and with styles set, at the
+    /// screen's corner and in its middle.
+    #[test]
+    fn the_menu_box_as_a_block_draws_what_it_did() {
+        let item = |label: &str, key: &str| crate::modal::MenuItem { label: label.into(), key: key.into(), command: "x".into(), disabled: false, separator: false };
+        let items = vec![
+            item("New window", "c"), item("Split #[bold]right", "%"),
+            crate::modal::MenuItem { separator: true, ..item("", "") },
+            crate::modal::MenuItem { disabled: true, ..item("Nothing to paste", "") },
+            item("日本語の項目", ""), item("Kill", "X"),
+        ];
+        let screen = Rect::new(0, 0, 60, 14);
+        for lines in ["single", "double", "heavy", "simple", "rounded", "padded", "none"] {
+            for styled in [false, true] {
+                let mut app = app((60, 14));
+                let g = crate::options::SetFlags { global: true, ..Default::default() };
+                app.options.set("menu-border-lines", Some(lines), &g, "", 0).unwrap();
+                if styled {
+                    app.options.set("menu-style", Some("bg=colour236,fg=colour250"), &g, "", 0).unwrap();
+                    app.options.set("menu-border-style", Some("fg=colour39"), &g, "", 0).unwrap();
+                    app.options.set("menu-selected-style", Some("bg=colour24,fg=white,bold"), &g, "", 0).unwrap();
+                }
+                for (x, y) in [(0, 0), (17, 3)] { for choice in [None, Some(0), Some(3), Some(5)] { for title in ["", "Pane", "#[fg=red]Tab #1 ## (x)"] {
+                    let m = crate::modal::Menu { title: title.into(), items: items.clone(), choice, x, y, width: 24, stay_open: false, no_mouse: false, mouse: None, tree: None, complete: None, responsive: None, buttons: None };
+                    let (mut old, mut new) = (ground(screen), ground(screen));
+                    old_menu(&mut old, &app, &m);
+                    menu(&mut new, &app, &m);
+                    assert_eq!(new, old, "{lines} styled {styled} at ({x}, {y}) choice {choice:?} title {title:?}");
+                } } }
+            }
+        }
+    }
+
+    /// The key hints' box as a `Block` draws what it did, at every size it is drawn in, under its
+    /// items.
+    #[test]
+    fn the_key_hints_box_as_a_block_draws_what_it_did() {
+        let _colours = crate::term_out::colours_lock();
+        let app = app((150, 42));
+        for (w, h) in [(16, 4), (40, 10), (80, 24), (150, 42), (200, 60)] {
+            let body = Rect::new(0, 0, w, h);
+            let (mut old, mut new) = (ground(body), ground(body));
+            let was = old_which_key(&mut old, &app, body);
+            assert_eq!(which_key(&mut new, &app, body), was, "{w}x{h}");
+            assert_eq!(new, old, "{w}x{h}");
         }
     }
 }
