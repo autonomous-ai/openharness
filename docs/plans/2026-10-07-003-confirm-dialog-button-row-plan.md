@@ -53,7 +53,7 @@
 - A click between two buttons, or on the hint, runs nothing.
 - Resize while a dialog is open keeps the chosen button.
 - A failed stop shows only `[ Back ]`: one button, chosen, Enter runs it.
-- The Machines dialog's password prompt (paste-protected, `tui/tests/workspace-controls.py:226-248`) keeps its input focus: while the input has the keys, typing, Backspace, Enter (continue) and Esc work as today and ← → do nothing (the input has no text cursor today); Tab moves the keys to the buttons, then ← → Enter work; Tab again returns to the input. A pasted `y`/`n` is never a button letter (paste is never a yes).
+- The Machines dialog's password prompt (paste-protected, `tui/tests/workspace-controls.py:226-248`) keeps its input focus: while the input has the keys, typing, Backspace, Enter (continue) and Esc work as today and ← → move the caret in the input; Tab moves the keys to the buttons, then ← → move between the buttons and Enter runs one; Tab again, or typing a printable key, returns to the input. A pasted `y`/`n` is never a button letter (paste is never a yes).
 - Enter on a chosen `[ Cancel ]` in an Entry prompt cancels (it does not submit the typed value).
 
 ---

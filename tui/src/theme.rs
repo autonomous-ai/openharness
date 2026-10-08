@@ -1453,6 +1453,7 @@ mod palette_tests {
     /// of it disagrees with the theme.
     #[test]
     fn palette_follows_the_terminal_answer() {
+        let _colours = crate::term_out::colours_lock();
         crate::term_out::set_terminal_colours(Some("#201f26".into()), Some("#f5f5f5".into()));
         let (bg, fg, light) = palette();
         assert_eq!(bg, Color::Rgb(0x20, 0x1f, 0x26), "dark bg must map to the terminal's rgb");

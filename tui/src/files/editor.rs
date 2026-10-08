@@ -535,23 +535,26 @@ impl Editor {
         put(buf, ox + 1, sy, w.saturating_sub(2), &super::fit(&status, w.saturating_sub(2) as usize), st);
         if self.asking.is_some() {
             let (row, c) = (self.ask_row(), crate::settings::chrome());
-            let (r, d) = self.ask_dialog(&row, &c);
+            let (r, d) = self.ask_dialog(&row, &c, look.border);
             (&d).render(Rect::new(ox + r.x, oy + r.y, r.width, r.height).intersection(area), buf);
         }
     }
 
-    /// "Save changes?" as the shared dialog, in the middle of the editor.
-    fn ask_dialog<'a>(&self, row: &'a crate::buttons::Row, c: &'a crate::settings::Chrome) -> (Rect, crate::dialog::Dialog<'a>) {
+    /// "Save changes?" as the shared dialog, in the middle of the editor: its question wrapped to
+    /// the editor, in the border lines [border] says.
+    fn ask_dialog<'a>(&self, row: &'a crate::buttons::Row, c: &'a crate::settings::Chrome, border: ratatui::symbols::border::Set<'a>) -> (Rect, crate::dialog::Dialog<'a>) {
         let name = name_of(&self.path);
-        let question = ratatui::text::Line::from(format!("Save changes to '{name}'?"));
-        let d = crate::dialog::Dialog::new(&format!("Save Changes · {}", super::fit(&name, 30)), vec![question], row, c);
+        let question = crate::dialog::wrap(&format!("Save changes to '{name}'?"), self.size.0.saturating_sub(4).clamp(1, 60), c.base);
+        let mut d = crate::dialog::Dialog::new(&format!("Save Changes · {}", super::fit(&name, 30)), question, row, c);
+        d.border = border;
+        d.fit(self.size.1);
         (d.place(Rect::new(0, 0, self.size.0, self.size.1)), d)
     }
 
     /// The "Save changes?" box and its buttons' row (for drawing and clicks alike).
     fn ask_layout(&self) -> (Rect, Rect) {
         let (row, c) = (self.ask_row(), crate::settings::chrome());
-        let (r, d) = self.ask_dialog(&row, &c);
+        let (r, d) = self.ask_dialog(&row, &c, ratatui::symbols::border::PLAIN);
         (r, d.areas(r).row)
     }
 }
@@ -746,6 +749,24 @@ mod tests {
         e.key(ctrl('q')); e.key(k(KeyCode::Left)); e.key(k(KeyCode::Left));
         assert_eq!(e.key(k(KeyCode::Enter)), EdOut::Close);
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "x\n");
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn save_changes_follows_the_border_lines_and_wraps_to_a_narrow_editor() {
+        let (p, d) = scratch("a-very-long-file-name-for-a-narrow-editor.txt", b"x\n");
+        let mut e = Editor::open(&p, "a-very-long-file-name-for-a-narrow-editor.txt".into()).unwrap();
+        typing(&mut e, "y");
+        e.key(k(KeyCode::Esc));
+        let mut look = Look::default();
+        look.border = crate::ui::dialog_border("heavy");
+        e.size = (36, 12);
+        let area = Rect::new(0, 0, 36, 12);
+        let mut buf = Buffer::empty(area);
+        e.draw(&mut buf, area, &look);
+        let text: String = (0..12).map(|y| (0..36).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
+        assert!(text.contains("┏━Save Changes") && text.contains("┗"), "{text}");
+        for word in ["Save changes to", "txt'?"] { assert!(text.contains(word), "{word} lost:\n{text}") }
         let _ = std::fs::remove_dir_all(d);
     }
 

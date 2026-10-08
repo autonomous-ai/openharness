@@ -230,7 +230,7 @@ def machine_prompt_journey():
     shown('Set password…')
     click_text('Set password…')
     shown('New remote password')
-    dialog('Remote Password', 'Continue')
+    dialog('Set Remote Password', 'Continue')
     paste_password()
     assert '│' + '•' * len('fixture pasted password') in screen(), 'the password is typed into the dialog input'
     # A list click used to become Enter and accept the unfinished password.
@@ -242,7 +242,7 @@ def machine_prompt_journey():
     paste_password()
     click_text('Continue')
     shown("Set this computer's remote password?")
-    dialog('Remote Password', 'Yes')
+    dialog('Set Remote Password', 'Yes')
     assert not actions()
     snapshot('machine-password-confirmation')
     click_text('Cancel')
@@ -263,7 +263,7 @@ def machine_prompt_journey():
         tmux('resize-window', '-t', 'test', '-x', str(cols), '-y', str(rows))
         wait(lambda: value('#{client_width}x#{client_height}') == f'{cols}x{rows}', 'client follows terminal resize')
         shown('Prevent new links')
-        shown('┌─Remote Password')
+        shown('┌─Clear Remote Password')
         shown('[ Cancel ]')
         shown('[ Yes ]')
         snapshot(f'machine-confirmation-{cols}x{rows}')

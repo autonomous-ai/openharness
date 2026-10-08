@@ -171,6 +171,8 @@ pub struct Devices {
     /// the buttons: a confirmation's always are, a typed line's only after Tab.
     prompt_row: std::cell::Cell<usize>,
     prompt_focus: std::cell::Cell<bool>,
+    /// Set by a draw that had no room for the question: [cancel_unfit] ends it after the frame.
+    unfit: std::cell::Cell<bool>,
     /// A level inside a view: a machine's actions (`m:<id>`).
     pub sub: Option<String>,
     /// The footer's line: what happened, or (true) what went wrong — until the next thing does.
@@ -183,7 +185,7 @@ pub struct Devices {
 impl Default for Devices {
     fn default() -> Devices {
         Devices {
-            password: None, links: None, account: HashMap::new(), link: None, phone: Phone::default(), ask: None, prompt_actions: Default::default(), prompt_row: Default::default(), prompt_focus: Default::default(), sub: None, footer: None, loading: Vec::new(), runner: default_runner(),
+            password: None, links: None, account: HashMap::new(), link: None, phone: Phone::default(), ask: None, prompt_actions: Default::default(), prompt_row: Default::default(), prompt_focus: Default::default(), unfit: Default::default(), sub: None, footer: None, loading: Vec::new(), runner: default_runner(),
         }
     }
 }
@@ -924,6 +926,8 @@ fn answer_key(app: &mut App, key: KeyEvent) {
                 app.devices.ask = Some(Ask::Entry { what, label, value, caret, secret });
                 return;
             }
+            // A printable key is typed, wherever the keys were: the input has them again.
+            if matches!(key.code, KeyCode::Char(_)) && !ctrl && !key.modifiers.contains(KeyModifiers::ALT) { app.devices.prompt_focus.set(false) }
             if app.devices.prompt_focus.get() {
                 let mut row = prompt_row(app, false, "Continue");
                 match row.key(key.code, key.modifiers) {
@@ -1446,7 +1450,8 @@ fn ask_dialog(buf: &mut Buffer, app: &App, over: Rect, c: &Chrome) -> Option<Pos
     let room = over.width.saturating_sub(4);
     let confirm = matches!(ask, Ask::Confirm { .. });
     let mut row = prompt_row(app, confirm, action(ask, room));
-    if row.buttons_width() > room { return None }
+    // (A question that cannot be drawn must not stay open to answering keys: the frame ends it.)
+    if row.buttons_width() > room { app.devices.unfit.set(true); return None }
     let input_focus = !app.devices.prompt_focus.get();
     if !confirm && input_focus { row.chosen = usize::MAX }   // the input has the keys: no button chosen
     let mut d = Dialog::new(&ask_title(app, ask), Vec::new(), &row, c);
@@ -1454,11 +1459,11 @@ fn ask_dialog(buf: &mut Buffer, app: &App, over: Rect, c: &Chrome) -> Option<Pos
     match ask {
         Ask::Confirm { question, .. } => d.body = dialog::wrap(question, room.min(INPUT_W), c.base),
         Ask::Entry { label, value, caret, secret, .. } => {
-            d.input = Some(Input { label, value, caret: *caret, secret: *secret, focused: input_focus, width: INPUT_W });
-            d.message = app.devices.footer.as_ref().map(|(m, error, _)| Line::styled(m.as_str(), if *error { c.danger } else { c.muted }));
+            d.input = Some(Input { label, value, caret: *caret, select: None, secret: *secret, focused: input_focus, width: INPUT_W });
+            if let Some((m, error, _)) = &app.devices.footer { d.message = dialog::wrap(m, room.min(INPUT_W), if *error { c.danger } else { c.muted }) }
         }
     }
-    if !d.fit(over.height) { return None }
+    if !d.fit(over.height) { app.devices.unfit.set(true); return None }
     let area = d.place(over);
     (&d).render(area, buf);
     let a = d.areas(area);
@@ -1467,17 +1472,29 @@ fn ask_dialog(buf: &mut Buffer, app: &App, over: Rect, c: &Chrome) -> Option<Pos
     d.cursor(area)
 }
 
+/// After a frame: a question that had no room to be drawn is cancelled, as Close Tab's is when
+/// the terminal shrinks under it, and the person told why.
+pub fn cancel_unfit(app: &mut App) {
+    if !app.devices.unfit.take() || app.devices.ask.is_none() { return }
+    app.devices.ask = None;
+    app.devices.prompt_actions.set(None);
+    note(app, "Nothing changed");
+    app.say("Make the terminal larger to answer this", theme::WARN);
+}
+
 /// The dialog's title: what is being done, and to what.
 fn ask_title(app: &App, ask: &Ask) -> String {
     match ask {
         Ask::Entry { what: Entry::Link { name, .. }, .. } | Ask::Confirm { act: Act::Link { name, .. }, .. } => format!("Connect · {name}"),
-        Ask::Entry { what: Entry::NewPassword | Entry::RepeatPassword { .. }, .. } | Ask::Confirm { act: Act::SetPassword(_) | Act::ClearPassword, .. } => "Remote Password".into(),
-        Ask::Entry { what: Entry::Rename { name, .. }, .. } => format!("Rename Machine · {name}"),
-        Ask::Confirm { act: Act::Rename { machine, .. }, .. } => format!("Rename Machine · {}", name_of(app, machine)),
+        Ask::Entry { what: Entry::NewPassword | Entry::RepeatPassword { .. }, .. } | Ask::Confirm { act: Act::SetPassword(_), .. } => "Set Remote Password".into(),
+        Ask::Confirm { act: Act::ClearPassword, .. } => "Clear Remote Password".into(),
+        Ask::Entry { what: Entry::Rename { name, .. }, .. } => format!("Rename Computer · {name}"),
+        Ask::Confirm { act: Act::Rename { machine, .. }, .. } => format!("Rename Computer · {}", name_of(app, machine)),
         Ask::Confirm { act: Act::Unlink { name, .. }, .. } => format!("Unlink · {name}"),
-        Ask::Confirm { act: Act::Remove { name, .. }, .. } => format!("Remove Machine · {name}"),
+        // (The row says "Remove from account…".)
+        Ask::Confirm { act: Act::Remove { name, .. }, .. } => format!("Remove from Account · {name}"),
         Ask::Confirm { act: Act::Unpair { name, .. }, .. } => format!("Remove Access · {name}"),
-        Ask::Confirm { act: Act::ArmPhone, .. } => View::Phone.title().into(),
+        Ask::Confirm { act: Act::ArmPhone, .. } => "Add Your Phone".into(),
     }
 }
 
@@ -1549,6 +1566,7 @@ fn footer(buf: &mut Buffer, app: &App, picker: &Picker, x: u16, y: u16, w: u16, 
 pub fn draw(buf: &mut Buffer, app: &App, body: Rect, view: View, picker: &mut Picker) -> Option<Position> {
     let c = settings::chrome();
     app.devices.prompt_actions.set(None);
+    app.devices.unfit.set(false);
     app.devices.phone.drawn.set(None);
     picker.screen_area.set(body);
     picker.list_area.set(Rect::default());
@@ -1557,6 +1575,7 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, view: View, picker: &mut Pi
     picker.bar.set(None);
     settings::backdrop(buf, body, c.backdrop);
     if body.width < 24 || body.height < 8 {
+        if app.devices.ask.is_some() { app.devices.unfit.set(true) }
         settings::put(buf, body.x, body.y, body.width, &format!("{} · resize or Esc", view.title()), c.base);
         return None;
     }
@@ -1912,15 +1931,80 @@ mod tests {
         go_to(&mut app, "pw:clear"); press(&mut app, KeyCode::Enter);
         crate::input::handle(&mut app, crossterm::event::Event::Resize(80, 24));
         screen(&mut app, 80, 24);
+        // Too small to draw: the question is cancelled, never kept invisible to answer keys.
         crate::input::handle(&mut app, crossterm::event::Event::Resize(12, 5));
         screen(&mut app, 12, 5);
         assert!(app.devices.prompt_actions.get().is_none());
-        click_at(&mut app, 4, 3);
-        assert!(!has(&log, &clear));
-        assert!(matches!(app.devices.ask, Some(Ask::Confirm { .. })));
-        crate::input::handle(&mut app, crossterm::event::Event::Resize(80, 24));
-        click_prompt(&mut app, true);
-        assert_eq!(clis(&log, "remote-password").iter().filter(|r| **r == clear).count(), 1);
+        assert!(app.devices.ask.is_none(), "cancelled");
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Make the terminal larger to answer this"));
+        press(&mut app, KeyCode::Char('y'));
+        assert!(!has(&log, &clear), "nothing answered it");
+        assert_eq!(app.devices.footer.as_ref().map(|f| f.0.as_str()), Some("Nothing changed"), "the cancel path ran");
+    }
+
+    #[test]
+    fn a_typed_line_that_cannot_fit_is_cancelled_too() {
+        let mut app = app((150, 42));
+        let log = fake(&mut app);
+        connect_to(&mut app, REMOTE.into());
+        typed(&mut app, "pw");
+        crate::input::handle(&mut app, crossterm::event::Event::Resize(20, 6));
+        screen(&mut app, 20, 6);
+        assert!(app.devices.ask.is_none());
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Make the terminal larger to answer this"));
+        press(&mut app, KeyCode::Enter);
+        assert!(clis(&log, "link").iter().all(|r| !matches!(r, Req::Cli { args, .. } if args[1] == "connect")), "the typed password went nowhere");
+    }
+
+    #[test]
+    fn dialog_titles_follow_the_naming_system() {
+        let mut app = app((150, 42));
+        let _log = fake(&mut app);
+        let title = |app: &mut App| { let (s, _) = screen(app, 150, 42); s.lines().find_map(|l| l.find("┌─").map(|i| l[i..].chars().skip(2).take_while(|c| *c != '─').collect::<String>().trim_end().to_string())).unwrap_or_default() };
+        connect_to(&mut app, REMOTE.into());
+        assert_eq!(title(&mut app), "Connect · gpu-box");
+        press(&mut app, KeyCode::Esc);
+        crate::input::run(&mut app, "devices");
+        go_to(&mut app, "pw:set");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(title(&mut app), "Set Remote Password");
+        typed(&mut app, "a"); press(&mut app, KeyCode::Enter);
+        assert_eq!(title(&mut app), "Set Remote Password", "the repeat step too");
+        typed(&mut app, "a"); press(&mut app, KeyCode::Enter);
+        assert_eq!(title(&mut app), "Set Remote Password", "and its question");
+        press(&mut app, KeyCode::Esc);
+        go_to(&mut app, "pw:clear");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(title(&mut app), "Clear Remote Password");
+        press(&mut app, KeyCode::Esc);
+        go_to(&mut app, &format!("m:{REMOTE}"));
+        press(&mut app, KeyCode::Enter);
+        go_to(&mut app, &format!("act:rename:{REMOTE}"));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(title(&mut app), "Rename Computer · gpu-box");
+        typed(&mut app, "2"); press(&mut app, KeyCode::Enter);
+        assert_eq!(title(&mut app), "Rename Computer · gpu-box", "and its question");
+        press(&mut app, KeyCode::Esc);
+        go_to(&mut app, &format!("act:remove:{REMOTE}"));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(title(&mut app), "Remove from Account · gpu-box", "echoing the row \"Remove from account…\"");
+    }
+
+    #[test]
+    fn typing_while_the_buttons_have_the_keys_goes_back_to_the_input() {
+        let mut app = app((150, 42));
+        let _log = fake(&mut app);
+        connect_to(&mut app, REMOTE.into());
+        typed(&mut app, "ab");
+        press(&mut app, KeyCode::Tab);
+        assert!(app.devices.prompt_focus.get(), "on the buttons");
+        // (h and l move between buttons there, but they are letters too.)
+        typed(&mut app, "hl");
+        assert!(!app.devices.prompt_focus.get(), "the input has the keys again");
+        assert!(matches!(&app.devices.ask, Some(Ask::Entry { value, caret: 4, .. }) if value == "abhl"), "{:?}", app.devices.ask);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Right);
+        assert!(app.devices.prompt_focus.get(), "arrows still move between the buttons");
     }
 
     #[test]
@@ -1970,7 +2054,8 @@ mod tests {
         assert!(matches!(&app.devices.ask, Some(Ask::Entry { value, .. }) if value == "abc"), "arrows leave the typed value");
         press(&mut app, KeyCode::Tab);
         typed(&mut app, "y");
-        assert!(matches!(&app.devices.ask, Some(Ask::Entry { value, .. }) if value == "abc"), "no letter is a button letter");
+        assert!(matches!(&app.devices.ask, Some(Ask::Entry { value, .. }) if value == "abyc"), "a letter is typed at the caret, not a button's");
+        press(&mut app, KeyCode::Tab);
         press(&mut app, KeyCode::Left);
         press(&mut app, KeyCode::Enter);
         assert!(app.devices.ask.is_none(), "Enter on [ Cancel ] cancels, it does not submit");
@@ -2080,7 +2165,7 @@ mod tests {
         go_to(&mut app, &format!("act:rename:{REMOTE}"));
         press(&mut app, KeyCode::Enter);
         let (s, _, cursor) = screen_cursor(&mut app, 150, 42);
-        assert!(s.contains("Rename Machine · gpu-box") && s.contains("[ Cancel ]  [ Save ]"), "{s}");
+        assert!(s.contains("Rename Computer · gpu-box") && s.contains("[ Cancel ]  [ Save ]"), "{s}");
         assert!(line_with(&s, "│gpu-box").contains("│gpu-box"), "the current name in the input:\n{s}");
         assert!(cursor.is_some());
         press(&mut app, KeyCode::Backspace);

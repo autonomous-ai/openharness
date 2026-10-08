@@ -20,23 +20,25 @@ const INPUT_ROWS: u16 = 3;
 
 /// A one-line input: [label] above a bordered box with [value] in it — dots when [secret] — and
 /// the caret [caret] characters in. [focused]: the input has the keys (not the buttons). [width]:
-/// the columns it wants, so the box does not grow as it is typed into.
-pub struct Input<'a> { pub label: &'a str, pub value: &'a str, pub caret: usize, pub secret: bool, pub focused: bool, pub width: u16 }
+/// the columns it wants, so the box does not grow as it is typed into. [select]: the characters
+/// `(from, to)` that typing replaces, drawn in the chosen style.
+pub struct Input<'a> { pub label: &'a str, pub value: &'a str, pub caret: usize, pub select: Option<(usize, usize)>, pub secret: bool, pub focused: bool, pub width: u16 }
 
 pub struct Dialog<'a> {
     pub title: Line<'a>,
     pub body: Vec<Line<'a>>,
     pub input: Option<Input<'a>>,
-    /// What went wrong (or what to do), under the input.
-    pub message: Option<Line<'a>>,
+    /// What went wrong (or what to do), under the input: wrapped lines, which fitting drops last first.
+    pub message: Vec<Line<'a>>,
     pub row: &'a Row,
     pub border: border::Set<'a>,
     pub chrome: &'a Chrome,
 }
 
-/// Which optional parts a dialog has: its geometry depends on nothing else.
+/// Which optional parts a dialog has (and how many lines its message is): its geometry depends on
+/// nothing else.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Parts { pub label: bool, pub input: bool, pub message: bool }
+pub struct Parts { pub label: bool, pub input: bool, pub message: u16 }
 
 /// Where each part of a dialog goes inside its box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +47,7 @@ pub struct Areas { pub body: Rect, pub label: Option<Rect>, pub input: Option<Re
 /// The parts of a dialog drawn in [area] (its box), two columns in from each side: the body,
 /// then the label, the input box, the message, a blank row and the buttons' row.
 pub fn areas(area: Rect, parts: Parts) -> Areas {
-    let optional = [(parts.label, 1), (parts.input, INPUT_ROWS), (parts.message, 1)];
+    let optional = [(parts.label, 1), (parts.input, INPUT_ROWS), (parts.message > 0, parts.message)];
     let constraints = std::iter::once(Constraint::Fill(1))
         .chain(optional.iter().filter(|(on, _)| *on).map(|&(_, rows)| Constraint::Length(rows)))
         .chain([Constraint::Length(1), Constraint::Length(1)]);   // a blank row, the buttons
@@ -54,7 +56,7 @@ pub fn areas(area: Rect, parts: Parts) -> Areas {
     let mut next = rects.iter().copied();
     let body = next.next().unwrap_or_default();
     let mut take = |on: bool| if on { next.next() } else { None };
-    let (label, input, message) = (take(parts.label), take(parts.input), take(parts.message));
+    let (label, input, message) = (take(parts.label), take(parts.input), take(parts.message > 0));
     Areas { body, label, input, field: input.map(|r| r.inner(Margin::new(1, 1))), message, row }
 }
 
@@ -64,10 +66,26 @@ pub fn wrap(text: &str, width: u16, style: Style) -> Vec<Line<'static>> {
     crate::workspace_menu::wrap(text, width as usize).into_iter().map(|l| Line::styled(l, style)).collect()
 }
 
+/// [text] cut to [width] columns, ending in … where it was cut.
+fn cut(text: &str, width: u16) -> String {
+    if text.width() <= width as usize { return text.to_string() }
+    let mut used = 1;   // the …
+    let kept: String = text.chars().take_while(|ch| { used += ch.width().unwrap_or(0); used <= width as usize }).collect();
+    kept + "…"
+}
+
 impl Input<'_> {
     /// What the box shows: the value, or a dot for each of its characters.
     fn shown(&self) -> String {
         if self.secret { "•".repeat(self.value.chars().count()) } else { self.value.to_string() }
+    }
+
+    /// [shown] as a `Line`, the selection in [selected]'s style.
+    fn line(&self, selected: Style) -> Line<'static> {
+        let shown = self.shown();
+        let Some((from, to)) = self.select.filter(|(a, b)| a < b) else { return Line::raw(shown) };
+        let part = |skip: usize, take: usize| shown.chars().skip(skip).take(take).collect::<String>();
+        Line::from(vec![Span::raw(part(0, from)), Span::styled(part(from, to - from), selected), Span::raw(part(to, usize::MAX))])
     }
 
     /// The caret's column in what is shown, and how far that is scrolled so the caret stays in a
@@ -82,12 +100,12 @@ impl Input<'_> {
 impl<'a> Dialog<'a> {
     /// A dialog titled [title] in [c]'s muted colour, with the default single-line border.
     pub fn new(title: &str, body: Vec<Line<'a>>, row: &'a Row, c: &'a Chrome) -> Dialog<'a> {
-        Dialog { title: Line::from(Span::styled(title.to_string(), c.muted)), body, input: None, message: None, row, border: border::PLAIN, chrome: c }
+        Dialog { title: Line::from(Span::styled(title.to_string(), c.muted)), body, input: None, message: Vec::new(), row, border: border::PLAIN, chrome: c }
     }
 
     pub fn parts(&self) -> Parts {
         let input = self.input.as_ref();
-        Parts { label: input.is_some_and(|i| !i.label.is_empty()), input: input.is_some(), message: self.message.is_some() }
+        Parts { label: input.is_some_and(|i| !i.label.is_empty()), input: input.is_some(), message: self.message.len().min(u16::MAX as usize / 2) as u16 }
     }
 
     pub fn areas(&self, area: Rect) -> Areas { areas(area, self.parts()) }
@@ -95,7 +113,7 @@ impl<'a> Dialog<'a> {
     /// The columns the box wants: its widest part, and two columns each side for the border and margin.
     pub fn width(&self) -> u16 {
         let label = self.input.as_ref().map_or(0, |i| i.label.width().max(i.width as usize));
-        let message = self.message.as_ref().map_or(0, Line::width);
+        let message = self.message.iter().map(Line::width).max().unwrap_or(0);
         let widest = self.body.iter().map(Line::width).chain([self.title.width(), label, message, self.row.width() as usize]).max().unwrap_or(0);
         widest.min(u16::MAX as usize - 4) as u16 + 4
     }
@@ -103,7 +121,7 @@ impl<'a> Dialog<'a> {
     /// The rows the box needs.
     pub fn height(&self) -> u16 {
         let p = self.parts();
-        let optional = u16::from(p.label) + if p.input { INPUT_ROWS } else { 0 } + u16::from(p.message);
+        let optional = u16::from(p.label) + if p.input { INPUT_ROWS } else { 0 } + p.message;
         (self.body.len().min(u16::MAX as usize / 2) as u16).saturating_add(optional + 2 + 2)
     }
 
@@ -123,7 +141,7 @@ impl<'a> Dialog<'a> {
                 *last = Line::styled(cut + "…", style);
             }
         }
-        if self.height() > rows { self.message = None }
+        while self.height() > rows && self.message.pop().is_some() {}
         if self.height() > rows && let Some(input) = &mut self.input { input.label = "" }
         if self.height() > rows && self.input.is_some() { self.body.clear() }
         self.height() <= rows
@@ -163,12 +181,12 @@ impl Widget for &Dialog<'_> {
         let a = self.areas(area);
         Paragraph::new(Text::from(self.body.clone())).render(a.body, buf);
         if let (Some(input), Some(r), Some(field)) = (&self.input, a.input, a.field) {
-            if let Some(label) = a.label { Line::styled(input.label, c.base).render(label, buf) }
+            if let Some(label) = a.label { Line::styled(cut(input.label, label.width), c.base).render(label, buf) }
             Block::bordered().border_set(self.border).border_style(if input.focused { c.accent } else { c.muted }).render(r, buf);
             let (_, offset) = input.caret(field.width);
-            Paragraph::new(input.shown()).style(c.base).scroll((0, offset)).render(field, buf);
+            Paragraph::new(input.line(c.selected)).style(c.base).scroll((0, offset)).render(field, buf);
         }
-        if let (Some(message), Some(r)) = (&self.message, a.message) { message.render(r, buf) }
+        if let Some(r) = a.message { Paragraph::new(Text::from(self.message.clone())).render(r, buf) }
         self.row.view(c).render(a.row, buf);
     }
 }
@@ -191,8 +209,8 @@ mod tests {
 
     fn password<'a>(row: &'a Row, c: &'a Chrome, value: &'a str, focused: bool) -> Dialog<'a> {
         let mut d = Dialog::new("Connect · linux-box", vec![Line::styled("Enter the password.", c.base)], row, c);
-        d.input = Some(Input { label: "Remote password", value, caret: value.chars().count(), secret: true, focused, width: 0 });
-        d.message = Some(Line::styled("Wrong password", c.danger));
+        d.input = Some(Input { label: "Remote password", value, caret: value.chars().count(), select: None, secret: true, focused, width: 0 });
+        d.message = vec![Line::styled("Wrong password", c.danger)];
         d
     }
 
@@ -273,7 +291,7 @@ mod tests {
         let row = connect();
         let value = "abcdefghijklmnopqrstuvwxyz";
         let mut d = Dialog::new("Rename Machine", vec![], &row, &c);
-        d.input = Some(Input { label: "", value, caret: 26, secret: false, focused: true, width: 30 });
+        d.input = Some(Input { label: "", value, caret: 26, select: None, secret: false, focused: true, width: 30 });
         assert_eq!(d.width(), 34, "the box as wide as the input wants, not as its value");
         let area = Rect::new(0, 0, 18, d.height());
         let field = d.areas(area).field.unwrap();
@@ -303,11 +321,57 @@ mod tests {
         assert!(d.body[2].to_string().ends_with('…'), "{:?}", d.body[2]);
         assert!(!d.fit(4), "no room for one line of the question and the buttons");
         let mut d = password(&row, &c, "", true);
-        assert!(d.fit(9) && d.message.is_none() && d.input.as_ref().unwrap().label == "Remote password" && d.body.len() == 1);
+        assert!(d.fit(9) && d.message.is_empty() && d.input.as_ref().unwrap().label == "Remote password" && d.body.len() == 1);
         // (With an input, the input is the question: the body may go too.)
         assert!(d.fit(7) && d.input.as_ref().unwrap().label.is_empty() && d.body.is_empty());
         assert_eq!(d.height(), 7);
         assert!(!d.fit(6));
+    }
+
+    #[test]
+    fn a_long_message_wraps_and_fitting_drops_its_last_lines_first() {
+        let c = crate::settings::chrome_with(false);
+        let row = connect();
+        let mut d = password(&row, &c, "", true);
+        d.message = wrap("Passwords do not match, so nothing was changed.", 20, c.danger);
+        assert_eq!(d.message.iter().map(|l| l.to_string()).collect::<Vec<_>>(), ["Passwords do not", "match, so nothing", "was changed."]);
+        assert_eq!(d.parts(), Parts { label: true, input: true, message: 3 });
+        assert_eq!(d.areas(Rect::new(0, 0, 30, 20)).message.map(|r| r.height), Some(3));
+        assert_eq!(d.height(), 1 + 1 + 3 + 3 + 4, "the body, the label, the input box, three message lines, two rules and two rows");
+        assert!(d.fit(d.height() - 1));
+        assert_eq!(d.message.iter().map(|l| l.to_string()).collect::<Vec<_>>(), ["Passwords do not", "match, so nothing"], "the last line went first");
+        assert!(d.fit(9) && d.message.is_empty(), "then the rest of the message, before the label");
+        assert!(d.input.as_ref().unwrap().label == "Remote password");
+    }
+
+    #[test]
+    fn a_label_cut_to_the_box_ends_in_an_ellipsis() {
+        let c = crate::settings::chrome_with(false);
+        let row = connect();
+        let mut d = password(&row, &c, "", true);
+        d.input.as_mut().unwrap().label = "Remote password set on this computer";
+        let area = Rect::new(0, 0, 24, d.height());
+        let mut buf = Buffer::empty(area);
+        (&d).render(area, &mut buf);
+        let label = d.areas(area).label.unwrap();
+        let shown: String = (label.x..label.right()).map(|x| buf[(x, label.y)].symbol()).collect();
+        assert_eq!(shown, "Remote password set…");
+    }
+
+    #[test]
+    fn a_selection_in_the_input_is_drawn_in_the_chosen_style() {
+        let c = crate::settings::chrome_with(false);
+        let row = connect();
+        let mut d = Dialog::new("Rename · notes.txt", vec![], &row, &c);
+        d.input = Some(Input { label: "", value: "notes.txt", caret: 5, select: Some((0, 5)), secret: false, focused: true, width: 20 });
+        let area = Rect::new(0, 0, 30, d.height());
+        let mut buf = Buffer::empty(area);
+        (&d).render(area, &mut buf);
+        let field = d.areas(area).field.unwrap();
+        let bg = |i: u16| buf[(field.x + i, field.y)].bg;
+        assert_eq!((bg(0), bg(4)), (c.selected.bg.unwrap(), c.selected.bg.unwrap()), "notes");
+        assert_ne!(bg(5), c.selected.bg.unwrap(), ".txt is not");
+        assert_eq!(d.cursor(area), Some(Position::new(field.x + 5, field.y)));
     }
 
     #[test]

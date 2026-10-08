@@ -297,6 +297,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
+    crate::devices::cancel_unfit(app);
 }
 
 /// tmux's menu (menu_draw_cb, screen_write_menu, screen_write_box): a box width + 4 wide at its
@@ -3558,6 +3559,8 @@ mod confirm_box_tests {
         let b = |label: &str, key| Button { label: label.into(), key };
         let stop = Row { buttons: vec![b("Cancel", None), b("Stop", Some('s'))], chosen: 0, hint: "s stop · esc cancel".into() };
         let back = Row { buttons: vec![b("Back", None)], chosen: 0, hint: String::new() };
+        // (menu() and the direct draw each read hn's colours: no other test may change them between.)
+        let _colours = crate::term_out::colours_lock();
         let cases: [(&str, Vec<&str>, Row, bool); 4] = [
             ("Close Tab · zsh", vec!["Working · zsh", "The terminal and its running commands will end."], stop.clone(), true),
             ("Stop Harness · build", vec!["1 stopped. The session or connection changed. Check it before trying again."], back, true),
