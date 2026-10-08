@@ -1,4 +1,5 @@
-import type { EngineTranscript } from './facets/transcript.js'
+import type { EngineTranscript, HistoryAsk } from './facets/transcript.js'
+import type { HistoryPage, TranscriptPager } from '../lib/transcriptPages.js'
 import { transcript as claude } from './claude/transcript.js'
 import { transcript as codex } from './codex/transcript.js'
 
@@ -6,4 +7,9 @@ import { transcript as codex } from './codex/transcript.js'
 export function engineTranscriptFor(engine: string): EngineTranscript | undefined {
   const transcripts = { claude, codex }
   return Object.hasOwn(transcripts, engine) ? transcripts[engine as keyof typeof transcripts] : undefined
+}
+
+/** One page of `engine`'s transcript at `path`, as that engine's reader asks the pager for it. */
+export function pageOf(pager: TranscriptPager, engine: 'claude' | 'codex', path: string, ask: HistoryAsk): Promise<HistoryPage> {
+  return engine === 'claude' ? pager.claude(path, ask) : pager.codex(path, ask)
 }
