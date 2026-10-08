@@ -166,6 +166,68 @@ describe('engine live checkpoints', () => {
     expect(rest.cursor.historyUntil).toBeUndefined()
   })
 
+  describe('a re-attach after a rewrite: history up to where the read found it, live after', () => {
+    /** Attach, rewrite the file shorter, and let the old cursor's read find it; then `after` happens. */
+    const rewritten = async (engine: 'claude' | 'codex', after: (t: Awaited<ReturnType<typeof setup>>) => Promise<void>) => {
+      const t = await setup(engine, prompt(engine, 'a much longer original turn') + done(engine))
+      await t.page()
+      await writeFile(t.file, prompt(engine, 'history') + done(engine))
+      expect(await t.send()).toMatchObject({ error: 'ENGINE_TRANSCRIPT_CHANGED' })
+      await after(t)
+      t.payload.token = 'next'
+      t.payload.cursor = null
+      const ask = { rewritten: true, rewrittenFrom: 'binding' }
+      // Activation first, with nothing in it; then the pages, until one has nothing more.
+      expect((await t.page(ask)).frames).toEqual([])
+      const turns: Array<[string, string | null, boolean]> = []
+      for (let page = await t.page(ask); page.frames.length; page = await t.page(ask)) {
+        for (const frame of page.frames) for (const event of frame.events) {
+          if (event.type.startsWith('turn_')) turns.push([event.type, (event.payload as { userMessage?: string } | undefined)?.userMessage ?? null, frame.replay])
+        }
+      }
+      return turns
+    }
+
+    it.each(['claude', 'codex'] as const)('%s: a turn appended before the re-attach is live, however often the old cursor finds the change', async engine => {
+      const turns = await rewritten(engine, async t => {
+        await appendFile(t.file, prompt(engine, 'fresh') + done(engine))
+        expect(await t.send()).toMatchObject({ error: 'ENGINE_TRANSCRIPT_CHANGED' })
+      })
+      expect(turns).toEqual([
+        ['turn_started', 'history', true], ['turn_ended', null, true],
+        ['turn_started', 'fresh', false], ['turn_ended', null, false],
+      ])
+    })
+
+    it('a file rewritten again before the re-attach moves the boundary to where that was found', async () => {
+      const turns = await rewritten('claude', async t => {
+        await writeFile(t.file, prompt('claude', 'rewritten again') + done('claude'))
+        expect(await t.send()).toMatchObject({ error: 'ENGINE_TRANSCRIPT_CHANGED' })
+        await appendFile(t.file, prompt('claude', 'fresh') + done('claude'))
+      })
+      expect(turns).toEqual([
+        ['turn_started', 'rewritten again', true], ['turn_ended', null, true],
+        ['turn_started', 'fresh', false], ['turn_ended', null, false],
+      ])
+    })
+
+    it('a worker that never saw the read, or whose token core forgot, keeps everything on disk as history', async () => {
+      for (const lose of ['restart', 'forget'] as const) {
+        const turns = await rewritten('claude', async t => {
+          await appendFile(t.file, prompt('claude', 'fresh') + done('claude'))
+          if (lose === 'restart') t.restart()
+          else expect(await t.send(LIVE_FORGET)).toMatchObject({ forgotten: true })
+        })
+        expect(turns.map(([, , replay]) => replay), lose).toEqual([true, true, true, true])
+      }
+    })
+
+    it('refuses a rewrittenFrom that is not a token', async () => {
+      const t = await setup('claude', prompt('claude', 'one'))
+      expect(await t.send(LIVE_PREPARE, { rewritten: true, rewrittenFrom: 7 })).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
+    })
+  })
+
   it('accepts complete attach records without a trailing newline and finishes after trailing blank bytes', async () => {
     const t = await setup('claude', prompt('claude', 'attached').trimEnd())
     expect((await t.page()).prepared).toBe(true)
