@@ -6,6 +6,7 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
+import { loadEngine } from '../../engines/inProcess.js'
 import { prepareResume, repairedItemsName } from '../../engines/launchPrep.js'
 import { ApiConnectionError, type ApiConnections } from '../../lib/apiConnections.js'
 import { refreshApiLaunch } from '../../lib/apiModels.js'
@@ -33,6 +34,11 @@ export function createLaunchHelpers({ prepareApiTools, savedApis, launchOverride
   // An agent on a saved API's model relaunches with that API's endpoint and key as saved now, so a key
   // pasted since takes effect, and a removed API is refused rather than kept on its old key.
   const relaunchOverrides = async (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
+    // OpenCode's version decides its relaunch's argv, read by OpenCode's own code (lib/launchOverrides.ts): loaded
+    // here, before anything is written, and the relaunch refused without it.
+    if (session.engine === 'opencode' && !await loadEngine('opencode')) {
+      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
+    }
     await prepareInstructionWrites(session.cwd)
     prepareApiTools(session.cwd, session.engine)
     let gridLaunch = source.gridLaunch ?? null

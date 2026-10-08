@@ -8,6 +8,7 @@ import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { buildEngineLaunchArgv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { planFork } from '../../lib/forkAgent.js'
+import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentForker, type ForkAgentDeps } from './fork.js'
 
@@ -35,6 +36,10 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   refusePermissionFlagIfUnsupported: vi.fn(async () => null),
   supportsNamedAgent: vi.fn(() => true),
 }))
+vi.mock('../../scm/scmProjects.js', async (real) => {
+  const actual = await real<typeof import('../../scm/scmProjects.js')>()
+  return { ...actual, prepareInstructionWrites: vi.fn(actual.prepareInstructionWrites) }
+})
 vi.mock('../../lib/forkAgent.js', async (real) => ({ ...await real<object>(), planFork: vi.fn(() => ({ ok: true, level: 'native', forkSessionId: 's1' })) }))
 
 const root = mkdtempSync(join(tmpdir(), 'core-fork-'))
@@ -173,12 +178,19 @@ describe('forking an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
-  it('refuses to fork OpenCode when its code could not be loaded, and loads nothing for another engine', async () => {
+  it('refuses to fork OpenCode when its code could not be loaded, having written nothing, and loads nothing for another engine', async () => {
     const { loadEngine } = await import('../../engines/inProcess.js')
     vi.mocked(loadEngine).mockResolvedValueOnce(null)
-    expect(await setup(source({ engine: 'opencode', agent: 'reviewer' } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null }))
+    vi.mocked(installedDsh).mockReturnValue({ manifest: { name: 'Blender' } } as never)
+    const refused = setup(source({ engine: 'opencode', agent: 'reviewer', dsh: 'blender' } as Partial<RegisteredSession>))
+    expect(await refused.fork({ agentId: 'a1', name: null, prompt: null }))
       .toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
+    // No instruction files prepared, no harness runtime folder, no relaunch overrides, no pane.
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
+    expect(harnessLaunchOrRefusal).not.toHaveBeenCalled()
+    expect(refused.deps.relaunchOverrides).not.toHaveBeenCalled()
     expect(createAndRegisterPane).not.toHaveBeenCalled()
+    vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     vi.mocked(loadEngine).mockClear()
     await setup(source({ agent: 'reviewer' } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null })
     expect(loadEngine).not.toHaveBeenCalled()

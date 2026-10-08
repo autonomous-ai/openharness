@@ -74,6 +74,10 @@ export function createAgentForker({
     }
     const plan = planFork({ engine, sessionId: source.sessionId, name: sourceName, cwd: source.cwd }, memory, prompt)
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
+    // Which OpenCode is installed decides a fork's named agent (below). Its probe is OpenCode's own code, loaded for
+    // OpenCode alone (engines/inProcess.ts), here before anything is written: without it, no fork.
+    const opencode = engine === 'opencode' ? await loadEngine('opencode') : null
+    if (engine === 'opencode' && !opencode) return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
 
     const label = buildHarnessSessionLabel(engine)
     await prepareInstructionWrites(source.cwd)
@@ -104,10 +108,7 @@ export function createAgentForker({
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
-    // as a general session rather than handing the v2 TUI an `--agent` it exits on. Which one is installed is read
-    // by OpenCode's own probe, loaded for OpenCode alone (engines/inProcess.ts); without it, no fork.
-    const opencode = engine === 'opencode' ? await loadEngine('opencode') : null
-    if (engine === 'opencode' && !opencode) return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
+    // as a general session rather than handing the v2 TUI an `--agent` it exits on.
     const forkMajor = opencode ? opencode.opencodeMajorVersion() : null
     const extraArgs = [...built.overrides.extraArgs, ...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt

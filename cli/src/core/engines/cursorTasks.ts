@@ -72,13 +72,15 @@ export function createCursorTaskHooks({ emitSessionEvents, watcher, registry, cu
 }
 
 /**
- * Whether Cursor's hook queued Tasks while no daemon ran, or is queueing one now: its file, or the lock it takes
- * to write it (engines/cursor/contract.ts). Neither is there on a machine whose Cursor never did, and Cursor's
- * code is loaded only when one is: its own read and write of the queue then run as they always did.
+ * Whether Cursor's hook queued Tasks while no daemon ran, or is queueing one now: the lock it takes to write the
+ * queue, or the queue (engines/cursor/contract.ts). Neither is there on a machine whose Cursor never did, and
+ * Cursor's code is loaded only when one is: its own read and write of the queue then run as they always did. The
+ * lock is looked for first: a hook that takes it, writes the queue and lets go between the two looks leaves the
+ * queue for the second.
  */
 async function queued(dataDir: string): Promise<boolean> {
   const file = join(dataDir, PENDING_TASKS_FILE)
-  for (const path of [file, `${file}.lock`]) {
+  for (const path of [`${file}.lock`, file]) {
     try { await access(path); return true } catch { /* not this one */ }
   }
   return false
