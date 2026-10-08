@@ -3,7 +3,6 @@ import 'package:flutter/scheduler.dart';
 
 import '../shared/theme/app_theme.dart' as grid;
 import '../shared/theme/app_type.dart';
-import '../state/swarm_navigation.dart' show externalEngineName;
 import 'engine_identity.dart';
 
 /// What a pane shows while it installs the agent it was opened on.
@@ -94,8 +93,7 @@ class _AgentInstallCoverState extends State<AgentInstallCover>
   @override
   Widget build(BuildContext context) {
     grid.AppTheme.watch(context);
-    // "Claude Code", as the pane's header says it, not the engine's short label "Claude".
-    final name = externalEngineName(widget.engine);
+    final name = engineIdentity(widget.engine).label;
     if (_details) {
       // Uncovered: the terminal shows through, with a thin bar to cover it again.
       return Align(
