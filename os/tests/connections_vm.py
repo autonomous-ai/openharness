@@ -20,13 +20,15 @@ with tempfile.TemporaryDirectory(prefix='connections-native-') as temporary:
         return subprocess.check_output(['harness', 'connections', *args], env=env, text=True, timeout=10)
     assert json.loads(cli('list', '--json')) == []
     vault = connection_store.Store(root)
-    vault.save('github', {'auth_type': 'pat', 'api_key': 'native-fixture-not-a-real-token', 'user_email': 'fixture@example.invalid'})
+    vault.save('github', {'access_token': 'native-fixture-not-a-real-token', 'source': 'gateway',
+                          'account_name': 'fixture@example.invalid'})
     for _ in range(3):
         # Separate command processes use the same credentials, independent of an engine.
         info = json.loads(cli('info', 'github'))
         assert info['account'] == 'fixture@example.invalid', info
         assert 'native-fixture-not-a-real-token' not in json.dumps(info)
-    assert not (root / 'backend.json').exists()
+    # The bridge's socket is waiting for agents; nothing runs until one calls it.
+    subprocess.run(['systemctl', '--user', 'is-active', '--quiet', 'harness-connections.socket'], check=True)
     process = subprocess.Popen(['harness', 'connections', 'serve', '--background'], env=env,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
@@ -58,10 +60,12 @@ print('Installed Connections CLI, shared local credentials and authenticated dis
     vm.command('printf %s ' + shlex.quote(encoded) + ' | base64 -d | python3', timeout=30)
     vm.command('harness connections', timeout=15)
     try:
-        wait_installer_screen(vm, r'Connect once', 'connections-page', timeout=30)
-        vm.keys('tab')
+        wait_installer_screen(vm, r'Connectors', 'connections-page', timeout=30)
+        # Search, Refresh, then Add custom: the dialog for a remote MCP server.
+        for _ in range(3):
+            vm.keys('tab')
         vm.keys('ret')
-        wait_installer_screen(vm, r'Access token', 'connections-token-form', timeout=15)
+        wait_installer_screen(vm, r'Remote MCP server URL', 'connections-add-custom', timeout=15)
         vm.keys('esc')
     finally:
         # Use Chromium's own close-window shortcut. Harness deliberately does
@@ -75,4 +79,4 @@ print('Installed Connections CLI, shared local credentials and authenticated dis
         vm.command('pkill -INT -u "$(id -u)" -f ' + shlex.quote(pattern) + '; '
                    'for n in $(seq 1 30); do ! pgrep -u "$(id -u)" -f ' + shlex.quote(pattern) +
                    ' >/dev/null && exit 0; sleep .1; done; exit 1', timeout=10)
-    return {'status': 'passed', 'scope': 'Installed CLI, shared fixture credentials, local API boundary, browser and keyboard token form; no provider authentication'}
+    return {'status': 'passed', 'scope': 'Installed CLI, shared fixture credentials, bridge socket, local API boundary, browser page and Add custom dialog; no provider authentication'}

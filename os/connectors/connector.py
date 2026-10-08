@@ -9,10 +9,13 @@ the response body. Tokens stay out of routine tool output. This is not a
 security boundary against arbitrary code running as the same Unix user.
 
 Usage:
-  harness connections                     Open account settings
+  harness connections                     Open the Connectors page
+  harness connections connect <code>      Sign in from the terminal
   harness connections list [--json]
   harness connections info <code>
   harness connections disconnect <code>
+  harness connections refresh [<code>]    Renew tokens that are due
+  harness connections sync                Give agents their connections again
   harness connections call <code> <METHOD> <url> [options]
 
 Options for `call`:
@@ -48,24 +51,25 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 # Official API hosts per connector. A credential is only ever sent to one of
 # these (exact host or a subdomain of it). A connector that is not listed is
 # refused: the helper never sends a credential to a host it cannot vouch for.
+# Services signed in through the connector gateway hold an ordinary OAuth token
+# for their REST API. A service signed in from this computer (MCP OAuth) holds a
+# token for its MCP server instead: agents use it through their MCP tools.
 OFFICIAL_HOSTS = {
     "gmail": ("googleapis.com",),
     "google_calendar": ("googleapis.com",),
     "google_drive": ("googleapis.com",),
-    "facebook": ("graph.facebook.com",),
-    "figma": ("api.figma.com",),
-    "figma-api": ("api.figma.com",),
+    "google_bigquery": ("googleapis.com",),
     "github": ("api.github.com",),
-    "ahrefs": ("api.ahrefs.com",),
-    "notion": ("api.notion.com",),
-    "linear": ("api.linear.app",),
+    "slack": ("slack.com",),
     "asana": ("app.asana.com",),
+    "hubspot": ("api.hubapi.com",),
+    "pagerduty": ("api.pagerduty.com",),
+    "microsoft_365": ("graph.microsoft.com",),
 }
-GOOGLE_CODES = ("gmail", "google_calendar", "google_drive")
 
 # Connectors whose API only accepts the credential as a query parameter on
-# some endpoints (Facebook feed-post DELETE, debug_token).
-TOKEN_PARAM_CODES = ("facebook",)
+# some endpoints. None of the current services need it.
+TOKEN_PARAM_CODES = ()
 
 # Files that may be uploaded with `--form K=@path`: media and documents only,
 # never from a directory that holds credentials or device configuration.
@@ -105,70 +109,52 @@ def load_json(path):
         raise Failure(3, f"cannot read {path.name}: {type(e).__name__}")
 
 
-def load_entry(code):
-    """Return the stored entry for a connector, or None when it is not linked."""
-    return store.Store(CONFIGS_DIR).load(code)
-
-
-def account_of(entry):
-    creds = entry.get("credentials") or {}
-    if entry.get("auth_type") == "pat" and creds.get("email"):
-        return creds["email"]
-    return entry.get("user_email") or creds.get("email") or ""
+def vault():
+    return store.Store(CONFIGS_DIR)
 
 
 def cmd_list(as_json=False):
     """Discover the same per-user connections regardless of the current agent."""
-    found = 0
-    problems = []
-    records = []
-    for code in store.SERVICES:
-        try:
-            entry = load_entry(code)
-            if entry:
-                records.append(store.Store(CONFIGS_DIR).status(code))
-        except (Failure, store.StoreError) as e:
-            problems.append(str(e))
-            continue
-        if entry:
-            found += 1
-            if not as_json:
-                print(describe(code, entry))
-    for p in problems:
-        print(f"verification failed: {p}", file=sys.stderr)
-    if problems:
+    try:
+        tokens = vault().tokens()
+    except store.StoreError as e:
+        print(f"verification failed: {e}", file=sys.stderr)
         return 3
+    records = [vault().status(code, token) for code, token in sorted(tokens.items())]
     if as_json:
         print(json.dumps(records))
-    elif not found:
+    elif not records:
         print("no connectors linked")
+    for record in [] if as_json else records:
+        print(describe(record))
     return 0
 
 
-def describe(code, entry):
-    parts = [account_of(entry), entry.get("auth_type") or "oauth"]
-    state = "expired" if entry.get("expires_at") and entry["expires_at"] <= time.time() else "connected"
-    return f"{code}: {state} (" + ", ".join(p for p in parts if p) + ")"
+def describe(record):
+    how = "MCP tools" if record["tools"] else "harness connections call"
+    parts = [record.get("account"), how]
+    return f"{record['connector']}: {record['state']} (" + ", ".join(p for p in parts if p) + ")"
 
 
 def cmd_info(code):
-    entry = load_entry(code)
-    if not entry:
+    token = vault().token(code)
+    if not token:
         raise Failure(3, f"{code}: not connected")
-    expires = int(entry.get("expires_at") or 0)
+    record = vault().status(code, token)
+    expires = int(token.get("expires_at") or 0)
     info = {
         "connector": code,
-        "auth_type": entry.get("auth_type") or "oauth",
-        "account": account_of(entry),
-        "scopes": entry.get("scopes") or [],
-        "auto_refresh": store.Store(CONFIGS_DIR).status(code)["auto_refresh"],
+        "name": record["name"],
+        "state": record["state"],
+        "account": record.get("account", ""),
+        "signed_in_through": "Harness account" if token.get("source") == "gateway" else "this computer",
+        "scopes": record["scopes"],
+        "agent_tools": record["tools"],
+        "rest_call": code in OFFICIAL_HOSTS and token.get("source") == "gateway",
+        "auto_refresh": record["auto_refresh"],
         "expires": "not reported" if not expires else fmt_time(expires),
-        "expired": bool(expires) and expires < time.time(),
-        "obtained": fmt_time(entry.get("obtained_at")),
+        "obtained": fmt_time(token.get("obtained_at")),
     }
-    page_id = (entry.get("credentials") or {}).get("page_id")
-    if page_id:
-        info["page_id"] = page_id
     print(json.dumps(info, indent=2))
     return 0
 
@@ -281,10 +267,10 @@ def cmd_call(code, method, url, args, *, entry_override=None):
     if opts["token_param"] and code not in TOKEN_PARAM_CODES:
         raise Failure(2, f"--token-param is only for {', '.join(TOKEN_PARAM_CODES)}")
 
-    entry = entry_override if entry_override is not None else store.Store(CONFIGS_DIR).ready(code)
-    if code in GOOGLE_CODES and entry.get("auth_type") == "pat":
-        raise Failure(3, f"{code}: linked with an app password; Google REST APIs reject it — use IMAP/SMTP (see SKILL.md)")
-    token = entry.get("access_token") or entry.get("api_key")
+    entry = entry_override if entry_override is not None else vault().ready(code)
+    if entry.get("source") not in (None, "gateway"):
+        raise Failure(3, f"{code}: this account's token is for its MCP server; use the agent's {code} tools")
+    token = entry.get("access_token")
     if not token:
         raise Failure(3, f"{code}: linked but no usable credential stored")
 
@@ -296,17 +282,12 @@ def cmd_call(code, method, url, args, *, entry_override=None):
     )
 
     headers = {"Accept": "application/json", "User-Agent": "Harness-Connections"}
-    if code == "notion":
-        headers["Notion-Version"] = "2022-06-28"
     for k, v in opts["header"]:
-        if k.lower() in ("authorization", "host", "proxy-authorization", "cookie", "x-figma-token"):
+        if k.lower() in ("authorization", "host", "proxy-authorization", "cookie"):
             raise Failure(2, f"do not pass {k}; the helper sets it (or it is not allowed)")
         headers[k] = v
     if not opts["token_param"]:
-        if code in ("figma", "figma-api") and entry.get("auth_type") == "pat":
-            headers["X-Figma-Token"] = token
-        else:
-            headers["Authorization"] = token if code == "linear" and entry.get("auth_type") == "pat" else "Bearer " + token
+        headers["Authorization"] = store.bearer(entry)
 
     body = None
     if opts["json"] is not None:
@@ -378,7 +359,7 @@ def main(argv):
         if len(argv) >= 4 and argv[0] == "call":
             return cmd_call(argv[1], argv[2], argv[3], argv[4:])
         if len(argv) == 2 and argv[0] == "disconnect":
-            store.Store(CONFIGS_DIR).disconnect(argv[1])
+            vault().disconnect(argv[1])
             print("Disconnected on this computer. Revoke access at the provider to remove it elsewhere.")
             return 0
         print(__doc__.split("\n\n", 2)[2], file=sys.stderr)

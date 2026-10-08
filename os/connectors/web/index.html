@@ -2,26 +2,50 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Connections · Harness</title>
+<title>Connectors · Harness</title>
 <link rel="stylesheet" href="/style.css">
 <script src="/page.js" defer></script>
 <body>
 <main>
-  <header><span class="brand">harness<span> / connections</span></span></header>
-  <h1>Connect once.<br>Work with any agent.</h1>
-  <p class="intro">Your connected accounts, available to agents on this computer.</p>
+  <header>
+    <h1>Connectors</h1>
+    <p class="intro">Connect your agents to tools outside this computer: a tracker, a design tool, a web service.</p>
+  </header>
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Search connectors" autocomplete="off" spellcheck="false" aria-label="Search connectors">
+    <button id="reload" class="icon" type="button" title="Refresh" aria-label="Refresh">↻</button>
+    <button id="add" class="primary" type="button">+ Add custom</button>
+  </div>
+  <div class="pills" role="tablist">
+    <button id="browse" class="pill selected" type="button" role="tab" aria-selected="true">Browse</button>
+    <button id="connected" class="pill" type="button" role="tab" aria-selected="false">Connected</button>
+  </div>
   <p id="notice" role="status" aria-live="polite"></p>
-  <div id="connections" aria-label="Connected services"></div>
-  <footer>Connections stay on this computer. You choose what each service can access.</footer>
+  <div id="sections"></div>
+  <footer>Accounts stay on this computer and are shared by every agent you run here. Disconnecting stops Harness from using an account; revoke it in the service's settings to remove it everywhere.</footer>
 </main>
-<dialog id="connect-dialog">
-  <form id="connect-form">
-    <h2 id="service-name">Connect</h2>
-    <p>Use a token from your account. <a id="manage-link" target="_blank" rel="noreferrer">Manage permissions ↗</a></p>
-    <label for="token">Access token</label>
-    <input id="token" type="password" autocomplete="off" spellcheck="false" required maxlength="8192">
-    <p id="connect-error" role="status" aria-live="polite"></p>
-    <div class="actions"><button type="button" id="cancel">Cancel</button><button class="primary" id="save" type="submit">Connect</button></div>
+<dialog id="custom-dialog">
+  <form id="custom-form">
+    <h2>Add custom</h2>
+    <p>A remote MCP server. If it asks you to sign in, Harness opens the service's sign-in page.</p>
+    <label for="custom-name">Name</label>
+    <input id="custom-name" required maxlength="64" autocomplete="off" spellcheck="false">
+    <label for="custom-url">Remote MCP server URL</label>
+    <input id="custom-url" type="url" required maxlength="2048" placeholder="https://example.com/mcp" autocomplete="off" spellcheck="false">
+    <details>
+      <summary>Advanced</summary>
+      <label for="custom-headers">Headers (Name: value, one per line)</label>
+      <textarea id="custom-headers" rows="3" placeholder="Authorization: Bearer …" spellcheck="false"></textarea>
+    </details>
+    <p id="custom-error" class="error" role="status" aria-live="polite"></p>
+    <div class="actions"><button type="button" id="custom-cancel">Cancel</button><button class="primary" id="custom-save" type="submit">Continue</button></div>
+  </form>
+</dialog>
+<dialog id="confirm-dialog">
+  <form id="confirm-form">
+    <h2 id="confirm-title">Disconnect</h2>
+    <p>Agents on this computer stop using this account. To revoke it everywhere, use the service's settings.</p>
+    <div class="actions"><button type="button" id="confirm-cancel">Cancel</button><button class="danger" type="submit">Disconnect</button></div>
   </form>
 </dialog>
 </body>
