@@ -183,7 +183,7 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_re
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
              "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "pro_player_working_visible", "status_animated", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
-             "settings_item", "settings_count", "tabs_move", "selection_emit", "visit_emit", "pro_open_in_app", "make_action", "input_cancel", "view",
+             "settings_item", "settings_count", "pro_player_request", "tabs_move", "selection_emit", "visit_emit", "pro_open_in_app", "make_action", "input_cancel", "view",
              "question_rows", "question_move", "pro_question_back", "draft_move",
              "pro_appearance_view", "pro_appearance_open", "pro_appearance_move", "pro_appearance_use",
              "workspace_index", "tabs_open", "workspace_failed", "pro_panes_of",
@@ -191,7 +191,7 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_re
              "voice_close", "power", "notice_sync_view", "pro_result_source_reset", "pro_notice_source", "ui_set_connected", "ui_draft_source", "ui_focus_project",
              "ui_swarms_replace", "ui_tiles_replace", "ui_project_remove", "ui_project_apply_order",
              "ui_project_clear_all", "ui_project_set_name", "ui_project_set_machine", "ui_set_selected_machine",
-             "recap_preview", "activity_text", "event", "ui_project_emit", "ui_project_restore_event", "ui_project_player_activity", "ui_player_overview", "ui_player_context",
+             "recap_preview", "activity_text", "event", "ui_project_emit", "ui_project_restore_event", "ui_project_player_activity", "ui_player_overview", "ui_player_context", "ui_player_library",
              "ui_prune_stale_busy", "ui_cancel_acked") :
     code += function(name)
 selection_actions = SOURCE.split("    case A_SELECT_EXTEND:", 1)[1].split("    case A_CARRY:", 1)[0]
@@ -1530,6 +1530,7 @@ static void living_summary_transition(void) {
     habitat_touch_cancel();sample(false,360,340,3100);surface_tick(now);assert(s.view==READER&&!starts);
 }
 
+static bool player_has_text(const char *text);
 static void player_save(const char *name) {
     const char *dir=getenv("HARNESS_PLAYER_PREVIEW");if(!dir)return;
     static uint16_t pixels[720*720];
@@ -1548,7 +1549,7 @@ static void player_fixture(void) {
     ui_player_context(&context);
     COPY(s.agents[0].name,"Harness OS");COPY(s.agents[0].engine,"codex");
     ui_project_emit("a","session-a","processing","Working...",NULL);
-    ui_project_player_activity("a","Read os-tests.log, receipt.json",931);
+    ui_project_player_activity("a","CI passed for the integrated head too.",931);
 }
 static void player_screens(void) {
     player_fixture();render_actual();player_save("01-working");
@@ -1562,16 +1563,22 @@ static void player_screens(void) {
     player_fixture();s.notice_count=1;s.notice[0].question=true;
     COPY(s.notice[0].agent_id,"a");COPY(s.notice[0].summary,"Run the migration?");
     render_actual();player_save("03-question");
-    player_fixture();s.count=6;
-    const char *names[]={"Harness Product Line","daemon refactoring","Catch up on lamp GTM","Harness OS","Deploy dev firmware","computer mini"};
-    for(int i=0;i<6;i++){snprintf(s.agents[i].id,sizeof s.agents[i].id,"pane-%d",i);COPY(s.agents[i].name,names[i]);}
-    s.agents[1].busy=true;s.agents[4].player.finished=s.agents[5].player.finished=true;
-    s.active=1;s.notice_count=2;s.notice[0].question=s.notice[1].question=true;
-    COPY(s.notice[0].agent_id,"pane-2");COPY(s.notice[1].agent_id,"pane-3");
-    s.player_overview=(pro_player_overview_t){.harnesses=37,.machines=7,.models=6,.received=true,.received_ms=now,.valid_ms=60000};
-    s.view=AGENTS;render_actual();player_save("04-library");
-    s.notice_count=0;for(int i=0;i<6;i++){s.agents[i].busy=false;s.agents[i].player.finished=true;}
-    render_actual();assert(scene.count<HT_RUNS); // Every completion icon must fit the scene budget.
+    player_fixture();
+    pro_player_library_t page={.total=37,.machines=7,.count=6};
+    const char *names[]={"Harness OS","Harness pro UI","Daemon refactoring","Deploy dev firmware","Catch up on lamp GTM","Terminal harness"};
+    for(int i=0;i<6;i++) {
+        snprintf(page.rows[i].id,sizeof page.rows[i].id,"pane-%d",i);
+        COPY(page.rows[i].machine_id,i%2 ? "remote" : "local");
+        COPY(page.rows[i].name,names[i]); COPY(page.rows[i].engine,i==5 ? "terminal" : i==2 ? "claude" : "codex");
+        page.rows[i].age_seconds=i*3600;
+        page.rows[i].status=i<2 ? PLAYER_WORKING : i==2 ? PLAYER_QUESTION : i==3 ? PLAYER_FINISHED : i==4 ? PLAYER_PAUSED : PLAYER_IDLE;
+    }
+    ui_player_library(&page);s.view=AGENTS;render_actual();player_save("04-library");
+    assert(player_has_text("37 sessions across 7 machines"));
+    assert(player_has_text("now") && player_has_text("5h"));
+    assert(action_hit(A_PLAYER_SESSION) && !action_hit(A_AGENT));
+    for(int i=0;i<6;i++)s.player_library.rows[i].status=PLAYER_FINISHED;
+    render_actual();assert(scene.count<HT_RUNS);
     player_fixture();ui_set_connected(false);render_actual();player_save("05-disconnected");
 }
 static void player_data_lifetime(void) {
@@ -1590,6 +1597,34 @@ static void player_data_lifetime(void) {
     ui_project_player_activity("a","Read next.ts",0);
     ui_set_connected(false);
     assert(!s.agents[0].player.action[0]&&!s.agents[0].player.has_elapsed);
+}
+static void player_library_pages(void) {
+    player_fixture();
+    pro_player_library_t page={.total=71,.machines=4,.count=6};
+    for(int i=0;i<6;i++) { snprintf(page.rows[i].id,sizeof page.rows[i].id,"remote-%d",i);
+        COPY(page.rows[i].machine_id,"other");COPY(page.rows[i].name,"A very long remote session name that should be clipped");
+        COPY(page.rows[i].engine,"claude");page.rows[i].age_seconds=-1; }
+    ui_player_library(&page);s.view=AGENTS;render_actual();
+    assert(s.player_library.total==71 && s.count==2);
+    action_t captured=make_action((hit_t){.action=A_PLAYER_SESSION,.value=3});
+    assert(!strcmp(captured.id,"remote-3") && !strcmp(captured.text,"other"));
+    s.touch_down=true;COPY(page.rows[3].id,"new-3");ui_player_library(&page);
+    assert(!strcmp(s.player_library.rows[3].id,"remote-3"));s.touch_down=false;
+    tabs_move(TAB_ROW_HEIGHT*20);assert(s.offset==20&&s.player_library.pending);
+    assert(queued_action.kind==A_PLAYER_PAGE&&queued_action.value==20);
+    ui_player_library(&page);assert(s.player_library.pending&&s.player_library.offset==0);
+    page.request=s.player_library.request;page.offset=20;ui_player_library(&page);
+    assert(!s.player_library.pending&&s.player_library.offset==20&&s.offset==20);
+    assert(captured.revision!=s.player_library.revision);
+    dispatch(captured);assert(!visit.pending && !starts);
+    dispatch(make_action((hit_t){.action=A_PLAYER_SESSION,.value=3}));
+    assert(visit.pending && !strcmp(visit.pending_agent,"new-3") && !starts);
+    ht_visit_close(&visit);s.view=AGENTS;
+    render_actual();
+    tabs_move(TAB_ROW_HEIGHT*200);assert(s.offset==65);
+    page.request=s.player_library.request;page.offset=65;ui_player_library(&page);
+    render_actual();assert(s.player_library.count==6);
+    ui_set_connected(false);assert(!s.player_library.received);
 }
 static void player_gestures(void) {
     player_fixture();render_actual();tap(630,45,75);assert(starts==1&&s.view==VOICE);
@@ -1611,7 +1646,7 @@ static bool player_has_text(const char *text) {
 static void player_context_lifetime(void) {
     player_fixture();render_actual();
     assert(player_has_text("23%"));
-    assert(player_has_text("M2   openharness   (dev/firmware-pro)"));
+    assert(player_has_text("M2 / openharness") && player_has_text("dev/firmware-pro"));
     assert(!player_has_text("Codex")&&!player_has_text("Tap to speak"));
     for(int i=0;i<scene.count;i++) if(!strcmp(scene.runs[i].text,"Working")) assert(scene.runs[i].y>=640);
     s.player_context[0].remaining_bp=30;render_actual();assert(player_has_text("<1%"));
@@ -1620,7 +1655,7 @@ static void player_context_lifetime(void) {
     COPY(s.player_context[0].engine,"codex");
     now+=60001;surface_tick(now);render_actual();assert(player_has_text("-"));
     assert(!s.player_overview.received&&s.player_context[0].remaining_bp==-1);
-    assert(player_has_text("M2   openharness   (dev/firmware-pro)"));
+    assert(player_has_text("M2 / openharness") && player_has_text("dev/firmware-pro"));
     player_fixture();
     COPY(s.agents[0].name,"A long session title that spans two lines");
     COPY(s.player_context[0].branch,"dev/firmware-pro-a-very-long-branch-that-has-to-wrap-across-lines-without-hitting-the-action");
@@ -1664,7 +1699,7 @@ static void player_tabs_contacts(void) {
 
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
-        {"player_context_lifetime",player_context_lifetime},{"player_animation",player_animation},{"player_tabs_contacts",player_tabs_contacts},{"player_screens",player_screens},{"player_data_lifetime",player_data_lifetime},{"player_gestures",player_gestures},
+        {"player_library_pages",player_library_pages},{"player_context_lifetime",player_context_lifetime},{"player_animation",player_animation},{"player_tabs_contacts",player_tabs_contacts},{"player_screens",player_screens},{"player_data_lifetime",player_data_lifetime},{"player_gestures",player_gestures},
         {"search_match_contacts",search_match_contacts},{"carry_chooser_contacts",carry_chooser_contacts},{"reader_navigation_parity",reader_navigation_parity},{"reader_footer_scroll",reader_footer_scroll},{"reader_stale_contacts",reader_stale_contacts},{"reader_latest_contact",reader_latest_contact},
         {"question_back_parity",question_back_parity},{"question_back_stale_contact",question_back_stale_contact},{"question_back_immutable",question_back_immutable},
         {"footer_send_feedback",footer_send_feedback},{"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},

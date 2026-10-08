@@ -34,6 +34,22 @@ describe('CommanderMirror recap events', () => {
     expect(mirror.latestAction('session')).toBe('')
   })
 
+  it('Player reports the latest assistant update while tools continue running', () => {
+    const frames: CommanderFrame[] = []
+    const mirror = new CommanderMirror({ send: f => frames.push(f), sendWeb: () => {}, hasDevice: () => true,
+      summarize: async () => null, dataDir })
+    mirror.ingest([{ type: 'turn_started', payload: {} },
+      { type: 'text_delta', payload: { content: 'CI passed for the integrated head too.' } },
+      { type: 'tool_start', payload: { tool: 'Bash', input: { command: 'python3 check.py' } } } ] as LiveEvent[], 's')
+    expect(mirror.latestUpdate('s')).toBe('CI passed for the integrated head too.')
+    mirror.heartbeat('s')
+    expect(frames.some(f => f.payload.kind === 'processing' && f.payload.update === mirror.latestUpdate('s'))).toBe(true)
+    mirror.ingest([{ type: 'text_delta', payload: { content: 'The build is ready.' } }] as LiveEvent[], 's')
+    expect(mirror.latestUpdate('s')).toBe('The build is ready.')
+    mirror.ingest([{ type: 'turn_started', payload: {} }] as LiveEvent[], 's')
+    expect(mirror.latestUpdate('s')).toBe('')
+  })
+
   it('keeps what the user ASKED, not only what the agent answered', async () => {
     // The router reads these to decide where a spoken follow-up belongs, and a recap answers the wrong
     // question for that: measured on this desk, "Chiến tranh thế giới thứ hai kết thúc vào năm nào?"
@@ -566,7 +582,7 @@ describe('CommanderMirror recap events', () => {
 
     // Turn closed but summarize in flight → heartbeat re-asserts Summarizing… and still reports busy.
     expect(mirror.heartbeat('session-sum')).toBe(true)
-    expect(deviceFrames.map((f) => f.payload)).toEqual([{ kind: 'processing', text: 'Summarizing…' }])
+    expect(deviceFrames.map((f) => f.payload)).toEqual([{ kind: 'processing', text: 'Summarizing…', update: 'answer' }])
 
     releaseSummarize('recap\n\nbody')
     await vi.runAllTimersAsync()

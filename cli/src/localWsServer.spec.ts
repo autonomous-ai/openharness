@@ -413,10 +413,22 @@ describe('local CLI WebSocket', () => {
       { id: 'a2', project: 'x'.repeat(79), branch: 'bad branch', remaining: null, validUntil: 0 },
     ] } })
 
+    const sessions = Array.from({ length: 80 }, (_, i) => ({ id: `global-${i}`, machineId: `m${i % 4}`,
+      name: `Session ${i}`, engine: 'claude', status: 'paused', lastActivityAt: 12345 }))
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: {
+      active: 'empty', swarms: [{ id: 'empty', name: 'New Tab', agentIds: [] }],
+      overview: { harnesses: 80, machines: 4, models: 1, sessions,
+        contexts: sessions.map(row => ({ id: row.id, machine: row.machineId, project: 'repo', branch: 'work', engine: row.engine })) },
+    } }))
+    await vi.waitFor(() => expect(seen).toHaveLength(3))
+    const all = seen[2] as { overview: { sessions: unknown[]; contexts: unknown[] } }
+    expect(all.overview.sessions).toEqual(sessions)
+    expect(all.overview.contexts).toHaveLength(80)
+
     ws.close()
     // The window is gone, and so are its tabs.
-    await vi.waitFor(() => expect(seen).toHaveLength(3))
-    expect(seen[2]).toBeNull()
+    await vi.waitFor(() => expect(seen).toHaveLength(4))
+    expect(seen[3]).toBeNull()
   })
 
   it('follows an explicit app_focus, and keeps it off the wire', async () => {

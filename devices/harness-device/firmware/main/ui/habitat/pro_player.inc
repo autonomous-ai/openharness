@@ -54,27 +54,30 @@ static void pro_player_home(ht_scene_t *f)
         if(remaining>0 && remaining<100) snprintf(label,sizeof label,"<1%%");
         else if(remaining>=0) snprintf(label,sizeof label,"%d%%",remaining/100);
         else snprintf(label,sizeof label,"-");
-        int width=ht_pro_width(&ht_pro_24,label);
-        ht_pro_image(f,678-width-36,31,provider);
-        ht_pro_text(f,678-width,31,width,&ht_pro_24,PLAYER_DIM,label);
+        int width=ht_pro_width(&ht_pro_32,label);
+        ht_pro_image(f,678-width-40,37,provider);
+        ht_pro_text(f,678-width,31,width,&ht_pro_32,PLAYER_DIM,label);
     }
     int title_rows=ht_pro_wrap(f,40,124,640,2,0,&ht_pro_56,PLAYER_FG,a && a->name[0] ? a->name : "Harness Player");
-    char location[256];
+    char location[160];
     const char *machine=context && context->machine[0] ? context->machine : a ? a->machine : "";
-    snprintf(location,sizeof location,"%s%s%s%s%s%s",machine,
-        context && context->project[0] && machine[0] ? "   " : "",
-        context ? context->project : "",context && context->branch[0] ? "   (" : "",
-        context ? context->branch : "",context && context->branch[0] ? ")" : "");
-    ht_pro_wrap(f,42,124+title_rows*ht_pro_56.height+5,630,2,0,&ht_pro_24,PLAYER_DIM,location);
+    snprintf(location,sizeof location,"%s%s%s",machine,
+        context && context->project[0] && machine[0] ? " / " : "",context ? context->project : "");
+    int metadata_y=124+title_rows*ht_pro_56.height+5;
+    ht_pro_text(f,42,metadata_y,630,&ht_pro_32,PLAYER_DIM,location);
+    int branch_rows=context && context->branch[0] ?
+        ht_pro_wrap(f,42,metadata_y+ht_pro_32.height,630,2,0,&ht_pro_32,PLAYER_DIM,context->branch) : 0;
+    int content_y=metadata_y+(branch_rows+1)*ht_pro_32.height+28;
+    if(content_y<354) content_y=354;
 
-    const char *content=a ? a->player.action : "";
+    const char *content=a ? (!a->busy && a->recap_ready ? a->preview : a->player.action) : "";
     if (!s.connected) content="Connect to Harness";
     else if (s.loading) content="Loading sessions...";
     else if (!a) content=s.window ? "Choose a session on your computer." : "Open Harness on your computer.";
     else if (question) content=question->summary;
     if (voice) content=audio_client_recording() ? "Listening..." : voice_status();
     if (s.voice_retry_until || s.speech_error_until) content=s.message;
-    ht_pro_wrap(f,42,354,632,3,0,&ht_pro_32,PLAYER_FG,content);
+    ht_pro_wrap(f,42,content_y,632,(622-content_y)/ht_pro_42.height,0,&ht_pro_42,PLAYER_FG,content);
 
     const char *status=!s.connected ? "Disconnected" : s.loading ? "Connecting..." :
         question ? "Needs you" : !a ? "Ready" :
@@ -83,9 +86,9 @@ static void pro_player_home(ht_scene_t *f)
         a->player.finished || a->recap_ready ? "Finished" : "Ready";
     if (!voice) {
         if (ready) pro_player_mark(f,36,650,a,PLAYER_DIM);
-        ht_pro_text(f,ready ? 78 : 42,650,420,&ht_pro_24,PLAYER_DIM,status);
+        ht_pro_text(f,ready ? 78 : 42,642,350,&ht_pro_32,PLAYER_DIM,status);
         if(question) {
-            ht_pro_text(f,586,650,96,&ht_pro_24,PLAYER_FG,"Review");
+            ht_pro_text(f,570,642,112,&ht_pro_32,PLAYER_FG,"Review");
             pro_hit(560,632,144,72,A_QUESTION,0,ready);
         }
         uint32_t seconds;
@@ -93,8 +96,8 @@ static void pro_player_home(ht_scene_t *f)
             char elapsed[48];
             if (seconds>=3600) snprintf(elapsed,sizeof elapsed,"%luh %lum",(unsigned long)(seconds/3600),(unsigned long)(seconds/60%60));
             else snprintf(elapsed,sizeof elapsed,"%lum %lus",(unsigned long)(seconds/60),(unsigned long)(seconds%60));
-            int width=ht_pro_width(&ht_pro_24,elapsed);
-            ht_pro_text(f,678-width,650,width,&ht_pro_24,PLAYER_DIM,elapsed);
+            int width=ht_pro_width(&ht_pro_32,elapsed);
+            ht_pro_text(f,678-width,642,width,&ht_pro_32,PLAYER_DIM,elapsed);
         }
     }
     // Navigation owns its explicit targets; the rest keeps the shared gestures.
@@ -111,34 +114,71 @@ static void pro_player_home(ht_scene_t *f)
     }
 }
 
+static void pro_player_row_mark(ht_scene_t *f,int x,int y,pro_player_status_t status,uint16_t ink)
+{
+    switch(status) {
+    case PLAYER_WORKING: ht_pro_image(f,x,y,player_working[s.status_phase%10]); break;
+    case PLAYER_QUESTION: ht_pro_image(f,x,y,&player_question); break;
+    case PLAYER_FINISHED: ht_pro_image(f,x,y,&player_done); break;
+    case PLAYER_FAILED: ht_pro_image(f,x,y,&player_failed); break;
+    case PLAYER_PAUSED:
+        ht_pro_rect(f,x+6,y+4,5,20,1,ink); ht_pro_rect(f,x+17,y+4,5,20,1,ink); break;
+    case PLAYER_OFFLINE: ht_pro_rect(f,x+5,y+12,18,3,1,ink); break;
+    default: ht_pro_rect(f,x+9,y+9,10,10,5,ink); break;
+    }
+}
 static void pro_player_library(ht_scene_t *f)
 {
     ht_scene_clear(f,PLAYER_BG);
-    const pro_player_overview_t *stats=&s.player_overview;
-    bool fresh=s.connected && stats->received && (uint32_t)(ms()-stats->received_ms)<stats->valid_ms;
+    const pro_player_library_t *page=&s.player_library;
+    bool paged=page->received;
+    int count=paged ? page->total : s.count;
+    int machines=paged ? page->machines : s.machine_count;
     char counts[80];
-    int harnesses=fresh ? stats->harnesses : s.total;
-    int machines=fresh ? stats->machines : s.machine_count;
-    if(fresh && stats->models>=0) snprintf(counts,sizeof counts,"%d harnesses   %d machines   %d models",harnesses,machines,stats->models);
-    else snprintf(counts,sizeof counts,"%d harnesses   %d machines",harnesses,machines);
-    ht_pro_text(f,40,31,640,&ht_pro_24,PLAYER_DIM,counts);
-    ht_pro_rect(f,0,86,720,1,0,color(0xb9b8af));
-    pro_clamp_list(s.count,6);
-    for (int row=0;row<6 && row+s.offset<s.count;row++) {
-        int index=row+s.offset, y=106+row*100;
-        const agent_t *a=&s.agents[index];
-        bool selected=index==s.active;
-        int hit=pro_hit(0,y,698,90,A_AGENT,index,s.connected && !s.loading);
-        bool pressed=hit==s.pressed;
-        if (selected || pressed) ht_pro_rect(f,0,y,698,90,0,PLAYER_FG);
-        uint16_t ink=selected || pressed ? PLAYER_BG : PLAYER_FG;
-        ht_pro_text(f,40,y+26,562,&ht_pro_32,ink,a->name);
-        pro_player_mark(f,639,y+32,a,selected ? PLAYER_BG : PLAYER_DIM);
+    snprintf(counts,sizeof counts,"%d sessions across %d machines",count,machines);
+    ht_pro_text(f,36,20,648,&ht_pro_42,PLAYER_FG,"Library");
+    ht_pro_text(f,36,82,648,&ht_pro_32,PLAYER_DIM,counts);
+    if(!paged) pro_clamp_list(s.count,6);
+    int offset=paged ? page->offset : s.offset;
+    int visible=paged ? page->count : s.count-s.offset;
+    for(int row=0;row<6 && row<visible;row++) {
+        int index=offset+row,y=144+row*92;
+        const pro_player_row_t *item=paged ? &page->rows[row] : NULL;
+        const agent_t *a=paged ? NULL : &s.agents[index];
+        const char *id=item ? item->id : a->id;
+        const char *name=item ? item->name : a->name;
+        const char *engine=item ? item->engine : a->engine;
+        bool selected=active() && !strcmp(active()->id,id);
+        bool enabled=s.connected && !s.loading && (!paged || !page->pending);
+        int hit=pro_hit(16,y,682,84,item ? A_PLAYER_SESSION : A_AGENT,item ? row : index,enabled);
+        bool highlighted=selected || hit==s.pressed;
+        if(highlighted) ht_pro_rect(f,16,y,682,84,12,color(0xe0dfd6));
+        uint16_t ink=enabled ? PLAYER_FG : PLAYER_DIM;
+        const ht_pro_bitmap_t *provider=!strcmp(engine,"codex") ? &player_codex :
+            !strcmp(engine,"claude") ? &player_claude : NULL;
+        if(provider) ht_pro_image(f,34,y+29,provider);
+        else ht_pro_text(f,30,y+23,46,&ht_pro_24,PLAYER_DIM,!strcmp(engine,"terminal") ? ">_" : "o");
+        ht_pro_text(f,84,y+13,438,&ht_pro_42,ink,name);
+        if(item) {
+            pro_player_status_t status=item->status;
+            if(status==PLAYER_WORKING && (uint32_t)(ms()-page->received_ms)>25000) status=PLAYER_OFFLINE;
+            pro_player_row_mark(f,540,y+28,status,PLAYER_DIM);
+        } else pro_player_mark(f,540,y+28,a,PLAYER_DIM);
+        char age[24]="-";
+        if(item && item->age_seconds>=0) {
+            unsigned long seconds=(unsigned long)item->age_seconds+(uint32_t)(ms()-page->received_ms)/1000;
+            if(seconds<60) snprintf(age,sizeof age,"now");
+            else if(seconds<3600) snprintf(age,sizeof age,"%lum",seconds/60);
+            else if(seconds<86400) snprintf(age,sizeof age,"%luh",seconds/3600);
+            else snprintf(age,sizeof age,"%lud",seconds/86400);
+        }
+        int width=ht_pro_width(&ht_pro_32,age);
+        ht_pro_text(f,677-width,y+22,width,&ht_pro_32,PLAYER_DIM,age);
     }
-    if (!s.count) ht_pro_wrap(f,40,230,640,3,0,&ht_pro_32,PLAYER_DIM,
-        !s.connected ? "Connect to Harness" : s.loading ? "Loading sessions..." : "No sessions in this tab.");
-    if(s.count>6) {
-        int thumb=590*6/s.count;
-        ht_pro_rect(f,708,106+590*s.offset/s.count,4,thumb,2,color(0xb9b8af));
+    if(!visible) ht_pro_wrap(f,36,250,648,3,0,&ht_pro_42,PLAYER_DIM,
+        !s.connected ? "Connect to Harness" : page->pending || s.loading ? "Loading sessions..." : "No sessions yet.");
+    if(count>6) {
+        int thumb=552*6/count; if(thumb<8) thumb=8;
+        ht_pro_rect(f,708,144+(552-thumb)*offset/(count-6),4,thumb,2,color(0xb9b8af));
     }
 }

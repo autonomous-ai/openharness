@@ -10,6 +10,7 @@ enum {
     CABLE_FEATURE_QUESTIONS = 1u << 4,
     CABLE_FEATURE_AGENTS_REFRESH = 1u << 5,
     CABLE_FEATURE_METRICS = 1u << 6,
+    CABLE_FEATURE_PLAYER_LIBRARY = 1u << 7,
 };
 
 // Optional welcome field. Older daemons omit it and retain the core voice,

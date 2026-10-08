@@ -369,6 +369,7 @@ export class DeviceFleet implements MachineFleet {
         agentId: frame.agentId,
         text: typeof payload.text === 'string' ? payload.text : '',
         recap: typeof payload.recap === 'string' ? payload.recap : '',
+        ...(typeof payload.update === 'string' ? { update: payload.update } : {}),
         // A specialist on another Mac is as silent here as one on this one.
         ...(payload.subagent === true ? { subagent: true } : {}),
       })

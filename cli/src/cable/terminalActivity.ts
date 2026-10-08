@@ -1,7 +1,7 @@
 export interface TerminalActivitySnapshot {
   text: string
   elapsedSeconds?: number
-  /** Most recent native tool name/argument, not a generated explanation. */
+  /** Latest assistant-authored progress paragraph; independent of the footer. */
   action?: string
 }
 

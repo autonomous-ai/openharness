@@ -28,3 +28,21 @@ static inline bool pro_player_elapsed(const pro_player_state_t *p, uint32_t now,
     *seconds=p->elapsed_seconds+(uint32_t)(now-p->observed_ms)/1000;
     return true;
 }
+
+// Six visible rows, regardless of account size. No conversation history lives here.
+#define PRO_PLAYER_ROWS 6
+typedef enum {
+    PLAYER_IDLE, PLAYER_WORKING, PLAYER_QUESTION, PLAYER_FINISHED,
+    PLAYER_FAILED, PLAYER_PAUSED, PLAYER_OFFLINE
+} pro_player_status_t;
+typedef struct {
+    char id[48], machine_id[48], name[96], engine[16];
+    pro_player_status_t status;
+    int32_t age_seconds; // -1: source has not reported a time.
+} pro_player_row_t;
+typedef struct {
+    pro_player_row_t rows[PRO_PLAYER_ROWS];
+    int offset, total, machines, count;
+    uint32_t request, revision, received_ms, requested_ms, age_minute;
+    bool received, pending;
+} pro_player_library_t;

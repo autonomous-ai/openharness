@@ -1,3 +1,4 @@
+import { playerSessions, playerLabel } from './cable/playerLibrary.js'
 import { SharingEndedError, type HarnessShareRelay } from './sharing/relay.js'
 import { randomUUID } from 'node:crypto'
 import type { AppSwarms } from './cable/cableSession.js'
@@ -272,9 +273,10 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
   const raw = p.overview as Record<string, unknown> | undefined
   const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= 1_000_000
   const percent = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? v : null
-  const label = (v: unknown, length: number): string => typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, length) : ''
+  const label = playerLabel
+  const sessions = playerSessions(raw?.sessions)
   const contexts: NonNullable<AppSwarms['overview']>['contexts'] = []
-  const memberIds = new Set(swarms.find(s => s.id === active)?.agentIds ?? [])
+  const memberIds = new Set(sessions?.map(s => s.id) ?? swarms.find(s => s.id === active)?.agentIds ?? [])
   const seen = new Set<string>()
   for (const row of Array.isArray(raw?.contexts) ? raw.contexts : []) {
     if (!row || typeof row !== 'object') continue
@@ -284,10 +286,10 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     contexts.push({ id: c.id, machine: label(c.machine, 63), project: label(c.project, 79),
       branch: label(c.branch, 95), engine: label(c.engine, 15), remaining: percent(c.remaining),
       validUntil: typeof c.validUntil === 'number' && Number.isSafeInteger(c.validUntil) ? c.validUntil : 0 })
-    if (contexts.length === 24) break
+    if (!sessions && contexts.length === 24) break
   }
   const overview = raw && count(raw.harnesses) && count(raw.machines) && count(raw.models) ? {
-    harnesses: raw.harnesses, machines: raw.machines, models: raw.models, contexts,
+    harnesses: raw.harnesses, machines: raw.machines, models: raw.models, contexts, ...(sessions ? { sessions } : {}),
   } : undefined
   return { active, swarms, tiles, ...(overview ? { overview } : {}) }
 }

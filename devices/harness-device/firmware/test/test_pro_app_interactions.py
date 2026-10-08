@@ -33,6 +33,7 @@ def cases(first, after, source=SOURCE, indent="    "):
 code = r'''
 #include "runtime.h"
 #include "pro_canvas.h"
+#include "pro_player_icons.h"
 #include "pro_metrics.h"
 #include "pro_visual.h"
 #include "pro_work_intent.h"

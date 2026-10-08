@@ -404,6 +404,7 @@ export class DaemonCableHost implements CableHost {
    */
   setSwarms(swarms: AppSwarms | null): void {
     this.swarms = swarms
+    for (const row of swarms?.overview?.sessions ?? []) this.noteAgent(row.machineId, row.id)
   }
 
   /** What the window still has unread, newest first. Empty until a window says otherwise. */
@@ -492,6 +493,14 @@ export class DaemonCableHost implements CableHost {
    *  minus the terminals in it: the list is every TILE, this is every AGENT. */
   agentTotal(): number {
     return this.flatCount
+  }
+
+  async playerLibrary() {
+    const inventory = this.swarms?.overview?.sessions
+    if (inventory) return inventory
+    const agents = await this.listAgentsFlat()
+    return agents.map(a => ({ id: a.id, name: a.name, engine: a.engine ?? '', machineId: a.machineId ?? '',
+      status: 'idle' as const, lastActivityAt: null }))
   }
 
   playerOverview() {
@@ -1152,13 +1161,13 @@ export function multipart(file: Buffer, filename: string, mimeType: string, boun
  * kind reaches the cable the day it reaches the socket.
  */
 export function cableEventFor(
-  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown } },
-): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean } | null {
+  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string; subagent?: unknown; update?: string } },
+): { kind: 'processing' | 'done' | 'summary' | 'error'; agentId: string; text: string; recap: string; subagent: boolean; update?: string } | null {
   if (frame.type !== 'commander_event' || !frame.agentId) return null
   const kind = frame.payload?.kind
   if (kind !== 'processing' && kind !== 'done' && kind !== 'summary' && kind !== 'error') return null
   // `subagent`: a sub-agent's turn end — the tile redraws, nobody is told (CommanderMirrorOpts.isSubagent).
-  return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '', subagent: frame.payload?.subagent === true }
+  return { kind, agentId: frame.agentId, text: frame.payload?.text ?? '', recap: frame.payload?.recap ?? '', subagent: frame.payload?.subagent === true, ...(typeof frame.payload?.update === 'string' ? { update: frame.payload.update } : {}) }
 }
 
 /**

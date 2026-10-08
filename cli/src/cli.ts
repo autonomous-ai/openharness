@@ -6706,7 +6706,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
       const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
       const activity = terminalActivitySnapshot(session.engine, screen.state === 'succeeded' ? screen.value : null)
-      return activity ? { ...activity, action: mirror.latestAction(session.sessionId) } : null
+      return activity ? { ...activity, action: mirror.latestUpdate(session.sessionId) } : null
     },
     machineName: () => { try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' } },
     machineId: () => backend.machineId,
@@ -6869,7 +6869,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       console.log(`[cable] tee ${(frame as { payload?: { kind?: string } }).payload?.kind ?? '?'} → ${event ? 'sent' : 'ignored'}`)
     }
     if (!event) return
-    if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text)
+    if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text, event.update)
     else if (event.kind === 'done') void cable.turnDone(event.agentId)
     else if (event.kind === 'summary') {
       // Quiet when the window already has this agent on screen; silent when the
@@ -6896,7 +6896,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
     if (event.kind === 'questionClosed') { void cable.questionClose(event.agentId, event.requestId); return }
     if (event.kind === 'question') { void cable.question(event.agentId, event.requestId, event.questions); return }
-    if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text)
+    if (event.kind === 'processing') void cable.turnStarted(event.agentId, event.text, event.update)
     else if (event.kind === 'done') void cable.turnDone(event.agentId)
     else if (event.kind === 'summary') {
       // Quiet when the window already has this agent on screen; silent when the

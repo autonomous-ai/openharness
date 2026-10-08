@@ -66,7 +66,7 @@ static void cable_client_draft(const char *id,const char *op,uint32_t request,ui
 code = code.replace("static void audio_client_abort(void) {}", "static void audio_client_abort(void) {recording=false;}")
 code = code.replace('assert(!strcmp(op,"begin")||!strcmp(op,"cancel"));', 'assert(op[0]);')
 extra = "#define DRAFT_ROWS 6\n" + "\n".join(re.findall(r"^#define TAB_\w+ \d+$", SOURCE, re.M)) + "\n" + function("is_question")
-for name in ("pro_work_available", "pro_work_capture_available", "pro_work_draft_available",
+for name in ("pro_player_request", "pro_work_available", "pro_work_capture_available", "pro_work_draft_available",
              "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text",
              "draft_emit", "pro_draft_forget", "pro_draft_store_queue", "pro_draft_store_work",
              "ui_draft_source", "pro_selection_search_refuse", "selection_search_fields", "ui_selection_state", "ui_carry_state",

@@ -361,6 +361,7 @@ void ui_project_emit(const char *project_id, const char *session_id, const char 
 void ui_project_player_activity(const char *project_id, const char *action, int elapsed_seconds);
 void ui_player_overview(int harnesses, int machines, int models, int valid_ms);
 void ui_player_context(const pro_player_context_t *context);
+void ui_player_library(const pro_player_library_t *page);
 #endif
 // Restore a persisted historical card without changing the live busy lifecycle for this project.
 void ui_project_restore_event(const char *project_id, const char *kind, const char *text, const char *recap);

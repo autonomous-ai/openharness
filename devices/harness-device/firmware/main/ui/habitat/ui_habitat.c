@@ -101,6 +101,7 @@ typedef enum {
 #ifdef DEVICE_PRO_COMPANION
     A_LAUNCHER, A_WORK_INTENT, A_WORK_MODE, A_WORK_RECORD, A_AGENT_LAYOUT,
     A_TODAY, A_TODAY_REFRESH, A_METRICS_GET,
+    A_PLAYER_PAGE, A_PLAYER_SESSION,
     A_CARRY_PREVIEW, A_CARRY_CHOOSE, A_CARRY_TARGET, A_CARRY_OPEN,
     A_QUESTION_CLOSE, A_DRAFT_STORE,
     A_LANGUAGE, A_LANGUAGE_SET,
@@ -270,6 +271,7 @@ static EXT_RAM_BSS_ATTR struct {
     } work_capture;
     pro_metrics_t metrics;
     pro_player_overview_t player_overview;
+    pro_player_library_t player_library;
     pro_player_context_t player_context[PRO_PLAYER_CONTEXTS];
     unsigned player_context_next;
     pro_carry_review_t carry_review;
@@ -425,6 +427,7 @@ static void pro_speech_cancel(bool any);
 static void pro_speech_tick(uint32_t now);
 static bool pro_speech_visible(void);
 static void pro_open_in_app(const char *agent);
+static void pro_player_request(int offset);
 static void pro_render_home(ht_scene_t *f);
 static void pro_render_voice(ht_scene_t *f);
 #endif
@@ -896,6 +899,7 @@ static bool pro_work_draft_available(void)
 }
 static void pro_busy_reset(void)
 {
+    memset(&s.player_library,0,sizeof s.player_library);
     memset(&s.player_overview,0,sizeof s.player_overview);
     memset(s.player_context,0,sizeof s.player_context);
     s.player_context_next=0;
@@ -1498,6 +1502,12 @@ static bool pro_player_working_visible(void)
         return a && a->busy && !is_question(a->id);
     }
     if (s.view==AGENTS && !s.carry_route.choosing) {
+        if(s.player_library.received) {
+            if ((uint32_t)(ms()-s.player_library.received_ms)>25000) return false;
+            for(int i=0;i<s.player_library.count;i++)
+                if(s.player_library.rows[i].status==PLAYER_WORKING) return true;
+            return false;
+        }
         for (int i=s.offset;i<s.count && i<s.offset+6;i++)
             if (i>=0 && s.agents[i].busy && !is_question(s.agents[i].id)) return true;
     }
@@ -1603,6 +1613,11 @@ static void surface_tick(uint32_t now)
 #endif
     uint32_t held = now - s.touch_started;
 #ifdef DEVICE_PRO_COMPANION
+    if (s.player && s.view==AGENTS && s.player_library.pending &&
+        (uint32_t)(now-s.player_library.requested_ms)>3000) pro_player_request(s.offset);
+    if (s.player && s.view==AGENTS && s.player_library.received && now/60000!=s.player_library.age_minute) {
+        s.player_library.age_minute=now/60000; change();
+    }
     if (s.player_overview.received && (uint32_t)(now-s.player_overview.received_ms)>=s.player_overview.valid_ms) {
         s.player_overview.received=false;
         change();
@@ -2260,6 +2275,20 @@ static int settings_count(void)
     while (settings_item(count, NULL)) count++;
     return count;
 }
+#ifdef DEVICE_PRO_COMPANION
+static void pro_player_request(int offset)
+{
+    if (!s.player || !s.connected || !cable_client_supports(CABLE_FEATURE_PLAYER_LIBRARY)) return;
+    action_t a={.kind=A_PLAYER_PAGE,.value=offset,.revision=s.player_library.request+1};
+    if (queue(a)) {
+        s.player_library.request=a.revision;
+        s.player_library.requested_ms=ms();
+        s.player_library.pending=true;
+        s.offset=offset;
+        change();
+    }
+}
+#endif
 static void tabs_move(int dy)
 {
     // Move by one name while the finger is down, rather than paging by three
@@ -2269,6 +2298,10 @@ static void tabs_move(int dy)
     if (!step) return;
     s.tab_drag %= TAB_ROW_HEIGHT;
     int count = s.view == AGENTS ? s.count : s.view == SETTINGS ? settings_count() : s.tab_count;
+#ifdef DEVICE_PRO_COMPANION
+    if (s.player && s.view==AGENTS && !s.carry_route.choosing && s.player_library.received)
+        count=s.player_library.total;
+#endif
     int rows=TAB_ROWS;
 #ifdef DEVICE_PRO_COMPANION
     if (s.player && (s.view==TABS || (s.view==AGENTS && !s.carry_route.choosing))) rows=6;
@@ -2277,7 +2310,14 @@ static void tabs_move(int dy)
     int next = s.offset + step;
     if (next < 0) next = 0;
     if (next > last) next = last;
-    if (next != s.offset) { s.offset = next; change(); }
+    if (next != s.offset) {
+#ifdef DEVICE_PRO_COMPANION
+        if (s.player && s.view==AGENTS && !s.carry_route.choosing && s.player_library.received)
+            pro_player_request(next);
+        else
+#endif
+        { s.offset = next; change(); }
+    }
     else s.tab_drag = 0; // Overscroll never builds up travel to undo on reversal.
 }
 static void tab_name(ht_scene_t *f, const char *name, int center_x, uint16_t ink)
@@ -2911,6 +2951,12 @@ static action_t make_action(hit_t h)
         a.velocity=(int)s.reader_focus_generation;
         return a;
     }
+    if (h.action == A_PLAYER_SESSION && h.value>=0 && h.value<s.player_library.count) {
+        COPY(a.id,s.player_library.rows[h.value].id);
+        COPY(a.text,s.player_library.rows[h.value].machine_id);
+        a.revision=s.player_library.revision;
+        return a;
+    }
     if (h.action == A_WORK_MODE || h.action == A_WORK_RECORD) {
         COPY(a.id, s.work_agent); a.revision = s.work_revision;
         return a;
@@ -3444,6 +3490,11 @@ static void dispatch(action_t a)
         view(AGENTS);
 #ifdef DEVICE_PRO_COMPANION
         s.pro_agent_layout = 0;
+        if(s.player && cable_client_supports(CABLE_FEATURE_PLAYER_LIBRARY)) {
+            s.offset=s.player_library.offset;
+            pro_player_request(s.offset);
+            break;
+        }
 #endif
         int last = s.count > TAB_ROWS ? s.count - TAB_ROWS : 0;
         s.offset = s.active - TAB_ROWS / 2;
@@ -3452,6 +3503,19 @@ static void dispatch(action_t a)
         break;
     }
 #ifdef DEVICE_PRO_COMPANION
+    case A_PLAYER_PAGE:
+        break; // Only the worker emits paging requests.
+    case A_PLAYER_SESSION: {
+        if (!s.connected || s.loading || s.player_library.pending || s.view!=AGENTS ||
+            a.revision!=s.player_library.revision || a.value<0 || a.value>=s.player_library.count) break;
+        const pro_player_row_t *row=&s.player_library.rows[a.value];
+        if(strcmp(a.id,row->id) || strcmp(a.text,row->machine_id)) break;
+        int i=find(a.id);
+        if(i>=0 && !strcmp(s.agents[i].machine_id,row->machine_id)) {
+            action_t pick={.kind=A_AGENT}; COPY(pick.id,a.id); dispatch(pick);
+        } else pro_open_in_app(a.id);
+        break;
+    }
     case A_AGENT_LAYOUT:
         if (s.view == AGENTS && a.value >= 0 && a.value <= 2) {
             s.pro_agent_layout = (uint8_t)a.value;
@@ -4263,6 +4327,11 @@ static void worker(void *unused)
         case A_SCROLL:
             cable_client_send_scroll((cable_scroll_phase_t)a.value, a.dy, a.velocity);
             break;
+#ifdef DEVICE_PRO_COMPANION
+        case A_PLAYER_PAGE:
+            cable_client_player_library(a.value,a.revision);
+            break;
+#endif
         case A_AGENT:
             cable_client_send_focus(a.id);
             break;
@@ -4907,6 +4976,12 @@ uint32_t habitat_next_wake_ms(void)
     if (pro_busy_elapsed(active(), now, &busy_second)) {
         uint32_t due = 1000 - (now - active()->busy_ms) % 1000;
         if (due < delay) delay = due;
+    }
+#endif
+#ifdef DEVICE_PRO_COMPANION
+    if(s.player && s.view==AGENTS && !s.locked && !display_is_asleep()) {
+        uint32_t due=s.player_library.pending ? 100 : 1000;
+        if(due<delay) delay=due;
     }
 #endif
     if (s.voice_open && delay > 125)
@@ -5751,6 +5826,23 @@ void ui_fleet_set(int total, bool window)
     display_unlock();
 }
 #ifdef DEVICE_PRO_COMPANION
+void ui_player_library(const pro_player_library_t *page)
+{
+    if(!page) return;
+    display_lock();
+    if(s.connected && page->request==s.player_library.request &&
+       (!s.touch_down || s.player_library.pending)) {
+        uint32_t revision=s.player_library.revision+1;
+        s.player_library=*page;
+        s.player_library.revision=revision;
+        s.player_library.received_ms=ms();
+        s.player_library.received=true;
+        s.player_library.pending=false;
+        if(s.view==AGENTS && !s.carry_route.choosing) s.offset=page->offset;
+        change();
+    }
+    display_unlock();
+}
 void ui_player_overview(int harnesses, int machines, int models, int valid_ms)
 {
     display_lock();

@@ -89,6 +89,8 @@ export interface CommanderMirrorOpts {
 
 interface SessionState {
   lastAssistantText: string
+  playerUpdate: string
+  playerTextContinues: boolean
   /** The user's prompt for the current turn (from turn_started) — fed to the recap so it leads with
    *  the direct answer to what was asked. */
   lastUserMessage: string
@@ -340,7 +342,7 @@ export class CommanderMirror {
   private stateFor(sessionId: string): SessionState {
     let st = this.states.get(sessionId)
     if (!st) {
-      st = { lastAssistantText: '', lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null }
+      st = { lastAssistantText: '', playerUpdate: '', playerTextContinues: false, lastUserMessage: '', turnOpen: false, everOpened: false, summarizing: false, lastTool: null, lastTodos: null, agents: [], endPending: false, abandoned: false, endSettle: null, endDeadline: null, abort: null }
       this.states.set(sessionId, st)
     }
     return st
@@ -356,6 +358,8 @@ export class CommanderMirror {
     // from it). Streaming cards (processing/tool/todos/done) reach only the ACTIVELY-rendered machine — a
     // background machine gets just its summary, not the live stream. Single-machine firmware defaults active to
     // hasDevice, so attached == active and everything streams exactly like before.
+    const update = payload.kind === 'processing' ? this.latestUpdate(sessionId) : ''
+    if (update) payload = { ...payload, update }
     const terminal = payload.kind === 'summary'
     const active = this.opts.active ? this.opts.active() : this.opts.hasDevice()
     if (!terminal && !active && !this.opts.recapForce) return
@@ -413,6 +417,8 @@ export class CommanderMirror {
           st.endPending = false
           st.summarizing = false
           st.lastAssistantText = ''
+          st.playerUpdate = ''
+          st.playerTextContinues = false
           st.lastUserMessage = e.payload.userMessage || ''
           // RECORDED HERE, WHEN IT IS ASKED — not when the answer is summarised.
           //
@@ -448,6 +454,9 @@ export class CommanderMirror {
           break
 
         case 'text_delta':
+          if (!st.playerTextContinues) st.playerUpdate = ''
+          st.playerTextContinues = true
+          st.playerUpdate = (st.playerUpdate + e.payload.content).slice(-4096)
           st.lastAssistantText += e.payload.content
           // The wrap-up text landed while the turn-end was held: this IS what the hold was waiting for,
           // so drop to a short debounce (more blocks of the same message may still follow).
@@ -455,6 +464,7 @@ export class CommanderMirror {
           break
 
         case 'tool_start': {
+          st.playerTextContinues = false
           const tool = e.payload.tool || 'Tool'
           // AskUserQuestion is not a tool card — it's a question the user answers on the device's question
           // screen (QuestionWatcher pushes it live off the pane). By the time this line reaches the
@@ -818,6 +828,13 @@ export class CommanderMirror {
    *  complete, which is what a fork needs. */
   isBusy(sessionId: string): boolean {
     return this.states.get(sessionId)?.turnOpen === true
+  }
+
+  /** Latest assistant-authored paragraph, independent of tool execution and busy state. */
+  latestUpdate(sessionId: string): string {
+    const text = this.states.get(sessionId)?.playerUpdate.trim() ?? ''
+    const paragraph = text.split(/\n\s*\n/).filter(Boolean).at(-1) ?? ''
+    return clipBytes(paragraph.replace(/[\r\n\t]+/g, ' '), 188)
   }
 
   /** One literal recent action for the Player. No command output or generated recap. */

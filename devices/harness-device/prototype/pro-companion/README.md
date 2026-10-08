@@ -6,21 +6,30 @@ rollback versions; there is no on-device interface selector.
 
 ## Screens
 
-The library has one header: harnesses, machines, models. Six session rows fit
-below it; drag to browse the rest. Status uses the desktop/TUI vocabulary:
-cyan braille spinner (10 frames, 100 ms), yellow `?`, green `✓`, red `✗`.
-Only visible working sessions animate. Quiet mode and a sleeping display stop
-animation.
+The library shows the same known-session inventory as the desktop's New Tab
+list, across every machine. Completed, idle, paused and terminal sessions stay
+visible. Six generous rows fit at once; vertical dragging pages through the full
+inventory, with no 16- or 24-session cutoff. Each row has the engine logo, a 42 px
+session name, a status mark and a 32 px relative time. The header reads
+“Library” and “30 sessions across 4 machines.” Counts are live, not defaults.
+
+Time follows the New Tab list's last-use timestamp (the later of actual activity
+and a recorded open/focus), never registry polling. It reads `now`, `2m`, `1h`,
+or `3d`; missing time reads `-`. Status uses cyan working braille (10 frames,
+100 ms), yellow `?`, green `✓`, red `✗`, pause bars, an idle dot, and an offline
+dash. Only visible working rows animate; quiet mode and sleep stop animation.
 
 The detail shows:
 
-- Back chevron at top left; selected provider icon and remaining allowance at top right.
-- Session title, then machine, project and branch from the desktop's actual metadata.
-- One most recent native action.
-- Native working status and observed elapsed time along the bottom.
+- Back at top left; provider icon and reported remaining allowance at top right.
+- A 56 px session title, with machine / repository and branch at 32 px below it.
+- The latest assistant-authored progress paragraph at 42 px. A pending question
+  takes priority; after completion, the latest result takes its place.
+- A separate 32 px working/finished/waiting footer and observed elapsed time.
 
-No voice button, hint, duplicate provider label, turn number, synthetic progress,
-explanation, or activity history screen.
+A milestone such as “CI passed for the integrated head too” can be displayed
+while the footer still says Working. Tool commands do not replace that update.
+Text wraps within measured bounds, including long titles and branch names.
 
 ## Gestures
 
@@ -46,25 +55,39 @@ and question submission are preserved.
 The matching development desktop and CLI supply optional additive cable data;
 this firmware work does not install either shared application.
 
-- `player.overview`: counts, refreshed at most every 30 seconds, valid for 60 seconds.
-  Harnesses use the desktop's known-session inventory; machines use its machine
-  roster; models count distinct model identities actually reported by those sessions.
-- `player.context`: one bounded frame per active-tab session, up to 24. Contains
-  session ID, machine, project, branch, engine and remaining allowance with expiry.
-  No credentials or account identifiers cross the cable. A bounded LRU keeps
-  context while switching tabs and clears on disconnect.
-- Remaining allowance uses the existing desktop subscription reading for that
-  session's machine/provider and the limiting usage window. It is a percentage
-  of provider allowance, not a raw token count. Expired, unknown, or local-model
-  readings show `-`; a positive fraction below one percent shows `<1%`.
-- `turn.activity`: native status with optional `action` and `elapsedSeconds`.
-  Action comes from the latest native tool name/argument; elapsed time comes
-  from the actual terminal footer. No generated summaries or invented runtime.
-  The elapsed value stops displaying after 25 seconds without a fresh read.
-  Remote sessions without this metadata simply omit it.
-- An older desktop/CLI still supplies session names, machine and basic status.
-  Unavailable fields remain absent. No provider allowance is borrowed from a
-  different machine.
+- The development desktop exports `overview.sessions` and context for its entire
+  known inventory in `app_swarms`, including closed panes. It uses the existing
+  New Tab ordering, lifecycle, question and machine state. Changes are coalesced
+  within one event-loop turn and skipped when the inventory is unchanged. Account/window disconnect clears the export through the existing
+  socket lifecycle.
+- A square advertises `hello.player: "library-v1"`; the matching bridge advertises
+  `player.library` in `welcome.features`. Round devices keep their tab roster.
+- `player.library.get {offset, request}` requests six lightweight rows. The reply
+  is `player.library {request, offset, total, machines, rows}`. Each row contains
+  `id`, `machineId`, `name`, `engine`, `status`, and `ageSeconds` (`-1` if unknown).
+  Offsets clamp at the last full six-row page. Empty inventory has zero rows.
+  Each frame is bounded below 8192 bytes, with UTF-8 byte limits matching the MCU.
+  Metadata changes push immediately on the next bridge tick, otherwise at 10 s.
+- The device holds only six lightweight rows; the existing 16 conversation slots
+  and history restore path are unchanged. Old page responses are rejected by
+  request ID; a tap pins the page revision, session and machine. Refreshes do not
+  replace a stationary finger's target. A missing response retries after 3 s.
+  Off-tab picks use the existing identity-checked visit/open flow before voice
+  can target the new session. Reading a row does not approve a question.
+- `player.overview` retains counts and its 60 s validity. `player.context` sends
+  context only for active panes/focus, selected from the complete host inventory;
+  the device's 24-entry LRU clears on disconnect.
+- Remaining allowance uses the existing machine/provider-specific subscription
+  reading and expiry. Unknown or expired readings show `-`, with `<1%` preserved.
+- `turn.activity.action` now carries a literal assistant-authored paragraph;
+  tools remain separate from this text. Local reads use the transcript mirror;
+  remote progress rides an additive `update` on existing processing heartbeats
+  from a matching CLI. Completed results use the existing summary path.
+  `elapsedSeconds` is still read from the native terminal footer and expires
+  after 25 s without a fresh observation. An unreported remote timer is omitted.
+- Full inventory and context require this branch's desktop and CLI as well as the
+  firmware. Older hosts retain their existing tab-only roster; they cannot supply
+  fields they do not know. This change does not install the shared desktop/CLI.
 
 ## Build and verify
 
@@ -83,6 +106,8 @@ Run native production-handler replays:
 ```sh
 python3 devices/harness-device/firmware/test/test_pro_touch_ui.py
 python3 devices/harness-device/firmware/test/test_pro_controls.py
+# With IDF_PATH set to the pinned SDK (real cJSON decoder):
+python3 devices/harness-device/firmware/test/test_pro_player_library.py
 ```
 
 Set `HARNESS_PLAYER_PREVIEW` to an existing output directory to export real

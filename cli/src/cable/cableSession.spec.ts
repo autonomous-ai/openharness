@@ -1514,6 +1514,29 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  it('pages the full library only for a capable square and preserves the active pane roster', async () => {
+    const inventory = Array.from({ length: 71 }, (_, i) => ({ id: `session-${i}`, machineId: `machine-${i % 4}`,
+      name: `Session ${i}`, engine: 'codex', status: 'paused' as const, lastActivityAt: Date.now() - 120_000 }))
+    const { session, port } = await connect(makeHost({ playerLibrary: async () => inventory }))
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'round' })
+      await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+      expect(port.types()).not.toContain('player.library')
+      port.say({ t: 'hello', product: 'harness', mac: 'square', player: 'library-v1' })
+      await vi.waitFor(() => expect(port.types()).toContain('player.library'))
+      expect(port.sent.find(m => m.t === 'player.library')).toMatchObject({ total: 71, offset: 0, request: 0 })
+      port.say({ t: 'player.library.get', offset: 65, request: 3 })
+      await vi.waitFor(() => expect(port.sent.filter(m => m.t === 'player.library').at(-1)).toMatchObject({ offset: 65, request: 3 }))
+      const page = port.sent.filter(m => m.t === 'player.library').at(-1)!
+      expect((page.rows as Array<{id: string}>).map(r => r.id)).toEqual(inventory.slice(65).map(r => r.id))
+      expect(port.sent.filter(m => m.t === 'agent')).not.toContainEqual(expect.objectContaining({ id: 'session-70' }))
+      expect(Math.max(...port.frames.map(frame => frame.length))).toBeLessThan(8192)
+      await port.close('reconnect')
+      expect(session['playerRequest']).toBe(0)
+      expect(session['playerCapable']).toBe(false)
+    } finally { await session.stop() }
+  })
+
   it('sends the account-wide count and the tab beside the list, not the rows behind them', async () => {
     // The dial draws one number on the overview; the seventy rows behind it stay here. And `tab` is what
     // tells a shut window from an empty tab when both send zero agents.

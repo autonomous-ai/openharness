@@ -70,6 +70,20 @@ function onTab(host: DaemonCableHost, agentIds: string[], id = 't1'): void {
   host.setDesk(agentIds)
 }
 
+describe('Player inventory routing', () => {
+  it('keeps closed remote sessions and routes their selection to their own machine', async () => {
+    const w = wiring({ opened: vi.fn() })
+    const host = new DaemonCableHost(w)
+    const sessions = [{ id: 'paused', machineId: 'other', name: 'Paused work', engine: 'claude', status: 'paused' as const, lastActivityAt: 42 }]
+    host.setSwarms({ active: 'empty', swarms: [{ id: 'empty', name: 'New Tab', agentIds: [], panes: 0 }], tiles: [],
+      overview: { harnesses: 1, machines: 2, models: 1, contexts: [], sessions } })
+    expect(await host.listAgents()).toEqual([])
+    expect(await host.playerLibrary()).toEqual(sessions)
+    host.openAgent('paused')
+    expect(w.opened).toHaveBeenCalledWith('other', 'paused', undefined)
+  })
+})
+
 describe('DaemonCableHost.listMachines', () => {
   it('names the local row after the machine, and marks it local', async () => {
     // The row carries the machine's name; what identifies it as the cabled one is the `local` flag, which

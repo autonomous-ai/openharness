@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert' show jsonEncode;
 import 'dart:io' show Directory, exit, pid;
 import 'dart:math' show Random;
 
@@ -2002,6 +2003,7 @@ class AppNotifier extends ChangeNotifier {
     // closing a tab, a restored layout, a reveal. Listening here catches all of
     // them, and a clear that finds nothing to clear notifies nobody.
     addListener(seeWatchedAgents);
+    addListener(_schedulePlayerAnnouncement);
     // The dial is told the whole list whenever it changes, so a cable attaching
     // later is handed it without asking. See [_announceUnreadToDial].
     //
@@ -2605,25 +2607,22 @@ class AppNotifier extends ChangeNotifier {
   /// unchanged and the `foreground` flag riding with it is the point.
   void announceWindowForeground() => _announceOpenPanesToDial();
 
-  /// Player uses the same known sessions and project labels as the desktop.
-  /// Only reported model identities count; there is no guessed default model.
-  /// Context travels for this tab only, bounded like the device's pane roster.
+  /// Player shares the New Tab inventory. USB pages only six lightweight rows;
+  /// the active tab's conversation and voice roster remains separate.
   Map<String, Object?> get playerOverview {
-    final sessions = harnessSessions(this);
+    final sessions = visibleHarnessSessions(harnessSessions(this));
     final models = <String>{
       for (final session in sessions)
-        if (session.agent.gridModel ?? session.agent.modelName case final model?)
+        if (session.agent.gridModel ?? session.agent.modelName
+            case final model?)
           if (model.isNotEmpty) model,
     };
     final contexts = <Map<String, Object?>>[];
-    final seen = <(String, String)>{};
-    for (final pane in panes) {
-      final id = pane.agentId;
-      if (id == null || !seen.add((pane.machineId, id))) continue;
-      final machine = machineStates[pane.machineId];
-      final agent = machine?.agents.where((a) => a.id == id).firstOrNull;
-      if (machine == null || agent == null) continue;
-      final project = machine.projectOf(agent);
+    final rows = <Map<String, Object?>>[];
+    for (final session in sessions) {
+      final machine = session.machine;
+      final agent = session.agent;
+      final project = session.project;
       final allowance = agent.gridModel == null
           ? _modelsMenu?.subscriptionFor(
               agent.engine ?? '',
@@ -2631,8 +2630,33 @@ class AppNotifier extends ChangeNotifier {
               machineName: machine.machine.displayName,
             )
           : null;
+      final ended = machine.recentTurnEnds
+          .where((e) => e.agentId == agent.id)
+          .lastOrNull;
+      final status = !session.online
+          ? 'offline'
+          : agent.isStopped
+          ? 'paused'
+          : session.needsInput
+          ? 'question'
+          : session.working
+          ? 'working'
+          : machine.failedTurnAgents.contains(agent.id) ||
+                agent.launchState == 'failed'
+          ? 'failed'
+          : ended != null && !ended.failed
+          ? 'finished'
+          : 'idle';
+      rows.add({
+        'id': agent.id,
+        'machineId': session.machineId,
+        'name': agent.displayName,
+        'engine': agent.engine ?? '',
+        'status': status,
+        'lastActivityAt': session.lastUsedAt?.millisecondsSinceEpoch,
+      });
       contexts.add({
-        'id': id,
+        'id': agent.id,
         'machine': machine.machine.displayName,
         'project': project?.label ?? '',
         'branch': project?.shownBranch ?? '',
@@ -2640,14 +2664,29 @@ class AppNotifier extends ChangeNotifier {
         'remaining': allowance?['remainingPercent'],
         'validUntil': allowance?['validUntil'] ?? 0,
       });
-      if (contexts.length == 24) break;
     }
     return {
       'harnesses': sessions.length,
       'machines': machineStates.length,
       'models': models.length,
       'contexts': contexts,
+      'sessions': rows,
     };
+  }
+
+  bool _playerAnnouncementPending = false;
+  String _playerAnnouncementKey = '';
+  void _schedulePlayerAnnouncement() {
+    if (_disposed || _pool == null || _playerAnnouncementPending) return;
+    _playerAnnouncementPending = true;
+    scheduleMicrotask(() {
+      _playerAnnouncementPending = false;
+      if (_disposed || _pool == null) return;
+      final key = jsonEncode(playerOverview);
+      if (key == _playerAnnouncementKey) return;
+      _playerAnnouncementKey = key;
+      _announceOpenPanesToDial();
+    });
   }
 
   void _announceOpenPanesToDial() {
@@ -7632,8 +7671,11 @@ class AppNotifier extends ChangeNotifier {
     systemNotifications.withdraw(machineId, agentId);
     agentAlerts.dismiss(
       AgentAlert(
-        machineId: machineId, agentId: agentId,
-        title: '', kind: AlertKind.done, at: DateTime.now(),
+        machineId: machineId,
+        agentId: agentId,
+        title: '',
+        kind: AlertKind.done,
+        at: DateTime.now(),
       ),
     );
     _announceAgentSeen(machineId, agentId, readToken);
@@ -7641,7 +7683,11 @@ class AppNotifier extends ChangeNotifier {
 
   /// Reading is not answering. A device receipt clears only the exact message
   /// it displayed; the pending question and all pane/focus state remain intact.
-  void readAgentNotification(String machineId, String agentId, {String? readToken}) {
+  void readAgentNotification(
+    String machineId,
+    String agentId, {
+    String? readToken,
+  }) {
     if (readToken != null &&
         agentUnread.readTokenFor(machineId, agentId) != readToken) {
       return;
@@ -7653,7 +7699,9 @@ class AppNotifier extends ChangeNotifier {
         ..remove(key)
         ..[key] = question.requestId;
       while (_readQuestionNotifications.length > AgentUnread.capacity) {
-        _readQuestionNotifications.remove(_readQuestionNotifications.keys.first);
+        _readQuestionNotifications.remove(
+          _readQuestionNotifications.keys.first,
+        );
       }
     }
     _forgetUnread(machineId, agentId);
@@ -7688,7 +7736,8 @@ class AppNotifier extends ChangeNotifier {
       unawaited(
         _conn(machineId)
             .sendTerminalFrame('agent_seen', {
-              'agentId': agentId, 'readToken': ?readToken,
+              'agentId': agentId,
+              'readToken': ?readToken,
             })
             .catchError((_) => false),
       );
@@ -13140,8 +13189,10 @@ class AppNotifier extends ChangeNotifier {
         final readId = payload['agentId'];
         final readMachine = payload['machineId'];
         final readToken = payload['readToken'];
-        if (readId is String && readMachine is String &&
-            readToken is String && readToken.isNotEmpty) {
+        if (readId is String &&
+            readMachine is String &&
+            readToken is String &&
+            readToken.isNotEmpty) {
           readAgentNotification(readMachine, readId, readToken: readToken);
         }
         break;
@@ -13258,7 +13309,9 @@ class AppNotifier extends ChangeNotifier {
         final goneId = _eventAgentId(machine, event, payload);
         if (goneId != null) {
           agentUnread.forget(machineId, goneId);
-          _readQuestionNotifications.remove(AgentUnread.keyFor(machineId, goneId));
+          _readQuestionNotifications.remove(
+            AgentUnread.keyFor(machineId, goneId),
+          );
         }
         final agentId = _eventAgentId(machine, event, payload);
         if (agentId != null) {
@@ -13305,7 +13358,9 @@ class AppNotifier extends ChangeNotifier {
             // reconnect and when attaching to a turn that was already mid-dialog, and a window
             // that beeped at those would sound an alarm every time the network hiccuped.
             if (!repeat && !questionNotificationRead(machineId, agentId)) {
-              _readQuestionNotifications.remove(AgentUnread.keyFor(machineId, agentId));
+              _readQuestionNotifications.remove(
+                AgentUnread.keyFor(machineId, agentId),
+              );
               _raiseAlert(machine, agentId, AlertKind.needsYou);
             }
           }
@@ -13321,7 +13376,9 @@ class AppNotifier extends ChangeNotifier {
           final open = machine.blockedAgents[agentId];
           if (open != null && open.requestId == requestId) {
             machine.blockedAgents.remove(agentId);
-            _readQuestionNotifications.remove(AgentUnread.keyFor(machineId, agentId));
+            _readQuestionNotifications.remove(
+              AgentUnread.keyFor(machineId, agentId),
+            );
             // An old question close cannot erase a newer completed result.
             if (agentUnread.kindFor(machineId, agentId) == AlertKind.needsYou) {
               _forgetUnread(machineId, agentId);

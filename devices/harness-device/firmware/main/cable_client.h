@@ -146,6 +146,7 @@ bool cable_client_has_window(void);
 
 // Ask for the machine wheel. Mirrors `cable_client_list_agents`'s request half.
 void cable_client_list_machines(void);
+void cable_client_player_library(int offset, uint32_t request);
 
 // The user tapped a row. ALWAYS answered — `machine.selected` or `machine.error`, never silence, because
 // the dial holds a spinner until one of them lands.

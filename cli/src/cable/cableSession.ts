@@ -1,3 +1,4 @@
+import { playerPage, type PlayerSession } from './playerLibrary.js'
 import { CableSpeech, type SpeechProvider } from './cableSpeech.js'
 import type { TerminalActivitySnapshot } from './terminalActivity.js'
 import { configuredCreatureVoice } from './creatureVoiceConfig.js'
@@ -216,6 +217,7 @@ export interface PlayerOverview {
   harnesses: number
   machines: number
   models: number
+  sessions?: PlayerSession[]
   contexts: Array<{
     id: string; machine: string; project: string; branch: string; engine: string
     remaining: number | null; validUntil: number
@@ -273,6 +275,7 @@ export interface CableHost {
   /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
   agentTotal(): number
   playerOverview?(): PlayerOverview | null
+  playerLibrary?(): Promise<PlayerSession[]>
   /** The active tab's id, or '' with no window: what lets the dial tell an empty tab from a shut app. */
   activeSwarm(): string
   /** Who an agent is, for a card about one the dial does not hold. Undefined for an id never listed. */
@@ -610,6 +613,7 @@ export class CableSession {
       await this.syncSwarms()
       await this.syncAgents()
       await this.syncPlayerOverview()
+      await this.syncPlayerLibrary()
       void this.refreshFocusedActivity()
     }
   }
@@ -707,6 +711,10 @@ export class CableSession {
     this.lastAgentsKey = ''
     this.lastMachinesKey = ''
     this.playerOverviewKey = ''
+    this.playerCapable = false
+    this.playerOffset = this.playerRequest = 0
+    this.playerLibraryKey = ''
+    this.playerLibraryAt = 0
     this.playerOverviewAt = 0
     // INCLUDING which images it has been offered. `offered` holds bare version strings and named no dial,
     // so without this it outlived the session its comment claims it belongs to and became per-DAEMON:
@@ -744,6 +752,10 @@ export class CableSession {
     this.expectedAppFocusEchoUntil = 0
     this.lastAgentsKey = ''
     this.lastMachinesKey = ''
+    this.playerCapable = false
+    this.playerOffset = this.playerRequest = 0
+    this.playerLibraryKey = ''
+    this.playerLibraryAt = 0
     this.playerOverviewKey = ''
     this.playerOverviewAt = 0
     this.voice = null
@@ -810,6 +822,7 @@ export class CableSession {
           this.link = null
           return
         }
+        this.playerCapable = str('player') === 'library-v1'
         this.speech.capability(str('speech') === 'pcm16-v1')
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
@@ -829,6 +842,7 @@ export class CableSession {
           features: [
             'voice.draft',
             'agents.refresh',
+            ...(this.playerCapable && this.host.playerLibrary ? ['player.library'] : []),
             ...(this.host.form ? ['form'] : []),
             ...(this.host.selectPassage ? ['selection'] : []),
             ...(this.host.visit ? ['visit'] : []),
@@ -844,6 +858,8 @@ export class CableSession {
         const hw = str('hw')
         this.greetedHw = hw || undefined
         if (mac !== this.greetedMac || fw !== this.greetedFw) {
+          this.playerOffset = this.playerRequest = 0
+          this.playerLibraryKey = ''
           const returning = mac === this.greetedMac
           this.greetedMac = mac
           this.greetedFw = fw
@@ -960,6 +976,15 @@ export class CableSession {
         const agentId = str('agentId')
         const token = notificationReadToken(msg.readToken)
         if (agentId && token) this.host.readNotification?.(agentId, token)
+        return
+      }
+      case 'player.library.get': {
+        if (!this.playerCapable || !Number.isSafeInteger(msg.offset) || (msg.offset as number) < 0 ||
+            (msg.offset as number) > 1_000_000 || !Number.isSafeInteger(msg.request) ||
+            (msg.request as number) < 0 || (msg.request as number) > 0xffffffff) return
+        this.playerOffset = msg.offset as number
+        this.playerRequest = msg.request as number
+        await this.syncPlayerLibrary(true)
         return
       }
       case 'agent.open':
@@ -1597,6 +1622,31 @@ export class CableSession {
     return this.queued(() => this.syncAgentsNow(force))
   }
 
+  private playerCapable = false
+  private playerOffset = 0
+  private playerRequest = 0
+  private playerLibraryKey = ''
+  private playerLibraryAt = 0
+
+  async syncPlayerLibrary(force = false): Promise<void> {
+    return this.queued(async () => {
+      if (!this.playerCapable || !this.host.playerLibrary) return
+      const offset = this.playerOffset, request = this.playerRequest
+      const sessions = await this.host.playerLibrary()
+      if (request !== this.playerRequest) return
+      const page = playerPage(sessions, offset)
+      const machines = this.host.playerOverview?.()?.machines ?? new Set(sessions.map(row => row.machineId)).size
+      // Seconds advance on the device. Refresh metadata and liveness at most every 10s unless changed.
+      const key = JSON.stringify([page.offset, page.total, machines, sessions.slice(page.offset, page.offset + 6)])
+      if (!force && key === this.playerLibraryKey && Date.now() - this.playerLibraryAt < 10_000) return
+      if (await this.send({ t: 'player.library', request, ...page, machines })) {
+        this.playerOffset = page.offset
+        this.playerLibraryKey = key
+        this.playerLibraryAt = Date.now()
+      }
+    })
+  }
+
   private playerOverviewKey = ''
   private playerOverviewAt = 0
 
@@ -1607,7 +1657,9 @@ export class CableSession {
       const now = Date.now()
       const payload = { t: 'player.overview', harnesses: stats?.harnesses ?? this.host.agentTotal(),
         machines: stats?.machines ?? -1, models: stats?.models ?? -1, validMs: 60_000 }
-      const contexts = (stats?.contexts ?? []).slice(0, 24).map(context => ({
+      const activeIds = new Set((await this.host.listAgents()).map(a => a.id))
+      if (this.desiredFocus) activeIds.add(this.desiredFocus)
+      const contexts = (stats?.contexts ?? []).filter(c => !stats?.sessions || activeIds.has(c.id)).slice(0, 24).map(context => ({
         ...context,
         remaining: context.validUntil > now ? context.remaining : null,
       }))
@@ -1764,6 +1816,7 @@ export class CableSession {
       await this.syncSwarms(true)
       await this.syncAgents(true)
       await this.syncPlayerOverview(true)
+      await this.syncPlayerLibrary(true)
     } finally {
       this.restoring = false
     }
@@ -1896,12 +1949,13 @@ export class CableSession {
    * It travels because without it the dial gets a card with a state and nothing to render: the tile knows
    * a turn is live and shows the user nothing that says so.
    */
-  async turnStarted(agentId: string, text = ''): Promise<void> {
+  async turnStarted(agentId: string, text = '', update?: string): Promise<void> {
     this.speech.processing(agentId)
     this.activityEndedAt.delete(agentId)
     const read = {}
     this.activityReads.set(agentId, read)
     await this.send({ t: 'turn.started', agentId, text })
+    if (update !== undefined) await this.send({ t: 'turn.activity', agentId, text, action: update })
     if (!this.link?.isOpen || (!this.host.activityText && !this.host.activitySnapshot)) { this.activityReads.delete(agentId); return }
     let activity: TerminalActivitySnapshot | null = null
     try { activity = await this.readActivity(agentId) } catch { /* unavailable is not a status */ }

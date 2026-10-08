@@ -1,4 +1,7 @@
 #include "cable_client.h"
+#ifdef DEVICE_PRO_COMPANION
+#include "ui/habitat/pro_player_library.h"
+#endif
 #include "cable_scroll.h"
 #include "cable_speech.h"
 #ifdef DEVICE_PRO_WIFI
@@ -179,6 +182,7 @@ static void send_hello(void)
     msg_string(&root, "hw", board()->name);
 #ifdef DEVICE_PRO_COMPANION
     if (audio_speech_available()) msg_string(&root, "speech", "pcm16-v1");
+    msg_string(&root, "player", "library-v1");
 #endif
     // Also the device's USB serial number, so the daemon can tell one dial from another before a byte is
     // exchanged — and can tell a keepalive greeting from a new board.
@@ -188,6 +192,14 @@ static void send_hello(void)
     send_json(root);
 }
 
+void cable_client_player_library(int offset, uint32_t request)
+{
+    cJSON *root=msg("player.library.get");
+    if(!root) return;
+    msg_number(&root,"offset",offset);
+    msg_number(&root,"request",request);
+    send_json(root);
+}
 void cable_client_list_machines(void)
 {
     send_json(msg("machines.list"));
@@ -1214,6 +1226,11 @@ static void handle_message(const cJSON *root)
     if (strcmp(t,"draft.state")==0) { ui_draft_state(p);return; }
 #ifdef DEVICE_PRO_COMPANION
     if (strcmp(t,"metrics.state")==0) { ui_metrics_state(p);return; }
+    if (strcmp(t,"player.library")==0) {
+        pro_player_library_t page;
+        if(pro_player_library_parse(p,&page)) ui_player_library(&page);
+        return;
+    }
     if (strcmp(t,"player.overview")==0) {
         const char *keys[]={"harnesses","machines","models","validMs"};
         int values[]={-1,-1,-1,0};
