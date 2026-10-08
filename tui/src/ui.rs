@@ -39,6 +39,7 @@ pub fn next_repaint(app: &App, frame_started: Instant) -> Option<Instant> {
     if let Some((_, _, at)) = app.toast.as_ref().filter(|_| app.toast_ms() != u64::MAX) {
         deadline(*at, app.toast_ms());
     }
+    if let Some((_, at)) = app.copied { deadline(at, COPIED_MS) }
     let hints = !(app.options.tmux_look() && app.options.get("@hn-hint-time", "", None).is_none());
     if app.prefix && hints {
         if let Some(at) = app.prefix_at { deadline(at, app.keymap.hint_ms); }
@@ -297,6 +298,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let speaking = matches!(&app.modal, Some(Modal::Prompt(p)) if !p.dialog()) || matches!(app.modal, Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     crate::os_welcome::draw_dock(buf, app);
+    copied(buf, app);
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
@@ -747,6 +749,23 @@ pub(crate) const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ 
 fn empty_window(buf: &mut Buffer, app: &mut App, area: Rect) -> Option<Position> {
     if crate::input::os_home(app) { os_welcome(buf, app, area); None }
     else { crate::new_harness::draw_welcome(buf, app, area) }
+}
+
+/// How long "Copied" stays over the pane a selection was copied from.
+const COPIED_MS: u64 = 1200;
+
+/// "✓ Copied" in the bottom right of the pane a selection just went to the clipboard from, for a
+/// moment (not under @hn-look tmux: tmux says nothing).
+fn copied(buf: &mut Buffer, app: &mut App) {
+    let Some((pane, at)) = app.copied else { return };
+    if at.elapsed() >= Duration::from_millis(COPIED_MS) { app.copied = None; return }
+    if app.options.tmux_look() || app.modal.is_some() { return }
+    let Some(rect) = app.rects.iter().find(|(id, _)| *id == pane).map(|(_, r)| app.content_of(app.tab(), *r)) else { return };
+    let label = " ✓ Copied ";
+    let width = label.width() as u16;
+    if rect.width < width + 2 || rect.height < 2 { return }
+    let (x, y) = (rect.right() - width - 1, rect.bottom() - 2);
+    buf.set_string(x, y, label, Style::default().fg(Color::Black).bg(theme::accent()).add_modifier(Modifier::BOLD));
 }
 
 /// A command's window while its terminal starts: a quiet line, nothing to choose.
@@ -3310,6 +3329,23 @@ mod theme_render_tests {
         // The terminal never came (the request failed): back to what an empty window shows.
         app.shell_inputs.remove(&id);
         assert!(!screen(&mut app).contains("Opening Updates…"));
+    }
+
+    /// A selection let go goes to the clipboard and says so over its pane for a moment.
+    #[test]
+    fn a_copied_selection_says_copied_over_its_pane_for_a_moment() {
+        let mut app = app();
+        app.panes.insert(1, Pane::new(1, "local", "shell", 100, 30));
+        app.tab_mut().root = Some(crate::layout::Node::new(1, 150, 41));
+        app.tab_mut().focus = Some(1);
+        app.fit_panes();
+        assert!(!screen(&mut app).contains("Copied"));
+        app.copied = Some((1, Instant::now()));
+        assert!(screen(&mut app).contains("✓ Copied"));
+        assert!(next_repaint(&app, Instant::now()).is_some(), "a frame comes to take it away");
+        app.copied = Some((1, Instant::now() - Duration::from_millis(COPIED_MS + 1)));
+        assert!(!screen(&mut app).contains("Copied"));
+        assert!(app.copied.is_none());
     }
 
     /// `theme` opens the settings panel over the window (not fzf's full-screen list), and a key
