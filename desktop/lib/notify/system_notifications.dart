@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import 'agent_alerts.dart';
 import 'alert_sounds.dart';
+import 'browser_notifier.dart';
 
 /// Whether an agent's news is ALSO handed to the operating system, so it reaches
 /// somebody whose window is behind their editor, on another desktop, or minimised.
@@ -55,6 +56,10 @@ abstract class SystemNotifier {
   /// what the platform does.
   bool get clickOpensAgent;
 
+  /// Where a person who said no turns notifications back on — Settings shows
+  /// it under a switch that is on but [NotificationPermission.denied].
+  String get deniedAdvice;
+
   /// Ask for permission if it has not been asked, and say what the answer is.
   Future<NotificationPermission> authorize();
 
@@ -83,6 +88,10 @@ class NoSystemNotifier implements SystemNotifier {
 
   @override
   bool get clickOpensAgent => false;
+
+  @override
+  String get deniedAdvice =>
+      'Allow it in System Settings ▸ Notifications ▸ Harness.';
 
   @override
   Future<NotificationPermission> authorize() async =>
@@ -121,6 +130,10 @@ class MacSystemNotifier implements SystemNotifier {
 
   @override
   bool get clickOpensAgent => true;
+
+  @override
+  String get deniedAdvice =>
+      'Allow it in System Settings ▸ Notifications ▸ Harness.';
 
   @override
   Future<NotificationPermission> authorize() => _ask('authorize', null);
@@ -212,6 +225,10 @@ class LinuxSystemNotifier implements SystemNotifier {
   bool get clickOpensAgent => false;
 
   @override
+  String get deniedAdvice =>
+      'Allow it in System Settings ▸ Notifications ▸ Harness.';
+
+  @override
   Future<NotificationPermission> authorize() async {
     try {
       final result = await _run('notify-send', ['--version']);
@@ -276,7 +293,7 @@ class LinuxSystemNotifier implements SystemNotifier {
 
 /// The notifier for the platform this build runs on.
 SystemNotifier platformSystemNotifier() {
-  if (kIsWeb) return const NoSystemNotifier();
+  if (kIsWeb) return browserSystemNotifier();
   if (Platform.isMacOS) return MacSystemNotifier();
   if (Platform.isLinux) return LinuxSystemNotifier();
   return const NoSystemNotifier();

@@ -261,10 +261,23 @@ class PaneLayoutStore {
     return result;
   }
 
+  /// Whether [layout] may be restored for [account].
+  ///
+  /// A browser is shared by whoever signs in on it, and the tabs it saved are
+  /// the last account's: their names and harness history must not open under
+  /// another one, nor be seeded into its desk. A layout from before owners were
+  /// recorded, or a sign-in whose account is not known yet, keeps the old
+  /// behaviour; a known account never takes another account's tabs.
+  static bool restorableFor(Map<String, dynamic> layout, String? account) {
+    final owner = layout['owner'];
+    return owner is! String || account == null || owner == account;
+  }
+
   Future<void> saveSwarms(
     List<Swarm> swarms,
     String activeId, {
     Iterable<(String, String)> monitorHarnesses = const [],
+    String? owner,
   }) {
     // Capture each request before yielding, but keep only the latest snapshot
     // while a write is pending. Holding a navigation key must not queue a full
@@ -272,6 +285,7 @@ class PaneLayoutStore {
     try {
       _pendingSwarmSnapshot = jsonEncode({
         'version': 1,
+        'owner': ?owner,
         'activeId': activeId,
         'swarms': swarms.map((s) => s.toJson()).toList(),
         'monitorHarnesses': [

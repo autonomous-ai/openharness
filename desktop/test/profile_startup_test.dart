@@ -17,6 +17,10 @@ class _Api extends ApiClient {
   final profiles = <Completer<Map<String, dynamic>?>>[];
   final lists = <Completer<List<Machine>>>[];
 
+  /// No desk here: these tests are about the profile and the machine list.
+  @override
+  Future<Map<String, dynamic>?> desk() async => null;
+
   @override
   Future<Map<String, dynamic>?> me() {
     final result = Completer<Map<String, dynamic>?>();
