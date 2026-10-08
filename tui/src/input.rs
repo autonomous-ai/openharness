@@ -264,7 +264,17 @@ pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
 fn on_paste(app: &mut App, text: String) {
     if paste_form(app, &text) { return }
     if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in text.chars().filter(|c| !c.is_control()) { picker.type_char(c) } return }
-    if let Some(Modal::Prompt(prompt)) = &mut app.modal { prompt.value.push_str(&text.replace(['\r', '\n'], " ")); return }
+    // (At the cursor, which goes after it, as a typed line does; a dialog's input has the keys again.)
+    if let Some(Modal::Prompt(prompt)) = &mut app.modal {
+        let mut chars: Vec<char> = prompt.value.chars().collect();
+        let at = prompt.cursor.min(chars.len());
+        let pasted: Vec<char> = text.replace(['\r', '\n'], " ").chars().collect();
+        prompt.cursor = at + pasted.len();
+        chars.splice(at..at, pasted);
+        prompt.value = chars.into_iter().collect();
+        prompt.buttons = false;
+        return;
+    }
     app.tab_mut().home = false;
     if let Some(buffer) = app.shell_inputs.get(&app.tab().id) { buffer.lock().unwrap().push(text.into_bytes()); return }
     let Some(focus) = app.focused() else { return };
@@ -322,6 +332,7 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
 /// preview, whichever it is over; a click takes a row, a second one opens it; in the preview a
 /// drag scrolls it and a drag on its border resizes it; a click outside the box closes it.
 fn modal_mouse(app: &mut App, mouse: MouseEvent) {
+    if matches!(&app.modal, Some(Modal::Prompt(p)) if p.dialog()) { return prompt_mouse(app, mouse) }
     if matches!(app.modal, Some(Modal::NewHarness(_))) { return crate::new_harness::mouse(app, mouse) }
     // --no-mouse: a list the mouse does nothing to.
     if theme::fzf_opts().no_mouse && matches!(app.modal, Some(Modal::Picker { .. })) { return }
@@ -954,14 +965,11 @@ fn local_offset_hours() -> u64 {
     ((24 + sign * hours) % 24) as u64
 }
 
-/// A status-line prompt, tmux's way: `(rename-window) name`. [label] becomes the hint shown dim
-/// at the right when the line has room.
-fn prompt(app: &mut App, kind: PromptKind, title: &str, label: &str, hint: &str, value: &str, secret: bool) {
-    let tag = format!("({}) ", title.to_lowercase().replace(' ', "-"));
-    let mut p = Prompt::status(kind, &tag, value);
-    p.title = title.into();
-    p.hint = if hint.is_empty() { label.to_string() } else { hint.to_string() };
-    p.secret = secret;
+/// One of hn's own questions, as the shared dialog: titled [title], [body] above an input box
+/// labelled [field] with [value] in it, the caret at its end.
+fn prompt(app: &mut App, kind: PromptKind, title: &str, field: &str, body: &str, value: &str) {
+    let mut p = Prompt::status(kind, "", value);
+    (p.title, p.field, p.body) = (title.into(), field.into(), body.into());
     app.modal = Some(Modal::Prompt(p));
 }
 
@@ -1052,11 +1060,11 @@ pub fn run(app: &mut App, command: &str) {
             let focused = focused_agent(app);
             new_shell_from(app, focused, Placement::Auto(None), None, None);
         }
-        "send" => prompt(app, PromptKind::Send, "Send to harness", "What should be done?", "Harness picks the harness that fits best; you confirm.", "", false),
+        "send" => prompt(app, PromptKind::Send, "Send to Harness", "What should be done?", "Harness picks the harness that fits best; you confirm.", ""),
         "broadcast" => {
             let n = app.tab().panes().len();
             if n == 0 { app.say("No harnesses in this tab", theme::MUTED); return }
-            prompt(app, PromptKind::Broadcast, &format!("Broadcast to {n} harness{}", if n == 1 { "" } else { "es" }), "Message", "Sent as a turn to every harness in this tab.", "", false)
+            prompt(app, PromptKind::Broadcast, &format!("Broadcast · {n} Harness{}", if n == 1 { "" } else { "es" }), "Message", "Sent as a turn to every harness in this tab.", "")
         }
         "clone" => {
             let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
@@ -1076,13 +1084,13 @@ pub fn run(app: &mut App, command: &str) {
         "rename" => {
             let Some((machine, agent)) = focused_agent(app) else { return };
             let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
-            prompt(app, PromptKind::RenameHarness { machine, agent }, "Rename Harness", "New name", "", &name, false)
+            prompt(app, PromptKind::RenameHarness { machine, agent }, &format!("Rename Harness · {}", crate::format::short_name(&name, 30)), "New name", "", &name)
         }
         "tab" => crate::commands::execute(app, "new-window"),
         "rename-tab" => {
             let name = app.tab().name.clone();
             let target = PromptKind::RenameTab { session:app.session_id, window:app.tab().id.clone(), owner:app.fleet.local_id.clone() };
-            prompt(app, target, "Rename Tab", "Tab name", "", &name, false);
+            prompt(app, target, &format!("Rename Tab · {}", crate::format::short_name(&name, 30)), "Tab name", "", &name);
         }
         "close-tab" => crate::session_close::tab(app, app.active),
         "next-tab" => { let n = app.tabs.len(); let i = (app.active + 1) % n; app.select_tab(i) }
@@ -1704,12 +1712,36 @@ pub(crate) fn modal_key(app: &mut App, key: KeyEvent) {
         Modal::Copy { pane } => { app.modal = Some(Modal::Copy { pane }); mode_key(app, pane, &keys::of(&key)); }
         Modal::Prompt(p) => {
             prompt_key(app, key, p);
-            // A message or an answer typed from the list: back to it, its query and place kept.
-            if app.modal.is_none() { if let Some(back) = app.back_to_list.take() { app.modal = Some(Modal::Picker { kind: back.0, picker: back.1 }); refill(app) } }
-            else if !matches!(app.modal, Some(Modal::Prompt(_))) { app.back_to_list = None }
+            after_prompt(app);
         }
         Modal::Picker { kind, picker } => picker_key(app, key, kind, picker),
     }
+}
+
+/// After a prompt's key or click: a message or an answer typed from the list goes back to it, its
+/// query and place kept.
+fn after_prompt(app: &mut App) {
+    if app.modal.is_none() { if let Some(back) = app.back_to_list.take() { app.modal = Some(Modal::Picker { kind: back.0, picker: back.1 }); refill(app) } }
+    else if !matches!(app.modal, Some(Modal::Prompt(_))) { app.back_to_list = None }
+}
+
+/// The mouse on one of hn's question dialogs: a button answers, a click on the input gives it the
+/// keys, the rest of the box does nothing and a click outside it cancels.
+fn prompt_mouse(app: &mut App, mouse: MouseEvent) {
+    let Some((r, a)) = crate::ui::prompt_layout(app) else { return };
+    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) { return }
+    let at = ratatui::layout::Position::new(mouse.column, mouse.row);
+    let Some(Modal::Prompt(mut p)) = app.modal.take() else { return };
+    if !r.contains(at) { return after_prompt(app) }
+    match p.row().click(a.row, at) {
+        Some(1) => submit_prompt(app, p),
+        Some(_) => {}
+        None => {
+            if a.input.is_some_and(|i| i.contains(at)) { p.buttons = false }
+            app.modal = Some(Modal::Prompt(p));
+        }
+    }
+    after_prompt(app);
 }
 
 /// The status-line prompt (status_prompt_key): tmux's `status-keys emacs` — each change runs an
@@ -1741,9 +1773,28 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         if ask.single() { if let KeyCode::Char(c) = key.code { if !ctrl && !alt { return crate::tree::answer(app, pane, ask, Some(&c.to_string())) } } }
         if (key.code == KeyCode::Esc && !vi) || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) { return crate::tree::answer(app, pane, ask, None) }
     }
+    // hn's own questions are dialogs, keyed as the Machines inputs are: Tab takes the keys to the
+    // buttons and back, a printable key is typed wherever they were, Esc cancels (status-keys vi
+    // is the status line's). In the input the keys below edit the line as in tmux's prompt.
+    if p.dialog() {
+        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) { p.buttons = !p.buttons; app.modal = Some(Modal::Prompt(p)); return }
+        if matches!(key.code, KeyCode::Char(_)) && !ctrl && !alt { p.buttons = false }
+        if p.buttons {
+            let mut row = p.row();
+            match row.key(key.code, key.modifiers) {
+                crate::buttons::Answer::Chosen(1) => return submit_prompt(app, p),
+                crate::buttons::Answer::Chosen(_) | crate::buttons::Answer::Cancel => return,
+                crate::buttons::Answer::Moved => p.chosen = row.chosen,
+                crate::buttons::Answer::Ignored => {}
+            }
+            app.modal = Some(Modal::Prompt(p));
+            return;
+        }
+        if key.code == KeyCode::Esc { return }
+    }
     let (single, incremental, ptype) = match &p.kind { PromptKind::Command { one, incremental, ptype, .. } => (*one, *incremental, *ptype), PromptKind::Tree { ask, .. } => (false, false, ask.ptype()), _ => (false, false, 0) };
     // status-keys vi (tmux's default when $EDITOR names vi): Esc leaves insert for normal mode.
-    let vi = app.options.get("status-keys", "", None).as_deref() == Some("vi");
+    let vi = !p.dialog() && app.options.get("status-keys", "", None).as_deref() == Some("vi");
     if vi && p.vi_normal { prompt_vi_normal(app, key, p); return }
     if vi && key.code == KeyCode::Esc && !ctrl && !alt { p.vi_normal = true; app.modal = Some(Modal::Prompt(p)); return }
     // Entry mode (status_prompt_translate_key): these keys do what emacs's do, a character is
@@ -2431,7 +2482,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
                 if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
                     let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
                     app.back_to_list = Some(Box::new((kind, picker)));
-                    return prompt(app, PromptKind::Message { machine, agent }, "Message", &name, &format!("to {name}"), "", false);
+                    return prompt(app, PromptKind::Message { machine, agent }, &format!("Message · {}", crate::format::short_name(&name, 30)), "Message", "", "");
                 }
             }
             // M-a: the question's answer typed — option numbers (several for a multi-choice one) or
@@ -2442,15 +2493,11 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
                         let row = format!("{machine}:{agent}");
                         let row = picker.current_id().unwrap_or(row);
                         let request = match answerable(app, &picker, &row) { Ok(r) => r, Err(why) => { picker.say(why); app.modal = Some(Modal::Picker { kind, picker }); return } };
-                        let how = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
+                        let how = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "Your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
                         // Who asks and what, while you type (the list is gone behind the prompt).
-                        let name = app.fleet.agent(&machine, &agent).map(|a| crate::format::short_name(&a.name, 24)).unwrap_or_default();
-                        let mut p = Prompt::status(PromptKind::Answer { machine, agent, request }, &format!("({name}) "), "");
-                        p.title = "Answer".into();
-                        p.hint = format!("{} — {how}", q.prompt);
+                        let name = app.fleet.agent(&machine, &agent).map(|a| crate::format::short_name(&a.name, 30)).unwrap_or_default();
                         app.back_to_list = Some(Box::new((kind, picker)));
-                        app.modal = Some(Modal::Prompt(p));
-                        return;
+                        return prompt(app, PromptKind::Answer { machine, agent, request }, &format!("Answer · {name}"), &how, &q.prompt, "");
                     }
                 }
             }
@@ -3219,7 +3266,7 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             // kept, offered as a message to it — Enter sends it, Escape drops it.
             let keep = |app: &mut App, why: &str| {
                 let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
-                prompt(app, PromptKind::Message { machine: machine.clone(), agent: agent.clone() }, "Message", &name, &format!("{why} — send it to {name} as a message?"), &value, false);
+                prompt(app, PromptKind::Message { machine: machine.clone(), agent: agent.clone() }, &format!("Message · {}", crate::format::short_name(&name, 30)), "Message", &format!("{why}. Send it to {name} as a message?"), &value);
             };
             if q.as_ref().is_some_and(|q| q.request_id != request) { return keep(app, "That question changed while you typed") }
             let text = q.and_then(|q| crate::fleet::answer_text(&q, &value));

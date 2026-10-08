@@ -154,8 +154,7 @@ pub enum Ask {
 #[derive(Clone, Copy)]
 struct PromptActions { size: (u16, u16), accept: Rect, cancel: Rect, input: Option<Rect> }
 
-/// The columns a typed line's input box wants.
-const INPUT_W: u16 = 48;
+use crate::dialog::INPUT_W;
 
 pub struct Devices {
     /// `remote-password status --json` ({hasPassword, fingerprint, setAt}), or why it is unknown.

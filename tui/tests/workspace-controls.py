@@ -569,6 +569,10 @@ try:
     shown('Arrange panes')
     click_text('Rename')
     shown('Tab name')
+    # hn's own rename is a dialog with an input box, not tmux's status-line prompt.
+    shown('┌─Rename Tab ·')
+    shown('[ Cancel ]  [ Rename ]')
+    snapshot('rename-tab-dialog')
     hn('select-window', '-t', 'Remote')
     keys('C-u')
     tmux('send-keys', '-l', '-t', 'test', 'Renamed workspace')

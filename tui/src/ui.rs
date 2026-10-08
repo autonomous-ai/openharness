@@ -290,12 +290,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
-    let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
+    let speaking = matches!(&app.modal, Some(Modal::Prompt(p)) if !p.dialog()) || matches!(app.modal, Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     crate::os_welcome::draw_dock(buf, app);
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
+    if let Some(pos) = draw_prompt(buf, app) { cursor = Some(pos) }
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
     crate::devices::cancel_unfit(app);
 }
@@ -360,6 +361,48 @@ fn menu_text(it: &crate::modal::MenuItem) -> String {
 pub fn dialog_border(lines: &str) -> border::Set<'static> {
     let (tl, tr, bl, br, hz, vt, ..) = box_set(lines);
     border::Set { top_left: tl, top_right: tr, bottom_left: bl, bottom_right: br, vertical_left: vt, vertical_right: vt, horizontal_top: hz, horizontal_bottom: hz }
+}
+
+/// One of hn's own questions (Rename Tab, Rename Harness, Send, Broadcast, Answer, Message) as the
+/// shared `Dialog` in the middle of the panes, in menu-border-lines: its line of context, the
+/// input and its buttons. None where the buttons, or the input, cannot fit.
+pub fn prompt_dialog<'a>(app: &App, p: &'a crate::modal::Prompt, row: &'a crate::buttons::Row, c: &'a crate::settings::Chrome) -> Option<(Rect, crate::dialog::Dialog<'a>)> {
+    let over = app.body();
+    let room = over.width.saturating_sub(4);
+    if row.buttons_width() > room { return None }
+    let lines = Some(app.style_spec("menu-border-lines", app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| "single".into());
+    let body = if p.body.is_empty() { Vec::new() } else { crate::dialog::wrap(&p.body, room.min(crate::dialog::INPUT_W), c.base) };
+    let mut d = crate::dialog::Dialog::new(&p.title, body, row, c);
+    d.border = dialog_border(&lines);
+    d.input = Some(crate::dialog::Input { label: &p.field, value: &p.value, caret: p.cursor, select: None, secret: p.secret, focused: !p.buttons, width: crate::dialog::INPUT_W });
+    if !d.fit(over.height) { return None }
+    Some((d.place(over), d))
+}
+
+/// The open question's box and the parts inside it (for drawing and clicks alike).
+pub fn prompt_layout(app: &App) -> Option<(Rect, crate::dialog::Areas)> {
+    let Some(Modal::Prompt(p)) = &app.modal else { return None };
+    if !p.dialog() { return None }
+    let (row, c) = (p.row(), crate::settings::chrome());
+    let (r, d) = prompt_dialog(app, p, &row, &c)?;
+    Some((r, d.areas(r)))
+}
+
+/// Draws the open question, if it is one of hn's dialogs: where its caret is. One with no room
+/// to be drawn is cancelled, never kept invisible to answer keys.
+fn draw_prompt(buf: &mut Buffer, app: &mut App) -> Option<Position> {
+    let Some(Modal::Prompt(p)) = &app.modal else { return None };
+    if !p.dialog() { return None }
+    let (row, c) = (p.row(), crate::settings::chrome());
+    let Some((r, d)) = prompt_dialog(app, p, &row, &c) else {
+        app.modal = None;
+        app.back_to_list = None;
+        app.say("Make the terminal larger to answer this", theme::WARN);
+        return None;
+    };
+    crate::term_out::clear_extras(r);
+    (&d).render(r, buf);
+    d.cursor(r)
 }
 
 /// A confirmation (a menu with buttons: Close Tab, Stop Harness) as the shared `Dialog`: in
@@ -792,7 +835,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     // (A prompt's completion menu keeps the prompt on the status line under it.)
     let under_menu = match &app.modal { Some(Modal::Menu(m)) => m.complete.as_ref().map(|c| &c.prompt), _ => None };
     let prompt_like: Option<(String, String, usize, String, bool)> = match (&app.modal, under_menu) {
-        (_, Some(p)) | (Some(Modal::Prompt(p)), _) => {
+        // (hn's own questions are dialogs over the panes: the status line stays.)
+        (_, Some(p)) | (Some(Modal::Prompt(p)), _) if !p.dialog() => {
             let shown: String = if p.secret { "*".repeat(p.value.chars().count()) } else { p.value.clone() };
             Some((p.label.clone(), shown, p.cursor, p.hint.clone(), p.vi_normal))
         }
@@ -3587,5 +3631,177 @@ mod confirm_box_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod prompt_dialog_tests {
+    use super::*;
+    use crate::app::App;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::Backend;
+
+    fn app(size: (u16, u16)) -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, size);
+        app.fleet.local_id = "local".into();
+        app
+    }
+
+    /// The screen as text, and where the terminal's cursor was put.
+    fn screen(app: &mut App) -> (String, Option<Position>) {
+        let (w, h) = app.size;
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        let mut at = None;
+        term.draw(|f| { draw(f, app); }).unwrap();
+        if let Ok(p) = term.backend_mut().get_cursor_position() { at = Some(p) }
+        let buf = term.backend().buffer().clone();
+        ((0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n"), at)
+    }
+
+    fn press(app: &mut App, code: KeyCode) { crate::input::handle(app, Event::Key(KeyEvent::new(code, KeyModifiers::NONE))) }
+    fn typed(app: &mut App, text: &str) { for ch in text.chars() { press(app, KeyCode::Char(ch)) } }
+    fn click(app: &mut App, at: Position) {
+        crate::input::handle(app, Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: at.x, row: at.y, modifiers: KeyModifiers::NONE }));
+    }
+    fn open(app: &App) -> Option<&crate::modal::Prompt> { match &app.modal { Some(Modal::Prompt(p)) => Some(p), _ => None } }
+
+    /// Rename… from the tab's menu: a dialog titled with the tab, its name in the input with the
+    /// caret at its end, `[ Cancel ]  [ Rename ]` — not tmux's `(rename-tab)` on the status line.
+    #[test]
+    fn rename_tab_is_a_dialog_with_the_name_in_its_input() {
+        let mut app = app((120, 30));
+        app.mouse = true;
+        let name = app.tab().name.clone();
+        crate::input::run(&mut app, "rename-tab");
+        let (s, cursor) = screen(&mut app);
+        assert!(s.contains(&format!("┌─Rename Tab · {name}")) && s.contains("Tab name") && s.contains("[ Cancel ]  [ Rename ]"), "{s}");
+        assert!(s.contains(&format!("│{name}")), "the name in the input:\n{s}");
+        assert!(!s.contains("(rename-tab)"), "not on the status line:\n{s}");
+        let (r, a) = prompt_layout(&app).expect("fits");
+        let field = Rect::new(a.input.unwrap().x + 1, a.input.unwrap().y + 1, a.input.unwrap().width - 2, 1);
+        assert_eq!(cursor, Some(Position::new(field.x + name.chars().count() as u16, field.y)), "the caret after the name");
+        assert!(r.y > 0 && r.bottom() < 29, "over the panes");
+        // The caret edits where it is; Enter renames.
+        press(&mut app, KeyCode::Home);
+        typed(&mut app, "my ");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none());
+        assert_eq!(app.tab().name, format!("my {name}"));
+    }
+
+    #[test]
+    fn esc_and_cancel_change_nothing_and_tab_moves_the_keys_to_the_buttons() {
+        let mut app = app((120, 30));
+        app.mouse = true;
+        let name = app.tab().name.clone();
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "x");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none() && app.tab().name == name, "Esc");
+        // status-keys vi is the status line's: Esc still cancels a dialog.
+        crate::commands::execute(&mut app, "set -g status-keys vi");
+        crate::input::run(&mut app, "rename-tab");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none(), "Esc under status-keys vi");
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "x");
+        press(&mut app, KeyCode::Tab);
+        assert!(open(&app).is_some_and(|p| p.buttons && p.chosen == 1), "Rename chosen");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(open(&app).map(|p| p.chosen), Some(0), "← → between the buttons");
+        // A letter is typed, and the input has the keys again.
+        typed(&mut app, "y");
+        assert!(open(&app).is_some_and(|p| !p.buttons && p.value == format!("{name}xy")));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none() && app.tab().name == name, "Enter on [ Cancel ]");
+    }
+
+    #[test]
+    fn the_mouse_answers_with_a_button_and_cancels_outside() {
+        let mut app = app((120, 30));
+        app.mouse = true;
+        let name = app.tab().name.clone();
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "2");
+        screen(&mut app);
+        let (r, a) = prompt_layout(&app).expect("fits");
+        let buttons = { let p = open(&app).unwrap(); p.row().areas(a.row).1 };
+        press(&mut app, KeyCode::Tab);
+        click(&mut app, Position::new(a.input.unwrap().x + 2, a.input.unwrap().y + 1));
+        assert!(open(&app).is_some_and(|p| !p.buttons), "a click on the input gives it the keys");
+        click(&mut app, Position::new(r.x + 1, r.y + 1));
+        assert!(open(&app).is_some(), "the box's own rule does nothing");
+        click(&mut app, Position::new(buttons[1].x + 1, buttons[1].y));
+        assert!(app.modal.is_none() && app.tab().name == format!("{name}2"), "[ Rename ]");
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "3");
+        click(&mut app, Position::new(buttons[0].x + 1, buttons[0].y));
+        assert!(app.modal.is_none() && app.tab().name == format!("{name}2"), "[ Cancel ]");
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "3");
+        click(&mut app, Position::new(0, 0));
+        assert!(app.modal.is_none() && app.tab().name == format!("{name}2"), "outside");
+    }
+
+    #[test]
+    fn a_paste_goes_in_at_the_caret() {
+        let mut app = app((120, 30));
+        crate::input::run(&mut app, "send");
+        typed(&mut app, "fix tests");
+        for _ in 0..5 { press(&mut app, KeyCode::Left) }
+        press(&mut app, KeyCode::Tab);
+        crate::input::handle(&mut app, Event::Paste("the\nnew ".into()));
+        assert!(open(&app).is_some_and(|p| p.value == "fix the new tests" && p.cursor == 12 && !p.buttons), "{:?}", open(&app).map(|p| (&p.value, p.cursor)));
+    }
+
+    /// Send, Broadcast, Rename Harness, Message and Answer are the same dialog with their own
+    /// title, line, label and action.
+    #[test]
+    fn hn_s_other_questions_are_dialogs_with_their_own_action() {
+        let mut app = app((120, 30));
+        crate::input::run(&mut app, "send");
+        let (s, _) = screen(&mut app);
+        // (Its line wrapped to the input's width.)
+        for want in ["┌─Send to Harness", "Harness picks the harness that fits best;", "confirm.", "What should be done?", "[ Cancel ]  [ Send ]"] { assert!(s.contains(want), "{want}:\n{s}") }
+        press(&mut app, KeyCode::Esc);
+        let kinds = [
+            (crate::modal::PromptKind::Broadcast, "Broadcast"),
+            (crate::modal::PromptKind::RenameHarness { machine: "m".into(), agent: "a".into() }, "Rename"),
+            (crate::modal::PromptKind::Message { machine: "m".into(), agent: "a".into() }, "Send"),
+            (crate::modal::PromptKind::Answer { machine: "m".into(), agent: "a".into(), request: "r".into() }, "Answer"),
+        ];
+        for (kind, action) in kinds {
+            let mut p = crate::modal::Prompt::status(kind, "", "");
+            (p.title, p.field) = ("Title".into(), "Field".into());
+            app.modal = Some(Modal::Prompt(p));
+            let (s, _) = screen(&mut app);
+            assert!(s.contains("┌─Title") && s.contains(&format!("[ Cancel ]  [ {action} ]")), "{action}:\n{s}");
+        }
+    }
+
+    /// tmux's own prompts (C-b , and every command-prompt, choose-tree's) stay on the status line.
+    #[test]
+    fn tmux_s_command_prompt_keeps_the_status_line() {
+        let mut app = app((120, 30));
+        crate::commands::execute(&mut app, "command-prompt -I zsh -p (rename-window) \"rename-window '%%'\"");
+        assert!(open(&app).is_some_and(|p| !p.dialog()));
+        let (s, _) = screen(&mut app);
+        assert!(s.lines().last().unwrap().starts_with("(rename-window) zsh"), "{s}");
+        assert!(!s.contains("┌─"), "no dialog:\n{s}");
+        assert!(prompt_layout(&app).is_none());
+    }
+
+    #[test]
+    fn a_dialog_that_cannot_fit_is_cancelled() {
+        let mut app = app((20, 6));
+        let name = app.tab().name.clone();
+        crate::input::run(&mut app, "rename-tab");
+        screen(&mut app);
+        assert!(app.modal.is_none(), "an invisible question must not keep answering keys");
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Make the terminal larger to answer this"));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tab().name, name);
     }
 }

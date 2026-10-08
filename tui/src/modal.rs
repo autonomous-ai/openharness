@@ -95,7 +95,8 @@ pub enum PromptKind {
     Tree { pane: u64, ask: crate::tree::Ask },
 }
 
-/// A line typed in the status line, tmux-style: `(rename-window) name`, `:split-window -h`.
+/// A line typed: tmux's in the status line (`(rename-window) name`, `:split-window -h`), hn's own
+/// in a dialog ([Prompt::dialog]).
 #[derive(Clone, Debug)]
 pub struct Prompt {
     pub kind: PromptKind,
@@ -112,11 +113,35 @@ pub struct Prompt {
     pub vi_normal: bool,
     /// What C-w last cut (prompt_saved): C-y puts it back before the newest paste buffer.
     pub saved: Option<String>,
+    /// hn's own questions ([Prompt::dialog]): the input's label, the line above it, whether the
+    /// keys are on the buttons (Tab) and which one is chosen (0 Cancel, 1 the action).
+    pub field: String,
+    pub body: String,
+    pub buttons: bool,
+    pub chosen: usize,
 }
 
 impl Prompt {
     pub fn status(kind: PromptKind, label: &str, initial: &str) -> Prompt {
-        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, saved: None }
+        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, saved: None, field: String::new(), body: String::new(), buttons: false, chosen: 1 }
+    }
+
+    /// hn's own questions are dialogs; tmux's (command-prompt, choose-tree's) keep the status line.
+    pub fn dialog(&self) -> bool {
+        matches!(self.kind, PromptKind::RenameTab { .. } | PromptKind::RenameHarness { .. } | PromptKind::Send | PromptKind::Broadcast | PromptKind::Answer { .. } | PromptKind::Message { .. })
+    }
+
+    /// The dialog's `[ Cancel ]  [ Rename ]` (Send, Broadcast, Answer), the chosen button only
+    /// while the keys are on them.
+    pub fn row(&self) -> crate::buttons::Row {
+        let action = match self.kind {
+            PromptKind::RenameTab { .. } | PromptKind::RenameHarness { .. } => "Rename",
+            PromptKind::Broadcast => "Broadcast",
+            PromptKind::Answer { .. } => "Answer",
+            _ => "Send",
+        };
+        let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
+        crate::buttons::Row { buttons: vec![button("Cancel"), button(action)], chosen: if self.buttons { self.chosen } else { usize::MAX }, hint: "tab buttons".into() }
     }
 }
 

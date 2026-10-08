@@ -1,5 +1,6 @@
 //! The box every question is asked in — Close Tab, Stop Harness, the Machines prompts, Files'
-//! Delete, the editor's Save changes: a bordered box in the command panel's colours with its
+//! Delete and names, the editor's Save changes, hn's own Rename / Send / Broadcast / Answer /
+//! Message: a bordered box in the command panel's colours with its
 //! title in the top rule, the question, an optional one-line input (its label above it, a password
 //! as dots), a line for what went wrong, and the button row (`buttons::Row`) at the bottom. It is
 //! a ratatui widget; [areas] is the one place its parts are laid out, for drawing and clicks alike.
@@ -17,6 +18,9 @@ use crate::settings::Chrome;
 
 /// The input box's rows: its border above and below the text.
 const INPUT_ROWS: u16 = 3;
+
+/// The columns a typed line's input box wants.
+pub const INPUT_W: u16 = 48;
 
 /// A one-line input: [label] above a bordered box with [value] in it — dots when [secret] — and
 /// the caret [caret] characters in. [focused]: the input has the keys (not the buttons). [width]:
