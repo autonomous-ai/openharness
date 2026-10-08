@@ -1,6 +1,12 @@
 [Unit]
 Description=The hn screen
-BindsTo=graphical-session.target
+# Requires + PartOf, not BindsTo: starting the screen starts the graphical session, and stopping
+# that session stops the screen. BindsTo also stops the screen whenever the session is merely
+# inactive, and an update from preview 14 (whose session never started it) reloaded systemd into
+# exactly that: "Stopped target The hn screen", hn-screen and harness-idle stopped mid-update, a
+# black screen with the Restart button out of sight.
+Requires=graphical-session.target
+PartOf=graphical-session.target
 # Portals can keep the standard target needed after our screen stops.
 PropagatesStopTo=graphical-session.target
 Wants=hn-screen.service harness-install.service harness-idle.service harness-update.timer harness-gpu-check.timer

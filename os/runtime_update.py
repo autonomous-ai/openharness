@@ -246,7 +246,22 @@ def prepare_packages(package, additional=()):
                     *map(str, additional), str(package)], check=True)
 
 
-def apply(folder, system, base, installation):
+class Steps:
+    """`Step 2 of 4 · Saving a recovery point…` in the Updates terminal. A system update showed
+    pacman's output alone, with no sign of how far it was or that turning the computer off
+    then is the one moment that leaves it to recovery."""
+
+    def __init__(self, total):
+        self.total, self.done = total, 0
+
+    def __call__(self, text):
+        self.done += 1
+        self.total = max(self.total, self.done)
+        print(f'Step {self.done} of {self.total} · {text}…', flush=True)
+
+
+def apply(folder, system, base, installation, steps=None):
+    steps = steps or Steps(3)
     previous = latest()
     if previous and previous['status'] not in ('applied', 'rolled-back'):
         raise ValueError('The previous Harness update did not finish. Run rollback first; its checkpoint is retained.')
@@ -276,6 +291,7 @@ def apply(folder, system, base, installation):
         kernel = boot.module('t2_update') if kernel_change else None
         additional = [incoming / kernel_change['candidate']['package']['filename']] if kernel_change else []
         prepare_packages(incoming / source_package.name, additional)
+        steps('Saving a recovery point')
         checkpoint = system.checkpoint('before-harness-update')
         identity = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ-') + uuid.uuid4().hex[:8]
         saved = STATE / identity
@@ -298,7 +314,9 @@ def apply(folder, system, base, installation):
             # The fast user updater must not mix a running old session with newly
             # installed OS integration. /run clears this only on a real reboot.
             system.write_json(RESTART_REQUIRED, {'status': 'applying', 'package': manifest['package']['version']})
+            steps('Installing Harness')
             install_package(incoming / source_package.name, manifest['package']['version'], manifest['runtime'], additional)
+            steps('Preparing the boot files')
             boot.restore_firmware()
             # Plymouth and other initramfs assets may change without a kernel
             # package transaction, so rebuild them on this path as well.
