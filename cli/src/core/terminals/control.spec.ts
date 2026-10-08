@@ -243,7 +243,7 @@ it.each(['key', 'submit'] as const)('checks revoked %s authority after awaited t
 
 it('passes a live submission guard through to paste/Enter, and permits a guarded key', async () => {
   const { terminals } = backend(), control = createTerminalControl({ resolve, terminals }), allowed = () => true
-  expect(await control.submitTerminalAction('agent-1', '/model next', { allowed })).toEqual(ok)
+  expect(await control.submitTerminal('agent-1', '/model next', { allowed })).toBe(true)
   expect(terminals.submitTextForLease).toHaveBeenCalledWith(session, expect.anything(), '/model next', { allowed })
-  expect(await control.keyTerminalAction('agent-1', 'Enter', allowed)).toEqual(ok)
+  expect(await control.keyTerminal('agent-1', 'Enter', allowed)).toBe(true)
 })

@@ -129,9 +129,10 @@ export class RuntimeProfileController {
     const registeredSession = this.deps.getSession(sessionId)
     if (!registeredSession) throw new RuntimeProfileControlError('AGENT_NOT_FOUND')
     const observed = this.deps.manager.getState(registeredSession.sessionId)
-    const session: RegisteredSession = registeredSession.cliVersion || !observed.cliVersion
-      ? registeredSession
-      : { ...registeredSession, cliVersion: observed.cliVersion }
+    // Keep transaction cleanup on the conversation that began it, even if the registry row
+    // is rebound in place while a native driver awaits its worker.
+    const session: RegisteredSession = structuredClone(registeredSession)
+    session.cliVersion ||= observed.cliVersion
     const native = this.deps.modelControlFor(session)
     const target = parseRuntimeProfile(encoded)
     // Either id identifies the agent: the encoded profile now carries the agent id, but one minted

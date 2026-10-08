@@ -571,8 +571,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     handles: isolatedModelControl, inline: engine => inline?.modelControlFor(engine), resolve: id => registry.resolve(id),
     call: (service, method, payload, waitMs) => serviceLinksRef?.call(service, method, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
     catalog: session => runtimeProfiles.codexCatalog(session), capture: captureTerminal,
-    text: async (target, text, allowed) => (await terminalControl.submitTerminalAction(target, text, { allowed })).state === 'succeeded',
-    key: async (target, key, allowed) => (await terminalControl.keyTerminalAction(target, key, allowed)).state === 'succeeded',
+    text: (target, text, allowed) => submitTerminal(target, text, { allowed }), key: keyTerminal,
     waitForModel: (id, ms) => runtimeProfiles.waitForModel(id, ms), waitForProfile: (id, ms) => runtimeProfiles.waitForProfile(id, ms),
     confirmEffort: (id, effort) => runtimeProfiles.confirmEffort(id, effort),
   })

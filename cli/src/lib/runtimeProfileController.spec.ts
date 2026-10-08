@@ -11,6 +11,7 @@ import {
   parseCursorParameterRows,
   paneModal,
   RuntimeProfileController,
+  RuntimeProfileControlError,
 } from './runtimeProfileController.js'
 import {
   CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY, CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED,
@@ -432,6 +433,32 @@ describe('runtime pane parsing', () => {
 })
 
 describe('RuntimeProfileController', () => {
+  it('cancels the original conversation transaction after the registry row is rebound in place', async () => {
+    const value = session('claude'), original = structuredClone(value), manager = new RuntimeProfileManager()
+    manager.hydrate(value, [])
+    manager.ingestPane(value, 'Sonnet 5 with low effort\n❯ ', true)
+    const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'claude', model: 'opus', effort: 'high' })
+    const cancelled = vi.spyOn(manager, 'cancelControl'), finished = vi.spyOn(manager, 'finishControl'), release = vi.fn()
+    const controller = new RuntimeProfileController({
+      manager, getSession: () => value, validateRuntime: async () => true, capture: async () => CLAUDE_PROMPT,
+      sendText: vi.fn(async () => true), sendLiteral: vi.fn(async () => true), sendKey: vi.fn(async () => true), acquireInput: () => release,
+      modelControlFor: bound => ({ validate: async () => {}, apply: async () => {
+        value.sessionId = 'replacement'
+        value.tmuxPane = '%2'
+        value.runtimes[0] = { backend: 'tmux', paneId: '%2' }
+        expect(bound.sessionId).toBe('s1')
+        expect(bound.runtimes).toEqual(original.runtimes)
+        throw new RuntimeProfileControlError('BUSY')
+      } }),
+    })
+    await expect(controller.setProfile('h1', target)).rejects.toMatchObject({ code: 'BUSY' })
+    expect(cancelled).toHaveBeenCalledExactlyOnceWith('s1')
+    expect(finished).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledOnce()
+    expect(manager.beginControl(original, parseRuntimeProfile(target)!)).toBe(true)
+    manager.cancelControl('s1')
+  })
+
   it('sets Claude model and effort only after transcript confirmations', async () => {
     const value = session('claude')
     const manager = new RuntimeProfileManager()

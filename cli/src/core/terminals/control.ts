@@ -93,8 +93,8 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result
   }
-  const submitTerminal = async (target: string, text: string): Promise<boolean> => {
-    return terminalActionSucceeded(await submitTerminalAction(target, text))
+  const submitTerminal = async (target: string, text: string, options?: SubmitOptions): Promise<boolean> => {
+    return terminalActionSucceeded(await submitTerminalAction(target, text, options))
   }
   const typeTerminal = async (target: string, text: string): Promise<boolean> => {
     const session = terminalSession(target)
@@ -115,8 +115,8 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result
   }
-  const keyTerminal = async (target: string, key: string): Promise<boolean> => {
-    return terminalActionSucceeded(await keyTerminalAction(target, key))
+  const keyTerminal = async (target: string, key: string, allowed?: () => boolean): Promise<boolean> => {
+    return terminalActionSucceeded(await keyTerminalAction(target, key, allowed))
   }
   const validateTerminal = async (session: RegisteredSession): Promise<boolean> =>
     (await terminals.validate(session)).state === 'alive'
