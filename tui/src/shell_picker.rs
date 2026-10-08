@@ -174,7 +174,46 @@ impl Drop for Request {
 }
 
 fn clean(s: &str) -> String { s.chars().filter(|c| !c.is_control()).collect() }
-fn is_loading(items_loaded:bool,status:&str)->bool { !items_loaded || status.ends_with('…') }
+/// `failed` is the number of failures in a row while the last request failed.
+/// A failure is kept apart from the server's status, so an error that happens
+/// to end in "…" never reads as loading; while a retry is due, the list spins.
+fn is_loading(items_loaded:bool,status:&str,failed:Option<u8>)->bool {
+    match failed {
+        Some(failures)=>retry_after(failures).is_some(),
+        None=>!items_loaded || status.ends_with('…'),
+    }
+}
+/// A failure's message stays readable: beside the spinner while a retry is due,
+/// in the list once the retries are spent. A finished list with a notice (a
+/// failed directory read, a catalog warning) shows it instead of looking empty.
+fn paint_list(next:&mut Buffer,area:Rect,picker:&mut Picker,loading:bool,failure:Option<&str>,lines:Vec<Line<'static>>,bottom:bool)->Position {
+    let previous_empty=std::mem::take(&mut picker.empty);
+    let previous_flash=picker.flash.clone();
+    match failure {
+        Some(message) if loading=>picker.flash=Some((message.into(),Instant::now())),
+        Some(message)=>picker.empty=message.into(),
+        None if !loading && !picker.status.is_empty()=>picker.empty=picker.status.clone(),
+        None=>{},
+    }
+    let at=paint_inline(next,area,picker,loading,lines,bottom);
+    picker.empty=previous_empty;picker.flash=previous_flash;at
+}
+/// The line under a launch that waits for its computer: only once the wait is
+/// long enough to notice (an instant local launch draws nothing), and one row
+/// that fits the pane, since a wrapped line would add a row at every frame.
+fn wait_line(elapsed:Duration,waiting:&str,cols:u16)->Option<String> {
+    const FRAMES:[&str;10]=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+    if elapsed<Duration::from_millis(150) {return None}
+    let who=match clean(waiting).as_str() {"local"|"-"=>"this computer".to_string(),name=>name.to_string()};
+    let line=format!("{} Starting on {who}… Ctrl-C to cancel",FRAMES[(elapsed.as_millis()/100) as usize%FRAMES.len()]);
+    // The last column is left free: some terminals wrap on writing it.
+    Some(crate::ui::clip(&line,usize::from(cols.saturating_sub(1))))
+}
+fn tty_cols(tty:&File)->u16 {
+    use std::os::fd::AsRawFd;
+    let mut size:libc::winsize=unsafe{std::mem::zeroed()};
+    if unsafe{libc::ioctl(tty.as_raw_fd(),libc::TIOCGWINSZ,&mut size)}==0 && size.ws_col>0 {size.ws_col} else {80}
+}
 fn frame_due(loading:bool,last:Instant,now:Instant)->bool { loading && now.duration_since(last)>=Duration::from_millis(120) }
 // A failed list request is retried a few times, then left showing its message.
 fn retry_after(failures:u8)->Option<Duration> { (failures<=3).then(||Duration::from_secs(2)) }
@@ -195,7 +234,6 @@ pub fn exchange(verb:&str,value:&serde_json::Value,waiting:&str)->io::Result<ser
     let _signal=Signal(unsafe{libc::signal(libc::SIGINT,interrupted as *const () as libc::sighandler_t)});
     let mut out=OpenOptions::new().read(true).write(true).open("/dev/tty")?;
     let mut request=Request::new(&mut out,verb,&value.to_string())?;
-    const FRAMES:[&str;10]=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
     let begun=Instant::now();
     let mut shown=usize::MAX;
     let result=loop {
@@ -209,9 +247,10 @@ pub fn exchange(verb:&str,value:&serde_json::Value,waiting:&str)->io::Result<ser
             Err(e)=>break Err(e),
         }
         let frame=(begun.elapsed().as_millis()/100) as usize;
-        if frame!=shown {
+        // The width is read each frame, so a pane resized meanwhile still gets one row.
+        if frame!=shown && let Some(line)=wait_line(begun.elapsed(),waiting,tty_cols(&out)) {
             shown=frame;
-            let _=write!(out,"\r\x1b[2K{} Starting on {}… Ctrl-C to cancel",FRAMES[frame%FRAMES.len()],clean(waiting));
+            let _=write!(out,"\r\x1b[2K{line}");
             let _=out.flush();
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -303,19 +342,13 @@ impl Screen {
         (self.top,self.height)=dimensions(rows,self.top,picker);self.cols=cols;
         self.clear()
     }
-    fn draw(&mut self,picker:&mut Picker,items:Option<&Items>,preview_id:Option<&str>)->io::Result<()> {
+    fn draw(&mut self,picker:&mut Picker,items:Option<&Items>,preview_id:Option<&str>,loading:bool,failure:Option<&str>)->io::Result<()> {
         let area=self.area();
         let mut next=Buffer::empty(area);
         let valid=items.filter(|v| v.preview_id.as_deref()==preview_id && preview_id.is_some());
         let lines=valid.map(|v|v.preview.iter().map(|s|Line::raw(clean(s))).collect()).unwrap_or_default();
         let bottom=valid.is_some_and(|v|v.preview_bottom);
-        let loading=is_loading(items.is_some(),&picker.status);
-        // Loading uses the usual spinner. A failed directory read or catalog
-        // warning must remain visible instead of looking like an endless load.
-        let previous_empty=std::mem::take(&mut picker.empty);
-        if !loading && !picker.status.is_empty() {picker.empty=picker.status.clone();}
-        let cursor=paint_inline(&mut next,area,picker,loading,lines,bottom);
-        picker.empty=previous_empty;
+        let cursor=paint_list(&mut next,area,picker,loading,failure,lines,bottom);
         let bytes=render_diff(self.previous.as_ref(),&next,cursor)?;
         self.out.write_all(&bytes)?;
         self.out.flush()?;
@@ -514,6 +547,8 @@ pub fn run(args:&[String])->io::Result<i32> {
     let mut dirty=true;
     let mut last_draw=Instant::now();
     let mut failures=0u8;
+    // The last request's error, apart from the server's own status line.
+    let mut failure:Option<String>=None;
     loop {
         let current=picker.current_id();
         if current!=last_id {
@@ -523,9 +558,10 @@ pub fn run(args:&[String])->io::Result<i32> {
             if picker.preview {due=Instant::now()+Duration::from_millis(35);}
         }
         // A visible spinner turns on its own; an idle picker draws nothing.
-        if dirty || frame_due(is_loading(items.is_some(),&picker.status),last_draw,Instant::now()) {
+        let loading=is_loading(items.is_some(),&picker.status,failure.is_some().then_some(failures));
+        if dirty || frame_due(loading,last_draw,Instant::now()) {
             theme::begin_animation_frame(true);
-            screen.draw(&mut picker,items.as_ref(),last_id.as_deref())?;dirty=false;last_draw=Instant::now();
+            screen.draw(&mut picker,items.as_ref(),last_id.as_deref(),loading,failure.as_deref())?;dirty=false;last_draw=Instant::now();
         }
         if request.is_none() && Instant::now()>=due {
             requested_preview=if picker.preview {picker.current_id()} else {None};
@@ -545,12 +581,13 @@ pub fn run(args:&[String])->io::Result<i32> {
                 // "Office is offline", "Harness did not answer": say it in the list
                 // and retry a few times, instead of ending the picker unseen.
                 failures=failures.saturating_add(1);
-                picker.status=e.to_string();
+                failure=Some(e.to_string());
                 if items.is_none() {items=Some(Items::default());}
                 request=None;dirty=true;
                 due=Instant::now()+retry_after(failures).unwrap_or(Duration::from_secs(86400));
             } else if let Some(mut value)=polled? {
-                if failures>0 {failures=0;if value.unchanged {picker.status.clear();dirty=true;}}
+                failures=0;
+                if failure.take().is_some() {dirty=true;}
                 if !value.unchanged {
                     // Older preview servers omit this optional field. The request
                     // still supplies the exact id; never associate it with today's cursor.
@@ -853,7 +890,42 @@ mod tests {
         assert!(frame_due(true,t,t+Duration::from_millis(150)));
         assert!(!frame_due(true,t,t+Duration::from_millis(50)));
         assert!(!frame_due(false,t,t+Duration::from_secs(5)),"an idle picker draws nothing");
-        assert!(is_loading(false,"") && is_loading(true,"Searching folders…") && !is_loading(true,"Office is offline"));
+        assert!(is_loading(false,"",None) && is_loading(true,"Searching folders…",None) && !is_loading(true,"Office is offline",None));
+    }
+    #[test]
+    fn a_failed_request_says_why_while_retrying_and_after() {
+        let area=Rect::new(0,0,60,12);
+        let text=|buf:&Buffer|buf.content().iter().map(|c|c.symbol()).collect::<String>();
+        // An error that ends in "…" is still an error: once the retries are
+        // spent it stops spinning. During the 2 s retry gaps the spinner turns.
+        let message="Office went to sleep…";
+        for (failures,spins) in [(1,true),(3,true),(4,false)] {
+            let mut picker=Picker::new("","");configure(&mut picker,false);
+            let empty=picker.empty.clone();
+            let loading=is_loading(true,&picker.status,Some(failures));
+            assert_eq!(loading,spins,"{failures}");
+            let mut buf=Buffer::empty(area);
+            theme::begin_animation_frame(true);
+            paint_list(&mut buf,area,&mut picker,loading,Some(message),vec![],false);
+            assert_eq!(theme::needs_animation_frame(),spins,"{failures}");
+            assert!(text(&buf).contains(message),"{failures}: the message is not shown");
+            assert!(picker.flash.is_none() && picker.empty==empty,"the message is not left on the picker");
+        }
+        theme::fzf_reset();
+    }
+    #[test]
+    fn the_launch_wait_line_is_one_row_and_waits_before_it_shows() {
+        use unicode_width::UnicodeWidthStr;
+        let at=Duration::from_millis;
+        assert_eq!(wait_line(at(100),"Office",80),None,"an instant launch draws nothing");
+        assert_eq!(wait_line(at(200),"Office",80).as_deref(),Some("⠹ Starting on Office… Ctrl-C to cancel"));
+        for name in ["local","-"] {assert!(wait_line(at(200),name,80).unwrap().contains("Starting on this computer…"),"{name}");}
+        // A long (CJK) name in a narrow pane stays on one row: a wrapped line
+        // would add a row at every frame, and the final erase clears only one.
+        for cols in [0,1,2,10,20,39] {
+            let line=wait_line(at(300),"日本語のとても長いコンピューター名",cols).unwrap();
+            assert!(line.width()<=usize::from(cols.saturating_sub(1)),"{cols}: {line}");
+        }
     }
     #[test]
     fn a_failed_list_request_retries_three_times_then_stays_put() {

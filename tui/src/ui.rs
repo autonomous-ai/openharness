@@ -2700,7 +2700,7 @@ fn clock(buf: &mut Buffer, app: &App, rect: Rect) {
 }
 
 
-fn clip(text: &str, cols: usize) -> String {
+pub(crate) fn clip(text: &str, cols: usize) -> String {
     if text.width() <= cols { return text.to_string() }
     if cols == 0 { return String::new() }
     let mut out = String::new();

@@ -245,6 +245,10 @@ def check(shell):
             if 'Starting on Slow… Ctrl-C to cancel' not in s.data.decode('utf-8', 'ignore'):
                 problems.append(('Enter on claude @Slow drew no "Starting on Slow… Ctrl-C to cancel" within 1 s', s.data[-500:]))
             s.send('\x03'); s.wait(lambda: b'READY> ' in s.data[-200:], 'Ctrl-C after Enter on Slow')
+            # The wait line is erased (its one row cleared) before the prompt comes back.
+            after = s.data.rsplit('Starting on Slow… Ctrl-C to cancel'.encode(), 1)[-1]
+            if b'\r\x1b[2K' not in after.split(b'READY> ', 1)[0]:
+                problems.append(('the wait line was not erased after Ctrl-C', after[-500:]))
             s.allow_launch = False
             if not (len(s.launches) == 1 and s.launches[0].get('host') == 'Slow'):
                 problems.append(('Enter did not ask for exactly one launch on Slow', s.launches))
