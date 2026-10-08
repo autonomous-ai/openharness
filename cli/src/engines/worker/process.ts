@@ -11,6 +11,7 @@ import type { EngineTranscript, HistoryAsk, TranscriptSession } from '../facets/
 import { engineLiveRequests } from './liveRequests.js'
 import { engineScreenRequests } from './screenRequests.js'
 import { engineSubmissionRequests } from './submissionRequests.js'
+import { engineNativeControlRequests } from './nativeControlRequests.js'
 import { engineRuntimeRequests } from './runtimeRequests.js'
 import {
   EngineReadError, record, READER_HISTORY, READER_IN_FLIGHT, READER_LAST_TURN, READER_REPLY_BYTES,
@@ -96,7 +97,9 @@ export function runEngineReader(engine: ReaderEngine, options: EngineProcessOpti
       query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
     }), ...engineQuestionControlRequests(engine, {
       query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
-    }) },
+    }), ...(engine === 'codex' ? engineNativeControlRequests(engine, {
+      query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
+    }) : {}) },
     onConnected: connected => { core = connected }, onDisconnected: () => { core = null },
   })
 }

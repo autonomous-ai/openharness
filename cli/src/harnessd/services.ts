@@ -463,6 +463,7 @@ export const ENGINE_SCREEN_ENV = 'HARNESSD_ENGINE_SCREEN'
 export const ENGINE_MODEL_CONTROL_ENV = 'HARNESSD_ENGINE_MODEL_CONTROL'
 export const ENGINE_QUESTION_CONTROL_ENV = 'HARNESSD_ENGINE_QUESTION_CONTROL'
 export const ENGINE_SUBMISSION_ENV = 'HARNESSD_ENGINE_SUBMISSION'
+export const ENGINE_NATIVE_CONTROL_ENV = 'HARNESSD_ENGINE_NATIVE_CONTROL'
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
@@ -474,7 +475,7 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: nu
   // The services, not the processes: a core knows what it routes by service, and one from before the
   // edge host still finds the services it knows here (workspaces) and runs the rest itself.
   const names = specs.flatMap((spec) => spec.services).join(',')
-  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1` }
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_SUBMISSION_ENV]: `${masterPid}:1`, [ENGINE_NATIVE_CONTROL_ENV]: `${masterPid}:1` }
 }
 
 /** An older master may inherit a newer master's environment after rollback. Trust only this parent. */
@@ -542,4 +543,9 @@ export function masterRunsEngineQuestionControl(env: NodeJS.ProcessEnv, parentPi
 /** A new core must not ask an older worker host for submission readings it does not serve. */
 export function masterRunsEngineSubmission(env: NodeJS.ProcessEnv, parentPid: number): boolean {
   return masterRunsLiveEngines(env, parentPid) && env[ENGINE_SUBMISSION_ENV] === `${parentPid}:1`
+}
+
+/** A new core must not send an older worker host a stop its Codex worker cannot speak. */
+export function masterRunsEngineNativeControl(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return masterRunsLiveEngines(env, parentPid) && env[ENGINE_NATIVE_CONTROL_ENV] === `${parentPid}:1`
 }

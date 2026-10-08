@@ -62,7 +62,9 @@ imports:
 
 Splitting the shared functions into `engines/kit` frees another 1,000 to 2,000 lines.
 
-## (d) Native control connections
+## (d) Native control connections: done in the batch after (a)
+
+See [engine native control](2026-10-08-engine-native-control.md). The map below is as it stood before it.
 
 | File | Engine-specific behavior | Stays in core | Can move | Risk |
 | --- | --- | --- | --- | --- |

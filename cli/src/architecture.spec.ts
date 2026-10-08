@@ -143,9 +143,9 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
-  /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission)\.ts$/,
+  /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission|nativeControl)\.ts$/,
   /^lib\/(askQuestion|runtimeProfileController|composerScreen|teamWriteHold|messageHold|terminalActivity|codexTurnRecovery)\.ts$/,
-  /^engines\/(screens|modelControls|questionControls|submissions)\.ts$/,
+  /^engines\/(screens|modelControls|questionControls|submissions|nativeControls)\.ts$/,
   // Claude Code's and Codex's reading of their composer: shared by the two, loaded only by their workers.
   /^engines\/kit\/nativeSubmission\.ts$/,
   // A worker's request handlers, the submission readers' among them, run in the engine's own process.
@@ -223,9 +223,10 @@ describe('the daemon\'s shape', () => {
     }
   })
 
-  it('screen and submission transports and input authority do not load native screen or submission readers', () => {
+  it('screen, submission and native-control brokers and input authority do not load the engines\' native code', () => {
     for (const entry of ['core/input.ts', 'core/questions.ts', 'core/engines/screens.ts', 'core/engines/screenTransport.ts',
-      'core/deviceInput.ts', 'lib/sessionInput.ts', 'core/engines/submissions.ts', 'core/engines/submissionTransport.ts']) {
+      'core/deviceInput.ts', 'lib/sessionInput.ts', 'core/engines/submissions.ts', 'core/engines/submissionTransport.ts',
+      'core/engines/nativeControls.ts', 'core/turns/activity.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
     }
   })

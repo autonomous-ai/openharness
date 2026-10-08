@@ -27,4 +27,14 @@ export const launch: EngineLaunch = {
   permissionModes, bypassPermission: permissionModes.auto,
   firstPromptArgs: [], resumeArgs: ['resume'], forkArgs: { lead: ['fork'] },
   instructionFiles: ['AGENTS.override.md', 'AGENTS.md'], envArgs: codexEnvArgs,
+  // Older Codex shares one app-server per CODEX_HOME, which owns work independently of its terminal client.
+  // New Harness launches opt out with --no-daemon (lib/engineLaunch.ts), as the first option.
+  sharedServer: {
+    ownedFlag: '--no-daemon', remoteFlag: '--remote', scripts: ['codex', 'codex.js'], pidFile: 'app-server-daemon/daemon.pid',
+    messages: {
+      unverified: 'Could not verify the Codex server before stopping',
+      remote: 'Stop this conversation on its remote Codex server before closing its terminal',
+      unidentified: 'Could not identify the conversation on the Codex server; the session is still open',
+    },
+  },
 }

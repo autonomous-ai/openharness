@@ -1,5 +1,6 @@
 import type { EngineQuestionControl } from './facets/questionControl.js'
 import type { EngineSubmission } from './facets/submission.js'
+import type { EngineNativeControl } from './facets/nativeControl.js'
 import type { EngineScreen } from './facets/screen.js'
 import type { EngineModelControl } from './facets/modelControl.js'
 import type { ProcessEngine } from './types.js'
@@ -21,4 +22,6 @@ export interface Engine {
   readonly modelControl: EngineModelControl
   readonly questionControl: EngineQuestionControl
   readonly submission: EngineSubmission
+  /** Only an engine whose CLI leaves work on a server of its own (Codex). */
+  readonly nativeControl?: EngineNativeControl
 }

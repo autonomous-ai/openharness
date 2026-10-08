@@ -17,6 +17,7 @@ function setup(over: Partial<TurnActivityDeps> = {}) {
     bySession: (sessionId) => sessions.get(sessionId),
     sessionTurnOpen: (sessionId) => sessionId === 's1',
     drain: vi.fn(async () => {}),
+    nativeActivity: vi.fn(async () => 'idle' as const),
     ...over,
   }
   return { deps, readers: createTurnActivity(deps) }
@@ -42,12 +43,11 @@ describe('turn activity', () => {
     expect(await turn.probe('s2')).toBe('unknown')
   })
 
-  it('reads Codex\'s activity from Codex, and every other runtime from what its pane shows', async () => {
+  it('reads Codex\'s activity from its own server (through its worker), and every other runtime from what its pane shows', async () => {
     const { deps, readers } = setup()
     const runtime = given(readers.runtimeActivity)
-    const codex = vi.spyOn(readers.codexActivity, 'read').mockResolvedValue('idle' as never)
     expect(await runtime.codex(live)).toBe('idle')
-    expect(codex).toHaveBeenCalledWith(live)
+    expect(deps.nativeActivity).toHaveBeenCalledWith(live)
     expect(await runtime.capture(live)).toBe('screen')
     expect(deps.terminals.capture).toHaveBeenCalledWith(live, { mode: 'visible', ansi: true })
     vi.mocked(deps.terminals.capture).mockResolvedValueOnce({ state: 'failed', reason: 'no pane' })

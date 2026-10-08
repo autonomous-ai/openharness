@@ -7,6 +7,10 @@ import { createScreenTransport } from './engines/screenTransport.js'
 import { legacyScreen } from '../lib/legacyScreen.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
+import { createNativeControls } from './engines/nativeControls.js'
+import { createEngineLinks } from './engines/engineLinks.js'
+import { engineLaunches } from '../engines/launches.js'
+import { masterRunsEngineNativeControl } from '../harnessd/services.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { createSubmissionTransport } from './engines/submissionTransport.js'
 import { masterRunsEngineSubmission } from '../harnessd/services.js'
@@ -22,6 +26,7 @@ import { masterRunsEngineSubmission } from '../harnessd/services.js'
  * the core with `__run`.
  */
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'path'
 import { execFile, spawn } from 'child_process'
 import { createServer, type Server } from 'http'
@@ -76,7 +81,8 @@ import { rememberSavedApis } from '../lib/apiModels.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
-import { clearPaneRemainOnExit, lookupPaneEngineProcess, resolvePaneEngineProcess, tmuxPaneInfo, tmuxPaneState } from '../lib/tmux.js'
+import { sessionCodexHome } from '../lib/engineHomes.js'
+import { argvTokens, clearPaneRemainOnExit, lookupPaneEngineProcess, processRows, resolvePaneEngineProcess, tmuxPaneInfo, tmuxPaneState } from '../lib/tmux.js'
 import { ALL_TERMINAL_BACKENDS } from '../config/terminalConfig.js'
 import { TerminalBackendCoordinator } from '../lib/terminalBackendCoordinator.js'
 import { TerminalStreamManager } from '../lib/terminalStreamManager.js'
@@ -560,9 +566,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const screenHosted = masterRunsEngineScreen(process.env, process.ppid)
   const isolatedScreen = (engine: string): boolean => screenHosted && isolatedLive(engine)
   const submissionHosted = masterRunsEngineSubmission(process.env, process.ppid)
+  const nativeControlHosted = masterRunsEngineNativeControl(process.env, process.ppid)
+  const isolatedNativeControl = (engine: string): boolean => nativeControlHosted && isolatedLive(engine)
   const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted || !nativeControlHosted
     ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
@@ -578,6 +586,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const submissions = createSubmissions({ policy: submissionPolicy, handles: isolatedSubmission, transport: submissionTransport, resolve: id => registry.resolve(id),
     inline: engine => inline?.submissionFor(engine) })
+  // Codex's shared app-server, spoken to from its worker: core identifies the conversation and decides.
+  const nativeControls = createNativeControls({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    servers: Object.fromEntries(Object.entries(engineLaunches).flatMap(([name, launch]) => 'sharedServer' in launch && launch.sharedServer ? [[name, launch.sharedServer]] : [])),
+    handles: isolatedNativeControl, inline: engine => isolatedNativeControl(engine) ? undefined : inline?.nativeControlFor(engine),
+    rows: processRows, home: session => sessionCodexHome(session), argv: argvTokens, readFile: path => readFile(path, 'utf8'),
+  })
+  // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
+  const engineLinks = createEngineLinks()
   const runtimeProfiles = createRuntimeProfiles({
     legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
     handles: isolatedRuntime,
@@ -976,8 +993,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     bySession: (sessionId) => registry.bySession(sessionId),
     sessionTurnOpen,
     drain: (sessionId) => watcher.pollSession(sessionId),
+    nativeActivity: (session) => nativeControls.activity(session),
   })
-  const codexActivity = activity.codexActivity
   const runtimeActivity = activity.runtimeActivity
   const turnActivity = activity.turnActivity
   activityFrameContextRef = activity.activityFrame
@@ -1224,7 +1241,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell']),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
+    answer: async (service, query, payload) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? await nativeControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
@@ -1248,6 +1265,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       runtimeTransport.connected(service)
       screenTransport.connected(service)
       submissionTransport.connected(service)
+      nativeControls.connected(service)
+      engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
@@ -1262,6 +1281,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       runtimeTransport.disconnected(service)
       screenTransport.disconnected(service)
       submissionTransport.disconnected(service)
+      nativeControls.disconnected(service)
+      engineLinks.disconnected(service)
       modelControls.disconnected(service)
       questionControls.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
@@ -2266,6 +2287,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     forgetSession,
     markDeleted,
     clearDeleted,
+    stopNative: (session, current, confirmUnused) => nativeControls.stop(session, current, confirmUnused),
     sessionCheckpoints,
     mirror,
     sessionSearch,
@@ -2299,6 +2321,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sessionCheckpoints,
     stopAgent,
     announceSession,
+    engineReady: (engine, ms) => engineLinks.ready(engine, ms),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()
@@ -2381,7 +2404,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
     ['Share', () => ports.sharing?.stop()],
     ['the local websocket', () => localWsServer.close()], ['the hook server', () => hookServer.close()],
-    ['the local socket', () => localSocket?.close()], ['Codex activity', () => codexActivity.close()],
+    ['the local socket', () => localSocket?.close()], ['Codex activity', () => nativeControls.close()],
     // The serial ports, the lane and the voice router's worker: a port held through the handoff makes the
     // next daemon's dial, and esptool, fail as if the hardware had died.
     ['the devices', () => ports.devices?.stop()],
@@ -2432,7 +2455,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await localSocket?.close()
     await localWsServer.close()
     hookServer.close()
-    codexActivity.close()
+    nativeControls.close()
     await ports.viewers?.stop()
     await gateway.stop()
     await backend.stop()
