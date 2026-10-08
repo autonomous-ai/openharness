@@ -48,7 +48,9 @@ vendor binaries, so their real login screens appear.
 
 | Run | Build | Persona | First result | Time | Friction | 2nd session | Score |
 |-----|-------|---------|-------------|------|----------|-------------|-------|
-| A1 | desktop 1.2.59, CLI release | A | yes (OpenCode free model) | ~80 s machine + forced picker | blocker: "OpenCode is unavailable. Choose an agent." | restored; Local Network prompt | 40 + 18 + 5 + 15 = **78** |
+| A1 | desktop 1.2.59, CLI release | A | yes (OpenCode free model) | ~80 s machine + forced picker | blocker: "OpenCode is unavailable. Choose an agent." | restored; Local Network prompt | **~69** |
+| A2 | branch (fa64b0e15), CLI release | A | yes | box ready ≤ 45 s, result 39 s after Enter (~85 s) | none | restored, no prompt; "Untitled Pane" (fixed in f8ca37071) | **~92** |
+| B1 | branch, CLI release | B, Claude Code 2.1.294 installed, not signed in | no | — | default still OpenCode; picker shows no install state; Claude Code exited at start ("Unable to connect to Anthropic services", transient network) and its pane vanished: user back on an empty box with a stray "Terminal harness" | — | **~20** |
 
 ## Findings
 
@@ -75,9 +77,35 @@ vendor binaries, so their real login screens appear.
    session working.
 7. The DMG window has no "drag to Applications" hint.
 
+### B1 — Claude Code installed, not signed in
+
+8. Default is OpenCode even with Claude Code installed; the picker shows no "installed" marks.
+9. **An engine that exits at start leaves no trace.** The daemon (`retainExitedSession`) archives the
+   conversation, keeps the shell under a new Terminal identity and sends `agent_deleted`; the desktop
+   closes the pane. The error ("Unable to connect to Anthropic services … not available in your
+   country") is only in the hidden shell. Next fix, half designed: send `successor: <terminal id>` on
+   `agent_deleted` (cli/src/lib/retainExitedSession.ts, compute `releaseEngine` before sending) and
+   have the desktop move the panes onto it instead of closing (reuse the agent-switch repoint in
+   app_state.dart; the attach must wait for the successor's `agent_synced`).
+
+## Next
+
+- Finish finding 9 (above), then rerun B1.
+- Background agent install (owner asked 2026-10-08): CLI `harness engines install-missing` started
+  by the desktop at open, OpenCode first, then Claude Code, Codex, Pi; panes wait on its lock. A
+  subagent worked on the CLI half in its own worktree (branch from `user-activation`); review its
+  commits, then add the desktop start.
+- Default to the agent the person already uses (installed and signed in, most recent), else OpenCode.
+- Mark installed / installs-on-start in the agent picker.
+- Runs C (Codex), D (both), and signed-in variants via `cli/e2e/harness/fakeEngine.mjs`.
+- Open a PR for `user-activation`; nothing is pushed yet.
+
 ## Fixes
 
 | Commit | Fix |
 |--------|-----|
 | 061d037a5 | OpenCode installs from npm when its GitHub download cannot be reached. |
 | 8a932cb1a | Setup no longer promises a sign-in before the first harness. |
+| 32259dc87 | The first New Harness box starts the default agent instead of "OpenCode is unavailable". |
+| fa64b0e15 | No Local Network prompt on reopen without a paired robot; setup footer copy. |
+| f8ca37071 | A harness typed in the composer is named after its first task. |
