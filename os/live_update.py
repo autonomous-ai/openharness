@@ -36,6 +36,7 @@ FILES = ('harness-tui', 'cli.mjs', 'notify.mjs')
 LIMIT = 64 * 1024 * 1024
 DOWNLOAD_CHUNK = 1024 * 1024
 RESTART_REQUIRED = Path('/run/harness-os-restart-required')
+KEEP_ON = 'Keep the computer on and plugged in until the system update finishes.'
 SYSTEM_LOCK = Path('/run/lock/hn-os.lock')
 BOOT_ID = Path('/proc/sys/kernel/random/boot_id')
 PROC = Path('/proc')
@@ -685,6 +686,8 @@ def update_all():
         # Do not reconnect an old session using a new OS package. Its included
         # runtime takes effect on reboot; finish any independent public release
         # against that new base afterward, under this same explicit approval.
+        # The one stretch where turning the computer off leaves it to recovery: say so first.
+        print(KEEP_ON, flush=True)
         subprocess.run(['sudo', '-n', '/usr/bin/harness', 'upgrade'], check=True)
         (STATE / 'system.json').unlink(missing_ok=True)
         if read(RESTART_REQUIRED, {}).get('status') == 'ready':
@@ -750,6 +753,8 @@ def screen(window, message='', refresh=False, intent=None):
         else:
             title, choices = 'Harness is up to date.', [('Done', None)]
         lines = [*WORDMARK, '', '', status or title]
+        if system_state == 'applying' and not status:
+            lines += ['', KEEP_ON]
         if message and not status:
             lines += ['', message]
         top = max(0, (height - len(lines) - 4) // 2)

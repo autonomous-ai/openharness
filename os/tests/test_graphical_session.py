@@ -46,6 +46,15 @@ class GraphicalSession(unittest.TestCase):
             self.assertTrue(events.exists(), f'{result.returncode}: {result.stderr}')
             return result, events.read_text().splitlines()
 
+    def test_an_update_reload_cannot_stop_the_running_screen(self):
+        # BindsTo stops the screen whenever graphical-session.target is inactive, which a session
+        # from before that target (preview 14) is when an update reloads systemd.
+        target = (ROOT / 'os/root/usr/lib/systemd/user/harness-os.target').read_text().splitlines()
+        self.assertFalse([line for line in target if line.startswith('BindsTo=')])
+        for line in ['Requires=graphical-session.target', 'PartOf=graphical-session.target',
+                     'PropagatesStopTo=graphical-session.target']:
+            self.assertIn(line, target)
+
     def test_success_stops_graphical_services_without_stopping_agents(self):
         result, events = self.exercise(0)
         self.assertEqual(result.returncode, 0, result.stderr)

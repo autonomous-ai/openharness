@@ -161,6 +161,8 @@ def main():
             receipt['system_channel']['checks'].append(finish_after_reboot(vm))
             receipt['system_channel']['reboot_keyboard'] = check_graphical_keyboard(vm, 'system-channel-reboot')
             receipt['checks'].append('The OS-channel update boots its rebuilt encrypted image and accepts keyboard input')
+        from connections_vm import exercise as check_connections
+        receipt['connections'] = check_connections(vm)
         receipt['status'] = 'passed'
     except BaseException as error:
         receipt['status'] = 'failed'

@@ -305,6 +305,9 @@ pub struct Tab {
     pub named: bool,
     /// The recent-harness home page over this window's shell; scripts still see a real pane.
     pub home: bool,
+    /// What this empty window is opening (`Updates`, `hn-os`): a command's window shows that
+    /// while its terminal starts, not the New Harness form the user did not ask for.
+    pub opening: Option<String>,
     pub root: Option<Node>,
     pub focus: Option<u64>,
     pub zoomed: bool,
@@ -356,7 +359,7 @@ impl Tab {
     pub fn home() -> Tab { Tab::with_wid("New Tab", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None, shared_geometry: None }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, opening: None, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None, shared_geometry: None }
     }
     fn fit_layout(&mut self, size: (u16, u16), status: layout::Status) -> bool {
         let Some(root) = self.root.as_mut() else { return false };
