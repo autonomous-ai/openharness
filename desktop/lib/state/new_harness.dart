@@ -532,10 +532,11 @@ class NewHarnessController extends ChangeNotifier {
     );
     // What the machine has is asked when the box opens, as the form does: an
     // engine installed in a terminal a minute ago is otherwise still "missing".
-    enginesProbed = app
-        .probeEngines(_machineId, force: true)
-        .then((_) => _adoptAccountAgent());
-    unawaited(enginesProbed);
+    unawaited(
+      app
+          .probeEngines(_machineId, force: true)
+          .then((_) => _adoptAccountAgent()),
+    );
     final initialMachine = _machineId;
     unawaited(
       app.probeDsh(initialMachine, force: true).then((_) {
@@ -638,10 +639,6 @@ class NewHarnessController extends ChangeNotifier {
             (_harnessId == null || _harnessId == app.agentPreference.harness
                 ? app.agentPreference.value
                 : null);
-
-  /// Done once the chosen machine has said which agents it has and the box
-  /// has opened on the one this person uses (see [_adoptAccountAgent]).
-  late final Future<void> enginesProbed;
 
   /// Whether [_engine] is this person's own earlier choice rather than the
   /// product default. Only a remembered agent that is gone asks for a

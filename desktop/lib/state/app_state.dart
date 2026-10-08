@@ -4971,30 +4971,6 @@ class AppNotifier extends ChangeNotifier {
     _startDaemonSupervision(discovery);
   }
 
-  /// A first task typed on the setup screen while this computer was being
-  /// prepared. A new user sat 45–65 s on "Preparing this computer" before
-  /// they could type anything (fresh macOS VM, 2026-10-08); now the first New
-  /// Harness box opens with it, and starts it at once when it was sent.
-  String _setupTask = '';
-  bool _setupTaskQueued = false;
-  String get setupTask => _setupTask;
-  bool get setupTaskQueued => _setupTaskQueued;
-
-  void setSetupTask(String text, {bool queued = false}) {
-    _setupTask = text;
-    _setupTaskQueued = queued && text.trim().isNotEmpty;
-    notifyListeners();
-  }
-
-  /// The setup screen's task, once: the first box takes it.
-  ({String task, bool start})? takeSetupTask() {
-    final task = _setupTask;
-    final start = _setupTaskQueued;
-    _setupTask = '';
-    _setupTaskQueued = false;
-    return task.trim().isEmpty ? null : (task: task, start: start);
-  }
-
   /// Settings › Devices could not see the local network. Without a paired
   /// robot the daemon-owner check never tests the LAN (it is what raises the
   /// macOS prompt), so a daemon started from a terminal would stay refused it
