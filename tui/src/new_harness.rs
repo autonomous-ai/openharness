@@ -1451,7 +1451,8 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
         }
         return;
     }
-    if !form.child_active && matches!(key.code, KeyCode::Enter | KeyCode::Char(' '))
+    // → opens these rows as Enter does: they have no chooser to enter.
+    if !form.child_active && matches!(key.code, KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right)
         && matches!(form.focus, Field::Terminal | Field::Recent(_) | Field::Browse) {
         return welcome::activate(app, form);
     }
@@ -1566,6 +1567,11 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
             KeyCode::Enter | KeyCode::Char(' ') => launch = activate(app, &mut form),
             KeyCode::Right if form.focus != Field::Create => {
                 activate(app, &mut form);
+            }
+            // ← steps back to the task, as in the command panel (→ in, ← back).
+            KeyCode::Left if matches!(form.focus, Field::Recent(_) | Field::Browse | Field::Terminal) => {
+                form.focus = Field::Task;
+                reveal(app, &mut form);
             }
             KeyCode::Left | KeyCode::PageUp | KeyCode::PageDown
                 if form.focus == Field::Worktree =>

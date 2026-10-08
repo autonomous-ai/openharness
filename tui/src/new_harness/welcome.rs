@@ -686,6 +686,49 @@ mod tests {
         assert_eq!(form.focus, Field::Browse);
     }
 
+    /// A bare app with three agents, the page on `focus`, and the key pressed.
+    fn press_on(focus: Field, code: KeyCode) -> (App, String) {
+        let mut app = app();
+        for i in 0..3 {
+            let a = crate::fleet::agent_from("local", &json!({"id":format!("{i}"), "name":format!("Work {i}"), "engine":"codex"}), None);
+            app.fleet.agents.insert(a.key(), a);
+        }
+        ensure(&mut app, None, Some("/work/project".into()));
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        prepare(&app, &mut form);
+        form.focus = focus;
+        store_form(&mut app, form);
+        event(&mut app, code, KeyModifiers::NONE);
+        (app, tab)
+    }
+
+    #[tokio::test]
+    async fn right_opens_a_recent_row_and_left_goes_back_to_the_task() {
+        let (app, tab) = press_on(Field::Recent(1), KeyCode::Left);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        assert!(app.tab().home, "← opens nothing");
+        // Enter is the reference: whatever it does to the app, → does the same.
+        let (enter, etab) = press_on(Field::Recent(1), KeyCode::Enter);
+        let (right, rtab) = press_on(Field::Recent(1), KeyCode::Right);
+        assert!(!enter.tab().home && !right.tab().home, "the harness opened, so the page is left");
+        assert_eq!((right.tab().home, right.welcome.forms.contains_key(&rtab)),
+            (enter.tab().home, enter.welcome.forms.contains_key(&etab)));
+        assert!(right.welcome.forms.get(&rtab).is_none_or(|f| f.child.is_none() && !f.child_active),
+            "→ on a row never leaves an empty chooser open");
+    }
+
+    #[tokio::test]
+    async fn right_on_browse_and_terminal_does_what_enter_does() {
+        for field in [Field::Browse, Field::Terminal] {
+            let (enter, etab) = press_on(field, KeyCode::Enter);
+            let (right, rtab) = press_on(field, KeyCode::Right);
+            assert_eq!(right.welcome.forms.contains_key(&rtab), enter.welcome.forms.contains_key(&etab), "{field:?}");
+            assert!(right.welcome.forms.get(&rtab).is_none_or(|f| f.child.is_none() && !f.child_active),
+                "{field:?}: → leaves no empty chooser");
+        }
+    }
+
     #[tokio::test]
     async fn closing_a_pending_window_preserves_its_receipt_and_the_other_dialog_draft() {
         let mut app = app();
