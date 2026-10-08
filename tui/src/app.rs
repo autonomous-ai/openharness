@@ -5676,8 +5676,10 @@ impl App {
             }
             let gone: Vec<String> = self.tabs.iter().filter(|t| t.root.is_none()).map(|t| t.id.clone()).collect();
             self.tabs.retain(|t| t.root.is_some());
-            for id in gone { self.nums.remove(&id); }
+            // Windows gone: renumber-windows closes the gap, so what stays starts at base-index.
+            for id in gone { if self.nums.remove(&id).is_some() { self.window_gone = true } }
             if self.tabs.is_empty() { self.tabs.push(Tab::home()) }
+            self.renumber();
             self.active = self.active.min(self.tabs.len() - 1);
             self.keep_local_shell_session();
             self.fit_panes();
@@ -6820,6 +6822,36 @@ mod recovery_tests {
         assert!(app.panes.contains_key(&1) && app.panes.contains_key(&3));
         assert!(!app.panes.contains_key(&4) && !app.panes.contains_key(&2));
         assert!(app.tabs.iter().all(|t| !t.on_desk));
+    }
+
+    /// Signed out with renumber-windows on (the OS's), the windows that stay are numbered from
+    /// base-index again, not left at the numbers they had among the account's tabs.
+    #[tokio::test]
+    async fn the_windows_left_after_a_sign_out_are_numbered_from_the_first() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Account;
+        app.fleet.local_id = "test-peer".into();
+        app.options.global_session.insert("base-index".into(), "1".into());
+        app.options.global_session.insert("renumber-windows".into(), "on".into());
+        app.panes.get_mut(&1).unwrap().machine_id = "other-peer".into();
+        app.panes.get_mut(&2).unwrap().machine_id = "other-peer".into();
+        let mut tabs = Vec::new();
+        for (i, pane) in [1u64, 2, 3].into_iter().enumerate() {
+            let mut tab = Tab::with_wid(&format!("tab {pane}"), i as u64 + 1);
+            tab.root = Some(Node::new(pane, 80, 23));
+            tab.focus = Some(pane);
+            tab.on_desk = true;
+            tabs.push(tab);
+        }
+        app.tabs = tabs;
+        app.session_desk = true;
+        app.signed_in = true;
+        app.renumber();
+        assert_eq!(app.win_num(2), 3);
+
+        app.follow_account(false);
+        assert_eq!(app.tabs.len(), 1, "only this computer's tab stays");
+        assert_eq!(app.win_num(0), 1, "and it is window 1, not 3");
     }
 
     /// Windows saved before the sign-in name the computer id; hn started after it moves them to the
