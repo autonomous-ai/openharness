@@ -1,3 +1,5 @@
+import type { QuestionStep } from '../engines/facets/questionControl.js'
+import type { QuestionControlFor, QuestionControlSession } from './questionControl.js'
 import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView } from '../engines/facets/screen.js'
@@ -41,9 +43,8 @@ export function shapeQuestions(questions: unknown): ShapedQuestion[] {
   })
 }
 
-function rowKeys(engine: AgentEngine, row: QuestionRow, view?: QuestionView): string[] {
+function rowKeys(engine: AgentEngine, row: QuestionRow): string[] {
   if (engine === 'amp') return ampSelectionKeys(row)
-  if (engine === 'codex') return codexRowKeys(row, view)
   // Kilo's rows sit side by side, so its walk is horizontal — see engines/kilo/askQuestion.ts.
   if (engine === 'kilo') return kiloSelectionKeys(row)
   // Same dialog, different engine: opencode numbers its ask dialog but not its permission prompt, so the
@@ -51,16 +52,6 @@ function rowKeys(engine: AgentEngine, row: QuestionRow, view?: QuestionView): st
   if (row.walk === 'right') return kiloSelectionKeys(row)
   if (row.walk === 'down') return ampSelectionKeys(row)
   return [row.number]
-}
-
-/**
- * Codex, measured 2026-09-15 on 0.149: in its request_user_input dialog a digit only MOVES the highlight
- * and Enter submits (`enter to submit answer`) — a digit alone left the dialog up and the device's answer
- * reported as stuck. Its approval prompt is the other way round and was verified earlier: one digit
- * selects and commits, so that one keeps the single key.
- */
-export function codexRowKeys(row: QuestionRow, view?: QuestionView): string[] {
-  return view?.enterSubmits ? [row.number, 'Enter'] : [row.number]
 }
 
 export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | null {
@@ -121,6 +112,7 @@ const KEYS_FAILED = failed('The answer could not be typed into the agent\'s term
 const STUCK = failed('The question did not take the answer.')
 
 export interface AskQuestionDeps {
+  questionControlFor: QuestionControlFor
   readQuestion(session: RegisteredSession, capture: string): PaneView | Promise<PaneView>
   getSession: (sessionId: string) => RegisteredSession | undefined
   capture: (terminalTarget: string, historyLines?: number) => Promise<string | null>
@@ -178,7 +170,7 @@ export class AskQuestionController {
     }
     const remembered = this.pending.get(requestId)
     const sessionId = payload.sessionId || payload.agentId || remembered || ''
-    const answers = payload.answers && typeof payload.answers === 'object' ? payload.answers : null
+    const answers = payload.answers && typeof payload.answers === 'object' ? structuredClone(payload.answers) : null
     if (!sessionId || !answers || Object.keys(answers).length === 0) {
       console.warn(`[question] ignoring answer with no session/answers (req=${requestId})`)
       return failed('The answer named no agent or carried no choice.')
@@ -208,9 +200,11 @@ export class AskQuestionController {
     // The ids the watcher could have announced this dialog under: the session it was remembered for, and
     // the session as the registry knows it now.
     const owners = [...new Set([remembered, session?.sessionId].filter((id): id is string => !!id))]
+    const native = session ? this.deps.questionControlFor(session) : undefined
+    const reviewed = payload.expectedQuestions ? structuredClone(payload) : undefined
     this.driving.add(terminalTarget)
     try {
-      const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners }, payload.expectedQuestions ? payload : undefined)
+      const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners }, reviewed, native)
       this.pending.delete(requestId)
       const outcome = result.ok ? 'submitted' : result.error === 'STALE_QUESTION' ? 'refused · STALE_QUESTION, nothing typed' : 'FAILED'
       console.log(`[question] ${sessionId.slice(0, 8)} answered from device · ${outcome} (req=${requestId || 'none'})`)
@@ -236,8 +230,10 @@ export class AskQuestionController {
     allowPermissions: boolean,
     asked: { requestId: string; owners: string[] },
     reviewed?: QuestionAnswerPayload,
+    native?: QuestionControlSession,
   ): Promise<QuestionAnswerResult> {
     const wait = this.deps.wait ?? sleep
+    const apply = (step: QuestionStep) => native ? native.apply(step).catch(() => false) : this.applyLegacyStep(terminalTarget, engine, step, wait)
     const used = new Set<string>()
     const reviewedComplete = () => !reviewed || used.size === reviewed.expectedQuestions!.length
     let lastQuestion = ''
@@ -274,7 +270,7 @@ export class AskQuestionController {
         // answered somewhere else — submitting would send answers this person never gave.
         if (answered === 0) return STALE_GONE
         if (!reviewedComplete()) return STALE_CHANGED
-        return await this.deps.sendKey(terminalTarget, view.submitRow) ? { ok: true } : failed('The answers could not be submitted.')
+        return await apply({ kind: 'review', key: view.submitRow }) ? { ok: true } : failed('The answers could not be submitted.')
       }
       // Mid-repaint the question line can read blank for a capture (see parseQuestionPane). Neither its id
       // nor its text can be checked against a blank, so look again rather than judge the dialog by it.
@@ -332,8 +328,7 @@ export class AskQuestionController {
         if (!expected?.canText || view.permission || view.multi || !view.typeRow ||
             !picked.value.trim() || Buffer.byteLength(picked.value, 'utf8') > 1200 ||
             /[\x00-\x09\x0b-\x1f\x7f]/.test(picked.value)) return failed('The text answer cannot be entered into this question.')
-        if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
-        await wait(STEP_MS)
+        if (!await apply({ kind: 'text', row: view.typeRow, text: picked.value })) return KEYS_FAILED
         continue
       }
 
@@ -342,48 +337,46 @@ export class AskQuestionController {
         const labels = reviewed ? reviewed.selectedLabels?.[picked.key] ?? []
           : picked.value.split(',').map((s) => s.trim()).filter(Boolean)
         if (reviewed && (!labels.length || labels.some(label => !view.rows.some(row => row.label === label)))) return failed('That answer matches no option.')
-        if (reviewed) {
-          // Set the exact reviewed set, including clearing choices selected in another client.
-          for (const row of view.rows) if (row.checked !== labels.includes(row.label)) {
-            if (!await this.deps.sendKey(terminalTarget, row.number)) return KEYS_FAILED
-            await wait(TEXT_MS)
-          }
-          if (!await this.deps.sendKey(terminalTarget, multiSubmitKey(engine))) return KEYS_FAILED
-          await wait(STEP_MS)
-          continue
-        }
-        let toggled = 0
-        for (const label of labels) {
-          const row = matchRow(view.rows, label)
-          if (!row || row.checked) continue
-          if (!await this.deps.sendKey(terminalTarget, row.number)) return KEYS_FAILED
-          await wait(TEXT_MS)
-          toggled++
-        }
-        if (!toggled && view.typeRow
-          && !await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
-        if (!await this.deps.sendKey(terminalTarget, multiSubmitKey(engine))) return KEYS_FAILED // advance to the next question / review
-        await wait(STEP_MS)
+        // Core chooses the exact approved set; the engine owns toggling and advancing its UI.
+        const rows = reviewed ? view.rows.filter(row => row.checked !== labels.includes(row.label))
+          : labels.map(label => matchRow(view.rows, label)).filter((row): row is QuestionRow => !!row && !row.checked)
+        const freeText = !reviewed && !rows.length && view.typeRow ? { row: view.typeRow, text: picked.value } : undefined
+        if (!await apply({ kind: 'multiple', rows, ...(freeText ? { freeText } : {}) })) return KEYS_FAILED
         continue
       }
 
       const row = reviewed ? view.rows.find(row => row.label === picked.value) ?? null : matchRow(view.rows, picked.value)
       if (row) {
-        // One digit selects AND submits — except on Amp, whose rows are unnumbered and reached by
-        // walking the list, so this is a short sequence rather than a single key.
-        for (const key of rowKeys(engine, row, view)) {
-          if (!await this.deps.sendKey(terminalTarget, key)) return KEYS_FAILED
-          await wait(TEXT_MS)
-        }
-        await wait(STEP_MS)
+        if (!await apply({ kind: 'select', row, enterSubmits: view.enterSubmits })) return KEYS_FAILED
         continue
       }
       if (reviewed) return failed('That answer matches no option.')
       if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return failed('That answer matches no option.') }
-      if (!await this.typeFreeText(terminalTarget, view.typeRow, picked.value, wait)) return KEYS_FAILED
-      await wait(STEP_MS)
+      if (!await apply({ kind: 'text', row: view.typeRow, text: picked.value })) return KEYS_FAILED
     }
     return STUCK
+  }
+
+  /** Other engines keep their existing navigation until their migration batch. */
+  private async applyLegacyStep(target: string, engine: AgentEngine, step: QuestionStep, wait: (ms: number) => Promise<void>): Promise<boolean> {
+    if (step.kind === 'review') return this.deps.sendKey(target, step.key)
+    if (step.kind === 'select') {
+      for (const key of rowKeys(engine, step.row)) {
+        if (!await this.deps.sendKey(target, key)) return false
+        await wait(TEXT_MS)
+      }
+    } else if (step.kind === 'text') {
+      if (!await this.typeFreeText(target, step.row, step.text, wait)) return false
+    } else {
+      for (const row of step.rows) {
+        if (!await this.deps.sendKey(target, row.number)) return false
+        await wait(TEXT_MS)
+      }
+      if (step.freeText && !await this.typeFreeText(target, step.freeText.row, step.freeText.text, wait)) return false
+      if (!await this.deps.sendKey(target, multiSubmitKey(engine))) return false
+    }
+    await wait(STEP_MS)
+    return true
   }
 
   /** True while a dialog is being keyed — the watcher pauses so a half-driven dialog isn't re-announced. */

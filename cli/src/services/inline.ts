@@ -1,3 +1,4 @@
+export { questionControlFor } from '../engines/questionControls.js'
 /**
  * The services that run in a process of their own by default (harnessd/services.ts `SERVICE_HOSTS`), for
  * when they run in the core's instead: with `HARNESSD_SERVICES=none` (debugging, or a quick way back), a

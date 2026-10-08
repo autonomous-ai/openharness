@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto'
 import type { EngineModelControl } from '../../engines/facets/modelControl.js'
 import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../engines/facets/modelControl.js'
 import type { RuntimeCatalogModel, RuntimeProfile } from '../../engines/facets/runtime.js'
-import { readerEngine, READER_SERVICES } from '../../engines/worker/protocol.js'
 import { createModelControlHost } from '../../engines/worker/modelControlHost.js'
 import { modelControlAction, modelControlAnswer, modelControlCheck, modelControlEnvelope, modelControlInput, modelControlSize,
   MODEL_CONTROL_APPLY, MODEL_CONTROL_CAPABILITIES, MODEL_CONTROL_CHECK_MS, MODEL_CONTROL_ERRORS, MODEL_CONTROL_HOST,
@@ -10,7 +9,7 @@ import { modelControlAction, modelControlAnswer, modelControlCheck, modelControl
   MODEL_CONTROL_VERSION, MODEL_CONTROL_WAIT_MS, MODEL_CONTROL_WRITES } from '../../engines/worker/modelControlProtocol.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { ModelControlFor } from '../../lib/modelControl.js'
-import { sessionBinding } from './sessionBinding.js'
+import { boundedControl, createControlTransport } from './controlTransport.js'
 
 export interface ModelControlsDeps {
   handles(engine: string): boolean
@@ -26,11 +25,8 @@ export interface ModelControlsDeps {
   confirmEffort(sessionId: string, effort: string): void
 }
 function fail(): never { throw new RuntimeProfileControlError('BUSY') }
-async function bounded<T>(work: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new RuntimeProfileControlError('BUSY')), ms) })]) }
-  finally { clearTimeout(timer) }
-}
+const unavailable = () => new RuntimeProfileControlError('BUSY')
+const bounded = <T>(work: Promise<T>, ms: number) => boundedControl(work, ms, unavailable)
 interface Grant {
   service: string
   session: RegisteredSession
@@ -43,8 +39,18 @@ interface Grant {
 
 /** Core holds identity, input authority and confirmation state. Workers receive none of those handles. */
 export function createModelControls(deps: ModelControlsDeps) {
-  const states = new Map(Object.values(READER_SERVICES).map(service => [service as string, { generation: 0, connected: false, capable: false, pending: 0 }]))
   const grants = new Map<string, Grant>()
+  const transport = createControlTransport(deps, {
+    version: MODEL_CONTROL_VERSION, capabilities: MODEL_CONTROL_CAPABILITIES, inFlight: MODEL_CONTROL_IN_FLIGHT,
+    capable: (reply, engine) => modelControlEnvelope(reply, ['modelControl', 'engine']) && reply.modelControl === MODEL_CONTROL_VERSION && reply.engine === engine,
+    result: reply => {
+      if (!modelControlEnvelope(reply, ['ok', 'error'])) fail()
+      if (reply.error !== undefined) throw new RuntimeProfileControlError(MODEL_CONTROL_ERRORS.includes(reply.error as RuntimeProfileErrorCode) ? reply.error as RuntimeProfileErrorCode : 'BUSY')
+      if (reply.ok !== true) fail()
+    },
+    unavailable, error: error => error instanceof RuntimeProfileControlError ? error : unavailable(),
+    connectionChanged: service => { for (const [token, grant] of grants) if (grant.service === service) grants.delete(token) },
+  })
   const answer = (service: string, query: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> | null => {
     if (query !== MODEL_CONTROL_HOST) return null
     return (async () => {
@@ -77,43 +83,10 @@ export function createModelControls(deps: ModelControlsDeps) {
     })()
   }
   const forSession: ModelControlFor = registered => {
-    const engine = registered.engine
-    if (!readerEngine(engine)) return undefined
-    // Snapshot before the controller's first await: in-place registry edits cannot retarget this request.
-    const session = structuredClone(registered), binding = sessionBinding(registered), service = READER_SERVICES[engine]
-    const isolated = deps.handles(engine), state = states.get(service)!
-    const generation = state.generation + (state.connected ? 0 : 1)
-    const sameSession = () => sessionBinding(deps.resolve(session.agentId)) === binding
-    const current = () => sameSession() && (!isolated || (state.connected && state.generation === generation))
+    const bound = transport.bind(registered)
+    if (!bound) return undefined
+    const { engine, session, service, isolated, run } = bound
     let catalog: RuntimeCatalogModel[] = []
-    const run = async (ms: number, work: (allowed: () => boolean, call: (method: string, payload: Record<string, unknown>) => Promise<void>) => Promise<void>) => {
-      if (!sameSession() || state.pending >= MODEL_CONTROL_IN_FLIGHT) fail()
-      state.pending++
-      let active = true
-      const deadline = performance.now() + ms
-      const allowed = () => active && performance.now() < deadline && current()
-      const call = async (method: string, payload: Record<string, unknown>) => {
-        const reply = await deps.call(service, method, { version: MODEL_CONTROL_VERSION, ...payload }, Math.max(1, Math.ceil(deadline - performance.now())))
-        if (!allowed() || !modelControlEnvelope(reply, ['ok', 'error'])) fail()
-        if (reply.error !== undefined) throw new RuntimeProfileControlError(MODEL_CONTROL_ERRORS.includes(reply.error as RuntimeProfileErrorCode) ? reply.error as RuntimeProfileErrorCode : 'BUSY')
-        if (reply.ok !== true) fail()
-      }
-      try {
-        await bounded((async () => {
-          if (isolated && !state.capable) {
-            // Allow only the first startup connection. A replacement cannot resume an old UI intent.
-            if (state.generation !== generation && (state.connected || state.generation !== generation - 1)) fail()
-            const reply = await deps.call(service, MODEL_CONTROL_CAPABILITIES, { version: MODEL_CONTROL_VERSION }, ms)
-            if (!allowed() || !modelControlEnvelope(reply, ['modelControl', 'engine']) || reply.modelControl !== MODEL_CONTROL_VERSION || reply.engine !== engine) fail()
-            state.capable = true
-          }
-          if (!allowed()) fail()
-          await work(allowed, call)
-          if (!allowed()) fail()
-        })(), ms)
-      } catch (error) { throw error instanceof RuntimeProfileControlError ? error : new RuntimeProfileControlError('BUSY') }
-      finally { active = false; state.pending-- }
-    }
     return {
       validate: check => run(MODEL_CONTROL_CHECK_MS, async (allowed, call) => {
         if (check.stage === 'target') catalog = await deps.catalog(session)
@@ -139,10 +112,5 @@ export function createModelControls(deps: ModelControlsDeps) {
       },
     }
   }
-  const connection = (service: string, connected: boolean) => {
-    const state = states.get(service)
-    if (state) { state.generation++; state.connected = connected; state.capable = false }
-    for (const [token, grant] of grants) if (grant.service === service) grants.delete(token)
-  }
-  return { forSession, answer, connected: (service: string) => connection(service, true), disconnected: (service: string) => connection(service, false) }
+  return { forSession, answer, connected: transport.connected, disconnected: transport.disconnected }
 }

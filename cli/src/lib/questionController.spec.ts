@@ -12,6 +12,36 @@ const deferred = <T>() => { let resolve!: (value: T) => void; const promise = ne
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('asynchronous question evidence', () => {
+  it('binds native control before capture and snapshots the reviewed answer', async () => {
+    const current = row(), release = vi.fn(), apply = vi.fn(async () => true), questionControlFor = vi.fn(() => ({ apply }))
+    const sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
+    const question = { kind: 'question' as const, question: 'Drink?', multi: false, typeRow: null,
+      rows: [{ number: '1', label: 'Tea', checked: false }, { number: '2', label: 'Coffee', checked: false }] }
+    const payload = { agentId: 'agent', answers: { 'Drink?': 'Coffee' }, expectedQuestions: [{ key: 'Drink?', q: 'Drink?', options: ['Tea', 'Coffee'], multi: false }] }
+    const readQuestion = vi.fn(async (): Promise<PaneView> => question).mockResolvedValueOnce(question).mockResolvedValueOnce(null)
+    const controller = new AskQuestionController({ getSession: () => current, questionControlFor, readQuestion, sendKey, sendText,
+      acquireControl: () => release, capture: async () => {
+        expect(questionControlFor).toHaveBeenCalledOnce()
+        payload.answers['Drink?'] = 'Tea'; payload.expectedQuestions[0].options = ['changed']
+        return capture
+      } })
+    expect(await controller.answer(payload)).toEqual({ ok: true })
+    expect(apply).toHaveBeenCalledWith({ kind: 'select', row: question.rows[1], enterSubmits: undefined })
+    expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
+  it('does not use the local writer after the bound native driver fails', async () => {
+    const current = row(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true), release = vi.fn()
+    const controller = new AskQuestionController({ getSession: () => current, capture: async () => capture,
+      readQuestion: async () => view, sendKey, sendText, acquireControl: () => release,
+      questionControlFor: () => ({ apply: async () => { throw new Error('worker went away') } }) })
+    if (!view || view.kind !== 'question') throw new Error('missing recorded fixture')
+    expect(await controller.answer({ agentId: 'agent', answers: { [view.question]: view.rows[0].label } })).toMatchObject({ ok: false, error: 'ANSWER_FAILED' })
+    expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('keeps a previously announced question while the screen reader is unavailable', async () => {
     vi.useFakeTimers()
     const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn()
@@ -47,7 +77,7 @@ describe('asynchronous question evidence', () => {
   })
   it.each(['unavailable', 'rebound', 'capture-rebound'] as const)('types no answer after %s and releases its input lease', async change => {
     const current = row(), release = vi.fn(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
-    const controller = new AskQuestionController({ getSession: () => current,
+    const controller = new AskQuestionController({ questionControlFor: () => undefined, getSession: () => current,
       capture: async () => { if (change === 'capture-rebound') current.sessionId = 'replacement'; return capture },
       sendKey, sendText, acquireControl: () => release,
       readQuestion: async () => {

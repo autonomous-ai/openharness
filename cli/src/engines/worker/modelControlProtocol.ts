@@ -3,6 +3,7 @@ import type { ModelControlCheck, ModelControlInput, RuntimeProfileErrorCode } fr
 import type { RuntimeCatalogModel, RuntimeProfile, RuntimeSession } from '../facets/runtime.js'
 import { record, type ReaderEngine } from './protocol.js'
 import { runtimeContext } from './runtimeProtocol.js'
+import { CONTROL_BYTES, controlEnvelope, controlSize, controlToken } from './controlWire.js'
 import { screenCapture } from './screenProtocol.js'
 
 export const MODEL_CONTROL_VERSION = 1
@@ -16,15 +17,15 @@ export const MODEL_CONTROL_QUERY_MS = 10_000
 export const MODEL_CONTROL_IN_FLIGHT = 4
 export const MODEL_CONTROL_QUERIES = 128
 export const MODEL_CONTROL_WRITES = 32
-export const MODEL_CONTROL_BYTES = 1024 * 1024
+export const MODEL_CONTROL_BYTES = CONTROL_BYTES
 export const MODEL_CONTROL_ERRORS: readonly RuntimeProfileErrorCode[] = ['AGENT_NOT_FOUND', 'INVALID_RUNTIME_PROFILE', 'BUSY',
   'UNSUPPORTED_CLI_VERSION', 'MODEL_UNAVAILABLE', 'EFFORT_UNSUPPORTED', 'PLAN_SCOPE_AMBIGUOUS', 'CONFIRM_TIMEOUT', 'TMUX_FAILED']
 const EMPTY_STATE = { model: null, effort: null, mode: 'unknown' as const, cliVersion: null, observedAt: null }
 const fields = (value: Record<string, unknown>, names: string[]) => Object.keys(value).every(key => names.includes(key))
 const text = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max
 const label = (v: unknown): v is string => text(v, 2000) && !!v && !/[\x00-\x1f\x7f]/.test(v)
-export const modelControlToken = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
-export const modelControlSize = (value: unknown) => Buffer.byteLength(JSON.stringify(value)) <= MODEL_CONTROL_BYTES
+export const modelControlToken = controlToken
+export const modelControlSize = controlSize
 
 export function modelControlCatalog(value: unknown): value is RuntimeCatalogModel[] {
   return Array.isArray(value) && value.length <= 512 && value.every(m => record(m)
@@ -90,6 +91,5 @@ export function modelControlAnswer(action: ModelControlAction, value: unknown): 
 }
 
 export function modelControlEnvelope(payload: Record<string, unknown>, names: string[]): boolean {
-  return payload.version === MODEL_CONTROL_VERSION && fields(payload, ['version', 'requestId', ...names])
-    && (payload.requestId === undefined || text(payload.requestId, 200)) && modelControlSize(payload)
+  return controlEnvelope(payload, MODEL_CONTROL_VERSION, names)
 }

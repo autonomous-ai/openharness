@@ -1,3 +1,4 @@
+import type { EngineQuestionControl } from './facets/questionControl.js'
 import type { EngineScreen } from './facets/screen.js'
 import type { EngineModelControl } from './facets/modelControl.js'
 import type { ProcessEngine } from './types.js'
@@ -17,4 +18,5 @@ export interface Engine {
   readonly runtime: EngineRuntime
   readonly screen: EngineScreen
   readonly modelControl: EngineModelControl
+  readonly questionControl: EngineQuestionControl
 }

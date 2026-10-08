@@ -1,3 +1,4 @@
+import { engineQuestionControlRequests } from './questionControlRequests.js'
 import type { CoreConnection } from '../../services/process.js'
 import { engineModelControlRequests } from './modelControlRequests.js'
 /** One engine's facets, hosted by the master's existing service supervisor. */
@@ -91,6 +92,8 @@ export function runEngineReader(engine: ReaderEngine, options: EngineProcessOpti
   return (options.run ?? runServiceProcess)({
     name: READER_SERVICES[engine], socketPath: options.socketPath, machineId: options.machineId,
     token: options.token, requests: options.requests ?? { ...engineReaderRequests(engine), ...engineLiveRequests(engine), ...engineRuntimeRequests(engine), ...engineScreenRequests(engine), ...engineModelControlRequests(engine, {
+      query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
+    }), ...engineQuestionControlRequests(engine, {
       query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
     }) },
     onConnected: connected => { core = connected }, onDisconnected: () => { core = null },

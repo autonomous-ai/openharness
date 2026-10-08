@@ -461,6 +461,7 @@ export const ENGINE_LIVE_ENV = 'HARNESSD_ENGINE_LIVE'
 export const ENGINE_RUNTIME_ENV = 'HARNESSD_ENGINE_RUNTIME'
 export const ENGINE_SCREEN_ENV = 'HARNESSD_ENGINE_SCREEN'
 export const ENGINE_MODEL_CONTROL_ENV = 'HARNESSD_ENGINE_MODEL_CONTROL'
+export const ENGINE_QUESTION_CONTROL_ENV = 'HARNESSD_ENGINE_QUESTION_CONTROL'
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
@@ -472,7 +473,7 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: nu
   // The services, not the processes: a core knows what it routes by service, and one from before the
   // edge host still finds the services it knows here (workspaces) and runs the rest itself.
   const names = specs.flatMap((spec) => spec.services).join(',')
-  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1` }
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1`, [ENGINE_SCREEN_ENV]: `${masterPid}:1`, [ENGINE_MODEL_CONTROL_ENV]: `${masterPid}:1`, [ENGINE_QUESTION_CONTROL_ENV]: `${masterPid}:1` }
 }
 
 /** An older master may inherit a newer master's environment after rollback. Trust only this parent. */
@@ -531,4 +532,8 @@ export function masterRunsEngineScreen(env: NodeJS.ProcessEnv, parentPid: number
 /** A new core must not route controls through an older worker host. */
 export function masterRunsEngineModelControl(env: NodeJS.ProcessEnv, parentPid: number): boolean {
   return masterRunsLiveEngines(env, parentPid) && env[ENGINE_MODEL_CONTROL_ENV] === `${parentPid}:1`
+}
+
+export function masterRunsEngineQuestionControl(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return masterRunsLiveEngines(env, parentPid) && env[ENGINE_QUESTION_CONTROL_ENV] === `${parentPid}:1`
 }

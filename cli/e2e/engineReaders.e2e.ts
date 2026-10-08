@@ -59,7 +59,7 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(readerPid(d, 'claude')).toBeUndefined()
     expect(readerPid(d, 'codex')).toBeUndefined()
     for (const type of ['engine_history_page', 'engine_last_turn', 'engine_live_capabilities', 'engine_live_prepare',
-      'engine_live_read', 'engine_live_part', 'engine_live_close', 'engine_live_forget', 'engine_runtime_capabilities', 'engine_runtime_read', 'engine_screen_capabilities', 'engine_screen_read', 'engine_model_control_capabilities', 'engine_model_control_validate', 'engine_model_control_apply']) {
+      'engine_live_read', 'engine_live_part', 'engine_live_close', 'engine_live_forget', 'engine_runtime_capabilities', 'engine_runtime_read', 'engine_screen_capabilities', 'engine_screen_read', 'engine_model_control_capabilities', 'engine_model_control_validate', 'engine_model_control_apply', 'engine_question_control_capabilities', 'engine_question_control_apply']) {
       const answer = await c.request(type, { version: 1, session: { transcriptPath: '/etc/passwd' } })
       expect(answer.error).toBe('UNSUPPORTED')
     }
