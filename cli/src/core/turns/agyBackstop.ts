@@ -15,7 +15,7 @@
 import type { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import { engineNow } from '../../engines/inProcess.js'
 import { sid } from '../../lib/log.js'
-import type { LiveEvent } from '../../lib/normalize.js'
+import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 
 export interface AgyBackstopDeps {

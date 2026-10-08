@@ -7,10 +7,9 @@ import { isAbsolute, join } from 'node:path'
 
 import { cursorConfigDir, cursorDataDir } from '../../../engines/cursor/home.js'
 import { env } from '../../../config/env.js'
+import { adoptionProviderOf } from '../../../engines/adoptions.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../../engineHomes.js'
 import { agyProvider } from './agy.js'
-import { claudeProvider } from './claude.js'
-import { codexProvider } from './codex.js'
 import { commandcodeProvider } from './commandcode.js'
 import { copilotProvider } from './copilot.js'
 import { cursorProvider } from './cursor.js'
@@ -75,8 +74,10 @@ export function externalProviders(paths: ExternalPaths = externalPaths()): Exter
   return [
     // QA found search's separate process started before the core adopted the shell's homes.
     // Resolve roots on each scan, retaining the default and previously adopted conversations.
-    claudeProvider({ projectsDir: paths.claudeProjectsDir, home: join(paths.claudeProjectsDir, '..'), roots: () => claudeProjectsRoots(paths.claudeProjectsDir) }),
-    codexProvider({ home: paths.codexHome, roots: () => codexHomeRoots(paths.codexHome) }),
+    // Claude Code's and Codex's are declared (engines/adoptions.ts): Claude Code's listed from each sessions
+    // folder, its process records beside each; Codex's from each home.
+    adoptionProviderOf('claude', { roots: () => claudeProjectsRoots(paths.claudeProjectsDir) }),
+    adoptionProviderOf('codex', { roots: () => codexHomeRoots(paths.codexHome) }),
     cursorProvider({ configDir: paths.cursorConfigDir, dataDir: paths.cursorDataDir }),
     grokProvider({ home: paths.grokHome }),
     copilotProvider({ home: paths.copilotHome }),

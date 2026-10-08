@@ -14,5 +14,6 @@ export interface HistoryAnswer {
 }
 export interface EngineTranscript {
   lastTurnText(session: TranscriptSession): Promise<LastTurnText | null>
-  historyPage(session: TranscriptSession, ask: HistoryAsk, pages: Pick<TranscriptPager, 'claude' | 'codex'>): Promise<HistoryAnswer>
+  /** `pages` is the pager of the process the reader runs in; the reader hands it its own rules (`ThreadPages`). */
+  historyPage(session: TranscriptSession, ask: HistoryAsk, pages: Pick<TranscriptPager, 'page'>): Promise<HistoryAnswer>
 }

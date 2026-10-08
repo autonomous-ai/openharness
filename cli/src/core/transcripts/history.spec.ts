@@ -19,7 +19,7 @@ import { lastActivityAt } from '../../lib/agentFrame.js'
 import { sid } from '../../lib/log.js'
 import { messagesToEvents, windowRawLines } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { HistoryPage } from '../../lib/transcriptPages.js'
+import type { HistoryPage, ThreadPages } from '../../lib/transcriptPages.js'
 import { tailFileCapped } from '../../lib/transcriptTail.js'
 import { createHistory, wholeHistoryPage } from './history.js'
 import { loadEngine } from '../../engines/inProcess.js'
@@ -118,9 +118,13 @@ function transcript(lines: string[], name = 'session.jsonl'): string {
 }
 
 function setup(s?: RegisteredSession, kept: RegisteredSession[] = [], readerFor = engineTranscriptFor) {
+  // The pager pages a thread by the rules its engine's reader hands it: a record's cursor (Claude Code's) or a
+  // line count (Codex's). Each kind is its own mock, so what each engine asked for is checked by kind.
+  const claude = vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null))
+  const codex = vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null))
   const pages = {
-    claude: vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null)),
-    codex: vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null)),
+    claude, codex,
+    page: vi.fn(async (path: string, rules: ThreadPages, opts: { limit?: number; before?: string }) => rules.cursor === 'record' ? claude(path, opts) : codex(path, opts)),
     lineCount: vi.fn(async (_path: string) => 0),
   }
   const deps = {
@@ -147,6 +151,19 @@ describe('an engine whose code could not be loaded', () => {
     expect(readDevinMessages).not.toHaveBeenCalled()
     const file = session('grok', { transcriptPath: transcript(['g0']) })
     expect(await setup(file).sessionGet({ sessionId: file.sessionId })).toStrictEqual({ ...about(file, MTIME), events: [], hasMore: false, oldestCursor: null })
+  })
+
+  // Core reads no engine's lines itself: Claude Code's and Codex's replays are their readers'. A shell keeps no
+  // transcript (registry.engineKeepsTranscriptFile), so this is only what a row that somehow had one would get.
+  it('so does an engine with neither a reader nor code of its own here', async () => {
+    const s = session('terminal', { transcriptPath: transcript(['l0', 'l1']) })
+    for (const ask of [{}, { limit: 2 }, { limit: 2, before: 'raw:1' }]) {
+      expect(await setup(s, [], () => undefined).sessionGet({ sessionId: s.sessionId, ...ask })).toStrictEqual({ ...about(s, MTIME), events: [], hasMore: false, oldestCursor: null })
+    }
+    const claude = session('claude', { transcriptPath: transcript(['c0']) })
+    expect(await setup(claude, [], () => undefined).sessionGet({ sessionId: claude.sessionId, limit: 2 })).toStrictEqual({ ...about(claude, MTIME), events: [], hasMore: false, oldestCursor: null })
+    expect(messagesToEvents).not.toHaveBeenCalled()
+    expect(windowRawLines).not.toHaveBeenCalled()
   })
 })
 
@@ -366,14 +383,14 @@ describe('sub-agent totals, joined from their own transcripts', () => {
     ])
   })
 
-  it('only Claude Code\'s replay is joined: the raw replay is, and an engine with its own replay is not', async () => {
+  it('only Claude Code\'s reader joins them: an engine with its own replay is not joined', async () => {
     writeSubagent('agent7', subagent)
     const lines = ['l0', 'l1']
-    for (const [engine, replay, limit] of [['terminal', messagesToEvents, 5], ['terminal', messagesToEvents, undefined], ['pi', piMessagesToEvents, 5], ['pi', piMessagesToEvents, undefined]] as const) {
-      const s = session(engine, { transcriptPath: transcript(lines) })
-      vi.mocked(replay).mockReturnValueOnce([end({ agentId: 'agent7' })] as never)
+    for (const limit of [5, undefined]) {
+      const s = session('pi', { transcriptPath: transcript(lines) })
+      vi.mocked(piMessagesToEvents).mockReturnValueOnce([end({ agentId: 'agent7' })] as never)
       const { events } = await setup(s).sessionGet({ sessionId: s.sessionId, limit }) as { events: Array<{ payload: { subagent?: Record<string, unknown> } }> }
-      expect(events[0].payload.subagent?.totalToolUseCount, `${engine}, limit ${limit}`).toBe(engine === 'terminal' ? 3 : undefined)
+      expect(events[0].payload.subagent?.totalToolUseCount, `limit ${limit}`).toBeUndefined()
     }
   })
 })
@@ -384,8 +401,6 @@ describe('the other file engines: read from the end, bounded', () => {
   it.each([
     ['cursor', 'cursor'], ['muse', 'muse'], ['amp', 'amp'], ['grok', 'grok'], ['agy', 'agy'], ['copilot', 'copilot'],
     ['pi', 'pi'], ['commandcode', 'commandcode'],
-    // An engine with no replay of its own is read as Claude Code's lines.
-    ['terminal', 'claude'],
   ])('%s: the whole transcript, through its own replay', async (engine, from) => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     const file = transcript(lines)
@@ -430,7 +445,6 @@ describe('the other file engines: read from the end, bounded', () => {
 
   it.each([
     ['cursor', 'cursor', 'cursor'], ['pi', 'pi', 'pi'], ['commandcode', 'commandcode', 'commandcode'],
-    ['terminal', 'raw', 'claude'],
   ])('%s: the newest page, the page before it, and a cursor it cannot find, through its own window', async (engine, window, from) => {
     const s = session(engine, { transcriptPath: transcript(lines) })
     const { sessionGet } = setup(s)

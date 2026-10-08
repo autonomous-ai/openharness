@@ -22,7 +22,7 @@
  *   starting again) is held, in order, and handed on once the service has been resumed; a session, a
  *   request or a pairing asks for the process (core/devicesWake.ts).
  */
-import type { LiveEvent } from '../lib/normalize.js'
+import type { LiveEvent } from '../engines/kit/events.js'
 import type { DeviceInputStatus } from './deviceInput.js'
 import type { CoreApi, RemoteClient, WifiPort, WifiResume } from './api.js'
 import type { AutonomousDeviceDelivery } from '../lib/autonomous-device/service.js'

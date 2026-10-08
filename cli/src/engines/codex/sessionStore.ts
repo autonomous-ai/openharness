@@ -41,4 +41,18 @@ export const sessionStore: SessionStoreContract = {
   live: { open: { file: /rollout-[^/]*\.jsonl$/, launcher: /^node(?:js)?$/ } },
   // A sub-agent's hooks run from its parent's pane, and an older daemon let them overwrite the parent's binding.
   repairsOverwrittenParent: true,
+  /**
+   * The events and items of a conversation, and a compaction; never `session_meta`, `turn_context`, a token count
+   * or a rate-limit reading. An item is the payload's, or the one nested in it.
+   */
+  activity: {
+    at: 'timestamp',
+    item: [['payload', 'item'], ['payload']],
+    records: [
+      { type: 'event_msg', item: { type: { in: ['user_message', 'UserMessage', 'agent_message', 'AgentMessage', 'task_started', 'task_complete', 'turn_aborted', 'context_compacted'] } } },
+      { type: 'response_item', item: { type: { in: ['reasoning', 'function_call', 'custom_tool_call', 'tool_search_call', 'function_call_output', 'custom_tool_call_output', 'tool_search_output'] } } },
+      { type: 'response_item', item: { type: { is: ['message'] }, role: { is: ['user', 'assistant'] } } },
+      { type: 'compacted' },
+    ],
+  },
 }
