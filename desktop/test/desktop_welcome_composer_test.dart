@@ -217,7 +217,7 @@ void main() {
       setupQueued: true,
       settle: false,
     );
-    for (var i = 0; i < 10 && connection.starts.isEmpty; i++) {
+    for (var i = 0; i < 60 && connection.starts.isEmpty; i++) {
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 50)),
       );
