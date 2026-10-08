@@ -117,7 +117,7 @@ function remoteSetup(open = false) {
   ]
   const remote: NonNullable<AttachDeps['remoteLive']> = {
     handles: engine => engine === 'claude', current: vi.fn(() => true),
-    prepare: vi.fn(async (_session, _options, observe) => { frames.forEach(observe); return candidate }),
+    prepare: vi.fn(async (_session, _options, observe, observePage) => { await observePage?.(frames); frames.forEach(observe); return candidate }),
     install: vi.fn(() => true), discard: vi.fn(), retry: vi.fn(),
   }
   const p = setup({ remoteLive: remote, liveFor: vi.fn(() => { throw new Error('isolated parser must stay in its worker') }) })
@@ -138,7 +138,7 @@ describe('attaching a session', () => {
     p.service.needsTranscript.mockReturnValue(true)
     expect(await p.attach.attachSession(s)).toBe(true)
     expect(p.deps.liveFor).not.toHaveBeenCalled()
-    expect(p.remote.prepare).toHaveBeenCalledWith(s, { live: false, end: undefined }, expect.any(Function))
+    expect(p.remote.prepare).toHaveBeenCalledWith(s, { live: false, end: undefined }, expect.any(Function), undefined)
     expect(p.profile.ingest).toHaveBeenCalledExactlyOnceWith('metadata')
     expect(p.service.observeTranscript).toHaveBeenCalledExactlyOnceWith(s.agentId, s.sessionId, s.engine, 'record')
     expect(p.profile.commit).toHaveBeenCalledOnce()
@@ -154,7 +154,7 @@ describe('attaching a session', () => {
   it('activates a first live worker stream without reading locally, including a session whose path is not announced yet', async () => {
     const p = remoteSetup(), s = session('claude')
     expect(await p.attach.attachSession(s, false, false, true)).toBe(true)
-    expect(p.remote.prepare).toHaveBeenCalledWith(s, { live: true, end: undefined }, expect.any(Function))
+    expect(p.remote.prepare).toHaveBeenCalledWith(s, { live: true, end: undefined }, expect.any(Function), undefined)
     expect(p.deps.watcher.hold).not.toHaveBeenCalled()
     expect(p.normalizers.liveParsers.get(s.sessionId)).toBe(p.handle)
   })
@@ -196,6 +196,36 @@ describe('attaching a session', () => {
     const local = setup({ remoteLive: p.remote })
     expect(await local.attach.attachSession(session('pi', transcript([])))).toBe(true)
     expect(p.remote.prepare).not.toHaveBeenCalled()
+  })
+
+  it('commits staged worker profile state with parser installation and never parses its raw records', async () => {
+    const p = remoteSetup(), s = session('claude', '/private/transcript')
+    const order: string[] = []
+    const ingestFrames = vi.fn(async () => { order.push('evidence') })
+    const config = vi.fn(async () => { order.push('config') })
+    const commitWith = vi.fn((install: () => boolean) => { order.push('commit'); return install() })
+    vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...p.profile, ingestFrames, config, commitWith })
+    vi.mocked(p.remote.install).mockImplementation(() => { order.push('install'); return true })
+    expect(await p.attach.attachSession(s)).toBe(true)
+    expect(order).toEqual(['evidence', 'config', 'commit', 'install'])
+    expect(ingestFrames).toHaveBeenCalledOnce()
+    expect(p.profile.ingest).not.toHaveBeenCalled()
+    expect(p.profile.commit).not.toHaveBeenCalled()
+    expect(p.deps.runtimeProfiles.ingestConfig).not.toHaveBeenCalled()
+    expect(p.normalizers.liveParsers.get(s.sessionId)).toBe(p.handle)
+  })
+
+  it.each(['config', 'commit'])('discards and retries a worker profile %s failure without replacing live state', async phase => {
+    const p = remoteSetup(), s = session('claude', '/private/transcript'), old = { ...p.handle }
+    p.normalizers.liveParsers.set(s.sessionId, old)
+    vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockReturnValue({ ...p.profile,
+      ingestFrames: async () => {}, config: async () => { if (phase === 'config') throw new Error('worker failed') },
+      commitWith: () => false })
+    expect(await p.attach.attachSession(s, true)).toBe(true)
+    expect(p.remote.install).not.toHaveBeenCalled()
+    expect(p.remote.discard).toHaveBeenCalledWith(p.candidate)
+    expect(p.remote.retry).toHaveBeenCalledWith(s)
+    expect(p.normalizers.liveParsers.get(s.sessionId)).toBe(old)
   })
 
   it('refuses a session whose pane is gone', async () => {

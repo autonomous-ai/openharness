@@ -7,14 +7,14 @@ import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 import { LIVE_PREPARE, LIVE_READ } from '../../engines/worker/liveProtocol.js'
 import { engineLiveRequests } from '../../engines/worker/liveRequests.js'
 import { createLiveTransport } from './liveTransport.js'
-import { createLiveSessions, type LiveSessions } from './liveSessions.js'
+import { createLiveSessions, type LiveSessionDeps, type LiveSessions } from './liveSessions.js'
 
 const dirs: string[] = [], sessions: LiveSessions[] = []
 const prompt = (message: string) => JSON.stringify({ type: 'user', message: { role: 'user', content: message } }) + '\n'
 const done = JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'finished' }], stop_reason: 'end_turn' } }) + '\n'
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
 
-async function setup(content = '') {
+async function setup(content = '', prepareFrames?: LiveSessionDeps['prepareFrames']) {
   const dir = await mkdtemp(join(tmpdir(), 'core-engine-stream-')); dirs.push(dir)
   const file = join(dir, 'transcript.jsonl'); await writeFile(file, content)
   const session = { agentId: 'agent', sessionId: 'session', engine: 'claude', transcriptPath: file,
@@ -32,7 +32,7 @@ async function setup(content = '') {
   const reattach = vi.fn(async () => {})
   const watch = vi.fn(), unwatch = vi.fn(), log = vi.fn()
   const live = createLiveSessions({ handles: engine => engine === 'claude', transport, bySession: () => bound,
-    frame: (_session, frame) => { frames.push(frame) }, reattach, watch, unwatch, log })
+    frame: (_session, frame) => { frames.push(frame) }, prepareFrames, reattach, watch, unwatch, log })
   sessions.push(live)
   const prepare = (first = false) => live.prepare(session, { live: first }, () => {})
   const attach = async (first = false) => {
@@ -56,6 +56,52 @@ afterEach(async () => {
 })
 
 describe('core engine stream authority', () => {
+  it('keeps a failed profile page unacknowledged and retries it exactly once without another file event', async () => {
+    const prepareFrames = vi.fn(async (): Promise<() => boolean> => () => true)
+    const t = await setup('', prepareFrames), prepared = await t.attach()
+    const initial = prepared.state.ask.cursor
+    await appendFile(t.file, prompt('profile first') + done)
+    prepareFrames.mockRejectedValueOnce(new Error('ENGINE_UNAVAILABLE'))
+    await expect(t.live.pollSession(t.session.sessionId)).rejects.toThrow('ENGINE_UNAVAILABLE')
+    expect(prepared.state.ask.cursor).toBe(initial)
+    expect(t.frames).toEqual([])
+    await vi.waitFor(() => expect(t.events().filter(e => e.type === 'turn_ended')).toHaveLength(1), { timeout: 2500 })
+    await t.live.pollSession(t.session.sessionId)
+    expect(t.events().filter(e => e.type === 'turn_started')).toHaveLength(1)
+    expect(t.events().filter(e => e.type === 'turn_ended')).toHaveLength(1)
+  })
+
+  it('does not accept a profile or cursor if a turn closes while profile interpretation is in flight', async () => {
+    const prepareFrames = vi.fn(async (): Promise<() => boolean> => () => true)
+    const t = await setup(prompt('old'), prepareFrames), prepared = await t.attach()
+    const entered = deferred<void>(), resume = deferred<void>(), commit = vi.fn(() => true)
+    prepareFrames.mockImplementationOnce(async () => { entered.resolve(); await resume.promise; return commit })
+    await appendFile(t.file, prompt('new'))
+    const pending = t.live.pollSession(t.session.sessionId)
+    await entered.promise; prepared.state.handle.closeTurn('cancel'); resume.resolve(); await pending
+    expect(commit).not.toHaveBeenCalled()
+    expect(t.frames).toEqual([])
+    prepareFrames.mockResolvedValueOnce(() => false)
+    await expect(t.live.pollSession(t.session.sessionId)).rejects.toThrow('ENGINE_STALE_REPLY')
+    expect(t.frames).toEqual([])
+    await t.live.pollSession(t.session.sessionId)
+    expect(t.events().filter(e => e.type === 'turn_started')).toHaveLength(1)
+  })
+
+  it('awaits profile hydration per page and discards a candidate invalidated while that work runs', async () => {
+    const t = await setup(prompt('history') + done)
+    const observed = vi.fn(), page = vi.fn(async () => { expect(observed).not.toHaveBeenCalled(); t.unbind() })
+    const hydrated = vi.fn(), hydratedPage = vi.fn(async () => { expect(hydrated).not.toHaveBeenCalled() })
+    const candidate = await t.live.prepare(t.session, { live: false }, hydrated, hydratedPage)
+    expect(hydratedPage).toHaveBeenCalledOnce()
+    expect(hydrated).toHaveBeenCalled()
+    t.live.discard(candidate)
+    await expect(t.live.prepare(t.session, { live: false }, observed, page)).rejects.toThrow('ENGINE_STALE_REPLY')
+    expect(page).toHaveBeenCalledOnce()
+    expect(observed).not.toHaveBeenCalled()
+    expect(t.frames).toEqual([])
+  })
+
   it('remembers first-turn delivery when initial preparation fails and a normal retry follows', async () => {
     const t = await setup(prompt('born after the agent') + done)
     t.intercept(async (method, reply) => { if (method === LIVE_PREPARE) throw new Error('worker disconnected'); return reply })

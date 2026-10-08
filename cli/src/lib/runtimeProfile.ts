@@ -1,3 +1,5 @@
+import { parseRuntimeProfile } from './runtimeProfileWire.js'
+export { parseRuntimeProfile } from './runtimeProfileWire.js'
 import { readFile } from 'fs/promises'
 import { join } from 'path'
 import { execFile } from 'child_process'
@@ -52,7 +54,7 @@ export { codexEffortAllowed } from '../engines/codex/runtimeProfile.js'
 import { runtimeFor } from '../engines/runtime.js'
 import type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl } from '../engines/facets/runtime.js'
 export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } from '../engines/facets/runtime.js'
-import { addOption, currentPaneUi, effortLabel, encodeRuntimeProfile, parseVersion, readJson, record, runtimeModelLabel, stripAnsi, text, transcriptFields, versionAtLeast } from '../engines/kit/runtime.js'
+import { addOption, currentPaneUi, effortLabel, encodeRuntimeProfile, parseVersion, readJson, record, runtimeModelLabel, stripAnsi, text, transcriptFields, versionAtLeast, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
 export { encodeRuntimeProfile, runtimeModelLabel } from '../engines/kit/runtime.js'
 
 const blankState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
@@ -92,13 +94,9 @@ interface StateWaiter {
   timer: NodeJS.Timeout
 }
 
-const PROFILE_RE = /^runtime-v1:([^:]+):(claude|codex|cursor|commandcode|pi|devin|opencode|hermes|muse|amp|kilo|grok|agy|copilot):([^@]+)@([a-z0-9_-]+)$/i
 const CURSOR_EFFORTS = new Set(['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'])
 /** Wire parsing accepts all known effort labels; each engine owns its support policy. */
-const EFFORTS = new Set([
-  'auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent', 'ultracode', ...CURSOR_EFFORTS, ...PI_EFFORTS, ...DEVIN_EFFORTS,
-  ...COMMANDCODE_EFFORTS, ...HERMES_EFFORTS,
-])
+const EFFORTS = RUNTIME_EFFORTS
 /**
  * Versions whose model UI was driven by hand before wiring it up. Open-ended upward: a newer CLI is
  * assumed compatible (the alternative — refusing to switch after every auto-update — is worse), but a
@@ -135,32 +133,6 @@ const CATALOG_TTL_MS = 5 * 60_000
 import { opencodeBin } from './engineBin.js'
 
 const execFileAsync = promisify(execFile)
-
-function decode(value: string): string | null {
-  try {
-    const out = decodeURIComponent(value)
-    return out ? out : null
-  } catch {
-    return null
-  }
-}
-
-export function parseRuntimeProfile(value: unknown): RuntimeProfile | null {
-  if (typeof value !== 'string') return null
-  const match = PROFILE_RE.exec(value)
-  if (!match) return null
-  const sessionId = decode(match[1])
-  const model = decode(match[3])
-  const effort = match[4].toLowerCase()
-  if (!sessionId || !model || !EFFORTS.has(effort)) return null
-  return {
-    id: value,
-    sessionId,
-    engine: match[2].toLowerCase() as AgentEngine,
-    model,
-    effort,
-  }
-}
 
 export function supportsNativeRuntimeControl(session: RegisteredSession): boolean {
   return !session.gateway && (runtimeFor(session.engine)?.supportsControl(session) ?? false)
@@ -388,6 +360,14 @@ async function commandcodeConfiguredEffort(model: string | null): Promise<{ effo
 /** The first-run banner names the model before Claude writes a conversation transcript. */
 
 export class RuntimeProfileManager {
+  supportsControl(session: RegisteredSession): boolean {
+    return supportsNativeRuntimeControl(session)
+  }
+
+  effortAllowed(session: RegisteredSession, model: string, effort: string, listed: readonly string[] | null): boolean {
+    return runtimeFor(session.engine)?.effortAllowed?.(model, effort, listed) ?? false
+  }
+
   private readonly states = new Map<string, RuntimeState>()
   private readonly controls = new Map<string, RuntimeControl>()
   private readonly waiters = new Map<string, Set<StateWaiter>>()

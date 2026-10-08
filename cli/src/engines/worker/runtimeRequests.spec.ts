@@ -31,6 +31,13 @@ function setup() {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('runtime worker contract', () => {
+  it('serves a catalog for an unbound agent but refuses conversation controls without a binding', async () => {
+    const t = setup(), ctx = context(); ctx.session.sessionId = ''
+    expect((await t.send({ context: ctx, operation: { kind: 'models' } })).answer.models).toEqual([])
+    ctx.control = { target: target(ctx), before: null, modelConfirmed: false, effortConfirmed: false }
+    expect(await t.send({ context: ctx })).toEqual(failure('ENGINE_INVALID_REQUEST', false))
+  })
+
   it('reduces a supplied snapshot and survives a fresh worker without mutating the caller', async () => {
     for (const engine of ['claude', 'codex'] as const) {
       const ctx = context(engine), adapter = runtimeFor(engine)!

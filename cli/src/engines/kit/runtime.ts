@@ -4,6 +4,11 @@ import type { EngineRuntime, RuntimeField, RuntimeModelOption, RuntimeProfile, R
 
 export const blankRuntimeState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
 
+/** Wire vocabulary only. Eligibility for a particular model belongs to its engine. */
+export const RUNTIME_EFFORTS: ReadonlySet<string> = new Set([
+  'auto', 'none', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent', 'ultracode',
+])
+
 export function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
 }

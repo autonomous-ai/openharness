@@ -44,7 +44,7 @@ export function runtimeState(value: unknown): value is RuntimeState {
 
 function controlOf(value: unknown, session: RuntimeSession): RuntimeControl | undefined | null {
   if (value === undefined || value === null) return undefined
-  if (!record(value) || !record(value.target) || typeof value.modelConfirmed !== 'boolean' || typeof value.effortConfirmed !== 'boolean'
+  if (!session.sessionId || !record(value) || !record(value.target) || typeof value.modelConfirmed !== 'boolean' || typeof value.effortConfirmed !== 'boolean'
     || (value.before !== null && !text(value.before, 32_768))) return null
   const target = value.target
   // Older clients encoded the conversation id; core's controller still accepts that bound alias.
@@ -58,7 +58,8 @@ function controlOf(value: unknown, session: RuntimeSession): RuntimeControl | un
 export function runtimeContext(value: unknown, engine: ReaderEngine): RuntimeContext | null {
   if (!record(value) || !record(value.session) || !runtimeState(value.state)) return null
   const s = value.session
-  if (s.engine !== engine || !label(s.agentId) || !label(s.sessionId) || !nullable(s.model) || !nullable(s.cliVersion)
+  // Catalogs can be requested before a conversation binds. Core never caches conversation state at ''.
+  if (s.engine !== engine || !label(s.agentId) || !text(s.sessionId, 200) || !nullable(s.model) || !nullable(s.cliVersion)
     || (s.transcriptPath !== null && !path(s.transcriptPath)) || (s.cwd !== null && !path(s.cwd))
     || (s.codexHome != null && !path(s.codexHome))) return null
   const session: RuntimeSession = { agentId: s.agentId, sessionId: s.sessionId, engine, model: s.model, cliVersion: s.cliVersion,

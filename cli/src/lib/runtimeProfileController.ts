@@ -1,3 +1,4 @@
+import { parseRuntimeProfile } from './runtimeProfileWire.js'
 import type { RegisteredSession } from './registry.js'
 import { devinModelCommandResult } from '../engines/devin/runtimeProfile.js'
 import { countCommandcodeRefusals } from '../engines/commandcode/runtimeProfile.js'
@@ -21,9 +22,6 @@ import {
   type CodexPicker,
 } from '../engines/codex/modelPicker.js'
 import {
-  codexEffortAllowed,
-  parseRuntimeProfile,
-  supportsNativeRuntimeControl,
   type CursorModelTarget,
   type RuntimeProfile,
   type RuntimeProfileManager,
@@ -74,7 +72,13 @@ export interface PaneInspection {
 }
 
 export interface RuntimeProfileControllerDeps {
-  manager: RuntimeProfileManager
+  manager: Pick<RuntimeProfileManager, 'getState' | 'selectedModel' | 'codexCatalog' | 'modelsForSession'
+    | 'beginControl' | 'finishControl' | 'cancelControl' | 'confirmEffort' | 'waitForProfile' | 'waitForModel'
+    | 'devinTarget' | 'opencodeCatalog' | 'commandcodeTarget' | 'ingestConfig' | 'hermesTarget' | 'cursorTarget' | 'confirmControlProfile'> & {
+      supportsControl(session: RegisteredSession): boolean | Promise<boolean>
+      effortAllowed(session: RegisteredSession, model: string, effort: string, listed: readonly string[] | null): boolean | Promise<boolean>
+      ingestPane(session: RegisteredSession, text: string, silent?: boolean): boolean | Promise<boolean>
+    }
   getSession: (sessionId: string) => RegisteredSession | undefined
   validateRuntime: (session: RegisteredSession) => Promise<boolean>
   capture: (terminalTarget: string, historyLines?: number) => Promise<string | null>
@@ -721,7 +725,7 @@ export class RuntimeProfileController {
     }
     const current = parseRuntimeProfile(this.deps.manager.selectedModel(session))
     if (current?.id === target.id) return
-    if (!supportsNativeRuntimeControl(session)) {
+    if (!await this.deps.manager.supportsControl(session)) {
       console.warn(`[runtime-profile] unsupported ${session.engine} CLI version ${session.cliVersion ?? 'unknown'} for ${sessionId.slice(0, 8)}`)
       throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
     }
@@ -729,7 +733,7 @@ export class RuntimeProfileController {
     const codexCatalog = session.engine === 'codex' ? await this.deps.manager.codexCatalog(session) : []
     if (session.engine === 'codex') {
       const listed = codexCatalog.find((entry) => entry.slug === target.model)?.efforts ?? null
-      if (!codexEffortAllowed(target.model, target.effort, listed)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
+      if (!await this.deps.manager.effortAllowed(session, target.model, target.effort, listed)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
     }
     const options = await this.deps.manager.modelsForSession(session)
     if (!options.some((option) => option.id === target.id)) {
@@ -968,8 +972,8 @@ export class RuntimeProfileController {
 
   /** Poll the pane INTO the manager until it reports the profile we asked for. */
   private async waitObservedProfile(session: RegisteredSession, target: RuntimeProfile): Promise<boolean> {
-    const confirmed = await this.waitPane(session.agentId, (value) => {
-      this.deps.manager.ingestPane(session, value, true)
+    const confirmed = await this.waitPane(session.agentId, async (value) => {
+      await this.deps.manager.ingestPane(session, value, true)
       return this.deps.manager.selectedModel(session) === target.id
     }, COMMAND_CONFIRM_MS)
     return !!confirmed
@@ -1182,8 +1186,8 @@ export class RuntimeProfileController {
 
   /** Like waitObservedProfile, but only the model half — used where effort is applied separately. */
   private async waitObservedModel(session: RegisteredSession, target: RuntimeProfile): Promise<boolean> {
-    const confirmed = await this.waitPane(session.agentId, (value) => {
-      this.deps.manager.ingestPane(session, value, true)
+    const confirmed = await this.waitPane(session.agentId, async (value) => {
+      await this.deps.manager.ingestPane(session, value, true)
       return parseRuntimeProfile(this.deps.manager.selectedModel(session))?.model === target.model
     }, COMMAND_CONFIRM_MS)
     return !!confirmed
@@ -1360,8 +1364,8 @@ export class RuntimeProfileController {
       if (!await this.deps.sendKey(session.agentId, 'Enter')) throw new RuntimeProfileControlError('TMUX_FAILED')
     }
 
-    const confirmed = await this.waitPane(session.agentId, (value) => {
-      this.deps.manager.ingestPane(session, value, true)
+    const confirmed = await this.waitPane(session.agentId, async (value) => {
+      await this.deps.manager.ingestPane(session, value, true)
       return this.deps.manager.selectedModel(session) === target.id
         || this.cursorFooterMatches(value, cursorTarget, target.effort)
     }, COMMAND_CONFIRM_MS)
@@ -1426,11 +1430,11 @@ export class RuntimeProfileController {
     })
   }
 
-  private async waitPane(terminalTarget: string, predicate: (capture: string) => boolean, timeoutMs: number): Promise<string | null> {
+  private async waitPane(terminalTarget: string, predicate: (capture: string) => boolean | Promise<boolean>, timeoutMs: number): Promise<string | null> {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
       const capture = await this.deps.capture(terminalTarget, 100)
-      if (capture && predicate(capture)) return capture
+      if (capture && await predicate(capture)) return capture
       await sleep(100)
     }
     return null

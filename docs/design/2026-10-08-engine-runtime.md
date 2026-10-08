@@ -1,15 +1,17 @@
 # Engine runtime profiles
 
 Status: implementation in progress. This continues [engine isolation](2026-10-05-engine-interface.md)
-after [live transcript isolation](2026-10-07-engine-streams.md). It is not complete runtime-profile
-process isolation yet.
+after [live transcript isolation](2026-10-07-engine-streams.md). The supervised Claude Code/Codex profile
+path now executes in workers. The remaining legacy import dependencies still prevent this increment
+from being complete code and process isolation.
 
 ## Ownership
 
 Claude Code and Codex own transcript and pane interpretation, native model and effort policy,
-configuration reads, and model catalogs. The shared runtime manager retains profile state,
-notification timing, and control transactions during migration. Core must ultimately keep only
-reported state and transaction authority; it must not interpret either vendor's records or panes.
+configuration reads, and model catalogs. Core's runtime coordinator keeps accepted profile state,
+notification timing, and control transactions. Its routing facade uses the inline manager only for
+other engines or explicit compatibility. Supervised Claude Code/Codex observations, catalogs and
+native-control eligibility go through their workers, with no inline fallback after failure.
 
 The runtime facet takes plain session, state, and optional control values. Its reducers mutate those
 supplied values, not a registry or terminal. The private worker handler copies only declared fields
@@ -40,23 +42,45 @@ They are not public request routes. Each worker loads its own runtime facet on d
 - Calls do not fall back to core after worker failure. Caller wiring must preserve the last accepted
   profile and retry pending evidence under the same binding checks used by live transcripts.
 
+## Core authority and handover
+
+Core serializes runtime requests per engine, with a 256-entry queue and a five-second queue wait
+budget in addition to the transport deadline. Each operation carries copied state and control facts.
+Replies are rejected if the conversation/process binding, control revision, or observed CLI version
+changed. A stale caller cannot replace a newer binding's accepted profile. Empty conversation ids
+never become shared cached state; unbound agents can still request their own catalogs.
+
+Live pages reduce compact evidence in bounded batches before acknowledging their cursor or delivering
+events. Failed reductions retain the previous cursor and retry even without another file change.
+Cancellation is checked again after awaiting the profile worker. Attach hydration has its own staged
+state, including configuration; it installs that state and the live parser in one synchronous commit
+under the existing binding, turn, tail-movement and hold guards. A failed stage cannot commit a
+partially reduced page.
+
+Synchronous display reads use accepted state. Control waiters, cancellation, nested notification
+suppression and debounce remain in core. Gateway sessions remain display-only. The parent-bound
+`HARNESSD_ENGINE_RUNTIME=<master-pid>:1` report selects runtime isolation separately from live parsing;
+an older master selects explicit compatibility instead of discovering the missing protocol on a
+user's first request. The wire profile parser no longer imports the runtime manager.
+
 ## Remaining before this increment ships
 
-The transport and worker methods exist, but the normal core profile consumers still use the inline
-manager. This branch must not be marked ready on the strength of the extraction tests alone.
+The normal routing is implemented and exercised, but the facade still receives a legacy manager whose
+imports load Claude/Codex profile implementations into core. This is an unfinished boundary, even
+though supervised Claude/Codex requests execute remotely. Do not mark this draft ready yet.
 
-1. Wire a core coordinator that serializes profile mutations, stages hydration, and fences binding
-   and control revisions. A late pane/config result must not overwrite newer transcript evidence.
-2. Apply a live page's profile evidence before acknowledging its cursor. Retry failures from that
-   checkpoint; split large evidence batches within protocol limits without dropping records.
-3. Serve synchronous display reads from accepted reported state. Preserve model-control waiters,
-   cancellation, notification suppression/debounce, and existing gateway display-only policy.
-4. Remove the normal core path's runtime imports of Claude/Codex profile implementations. Explicit
-   older-master/inline compatibility must be selected from a parent-bound capability report.
-5. Preserve the existing metadata behavior of other engines during this two-engine migration;
-   the legacy manager currently routes some of them through Claude-shaped fallback readers.
-6. Run affected coverage gates, profile/model daemon integration and recovery tests, inspect runtime
-   cost, then complete separate review and automatic ready-PR CI before merge.
+1. Remove that remaining import path while preserving other engines' existing metadata behavior.
+   Some of the legacy manager's other-engine paths intentionally retain Claude-shaped fallback reads;
+   deleting them or merely renaming the same parser would not complete the boundary.
+2. Measure paired CPU, RSS and latency for the final implementation, including engine workers.
+3. Validate any further changes, then complete a separate review and automatic ready-PR CI.
+
+Current development evidence: 1,446 core/services tests with 100% coverage in every file; the supervisor
+gate with 100% coverage in every file; 204 focused profile/controller/home/protocol tests; typechecking
+and architecture checks. Six selected private daemon/tmux cases passed with fake vendor CLIs: Codex
+model/effort switching, both engines' moved-home catalogs, private-route denial, and both engines'
+accepted-profile preservation and pending-evidence recovery while their worker was frozen. These are
+development receipts, not a claim that the remaining boundary or full engine goal is complete.
 
 Hooks, launch/discovery/resume, input interpretation, and the other boundaries tracked by the engine
 isolation work remain in scope after runtime profiles. This increment does not close the full goal.

@@ -144,7 +144,7 @@ import { createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { KNOWN_SERVICES, masterRunsLiveEngines, servicesTheMasterRuns } from '../harnessd/services.js'
+import { KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink, teamsOutOfProcess } from './teamsLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -178,6 +178,8 @@ import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.j
 import { forgetAgentProject } from '../lib/agentProject.js'
 import { agentTokenUsage } from '../lib/agentTokenUsage.js'
 import { RuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfile.js'
+import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
+import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeProfileController.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
 import { backendHttpBase } from '../lib/controlPlane.js'
@@ -534,7 +536,16 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const syncRecapPool = (): void => {
     ports.devices?.engines(registry.active().map((session) => session.engine))
   }
-  const runtimeProfiles = new RuntimeProfileManager()
+  const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
+  const liveHosted = masterRunsLiveEngines(process.env, process.ppid)
+  const runtimeHosted = liveHosted && masterRunsEngineRuntime(process.env, process.ppid)
+  let serviceLinksRef: ServiceLinks | null = null
+  const runtimeTransport = createRuntimeTransport({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
+  const runtimeProfiles = createRuntimeProfiles({ legacy: new RuntimeProfileManager(),
+    handles: engine => runtimeHosted && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine]),
+    resolve: id => registry.resolve(id), transport: runtimeTransport })
   // An agent's Model/Effort choices, or every live agent's: what `models_list` answers (services/models.ts)
   // and the dial's picker reads, so neither can show a catalog the machine would not honour.
   const runtimeModels = (agentId?: string): Promise<RuntimeModelOption[]> => {
@@ -778,12 +789,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // only under a master, which is what gives this core the token they connect with. Their requests are
   // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
   const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
-  const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
   // The services' own code, for those that run in this process (services/inline.ts): loaded only then, so
   // one in its own process, as each is by default, is never loaded here.
   // A reader-only older master knows these names but cannot host live parsers. Its explicit version
   // report selects compatibility; a worker timeout or crash never activates an inline fallback.
-  const liveHosted = masterRunsLiveEngines(process.env, process.ppid)
   const isolatedLive = (engine: string): boolean => liveHosted
     && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
   const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !liveHosted
@@ -794,7 +803,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // or here (gateway/start.ts); the socket hears it through `fromGateway` and speaks to it in the clear.
   Object.assign(coreApi.terminals, createTerminalSessions({ agents: coreApi.agents, paneState: tmuxPaneState, processState: checkPidRuntime }))
   const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct), autonomousEnv: s?.autonomousEnv ?? env.AUTONOMOUS_ENV })
-  let serviceLinksRef: ServiceLinks | null = null
   const engineReaders = createEngineReaders({ isolated: outOfProcess, inline: inline?.engineTranscriptFor,
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) })
   const liveTransport = createLiveTransport({
@@ -916,7 +924,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     handles: isolatedLive,
     transport: liveTransport,
     bySession: (id) => registry.bySession(id),
-    frame: (session, frame) => ingest.acceptFrame(session.sessionId, session.engine, frame),
+    prepareFrames: (session, frames) => runtimeProfiles.prepareFrames(session, frames),
+    frame: (session, frame) => ingest.acceptFrame(session.sessionId, session.engine, frame, runtimeProfiles.handles(session.engine)),
     reattach: (session) => attachSession(session, true),
   })
   // Whether a turn is really working, beyond its transcript (core/turns/activity.ts).
@@ -1190,6 +1199,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     connected: (service) => {
       engineReaders.connected(service)
       liveTransport.connected(service)
+      runtimeTransport.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
@@ -1199,6 +1209,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     disconnected: (service) => {
       engineReaders.disconnected(service)
       liveTransport.disconnected(service)
+      runtimeTransport.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()
@@ -1994,7 +2005,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         await watcher.pollAll()
         await Promise.all(registry.advertised().map(async (session) => {
           const capture = await captureTerminal(session.agentId, 120)
-          if (capture) runtimeProfiles.ingestPane(session, capture, true)
+          if (capture) await runtimeProfiles.ingestPane(session, capture, true)
         }))
       })
       await syncTerminalTitles()
@@ -2041,7 +2052,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     for (const session of registry.list()) {
       if (!PANE_POLLED_ENGINES.has(session.engine)) continue
       void captureTerminal(session.agentId, 60)
-        .then((capture) => { if (capture) runtimeProfiles.ingestPane(session, capture) })
+        .then((capture) => capture ? runtimeProfiles.ingestPane(session, capture) : undefined)
         .catch(() => undefined)
     }
   }, PANE_POLL_MS)
@@ -2305,7 +2316,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the question watchers', () => questionWatcher.stopAll()],
     ['the turn heartbeats', () => { for (const t of heartbeats.values()) clearInterval(t); heartbeats.clear() }],
     ['the Cursor sub-agents', () => cursorSubagents.stop()], ['the normalizers', () => normalizers.stopPollers()],
-    ['Cursor discovery', () => cursorDiscovery.stop()], ['the transcript watcher', () => watcher.stop()],
+    ['Cursor discovery', () => cursorDiscovery.stop()], ['the runtime profiles', () => runtimeProfiles.stop()], ['the transcript watcher', () => watcher.stop()],
     // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
     // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
     ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
@@ -2355,6 +2366,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     normalizers.stopPollers()
     await cursorDiscovery.stop()
     await watcher.stop()
+    runtimeProfiles.stop()
     await ports.sharing?.stop()
     // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
     // start as soon as it is gone, whatever the clients below take to close.
