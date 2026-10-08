@@ -218,10 +218,14 @@ restored every harness with no prompt.
     `com.apple.dt.CommandLineTools.installondemand` log, which names the requesting process's parent.
     An agent that runs `python3` or `git` itself still raises it (OpenCode did, once, in M-A); that is
     the agent's command, not Harness's.
-25. **Garbled monospace glyphs in the VM.** In two runs some terminal and mono UI text drew hatched
-    boxes in place of letters for a while (first harness's pane, one label); sans-serif text was fine
-    and later frames were clean. Seen only in the VM's paravirtualized GPU with the debug (Impeller)
-    build; not reproduced on hardware. Worth checking on a real Apple Silicon Mac with the release build.
+25. **Garbled glyphs in the VM are Impeller on its virtual GPU.** Letters drew as hatched boxes in
+    the debug build and, worse, in an AOT (profile) build ("Ope▒C▒▒", "New H▒r▒ess"); the same profile
+    build with `FLTEnableImpeller` set to false (Skia) drew every letter correctly. Apple Silicon
+    release builds ship on Impeller, so this would show for anyone running Harness inside a macOS VM
+    (Tart, UTM, cloud Macs); on real hardware it has not been seen. The black window for several
+    seconds at first launch was the debug build only: the profile build showed its first screen
+    with content as soon as the window appeared (~5 s after `open`, including Gatekeeper's
+    "Verifying Harness…").
 
 ### Time to the first result, measured
 

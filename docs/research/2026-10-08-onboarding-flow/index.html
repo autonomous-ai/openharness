@@ -75,7 +75,7 @@
   <figure><img src="img/03-launch.jpg" alt="Desktop with no Harness window yet">
     <figcaption><div class="step"><span class="n">3</span><span class="t">Nothing on screen yet</span><span class="time">3 s</span></div>
       <p>The window appears a few seconds after the Dock icon. The Terminal in the background belongs to the test rig.</p>
-      <div class="note">In some runs the window first showed black for 1–5 s.</div></figcaption></figure>
+      <div class="note">Debug builds then showed a black window for several seconds. An AOT build showed its first screen as soon as the window appeared, about 5 s after opening, including macOS's "Verifying Harness…".</div></figcaption></figure>
   <div class="pair">
     <figure><img src="img/04-setup.jpg" alt="Preparing this computer screen with a task field">
       <figcaption><div class="step"><span class="n">4</span><span class="t">"Preparing this computer"</span><span class="time">8 s</span><span class="tag">#1052</span></div>
@@ -86,7 +86,7 @@
   </div>
   <figure><img src="img/06-task-queued.jpg" alt="Task queued: starts as soon as this computer is ready">
     <figcaption><div class="step"><span class="n">6</span><span class="t">Return → "Starts as soon as this computer is ready."</span><span class="time">12 s</span></div>
-      <div class="note">Some letters in that line drew as hatched boxes. I've only seen this in the VM's virtual graphics, never on hardware; it needs checking on a real Mac.</div></figcaption></figure>
+      <div class="note">Some letters in that line drew as hatched boxes. This is Impeller on the VM's virtual GPU: the same build drew correctly on Skia. It would affect anyone running Harness in a macOS VM; it has not been seen on real hardware.</div></figcaption></figure>
   <figure><img src="img/07-starting.jpg" alt="New Harness box holding the task while the first harness starts">
     <figcaption><div class="step"><span class="n">7</span><span class="t">Setup done; the task starts by itself</span><span class="time">31 s</span><span class="tag">#1047</span></div>
       <p>The box opens with the task and starts it without a click. The agent is the person's own Claude Code or Codex if installed and signed in; otherwise OpenCode with a free model.</p>
