@@ -6,7 +6,12 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SessionInputController } from './sessionInput.js'
 import type { RegisteredSession } from './registry.js'
-import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from './terminalTypes.js'
+import { createScreens } from '../core/engines/screens.js'
+import { createSubmissions } from '../core/engines/submissions.js'
+import { screenFor } from '../engines/screens.js'
+import { submissionFor } from '../engines/submissions.js'
+import { submissionPolicy } from '../engines/submissionPolicies.js'
 
 function session(engine: 'claude' | 'codex' | 'cursor' | 'commandcode' = 'codex'): RegisteredSession {
   return {
@@ -677,6 +682,53 @@ describe('SessionInputController', () => {
       expect(sendKey).not.toHaveBeenCalled()
       expect(onError).not.toHaveBeenCalled()
       controller.forget('s1')
+    })
+
+    describe('a message sent while its engine starts, its turn starting after the verify window', () => {
+      // The engine draws its composer before its first hook binds the conversation: the message is typed under
+      // the launch's record, which is rebuilt, bound, before the check after the paste. The readings here are
+      // the fenced ones core composes (core/engines/screens.ts, submissions.ts): each refuses a record that is
+      // no longer the agent's binding.
+      const engineProcess = (pid: number): ProcessIdentity => ({ pid, executable: 'engine', startMarker: `start ${pid}` })
+      const starting = (engine: 'claude' | 'codex'): RegisteredSession => ({ ...session(engine), launch: { state: 'ready' }, sessionId: '',
+        boundAt: null, transcriptPath: null })
+      const bound = (engine: 'claude' | 'codex'): RegisteredSession => ({ ...session(engine), boundAt: 5, processIdentity: engineProcess(7) })
+      const run = async (engine: 'claude' | 'codex', typed: RegisteredSession, after: RegisteredSession) => {
+        let current = typed
+        const sendKey = vi.fn(async () => true), onError = vi.fn()
+        const resolve = () => current
+        const screens = createScreens({ handles: () => false, transport: { read: vi.fn() }, resolve,
+          inline: (name, capture) => capture === null ? undefined : screenFor(name).inspect(capture) })
+        const submission = createSubmissions({ policy: submissionPolicy, handles: () => false, transport: { read: vi.fn(), echo: vi.fn() },
+          resolve, inline: name => submissionFor(name) })
+        const controller = new SessionInputController({ readScreen: screens.read, submission, getSession: () => current,
+          validateRuntime: async () => true, inject: async () => { current = after; return true }, sendKey,
+          // Taken off the composer, its turn not started yet.
+          capture: async () => engine === 'claude' ? claudeBox('') : codexComposer(''), onError })
+        vi.useFakeTimers()
+        controller.submit('s1', 'sent while it was starting')
+        await vi.advanceTimersByTimeAsync(5_000)
+        controller.onTurnStarted('s1', 'sent while it was starting')
+        await vi.advanceTimersByTimeAsync(30_000)
+        controller.forget('s1')
+        return { sendKey, onError }
+      }
+
+      it.each(['claude', 'codex'] as const)('%s: read under its first bind, the message is taken: no failure, no second Enter', async engine => {
+        const { sendKey, onError } = await run(engine, starting(engine), bound(engine))
+        expect(onError).not.toHaveBeenCalled()
+        expect(sendKey).not.toHaveBeenCalled()
+      })
+
+      it.each([
+        ['a rotation of a bound conversation', bound('claude'), { ...bound('claude'), sessionId: 's2', boundAt: 9 }],
+        ['another process than the one it knew', { ...starting('claude'), processIdentity: engineProcess(6) }, bound('claude')],
+        ['another pane', starting('claude'), { ...bound('claude'), tmuxPane: '%2' }],
+      ])('%s still fails closed: unconfirmed, and no second Enter', async (_name, typed, after) => {
+        const { sendKey, onError } = await run('claude', typed, after)
+        expect(onError).toHaveBeenCalledWith('s1', expect.stringContaining('could not be confirmed'))
+        expect(sendKey).not.toHaveBeenCalled()
+      })
     })
 
     it('a pending draft, as the worker reads it, is what lets the core press Enter again', async () => {

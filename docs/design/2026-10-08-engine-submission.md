@@ -48,7 +48,8 @@ A reply must be exactly three facts, or an in-range span of the text sent. Anyth
   session input reports the message unconfirmed, as it already did for an unreadable screen. The
   Device route treats the pane as unreadable and keeps looking until its bound.
 - **Readings that land late.** If the turn started, or the agent was rebound, while a reading was in
-  flight, that reading decides nothing.
+  flight, that reading decides nothing. A first bind is not a rebind: a message typed while its engine
+  started is read under the record as it now stands, that launch bound since (`launchBound`).
 - **Echoes.** An exact echo matches with no reading. A different record is the engine's to unwrap. Its
   delivery leaves the pane's state at once, so later writes never wait on the reading. Only the receipt
   waits: `started`, or `unknown`/`prompt_mismatch` when the reading says otherwise or there is none.

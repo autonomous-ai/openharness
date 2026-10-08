@@ -2,6 +2,7 @@ import type { ScreenReader } from './screenReader.js'
 import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
 import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
+import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
 import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
@@ -168,6 +169,17 @@ export class SessionInputController {
   /** Controller dependencies take the stable agent id, never a backend route. */
   private controlSession(id: string): RegisteredSession | undefined {
     return this.deps.getSession(id)
+  }
+
+  /**
+   * The record the checks after a paste read the pane under. A message sent while its engine starts is
+   * typed before the engine's first hook binds the conversation, and its turn can start after the verify
+   * window: read as typed, the fenced readings refuse it and the message is reported unconfirmed. The
+   * record as it now stands is taken when it is that launch, bound since (core/engines/sessionBinding.ts
+   * `launchBound`); a rebind, a rotation, another pane or another process is read as typed, and fails closed.
+   */
+  private readingSession(session: RegisteredSession): RegisteredSession {
+    return launchBound(session, this.controlSession(session.agentId))
   }
 
   /**
@@ -737,7 +749,7 @@ export class SessionInputController {
         // The engine's own reading for Claude Code and Codex, from their worker; the core's for the others.
         const prompt = state.awaitingContent ?? ''
         const reading = this.deps.submission.policy(session.engine)
-          ? await this.deps.submission.read(session, capture, prompt).catch(() => null)
+          ? await this.deps.submission.read(this.readingSession(session), capture, prompt).catch(() => null)
           : { draft: composerHolds(capture, prompt), composer: composerShown(capture) }
         if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
         // No reading is no evidence (the engine's worker down, or the agent rebound while it read): never
@@ -830,7 +842,7 @@ export class SessionInputController {
    */
   private async dialogOverComposer(sessionId: string, session: RegisteredSession, state: InputState, capture: string | null | undefined): Promise<boolean> {
     if (capture === undefined) return false
-    const screen = await this.deps.readScreen(session, capture)
+    const screen = await this.deps.readScreen(this.readingSession(session), capture)
     if (this.states.get(sessionId) !== state || state.turnOpen || !state.awaitingFingerprint) return true
     const hold = screen ? screen.messageHold : 'screen_unreadable'
     if (!hold) return false
