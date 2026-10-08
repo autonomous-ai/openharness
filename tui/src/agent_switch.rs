@@ -275,6 +275,9 @@ pub fn pane_supports(app: &App, pane: u64) -> bool {
         && app.fleet.machine(&a.machine_id).is_some_and(|m| !m.shared))
 }
 
+pub fn pane_label(app: &App, pane: u64) -> String {
+    source_for(app, pane).map(|a| theme::engine_label(&a.engine).to_string()).unwrap_or_else(|| "Agent".into())
+}
 
 fn engines(app: &App, source: &Agent) -> Vec<String> {
     let all = crate::modal::ENGINES.iter().filter(|e| **e != "terminal").map(|e| e.to_string()).collect::<Vec<_>>();

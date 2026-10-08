@@ -33,10 +33,11 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 - `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
   and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
 - `engines/`: hook coordination, reader ports and live worker coordination. Claude Code/Codex
-  history, last-turn reads, live parsing and runtime profile interpretation/catalogs run in supervised workers; core passes snapshots,
+  history, last-turn reads, live parsing, runtime profiles/catalogs and screen interpretation run in supervised workers; core passes snapshots,
   validates bounded replies, retains acknowledged cursors and owns binding/turn state. The explicit
   inline/older-master compatibility path is the only live parser or runtime profile implementation
-  composition in core. Core keeps accepted profiles and control authority; native picker drivers
+  composition in core. Screen reads are bounded and fenced to the worker connection and session binding
+  ([screen boundary](../../../docs/design/2026-10-08-engine-screen.md)). Core keeps accepted profiles and control authority; native picker drivers
   remain to migrate. See [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md).
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
   `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.

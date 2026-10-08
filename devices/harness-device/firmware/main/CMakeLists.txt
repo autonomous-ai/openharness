@@ -29,6 +29,7 @@ set(BOARD_SRCS
     "cable_features.c"
     "last_words.c"
     "fw_update.c"
+    "pet_store.c"
     "audio_capture.c"
     "audio_client_habitat.c"
     "audio_probe.c"

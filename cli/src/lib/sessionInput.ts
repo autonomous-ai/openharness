@@ -1,7 +1,8 @@
+import type { ScreenReader } from './screenReader.js'
 import { createHash } from 'crypto'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
-import { isMessageHold, messageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHold.js'
+import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
 import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult } from './terminalTypes.js'
 
 const MAX_QUEUE_ITEMS = 8
@@ -105,6 +106,7 @@ interface InputState {
 }
 
 export interface SessionInputDeps {
+  readScreen: ScreenReader
   /** A team-only preflight at the actual write boundary. A reason proves no paste occurred. */
   beforeTeamWrite?: (session: RegisteredSession) => Promise<string | null>
   onDelivery?: (event: SessionInputDelivery) => void
@@ -645,7 +647,7 @@ export class SessionInputController {
     if (session.engine === 'cursor') {
       const capture = await this.deps.capture?.(session.agentId)
       if (!state.awaitingFingerprint || state.turnOpen) return
-      if (this.dialogOverComposer(sessionId, session, state, capture)) return
+      if (await this.dialogOverComposer(sessionId, session, state, capture)) return
       const draftPending = !!capture && cursorComposerContains(capture, state.awaitingContent ?? '')
       if (state.ambiguousDispatch && !draftPending) {
         this.failAmbiguousSubmission(sessionId, state)
@@ -684,7 +686,7 @@ export class SessionInputController {
       // claude/codex/commandcode: verify against the terminal before pressing Enter again or declaring failure.
       const capture = await this.deps.capture?.(session.agentId)
       if (!state.awaitingFingerprint || state.turnOpen) return
-      if (this.dialogOverComposer(sessionId, session, state, capture)) return
+      if (await this.dialogOverComposer(sessionId, session, state, capture)) return
       // Command Code writes the user line to its transcript only once the model has finished THINKING, so
       // the turn_started this used to wait for can be half a minute late on a real task — and the user
       // watched the terminal accept the message and start working while the device claimed it had been
@@ -775,8 +777,11 @@ export class SessionInputController {
    * agent asks means the message was taken and its turn has reached a tool; anything else leaves it
    * unknown, as does any delivery with a receipt, which the pane alone cannot settle.
    */
-  private dialogOverComposer(sessionId: string, session: RegisteredSession, state: InputState, capture: string | null | undefined): boolean {
-    const hold = capture ? messageHold(session.engine, capture) : null
+  private async dialogOverComposer(sessionId: string, session: RegisteredSession, state: InputState, capture: string | null | undefined): Promise<boolean> {
+    if (capture === undefined) return false
+    const screen = await this.deps.readScreen(session, capture)
+    if (this.states.get(sessionId) !== state || state.turnOpen || !state.awaitingFingerprint) return true
+    const hold = screen ? screen.messageHold : 'screen_unreadable'
     if (!hold) return false
     if (state.deliveryId || (hold !== 'permission_open' && hold !== 'question_open')) {
       this.failAmbiguousSubmission(sessionId, state)

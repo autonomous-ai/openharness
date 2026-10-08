@@ -7,7 +7,7 @@
  */
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
-import type { QuestionWatcher } from '../../lib/askQuestion.js'
+import type { QuestionWatcher } from '../../lib/questionController.js'
 import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
 import type { RegisteredSession } from '../../lib/registry.js'

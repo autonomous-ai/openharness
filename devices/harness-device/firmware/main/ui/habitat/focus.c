@@ -2,6 +2,7 @@
 #include "pets.h"
 #include "focus_faces.h"
 #include "theme.h"
+#include "../../pet_store.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -162,10 +163,14 @@ static bool pet_holds(const ht_character_face_t *f)
     return !f->clock_ms || f->mood == HT_CHARACTER_ASLEEP || f->mood == HT_CHARACTER_OFFLINE;
 }
 
-// The pet of the face's engine, or NULL: the face draws the engine's mark.
+// The pet of the face's engine, or NULL: the face draws the engine's mark. A pack the person sent (pet_store.c:
+// the engine's own, else "all") wins over the built-in pet; its pointers stay good until ui_habitat.c's next
+// pet_store_release_frame, which comes only after the frame built from them has been painted.
 static const ht_pet_t *pet_for(const ht_character_face_t *f)
 {
     if (!f->engine) return NULL;
+    const ht_pet_t *custom = pet_store_lookup(f->engine);
+    if (custom) return custom;
     for (unsigned i = 0; i < ht_pet_count; i++)
         if (!strcmp(f->engine, ht_pets[i].engine)) return &ht_pets[i];
     return NULL;
@@ -195,7 +200,7 @@ static const ht_pet_scene_t *alert_scene(const ht_character_face_t *f, const cha
 {
     const ht_pet_scene_t *work = working_scene(f, recap);
     const ht_pet_t *pet = pet_for(f);
-    if (!work || !pet->alert_scene || !f->notice_ms || !f->notices) return NULL;
+    if (!work || !pet || !pet->alert_scene || !f->notice_ms || !f->notices) return NULL;
     const ht_pet_scene_t *a = pet->alert_scene;
     uint32_t age = f->clock_ms - f->notice_ms;
     bool past = age >= (uint32_t)a->steps * a->step_ms;
@@ -203,15 +208,48 @@ static const ht_pet_scene_t *alert_scene(const ht_character_face_t *f, const cha
     if (held) *held = past;
     return a;
 }
+/*
+ * THE ALERT OF A PET WITHOUT ONE (a custom pack has no alert_scene: the person's art has no bubble): drawn in code, a
+ * blue box ALERT_W x ALERT_H (gen_pets.py's bubble size) centred on the working scene's top-right corner inset
+ * ALERT_INSET px, the count in it at once (there is no pop-in, so ht_focus_alert_pop_ms is 0). It takes the same run
+ * slots the built-in bubble does (the second recap slot the box, the third the count), so the face's runs never change.
+ * Pulled toward the glass's centre until its rounded outline lies inside r 230 (a scene placed far out by its dx, dy).
+ */
+enum { ALERT_W = 68, ALERT_H = 44, ALERT_INSET = 8, ALERT_R = 13, ALERT_GLASS_R = 230 };
+#define ALERT_BLUE 0x006fffu
+static bool code_alert(const ht_character_face_t *f, const char *recap, ht_rect_t *box)
+{
+    const ht_pet_scene_t *work = working_scene(f, recap);
+    const ht_pet_t *pet = pet_for(f);
+    if (!work || !pet || pet->alert_scene || !f->notice_ms || !f->notices) return false;
+    if (box) {
+        int sx, sy;
+        scene_origin(work, 4, &sx, &sy);
+        int x = sx + work->w - ALERT_INSET - ALERT_W / 2, y = sy + ALERT_INSET - ALERT_H / 2;
+        for (int guard = 0; guard < 240; guard++) {   // the farthest corner's arc centre, plus the radius, inside r 230
+            int cx = x + ALERT_W / 2 >= HT_WIDTH / 2 ? x + ALERT_W - ALERT_R : x + ALERT_R;
+            int cy = y + ALERT_H / 2 >= HT_HEIGHT / 2 ? y + ALERT_H - ALERT_R : y + ALERT_R;
+            int dx = cx - HT_WIDTH / 2, dy = cy - HT_HEIGHT / 2, room = ALERT_GLASS_R - ALERT_R - 1;
+            if (dx * dx + dy * dy <= room * room) break;
+            if (x + ALERT_W / 2 > HT_WIDTH / 2) x--; else if (x + ALERT_W / 2 < HT_WIDTH / 2) x++;
+            if (y + ALERT_H / 2 > HT_HEIGHT / 2) y--; else if (y + ALERT_H / 2 < HT_HEIGHT / 2) y++;
+        }
+        *box = (ht_rect_t){x, y, ALERT_W, ALERT_H};
+    }
+    return true;
+}
 bool ht_focus_alert_shown(const ht_character_face_t *f, const char *recap, ht_rect_t *at)
 {
+    if (code_alert(f, recap, at)) return true;
     uint32_t step = 0;
     const ht_pet_scene_t *a = alert_scene(f, recap, &step, NULL);
     if (!a) return false;
+    const ht_pet_scene_t *work = working_scene(f, recap);
+    if (!work) return false;
     if (at) {   // the step's bubble on the glass (nothing while it has not popped in yet)
         const ht_cell_frame_t *b = &a->overlay->frames[a->overlay->loop[step]];
         int ox, oy;
-        scene_origin(working_scene(f, recap), 4, &ox, &oy);
+        scene_origin(work, 4, &ox, &oy);
         bool none = !a->overlay->at[step][0] && !a->overlay->at[step][1];
         *at = none ? (ht_rect_t){0} : (ht_rect_t){ox + a->overlay->at[step][0], oy + a->overlay->at[step][1],
                                                   b->cols * b->cell, b->rows * b->cell};
@@ -423,7 +461,7 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
     bool held;
     const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step, &held);
     const ht_pet_scene_t *sc = working_scene(f, recap);
-    if (alert && !held) {   // its next step (the last one then holds), or the work's next frame if that comes first
+    if (alert && !held && sc) {   // its next step (the last one then holds), or the work's next frame if that comes first
         uint32_t next = f->notice_ms + (alert_step + 1) * alert->step_ms, work = scene_next_ms(sc, 0, f->clock_ms);
         return work && work < next ? work : next;
     }
@@ -804,7 +842,9 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     const ht_pet_t *pet = pet_for(f);
     const ht_pet_scene_t *scene = working_scene(f, recap);
     uint32_t alert_step = 0;
-    const ht_pet_scene_t *alert = alert_scene(f, recap, &alert_step, NULL);
+    const ht_pet_scene_t *alert = scene ? alert_scene(f, recap, &alert_step, NULL) : NULL;   // never without its scene
+    ht_rect_t drawn_alert;
+    bool coded = !alert && code_alert(f, recap, &drawn_alert);   // a custom pet's alert, drawn in code
     if (scene) {
         // The working scene in the mark's slot: centred on the glass, a touch low for its hat.
         int sx, sy;
@@ -849,7 +889,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         // The scene's overlay takes the first line's slot, empty without a recap; the alert's bubble the second, its
         // count the third.
         int sx = 0, sy = 0;
-        if (alert) scene_origin(scene, 4, &sx, &sy);
+        if (alert && scene) scene_origin(scene, 4, &sx, &sy);
         if (alert && n == 1) {
             ht_cell_sprite(s, sx + alert->overlay->at[alert_step][0], sy + alert->overlay->at[alert_step][1],
                            &alert->overlay->frames[alert->overlay->loop[alert_step]]);
@@ -866,6 +906,17 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
                                                (cy - sy - alert->overlay->at[alert_step][1]) / b->cell)];
             uint16_t fill = (uint16_t)((p >> 8) | (p << 8));
             ht_text(s, cx - cw / 2, cy - cf->height / 2, cw, cf, ht_rgb(0x006fff), fill, count);
+        } else if (coded && n == 1) {
+            ht_box(s, drawn_alert.x, drawn_alert.y, ALERT_W, ALERT_H, ALERT_R, ht_rgb(ALERT_BLUE), ht_rgb(ALERT_BLUE));
+        } else if (coded && n == 2) {
+            // The built-in count's fonts; on this blue bubble the digit is the soft white of the bell pill's.
+            const ht_font_t *cf = f->notices > 9 ? &ht_lv_inter_20.base : &ht_lv_inter_med_26.base;
+            char count[4];
+            if (f->notices > 9) snprintf(count, sizeof count, "9+");
+            else snprintf(count, sizeof count, "%u", (unsigned)f->notices);
+            int cw = ht_measure(cf, count);
+            ht_text(s, drawn_alert.x + (ALERT_W - cw) / 2, drawn_alert.y + (ALERT_H - cf->height) / 2, cw, cf,
+                    ht_rgb(FOCUS_FG), ht_rgb(ALERT_BLUE), count);
         } else if (n == 0 && scene && scene->overlay)
             scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
         else no_text(s, rf);

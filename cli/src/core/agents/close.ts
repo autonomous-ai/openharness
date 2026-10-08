@@ -1,3 +1,4 @@
+import type { ScreenReader } from '../../lib/screenReader.js'
 /**
  * Closing agents that no window shows: the close service (now, once idle, after the task) and the
  * cleanup preview that lists what a close would take, each with what it is doing right now.
@@ -12,6 +13,7 @@ import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordi
 import type { Watcher } from '../../watcher/watcher.js'
 
 export interface ClosingDeps {
+  readScreen: ScreenReader
   registry: typeof registry
   cleanupTabs: Pick<OpenTabProtection, 'refresh' | 'isHidden' | 'assertHidden'>
   watcher: Pick<Watcher, 'pollSession'>
@@ -26,7 +28,7 @@ export interface ClosingDeps {
 }
 
 export function createAgentClosing({
-  registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
+  readScreen, registry, cleanupTabs, watcher, captureTerminal, sessionTurnState, openQuestions, terminals, sessionCheckpoints,
   stopAgent, announceSession,
 }: ClosingDeps) {
   const closeAgentService = new CloseAgentService({
@@ -35,7 +37,7 @@ export function createAgentClosing({
     activity: async s => {
       if (s.sessionId) await watcher.pollSession(s.sessionId)
       const screen = await captureTerminal(s.agentId, 80)
-      return inspectCloseActivity(s, screen, sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
+      return inspectCloseActivity(s, await readScreen(s, screen), sessionTurnState(s.sessionId), openQuestions.has(s.sessionId))
     },
     checkpoint: async (s, phase) => {
       const captured = phase === 'before' ? await terminals.captureRetained(s, { historyLines: 2000 }) : null

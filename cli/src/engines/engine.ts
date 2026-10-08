@@ -1,3 +1,4 @@
+import type { EngineScreen } from './facets/screen.js'
 import type { ProcessEngine } from './types.js'
 import type { EngineTranscript } from './facets/transcript.js'
 import type { EngineLaunch } from './facets/launch.js'
@@ -13,4 +14,5 @@ export interface Engine {
   readonly hooks: EngineHooks
   readonly live: EngineLive
   readonly runtime: EngineRuntime
+  readonly screen: EngineScreen
 }

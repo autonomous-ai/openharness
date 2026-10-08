@@ -1,3 +1,4 @@
+import type { ScreenReader } from '../../lib/screenReader.js'
 /**
  * Turn activity: whether an agent is really working, beyond what its transcript says. A turn's
  * transcript can go quiet while the agent thinks or runs a long tool, so an open turn is checked against
@@ -12,6 +13,7 @@ import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordi
 import { TurnActivity, type ActivityFrame } from '../../lib/turnActivity.js'
 
 export interface TurnActivityDeps {
+  readScreen: ScreenReader
   terminals: Pick<TerminalBackendCoordinator, 'capture'>
   bySession: (sessionId: string) => RegisteredSession | undefined
   sessionTurnOpen: (sessionId: string) => boolean
@@ -19,9 +21,10 @@ export interface TurnActivityDeps {
   drain: (sessionId: string) => Promise<void>
 }
 
-export function createTurnActivity({ terminals, bySession, sessionTurnOpen, drain }: TurnActivityDeps) {
+export function createTurnActivity({ readScreen, terminals, bySession, sessionTurnOpen, drain }: TurnActivityDeps) {
   const codexActivity = new CodexActivityReader()
   const runtimeActivity = new RuntimeActivityReader({
+    readScreen,
     codex: session => codexActivity.read(session),
     capture: async session => {
       const screen = await terminals.capture(session, { mode: 'visible', ansi: true })
