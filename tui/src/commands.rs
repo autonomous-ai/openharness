@@ -93,7 +93,7 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("devices", "devices", "Manage computer connections"),
     ("hardware-devices", "hardware-devices", "Manage physical Harness devices on your computers"),
     ("account", "login", "Optional sign-in and your Harness account"),
-    ("signout", "logout", "Sign out of your Harness account (harnesses on this computer keep running)"),
+    ("signout", "logout", "Sign out of your Harness account, after asking (-y: without); harnesses on this computer keep running"),
     ("appearance", "appearance", "Choose the TUI appearance"),
     ("pane-menu", "pane-menu", "Actions for a pane (-t target)"),
     ("window-menu", "window-menu", "Actions for a window (-t target)"),
@@ -3539,7 +3539,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "workspace-menu" => crate::workspace_controls::command(app, &words[1..]),
         "workspace-sync" => crate::agent_switch::retry_sync(app),
         "account" => crate::account::open(app),
-        "signout" => crate::account::sign_out_command(app),
+        "signout" => if flag(words, "-y") { crate::account::sign_out_confirmed(app) } else { crate::account::ask_sign_out(app, false) },
         "change-agent" => {
             if let Some((_, p)) = target_pane(app, words) { crate::agent_switch::open(app, p); }
             else { app.error("can't find pane"); }

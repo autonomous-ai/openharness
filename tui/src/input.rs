@@ -1044,7 +1044,7 @@ fn remode(app: &App, kind: PickerKind, picker: &mut Picker) -> (PickerKind, bool
 pub fn run(app: &mut App, command: &str) {
     match command {
         "account" | "login" => crate::account::open(app),
-        "signout" | "logout" => crate::account::sign_out_command(app),
+        "signout" | "logout" => crate::account::ask_sign_out(app, false),
         "hardware-devices" => crate::hardware::open(app),
         "open" => launch(app, "", Filter::All),
         "palette" => launch(app, ">", Filter::All),
