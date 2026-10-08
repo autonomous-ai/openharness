@@ -23,7 +23,7 @@ def package_info(version, timestamp, size, compositor_dependencies=()):
             'pkgdesc = Harness session and verified Harness runtime\n'
             'url = https://github.com/autonomous-ai/openharness\n'
             f'builddate = {timestamp}\npackager = OpenHarness\nsize = {size}\n'
-            'arch = x86_64\nlicense = MIT\nlicense = GPL-2.0-only\n'
+            'arch = x86_64\nlicense = MIT\nlicense = GPL-2.0-only\nlicense = Apache-2.0\n'
             + ''.join(f'depend = {name}\n' for name in dict.fromkeys((*DEPENDENCIES, *compositor_dependencies))))
 
 
@@ -54,6 +54,11 @@ def stage(source, runtime, destination, commit):
     info = validate_runtime(runtime, commit)
     os_source = source / 'os'
     shutil.copytree(os_source / 'root', destination, symlinks=True)
+    shutil.copytree(os_source / 'connectors', destination / 'usr/lib/harness-os/connections',
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    license_dir = destination / 'usr/share/licenses/harness-os-connections'
+    license_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(os_source / 'connectors/LICENSE', license_dir / 'LICENSE')
     special = {
         'LICENSE': 'usr/share/licenses/harness-os/LICENSE',
         'os/installer.py': 'usr/lib/harness-os/install.py',
