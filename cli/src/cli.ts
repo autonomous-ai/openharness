@@ -134,8 +134,7 @@ Machine:
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
   harness engines install-missing [--background]
                                install OpenCode, Claude Code, Codex and pi where they are missing, one at
-                               a time, OpenCode first; never reinstalls one, nor puts back one removed
-                               since, and retries a failed one after a day. JSON line per engine; log in
+                               a time, OpenCode first; never reinstalls one. JSON line per engine; log in
                                ~/.harness/logs/engine-install.log. --background detaches and returns
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of

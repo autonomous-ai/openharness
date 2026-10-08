@@ -161,31 +161,10 @@ export const INSTALLABLE_ENGINES: ReadonlySet<AgentEngine> = new Set(
  * How long one engine's install may run with nobody watching (`harness engines install-missing`)
  * before it is killed and reported failed. A healthy one takes seconds: OpenCode's native installer
  * about fourteen, an npm package under a minute on a slow line. Ten minutes is for a network that is
- * merely bad; past it the install is hung (a download that stalled without closing).
+ * merely bad; past it the install is hung (a download that stalled without closing), and a pane
+ * waiting on its lock is better off trying for itself.
  */
 export const ENGINE_INSTALL_TIMEOUT_MS = 10 * 60_000
-
-/**
- * How long a pane waits for another install of its engine to finish before it gives up and says so.
- *
- * Not the background install's whole ten minutes: the daemon gives a new pane ten minutes in all to
- * show its engine (`watchNewPane`), and a pane that waited that long would leave its own install no
- * time at all, with the person looking at one line. Two minutes covers every healthy install measured
- * (OpenCode 8.6 s on a fresh VM, npm packages under a minute); past it the other install is in trouble
- * and the person is better told than kept waiting.
- */
-export const ENGINE_INSTALL_WAIT_S = 120
-
-/**
- * A lock older than this is stale whoever seems to hold it: well past the background install's own
- * limit, so only a holder that outlived every bound is ever taken over. It covers what a pid and its
- * start time cannot, such as a clock that cannot be read for the start marker.
- */
-export const ENGINE_INSTALL_LOCK_MAX_AGE_S = 30 * 60
-
-/** What the background install's script exits with when another install of the engine outlasted
- *  its wait (`ENGINE_INSTALL_WAIT_S`): not a failure of this engine's install, which never ran. */
-export const BACKGROUND_INSTALL_BUSY_EXIT = 75
 
 /**
  * Where the install locks live: one folder per engine being installed (`engineInstallLockPath`).
@@ -198,33 +177,6 @@ export const BACKGROUND_INSTALL_BUSY_EXIT = 75
  */
 export function engineInstallLockDir(): string {
   return join(homedir(), '.harness', 'run', 'engine-install')
-}
-
-/**
- * Who holds an install lock: the one line of its `owner` file, `<pid> <since> <kind> <start>`.
- *
- * `since` is when it was taken (epoch seconds, `ENGINE_INSTALL_LOCK_MAX_AGE_S`), `kind` is `pane`,
- * `background` or `run` (a whole `install-missing` run), and `start` is the holder's start marker
- * (`processLiveness.ts` `processStartMarker`), last because it holds spaces. A pid alone is not enough:
- * after a power loss the pid in a lock left behind can belong to an unrelated process, and the lock
- * would look held for good. The shell side writes and reads the same line (`installLockFunctions` in
- * engineLaunch.ts), so a pane and the background install judge each other's locks alike.
- */
-export interface EngineLockOwner {
-  readonly pid: number
-  readonly since: number
-  readonly kind: string
-  readonly start: string
-}
-
-export function formatEngineLockOwner(owner: EngineLockOwner): string {
-  return `${owner.pid} ${owner.since} ${owner.kind} ${owner.start}\n`
-}
-
-/** Null for an empty or malformed line: a holder between its `mkdir` and its write, or debris. */
-export function parseEngineLockOwner(text: string): EngineLockOwner | null {
-  const match = /^([1-9][0-9]*) ([0-9]+) ([a-z]+) ?(.*)$/.exec(text.replace(/\n+$/, ''))
-  return match ? { pid: Number(match[1]), since: Number(match[2]), kind: match[3], start: match[4] } : null
 }
 
 /**
