@@ -847,7 +847,10 @@ pub fn tick(app: &mut App) {
     if app.shell_context.pending.as_ref().is_some_and(|r| r.verb != "compose-launch" && !r.verb.ends_with("-inline")) && !matches!(app.modal, Some(Modal::Picker { kind:PickerKind::ShellContext, .. })) {
         cancel(app);
     }
-    if app.shell_context.pending.as_ref().is_some_and(|r| r.at.elapsed() > Duration::from_secs(if r.verb == "compose-launch" { 180 } else if r.verb.ends_with("-inline") { 65 } else { 100 })) {
+    // A line-editor request is kept 5 s past the shell's own wait for that action
+    // (shell_integration.sh `_hn_attempts`), so the shell always gives up first.
+    let limit = |verb: &str| match verb { "compose-launch" => 180, "host-inline" => 105, "session-inline" => 185, "model-inline" => 65, _ => 100 };
+    if app.shell_context.pending.as_ref().is_some_and(|r| r.at.elapsed() > Duration::from_secs(limit(&r.verb))) {
         finish(app, 1, "The request timed out. Your shell is unchanged.");
     }
 }
@@ -1309,14 +1312,18 @@ mod tests {
         let mut app=app();
         let token=prepare(&mut app,None,false);bind(&mut app,&token,"local","shell");
         let id=uuid::Uuid::new_v4().to_string();
+        let waiting=|verb:&str,age:u64|Some(Request{token:token.clone(),id:uuid::Uuid::new_v4().to_string(),pane:1,verb:verb.into(),query:"Gone".into(),at:Instant::now()-Duration::from_secs(age)});
+        // the shell waits as long as the TUI's own budget for each action; the TUI
+        // keeps the request 5 s longer than that
+        for (verb,limit) in [("host-inline",100),("session-inline",180),("model-inline",60)] {
+            app.shell_context.pending=waiting(verb,limit+2);
+            tick(&mut app);assert!(app.shell_context.pending.is_some(),"{verb} outlives the shell's {limit} s wait");
+            app.shell_context.pending=waiting(verb,limit+6);
+            tick(&mut app);
+            assert!(app.shell_context.pending.is_none(),"{verb} expires 5 s after the shell gives up");
+            assert_eq!(app.shell_context.replies.back().unwrap().code,1);
+        }
         let pending=|age:u64|Some(Request{token:token.clone(),id:id.clone(),pane:1,verb:"host-inline".into(),query:"Gone".into(),at:Instant::now()-Duration::from_secs(age)});
-        // the shell waits 60 s; the TUI keeps the request a little longer than that
-        app.shell_context.pending=pending(62);
-        tick(&mut app);assert!(app.shell_context.pending.is_some(),"an -inline request outlives the shell's 60 s wait");
-        app.shell_context.pending=pending(66);
-        tick(&mut app);
-        assert!(app.shell_context.pending.is_none(),"an -inline request expires after 65 s");
-        assert_eq!(app.shell_context.replies.back().unwrap().code,1);
         // a later request is served, not refused with "close the current picker first"
         output(&mut app,1,&request(&token,"model-inline","default"));
         assert_eq!(app.shell_context.replies.back().unwrap().code,0);
