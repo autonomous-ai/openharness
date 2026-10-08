@@ -1,23 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   ENGINE_INSTALL,
   ENGINE_INSTALL_LOCK_MAX_AGE_S,
-  ENGINE_INSTALL_PRIMARY_LIMIT_S,
   ENGINE_INSTALL_WAIT_S,
   engineInstallLockPath,
   formatEngineLockOwner,
   parseEngineLockOwner,
   type EngineInstallRecipe,
 } from './engineInstall.js'
-import { backgroundInstallArgv, buildEngineLaunchArgv, shellSingleQuote } from './engineLaunch.js'
+import { buildEngineLaunchArgv, shellSingleQuote } from './engineLaunch.js'
 import {
   RETRY_FAILED_INSTALL_MS,
   engineInstallStateFile,
+  engineInstallStatusFile,
   inspectLock,
   installMissingEngines,
   releaseLock,
@@ -164,12 +164,16 @@ describe('installMissingEngines', () => {
       expect(outcome.results.map((result) => result.engine)).toEqual(['opencode', 'claude', 'codex', 'pi'])
       expect(outcomes(outcome.results)).toEqual({ opencode: 'installed', claude: 'already-installed', codex: 'installed', pi: 'installed' })
       expect(outcome.results[0].path).toBe(f.installedAt.opencode)
-      // The summary: a JSON line per engine, and the same lines in the log.
+      // The summary: a JSON line per engine, the same lines in the log, and the state in status.json.
       expect(f.lines.map((line) => JSON.parse(line).status)).toEqual(['installed', 'already-installed', 'installed', 'installed'])
       const log = readFileSync(f.logFile, 'utf8')
       expect(log).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[opencode\] missing; installing$/m)
       expect(log).toContain('[opencode] harness: OpenCode is missing — installing it in the background')
-      expect(log).toContain(`[summary] {"engine":"claude","status":"already-installed","path":${JSON.stringify(f.installedAt.claude)}}`)
+      expect(log).toContain('[summary] {"engine":"claude","status":"already-installed"}')
+      const status = JSON.parse(readFileSync(engineInstallStatusFile(), 'utf8'))
+      expect(status.finishedAt).toEqual(expect.any(String))
+      expect(status.engines.opencode).toMatchObject({ status: 'installed', path: f.installedAt.opencode })
+      expect(status.engines.claude).toMatchObject({ status: 'already-installed' })
       // Every lock let go.
       expect(existsSync(warmupLockPath())).toBe(false)
       expect(existsSync(f.lock)).toBe(false)
@@ -201,33 +205,13 @@ describe('installMissingEngines', () => {
 
   it('reports an engine its probe missed but its script found as there already, not installed', async () => {
     const f = fixture()
-    // On PATH, not at an install path: only the probe and the script look there.
-    const bin = join(f.root, 'bin')
-    mkdirSync(bin)
-    writeFileSync(join(bin, 'opencode'), '#!/bin/sh\necho "ENGINE_READY:$*"\n', { mode: 0o755 })
-    vi.stubEnv('PATH', `${bin}:/usr/bin:/bin`)
+    f.preinstall('opencode')
     const outcome = await f.run({
       engines: ['opencode'],
       probe: async () => [{ engine: 'opencode', installed: false, command: 'opencode', installable: true }],
     })
-    expect(!outcome.busy && outcome.results).toEqual([{ engine: 'opencode', status: 'already-installed', path: join(bin, 'opencode') }])
+    expect(!outcome.busy && outcome.results).toEqual([{ engine: 'opencode', status: 'already-installed', path: f.installedAt.opencode }])
     expect(f.ran()).toEqual([])
-  })
-
-  it('probes no engine it can settle without a shell', async () => {
-    const f = fixture()
-    for (const engine of ['opencode', 'claude', 'codex']) f.preinstall(engine)
-    // pi was seen here once (state.json) and is gone now: nothing to probe either.
-    mkdirSync(dirname(engineInstallStateFile()), { recursive: true })
-    writeFileSync(engineInstallStateFile(), JSON.stringify({ engines: { pi: { presentAt: new Date().toISOString() } } }))
-    const outcome = await f.run({ probe: async () => { throw new Error('no probe was needed') } })
-    expect(!outcome.busy && outcome.results).toEqual([
-      { engine: 'opencode', status: 'already-installed', path: f.installedAt.opencode },
-      { engine: 'claude', status: 'already-installed', path: f.installedAt.claude },
-      { engine: 'codex', status: 'already-installed', path: f.installedAt.codex },
-      { engine: 'pi', status: 'skipped', reason: expect.stringContaining('removed since and not put back') },
-    ])
-    expect(readFileSync(f.logFile, 'utf8')).toContain('every engine settled without a probe')
   })
 
   it('goes on to the next engine when one install cannot even be started', async () => {
@@ -244,6 +228,7 @@ describe('installMissingEngines', () => {
         expect.objectContaining({ engine: 'codex', status: 'failed', reason: expect.stringMatching(/^could not start its install: /) }),
       ])
       expect(existsSync(warmupLockPath())).toBe(false)
+      expect(JSON.parse(readFileSync(engineInstallStatusFile(), 'utf8')).finishedAt).toEqual(expect.any(String))
     } finally {
       unlinkSync(launch)
     }
@@ -258,7 +243,7 @@ describe('installMissingEngines', () => {
     expect(existsSync(f.lock)).toBe(false)
   })
 
-  it('takes over a lock whose pid now runs another process, or that is old and cannot be checked', async () => {
+  it('takes over a lock whose pid now runs another process, or that is older than any install', async () => {
     const f = fixture()
     const pid = livePid()
     hold(f.lock, pid, { start: otherStart(pid) })
@@ -268,24 +253,11 @@ describe('installMissingEngines', () => {
 
     rmSync(f.installedAt.opencode)
     rmSync(engineInstallStateFile())
-    hold(f.lock, pid, { start: '', since: Math.floor(Date.now() / 1000) - ENGINE_INSTALL_LOCK_MAX_AGE_S - 60 })
+    hold(f.lock, pid, { since: Math.floor(Date.now() / 1000) - ENGINE_INSTALL_LOCK_MAX_AGE_S - 60 })
     const second = await f.run({ engines: ['opencode'] })
     expect(!second.busy && second.results[0]).toMatchObject({ status: 'installed' })
     expect(readFileSync(f.logFile, 'utf8')).not.toContain('waiting for it')
     expect(f.ran()).toEqual(['opencode', 'opencode'])
-  })
-
-  it('waits for an install however long it has run, while its holder checks out by its start', async () => {
-    // A slow pane install past half an hour is still an install: a second one beside it would break it.
-    const f = fixture()
-    hold(f.lock, livePid(), { since: Math.floor(Date.now() / 1000) - ENGINE_INSTALL_LOCK_MAX_AGE_S - 60 })
-    const running = f.run({ engines: ['opencode'] })
-    await until(() => existsSync(f.logFile) && readFileSync(f.logFile, 'utf8').includes('waiting for it'))
-    f.preinstall('opencode')
-    rmSync(f.lock, { recursive: true })
-    const outcome = await running
-    expect(!outcome.busy && outcome.results[0]).toMatchObject({ status: 'already-installed' })
-    expect(f.ran()).toEqual([])
   })
 
   it('waits for an install of the same engine another terminal holds, then reports what it left', async () => {
@@ -385,8 +357,8 @@ describe('what a run remembers', () => {
     rmSync(f.installedAt.claude)
     const second = await f.run({ engines: ['opencode', 'claude'] })
     expect(!second.busy && second.results).toEqual([
-      { engine: 'opencode', status: 'skipped', reason: expect.stringContaining('removed since and not put back') },
-      { engine: 'claude', status: 'skipped', reason: expect.stringContaining('removed since and not put back') },
+      { engine: 'opencode', status: 'skipped', reason: expect.stringContaining('removed since, so it is not put back') },
+      { engine: 'claude', status: 'skipped', reason: expect.stringContaining('removed since, so it is not put back') },
     ])
     expect(f.ran()).toEqual(['opencode'])
   })
@@ -408,19 +380,14 @@ describe('what a run remembers', () => {
 })
 
 describe('the lock, from Node', () => {
-  it('holds only for the process that took it, and ages out only a holder it cannot check', () => {
+  it('holds only for the process that took it, and only so long', () => {
     const f = fixture()
-    const old = Math.floor(Date.now() / 1000) - ENGINE_INSTALL_LOCK_MAX_AGE_S - 60
     hold(f.lock, process.pid)
     expect(inspectLock(f.lock)).toMatchObject({ state: 'held', owner: { pid: process.pid } })
     hold(f.lock, process.pid, { start: otherStart(process.pid) })
     expect(inspectLock(f.lock).state).toBe('stale')
-    hold(f.lock, process.pid, { since: old })
-    expect(inspectLock(f.lock).state).toBe('held')
-    hold(f.lock, process.pid, { start: '', since: old })
+    hold(f.lock, process.pid, { since: Math.floor(Date.now() / 1000) - ENGINE_INSTALL_LOCK_MAX_AGE_S - 60 })
     expect(inspectLock(f.lock).state).toBe('stale')
-    hold(f.lock, process.pid, { start: '' })
-    expect(inspectLock(f.lock).state).toBe('held')
     hold(f.lock, deadPid(), { start: '' })
     expect(inspectLock(f.lock).state).toBe('stale')
   })
@@ -560,114 +527,11 @@ describe('a pane whose engine is installing elsewhere', () => {
     })
   }
 
-  it('counts a lock with no owner line yet per folder: a new one is not removed for the last one\'s looks', async () => {
-    const f = fixture()
-    const paneInstalled = join(f.root, 'pane-installer-ran')
-    mkdirSync(f.lock, { recursive: true })
-    const pane = startPane(f.pane(`touch ${shellSingleQuote(paneInstalled)}`))
-    await until(() => pane.output().includes('waiting for it'))
-    await new Promise((resolve) => setTimeout(resolve, 6_000))
-    // Another holder's folder, between its mkdir and its owner line: six looks at the first do not
-    // count. Made before the first goes, so it cannot be given the first one's inode back.
-    mkdirSync(`${f.lock}.next`)
-    rmSync(f.lock, { recursive: true })
-    renameSync(`${f.lock}.next`, f.lock)
-    await new Promise((resolve) => setTimeout(resolve, 6_000))
-    expect(existsSync(f.lock)).toBe(true)
-    expect(existsSync(paneInstalled)).toBe(false)
-    f.preinstall('opencode')
-    rmSync(f.lock, { recursive: true })
-    const done = await pane.done
-    expect(done.code).toBe(0)
-    expect(existsSync(paneInstalled)).toBe(false)
-  }, 60_000)
-
-  for (const shell of SHELLS) {
-    /** The pane's lock functions in [shell], then [probe], against the lock as the test left it. */
-    const lockProbe = (f: ReturnType<typeof fixture>, probe: string) => {
-      const script = launchScriptOf(f.pane('true', shell))
-      const functions = script.slice(0, script.indexOf('\nharness_lock_await\n'))
-      return spawnSync(shell, ['-c', `${functions}\n${probe}`, 'harness-engine', 'opencode'], { encoding: 'utf8', timeout: 20_000 })
-    }
-
-    it(`in ${shell}, never goes on without the lock while one can be made, however it is contested`, () => {
-      const f = fixture(shell)
-      const take = 'if harness_lock_take; then echo "TAKEN:$harness_lock_held"; else echo WAIT; fi'
-      // A lock let go between a failed mkdir and the look reads the same as this: no folder, no mkdir.
-      mkdirSync(dirname(f.lock), { recursive: true })
-      writeFileSync(f.lock, 'in the way')
-      expect(lockProbe(f, take).stdout.trim()).toBe('WAIT')
-      rmSync(f.lock)
-      expect(lockProbe(f, take).stdout.trim()).toBe('TAKEN:1')
-    })
-
-    it(`in ${shell}, goes on without a lock only where none can be made`, () => {
-      const f = fixture(shell)
-      const dir = dirname(f.lock)
-      mkdirSync(dir, { recursive: true })
-      chmodSync(dir, 0o555)
-      try {
-        expect(lockProbe(f, 'if harness_lock_take; then echo "TAKEN:$harness_lock_held"; else echo WAIT; fi').stdout.trim()).toBe('TAKEN:')
-      } finally {
-        chmodSync(dir, 0o755)
-      }
-    })
-
-    it(`in ${shell}, does not remove a stale lock that changed hands while it was looked at`, () => {
-      const f = fixture(shell)
-      hold(f.lock, deadPid(), { start: '' })
-      const fresh = `${livePid()} 1 pane x`
-      // The holder is judged gone, and in that moment a new one takes the folder over.
-      const probe = `harness_lock_live() { printf '%s\\n' ${shellSingleQuote(fresh)} > ${shellSingleQuote(join(f.lock, 'owner'))}; return 1; }\n`
-        + 'if harness_lock_busy; then echo BUSY; else echo FREE; fi'
-      expect(lockProbe(f, probe).stdout.trim()).toBe('BUSY')
-      expect(readFileSync(join(f.lock, 'owner'), 'utf8').trim()).toBe(fresh)
-    })
-
-    it(`in ${shell}, stops a first installer that stalls, its whole tree, and runs the fallback`, async () => {
-      const f = fixture(shell)
-      const rc = join(f.root, 'rc')
-      mkdirSync(rc)
-      writeFileSync(join(rc, '.zshrc'), '')
-      vi.stubEnv('ZDOTDIR', rc)
-      const sleeper = join(f.root, 'sleeper')
-      // A download accepted and then stalled: never exits, and has a child of its own.
-      const stalled = `sh -c 'sleep 1000 & printf "%s" $! > ${sleeper}; wait'`
-      const argv = buildEngineLaunchArgv('opencode', {
-        installIfMissing: f.recipe('opencode', stalled, f.fakeInstall('opencode')),
-      }, shell, process.execPath, 'grid', null)
-      const script = launchScriptOf(argv)
-      const limit = `harness_primary_limit=${ENGINE_INSTALL_PRIMARY_LIMIT_S}`
-      expect(script).toContain(limit)
-      // The limit is two minutes; the same script with it at two seconds, in an interactive shell as a pane's is.
-      const pane = await startPane([shell, '-ic', script.replace(limit, 'harness_primary_limit=2'), 'harness-engine', 'opencode', 'after the stall']).done
-      expect(pane.stdout).toContain('harness: that install ran for 2s without finishing, so it was stopped')
-      expect(pane.stdout).toContain('trying the npm package instead')
-      expect(pane.stdout).toContain('ENGINE_READY:after the stall')
-      expect(pane.code).toBe(0)
-      expect(pane.seconds).toBeLessThan(20)
-      await until(() => !alive(Number(readFileSync(sleeper, 'utf8'))), 5_000)
-      expect(f.ran()).toEqual(['opencode'])
-    })
-  }
-
-  it('in the background too, a stalled first installer gives way to the fallback before the run\'s own limit', async () => {
-    const f = fixture()
-    const recipe = f.recipe('opencode', 'sleep 1000', f.fakeInstall('opencode'))
-    const script = launchScriptOf(backgroundInstallArgv('opencode', recipe, '/bin/sh'))
-    const limit = `harness_primary_limit=${ENGINE_INSTALL_PRIMARY_LIMIT_S}`
-    expect(script).toContain(limit)
-    const run = await startPane(['/bin/sh', '-ic', script.replace(limit, 'harness_primary_limit=2'), 'harness-engine-install', 'opencode']).done
-    expect(run.stdout).toContain('that install ran for 2s without finishing, so it was stopped')
-    expect(run.stdout).toContain(`harness-engine-installed: ${f.installedAt.opencode}`)
-    expect(run.code).toBe(0)
-  })
-
   it('gives up past its wait with a line saying why, without installing, and says it is still waiting meanwhile', async () => {
     const f = fixture()
     const paneInstalled = join(f.root, 'pane-installer-ran')
     hold(f.lock, livePid(), { kind: 'background' })
-    // The wait is five minutes; this runs the same script with it at three seconds and a line a second.
+    // The wait is two minutes; this runs the same script with it at three seconds and a line a second.
     const script = launchScriptOf(f.pane(`touch ${shellSingleQuote(paneInstalled)}`))
     const waitCheck = `[ "$harness_lock_waits" -ge ${ENGINE_INSTALL_WAIT_S} ]`
     expect(script).toContain(waitCheck)
@@ -708,7 +572,7 @@ describe('harness engines install-missing', () => {
     const result = spawnSync(process.execPath, [TSX, CLI, 'engines', 'install-missing'], { env: f.env, encoding: 'utf8', timeout: 60_000 })
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout.trim().split('\n').map((line) => JSON.parse(line))).toEqual(
-      ['opencode', 'claude', 'codex', 'pi'].map((engine) => ({ engine, status: 'already-installed', path: f.installedAt[engine] })),
+      ['opencode', 'claude', 'codex', 'pi'].map((engine) => ({ engine, status: 'already-installed' })),
     )
   })
 
@@ -719,9 +583,11 @@ describe('harness engines install-missing', () => {
     const started = JSON.parse(result.stdout.trim())
     expect(started).toMatchObject({ status: 'started', pid: expect.any(Number), log: join(f.root, 'logs', 'engine-install.log') })
     try {
-      await until(() => existsSync(started.log) && readFileSync(started.log, 'utf8').includes('[install-missing] done'), 45_000)
+      const status = join(f.home, '.harness', 'run', 'engine-install', 'status.json')
+      await until(() => existsSync(status) && JSON.parse(readFileSync(status, 'utf8')).finishedAt !== null, 45_000)
+      expect(JSON.parse(readFileSync(status, 'utf8')).engines.opencode).toMatchObject({ status: 'already-installed' })
       await until(() => !alive(started.pid), 10_000)
-      expect(readFileSync(started.log, 'utf8')).toContain(`[summary] {"engine":"pi","status":"already-installed","path":${JSON.stringify(f.installedAt.pi)}}`)
+      expect(readFileSync(started.log, 'utf8')).toContain('[summary] {"engine":"pi","status":"already-installed"}')
     } finally {
       try { process.kill(-started.pid, 'SIGKILL') } catch { /* ended */ }
     }

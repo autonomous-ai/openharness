@@ -129,7 +129,7 @@ vendor binaries, so their real login screens appear.
 - Background agent install (owner asked 2026-10-08): the CLI half is in (37927c159, d8096fb5c):
   `harness engines install-missing --background` prints one JSON line (`started`/`busy`/`failed`),
   installs OpenCode, Claude Code, Codex, Pi when missing, logs to `~/.harness/logs/engine-install.log`,
-  and remembers each engine in `~/.harness/run/engine-install/state.json`; panes wait on its per-engine lock. Still to
+  and writes `~/.harness/run/engine-install/status.json`; panes wait on its per-engine lock. Still to
   do: the desktop starts it once the local daemon is ready, then the run is measured in a fresh VM
   (needs a dev CLI in the VM: build the bundle and replace `~/.harness/cli`).
 - Default to the agent the person already uses (installed and signed in, most recent), else OpenCode.

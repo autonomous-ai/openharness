@@ -12,14 +12,10 @@
  *
  * ## The rules it keeps
  *
- *  - **Never reinstall.** An engine at one of its own install paths (`~/.opencode/bin`, `~/.local/bin`)
- *    is there. Any other is probed exactly as the daemon probes it for the New Harness dialog
- *    (`probeEngines`: the login shell's PATH, the npm global prefix), and one that resolves is left
- *    alone. One whose launch path is set by hand (`OPENCODE_PATH`, …) is skipped: an install cannot
- *    fill a path somebody chose.
- *  - **Cheap when there is nothing to do,** which is every app start but the first few: the probe
- *    starts an interactive login shell per engine, rc files and all, so it runs only for an engine not
- *    settled without one (at its install path, seen here by an earlier run, or failed within the day).
+ *  - **Never reinstall.** Each engine is probed exactly as the daemon probes it for the New Harness
+ *    dialog (`probeEngines`: the login shell's PATH, `~/.local/bin`, `~/.opencode/bin`, the npm global
+ *    prefix), and one that resolves is left alone. One whose launch path is set by hand
+ *    (`OPENCODE_PATH`, …) is skipped: an install cannot fill a path somebody chose.
  *  - **Never against the person.** An engine this has once seen here, installed by it or by anyone,
  *    and that is gone now, was removed by the person, and is not put back (`state.json`). One whose
  *    install failed is not tried again for a day: on a network that blocks npm every launch would
@@ -42,19 +38,20 @@
  *  - **It outlives the app.** `--background` starts it detached, in a session of its own, and returns.
  *
  * Every lock is an atomic `mkdir` with an owner line inside (`EngineLockOwner`): the holder's pid, its
- * start marker and when it was taken. A lock whose holder is gone, or whose pid now belongs to another
- * process, is stale and is taken over, so an install killed with the machine never holds anything for
- * good; a holder that cannot be checked by its start is aged out (`ENGINE_INSTALL_LOCK_MAX_AGE_S`).
+ * start marker and when it was taken. A lock whose holder is gone, whose pid now belongs to another
+ * process, or that is older than any install could be, is stale and is taken over, so an install
+ * killed with the machine never holds anything for good.
  *
  * ## What it reports
  *
  * One JSON line per engine on stdout and in the log: `{"engine":"opencode","status":"installed",
  * "path":"…","seconds":14.2}`, the status one of `already-installed`, `installed`, `failed` (with a
- * `reason`) or `skipped` (with a `reason`).
+ * `reason`) or `skipped` (with a `reason`). The same state is kept in `status.json` beside the locks,
+ * rewritten as each engine starts and ends, for the desktop to read whenever it likes.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { accessSync, closeSync, constants as fsConstants, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { constants, homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -68,7 +65,6 @@ import {
   ENGINE_INSTALL_WAIT_S,
   engineInstallLockDir,
   engineInstallLockPath,
-  engineInstallPaths,
   formatEngineLockOwner,
   parseEngineLockOwner,
   type EngineInstallRecipe,
@@ -77,7 +73,7 @@ import {
 import { BACKGROUND_INSTALL_MARKS, backgroundInstallArgv } from './engineLaunch.js'
 import { probeEngines, type EngineAvailability } from './engineProbe.js'
 import { trimLogFile, ts } from './log.js'
-import { lockOwnerState, processStartMarker } from './processLiveness.js'
+import { lockOwnerAlive, processStartMarker } from './processLiveness.js'
 
 /** The engines installed ahead of time, in order: OpenCode first, as the default agent. */
 export const WARMUP_ENGINES: readonly ProcessEngine[] = ['opencode', 'claude', 'codex', 'pi']
@@ -114,6 +110,7 @@ export interface WarmupOptions {
   /** How long a timed-out install has to end on SIGTERM before its group is sent SIGKILL. */
   readonly killGraceMs?: number
   readonly logFile?: string
+  readonly statusFile?: string
   readonly stateFile?: string
   /** Wall clock, for the day a failed install is held back. */
   readonly now?: () => number
@@ -126,6 +123,11 @@ export interface WarmupOptions {
 /** Read and sent with a bug report, beside the desktop's own logs (`HARNESS_LOGS_DIR`). */
 export function engineInstallLogFile(): string {
   return join(process.env.HARNESS_LOGS_DIR || join(homedir(), '.harness', 'logs'), 'engine-install.log')
+}
+
+/** The last run's state, per engine, for the desktop to show. */
+export function engineInstallStatusFile(): string {
+  return join(engineInstallLockDir(), 'status.json')
 }
 
 /** What every run has seen of each engine, so that none is put back or retried against the person. */
@@ -159,8 +161,7 @@ type LockState =
 /**
  * Who holds the lock at [lock]: the same reading as the shell's `harness_lock_busy` in engineLaunch.ts,
  * since a pane and this run take each other's locks. The holder must still be the process that took
- * it (`lockOwnerState`: its pid and its start marker). One checked that way holds however long its
- * install takes; only one that cannot be checked is aged out (`ENGINE_INSTALL_LOCK_MAX_AGE_S`).
+ * it (`lockOwnerAlive`: its pid and its start marker) and the lock younger than any install could be.
  */
 export function inspectLock(lock: string, now: number = Date.now()): LockState {
   let made: number
@@ -170,10 +171,8 @@ export function inspectLock(lock: string, now: number = Date.now()): LockState {
   if (!text.trim()) return now - made < UNCLAIMED_STALE_MS ? { state: 'held', owner: null } : { state: 'stale', text }
   const owner = parseEngineLockOwner(text)
   if (!owner) return { state: 'stale', text }
-  const holder = lockOwnerState(owner.pid, owner.start)
-  if (holder === 'gone') return { state: 'stale', text }
-  if (holder === 'unverified' && owner.since > 0 && now / 1000 - owner.since > ENGINE_INSTALL_LOCK_MAX_AGE_S) return { state: 'stale', text }
-  return { state: 'held', owner }
+  if (owner.since > 0 && now / 1000 - owner.since > ENGINE_INSTALL_LOCK_MAX_AGE_S) return { state: 'stale', text }
+  return lockOwnerAlive(owner.pid, owner.start) ? { state: 'held', owner } : { state: 'stale', text }
 }
 
 /** Remove a stale lock, unless it changed hands since it was judged: then it is someone's new one. */
@@ -224,7 +223,7 @@ export function releaseLock(lock: string, owner: Pick<EngineLockOwner, 'pid' | '
   try { rmSync(lock, { recursive: true, force: true }) } catch { /* already gone */ }
 }
 
-// ── log and history ────────────────────────────────────────────────────────────────────────────
+// ── log, status and history ────────────────────────────────────────────────────────────────────
 
 interface Log {
   line(engine: string, text: string): void
@@ -263,6 +262,39 @@ function writeJson(file: string, value: unknown): void {
   }
 }
 
+interface StatusEntry {
+  readonly status: WarmupStatus | 'installing' | 'waiting'
+  readonly reason?: string
+  readonly path?: string
+  readonly at: string
+}
+
+/** `status.json`: this run, as it goes. */
+class StatusRecord {
+  private readonly engines: Record<string, StatusEntry> = {}
+  private readonly startedAt = new Date().toISOString()
+  private finishedAt: string | null = null
+
+  constructor(private readonly file: string, engines: readonly ProcessEngine[]) {
+    for (const engine of engines) this.engines[engine] = { status: 'waiting', at: this.startedAt }
+    this.write()
+  }
+
+  set(engine: ProcessEngine, entry: Omit<StatusEntry, 'at'>): void {
+    this.engines[engine] = { ...entry, at: new Date().toISOString() }
+    this.write()
+  }
+
+  finish(): void {
+    this.finishedAt = new Date().toISOString()
+    this.write()
+  }
+
+  private write(): void {
+    writeJson(this.file, { pid: process.pid, startedAt: this.startedAt, finishedAt: this.finishedAt, engines: this.engines })
+  }
+}
+
 /** One engine in `state.json`: when it was first seen here, when this installed it, its last failure. */
 interface EngineHistory {
   presentAt?: string
@@ -282,11 +314,11 @@ class History {
     this.engines = engines && typeof engines === 'object' ? { ...(engines as Record<string, EngineHistory>) } : {}
   }
 
-  /** Why [engine] needs neither a probe nor an install, or null when it may. */
-  settled(engine: ProcessEngine): string | null {
+  /** Why a missing [engine] is left alone, or null to install it. */
+  holdBack(engine: ProcessEngine): string | null {
     const seen = this.engines[engine]
     if (seen?.presentAt) {
-      return `seen here on ${seen.presentAt.slice(0, 10)}: still here, or removed since and not put back (a new harness of it still installs it)`
+      return `it was here (${seen.presentAt.slice(0, 10)}) and has been removed since, so it is not put back; a new harness of it still installs it`
     }
     const failed = seen?.failedAt ? Date.parse(seen.failedAt) : NaN
     if (Number.isFinite(failed) && this.now() - failed < RETRY_FAILED_INSTALL_MS) {
@@ -409,34 +441,6 @@ async function installOne(engine: ProcessEngine, recipe: EngineInstallRecipe, co
   return failed(said ?? (code === null ? 'the install did not run' : `the install exited ${code}`))
 }
 
-/** The executable at one of [recipe]'s own install paths, as the pane's `resolve_engine` reads one. */
-function atInstallPath(recipe: EngineInstallRecipe): string | null {
-  for (const path of engineInstallPaths(recipe)) {
-    try {
-      if (statSync(path).isFile()) {
-        accessSync(path, fsConstants.X_OK)
-        return path
-      }
-    } catch { /* not this one */ }
-  }
-  return null
-}
-
-/**
- * [engine]'s line without a probe, or null when only a probe can tell. A path set by hand is the
- * probe's to judge (it decides whether an install could fill it).
- */
-function settledWithoutProbe(engine: ProcessEngine, recipe: EngineInstallRecipe, history: History): WarmupResult | null {
-  if (enginePathOverride(engine)) return null
-  const path = atInstallPath(recipe)
-  if (path) {
-    history.present(engine, false)
-    return { engine, status: 'already-installed', path }
-  }
-  const held = history.settled(engine)
-  return held ? { engine, status: 'skipped', reason: held } : null
-}
-
 /** Why an engine that is not there cannot be installed here (`probeEngines`' `installable`). */
 function skipReason(engine: ProcessEngine): string {
   const override = enginePathOverride(engine)
@@ -468,29 +472,19 @@ export async function installMissingEngines(options: WarmupOptions = {}): Promis
   const release = (): void => { if (take.taken) releaseLock(lock, take.owner) }
   // A run that ends in an exception still lets go: `exit` runs on the way out of anything but SIGKILL.
   process.once('exit', release)
+  const status = new StatusRecord(options.statusFile ?? engineInstallStatusFile(), engines)
   const history = new History(options.stateFile ?? engineInstallStateFile(), options.now ?? Date.now)
   const results: WarmupResult[] = []
   const record = (result: WarmupResult): void => {
     results.push(result)
+    status.set(result.engine, { status: result.status, ...(result.reason ? { reason: result.reason } : {}), ...(result.path ? { path: result.path } : {}) })
     const line = JSON.stringify(result)
     log.line('summary', line)
     emit(line)
   }
   try {
-    // Settled without a shell first (see the header). Measured on a throwaway home with all four
-    // engines (bundled CLI, zsh, median of nine, 2026-10-08): 0.19 s and 0.22 s CPU became 0.17 s
-    // and 0.17 s with an empty .zshrc; with a .zshrc that sleeps 0.3 s, a stand-in for a slow set-up
-    // such as nvm's, 0.52 s became 0.17 s. What is left is Node loading the CLI.
-    const settled = new Map<ProcessEngine, WarmupResult>()
-    for (const engine of engines) {
-      const known = settledWithoutProbe(engine, options.recipes?.[engine] ?? ENGINE_INSTALL[engine], history)
-      if (known) settled.set(engine, known)
-    }
-    const unsettled = engines.filter((engine) => !settled.has(engine))
-    log.line('install-missing', unsettled.length ? `probing ${unsettled.join(', ')}` : 'every engine settled without a probe')
-    const availability = unsettled.length
-      ? await (options.probe ?? ((list) => probeEngines(list, { accounts: false })))(unsettled)
-      : []
+    log.line('install-missing', `checking ${engines.join(', ')}`)
+    const availability = await (options.probe ?? probeEngines)(engines)
     const context: InstallContext = {
       log,
       shell: options.shell,
@@ -499,14 +493,9 @@ export async function installMissingEngines(options: WarmupOptions = {}): Promis
       killGraceMs: options.killGraceMs ?? DEFAULT_KILL_GRACE_MS,
       signal: options.signal,
     }
-    for (const engine of engines) {
+    for (const [index, engine] of engines.entries()) {
       if (options.signal?.aborted) break
-      const known = settled.get(engine)
-      if (known) {
-        record(known)
-        continue
-      }
-      const found = availability[unsettled.indexOf(engine)]
+      const found = availability[index]
       if (found?.installed) {
         history.present(engine, false)
         record({ engine, status: 'already-installed' })
@@ -516,11 +505,12 @@ export async function installMissingEngines(options: WarmupOptions = {}): Promis
         record({ engine, status: 'skipped', reason: skipReason(engine) })
         continue
       }
-      const held = history.settled(engine)
+      const held = history.holdBack(engine)
       if (held) {
         record({ engine, status: 'skipped', reason: held })
         continue
       }
+      status.set(engine, { status: 'installing' })
       let ended: InstallEnd
       try {
         ended = await installOne(engine, options.recipes?.[engine] ?? ENGINE_INSTALL[engine], context)
@@ -534,6 +524,7 @@ export async function installMissingEngines(options: WarmupOptions = {}): Promis
       record(ended.result)
     }
   } finally {
+    status.finish()
     process.off('exit', release)
     release()
     log.line('install-missing', 'done')
@@ -563,7 +554,7 @@ export function startInBackground(argv: readonly string[], logFile: string = eng
     return { status: 'failed', reason: `could not open ${logFile}: ${(error as Error).message}` }
   }
   try {
-    // stdout is not kept: the run writes its summary to the log itself, and state.json.
+    // stdout is not kept: the run writes its summary to the log and status.json itself.
     const child = spawn(argv[0], argv.slice(1), { detached: true, stdio: ['ignore', 'ignore', fd] })
     child.on('error', () => { /* reported below by the missing pid */ })
     child.unref()

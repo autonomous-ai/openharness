@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({ read: vi.fn(), exec: vi.fn() }))
 vi.mock('fs', () => ({ readFileSync: mocks.read }))
 vi.mock('node:child_process', () => ({ execFileSync: mocks.exec }))
 
-import { lockOwnerAlive, lockOwnerState, lockStartMarker, processLockIdentity, processStartMarker } from './processLiveness.js'
+import { lockOwnerAlive, lockStartMarker, processLockIdentity, processStartMarker } from './processLiveness.js'
 
 const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
 const hook = readFileSync(new URL('../../hook/notify.mjs', import.meta.url), 'utf8')
@@ -76,22 +76,5 @@ describe.each([
     expect(api.lockOwnerAlive(process.pid, 'ps-c:Sun Sep 27 20:00:00 2026')).toBe(true)
     expect(api.lockOwnerAlive(999_999_999, 'ps:legacy')).toBe(false)
     expect(api.processStartMarker(-1)).toBeNull()
-  })
-})
-
-describe('lockOwnerState', () => {
-  beforeEach(() => {
-    mocks.read.mockReset().mockImplementation(() => { throw new Error('No /proc') })
-    mocks.exec.mockReset().mockReturnValue('Sun Sep 27 20:00:00 2026\n')
-  })
-
-  it('tells an owner checked by its start from one that can only be assumed alive', () => {
-    expect(lockOwnerState(process.pid, 'ps-c:Sun Sep 27 20:00:00 2026')).toBe('same')
-    expect(lockOwnerState(process.pid, 'ps-c:Sun Sep 27 19:00:00 2026')).toBe('gone')
-    expect(lockOwnerState(999_999_999, 'ps-c:Sun Sep 27 20:00:00 2026')).toBe('gone')
-    expect(lockOwnerState(process.pid, '')).toBe('unverified')
-    expect(lockOwnerState(process.pid, 'ps:legacy')).toBe('unverified')
-    mocks.exec.mockImplementation(() => { throw new Error('Process query failed') })
-    expect(lockOwnerState(process.pid, 'ps-c:Sun Sep 27 20:00:00 2026')).toBe('unverified')
   })
 })

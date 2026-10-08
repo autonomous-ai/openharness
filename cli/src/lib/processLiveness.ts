@@ -61,25 +61,14 @@ export function lockStartMarker(owner: LockGeneration | null | undefined): strin
     : typeof owner?.startMarker === 'string' ? owner.startMarker : ''
 }
 
-/**
- * What can be said of a lock's owner: `same` when its pid runs with the start marker it wrote, `gone`
- * when the pid is not running or runs with another start, and `unverified` when it runs but its start
- * cannot be compared (none written, none readable now, or a legacy form). A caller that must not wait
- * for good on a reused pid can bound only the `unverified` case (engineWarmup.ts does, by age).
- */
-export function lockOwnerState(pid: number, startMarker: string): 'same' | 'gone' | 'unverified' {
-  if (!processExists(pid)) return 'gone'
-  if (!startMarker) return 'unverified'
+export function lockOwnerAlive(pid: number, startMarker: string): boolean {
+  if (!processExists(pid)) return false
+  if (!startMarker) return true
   const current = processStartMarker(pid)
   // Legacy ps markers inherited the writer's locale. They cannot be compared
   // safely with a new reader's timestamp; keep that live owner until it exits.
   const comparable = current !== null && ['linux:', 'ps-c:'].some(
     (prefix) => startMarker.startsWith(prefix) && current.startsWith(prefix),
   )
-  if (!comparable) return 'unverified'
-  return current === startMarker ? 'same' : 'gone'
-}
-
-export function lockOwnerAlive(pid: number, startMarker: string): boolean {
-  return lockOwnerState(pid, startMarker) !== 'gone'
+  return !comparable || current === startMarker
 }
