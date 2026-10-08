@@ -2555,6 +2555,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               : null
         : !option.enabled
         ? option.why
+        : box.field == NewHarnessField.harness ||
+              box.field == NewHarnessField.agent
+        ? box.agentStatus(option.id)
         : null;
     return Semantics(
       key: ValueKey('new-harness-option-${option.id}'),
