@@ -25,6 +25,9 @@ class PackageIdentity(unittest.TestCase):
                 identity = package.stage(Path(__file__).resolve().parents[2], runtime, destination, 'a' * 40)
             config = destination / 'etc/skel/.config/opencode'
             self.assertTrue((destination / 'usr/lib/harness-os/connections/connections.py').is_file())
+            self.assertTrue((destination / 'usr/share/harness-os/browser-home/home.crx').is_file())
+            self.assertEqual((destination / 'usr/lib/harness-os/browser_home.py').stat().st_mode & 0o777, 0o755)
+            self.assertTrue((destination / 'etc/chromium/native-messaging-hosts/ai.autonomous.harness_home.json').is_file())
             self.assertTrue((destination / 'usr/lib/harness-os/connections/web/index.html').is_file())
             self.assertTrue((destination / 'usr/share/licenses/harness-os-connections/LICENSE').is_file())
             self.assertIn('harness connections', (destination / 'usr/share/harness-os/connections.md').read_text())

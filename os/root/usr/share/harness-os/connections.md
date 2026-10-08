@@ -5,7 +5,8 @@ Every agent running as this user reads the same connection store. A connection
 on another computer does not grant access here. Do not copy tokens between
 machines or into agent configuration.
 
-Open `harness connections` when the user needs to connect or disconnect an
+On the PC OS, open a browser tab and choose **Connections**, or use
+`harness connections` when the user needs to connect or disconnect an
 account. Secrets belong in that local form, never in chat, shell arguments or
 project files. Read `harness connections info CODE` for account identity,
 reported permissions and expiry. Unknown permissions are not unlimited access.

@@ -224,10 +224,8 @@ def forget_page(vault, identity):
             path.unlink(missing_ok=True)
 
 
-def open_page():
-    browser = shutil.which("hn-browser")
-    if not browser:
-        raise store.StoreError("Open this page on a Harness computer, or run 'connections.py serve' for local review.")
+def page_url():
+    """Start or authenticate this user's on-demand page without opening a tab."""
     vault = store.Store()
     with store.locked(vault.root):
         url = running_page(vault)
@@ -243,6 +241,14 @@ def open_page():
                 time.sleep(0.1)
             if not url:
                 raise store.StoreError("Could not open Connections.")
+    return url
+
+
+def open_page():
+    browser = shutil.which("hn-browser")
+    if not browser:
+        raise store.StoreError("Open this page on a Harness computer, or run 'connections.py serve' for local review.")
+    url = page_url()
     subprocess.Popen([browser, url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print("Connections opened in the browser.")
 

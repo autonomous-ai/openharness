@@ -1,0 +1,41 @@
+# Browser start page
+
+The PC OS packages a small, removable Chromium Manifest V3 extension. It opens on
+New Tab and the browser's default startup, with one action: **Connections**.
+The browser launcher, startup preferences, bookmark bar and explicit URLs stay
+untouched. A user can disable/remove it in `chrome://extensions` or choose another
+New Tab extension. Chromium remembers removal across OS updates.
+
+The extension has only `nativeMessaging` permission. It has no background worker,
+network access, content scripts, history or bookmark permissions. Clicking
+Connections starts a short-lived native host which accepts exactly one action
+from the exact extension origin. The host authenticates or starts the existing
+per-user Connections helper and returns its temporary capability URL. There is
+no fixed local port, unauthenticated credential endpoint or shell-command bridge.
+
+The signed `home.crx` is committed alongside its source. Ordinary OS builds need
+no private key or browser build. `os/tools/browser_home_payload.py` verifies the
+CRX3 RSA signature, extension identity and every bundled file against the source
+before packaging it. This uses OpenSSL only on the build/test host; the installed
+bridge uses Python's standard library.
+
+To change the page, increment `extension/manifest.json`'s version, then pack it
+with Chromium using the existing **private** extension signing key:
+
+```sh
+chromium --user-data-dir=/tmp/harness-home-pack --no-message-box \
+  --pack-extension="$PWD/os/browser-home/extension" \
+  --pack-extension-key=/secure/path/harness-home.pem
+mv os/browser-home/extension.crx os/browser-home/home.crx
+chmod 644 os/browser-home/home.crx
+python3 os/tools/browser_home_payload.py
+```
+
+Keep the private key in secure maintainer storage, backed up before publication;
+never commit it or ship it in an image. Reuse the same key: changing it changes
+the extension ID and loses the browser's remembered customization. Package
+updates take effect on the next browser launch; never terminate a running browser
+or rewrite a live browser profile to activate the page.
+
+The experimental Fedora session does not yet include this browser integration.
+Validate its native Chromium paths and removable install before adding it there.
