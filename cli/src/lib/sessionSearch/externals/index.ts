@@ -67,12 +67,21 @@ export function externalPaths(vars: NodeJS.ProcessEnv = process.env): ExternalPa
 /**
  * An engine's reader, built from its own code the first time a scan or a question needs it, then kept: what it
  * remembers between scans (the files it read, which session is where) stays its own. An engine whose code could not
- * be loaded lists nothing and holds nothing open, as an engine with no store does; its failure is logged once, by
- * the loader.
+ * be loaded, or whose reader could not be built from it, lists nothing and holds nothing open, as an engine with no
+ * store does. Either failure is logged once (the loader logs the first), and never tried again: a rejection kept
+ * for good would fail every scan of that engine instead.
  */
 function loaded<Name extends OtherEngine>(engine: ExternalEngine, name: Name, build: (code: InProcessModules[Name]) => ExternalProvider): ExternalProvider {
   let provider: Promise<ExternalProvider | null> | null = null
-  const reader = (): Promise<ExternalProvider | null> => provider ??= loadEngine(name).then((code) => code && build(code))
+  const reader = (): Promise<ExternalProvider | null> => provider ??= loadEngine(name).then((code) => {
+    if (!code) return null
+    try {
+      return build(code)
+    } catch (error) {
+      console.error(`[engine ${name}] adoption reader unavailable · ${error instanceof Error ? error.message : error}`)
+      return null
+    }
+  })
   return {
     engine,
     scan: async (ctx) => await (await reader())?.scan(ctx) ?? [],

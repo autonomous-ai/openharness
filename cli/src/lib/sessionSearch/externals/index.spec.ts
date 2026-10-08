@@ -79,4 +79,17 @@ describe('the other engines\' readers, loaded on first use', () => {
     expect(await devin.owners!(none)).toEqual([])
     expect(await devin.busy!({ pid: 1, record: '' })).toBeNull()
   })
+
+  it('treats a reader that could not be built as that engine unavailable, said once, never as a failed scan', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const devinProvider = vi.fn(() => { throw new Error('bad store path') })
+    vi.mocked(loadEngine).mockResolvedValueOnce({ devinProvider } as never)
+    const devin = externalProviders(paths()).find((provider) => provider.engine === 'devin')!
+    for (let scan = 0; scan < 2; scan++) expect(await devin.scan(scanMemo({ excluded: [] }).context())).toEqual([])
+    expect(await devin.owners!(none)).toEqual([])
+    expect(await devin.busy!({ pid: 1, record: '' })).toBeNull()
+    expect(devinProvider).toHaveBeenCalledOnce()
+    expect(error.mock.calls).toEqual([['[engine devin] adoption reader unavailable · bad store path']])
+    error.mockRestore()
+  })
 })
