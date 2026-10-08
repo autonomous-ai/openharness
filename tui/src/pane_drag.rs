@@ -116,8 +116,28 @@ pub fn draw(buf: &mut Buffer, app: &App) {
     shade(buf, zone, hint(app, &grab.drop).as_deref(), theme::paint(theme::accent()), theme::paint(theme::pane_palette().background), theme::no_color());
 }
 
-/// What releasing pane [src] over [drop] does.
-pub fn release(_app: &mut App, _src: u64, _drop: Drop) {}
+/// What releasing pane [src] over [drop] does: tmux's own swap-pane / join-pane, so the layout
+/// reaches the desk and every other client as those commands' does. Another client may have
+/// moved or closed either pane while it was dragged: then nothing happens.
+pub fn release(app: &mut App, src: u64, drop: Drop) {
+    let home = |app: &App, id: u64| if app.panes.contains_key(&id) { app.tabs.iter().position(|t| t.panes().contains(&id)) } else { None };
+    let Some(from) = home(app, src) else { return };
+    let tag = crate::pane::tag;
+    let command = match drop {
+        Drop::Swap(dst) if dst != src && home(app, dst).is_some() => format!("swap-pane -s {} -t {}", tag(src), tag(dst)),
+        Drop::Beside(dst, side) if dst != src && home(app, dst).is_some() => {
+            let flags = match side { Side::Left => "-h -b", Side::Right => "-h", Side::Top => "-v -b", Side::Bottom => "-v" };
+            format!("join-pane {flags} -s {} -t {}", tag(src), tag(dst))
+        }
+        // (`:N` is that window's active pane, as join-pane -t :N is in tmux.)
+        Drop::Tab(id) => match app.tabs.iter().position(|t| t.id == id).filter(|i| *i != from) {
+            Some(i) => format!("join-pane -s {} -t :{}", tag(src), app.win_num(i)),
+            None => return,
+        },
+        _ => return,
+    };
+    crate::commands::execute(app, &command);
+}
 
 /// Escape: the pane is let go where it was.
 pub fn cancel(app: &mut App) {
@@ -284,6 +304,79 @@ mod tests {
         shade(&mut buf, Rect::new(2, 0, 6, 1), Some("to b"), accent, back, true);
         assert_eq!((3..7).map(|x| buf[(x, 0)].symbol()).collect::<String>(), "to b");
         assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    /// Panes 1 | 2 | 3 in one window [width] wide, on the desk so that layout changes are queued.
+    fn three(width: u16) -> App {
+        let mut app = app(width);
+        app.tabs.truncate(1);
+        let mut pane = crate::pane::Pane::new(3, "local", "a3", width, 30);
+        pane.phase = crate::pane::Phase::Live;
+        app.panes.insert(3, pane);
+        let root = app.tabs[0].root.as_mut().unwrap();
+        root.split(1, 2, Dir::Horizontal);
+        root.split(2, 3, Dir::Horizontal);
+        app.session_desk = true;
+        app.tabs[0].on_desk = true;
+        app.fit_panes();
+        app
+    }
+
+    #[tokio::test]
+    async fn dropping_runs_swap_and_join_and_publishes_the_layout() {
+        let mut app = three(120);
+        release(&mut app, 1, Drop::Swap(3));
+        assert_eq!(app.tabs[0].panes(), vec![3, 2, 1]);
+        assert!(app.desk_layouts.contains(&app.tabs[0].id), "queued for the desk");
+        app.desk_layouts.clear();
+        release(&mut app, 3, Drop::Beside(1, Side::Bottom));
+        let layout = app.tabs[0].root.as_ref().unwrap().to_tmux();
+        assert_eq!(layout.matches('[').count(), 1, "1 and 3 are stacked: {layout}");
+        assert_eq!(app.tabs[0].panes(), vec![2, 1, 3]);
+        assert!(app.desk_layouts.contains(&app.tabs[0].id));
+        // -b puts it before: on the left of 2
+        release(&mut app, 3, Drop::Beside(2, Side::Left));
+        assert_eq!(app.tabs[0].panes(), vec![3, 2, 1]);
+        assert_eq!(app.tabs[0].root.as_ref().unwrap().to_tmux().matches('[').count(), 0, "a row again");
+    }
+
+    #[tokio::test]
+    async fn dropping_on_a_tab_moves_the_pane_into_that_window() {
+        let mut app = app(100);                          // window 1: pane 1; window 2: pane 2
+        let other = app.tabs[1].id.clone();
+        release(&mut app, 1, Drop::Tab(other.clone()));
+        let tab = app.tabs.iter().find(|t| t.id == other).unwrap();
+        assert!(tab.panes().contains(&1) && tab.panes().contains(&2));
+        assert_eq!(app.tabs.len(), 1, "a window left with no pane closes, as join-pane does");
+    }
+
+    #[tokio::test]
+    async fn a_gone_source_or_target_does_nothing() {
+        let mut app = three(120);
+        let before = app.tabs[0].panes();
+        let own = app.tabs[0].id.clone();
+        release(&mut app, 99, Drop::Swap(2));
+        release(&mut app, 1, Drop::Swap(99));
+        release(&mut app, 1, Drop::Beside(99, Side::Left));
+        release(&mut app, 1, Drop::Tab("no-such-window".into()));
+        release(&mut app, 1, Drop::Tab(own));
+        release(&mut app, 1, Drop::Swap(1));
+        release(&mut app, 1, Drop::Nothing);
+        assert_eq!(app.tabs[0].panes(), before);
+        assert!(app.desk_layouts.is_empty());
+        assert_eq!(app.errors, 0, "nothing ran, so nothing failed");
+    }
+
+    #[tokio::test]
+    async fn a_pane_too_small_to_split_refuses_the_drop_and_nothing_moves() {
+        let mut app = three(8);
+        let (before, layout) = (app.tabs[0].panes(), app.tabs[0].root.as_ref().unwrap().to_tmux());
+        release(&mut app, 1, Drop::Beside(3, Side::Left));
+        assert_eq!(app.tabs[0].panes(), before);
+        assert_eq!(app.tabs[0].root.as_ref().unwrap().to_tmux(), layout);
+        let toast = app.toast.as_ref().map(|(t, ..)| t.clone()).unwrap_or_default();
+        assert!(toast.contains("pane too small"), "the command's own message: {toast:?}");
+        assert!(app.desk_layouts.is_empty());
     }
 
     #[tokio::test]

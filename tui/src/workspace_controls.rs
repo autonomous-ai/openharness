@@ -443,7 +443,7 @@ pub(crate) mod tests {
         app.tabs.truncate(1);
         app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
         app.fit_panes();
-        let before = render(&mut app);
+        render(&mut app);
         let g = grip(&app, 1);
         send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
         let r2 = app.rects.iter().find(|(id, _)| *id == 2).unwrap().1;
@@ -454,7 +454,14 @@ pub(crate) mod tests {
         assert!(row.contains("swap with Task 2"), "{row}");
         send(&mut app, MouseEventKind::Up(MouseButton::Left), cx, cy);
         assert!(app.redraw_all, "the release repaints the screen once");
-        assert_eq!(render(&mut app), before, "the frame after the release has no zone");
+        assert_eq!(app.tabs[0].panes(), vec![2, 1], "the drop swapped them");
+        // the same swap run as a command, never dragged: the frame it draws, with no zone
+        let mut swapped = self::app(120);
+        swapped.tabs.truncate(1);
+        swapped.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        swapped.fit_panes();
+        crate::commands::execute(&mut swapped, "swap-pane -s %0 -t %1");
+        assert_eq!(render(&mut app), render(&mut swapped), "the frame after the release has no zone");
     }
 
     #[tokio::test]
@@ -475,6 +482,8 @@ pub(crate) mod tests {
         assert_eq!(app.controls.grab.as_ref().unwrap().drop, crate::pane_drag::Drop::Swap(2));
         send(&mut app, MouseEventKind::Up(MouseButton::Left), cx, cy);
         assert!(app.controls.grab.is_none() && app.controls.pressed.is_none());
+        assert_eq!(app.tabs[0].panes(), vec![2, 1], "the drop swapped them");
+        render(&mut app);
         // a press and release that never moved 2 cells runs nothing
         let order = app.tabs[0].panes();
         let g = grip(&app, 1);
