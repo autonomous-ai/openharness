@@ -285,7 +285,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     // (Not under @hn-look tmux unless @hn-hint-time asks for it: tmux shows nothing after the prefix.)
     let hints = !(app.options.tmux_look() && app.options.get("@hn-hint-time", "", None).is_none());
-    if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
+    let hinted = if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) } else { None };
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
     let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
@@ -294,25 +294,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
-    app.overlay_drawn = overlay_area(app, body, status);
+    app.overlay_drawn = overlay_area(app, area, body, status, hinted);
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
 }
 
 /// Where this frame drew an overlay, for the settle rewrite: one that is gone or no longer covers
-/// the cells it did may have left some kept wrongly (see `app::settle_due`).
-fn overlay_area(app: &App, body: Rect, status: Rect) -> Option<Rect> {
+/// the cells it did may have left some kept wrongly (see `app::settle_due`). [hints]: the prefix's
+/// key hints, when drawn.
+fn overlay_area(app: &App, screen: Rect, body: Rect, status: Rect, hints: Option<Rect>) -> Option<Rect> {
     let spoken = app.toast.as_ref().is_some_and(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms()));
     let area = match &app.modal {
-        Some(Modal::Picker { picker, .. }) => picker.screen_area.get(),
-        Some(Modal::Menu(m)) => Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 2),
-        Some(Modal::NewHarness(form)) => form.area(),
-        Some(Modal::Popup { x, y, width, height, .. }) => Rect::new(*x, *y, *width, *height),
-        Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) => status,
-        Some(Modal::DisplayPanes { .. }) => body,
-        Some(Modal::Copy { .. }) | None if spoken => status,
-        Some(Modal::Copy { .. }) | None => return None,
+        Some(Modal::Picker { picker, .. }) => Some(picker.screen_area.get()),
+        // (Drawn clipped to the screen: a box placed past its edge.)
+        Some(Modal::Menu(m)) => Some(Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 2).intersection(screen)),
+        Some(Modal::NewHarness(form)) => Some(form.drawn_area()),
+        Some(Modal::Popup { x, y, width, height, .. }) => Some(Rect::new(*x, *y, *width, *height).intersection(screen)),
+        Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) => Some(status),
+        Some(Modal::DisplayPanes { .. }) => Some(body),
+        Some(Modal::Copy { .. }) | None if spoken => Some(status),
+        Some(Modal::Copy { .. }) | None => None,
     };
-    Some(area).filter(|r| r.width > 0 && r.height > 0)
+    let area = area.filter(|r| r.width > 0 && r.height > 0);
+    match (area, hints.filter(|r| r.width > 0 && r.height > 0)) { (Some(a), Some(h)) => Some(a.union(h)), (a, h) => a.or(h) }
 }
 
 /// tmux's menu (menu_draw_cb, screen_write_menu, screen_write_box): a box width + 4 wide at its
@@ -363,8 +366,8 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
 
 /// A pause after the prefix: every key that can come next, from the live table (your binds too),
 /// in a box over the bottom of the window — tmux's keys, with the hint zellij users praise.
-fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
-    if body.width < 16 || body.height < 4 { return }
+fn which_key(buf: &mut Buffer, app: &App, body: Rect) -> Option<Rect> {
+    if body.width < 16 || body.height < 4 { return None }
     let mut items: Vec<(String, String)> = Vec::new();
     let mut digits = false;
     for b in &app.keymap.prefix_table {
@@ -418,6 +421,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
         let room = col_w - key_w - 3;
         buf.set_stringn(x + key_w as u16 + 1, y, clip(what, room), room, Style::default().fg(pal.foreground).bg(pal.surface));
     }
+    Some(area)
 }
 
 
@@ -3228,6 +3232,29 @@ mod theme_render_tests {
         screen(&mut app);
         assert_eq!(app.overlay_drawn, None);
         assert_eq!(crate::app::settle_due(Some(two), app.overlay_drawn, 5, None, t0), Some(t0), "closed");
+    }
+
+    /// The rect kept for the settle rewrite is where the frame drew: a menu or popup placed past
+    /// the screen's edge is clipped to it, as drawn; the prefix's key hints are an overlay too.
+    #[test]
+    fn the_overlay_rect_is_on_the_screen_and_takes_in_the_key_hints() {
+        let mut app = app();
+        let whole = Rect::new(0, 0, 150, 42);
+        let items = (0..3).map(|i| modal::MenuItem { label: format!("item {i}"), key: String::new(), command: String::new(), disabled: false, separator: false }).collect();
+        app.modal = Some(Modal::Menu(modal::Menu { title: "m".into(), items, choice: None, x: 140, y: 40, width: 20, stay_open: false, no_mouse: false, mouse: None, tree: None, complete: None, responsive: None }));
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, Some(Rect::new(140, 40, 10, 2)), "the menu, clipped to the screen");
+        app.modal = Some(Modal::Popup { pane: 999, x: 130, y: 35, width: 40, height: 20, border: true, title: String::new(), look: Default::default() });
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, Some(Rect::new(130, 35, 20, 7)), "the popup, clipped to the screen");
+        assert!(app.overlay_drawn.is_some_and(|r| r.intersection(whole) == r));
+        app.modal = None;
+        app.prefix = true;
+        app.prefix_at = Some(std::time::Instant::now() - Duration::from_secs(5));
+        let s = screen(&mut app);
+        let hints = app.overlay_drawn.unwrap_or_else(|| panic!("the key hints are an overlay:\n{s}"));
+        let body = app.body();
+        assert_eq!((hints.x, hints.width, hints.bottom()), (body.x, body.width, body.bottom()), "{hints:?} {body:?}");
     }
 
     // ── tabs ──
