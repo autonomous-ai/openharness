@@ -510,6 +510,42 @@ def pane_drag_journey(alpha, beta):
     print('PASS workspace: dropping a pane on a tab moves it into that window', flush=True)
 
 
+def side_bar_machines_journey():
+    # In the side bar each machine lists its harnesses no window here shows: a click opens one in
+    # a window, a right press on the machine offers what can be done on it, and a harness that
+    # stops leaves the list.
+    bar = hn('show', '-gv', '@hn-status-bar', ok=False)
+    hn('set', '-g', '@hn-status-bar', 'left')
+    width = 26
+    windows = lambda: len(hn('list-windows', '-F', '#{window_id}').splitlines())
+    shown('✓ Remote')
+    api({'action': 'remote-agent', 'agent': 'delta', 'name': 'Delta remote task'})
+    shown('Delta remote task')
+    snapshot('side-bar-machines')
+    before = windows()
+    click_text('Delta remote task', before=width)
+    wait(lambda: windows() == before + 1, 'a click opens the harness in a window')
+    shown('Delta remote task terminal')
+    # (The second: the first is the bar's top line, the machine this window is on.)
+    click_text('✓ Remote', occurrence=1, button=2, before=width)
+    shown('New Harness on Remote…')
+    shown('Open its harnesses')
+    snapshot('side-bar-machine-menu')
+    keys('Escape')
+    wait(lambda: 'New Harness on Remote…' not in screen(), 'Esc closes the machine menu')
+    # Its window closed, the harness is a row under its machine again; stopped, it goes.
+    hn('kill-window')
+    wait(lambda: windows() == before, 'its window closes')
+    shown('Delta remote task')
+    api({'action': 'remote-agent', 'agent': 'delta', 'stop': True})
+    wait(lambda: 'Delta remote task' not in screen(), 'a stopped harness leaves the side bar')
+    if bar:
+        hn('set', '-g', '@hn-status-bar', bar)
+    else:
+        hn('set', '-gu', '@hn-status-bar')
+    print('PASS workspace: the side bar lists each machine\'s harnesses, opens one with a click, and offers its menu', flush=True)
+
+
 mock = None
 started = False
 try:
@@ -563,8 +599,12 @@ try:
         api({'action': 'terminal-mouse'})
         pane_drag_journey(alpha, beta)
         sys.exit(0)
+    if '--side-bar' in sys.argv:
+        side_bar_machines_journey()
+        sys.exit(0)
 
     machine_prompt_journey()
+    side_bar_machines_journey()
 
     # Local use is complete before any sign-in. The tiny footer entry explains the benefit,
     # then lets the user return without starting an authentication request.
