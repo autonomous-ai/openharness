@@ -9,7 +9,7 @@ void main() {
     'says the agent is getting ready, with a moving bar and the waiting message',
     (tester) async {
       await tester.pumpWidget(
-        _host(AgentInstallCover(engine: 'cursor', messageWaiting: true)),
+        _host(const AgentInstallCover(engine: 'cursor', messageWaiting: true)),
       );
       expect(find.text('Getting Cursor ready…'), findsOneWidget);
       expect(find.textContaining('your message is waiting'), findsOneWidget);
@@ -33,7 +33,9 @@ void main() {
   testWidgets(
     'Show details uncovers the terminal and Hide details covers it again',
     (tester) async {
-      await tester.pumpWidget(_host(AgentInstallCover(engine: 'copilot')));
+      await tester.pumpWidget(
+        _host(const AgentInstallCover(engine: 'copilot')),
+      );
       await tester.tap(
         find.byKey(const ValueKey('agent-install-show-details')),
       );

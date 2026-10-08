@@ -14,7 +14,7 @@ import 'engine_identity.dart';
 /// details uncovers the terminal for anyone who wants it. The bar moves on time, not on bytes: the
 /// installers report no progress, and measured installs took 7–20 s (macOS VM, 2026-10-08).
 class AgentInstallCover extends StatefulWidget {
-  AgentInstallCover({
+  const AgentInstallCover({
     super.key,
     required this.engine,
     this.failed = false,
