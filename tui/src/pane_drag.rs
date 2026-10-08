@@ -1,6 +1,6 @@
 //! Where a dragged pane would land: the pointer over the screen -> what releasing there does.
-use ratatui::{buffer::Buffer, layout::{Position, Rect}, style::{Color, Modifier}};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Position, Rect}, style::{Color, Modifier, Style}, text::Line, widgets::{Block, Widget}};
+use unicode_width::UnicodeWidthStr;
 use crate::{app::App, bar::Hit, draw::RangeKind, theme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,25 +86,29 @@ fn hint(app: &App, drop: &Drop) -> Option<String> {
     }
 }
 
-/// Shade [zone] (its symbols stay) and write [text] centred on its middle row, cut to the zone.
-/// A zone of one row (a tab) keeps its own label unless the whole hint fits.
-fn shade(buf: &mut Buffer, zone: Rect, text: Option<&str>, bg: Color, fg: Color, reverse: bool) {
-    let zone = zone.intersection(buf.area);
-    for pos in zone.positions() {
-        let Some(cell) = buf.cell_mut(pos) else { continue };
-        cell.set_bg(bg).set_fg(fg);
-        if reverse { cell.modifier.insert(Modifier::REVERSED) }
+/// The zone a dragged pane will land in: tinted (what is under it stays) with a hint on its middle row.
+pub struct DropZone<'a> { hint: Option<&'a str>, tint: Style }
+
+impl<'a> DropZone<'a> {
+    /// [reverse] is the cue for NO_COLOR, which paints no colour at all.
+    pub fn new(hint: Option<&'a str>, bg: Color, fg: Color, reverse: bool) -> Self {
+        let tint = Style::new().bg(bg).fg(fg);
+        DropZone { hint, tint: if reverse { tint.add_modifier(Modifier::REVERSED) } else { tint } }
     }
-    let Some(text) = text else { return };
-    let width = UnicodeWidthStr::width(text) as u16;
-    if zone.height == 1 && width > zone.width { return }
-    let (mut x, y) = (zone.x + zone.width.saturating_sub(width) / 2, zone.y + zone.height / 2);
-    for ch in text.chars() {
-        let w = ch.width().unwrap_or(0) as u16;
-        if w == 0 { continue }
-        if x + w > zone.right() { break }
-        if let Some(cell) = buf.cell_mut((x, y)) { cell.set_char(ch); }
-        x += w;
+}
+
+impl Widget for DropZone<'_> {
+    /// The hint is centred and cut to the zone; a zone of one row (a tab) keeps its own label
+    /// unless the whole hint fits.
+    fn render(self, zone: Rect, buf: &mut Buffer) {
+        let zone = zone.intersection(buf.area);
+        Block::new().style(self.tint).render(zone, buf);
+        let Some(text) = self.hint else { return };
+        let width = text.width() as u16;
+        if zone.height == 1 && width > zone.width { return }
+        let [_, middle, _] = Layout::vertical([Constraint::Length(zone.height / 2), Constraint::Length(1), Constraint::Fill(1)]).areas(zone);
+        let [_, hint] = Layout::horizontal([Constraint::Length(zone.width.saturating_sub(width) / 2), Constraint::Fill(1)]).areas(middle);
+        Line::raw(text).render(hint, buf);
     }
 }
 
@@ -113,7 +117,8 @@ pub fn draw(buf: &mut Buffer, app: &App) {
     let Some(grab) = app.controls.grab.as_ref().filter(|g| g.live) else { return };
     let Some(zone) = zone(app, &grab.drop) else { return };
     // (NO_COLOR paints nothing, so the zone is drawn reversed instead.)
-    shade(buf, zone, hint(app, &grab.drop).as_deref(), theme::paint(theme::accent()), theme::paint(theme::pane_palette().background), theme::no_color());
+    let (bg, fg) = (theme::paint(theme::accent()), theme::paint(theme::pane_palette().background));
+    DropZone::new(hint(app, &grab.drop).as_deref(), bg, fg, theme::no_color()).render(zone, buf);
 }
 
 /// What releasing pane [src] over [drop] does: tmux's own swap-pane / join-pane, so the layout
@@ -289,7 +294,7 @@ mod tests {
         assert_ne!(accent, back, "this test needs an accent that differs from the pane background");
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 5));
         buf.set_string(0, 0, "x", ratatui::style::Style::default());
-        shade(&mut buf, Rect::new(2, 1, 8, 3), Some("swap with a long name"), accent, back, false);
+        DropZone::new(Some("swap with a long name"), accent, back, false).render(Rect::new(2, 1, 8, 3), &mut buf);
         assert_eq!(buf[(2, 1)].bg, accent);
         assert_eq!(buf[(9, 3)].bg, accent);
         assert_ne!(buf[(10, 2)].bg, accent, "just outside");
@@ -300,11 +305,105 @@ mod tests {
         // one row (a tab): its own label stays unless the whole hint fits
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 2));
         buf.set_string(2, 0, "abcd", ratatui::style::Style::default());
-        shade(&mut buf, Rect::new(2, 0, 4, 1), Some("to a longer tab"), accent, back, false);
+        DropZone::new(Some("to a longer tab"), accent, back, false).render(Rect::new(2, 0, 4, 1), &mut buf);
         assert_eq!((2..6).map(|x| buf[(x, 0)].symbol()).collect::<String>(), "abcd");
-        shade(&mut buf, Rect::new(2, 0, 6, 1), Some("to b"), accent, back, true);
+        DropZone::new(Some("to b"), accent, back, true).render(Rect::new(2, 0, 6, 1), &mut buf);
         assert_eq!((3..7).map(|x| buf[(x, 0)].symbol()).collect::<String>(), "to b");
         assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    /// The cell loops the zone was first drawn with, kept to prove the widget draws the same cells.
+    fn oracle_shade(buf: &mut Buffer, zone: Rect, text: Option<&str>, bg: Color, fg: Color, reverse: bool) {
+        let zone = zone.intersection(buf.area);
+        for pos in zone.positions() {
+            let Some(cell) = buf.cell_mut(pos) else { continue };
+            cell.set_bg(bg).set_fg(fg);
+            if reverse { cell.modifier.insert(Modifier::REVERSED) }
+        }
+        let Some(text) = text else { return };
+        let width = UnicodeWidthStr::width(text) as u16;
+        if zone.height == 1 && width > zone.width { return }
+        let (mut x, y) = (zone.x + zone.width.saturating_sub(width) / 2, zone.y + zone.height / 2);
+        for ch in text.chars() {
+            let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;
+            if w == 0 { continue }
+            if x + w > zone.right() { break }
+            if let Some(cell) = buf.cell_mut((x, y)) { cell.set_char(ch); }
+            x += w;
+        }
+    }
+
+    /// A screen of busy cells (symbols, colours and a modifier that differ cell to cell) to shade.
+    fn backdrop() -> Buffer {
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 12));
+        for (i, pos) in buf.area.positions().enumerate() {
+            let cell = &mut buf[pos];
+            cell.set_char((b'a' + (i % 26) as u8) as char).set_fg(Color::Rgb(i as u8, 90, 200)).set_bg(Color::Indexed((i % 200) as u8));
+            if i % 7 == 0 { cell.modifier.insert(Modifier::BOLD | Modifier::REVERSED) }
+        }
+        buf
+    }
+
+    #[test]
+    fn the_widget_draws_what_the_cell_loops_drew() {
+        let dark = theme::pane_palette_of([28, 31, 36], [220, 225, 231]).background;
+        let light = theme::pane_palette_of([250, 250, 245], [30, 30, 30]).background;
+        let (field, ink) = (Rect::new(0, 0, 40, 12), Rect::new(4, 2, 14, 7));
+        let beside = |side| { // the four halves the way `zone` cuts a pane
+            let (w, h) = (ink.width / 2, ink.height / 2);
+            match side {
+                Side::Left => Rect::new(ink.x, ink.y, w, ink.height),
+                Side::Right => Rect::new(ink.x + w, ink.y, ink.width - w, ink.height),
+                Side::Top => Rect::new(ink.x, ink.y, ink.width, h),
+                Side::Bottom => Rect::new(ink.x, ink.y + h, ink.width, ink.height - h),
+            }
+        };
+        let zones = [
+            ("swap", ink), ("left", beside(Side::Left)), ("right", beside(Side::Right)), ("top", beside(Side::Top)), ("bottom", beside(Side::Bottom)),
+            ("tab", Rect::new(6, 0, 12, 1)), ("narrow tab", Rect::new(6, 0, 3, 1)), ("hanging off the screen", Rect::new(34, 8, 12, 9)),
+            ("edge", field), ("empty", Rect::new(3, 3, 0, 0)),
+        ];
+        let hints = [None, Some("swap with Task 2"), Some("to b"), Some("swap with a much longer agent name than the zone")];
+        for (palette, bg) in [("dark", dark), ("light", light)] {
+            for fg in [Color::Rgb(230, 120, 30), Color::Reset] {
+                for reverse in [false, true] {
+                    for (what, z) in zones {
+                        for hint in hints {
+                            let (mut old, mut new) = (backdrop(), backdrop());
+                            oracle_shade(&mut old, z, hint, fg, bg, reverse);
+                            DropZone::new(hint, fg, bg, reverse).render(z, &mut new);
+                            assert_eq!(new, old, "{palette}, reverse {reverse}, {what} zone {z:?}, hint {hint:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_wide_glyph_in_the_hint_takes_two_cells_and_is_cut_whole() {
+        // Only the continuation cell differs from the cell loops: they left the old letter
+        // there, which a terminal never shows; ratatui blanks it.
+        let (bg, fg) = (Color::Rgb(230, 120, 30), Color::Rgb(28, 31, 36));
+        for zone in [Rect::new(4, 2, 14, 7), Rect::new(4, 2, 5, 3)] {
+            let (mut old, mut new) = (backdrop(), backdrop());
+            oracle_shade(&mut old, zone, Some("to 日本語 tab"), bg, fg, false);
+            DropZone::new(Some("to 日本語 tab"), bg, fg, false).render(zone, &mut new);
+            for pos in new.area.positions() {
+                let wide_tail = pos.x > 0 && new[(pos.x - 1, pos.y)].symbol().width() == 2;
+                if wide_tail { assert_eq!(new[pos].symbol(), " ", "{pos:?} under a wide glyph"); continue }
+                assert_eq!(new[pos], old[pos], "{pos:?}, zone {zone:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_accent_in_the_hint_stays_with_its_letter() {
+        // The cell loops dropped zero-width marks ("ex"); ratatui keeps them with their letter.
+        let mut buf = backdrop();
+        DropZone::new(Some("e\u{301}x"), Color::Red, Color::Black, false).render(Rect::new(4, 2, 6, 3), &mut buf);
+        let row: Vec<&str> = (4..10).map(|x| buf[(x, 3)].symbol()).collect();
+        assert!(row.contains(&"e\u{301}") && row.contains(&"x"), "{row:?}");
     }
 
     /// Panes 1 | 2 | 3 in one window [width] wide, on the desk so that layout changes are queued.
