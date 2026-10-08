@@ -8,6 +8,8 @@ import { legacyScreen } from '../lib/legacyScreen.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
 import { createNativeControls } from './engines/nativeControls.js'
+import { createEngineLinks } from './engines/engineLinks.js'
+import { engineLaunches } from '../engines/launches.js'
 import { masterRunsEngineNativeControl } from '../harnessd/services.js'
 import { submissionPolicy } from '../engines/submissionPolicies.js'
 import { createSubmissionTransport } from './engines/submissionTransport.js'
@@ -24,6 +26,7 @@ import { masterRunsEngineSubmission } from '../harnessd/services.js'
  * the core with `__run`.
  */
 import { readFileSync, writeFileSync, openSync, existsSync, rmSync, statSync } from 'fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'path'
 import { execFile, spawn } from 'child_process'
 import { createServer, type Server } from 'http'
@@ -586,9 +589,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Codex's shared app-server, spoken to from its worker: core identifies the conversation and decides.
   const nativeControls = createNativeControls({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    servers: Object.fromEntries(Object.entries(engineLaunches).flatMap(([name, launch]) => 'sharedServer' in launch && launch.sharedServer ? [[name, launch.sharedServer]] : [])),
     handles: isolatedNativeControl, inline: engine => isolatedNativeControl(engine) ? undefined : inline?.nativeControlFor(engine),
-    rows: processRows, home: session => sessionCodexHome(session), argv: argvTokens,
+    rows: processRows, home: session => sessionCodexHome(session), argv: argvTokens, readFile: path => readFile(path, 'utf8'),
   })
+  // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
+  const engineLinks = createEngineLinks()
   const runtimeProfiles = createRuntimeProfiles({
     legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
     handles: isolatedRuntime,
@@ -1260,6 +1266,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       screenTransport.connected(service)
       submissionTransport.connected(service)
       nativeControls.connected(service)
+      engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
@@ -1275,6 +1282,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       screenTransport.disconnected(service)
       submissionTransport.disconnected(service)
       nativeControls.disconnected(service)
+      engineLinks.disconnected(service)
       modelControls.disconnected(service)
       questionControls.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
@@ -2313,6 +2321,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sessionCheckpoints,
     stopAgent,
     announceSession,
+    engineReady: (engine, ms) => engineLinks.ready(engine, ms),
   })
   backend.closeAgentService = closing.closeAgentService
   backend.closeAgentService.start()

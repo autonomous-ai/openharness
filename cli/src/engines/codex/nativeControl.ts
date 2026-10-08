@@ -2,12 +2,12 @@
  * Never kill that server: unload only the confirmed conversation, leaving its
  * history available and all other clients running. New Harness launches opt out
  * of sharing, but sessions opened before an upgrade still need this path.
- * Moved from lib/codexSessionLifecycle.ts and lib/runtimeActivity.ts into the Codex worker: core passes the
- * conversation it identified and answers the stop's questions (engines/facets/nativeControl.ts). */
+ * Moved from lib/codexSessionLifecycle.ts and lib/runtimeActivity.ts into the Codex worker. Core establishes
+ * from its own evidence and the launch contract that a conversation is on the server (core/engines/
+ * nativeControls.ts); this speaks the server's protocol for it (engines/facets/nativeControl.ts). */
 import { spawn } from 'node:child_process'
 import { Duplex } from 'node:stream'
-import { readFile, realpath } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { realpath } from 'node:fs/promises'
 import WebSocket from 'ws'
 import { engineBin } from '../../lib/engineBin.js'
 import type { EngineNativeControl, NativeConversation } from '../facets/nativeControl.js'
@@ -71,47 +71,25 @@ export async function connectCodexControl(home: string): Promise<CodexControl> {
   } catch (error) { close(); throw error }
 }
 
-async function daemonIdentity(home: string): Promise<{ pid: number; processStartTime: string } | null> {
-  try {
-    const value = JSON.parse(await readFile(join(home, 'app-server-daemon', 'daemon.pid'), 'utf8'))
-    if (!Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.processStartTime !== 'string') throw new Error('Invalid Codex server identity')
-    return value
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
-}
-
-/** Where the options start in an argv the npm wrapper (`node …/codex.js`) or the binary itself began. */
-function optionIndex(args: string[]): number {
-  return /^node(?:\.exe)?$/.test(basename(args[0] ?? '')) && /(?:^|\/)codex(?:\.js)?$/.test(args[1] ?? '') ? 2 : 1
-}
-const remote = (args: string[], option: number) => args.slice(option).some(arg => arg === '--remote' || arg.startsWith('--remote='))
-
 export interface CodexNativeDeps {
   connect(home: string): Promise<CodexControl>
-  daemonIdentity(home: string): Promise<{ pid: number; processStartTime: string } | null>
   now(): number
 }
 
-export function createNativeControl(deps: CodexNativeDeps = { connect: connectCodexControl, daemonIdentity, now: () => performance.now() }): EngineNativeControl {
+export function createNativeControl(deps: CodexNativeDeps = { connect: connectCodexControl, now: () => performance.now() }): EngineNativeControl {
   // Read-only activity connections, shared by profile. Never launch/resume a thread or
   // start an app-server to inspect it. An unrelated server's notLoaded is unknown.
   const controls = new Map<string, Promise<CodexControl>>()
   const retryAt = new Map<string, number>()
   return {
-    async activity(conversation: NativeConversation) {
-      const { home, owner: args } = conversation
-      if (!args) return 'unknown'
-      const option = optionIndex(args)
-      if (args[option] === '--no-daemon' || remote(args, option)) return 'unknown'
+    async activity({ home, sessionId }: NativeConversation) {
       if ((retryAt.get(home) ?? 0) > deps.now()) return 'unknown'
       let connection = controls.get(home)
       if (!connection) { connection = deps.connect(home); controls.set(home, connection) }
       try {
         const control = await connection
-        const read = await control.request('thread/read', { threadId: conversation.sessionId })
-        if (read?.thread?.id !== conversation.sessionId) return 'unknown'
+        const read = await control.request('thread/read', { threadId: sessionId })
+        if (read?.thread?.id !== sessionId) return 'unknown'
         if (read.thread.status?.type === 'active') return 'working'
         if (read.thread.status?.type === 'idle') return 'idle'
         return 'unknown'
@@ -125,33 +103,11 @@ export function createNativeControl(deps: CodexNativeDeps = { connect: connectCo
       }
     },
 
-    /** Called AFTER a checkpoint and BEFORE signalling the terminal. There is no
-     * polling, model call, archive deletion or machine-wide daemon shutdown here. */
-    async stop(conversation, host) {
-      const { home, sessionId, owner: args } = conversation
-      const guard = async () => { if (!await host.current()) throw new Error('The close request was cancelled or the session changed') }
-      if (args) {
-        // Harness inserts this as the FIRST option, before resume/fork or prompt
-        // text. A prompt merely mentioning --no-daemon is not proof of ownership.
-        const option = optionIndex(args)
-        // A remote app-server is not controlled by this machine's profile. Do not
-        // report its work stopped merely because its local terminal was closed.
-        if (remote(args, option)) throw new Error('Stop this conversation on its remote Codex server before closing its terminal')
-        if (args[option] === '--no-daemon') return
-      }
-      const daemon = await deps.daemonIdentity(home)
-      if (!daemon) return // Older/process-owned Codex has no detached writer.
-      if (!await host.running(daemon.pid, daemon.processStartTime)) return
-      if (!sessionId) {
-        // An unused TUI has no conversation to unload. Close supplies fresh proof
-        // of its empty composer after saving the screen; Pause and uncertain
-        // discovery still require an exact conversation identity.
-        if (args && await host.unused()) {
-          await guard()
-          return
-        }
-        throw new Error('Could not identify the conversation on the Codex server; the session is still open')
-      }
+    /** Called AFTER a checkpoint and BEFORE signalling the terminal, for a conversation core established is on
+     * a running server. There is no polling, model call, archive deletion or machine-wide daemon shutdown here. */
+    async stop({ home, sessionId }, host) {
+      const cancelled = () => new Error('The close request was cancelled or the session changed')
+      const guard = async () => { if (!await host.current()) throw cancelled() }
       const control = await deps.connect(home)
       try {
         await guard()
@@ -170,7 +126,9 @@ export function createNativeControl(deps: CodexNativeDeps = { connect: connectCo
         await guard()
         const active = turns?.data?.find((turn: any) => turn.status === 'inProgress')
         if (active) await control.request('turn/interrupt', { threadId: sessionId, turnId: active.id })
-        await guard()
+        // Core notes the archive before it is sent: cut off before its unarchive, this worker gone, core asks
+        // the next one to return the history (recover, below). It is the guard here, too.
+        if (!await host.pending()) throw cancelled()
         // Archive is the public operation that unloads a thread. Unarchive moves
         // only its saved history back; it does not restart the thread. Always undo
         // the archive even if the user reopens while its response is in flight.
@@ -181,6 +139,7 @@ export function createNativeControl(deps: CodexNativeDeps = { connect: connectCo
         // attempt to return the history to sessions before reporting the error.
         try { await control.request('thread/unarchive', { threadId: sessionId }) }
         catch (error) { throw archiveError ?? error }
+        await host.settled()
         if (archiveError) throw archiveError
         await guard()
         const after = await control.request('thread/read', { threadId: sessionId })
@@ -188,6 +147,13 @@ export function createNativeControl(deps: CodexNativeDeps = { connect: connectCo
           throw new Error('Could not confirm the Codex conversation stopped; its pane remains open')
         }
       } finally { control.close() }
+    },
+
+    /** The history of a thread a lost worker archived and never unarchived, returned once. */
+    async recover({ home, sessionId }) {
+      const control = await deps.connect(home)
+      try { await control.request('thread/unarchive', { threadId: sessionId }) }
+      finally { control.close() }
     },
 
     close() {

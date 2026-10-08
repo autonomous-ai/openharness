@@ -2,9 +2,9 @@ import type { ServiceRequests } from '../../core/api.js'
 import type { EngineNativeControl } from '../facets/nativeControl.js'
 import { controlToken } from './controlWire.js'
 import { createNativeStopHost, NATIVE_UNCONFIRMED } from './nativeControlHost.js'
-import { nativeActivity, nativeConversation, nativeEnvelope, nativeMessage, NATIVE_ACTIVITY, NATIVE_ACTIVITY_IN_FLIGHT,
+import { boundConversation, nativeActivity, nativeConversation, nativeEnvelope, nativeMessage, NATIVE_ACTIVITY, NATIVE_ACTIVITY_IN_FLIGHT,
   NATIVE_ACTIVITY_WAIT_MS, NATIVE_CONTROL_CAPABILITIES, NATIVE_CONTROL_HOST, NATIVE_CONTROL_VERSION, NATIVE_QUERY_MS,
-  NATIVE_REPLY_BYTES, NATIVE_STOP, NATIVE_STOP_IN_FLIGHT, NATIVE_STOP_WAIT_MS } from './nativeControlProtocol.js'
+  NATIVE_RECOVER, NATIVE_RECOVER_WAIT_MS, NATIVE_REPLY_BYTES, NATIVE_STOP, NATIVE_STOP_IN_FLIGHT, NATIVE_STOP_WAIT_MS } from './nativeControlProtocol.js'
 import { snapshotRequests } from './snapshotRequests.js'
 
 const loadControl = { codex: async () => (await import('../codex/nativeControl.js')).nativeControl }
@@ -34,11 +34,23 @@ export function engineNativeControlRequests(engine: keyof typeof loadControl, de
       },
     },
   })
+  // A recovery is one effect, rare, bounded: its own budget, so a slow one never starves activity reads.
+  const recoveries = snapshotRequests<EngineNativeControl>({
+    engine, version: NATIVE_CONTROL_VERSION, capabilities: NATIVE_CONTROL_CAPABILITIES, capability: 'nativeControl',
+    inFlight: NATIVE_STOP_IN_FLIGHT, waitMs: NATIVE_RECOVER_WAIT_MS, replyBytes: NATIVE_REPLY_BYTES, load, recycle,
+    methods: {
+      [NATIVE_RECOVER]: {
+        fields: ['conversation'], accepts: payload => boundConversation(payload.conversation),
+        answer: async (control, payload) => { try { await control.recover(payload.conversation as never); return true } catch { return false } },
+        valid: answer => typeof answer === 'boolean',
+      },
+    },
+  })
   let pending = 0
   const failure = () => ({ version: NATIVE_CONTROL_VERSION, error: 'ENGINE_INVALID_REQUEST' })
   const stop: ServiceRequests[string] = async (payload, asker, closed) => {
     if (!asker.owner || !asker.local || asker.connection !== undefined || closed?.aborted) return failure()
-    if (!nativeEnvelope(payload, ['token', 'conversation']) || !controlToken(payload.token) || !nativeConversation(payload.conversation)) return failure()
+    if (!nativeEnvelope(payload, ['token', 'conversation']) || !controlToken(payload.token) || !boundConversation(payload.conversation)) return failure()
     if (pending >= NATIVE_STOP_IN_FLIGHT) return { version: NATIVE_CONTROL_VERSION, error: 'ENGINE_BUSY' }
     const conversation = payload.conversation, token = payload.token
     pending++
@@ -77,5 +89,5 @@ export function engineNativeControlRequests(engine: keyof typeof loadControl, de
     } catch { return refused(NATIVE_UNCONFIRMED) }
     finally { active = false; clearTimeout(timer); closed?.removeEventListener('abort', abort!); pending-- }
   }
-  return { ...reads, [NATIVE_STOP]: stop }
+  return { ...reads, [NATIVE_RECOVER]: recoveries[NATIVE_RECOVER], [NATIVE_STOP]: stop }
 }

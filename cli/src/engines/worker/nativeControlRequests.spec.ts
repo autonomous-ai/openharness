@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { EngineNativeControl, NativeStopHost } from '../facets/nativeControl.js'
 import { NATIVE_UNCONFIRMED } from './nativeControlHost.js'
-import { NATIVE_ACTIVITY, NATIVE_CONTROL_CAPABILITIES, NATIVE_CONTROL_HOST, NATIVE_QUERY_MS, NATIVE_STOP, NATIVE_STOP_IN_FLIGHT,
-  NATIVE_STOP_WAIT_MS, nativeConversation, nativeStopAction, nativeStopAnswer } from './nativeControlProtocol.js'
+import { boundConversation, NATIVE_ACTIVITY, NATIVE_CONTROL_CAPABILITIES, NATIVE_CONTROL_HOST, NATIVE_QUERY_MS, NATIVE_RECOVER, NATIVE_STOP,
+  NATIVE_STOP_IN_FLIGHT, NATIVE_STOP_WAIT_MS, nativeConversation, nativeStopAction, nativeStopAnswer } from './nativeControlProtocol.js'
 import { engineNativeControlRequests } from './nativeControlRequests.js'
 
 const who = { owner: true, local: true }
-const conversation = { home: '/fixture/codex', sessionId: 'thread', owner: ['codex', 'resume', 'thread'] }
+const conversation = { home: '/fixture/codex', sessionId: 'thread' }
 const token = 'a'.repeat(64)
 const stop = { version: 1, token, conversation }
 const refused = (message: string) => ({ version: 1, answer: { refused: message } })
@@ -14,7 +14,7 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 function setup(run: (host: NativeStopHost) => Promise<void> = async host => { await host.current() }, value = true) {
   const control: EngineNativeControl = {
-    activity: vi.fn(async () => 'idle' as const), stop: vi.fn(async (_c, host) => run(host)), close: vi.fn(),
+    activity: vi.fn(async () => 'idle' as const), stop: vi.fn(async (_c, host) => run(host)), recover: vi.fn(async () => {}), close: vi.fn(),
   }
   const query = vi.fn(async (_query: string, _payload: Record<string, unknown>): Promise<Record<string, unknown>> => ({ version: 1, value }))
   const load = vi.fn(async () => control), recycle = vi.fn()
@@ -28,6 +28,11 @@ describe('the Codex worker\'s control connection', () => {
     expect(t.load).not.toHaveBeenCalled()
     expect(await t.requests[NATIVE_ACTIVITY]({ version: 1, conversation }, who)).toEqual({ version: 1, answer: 'idle' })
     expect(await t.requests[NATIVE_STOP](stop, who)).toEqual({ version: 1, answer: { stopped: true } })
+    expect(await t.requests[NATIVE_RECOVER]({ version: 1, conversation }, who)).toEqual({ version: 1, answer: true })
+    vi.mocked(t.control.recover).mockRejectedValueOnce(new Error('not archived'))
+    expect(await t.requests[NATIVE_RECOVER]({ version: 1, conversation }, who)).toEqual({ version: 1, answer: false })
+    // A recovery, like a stop, acts on a bound conversation only.
+    expect(await t.requests[NATIVE_RECOVER]({ version: 1, conversation: { ...conversation, sessionId: '' } }, who)).toEqual({ version: 1, error: 'ENGINE_INVALID_REQUEST' })
     expect(t.load).toHaveBeenCalledOnce()
     expect(t.query).toHaveBeenCalledWith(NATIVE_CONTROL_HOST, { version: 1, token, action: { kind: 'current' } })
   })
@@ -38,7 +43,7 @@ describe('the Codex worker\'s control connection', () => {
       expect(await t.requests[NATIVE_STOP](stop, asker)).toEqual({ version: 1, error: 'ENGINE_INVALID_REQUEST' })
     }
     for (const payload of [{ ...stop, version: 2 }, { ...stop, token: 'short' }, { ...stop, conversation: { ...conversation, home: 'relative' } },
-      { ...stop, pane: '%1' }, { ...stop, conversation: { ...conversation, owner: [1] } }]) {
+      { ...stop, pane: '%1' }, { ...stop, conversation: { ...conversation, owner: ['codex'] } }, { ...stop, conversation: { ...conversation, sessionId: '' } }]) {
       expect(await t.requests[NATIVE_STOP](payload, who)).toEqual({ version: 1, error: 'ENGINE_INVALID_REQUEST' })
     }
     expect(await t.requests[NATIVE_STOP](stop, who, AbortSignal.abort())).toEqual({ version: 1, error: 'ENGINE_INVALID_REQUEST' })
@@ -102,7 +107,7 @@ describe('the Codex worker\'s control connection', () => {
   })
 
   it('retries a control that failed to load, and refuses a stop the connection ended while it loaded', async () => {
-    const control: EngineNativeControl = { activity: vi.fn(), stop: vi.fn(async () => {}), close: vi.fn() }
+    const control: EngineNativeControl = { activity: vi.fn(), stop: vi.fn(async () => {}), recover: vi.fn(), close: vi.fn() }
     const load = vi.fn().mockRejectedValueOnce(new Error('import failed')).mockResolvedValue(control)
     const requests = engineNativeControlRequests('codex', { query: vi.fn(), load })
     expect(await requests[NATIVE_STOP](stop, who)).toEqual(refused(NATIVE_UNCONFIRMED))
@@ -113,13 +118,13 @@ describe('the Codex worker\'s control connection', () => {
   })
 
   it('validates every message shape it shares with core', () => {
-    expect(nativeConversation({ ...conversation, owner: null })).toBe(true)
-    for (const value of [null, { ...conversation, extra: 1 }, { ...conversation, home: '/a\0b' }, { ...conversation, sessionId: 'x'.repeat(201) },
-      { ...conversation, owner: Array(513).fill('a') }]) expect(nativeConversation(value)).toBe(false)
+    expect(nativeConversation({ ...conversation, sessionId: '' })).toBe(true)
+    expect(boundConversation({ ...conversation, sessionId: '' })).toBe(false)
+    for (const value of [null, { ...conversation, extra: 1 }, { ...conversation, home: '/a\0b' }, { ...conversation, sessionId: 'x'.repeat(201) }])
+      expect(nativeConversation(value)).toBe(false)
     expect(nativeStopAnswer({ stopped: true })).toBe(true)
     for (const value of [{ stopped: false }, { refused: '' }, { stopped: true, refused: 'x' }, []]) expect(nativeStopAnswer(value)).toBe(false)
-    expect(nativeStopAction({ kind: 'running', pid: 90, startedAt: 'Thu' })).toBe(true)
-    for (const value of [{ kind: 'current', extra: 1 }, { kind: 'running', pid: 0, startedAt: 'x' }, { kind: 'running', pid: 1.5, startedAt: 'x' },
-      { kind: 'kill', pid: 90 }, 'current']) expect(nativeStopAction(value)).toBe(false)
+    for (const kind of ['current', 'pending', 'settled']) expect(nativeStopAction({ kind })).toBe(true)
+    for (const value of [{ kind: 'current', extra: 1 }, { kind: 'running', pid: 90 }, { kind: 'kill' }, 'current']) expect(nativeStopAction(value)).toBe(false)
   })
 })

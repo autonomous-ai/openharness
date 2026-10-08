@@ -4,11 +4,10 @@
  * lib/codexSessionLifecycle.ts, unchanged: the move into the worker keeps every outcome and message.
  */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { createNativeControl, type CodexControl } from '../../engines/codex/nativeControl.js'
-import { sessionCodexHome } from '../../lib/engineHomes.js'
+import type { CodexControl } from '../../engines/codex/nativeControl.js'
 import { registry, type RegisteredSession } from '../../lib/registry.js'
-import { argvTokens, type ProcessRow } from '../../lib/tmux.js'
-import { createNativeControls } from './nativeControls.js'
+import type { ProcessRow } from '../../lib/tmux.js'
+import { composedCodex } from '../../testing/inlineNativeControls.js'
 
 interface CodexStopDeps {
   daemonIdentity(home: string): Promise<{ pid: number; processStartTime: string } | null>
@@ -18,9 +17,7 @@ interface CodexStopDeps {
 /** The former entry point, composed of the pieces it was split into. */
 function stopSharedCodexSession(session: RegisteredSession, current: () => boolean, deps: CodexStopDeps,
   confirmUnusedConversation?: (session: RegisteredSession) => Promise<boolean>): Promise<void> {
-  const control = createNativeControl({ connect: deps.connect, daemonIdentity: deps.daemonIdentity, now: () => 0 })
-  return createNativeControls({ call: async () => ({ error: 'SERVICE_UNAVAILABLE' }), handles: () => false, inline: () => control,
-    rows: deps.rows, home: sessionCodexHome, argv: argvTokens }).stop(session, current, confirmUnusedConversation)
+  return composedCodex(deps).stop(session, current, confirmUnusedConversation)
 }
 let row: RegisteredSession
 let deps: CodexStopDeps

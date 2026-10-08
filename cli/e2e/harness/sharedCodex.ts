@@ -16,7 +16,8 @@ export async function sharedCodex(home: string) {
   writeFileSync(join(home, 'app-server-daemon', 'fake-proxy.json'), JSON.stringify({ port: address.port }))
   // `open` counts the clients connected now. A request named in `hold` is answered only once `release()` is
   // called: a test can stop whoever asked while the server still owes the answer.
-  const state = { threadId: '', loaded: true, open: 0, hold: null as string | null,
+  // `archived`: a thread/archive with no thread/unarchive after it (the thread's history hidden from sessions).
+  const state = { threadId: '', loaded: true, archived: false, open: 0, hold: null as string | null,
     requests: [] as Array<{ method: string; params?: Record<string, unknown> }> }
   const held: Array<() => void> = []
   server.on('connection', socket => {
@@ -33,7 +34,8 @@ export async function sharedCodex(home: string) {
       } else if (frame.method === 'thread/read') result = { thread: { id: state.threadId, status: { type: state.loaded ? 'active' : 'notLoaded' } } }
       else if (frame.method === 'thread/goal/get') result = { goal: { status: 'active' } }
       else if (frame.method === 'thread/turns/list') result = { data: [{ id: 'held-turn', status: 'inProgress' }] }
-      else if (frame.method === 'thread/archive') state.loaded = false
+      else if (frame.method === 'thread/archive') { state.loaded = false; state.archived = true }
+      else if (frame.method === 'thread/unarchive') state.archived = false
       const answer = () => { if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ id: frame.id, result })) }
       if (frame.method === state.hold) held.push(answer)
       else answer()

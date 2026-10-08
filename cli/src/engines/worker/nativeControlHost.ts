@@ -11,9 +11,5 @@ export function createNativeStopHost(ask: (action: NativeStopAction) => Promise<
     if (!nativeEnvelope(reply, ['value', 'error']) || reply.error !== undefined || typeof reply.value !== 'boolean') throw new Error(NATIVE_UNCONFIRMED)
     return reply.value
   }
-  return {
-    current: () => call({ kind: 'current' }),
-    running: (pid, startedAt) => call({ kind: 'running', pid, startedAt }),
-    unused: () => call({ kind: 'unused' }),
-  }
+  return { current: () => call({ kind: 'current' }), pending: () => call({ kind: 'pending' }), settled: () => call({ kind: 'settled' }) }
 }
