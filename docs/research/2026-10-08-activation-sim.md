@@ -68,6 +68,28 @@ vendor binaries, so their real login screens appear.
 
 ## Findings
 
+### Full matrix on the combined build (2026-10-08 evening)
+
+#1047 + #1052 (with finding 24) + #1061, desktop debug build, CLI 9.0.11 installed by the app from a
+local manifest; every run a fresh VM. "Signed in" engines are the fake engines (they answer at once,
+so their times exclude model time); OpenCode runs are real (free model). First task typed on the setup
+screen; second session = + tab, new task in the same project, Enter. Scored with the rubric above.
+
+| Run | Persona | Box opened on | First result (from first open) | Second session | Friction | Score |
+|-----|---------|---------------|-------------------------------|----------------|----------|-------|
+| M-A | nothing installed (CLI 9.0.9, before finding 24) | OpenCode | 67 s | 13 s | Apple's "install developer tools" dialog over the app on both sessions | 90 |
+| M-A3 | nothing installed | OpenCode | 69 s | 14 s | none | **100** |
+| M-B1 | Claude Code, signed in | Claude Code | ~50 s | at once | none | **100** |
+| M-B2 | Claude Code, not signed in | OpenCode (picker: Claude Code "Needs sign-in") | 71 s | 11 s | none | **100** |
+| M-C1 | Codex, signed in | Codex | ~50 s | at once | none | **100** |
+| M-C2 | Codex, not signed in | OpenCode | 66 s | 12 s | none | **100** |
+| M-D2 | both signed in, Claude Code used last | Claude Code | ~50 s | at once | none | **100** |
+| M-D3 | both installed, neither signed in | OpenCode (both "Needs sign-in") | 67 s | 16 s | none | **100** |
+
+D1 (both signed in, Codex used last → Codex) is the earlier run above. Reopening the app (M-A, M-B1)
+restored every harness with no prompt.
+
+
 ### A1 — bare Mac, official desktop 1.2.59
 
 1. **Blocker: the default agent is "unavailable" on the first New Harness box.** On a bare Mac
@@ -181,6 +203,24 @@ vendor binaries, so their real login screens appear.
     and the agent probe 3 s after that: about 35 s from opening to the New Harness box, of which
     #1047 removes ~12 s. Bundling Node and the CLI in the app would save the remaining ~11 s, at the
     cost of a larger universal app and signing an embedded Node; not worth it before #1047 ships.
+
+### Full matrix
+
+24. **Apple's "install the command line developer tools" dialog on a fresh Mac's first harness.** On a
+    Mac without the Command Line Tools, `/usr/bin/git` is Apple's stub, and running it opens that
+    dialog in front of Harness. Five daemon readers still ran git in a folder with no `.git`: the agent
+    project reader as each agent started (4 s after the first task), the pull request reader for the
+    focused pane, the project picker's preview, the workspaces service naming a worktree branch once
+    the agent had a title, and Change agent's handoff check. All five now decide "not a checkout" from
+    the missing `.git` first (`insideGitCheckout`), with a test that puts a recording `git` on PATH
+    (`cli/src/lib/gitStub.spec.ts`). Found with a logging `git` wrapper and the
+    `com.apple.dt.CommandLineTools.installondemand` log, which names the requesting process's parent.
+    An agent that runs `python3` or `git` itself still raises it (OpenCode did, once, in M-A); that is
+    the agent's command, not Harness's.
+25. **Garbled monospace glyphs in the VM.** In two runs some terminal and mono UI text drew hatched
+    boxes in place of letters for a while (first harness's pane, one label); sans-serif text was fine
+    and later frames were clean. Seen only in the VM's paravirtualized GPU with the debug (Impeller)
+    build; not reproduced on hardware. Worth checking on a real Apple Silicon Mac with the release build.
 
 ## Next
 
