@@ -25,7 +25,7 @@ import { registry, projectDisplayName, validTranscriptPath, type RegisteredSessi
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHooks as engineHookFacets } from '../engines/hooks.js'
-import { liveFor } from '../engines/live.js'
+import type { LiveFor } from '../engines/facets/live.js'
 import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
@@ -89,7 +89,9 @@ import { createQuestions } from './questions.js'
 import { createTurnActivity } from './turns/activity.js'
 import { createLastTurnReader } from './transcripts/lastTurn.js'
 import { createEngineReaders } from './engines/readers.js'
-import { READER_SERVICES } from '../engines/worker/protocol.js'
+import { createLiveTransport } from './engines/liveTransport.js'
+import { createLiveWatcher } from './engines/liveWatcher.js'
+import { readerEngine, READER_SERVICES } from '../engines/worker/protocol.js'
 import { createRecaps } from './turns/recaps.js'
 import { createUpdateHandoff, handOverOnceReleased, probeStagedMaster, type TeardownStep } from './updateHandoff.js'
 import { needsUpdaterBeside, startUpdaterBeside } from './updaterBeside.js'
@@ -142,7 +144,7 @@ import { createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
+import { KNOWN_SERVICES, masterRunsLiveEngines, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink, teamsOutOfProcess } from './teamsLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -779,7 +781,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
   // The services' own code, for those that run in this process (services/inline.ts): loaded only then, so
   // one in its own process, as each is by default, is never loaded here.
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) ? await import('../services/inline.js') : null
+  // A reader-only older master knows these names but cannot host live parsers. Its explicit version
+  // report selects compatibility; a worker timeout or crash never activates an inline fallback.
+  const liveHosted = masterRunsLiveEngines(process.env, process.ppid)
+  const isolatedLive = (engine: string): boolean => liveHosted
+    && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !liveHosted
+    ? await import('../services/inline.js') : null
+  const liveFor: LiveFor = (engine) => isolatedLive(engine) ? undefined : inline?.liveFor(engine)
   // The relay and its E2EE (gateway/): the backend link, the sessions and the keys, which every remote
   // client's frames go through, held at the same gate. In its own process by default (core/gatewayLink.ts),
   // or here (gateway/start.ts); the socket hears it through `fromGateway` and speaks to it in the clear.
@@ -788,6 +797,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let serviceLinksRef: ServiceLinks | null = null
   const engineReaders = createEngineReaders({ isolated: outOfProcess, inline: inline?.engineTranscriptFor,
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) })
+  const liveTransport = createLiveTransport({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
   const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({
     events: backend.fromGateway,
     notify: (frame) => serviceLinksRef?.notify('gateway', frame) ?? false,
@@ -900,7 +912,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const commandcodeNormalizers = normalizers.commandcodeNormalizers
   const sessionTurnState = normalizers.sessionTurnState
   const sessionTurnOpen = normalizers.sessionTurnOpen
-  const watcher = new Watcher()
+  const { watcher, live: engineLive } = createLiveWatcher(new Watcher(), {
+    handles: isolatedLive,
+    transport: liveTransport,
+    bySession: (id) => registry.bySession(id),
+    frame: (session, frame) => ingest.acceptFrame(session.sessionId, session.engine, frame),
+    reattach: (session) => attachSession(session, true),
+  })
   // Whether a turn is really working, beyond its transcript (core/turns/activity.ts).
   const activity = createTurnActivity({
     terminals,
@@ -957,6 +975,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/transcripts/attach.ts).
   const attach = createAttach({
     liveFor,
+    remoteLive: engineLive,
     terminalGone: terminalControl.terminalGone,
     normalizers,
     watcher,
@@ -1170,6 +1189,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
     connected: (service) => {
       engineReaders.connected(service)
+      liveTransport.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
@@ -1178,6 +1198,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     disconnected: (service) => {
       engineReaders.disconnected(service)
+      liveTransport.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()

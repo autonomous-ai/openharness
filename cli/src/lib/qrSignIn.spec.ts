@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { qrSignIn, qrSignInLink, type QrSignInDeps } from './qrSignIn.js'
+import { claimTicket, qrSignIn, qrSignInLink, type QrSignInDeps } from './qrSignIn.js'
 import { terminalQr } from './terminalQr.js'
 
 /** A backend that answers the QR sign-in routes from a script of poll answers. */
@@ -105,5 +105,22 @@ describe('terminalQr', () => {
     // The quiet zone is light: full blocks all round the first line.
     expect(lines[0]).toBe('█'.repeat(width))
     expect(lines.length).toBe(Math.ceil(width / 2))
+  })
+})
+
+describe('claimTicket', () => {
+  const refused = (status: number) => Object.assign(new Error('refused'), { status })
+
+  it('claims the ticket as the poll token and hands back the session', async () => {
+    const post = vi.fn(async () => ({ token: 'hna_x', email: 'dee@example.com' })) as unknown as QrSignInDeps['post']
+    expect(await claimTicket(post, 'hnp_t')).toEqual({ ok: true, tokens: { token: 'hna_x', email: 'dee@example.com' } })
+    expect(post).toHaveBeenCalledWith('/api/auth/qr/claim', { pollToken: 'hnp_t' })
+  })
+
+  it('a refused ticket is TICKET_INVALID; a backend in trouble is BACKEND_ERROR', async () => {
+    const reject = (err: Error) => vi.fn(async () => { throw err }) as unknown as QrSignInDeps['post']
+    expect(await claimTicket(reject(refused(401)), 'hnp_t')).toMatchObject({ ok: false, code: 'TICKET_INVALID' })
+    expect(await claimTicket(reject(refused(503)), 'hnp_t')).toMatchObject({ ok: false, code: 'BACKEND_ERROR' })
+    expect(await claimTicket(reject(new Error('fetch failed')), 'hnp_t')).toMatchObject({ ok: false, code: 'BACKEND_ERROR' })
   })
 })

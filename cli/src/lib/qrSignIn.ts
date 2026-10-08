@@ -26,7 +26,7 @@ export interface QrSignInTokens {
   email: string
 }
 
-export type QrSignInFailure = 'BACKEND_ERROR' | 'DENIED' | 'EXPIRED' | 'CANCELLED'
+export type QrSignInFailure = 'BACKEND_ERROR' | 'DENIED' | 'EXPIRED' | 'CANCELLED' | 'TICKET_INVALID'
 
 export type QrSignInResult = { ok: true; tokens: QrSignInTokens } | { ok: false; code: QrSignInFailure; message: string }
 
@@ -98,5 +98,22 @@ export async function qrSignIn(deps: QrSignInDeps): Promise<QrSignInResult> {
     } catch (err) {
       return { ok: false, code: 'BACKEND_ERROR', message: (err as Error).message }
     }
+  }
+}
+
+/**
+ * Spend a box ticket (backend `issueBoxTicket`): the poll token of a QR sign-in the phone approved
+ * before handing it to this headless box, so there is nothing to show and no one here to confirm.
+ * A ticket the backend refuses (spent, expired, made up) is `TICKET_INVALID` — another try with the
+ * same one cannot help; anything else is `BACKEND_ERROR`, which can.
+ */
+export async function claimTicket(post: QrSignInDeps['post'], ticket: string): Promise<QrSignInResult> {
+  try {
+    const tokens = await post<QrSignInTokens>('/api/auth/qr/claim', { pollToken: ticket })
+    if (!tokens?.token) throw new Error('the backend returned no session')
+    return { ok: true, tokens }
+  } catch (err) {
+    if ((err as { status?: number }).status === 401) return { ok: false, code: 'TICKET_INVALID', message: 'This ticket was already used or has expired.' }
+    return { ok: false, code: 'BACKEND_ERROR', message: (err as Error).message }
   }
 }
