@@ -57,6 +57,10 @@ const { startHookServer } = await import('../src/hookServer.js')
 const { BackendSocket } = await import('../src/backendSocket.js')
 const { bindNativeResumeRequests } = await import('../src/testing/nativeResumeSocket.js')
 const { engineHooks } = await import('../src/engines/hooks.js')
+// The engines' screen readers and Codex's shared app-server control, composed in this process as the
+// daemon's inline mode does: the fixture runs no engine workers.
+const { readInlineScreen } = await import('../src/testing/inlineScreen.js')
+const { inlineNativeControls } = await import('../src/testing/inlineNativeControls.js')
 const backend = new TmuxBackend()
 const socketBackend = new BackendSocket('fixture-only')
 const hooks: Array<{ engine: string; sessionId: string }> = []
@@ -156,6 +160,7 @@ try {
       registry, stoppedAgents, restartJobs: jobs, stopJobs, tmuxBackend: backend,
       agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
       forgetSession: id => { registry.removeAgent(id); socketBackend.send({ type: 'agent_deleted', payload: { agentId: id, retained: true } }) }, markDeleted: () => {}, clearDeleted: () => {},
+      stopNative: inlineNativeControls().stop,
     })
     socketBackend.closeAgentService?.dispose()
     socketBackend.closeAgentService = new CloseAgentService({
@@ -173,7 +178,7 @@ try {
           for (const line of raw) lineToEvents(line, state)
           if (raw.length) turnOpen = state.turnOpen
         }
-        return inspectCloseActivity(row, screen, turnOpen, false)
+        return inspectCloseActivity(row, await readInlineScreen(row, screen), turnOpen, false)
       },
       checkpoint: async (row, phase) => sessionCheckpoints.save(row, {
         screen: phase === 'before' ? await tmux('capture-pane', '-p', '-S', '-2000', '-t', row.tmuxPane) : null,
