@@ -249,7 +249,9 @@ function projectCases(): Record<string, unknown> {
     cases[`transcript · ${name}`] = norm({
       isProjectTranscript: project.isProjectTranscript(path),
       cwdOf: project.cwdOf(path),
-      cwdOfWithin100: project.cwdOf(path, 100),
+      // A read cap shorter than the line that names the folder finds nothing. 16 bytes ends inside any line's
+      // `{"cwd":"…` on every host; 100 ended inside it only where the temp root is long (macOS), not on Linux CI.
+      cwdOfCutShort: project.cwdOf(path, 16),
       belongs: Object.fromEntries([work, sub, join(root, 'linked-work'), `${work}/`, '/elsewhere', join(root, 'my-work', 'repo-v2')]
         .map((cwd) => [cwd.split(root).join('<root>'), project.belongs(cwd, path)])),
     })
