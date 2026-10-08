@@ -9495,6 +9495,21 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The first message each harness was created with, by machine and agent,
+  /// for as long as this window runs. An agent that exits before it reads it
+  /// hands it to the shell that keeps its pane, and a Change agent with no
+  /// conversation to hand off starts the new agent on it: the person picked
+  /// OpenCode after Claude Code could not reach Anthropic, and had to type
+  /// their task again (fresh macOS VM, 2026-10-08).
+  final _firstMessages = <(String, String), String>{};
+
+  @visibleForTesting
+  void rememberFirstMessageForTest(
+    String machineId,
+    String agentId,
+    String message,
+  ) => _firstMessages[(machineId, agentId)] = message;
+
   /// An engine that exited left its pane's shell running under [successor]
   /// (the daemon's retainExitedSession). Its tiles move to that shell instead
   /// of closing, so the engine's last screen — the reason it stopped — stays in
@@ -9508,6 +9523,9 @@ class AppNotifier extends ChangeNotifier {
     String successor,
   ) async {
     final machineId = machine.machine.machineId;
+    if (_firstMessages.remove((machineId, agentId)) case final message?) {
+      _firstMessages[(machineId, successor)] = message;
+    }
     // An explicit Close or a Change agent owns these panes until it finishes,
     // as [_removeAgent] honours; a shell must not take them from under it.
     if (_closingViewAgents.containsKey((machineId, agentId)) ||
@@ -9573,6 +9591,7 @@ class AppNotifier extends ChangeNotifier {
     final confirmedStop = stop != null && _agentStopCurrent(stop) ? stop : null;
     confirmedStop?.confirmed = true;
     machine._agentRemovals[agentId] = ++machine._agentRevision;
+    _firstMessages.remove((machine.machine.machineId, agentId));
     _agentRenames.remove((machine.machine.machineId, agentId));
     machine._agentNames.remove(agentId);
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
@@ -11337,6 +11356,9 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
+    if (choices['prompt'] case final String prompt when prompt.trim().isNotEmpty) {
+      _firstMessages[(machineId, agent.id)] = prompt;
+    }
     _upsertAgent(machine, agent);
     // Apply each creation receipt once, even if its transport result is replayed.
     // A Git start remembers its repository, never the worktree it made.
@@ -12450,6 +12472,7 @@ class AppNotifier extends ChangeNotifier {
         change.handoffEmpty = accepted.prompt == null;
         change.handoffFailed = false;
         change.contextLoaded = true;
+        _resendUnreadFirstMessage(machineId, change, source);
         return null;
       }
     } catch (_) {
@@ -12475,7 +12498,23 @@ class AppNotifier extends ChangeNotifier {
     } catch (_) {
       return 'Could not read the conversation for the handoff. Try switching again.';
     }
+    _resendUnreadFirstMessage(machineId, change, source);
     return null;
+  }
+
+  /// Nothing to hand off, but the source was created with a first message:
+  /// the new agent starts on it (see [_firstMessages]).
+  void _resendUnreadFirstMessage(
+    String machineId,
+    _AgentChange change,
+    Agent source,
+  ) {
+    if (!change.handoffEmpty) return;
+    final message = _firstMessages[(machineId, source.id)];
+    if (message == null) return;
+    change.handoff = message;
+    change.handoffEmpty = false;
+    change.handoffFailed = false;
   }
 
   Future<String?> _changeAgent(String machineId, _AgentChange change) async {
