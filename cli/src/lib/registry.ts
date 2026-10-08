@@ -46,7 +46,7 @@ import { isSessionStoreEngine, sessionStoreContracts, sessionStoreOf } from '../
 import { admitHook } from '../engines/hooks.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
-import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunch.js'
+import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunchWire.js'
 import { parseScmLaunchRecord, type ScmLaunchRecord } from '../scm/types.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/transcript.js'
 import { agyTranscriptPath } from '../engines/agy/session.js'

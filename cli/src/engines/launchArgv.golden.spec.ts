@@ -40,6 +40,7 @@ import {
 import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from '../lib/gridLaunch.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../lib/launchOverrides.js'
 import { ENGINES, type AgentEngine } from './types.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/launch-argv.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_LAUNCH_GOLDEN === '1'
@@ -403,7 +404,7 @@ async function overridesCases(): Promise<Record<string, unknown>> {
   const run = async (engine: AgentEngine, source: LaunchSource, config: string | null = null, deps: Partial<LaunchOverridesDeps> = {}) => {
     const calls: string[] = []
     const result = await buildLaunchOverrides({
-      machine: () => ({ hermesSystemManaged: false, opencodeMajor: null }),
+      machine: () => ({ hermesSystemManaged: false, opencodeMajor: null }), gridLaunch: gridLaunchInProcess(),
       writeGridConfigDir: async (key, files) => { calls.push(`writeGridConfigDir ${key} ${files.map((file) => file.name).join(',')}`); return `/state/grid-engine-config/${key}` },
       tmuxSupportsSessionEnv: async () => true,
       installCodexHooks: (home) => { calls.push(`installCodexHooks ${home}`) },

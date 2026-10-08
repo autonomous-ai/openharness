@@ -29,7 +29,7 @@ import {
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
-import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, type GridLaunchMachine, type GridWebSearchStatus } from '../../lib/gridLaunch.js'
+import { describeGridLaunch, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
 import { profileEnvironment } from '../../lib/engineHomes.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -72,6 +72,9 @@ export interface CreateAgentDeps {
    *  `installOpencodePluginBeforeSpawn`): false when the other engines' installers could not be loaded. */
   installOpencodePlugin: (port: number) => Promise<boolean>
   gridLaunchMachine: () => GridLaunchMachine
+  /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
+   *  builds none itself, and a create on a grid while models is down is refused (GRID_UNAVAILABLE). */
+  buildGridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
   terminalHintMachineName: () => string
   /** Whether a folder is being purged (PurgeAgentService.blocksFolder). */
   blocksFolder: (cwd: string) => boolean | undefined
@@ -83,8 +86,8 @@ export interface CreateAgentDeps {
 
 export function createAgentCreator({
   tmuxBackend, registry, adoptableSession, heldBy, takeOverWhenIdle, watchNewPane, announceSession, attachDsh,
-  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, terminalHintMachineName, blocksFolder, gridSetup,
-  privateGridName,
+  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
+  gridSetup, privateGridName,
 }: CreateAgentDeps) {
   const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, scmLaunchRecord }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
@@ -200,7 +203,7 @@ export function createAgentCreator({
     // wrong account and looks identical to one that worked.
     let gridLaunch: { env: Record<string, string>; args: string[]; webSearch: GridWebSearchStatus } | undefined
     if (grid) {
-      const built = buildGridEngineLaunch(engine, grid, gridLaunchMachine())
+      const built = await buildGridLaunch({ engine, override: grid, machine: gridLaunchMachine() })
       if (!built.ok) {
         console.warn(`[agent] create ${engine} refused · ${built.detail}`)
         return { ok: false, error: built.error, detail: built.detail }

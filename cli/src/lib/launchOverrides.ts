@@ -19,13 +19,14 @@ import { ownLoginProviderArgs } from '../engines/launches.js'
 import { namedAgentArgs, supportsNamedAgent } from './engineLaunch.js'
 import { profileEnvironment } from './engineHomes.js'
 import {
-  buildGridEngineLaunch,
   gridConflictingEnvToClear,
   type GridEngineLaunch,
+  type GridLaunchAnswer,
   type GridLaunchMachine,
   type GridLaunchOverride,
   type GridLaunchRecord,
-} from './gridLaunch.js'
+  type GridLaunchRequest,
+} from './gridLaunchWire.js'
 import { TMUX_SESSION_ENV_MIN } from './tmuxVersion.js'
 import { harnessEnvToClear, type DshLaunch } from '../dsh/launch.js'
 import { scmLaunchEnv } from '../scm/scmProjects.js'
@@ -60,6 +61,9 @@ export type LaunchOverridesResult =
 export interface LaunchOverridesDeps {
   /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
   machine: () => GridLaunchMachine
+  /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
+   *  builds none itself. */
+  gridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
   writeGridConfigDir: (
     key: string,
     files: NonNullable<GridEngineLaunch['configDir']>['files'],
@@ -131,24 +135,28 @@ const noOverrides = (): LaunchOverrides => ({ env: {}, extraArgs: [], clearEnv: 
  * builds — config directory included — once it holds the pane).
  */
 export async function validateLaunchOverrides(
-  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv' | 'machine'>,
+  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv' | 'machine' | 'gridLaunch'>,
   engine: AgentEngine,
   source: LaunchSource,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
   if (!source.gridLaunch) return { ok: true }
-  const built = buildGridEngineLaunch(engine, source.gridLaunch, deps.machine())
+  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine() })
   if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
-  // Only a launch that SETS variables needs the tmux that can set them.
-  if (!(await deps.tmuxSupportsSessionEnv())) {
-    return {
-      ok: false,
-      error: 'TMUX_TOO_OLD_FOR_GRID',
-      detail: `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
-        + `which is the first version that can give a pane its own environment — so ${engine} could not be `
-        + `pointed at grid ${source.gridLaunch.networkName}.`,
-    }
+  return tmuxRefusal(deps, engine, source.gridLaunch)
+}
+
+/** Only a launch that SETS variables needs the tmux that can set them. */
+async function tmuxRefusal(
+  deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv'>, engine: AgentEngine, override: GridLaunchOverride,
+): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
+  if (await deps.tmuxSupportsSessionEnv()) return { ok: true }
+  return {
+    ok: false,
+    error: 'TMUX_TOO_OLD_FOR_GRID',
+    detail: `this machine's tmux is older than ${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, `
+      + `which is the first version that can give a pane its own environment — so ${engine} could not be `
+      + `pointed at grid ${override.networkName}.`,
   }
-  return { ok: true }
 }
 
 export async function buildLaunchOverrides(
@@ -201,8 +209,6 @@ async function buildBaseLaunchOverrides(
   source: LaunchSource,
   configKey: string,
 ): Promise<LaunchOverridesResult> {
-  const valid = await validateLaunchOverrides(deps, engine, source)
-  if (!valid.ok) return valid
   // Coming back to the engine's own login undoes TWO things the grid launch set, and they are
   // undone separately because the engine remembers them differently.
   //
@@ -232,8 +238,12 @@ async function buildBaseLaunchOverrides(
     }
   }
   if (source.gridLaunch) {
-    const built = buildGridEngineLaunch(engine, source.gridLaunch, deps.machine())
+    // Built once, by the models service, with a saved API's endpoint and key as saved now: a removed API is
+    // refused first, then an engine that cannot be pointed there, then a tmux that cannot set the variables.
+    const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(), refresh: true })
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
+    const tmux = await tmuxRefusal(deps, engine, built.override)
+    if (!tmux.ok) return tmux
     const env: Record<string, string> = { ...built.launch.env }
     if (built.launch.configDir) {
       const { envVar, files, pointAt, links } = built.launch.configDir
@@ -254,7 +264,7 @@ async function buildBaseLaunchOverrides(
         env,
         extraArgs: [...built.launch.args],
         clearEnv: gridConflictingEnvToClear({ env }),
-        gridLaunchRecord: { override: source.gridLaunch, webSearch: built.launch.webSearch },
+        gridLaunchRecord: { override: built.override, webSearch: built.launch.webSearch },
         ...(built.launch.sessionModel ? { sessionModel: built.launch.sessionModel } : {}),
       },
     }

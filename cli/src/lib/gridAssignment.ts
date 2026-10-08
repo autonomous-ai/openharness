@@ -22,7 +22,8 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
 import { enginesDeclaring } from '../engines/discoveries.js'
-import { anthropicBaseUrl, GRID_ROUTER_MODEL, relayBaseUrl } from './gridLaunch.js'
+import type { ApiConnections } from './apiConnections.js'
+import { anthropicBaseUrl, GRID_ROUTER_MODEL, relayBaseUrl } from './gridLaunchWire.js'
 import { readProcessEnv } from './processEnv.js'
 import type { ProcessIdentity } from './registry.js'
 
@@ -85,6 +86,15 @@ const apiBases = new Set<string>()
 
 export function rememberApiBase(baseUrl: string): void {
   for (const form of [relayBaseUrl(baseUrl), anthropicBaseUrl(baseUrl)]) apiBases.add(form)
+}
+
+/** Every saved API's endpoint, so agents already running on one are recognised. */
+export function rememberSavedApis(store: Pick<ApiConnections, 'list'>): void {
+  try {
+    for (const connection of store.list()) rememberApiBase(connection.baseUrl)
+  } catch {
+    // An unreadable store is reported where it is managed; recognising agents is best effort.
+  }
 }
 
 /**

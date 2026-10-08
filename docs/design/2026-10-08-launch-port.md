@@ -35,7 +35,7 @@ the ones every service call already uses (`core/serviceLinks.ts` `call`, `LONG_A
 
 | Owner | Already owns | Contributes |
 | --- | --- | --- |
-| Models (`services/models.ts`, its own process) | grid, the saved APIs | **Grid launch:** an engine's settings for a grid or API launch (env, args, config files, web-search MCP wiring, session model, the log line), with an API's key as saved now. **API target:** where a new agent on a saved API's model sends its inference. **API tools:** the saved-API instructions an agent's folder gets. **Grid assignment:** which grid each running agent is on. |
+| Models (`services/models.ts`, its own process) | grid, the saved APIs | **Grid launch:** an engine's settings for a grid or API launch (env, args, config files, web-search MCP wiring, session model), with an API's key as saved now. **API target:** where an agent moved onto a saved API's model sends its inference. **Grid assignment:** which grid each running agent is on, and the saved APIs' endpoints that say so. |
 | Store (`services/store.ts`, its own process) | installing and updating harness packages | **DSH launch:** the workspace materialized at create, and the package's env and args at every launch. |
 
 **A launch never hangs on a service.** A call waits at most its declared bound, and a service that is down
@@ -53,8 +53,8 @@ and the row keeps what it had, as a failed process read does today.
 
 | | Scope | Leaves the core |
 | --- | --- | --- |
-| **(L1) Grid and API launches** | `ModelsPort` gains the grid launch, API target and API tools. Callers: create, every relaunch (restart, resume, restore, fork), retarget's check before it touches the pane, and the socket's `api` selection. | the grid launch builders and `gridWebMcp.ts`, `apiConnections.ts`, `apiModels.ts`, `apiInstructions.ts`: about 2,000 lines |
-| **(L2) Grid assignment** | Discovery, restart and retarget ask models for the assignments of a pass's processes in one call. The saved APIs' endpoints are models' to remember. | `gridAssignment.ts`: about 290 lines |
+| **(L1) Grid and API launches** | `ModelsPort` gains the grid launch and the API target. Callers: create, every relaunch (restart, resume, restore, fork), retarget's check before it touches the pane, and the socket's `api` selection. | the grid launch builders, `gridWebMcp.ts`, `apiModels.ts`: about 1,750 lines |
+| **(L2) Grid assignment and the saved APIs** | Discovery, restart and retarget ask models for the assignments of a pass's processes in one call. The saved APIs' endpoints, and the instructions an agent's folder gets when any are saved, are models' to keep, told to the core so a launch on the engine's own login still asks models nothing. | `gridAssignment.ts`, `apiConnections.ts`, `apiInstructions.ts`: about 490 lines |
 | **(L3) DSH launches** | `StorePort` gains the DSH launch. Callers: create (materialize, then the env and args), every relaunch, fork. The request's package check reads the installed index, a small file the core keeps reading. | `dsh/runtime.ts`, `materialize.ts`, `shell.ts` and most of `manifest.ts`: about 700 lines |
 
 Each sub-batch is its own PR, stacked, each green on its own.
@@ -75,3 +75,32 @@ Each sub-batch is its own PR, stacked, each green on its own.
 (o6) moves OpenCode's version check and the other engines' launch data out of `core/agents/{launches,create}.ts`
 and `engines/launches.ts`. The grid block in `create.ts` sits beside them, so small conflicts are expected. Both
 sides keep their lines.
+
+## (L1) as built
+
+- **The wire stays, the builders go.** `lib/gridLaunchWire.ts` (473 lines) is what the core checks a launch with
+  and reads at every launch: `GridLaunchOverride` and its parser, `isApiLaunch`, the vendor variables a grid
+  launch clears, the variables each engine's grid launch sets, the engines a grid can run, and the line a grid
+  launch is logged with (the core logs it from the launch it holds: create's, or the record a relaunch built).
+  `lib/gridLaunch.ts` keeps the contracts and builds; `contractEnvVarNames` and `contractEngines` are what the
+  declared lists are held equal to (`lib/gridLaunch.spec.ts`).
+- **One question, one answer.** `ModelsPort.gridLaunch({ engine, override, machine, refresh })` answers the launch,
+  the override it was built from (a relaunch's saved API as saved now) and the endpoint of a saved API it read;
+  or the refusal. `ModelsPort.apiTarget({ connectionId, model })` answers the socket's `api` selection. Both take
+  the half-minute bound every service call has (`LONG_ANSWERS` lists neither).
+- **Down is a refusal.** `core/agents/launch.ts` `gridLaunchThrough` turns anything but an answer into
+  `GRID_UNAVAILABLE` (`API_UNAVAILABLE` for a saved API): "The models service is not running, so claude cannot be
+  put on Home grid. Try again in a moment." The socket's `api` selection answers `API_UNAVAILABLE` likewise. A
+  launch with no grid never asks, so it never starts models (on demand) either.
+- **What the core still remembers.** A saved API's endpoint an answer carries is added to the core's grid
+  assignment (`rememberApiBase`), as when the core read the store itself. The store stays in the core until (L2).
+- **Proof.** The golden (`engines/launchShapes.golden.spec.ts`, recorded first from the former code) passes
+  unchanged on darwin and linux, also under `TZ=UTC TMPDIR=/tmp`, with every grid launch crossing the process
+  boundary as JSON and checked as each side checks it (`testing/launchShapes.ts`); so does the earlier launch
+  argv golden. Sixteen mutations of the moved wiring each fail a golden or a spec. End to end, models killed:
+  Claude Code and Codex on their own login launch and take turns; a create, a restart and a retarget on a grid,
+  and a retarget onto a saved API, are refused at once; the agent on the grid keeps running; and its restart
+  works once models is back (`e2e/serviceProcesses.e2e.ts`).
+- **Closure** (`core/main.ts`): 67,045 lines in 370 files before, 65,858 in 367 after. `gridLaunch.ts` (1,121),
+  `gridWebMcp.ts` (446), `apiModels.ts` (171) and `codingContext.ts` (12) left; `gridLaunchWire.ts` (473) came
+  in. `architecture.spec.ts` lists the three as edge files.

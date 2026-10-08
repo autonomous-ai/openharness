@@ -3,6 +3,7 @@ import type { InstalledDsh } from './installed.js'
 import { dshLaunch, harnessEnvToClear, DSH_SESSION_ENV } from './launch.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { dshFromEnv } from './probe.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 const installed: InstalledDsh = {
   id: 'autonomous/circuit', dir: '/home/u/.harness/dsh/autonomous/circuit', realDir: '/src/circuit',
@@ -43,7 +44,7 @@ describe('dshLaunch', () => {
 describe('buildLaunchOverrides with a DSH', () => {
   const deps: LaunchOverridesDeps = {
     // The branch replaced `configDirFor` with the machine facts the grid launch builder reads itself.
-    machine: () => ({ hermesSystemManaged: false }),
+    machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async () => '/cfg',
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: () => undefined,

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
 import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -14,7 +15,7 @@ const GRID: GridLaunchOverride = {
 function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   const calls: string[] = []
   const d: LaunchOverridesDeps = {
-    machine: () => ({ hermesSystemManaged: false }),
+    machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async (key) => { calls.push(`writeConfig:${key}`); return `/state/grid-engine-config/${key}` },
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: (home) => { calls.push(`hooks:${home}`) },

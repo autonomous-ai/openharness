@@ -10,6 +10,7 @@ import type { InstalledDsh } from './installed.js'
 import { HARNESS_ADAPTERS, HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
 import { compatibleHarnessEngines } from './compatibility.js'
 import { forkRuntimeKey, harnessLaunchOrRefusal, harnessRuntimeDir, incompatibleHarnessEngine, migrateHarnessInstructions, prepareHarnessLaunch } from './runtime.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 let root: string
 let ws: string
@@ -90,7 +91,7 @@ describe('session isolation and lifecycle', () => {
   })
 
   it('does not inherit the previous account private grid on a harness relaunch', async () => {
-    const result = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }),
+    const result = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
       writeGridConfigDir: async () => '/unused', tmuxSupportsSessionEnv: async () => true,
       installCodexHooks: () => {}, dshLaunch: () => prepareHarnessLaunch(pkg, ws, 'claude', 'new-account'),
     }, 'claude', { dsh: pkg.id, cwd: ws }, 'agent')
@@ -134,7 +135,7 @@ describe('session isolation and lifecycle', () => {
     pkg.manifest.agent!.args = ['--new-flag']
     pkg.manifest.agent!.env = { TOOLCHAIN: 'changed' }
     write(join(pkg.realDir, 'AGENTS.md'), '# Updated instructions\n')
-    const deps = { machine: () => ({ hermesSystemManaged: false }), writeGridConfigDir: async () => '/cfg',
+    const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
       tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => {},
       dshLaunch: (_id: string, workspace: string, engine: typeof PROCESS_ENGINES[number] | 'terminal', key: string) =>
         prepareHarnessLaunch(pkg, workspace, engine, key, { privateGrid: 'new-grid' }) }
@@ -153,7 +154,7 @@ describe('session isolation and lifecycle', () => {
   })
 
   it('keeps older rows stable using their agent id and supports package renames', async () => {
-    const deps = { machine: () => ({ hermesSystemManaged: false }), writeGridConfigDir: async () => '/cfg',
+    const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
       tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => {},
       dshLaunch: (_id: string, workspace: string, engine: typeof PROCESS_ENGINES[number] | 'terminal', key: string) => prepareHarnessLaunch(pkg, workspace, engine, key) }
     const first = await buildLaunchOverrides(deps, 'codex', { dsh: pkg.id, cwd: ws }, 'old-agent')
@@ -164,7 +165,7 @@ describe('session isolation and lifecycle', () => {
   })
 
   it('reports preparation failures, missing dependencies, or no resolver before a relaunch', async () => {
-    const deps = { machine: () => ({ hermesSystemManaged: false }), writeGridConfigDir: async () => '/cfg',
+    const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
       tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => {} }
     expect(await buildLaunchOverrides(deps, 'codex', { dsh: pkg.id, cwd: ws }, 'key')).toMatchObject({ ok: false, error: 'DSH_NOT_INSTALLED' })
     expect(await buildLaunchOverrides({ ...deps, dshLaunch: () => { throw new Error('broken context') } }, 'codex', { dsh: pkg.id, cwd: ws }, 'key'))

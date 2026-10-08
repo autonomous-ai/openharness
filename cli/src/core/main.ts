@@ -53,8 +53,7 @@ import { isTerminalEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
-import { type GridLaunchMachine } from '../lib/gridLaunch.js'
-import { HERMES_SYSTEM_MANAGED_DIR } from '../lib/gridWebMcp.js'
+import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLaunchWire.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { tmuxSupportsSessionEnv } from '../lib/tmuxVersion.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
@@ -78,7 +77,7 @@ import { adoptLegacyHarnessSessions, listTmuxPanes } from '../lib/tmuxAgentDisco
 import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { prepareHarnessLaunch } from '../dsh/runtime.js'
 import { ApiConnections } from '../lib/apiConnections.js'
-import { rememberSavedApis } from '../lib/apiModels.js'
+import { rememberSavedApis } from '../lib/gridAssignment.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
@@ -124,7 +123,7 @@ import { createRelaunchMarks, transcriptSize } from './transcripts/relaunch.js'
 import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
-import { createLaunchHelpers } from './agents/launch.js'
+import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
 import { createCancel, createCancelRequest } from './turns/cancel.js'
 import { createPaneWatcher } from './agents/newPane.js'
 import { createAdoption } from './agents/adopt.js'
@@ -1909,8 +1908,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * restart read the row; retarget passes the override the desktop just sent. The config directory is
    * keyed on the agent, so relaunching the same agent rewrites one directory instead of leaving a trail.
    */
+  // Grid and saved-API launches are built by the models service (core/agents/launch.ts `gridLaunchThrough`): a
+  // launch on one while models is down is refused, and one on the engine's own login never asks it.
+  const gridLaunch = gridLaunchThrough(() => ports.models ?? MODELS_OFF)
   const launchOverridesDeps: LaunchOverridesDeps = {
     machine: gridLaunchMachine,
+    gridLaunch,
     writeGridConfigDir,
     tmuxSupportsSessionEnv,
     installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) engineHookFacets.codex.installIn(hookPort, codexHome) },
@@ -1927,7 +1930,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // pass below, which calls these for every pane it rebuilds.
   const launchHelpers = createLaunchHelpers({
     prepareApiTools,
-    savedApis,
     launchOverridesDeps,
     setGridLaunch: (agentId, launch) => registry.setGridLaunch(agentId, launch),
     setTail: (sessionId, offset) => watcher.setTail(sessionId, offset),
@@ -2224,6 +2226,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
     installOpencodePlugin: installOpencodePluginBeforeSpawn,
     gridLaunchMachine,
+    buildGridLaunch: gridLaunch,
     terminalHintMachineName,
     blocksFolder: (cwd) => backend.purgeAgentService?.blocksFolder(cwd),
     gridSetup: () => {

@@ -17,7 +17,7 @@ import { isOpencodeV2, opencodeMajorVersion } from '../../engines/opencode/versi
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { probeGridAssignment } from '../../lib/gridAssignment.js'
-import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunch.js'
+import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'

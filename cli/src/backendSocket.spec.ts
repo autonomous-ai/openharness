@@ -3320,7 +3320,7 @@ describe('a move onto a grid model asks models where it goes', () => {
   function daemon(moveTarget: ModelsPort['moveTarget'] | null) {
     const socket = relaySocket('token')
     const moved = vi.fn()
-    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved })
+    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved, apiTarget: () => Promise.reject(new Error('no APIs')) })
     const retargeted = vi.fn(async (_request: { agentId: string; grid: unknown }) => ({ ok: true as const }))
     socket.onRetargetAgent = retargeted
     const frames: Array<Record<string, unknown>> = []

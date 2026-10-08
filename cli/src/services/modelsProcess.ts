@@ -17,7 +17,8 @@
 import type { CoreApi, ServiceRequests } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, TERMINALS_OFF } from '../core/api.js'
 import type { AgentGridTarget, GridGlance } from '../lib/gridAnnotation.js'
-import { parseGridLaunchOverride } from '../lib/gridLaunch.js'
+import { parseGridLaunchOverride, type GridLaunchRequest } from '../lib/gridLaunch.js'
+import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { gridGlances, onGridModelsChanged } from '../lib/gridModels.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { startModels } from './models.js'
@@ -42,6 +43,23 @@ export interface ModelsServiceOptions {
 
 const isRecord = (value: unknown): value is Payload => !!value && typeof value === 'object' && !Array.isArray(value)
 const text = (value: unknown): string => (typeof value === 'string' ? value : '')
+
+/** A grid launch the core asked to have built, checked as the core checks one: the engine, the launch it sends,
+ *  this machine's facts and whether it is a relaunch; null when it is not one. */
+export function gridLaunchRequestIn(payload: Record<string, unknown>): GridLaunchRequest | null {
+  const parsed = parseGridLaunchOverride(payload.override)
+  const machine = payload.machine as Record<string, unknown> | null | undefined
+  if (parsed.state !== 'ok' || !(ENGINES as readonly string[]).includes(text(payload.engine))) return null
+  if (!machine || typeof machine !== 'object' || typeof machine.hermesSystemManaged !== 'boolean') return null
+  const major = machine.opencodeMajor
+  if (major !== undefined && major !== null && !Number.isSafeInteger(major)) return null
+  return {
+    engine: payload.engine as AgentEngine,
+    override: parsed.override,
+    machine: { hermesSystemManaged: machine.hermesSystemManaged, ...(major !== undefined ? { opencodeMajor: major as number | null } : {}) },
+    ...(payload.refresh === true ? { refresh: true } : {}),
+  }
+}
 
 /**
  * The core API models runs on in its own process: the sign-in, the account's grid and this machine's name
@@ -157,6 +175,11 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
     ensure: async (payload) => ({ ...await models.ensure({ ownGrid: payload.ownGrid === true }) }),
     launchTarget: async (payload) => ({ target: await models.launchTarget({ model: text(payload.model), grid: text(payload.grid) }) }),
     moveTarget: async (payload) => ({ ...await models.moveTarget({ gridName: text(payload.gridName) || null, model: text(payload.model) }) }),
+    gridLaunch: async (payload) => {
+      const request = gridLaunchRequestIn(payload)
+      return request ? { ...await models.gridLaunch(request) } : { ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' }
+    },
+    apiTarget: async (payload) => ({ ...await models.apiTarget({ connectionId: text(payload.connectionId), model: text(payload.model) }) }),
     privateGridName: async () => ({ name: await models.privateGridName() }),
     lists: async () => ({ ...await models.lists() }),
   }
