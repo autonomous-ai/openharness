@@ -250,9 +250,11 @@ final RegExp _outputGlyph = RegExp(
 /// under a dead dialog, the dialog was dropped, and the keyboard never came up
 /// for it. Measured on Codex 0.156.1, question 2 of 2. The modifiers sit before
 /// the `\b` group because a `\b` cannot follow `+` into `↓` or `]`: neither
-/// side is a word character.
+/// side is a word character. The bare glyph is there as well as the `+` form,
+/// not instead of it: Codex 0.161.0 writes it straight onto the key (`⇧←`,
+/// `⌥↓`), 0.156.1 with the `+`.
 final RegExp _footerHint = RegExp(
-  r'\u00b7|[⌥⌃⇧]\s*\+|\b(?:ctrl|shift|alt|option|opt|meta)\s*\+|\b(to (select|cancel|confirm|submit|toggle|navigate|edit|add|interrupt|view|expand)|esc|enter|tab|\u2191/\u2193|\u2190/\u2192)\b',
+  r'\u00b7|[⌥⌃⇧]\s*\+|[⌥⌃⇧]|\b(?:ctrl|shift|alt|option|opt|meta)\s*\+|\b(to (select|cancel|confirm|submit|toggle|navigate|edit|add|interrupt|view|expand)|esc|enter|tab|\u2191/\u2193|\u2190/\u2192)\b',
   caseSensitive: false,
 );
 
