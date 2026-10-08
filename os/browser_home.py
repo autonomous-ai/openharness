@@ -24,7 +24,7 @@ def read_message(stream):
     if len(raw) != length:
         raise ValueError('Incomplete message')
     message = json.loads(raw)
-    if message != {'action': 'connections'}:
+    if message not in [{'action': 'connections'}, {'action': 'installed'}]:
         raise ValueError('Unknown action')
     return message
 
@@ -35,12 +35,19 @@ def reply(stream, data):
     stream.flush()
 
 
-def main(argv, source, destination, *, manifest=HOST_MANIFEST, launch=None):
+def main(argv, source, destination, *, manifest=HOST_MANIFEST, launch=None, ready=None):
     try:
         allowed = json.loads(manifest.read_text())['allowed_origins']
         if len(argv) != 1 or argv[0] not in allowed:
             return 1
-        read_message(source)
+        message = read_message(source)
+        if message == {'action': 'installed'}:
+            if ready is None:
+                import browser_profile
+                ready = browser_profile.installed
+            ready()
+            reply(destination, {'ok': True})
+            return 0
         if launch is None:
             sys.path.insert(0, '/usr/lib/harness-os/connections')
             import connections

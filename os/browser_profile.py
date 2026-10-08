@@ -5,13 +5,115 @@ Only our supported external-extension descriptor is written. Browser preferences
 bookmarks, acknowledgement/disable records and other extensions are read-only.
 """
 import json
+import fcntl
 import os
 from pathlib import Path
 import re
+import signal
+import socket
+import subprocess
 import sys
 import tempfile
+import time
 
 PACKAGE = Path('/usr/share/harness-os/browser-home/extension.json')
+
+
+def startup_socket():
+    return Path('/run/user') / str(os.getuid()) / 'harness-browser-start' / 'ready'
+
+
+def installed():
+    """One install-only acknowledgment; no persistent helper or browser access."""
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as connection:
+        connection.sendto(b'ready', str(startup_socket()))
+
+
+def pristine(root):
+    return (not (root / 'Local State').exists() and
+            not (root / 'SingletonLock').is_symlink() and
+            not any(root.glob('*/Preferences')) and
+            not any(root.glob('*/Secure Preferences')))
+
+
+def prime(root, *, deadline_seconds=8):
+    """Let a new profile finish installing its page before opening a window.
+
+    Only a browser we start in an unused profile is controlled here. CDP stays
+    on private child pipes, never a listening port. Ordinary launches and every
+    existing profile skip this one-time step entirely.
+    """
+    endpoint = startup_socket()
+    browser = None
+    lock = None
+    bound = False
+    try:
+        endpoint.parent.mkdir(mode=0o700, parents=False, exist_ok=True)
+        lock = (endpoint.parent / 'lock').open('a')
+        limit = time.monotonic() + deadline_seconds + 5  # Include other caller's cleanup.
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= limit:
+                    return False
+                time.sleep(.05)
+        if not pristine(root):
+            return False
+        endpoint.unlink(missing_ok=True)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as ready:
+            ready.bind(str(endpoint))
+            bound = True
+            endpoint.chmod(0o600)
+            # The shell only maps Chromium's documented pipe descriptors.
+            # All command text is constant; no URL/user input is interpolated.
+            browser = subprocess.Popen([
+                '/bin/sh', '-c',
+                'exec /usr/bin/chromium --headless --no-first-run '
+                '--no-default-browser-check --remote-debugging-pipe '
+                'about:blank 3<&0 4>&1',
+            ], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, start_new_session=True)
+            ready.settimeout(deadline_seconds)
+            return ready.recv(64) == b'ready'
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False  # Optional preparation must never prevent normal browsing.
+    finally:
+        if browser is not None:
+            try:
+                if browser.poll() is None:
+                    browser.stdin.write(b'{"id":1,"method":"Browser.close"}\0')
+                    browser.stdin.flush()
+                    browser.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                # This group belongs only to the child created above. Never
+                # kill Chromium by name or touch an existing browser process.
+                try:
+                    if browser.poll() is None:
+                        os.killpg(browser.pid, signal.SIGTERM)
+                        browser.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(browser.pid, signal.SIGKILL)
+                        browser.wait(timeout=2)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                except OSError:
+                    pass
+            finally:
+                for pipe in [browser.stdin, browser.stdout]:
+                    try:
+                        pipe.close()
+                    except OSError:
+                        pass
+        if bound:
+            try:
+                endpoint.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if lock is not None:
+            lock.close()
 
 
 def read_json(path):
@@ -88,4 +190,8 @@ if __name__ == '__main__':
     if not os.environ.get('CHROME_USER_DATA_DIR') and not any(
             arg == '--user-data-dir' or arg.startswith('--user-data-dir=') for arg in sys.argv[1:]):
         config = Path(os.environ.get('CHROME_CONFIG_HOME') or os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
-        prepare(config / 'chromium')
+        root = config / 'chromium'
+        if (prepare(root) and len(sys.argv) == 1 and
+                not (config / 'chromium-flags.conf').exists() and not any(
+                    os.environ.get(key) for key in ['CHROME_CONFIG_HOME', 'XDG_CONFIG_HOME'])):
+            prime(root)

@@ -59,8 +59,10 @@ def exercise(vm, result):
     try:
         vm.command('hn-browser')
         wait_installer_screen(vm, r'Connect accounts', 'browser-home-offline', timeout=45)
+        vm.command('! pgrep -u "$(id -u)" -f ' + shlex.quote(r'^/usr/lib/chromium/chromium .*--headless'))
+        vm.command('test ! -S "/run/user/$(id -u)/harness-browser-start/ready"')
         vm.command('! pgrep -u "$(id -u)" -f ' + shlex.quote(HELPER))
-        result['checks'].append('Default browser start is the local Harness page offline, with no Connections helper running')
+        result['checks'].append('First browser start is the local Harness page offline; temporary preparation and Connections helper are both stopped')
         vm.click_word('browser-home-mouse', 'Connections')
         wait_installer_screen(vm, r'Connect once', 'browser-home-connections', timeout=30)
         vm.keys('alt', 'left')

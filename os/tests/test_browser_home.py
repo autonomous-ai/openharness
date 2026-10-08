@@ -8,7 +8,7 @@ import struct
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -39,11 +39,12 @@ class BrowserHome(unittest.TestCase):
         self.origin = 'chrome-extension://' + 'a' * 32 + '/'
         self.manifest.write_text(json.dumps({'allowed_origins': [self.origin]}))
         self.launch = Mock(return_value='http://127.0.0.1:12345/#' + 'K' * 43)
+        self.ready = Mock()
 
     def invoke(self, request, origin=None):
         output = io.BytesIO()
         result = host.main([origin or self.origin], request, output,
-                           manifest=self.manifest, launch=self.launch)
+                           manifest=self.manifest, launch=self.launch, ready=self.ready)
         raw = output.getvalue()
         if raw:
             self.assertEqual(struct.unpack('=I', raw[:4])[0], len(raw[4:]))
@@ -60,6 +61,14 @@ class BrowserHome(unittest.TestCase):
         for origin in ['https://example.com/', 'chrome-extension://' + 'b' * 32 + '/', self.origin + '?x']:
             self.assertEqual(self.invoke(message({'action': 'connections'}), origin), (1, None))
         self.launch.assert_not_called()
+        self.ready.assert_not_called()
+
+    def test_install_handshake_never_starts_connections(self):
+        self.assertEqual(self.invoke(message({'action': 'installed'})), (0, {'ok': True}))
+        self.ready.assert_called_once_with()
+        self.launch.assert_not_called()
+        self.assertEqual(self.invoke(message({'action': 'installed', 'path': '/unexpected'}))[0], 1)
+        self.ready.assert_called_once_with()
 
     def test_arbitrary_actions_parameters_and_malformed_messages_do_not_launch(self):
         for request in [message({'action': 'connections', 'url': 'https://evil.invalid'}),
@@ -83,7 +92,8 @@ class BrowserHome(unittest.TestCase):
         manifest = json.loads((ROOT / 'os/browser-home/extension/manifest.json').read_text())
         self.assertEqual(manifest['permissions'], ['nativeMessaging'])
         self.assertEqual(manifest['chrome_url_overrides'], {'newtab': 'index.html'})
-        self.assertFalse(set(manifest) & {'host_permissions', 'background', 'content_scripts',
+        self.assertEqual(manifest['background'], {'service_worker': 'installed.js'})
+        self.assertFalse(set(manifest) & {'host_permissions', 'content_scripts',
                                          'externally_connectable', 'web_accessible_resources', 'update_url'})
         result = payload.stage(ROOT, self.folder / 'stage')
         self.assertEqual(result, {'extension_id': extension_id, 'version': version})
@@ -193,6 +203,52 @@ class BrowserHome(unittest.TestCase):
         target = root / 'External Extensions' / (identity + '.json')
         self.assertTrue(json.loads(target.read_text())['keep_if_present'])
         self.assertEqual(prefs.read_text(), '{broken')
+
+    def test_existing_browser_profiles_never_start_priming_process(self):
+        for relative in ['Local State', 'Default/Preferences', 'Profile 2/Secure Preferences']:
+            root = self.folder / relative.replace('/', '-')
+            state = root / relative
+            state.parent.mkdir(parents=True)
+            state.write_text('{}')
+            endpoint = root / 'runtime/ready'
+            with patch.object(profile, 'startup_socket', return_value=endpoint), patch.object(profile.subprocess, 'Popen') as child:
+                self.assertFalse(profile.prime(root))
+                child.assert_not_called()
+                self.assertEqual(state.read_text(), '{}')
+
+    def test_priming_timeout_closes_only_its_own_child_and_removes_socket(self):
+        root = self.folder / 'pristine'
+        root.mkdir()
+        # Unix socket paths are limited to about 100 bytes, including macOS's
+        # long default temporary-directory prefix.
+        runtime = tempfile.TemporaryDirectory(prefix='hn-home-', dir='/tmp')
+        self.addCleanup(runtime.cleanup)
+        endpoint = Path(runtime.name) / 'ready'
+        child = Mock(stdin=io.BytesIO(), stdout=io.BytesIO())
+        child.poll.return_value = None
+        with patch.object(profile, 'startup_socket', return_value=endpoint), patch.object(profile.subprocess, 'Popen', return_value=child) as start:
+            self.assertFalse(profile.prime(root, deadline_seconds=.01))
+            start.assert_called_once()
+            self.assertTrue(start.call_args.kwargs['start_new_session'])
+            child.wait.assert_called_once_with(timeout=3)
+        self.assertFalse(endpoint.exists())
+        self.assertTrue(child.stdin.closed)
+
+    def test_priming_waits_for_real_install_acknowledgment_then_closes_child(self):
+        root = self.folder / 'pristine'
+        root.mkdir()
+        runtime = tempfile.TemporaryDirectory(prefix='hn-home-', dir='/tmp')
+        self.addCleanup(runtime.cleanup)
+        endpoint = Path(runtime.name) / 'ready'
+        child = Mock(stdin=io.BytesIO(), stdout=io.BytesIO())
+        child.poll.return_value = None
+        def start(*args, **kwargs):
+            profile.installed()
+            return child
+        with patch.object(profile, 'startup_socket', return_value=endpoint), patch.object(profile.subprocess, 'Popen', side_effect=start):
+            self.assertTrue(profile.prime(root))
+        child.wait.assert_called_once_with(timeout=3)
+        self.assertFalse(endpoint.exists())
 
 
 if __name__ == '__main__':

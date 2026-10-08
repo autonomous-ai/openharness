@@ -9,12 +9,20 @@ updating existing installations only. Startup preferences, bookmarks and explici
 URLs stay untouched. A user can disable/remove it in `chrome://extensions` or
 choose another New Tab extension. Chromium remembers removal across OS updates.
 
-The extension has only `nativeMessaging` permission. It has no background worker,
-network access, content scripts, history or bookmark permissions. Clicking
+The extension has only `nativeMessaging` permission. It has no network access,
+content scripts, history, tab or bookmark permissions. Clicking
 Connections starts a short-lived native host which accepts exactly one action
 from the exact extension origin. The host authenticates or starts the existing
 per-user Connections helper and returns its temporary capability URL. There is
 no fixed local port, unauthenticated credential endpoint or shell-command bridge.
+
+On a never-used default profile only, a temporary headless Chromium process lets
+the external extension install before the first visible window. An install-only
+worker acknowledges readiness through the native host and a private user runtime
+socket. The launcher then closes only that child through private CDP pipes; there
+is no debugging port. Existing profiles, explicit URLs and custom-profile options
+skip this step. Preparation is bounded and failure falls back to normal browsing.
+The worker has no startup listener, timers or persistent connection.
 
 The signed `home.crx` is committed alongside its source. Ordinary OS builds need
 no private key or browser build. `os/tools/browser_home_payload.py` verifies the
