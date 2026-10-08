@@ -28,7 +28,7 @@ code = r'''
 #include <unistd.h>
 static int64_t s_last_rx_us, clock_us = 123;
 static uint32_t s_bad,s_unknown;
-static unsigned handled, alloc_calls, live, fail_at, fw_slices;
+static unsigned handled, alloc_calls, live, fail_at, fw_slices, pet_slices;
 static int last_number;
 static size_t allocated_bytes, peak_bytes;
 typedef union { max_align_t alignment; size_t bytes; } allocation_header;
@@ -46,6 +46,7 @@ static void deallocate(void *p) {
 }
 static int64_t esp_timer_get_time(void) { return clock_us; }
 static void fw_update_slice(const uint8_t *p,size_t n) { (void)p; (void)n; fw_slices++; }
+static void handle_pet_slice(const uint8_t *p,size_t n) { (void)p; (void)n; pet_slices++; }
 static void handle_message(const cJSON *root) {
     assert(cJSON_IsObject(root)); handled++;
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(root,"n");
@@ -135,6 +136,7 @@ int main(void) {
     assert(!munmap(map,3*page));
     on_frame(1,9,NULL,0,NULL);assert(s_unknown==1);
     on_frame(1,CABLE_TYPE_FW,NULL,0,NULL);assert(fw_slices==1);
+    on_frame(1,CABLE_TYPE_PET,NULL,0,NULL);assert(pet_slices==1 && fw_slices==1 && !live);
     puts("USB JSON: real cJSON, guarded/truncated frames, 100000 mutations, every allocation failure PASS");
 }
 '''

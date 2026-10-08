@@ -32,6 +32,7 @@ import type { WindowRoute } from './windowRoute.js'
 import type { SelectionCommand, SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
+import type { PetStore } from './pets/store.js'
 import type { MachineFleet } from './machineFleet.js'
 import type { ReviewedAnswer, AnswerReceipt } from './questionInbox.js'
 
@@ -117,6 +118,8 @@ export interface CableHostWiring {
    * fleet is off. Absent, this host routes by itself.
    */
   fleet?: () => FleetRouting | null
+  /** The custom pets kept on this computer; the dial's session reads the mapping and packs from it. */
+  pets?: () => PetStore | null
 }
 
 /** Whether an id is the router's placeholder for a machine with no id yet (`cable:` and the computer id;
@@ -292,6 +295,10 @@ export class DaemonCableHost implements CableHost {
   onDialStatus(status: DialStatus): void {
     this.dialStatusNow = status
     this.wiring.dialStatus?.(status)
+  }
+
+  pets(): PetStore | null {
+    return this.wiring.pets?.() ?? null
   }
 
   currentDialStatus(): DialStatus {

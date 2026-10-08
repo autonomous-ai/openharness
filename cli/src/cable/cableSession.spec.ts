@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
+import type { PetStore } from './pets/store.js'
 
 /** A port whose two ends are both in this process. */
 class LoopbackPort implements CablePort {
@@ -23,6 +24,8 @@ class LoopbackPort implements CablePort {
   readonly sent: Array<Record<string, unknown>> = []
   /** The raw bytes of every frame written, so a test can assert the 8 KB cap holds. */
   readonly frames: Uint8Array[] = []
+  /** Payloads of every pet slice (CableType.Pet) the daemon wrote. */
+  readonly petSlices: Buffer[] = []
   closedWith: string | null = null
 
   private decoder = new CableDecoder()
@@ -38,6 +41,7 @@ class LoopbackPort implements CablePort {
       if (frame.type === CableType.Json) {
         this.sent.push(JSON.parse(Buffer.from(frame.payload).toString('utf8')) as Record<string, unknown>)
       }
+      if (frame.type === CableType.Pet) this.petSlices.push(Buffer.from(frame.payload))
     })
   }
 
@@ -2361,5 +2365,293 @@ describe('spoken output search purpose', () => {
       expect(selectPassage).toHaveBeenLastCalledWith({op:'cancel',agentId:'a2',selectionId:'search-one',revision:3})
       expect(port.types()).not.toContain('voice.search'); expect(host.sendTurn).not.toHaveBeenCalled()
     } finally {await session.stop()}
+  })
+
+  describe('custom pets', () => {
+    const A = 'a'.repeat(16)
+    const B = 'b'.repeat(16)
+    const NEW = 'c'.repeat(16)
+    /** A pack the size of two slices; the crc field is the u32 at offset 18, as in the real header. */
+    const pack = (fill: number, size = 20_000) => { const b = Buffer.alloc(size, fill); b[4] = 1; b.writeUInt32LE(0xdeadbeef, 18); return b }
+    const packs: Record<string, Buffer> = { [A]: pack(1), [B]: pack(2, 100), [NEW]: pack(3, 100) }
+    const fakeStore = (mapping: { all: string | null; engines: Record<string, string> }) => {
+      const store = {
+        current: mapping,
+        mapping: () => ({ all: store.current.all, engines: { ...store.current.engines } }),
+        pack: async (id: string) => packs[id],
+      }
+      return store
+    }
+    const hello = { t: 'hello', product: 'harness', fw: '0.0.1', proto: 3, mac: 'aa:bb' }
+    const petTypes = (port: LoopbackPort) => port.types().filter((t) => t.startsWith('pet.'))
+
+    it('hello without pets: no pet traffic', async () => {
+      const store = fakeStore({ all: A, engines: {} })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say(hello)
+      await settle()
+      expect(petTypes(port)).toEqual([])
+      expect(session.petDial()).toEqual({ supported: false, held: [], sending: null, errors: {} })
+      await session.stop()
+    })
+
+    it('hello with pets:1 and petIds [] → pet.map then pet.offer for the first mapped pack', async () => {
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      expect(port.sent.find((m) => m.t === 'pet.map')).toEqual({ t: 'pet.map', all: A, engines: { claude: B } })
+      const offers = port.sent.filter((m) => m.t === 'pet.offer')
+      // One transfer at a time: the second offer waits for pet.done of the first.
+      expect(offers).toEqual([{ t: 'pet.offer', id: A, size: 20_000, crc: 0xdeadbeef }])
+      expect(petTypes(port).slice(0, 2)).toEqual(['pet.map', 'pet.offer'])
+      expect(port.types().indexOf('welcome')).toBeLessThan(port.types().indexOf('pet.map'))
+      expect(port.petSlices).toHaveLength(0) // nothing before pet.accept
+      port.say({ t: 'pet.accept', id: A })
+      await settle()
+      expect(port.petSlices.map((b) => b.length)).toEqual([8192, 8192]) // the 16 KB credit window
+      expect(session.petDial().sending).toEqual({ id: A, percent: 0 })
+      port.say({ t: 'pet.progress', id: A, written: 16384 })
+      await settle()
+      expect(Buffer.concat(port.petSlices).equals(packs[A])).toBe(true)
+      expect(session.petDial().sending).toEqual({ id: A, percent: 81 })
+      port.say({ t: 'pet.done', id: A })
+      await settle()
+      expect(session.petDial()).toEqual({ supported: true, held: [A], sending: { id: B, percent: 0 }, errors: {} })
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B])
+      await session.stop()
+    })
+
+    it('a hello built before pet.done does not resend the pack it just stored', async () => {
+      // Seen on a dial 2026-10-08: its greeting, assembled while the pack was still arriving, landed after the
+      // pet.done and read as "holds nothing" — both packs went over twice.
+      const store = fakeStore({ all: B, engines: {} })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      port.say({ t: 'pet.accept', id: B })
+      await settle()
+      port.say({ t: 'pet.done', id: B })
+      await settle()
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([B])
+      expect(session.petDial().held).toEqual([B])
+      await session.stop()
+    })
+
+    it('a cut transfer is resent after reattach', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      const ports: LoopbackPort[] = []
+      const session = new CableSession(makeHost({ pets: () => store as unknown as PetStore }), tmpLog(), async (onData, onClosed) => {
+        const next = new LoopbackPort(onData, onClosed)
+        ports.push(next)
+        return next
+      })
+      session.start()
+      await vi.waitFor(() => expect(ports).toHaveLength(1))
+      ports[0].say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      ports[0].say({ t: 'pet.accept', id: B })
+      await settle()
+      expect(session.petDial().sending?.id).toBe(B)
+      await ports[0].close('cable pulled')
+      await settle()
+      expect(session.petDial()).toEqual({ supported: false, held: [], sending: null, errors: {} })
+      // The session's tick reopens the port; the dial greets again, having kept nothing of the cut pack.
+      await vi.waitFor(() => expect(ports).toHaveLength(2), NEXT_TICKS)
+      ports[1].say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      expect(ports[1].sent.filter((m) => m.t === 'pet.offer')).toEqual([{ t: 'pet.offer', id: B, size: 100, crc: 0xdeadbeef }])
+      await session.stop()
+    })
+
+    it('pet.error memory → reported in petDial; the next hello forgives it, a crc refusal stays until the mapping changes', async () => {
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      port.say({ t: 'pet.error', id: A, reason: 'memory' })
+      await settle()
+      expect(session.petDial().held).toEqual([])
+      expect(session.petDial().errors).toEqual({ [A]: 'memory' })
+      expect(session.petDial().sending?.id).toBe(B)
+      // The next pack is still tried; the refused one is not retried by the sync itself.
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B])
+      port.say({ t: 'pet.error', id: B, reason: 'crc' })
+      await settle()
+      expect(session.petDial().errors).toEqual({ [A]: 'memory', [B]: 'crc' })
+      // A greeting forgives the moment's trouble (memory), not the pack the dial found wrong (crc).
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B, A])
+      expect(session.petDial().errors).toEqual({ [B]: 'crc' })
+      // A changed mapping clears everything.
+      await session.petsChanged()
+      expect(session.petDial().errors).toEqual({})
+      await session.stop()
+    })
+
+    it('a hello that lost a held pack abandons the transfer in flight and offers again', async () => {
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [B] })
+      await settle()
+      port.say({ t: 'pet.accept', id: A })
+      await settle()
+      expect(session.petDial().sending?.id).toBe(A)
+      port.say({ ...hello, pets: 1, petIds: [] }) // rebooted under the open link: it holds nothing
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, A])
+      expect(session.petDial().sending).toEqual({ id: A, percent: 0 })
+      // A keepalive that merely does not list the pack in flight leaves it alone.
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(2)
+      await session.stop()
+    })
+
+    it('a memory refusal after a pet.drop is offered once more after 1.5 s', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: A, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        port.say({ ...hello, pets: 1, petIds: [NEW] }) // the old pet goes, the new one comes
+        await vi.advanceTimersByTimeAsync(5)
+        expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: NEW }])
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(1_000)
+        expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(1)
+        await vi.advanceTimersByTimeAsync(600)
+        expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, A])
+        // Only once.
+        port.say({ t: 'pet.error', id: A, reason: 'memory' })
+        await vi.advanceTimersByTimeAsync(5_000)
+        expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(2)
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('hello.pets is the newest pack version the dial reads', async () => {
+      const store = fakeStore({ all: A, engines: {} })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 3, petIds: [] })
+      await settle()
+      expect(session.petDial().supported).toBe(true)
+      expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(1)
+      await session.stop()
+    })
+
+    it('firmware offer pending → pet transfer waits', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      const host = makeHost({
+        pets: () => store as unknown as PetStore,
+        firmwareFor: async () => ({ version: '9.9.9', image: Buffer.alloc(2048, 9), sha256: 'x'.repeat(64) }),
+      })
+      const { session, port } = await connect(host)
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      expect(port.types()).toContain('fw.offer')
+      expect(port.types()).toContain('pet.map') // the map is a message, not a transfer
+      expect(port.types()).not.toContain('pet.offer')
+      port.say({ t: 'fw.error', message: 'no' })
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([B])
+      await session.stop()
+    })
+
+    it('a stalled pet transfer times out after 10 s without progress, records timeout, and moves on', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const store = fakeStore({ all: A, engines: { claude: B } })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        port.say({ ...hello, pets: 1, petIds: [] })
+        await vi.advanceTimersByTimeAsync(5)
+        expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A])
+        await vi.advanceTimersByTimeAsync(9_000)
+        // progress resets the timer
+        port.say({ t: 'pet.accept', id: A })
+        await vi.advanceTimersByTimeAsync(9_000)
+        expect(session.petDial().errors).toEqual({})
+        await vi.advanceTimersByTimeAsync(1_500)
+        expect(session.petDial().errors).toEqual({ [A]: 'timeout' })
+        expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: A }])
+        expect(session.petDial().sending?.id).toBe(B)
+        expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B])
+        await session.stop()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('petsChanged during the firmwareFor await → no fw.offer once a pet transfer started', async () => {
+      const store = fakeStore({ all: A, engines: {} })
+      let release: () => void = () => {}
+      const gate = new Promise<void>((r) => { release = r })
+      let calls = 0
+      const host = makeHost({
+        pets: () => store as unknown as PetStore,
+        firmwareFor: async () => {
+          calls++
+          if (calls === 1) return null
+          await gate
+          return { version: '9.9.9', image: Buffer.alloc(2048, 9), sha256: 'x'.repeat(64) }
+        },
+      })
+      const { session, port } = await connect(host)
+      port.say({ ...hello, pets: 1, petIds: [A] }) // holds everything: nothing to send yet
+      await settle()
+      port.say({ ...hello, pets: 1, petIds: [A] }) // keepalive: parks inside firmwareFor
+      await settle()
+      expect(calls).toBe(2)
+      store.current = { all: A, engines: { claude: B } }
+      await session.petsChanged()
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([B])
+      release()
+      await settle()
+      expect(port.types()).not.toContain('fw.offer')
+      await session.stop()
+    })
+
+    it('a held pack that is no longer mapped is dropped on hello; the next missing pack is offered after pet.done', async () => {
+      const store = fakeStore({ all: A, engines: { claude: B } })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [NEW] })
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: NEW }])
+      port.say({ t: 'pet.done', id: A })
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([A, B])
+      await session.stop()
+    })
+
+    it('petsChanged with a new mapping → pet.map resent and only the missing pack offered', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [B] })
+      await settle()
+      expect(petTypes(port)).toEqual(['pet.map'])
+      port.sent.length = 0
+      store.current = { all: B, engines: { claude: NEW } }
+      await session.petsChanged()
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.map')).toEqual([{ t: 'pet.map', all: B, engines: { claude: NEW } }])
+      expect(port.sent.filter((m) => m.t === 'pet.offer').map((m) => m.id)).toEqual([NEW])
+      // An unchanged mapping says nothing more.
+      port.say({ t: 'pet.done', id: NEW })
+      await settle()
+      port.sent.length = 0
+      await session.petsChanged()
+      expect(petTypes(port)).toEqual([])
+      // A pack nothing maps any more is dropped.
+      store.current = { all: B, engines: {} }
+      await session.petsChanged()
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.drop')).toEqual([{ t: 'pet.drop', id: NEW }])
+      await session.stop()
+    })
   })
 })

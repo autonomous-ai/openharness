@@ -6,7 +6,9 @@ import { dispatchDown, gatewayOf, relaySocket } from './testing/relaySocket.js'
 // The Devices tab's requests are the devices' own (services/devices.ts): the socket only routes them, with
 // who asked as it established it, and the devices answer the owner alone.
 describe('Devices host ownership', () => {
-  it.each(DEVICES_REQUESTS)('routes %s to the devices only sealed from afar, saying who asked, and replies to that connection', async type => {
+  // The pet_* requests are local-only by design (services/devices.ts answers them to a local asker): they are not
+  // in the E2EE lists, so there is no sealed remote path to exercise here.
+  it.each(DEVICES_REQUESTS.filter(type => !type.startsWith('pet_')))('routes %s to the devices only sealed from afar, saying who asked, and replies to that connection', async type => {
     const socket: BackendSocket = relaySocket('fixture')
     const routed: Asker[] = []
     socket.serviceRouter = (asked, _payload, asker, reply) => {

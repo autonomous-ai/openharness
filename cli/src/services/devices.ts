@@ -23,6 +23,7 @@ import { DEVICES_REQUESTS, type CoreApi, type CorePorts, type DevicesPort, type 
 import { CableFleet, testDialDiscovery, type CableFleetOptions } from '../cable/cableFleet.js'
 import { cableEventFor, cableQuestionCloseFor, cableQuestionFor, DaemonCableHost } from '../cable/cableHost.js'
 import { CableSession } from '../cable/cableSession.js'
+import { PetStore } from '../cable/pets/store.js'
 import { DialLog } from '../cable/dialLog.js'
 import { DialVerdicts } from '../cable/dialPortVerdicts.js'
 import { WindowForm } from '../cable/windowForm.js'
@@ -41,6 +42,8 @@ export { DEVICES_REQUESTS }
 export interface DevicesDeps {
   /** Where each dial keeps its log, one file a day (cable/dialLog.ts). */
   logsDir: string
+  /** Where custom pets are kept; `<HARNESS_DEVICES_DIR>/pets` when unset. */
+  petsDir?: string
   /** The dials to look at, by serial number (`HARNESS_DIAL_SERIALS`); every one when empty. */
   dialSerials?: string[]
   /** The end-to-end suite's dial, a pseudo-terminal (`HARNESSD_TEST_DIAL_PORT`). */
@@ -129,6 +132,8 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
   // the same registry, the same delivery path — and by the fleet's router, because a second
   // implementation of any of those is a second set of bugs.
   let revision = 0
+  // Built before the cable starts: a dial's first hello may read the mapping.
+  const pets = new PetStore(deps.petsDir ?? join(env.HARNESS_DEVICES_DIR, 'pets'))
   const cableHost = new DaemonCableHost({
     sessions: () => core.agents.advertised(),
     refresh: deps.refresh,
@@ -187,6 +192,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     // Which machine an agent is on, and getting there: the fleet's router, guarded. Null when it never
     // started; a member that fails answers "unavailable", and the host routes this computer by itself.
     fleet: () => fleet,
+    pets: () => pets,
   })
   // The dial's log lives with the app's, one file a day (dialLog.ts). The old unbounded `dial.log` in the
   // data folder is cut down to a pointer, for anyone with a bookmark.
@@ -322,8 +328,18 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     status: () => cableHost.currentDialStatus(),
     revision: () => revision,
     set: (id: string, patch: Parameters<CableFleet['setSettings']>[1]) => cable.setSettings(id, patch),
+    pets: () => pets,
+    // The first attached dial's state; a changed mapping is sent to every live dial.
+    petDial: () => cable.petDial(),
+    petsChanged: () => { void cable.petsChanged() },
   }
-  const answer = (type: string) => (payload: Record<string, unknown>, asker: { owner: boolean }) =>
+  const answer = (type: string) => (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }) =>
     asker.owner ? harnessDevicesRequest(tab, type, payload) : { error: 'OWNER_REQUIRED' }
-  return { harness_devices_list: answer('harness_devices_list'), harness_device_settings: answer('harness_device_settings') }
+  // Pets name files on this computer by path, so they are answered to a process here only, never the owner's relayed app.
+  const local = (type: string) => (payload: Record<string, unknown>, asker: { local?: boolean; owner: boolean }) =>
+    !asker.owner ? { error: 'OWNER_REQUIRED' } : asker.local ? harnessDevicesRequest(tab, type, payload) : { error: 'LOCAL_ONLY' }
+  return {
+    harness_devices_list: answer('harness_devices_list'), harness_device_settings: answer('harness_device_settings'),
+    pet_preview: local('pet_preview'), pet_apply: local('pet_apply'), pet_reset: local('pet_reset'), pet_status: local('pet_status'),
+  }
 }
