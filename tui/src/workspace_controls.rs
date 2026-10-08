@@ -3,13 +3,20 @@
 use std::cell::RefCell;
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use ratatui::{buffer::Buffer, layout::Rect, style::{Modifier, Style}};
+use ratatui::{buffer::Buffer, layout::Rect, style::{Modifier, Style}, text::Span, widgets::Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::{app::App, draw::RangeKind, theme, workspace_menu as menu};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action { New, Menu, Account, Header(u64), PaneMenu(u64), Close(u64) }
+pub enum Action { New, Menu, Account, Header(u64), PaneMenu(u64) }
+
+/// The menu's glyph — at a pane's title, in the status line and the side bar: three dots up and
+/// down, a braille cell as big as the spinner's dots (`…` and `⋮` are thin).
+pub const MENU_GLYPH: &str = "⠇";
+/// The pane title's control: the glyph with a blank each side. (No close button: the menu has
+/// Close / Stop Harness.)
+const MENU_COLS: u16 = 3;
 
 #[derive(Default)]
 pub struct State {
@@ -63,8 +70,8 @@ pub fn register(app: &App, rect: Rect, action: Action) {
 pub fn title_reserve(app: &App, window: usize, pane: u64, width: u16) -> u16 {
     let tab = app.tabs.get(window).map(|t| t.id.as_str()).unwrap_or("");
     if !enabled(app) || !app.mouse || width < 20 || app.options.has_window_override("pane-border-format", tab, pane) { return 0 }
-    // (No agent or model label: the … menu changes both.)
-    6
+    // (No agent or model label: the menu changes both.)
+    MENU_COLS
 }
 
 /// Return the title's remaining space. The controls never add a row or resize a terminal.
@@ -75,10 +82,9 @@ pub fn title(buf: &mut Buffer, app: &App, pane: u64, rect: Rect, style: Style) -
     register(app, rect, Action::Header(pane));
     app.controls.grips.borrow_mut().push((Rect::new(rect.x, rect.y, rect.width - reserve, 1), pane));
     let quiet = style.remove_modifier(Modifier::BOLD | Modifier::DIM).fg(theme::paint(theme::pane_palette().muted));
-    let x = rect.right() - 6;
-    buf.set_stringn(x, rect.y, " …  × ", 6, quiet);
-    register(app, Rect::new(x, rect.y, 3, 1), Action::PaneMenu(pane));
-    register(app, Rect::new(x + 3, rect.y, 3, 1), Action::Close(pane));
+    let menu = Rect::new(rect.right() - reserve, rect.y, reserve, 1);
+    Span::styled(format!(" {MENU_GLYPH} "), quiet).render(menu, buf);
+    register(app, menu, Action::PaneMenu(pane));
     Rect::new(rect.x, rect.y, rect.width - reserve, rect.height)
 }
 
@@ -109,7 +115,7 @@ pub fn status(app: &App) -> String {
     if app.account.status == crate::account::Status::SignedOut {
         parts.push("#[range=user|hn-account]Sign in#[norange]".to_string());
     }
-    parts.extend(["#[range=user|hn-new]+#[norange]", "#[range=user|hn-menu]…#[norange]"].map(str::to_string));
+    parts.extend(["#[range=user|hn-new]+#[norange]".to_string(), format!("#[range=user|hn-menu]{MENU_GLYPH}#[norange]")]);
     parts.join("  ")
 }
 
@@ -117,7 +123,7 @@ pub fn status(app: &App) -> String {
 pub fn side_actions(buf: &mut Buffer, app: &App, rect: Rect, style: Style, account: bool) {
     if !enabled(app) { return }
     let items: Vec<(&str, Action)> = if account { vec![(crate::account::label(app), Action::Account)] }
-        else { vec![("+", Action::New), ("…", Action::Menu)] };
+        else { vec![("+", Action::New), (MENU_GLYPH, Action::Menu)] };
     let total: u16 = items.iter().map(|(label, _)| label.width() as u16).sum::<u16>() + items.len().saturating_sub(1) as u16 * 2;
     if total > rect.width { return }
     let mut x = rect.right() - total;
@@ -143,7 +149,6 @@ pub fn activate(app: &mut App, action: Action, at: Option<(u16, u16)>) {
         Action::Account => crate::account::open(app),
         Action::Header(pane) => { select_pane(app, pane); }
         Action::PaneMenu(pane) => pane_menu(app, pane, at),
-        Action::Close(pane) => crate::session_close::pane(app, pane),
     }
 }
 
@@ -191,7 +196,7 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     let at = Some((mouse.column, mouse.row.saturating_add(1)));
     // A title is a border in line layouts and a pane's first row in boxed layouts.
     // Either explicit binding takes precedence over the added header controls.
-    let places: &[&str] = if matches!(action, Some(Action::Header(_) | Action::PaneMenu(_) | Action::Close(_))) { &["Border", "Pane"] } else { &["Status"] };
+    let places: &[&str] = if matches!(action, Some(Action::Header(_) | Action::PaneMenu(_))) { &["Border", "Pane"] } else { &["Status"] };
     if let MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right)) = mouse.kind {
         let defaults = crate::keys::Keymap::tmux_defaults();
         for place in places {
@@ -220,7 +225,7 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
             return true;
         },
         MouseEventKind::Down(MouseButton::Right) => {
-            let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p) | Action::Close(p)) => Some(p), _ => None };
+            let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p)) => Some(p), _ => None };
             if let Some(pane) = pane { begin_press(app, MouseButton::Right); pane_menu(app, pane, at); return true; }
             // A machine's heading in the side bar: what can be done on it.
             if let Some(crate::bar::Hit::Machine(machine, _)) = crate::bar::hit_at(app, mouse.column, mouse.row) {
@@ -560,10 +565,10 @@ pub(crate) mod tests {
                 let (pane, other) = if status == "top" { (2, 1) } else { (1, 2) };
                 let probe = stacked(look, status);
                 let (title, name) = (hit(&probe, Action::Header(pane)), grip(&probe, pane));
-                assert!(name.width > 0 && name.right() < title.right() - 6, "{look:?} {status}: the grip is the name, not the whole row");
+                assert!(name.width > 0 && name.right() < title.right() - MENU_COLS, "{look:?} {status}: the grip is the name, not the whole row");
                 let away = (hit(&probe, Action::Header(other)), grip(&probe, other));
-                assert_eq!(away.1.width, away.0.width - 6, "{look:?} {status}: a title on no divider drags from its whole row");
-                let controls = [hit(&probe, Action::PaneMenu(pane)), hit(&probe, Action::Close(pane))];
+                assert_eq!(away.1.width, away.0.width - MENU_COLS, "{look:?} {status}: a title on no divider drags from its whole row");
+                let controls = [hit(&probe, Action::PaneMenu(pane))];
                 let before = probe.tab().root.as_ref().unwrap().to_tmux();
                 // 3 rows into its own pane, from each cell of the row
                 let to = if status == "top" { title.y + 3 } else { title.y - 3 };
@@ -767,7 +772,7 @@ pub(crate) mod tests {
             let mut app = app(100);
             crate::commands::execute(&mut app, &format!("bind-key -n {key} 'set -g @header-click custom'"));
             render(&mut app);
-            let control = hit(&app, Action::Close(1));
+            let control = hit(&app, Action::PaneMenu(1));
             click(&mut app, button, control.x + 1, control.y);
             assert_eq!(app.options.get("@header-click", "", None).as_deref(), Some("custom"));
             assert!(app.session_close.sent.is_empty(), "custom binding owns the click");
@@ -782,13 +787,14 @@ pub(crate) mod tests {
             app.options.set(name, Some(value), &crate::options::SetFlags { global: true, ..Default::default() }, "", 0).unwrap();
             app.fit_panes();
             let buf = render(&mut app);
-            let at = hit(&app, Action::Close(1));
+            let at = hit(&app, Action::PaneMenu(1));
             let body = app.rects.iter().find(|(id, _)| *id == 1).map(|(_, r)| app.content_of(app.tab(), *r)).unwrap();
             assert_eq!(at.intersection(body).area(), 0, "controls must not steal a terminal cell");
-            assert!((at.x..at.right()).any(|x| buf[(x, at.y)].symbol() == "×"));
+            let row: String = (at.x..at.right()).map(|x| buf[(x, at.y)].symbol()).collect();
+            assert_eq!(row, format!(" {MENU_GLYPH} "), "the menu's three dots, no close button");
+            assert!(!(0..app.size.0).any(|x| buf[(x, at.y)].symbol() == "×"), "no close button on the title");
             click(&mut app, MouseButton::Left, at.x + 1, at.y);
-            assert_eq!(app.session_close.sent.last().unwrap().1["agentId"], "a1");
-            assert!(matches!(app.modal, Some(crate::modal::Modal::Menu(_))), "mouseup must not activate the new close dialog");
+            assert!(matches!(&app.modal, Some(crate::modal::Modal::Menu(m)) if m.items.iter().any(|i| i.key == "x")), "the pane menu, its close item on x");
             app.modal = None;
         }
     }

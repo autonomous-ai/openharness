@@ -703,7 +703,7 @@ mod tests {
             let x0 = if side == "left" { 0 } else { 120 - WIDTH as usize + 1 };
             let bar = |y: usize| row(&s, y).chars().skip(x0).take(WIDTH as usize - 1).collect::<String>();
             // The machine you are on (the focused pane's), online.
-            assert!(bar(0).starts_with(" ✓ studio") && bar(0).contains("+  …"), "{s}");
+            assert!(bar(0).starts_with(" ✓ studio") && bar(0).contains(&format!("+  {}", crate::workspace_controls::MENU_GLYPH)), "{s}");
             // (Each window named for its harness, as automatic-rename names it; idle harnesses and
             // shells have no mark, and no room kept for one — the name sits close.)
             assert!(bar(2).starts_with(" 0:fix login") && bar(2).trim_end().ends_with('3'), "{}", bar(2));

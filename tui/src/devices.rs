@@ -918,8 +918,11 @@ fn answer_key(app: &mut App, key: KeyEvent) {
             }
         }
         Some(Ask::Entry { what, label, mut value, mut caret, secret }) => {
-            if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
-                app.devices.prompt_focus.set(!app.devices.prompt_focus.get());
+            // (↓ from the input to the buttons, ↑ back up, as Tab goes either way.)
+            let on_buttons = app.devices.prompt_focus.get();
+            let across = match key.code { KeyCode::Tab | KeyCode::BackTab => true, KeyCode::Down => !on_buttons, KeyCode::Up => on_buttons, _ => false };
+            if across {
+                app.devices.prompt_focus.set(!on_buttons);
                 app.devices.ask = Some(Ask::Entry { what, label, value, caret, secret });
                 return;
             }

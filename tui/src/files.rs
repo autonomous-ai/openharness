@@ -781,7 +781,9 @@ impl Files {
         let Some(p) = self.prompt.as_mut() else { return Outcome::None };
         let typed = matches!(k.code, KeyCode::Char(_)) && !k.mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
         // Tab takes the keys to the buttons and back; a printable key is typed wherever they were.
-        if matches!(k.code, KeyCode::Tab | KeyCode::BackTab) { p.buttons = !p.buttons; return Outcome::None }
+        // (↓ from the input to the buttons, ↑ back up, as Tab goes either way.)
+        let across = match k.code { KeyCode::Tab | KeyCode::BackTab => true, KeyCode::Down => !p.buttons, KeyCode::Up => p.buttons, _ => false };
+        if across { p.buttons = !p.buttons; return Outcome::None }
         if typed { p.buttons = false }
         if p.buttons {
             let mut row = p.row();

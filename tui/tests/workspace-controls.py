@@ -183,11 +183,22 @@ def painted_workspace(alpha, beta):
                for name, (x, y, w) in positions)
 
 
+MENU = '⠇'
+
+
 def pane_menu_item(item, row):
-    """The first pane's … in title row [row], then [item]: the agent and the model change there."""
-    click_text('…', row=row)
+    """The first pane's menu (⠇) in title row [row], then [item]: the agent and the model change there."""
+    click_text(MENU, row=row)
     shown(item)
     click_text(item)
+
+
+def close_from_menu(row, occurrence=0):
+    """A pane's menu (⠇) in title row [row], then its close item (x): Stop Harness or Close. The
+    title has no close button."""
+    click_text(MENU, occurrence=occurrence, row=row)
+    shown('Move to new tab')
+    keys('x')
 
 
 def alpha_agent_picker():
@@ -367,7 +378,7 @@ def mirror_journey(command, source):
     replacement_agent = next(a['id'] for a in api()['agents'][api()['local']] if a['engine'] == 'claude' and a['name'] == source and a['status'] != 'stopped')
     api({'action': 'activity', 'agent': replacement_agent, 'activity': 'working'})
     before_stop = len(requests('agent_close'))
-    click_text('×', row=0)
+    close_from_menu(row=0)
     shown('Stop? Saved history will remain.')
     click_text('[ Stop ]')
     wait(lambda: original_pane not in hn('list-panes', '-s', '-t', 'mirror-review', '-F', '#{pane_id}').splitlines(), 'confirmed Stop closes the owning session view')
@@ -741,14 +752,14 @@ try:
     hn('select-pane', '-t', beta)
     api({'action': 'config', 'patch': {'closeFailure': 'SAVE_FAILED'}})
     x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', beta).split())
-    click_text('×', occurrence=1, row=y - 1)
+    close_from_menu(occurrence=1, row=y - 1)
     shown('Cancel')
     assert not [r for r in requests('agent_close') if r['payload'].get('mode') != 'inspect']
     snapshot('confirm-stop')
     keys('Enter')
     wait(lambda: 'Cancel' not in screen(), 'Cancel is the default stop action')
     assert len(hn('list-panes', '-F', '#{pane_id}').splitlines()) == 2
-    click_text('×', occurrence=1, row=y - 1)
+    close_from_menu(occurrence=1, row=y - 1)
     shown('Stop? Saved history will remain.')
     click_text('[ Stop ]')
     shown('could not save')
@@ -845,7 +856,7 @@ try:
     hn('select-window', '-t', 'Remote')
     shown('Gamma remote task terminal')
     _, remote_y = map(int, value('#{pane_left} #{pane_top}').split())
-    click_text('×', row=remote_y - 1)
+    close_from_menu(row=remote_y - 1)
     wait(lambda: not any(t['id'] == 'remote' for t in api()['desk']['tabs']), 'idle remote session is stopped and removed')
     remote_close = [r['payload']['mode'] for r in requests('agent_close') if r['payload']['agentId'] == 'gamma']
     assert remote_close == ['inspect', 'idle'], remote_close

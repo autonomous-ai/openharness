@@ -1794,7 +1794,9 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
     // buttons and back, a printable key is typed wherever they were, Esc cancels (status-keys vi
     // is the status line's). In the input the keys below edit the line as in tmux's prompt.
     if p.dialog() {
-        if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) { p.buttons = !p.buttons; app.modal = Some(Modal::Prompt(p)); return }
+        // (↓ from the input to the buttons, ↑ back up, as Tab goes either way.)
+        let across = match key.code { KeyCode::Tab | KeyCode::BackTab => true, KeyCode::Down => !p.buttons, KeyCode::Up => p.buttons, _ => false };
+        if across { p.buttons = !p.buttons; app.modal = Some(Modal::Prompt(p)); return }
         if matches!(key.code, KeyCode::Char(_)) && !ctrl && !alt { p.buttons = false }
         if p.buttons {
             let mut row = p.row();

@@ -4122,6 +4122,20 @@ mod prompt_dialog_tests {
         assert_eq!(app.tab().name, format!("my {name}"));
     }
 
+    /// ↓ takes the keys from the input to the buttons, ↑ and ↓ move between them, and ↑ from
+    /// Cancel's row… goes back up to the input.
+    #[test]
+    fn the_arrows_go_down_to_the_buttons_and_back_up() {
+        let mut app = app((120, 30));
+        crate::input::run(&mut app, "rename-tab");
+        press(&mut app, KeyCode::Down);
+        assert!(open(&app).is_some_and(|p| p.buttons && p.chosen == 1), "↓: on the buttons, Rename chosen");
+        press(&mut app, KeyCode::Left);
+        assert!(open(&app).is_some_and(|p| p.chosen == 0), "← → between them");
+        press(&mut app, KeyCode::Up);
+        assert!(open(&app).is_some_and(|p| !p.buttons), "↑: the input again");
+    }
+
     #[test]
     fn esc_and_cancel_change_nothing_and_tab_moves_the_keys_to_the_buttons() {
         let mut app = app((120, 30));

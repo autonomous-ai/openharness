@@ -72,9 +72,10 @@ impl Row {
             _ => {}
         }
         if n == 0 { return Answer::Ignored }
+        // (↑ ↓ as ← →: a question's arrows all move between its answers.)
         let step = match code {
-            KeyCode::Right | KeyCode::Tab => Some(1),
-            KeyCode::Left | KeyCode::BackTab => Some(n - 1),
+            KeyCode::Right | KeyCode::Down | KeyCode::Tab => Some(1),
+            KeyCode::Left | KeyCode::Up | KeyCode::BackTab => Some(n - 1),
             KeyCode::Char('l') if !held && owned('l').is_none() => Some(1),
             KeyCode::Char('h') if !held && owned('h').is_none() => Some(n - 1),
             _ => None,
@@ -165,6 +166,14 @@ mod tests {
     fn buttons_sit_right_aligned_two_columns_apart() {
         let cells = at50(&row());
         assert_eq!(cells, vec![Rect::new(50 - 8 - 2 - 10, 3, 10, 1), Rect::new(50 - 8, 3, 8, 1)]);   // "[ Cancel ]" 10, "[ Stop ]" 8
+    }
+
+    #[test]
+    fn up_and_down_move_between_the_answers_too() {
+        let mut r = row();
+        assert!(matches!(r.key(KeyCode::Down, KeyModifiers::NONE), Answer::Moved)); assert_eq!(r.chosen, 1);
+        assert!(matches!(r.key(KeyCode::Down, KeyModifiers::NONE), Answer::Moved)); assert_eq!(r.chosen, 0, "wraps");
+        assert!(matches!(r.key(KeyCode::Up, KeyModifiers::NONE), Answer::Moved)); assert_eq!(r.chosen, 1);
     }
 
     #[test]
