@@ -167,7 +167,7 @@ async function agentLoop(d: IsolatedDaemon, agentId: string, engine: QuestionEng
         // Asked, answered through question_response, its result awaited and a refusal retried as a new intent.
         const kinds = QUESTION_KINDS[engine]
         ledger.send(agentId, token)
-        const outcome = await askAndAnswer(client, { id: agentId, engine }, kinds[asked % kinds.length], asked, { token, askMs: 60_000, endMs: 120_000, retries: 8 })
+        const outcome = await askAndAnswer(client, { id: agentId, engine }, kinds[asked % kinds.length], asked, { token, askMs: 60_000, endMs: 120_000, retries: 20 })
         asked++
         questions.outcomes.push({ ...outcome, agentId, at: new Date().toISOString() })
         if (!outcome.ok || (outcome.errors.length && questions.refusalsAreFindings)) {
