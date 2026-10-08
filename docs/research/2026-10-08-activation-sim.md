@@ -147,10 +147,27 @@ vendor binaries, so their real login screens appear.
 
 ## Fixes
 
-| Commit | Fix |
-|--------|-----|
-| 061d037a5 | OpenCode installs from npm when its GitHub download cannot be reached. |
-| 8a932cb1a | Setup no longer promises a sign-in before the first harness. |
-| 32259dc87 | The first New Harness box starts the default agent instead of "OpenCode is unavailable". |
-| fa64b0e15 | No Local Network prompt on reopen without a paired robot; setup footer copy. |
-| f8ca37071 | A harness typed in the composer is named after its first task. |
+PR #1047 (branch `user-activation`):
+
+| Fix |
+|-----|
+| The first New Harness box starts the default agent instead of "OpenCode is unavailable". |
+| Agents install in the background as the app opens (`harness engines install-missing --background`); panes wait on the same lock. |
+| OpenCode falls back to `npm install -g opencode-ai` when its GitHub download does not finish. |
+| The box opens on the Claude Code or Codex the person already uses (installed, signed in, most recent). |
+| The agent picker says Installed / Needs sign-in / Installs on start. |
+| An agent that exits soon after it started keeps its pane and its error (`successor`). |
+| Harnesses are named after their first task (composer, existing folders). |
+| A folder with no `.git` above it is not a Git project, without running Apple's git stub (desktop and daemon). |
+| No Local Network prompt on reopen without a paired robot. |
+| Desktop first run no longer downloads grid. |
+| Setup copy no longer promises a sign-in. |
+| Review of #1047: successor only for a failed start; truer sign-in and last use; handover respects Close/Change; non-installable default still unavailable; symlinked folders; debounced folder check; install lock hardening (in progress). |
+
+Follow-up branch `user-activation-2`:
+
+| Fix |
+|-----|
+| Type the first task during setup; Return starts it once the computer is ready. |
+| Change agent after a failed start carries the first task to the new agent. |
+| Web pages and PDFs an agent names open with a click, relative names from its project folder. |
