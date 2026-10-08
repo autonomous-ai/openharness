@@ -2,6 +2,7 @@
 // handoff provider's dependencies (cli.ts passes the real functions, specs pass fakes). Discovery is
 // read-only: it never binds anything, and it answers only when the answer is certain — a Change agent
 // must not guess whose conversation it hands over. Consumed by lib/agentHandoff.ts.
+import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { HandoffDeps } from './agentHandoff.js'
 import { isSubagentTranscript } from './subagentTranscript.js'
@@ -12,10 +13,11 @@ import type { TurnSource } from './sessionSearch/sessionTurns.js'
 import { SQLITE_BACKED_ENGINES } from './sqliteRead.js'
 
 export interface DiscoveryDeps {
-  /** Engines other than Claude: the born, unique session of a process (sessionRepair findLiveSession). */
+  /** Engines whose process keeps no record of its session: the born, unique session of a process (sessionRepair
+   *  findLiveSession). */
   findLiveSession(engine: AgentEngine, cwd: string, startedAtMs: number, opts: { bornOnly: true; pid: number; codexHome?: string }): Promise<RepairedSession | null>
-  /** An engine that keeps a per-process record (Claude Code): the session it names, or null. Never a scan of its
-   *  store. */
+  /** An engine whose process keeps a record of its session (its session store's `live.record`, Claude Code's): the
+   *  session it names, or null. Never a scan of its store. */
   processSession(engine: AgentEngine, pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null>
   /** The agent has a live pane (not a stopped copy). */
   isLive(agentId: string): boolean
@@ -29,8 +31,8 @@ const DATABASE_ENGINES: ReadonlySet<string> = new Set(SQLITE_BACKED_ENGINES)
 
 /**
  * `HandoffDeps.discoverSession`: the session a live, unbound, non-fork agent of a file engine runs, found by its
- * process (pid and start marker) — Claude only through its per-process record, the others only a session born to
- * that process — or null. Null too when the session is a subagent's, was just deleted, or another agent holds it.
+ * process (pid and start marker) — an engine that keeps a per-process record only through it, the others only a
+ * session born to that process — or null. Null too when the session is a subagent's, was just deleted, or another agent holds it.
  * One search per agent at a time: a second request while one runs shares it.
  */
 export function sessionDiscovery(deps: DiscoveryDeps): (session: RegisteredSession) => Promise<TurnSource | null> {
@@ -38,7 +40,8 @@ export function sessionDiscovery(deps: DiscoveryDeps): (session: RegisteredSessi
 
   async function find(session: RegisteredSession, cwd: string, pid: number, startedAt: number): Promise<TurnSource | null> {
     try {
-      const found = session.engine === 'claude'
+      const live = sessionStoreOf(session.engine)?.live
+      const found = live && 'record' in live
         ? await deps.processSession(session.engine, pid, cwd, startedAt)
         : await deps.findLiveSession(session.engine, cwd, startedAt, { bornOnly: true, pid, codexHome: session.codexHome ?? undefined })
       const path = found?.transcriptPath

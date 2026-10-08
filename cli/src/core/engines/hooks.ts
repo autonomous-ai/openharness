@@ -4,11 +4,10 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 12: docs/design/2026-10-03-harnessd.md).
  */
-import { dirname } from 'node:path'
 import { engineHooks } from '../../engines/hooks.js'
-import { env } from '../../config/env.js'
+import { sessionStoreContracts, type SessionStoreEngine } from '../../engines/sessionStoreContracts.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
-import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
+import { adoptHomes, movedHomes } from '../../lib/engineHomes.js'
 import { loadEngine, type InProcessModules } from '../../engines/inProcess.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -232,22 +231,21 @@ export async function installEngineHooks(port: number, options: InstallEngineHoo
       console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
     }
   }
-  // The homes the person moved (lib/engineHomes.ts) get the hooks too: every one adopted before, those
-  // the daemon's own environment names, and those of the login shell every engine is launched through
-  // once it has been read. That read is never waited on (cli.ts), so an engine started in the first
-  // seconds of a daemon's very first start with a moved home may miss its first hook.
-  const installIn = (homes: { claude: Array<string | null>; codex: Array<string | null> }): void => {
-    for (const engine of Object.keys(homes) as Array<keyof typeof homes>) {
-      for (const home of homes[engine]) if (home) hookStep(engine, () => engineHooks[engine].installIn(port, home))
-    }
+  // The homes the person moved (lib/engineHomes.ts, by each engine's declared session store) get the hooks
+  // too: every one adopted before, those the daemon's own environment names, and those of the login shell
+  // every engine is launched through once it has been read. That read is never waited on (cli.ts), so an
+  // engine started in the first seconds of a daemon's very first start with a moved home may miss its first hook.
+  const installIn = (homes: Array<[SessionStoreEngine, string]>): void => {
+    for (const [engine, home] of homes) hookStep(engine, () => engineHooks[engine].installIn(port, home))
   }
   const adopt = (environment: NodeJS.ProcessEnv): void => {
-    const moved = adoptEngineHomes(environment, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), codexHome: env.CODEX_HOME })
-    if (!moved.claude && !moved.codex) return
-    console.log(`[hooks] engines keep their data elsewhere here: ${[moved.claude && `Claude Code in ${moved.claude}`, moved.codex && `Codex in ${moved.codex}`].filter(Boolean).join(', ')}`)
-    installIn({ claude: [moved.claude], codex: [moved.codex] })
+    const moved = (Object.entries(adoptHomes(environment)) as Array<[SessionStoreEngine, string | null]>)
+      .filter((found): found is [SessionStoreEngine, string] => !!found[1])
+    if (!moved.length) return
+    console.log(`[hooks] engines keep their data elsewhere here: ${moved.map(([engine, home]) => `${sessionStoreContracts[engine].product} in ${home}`).join(', ')}`)
+    installIn(moved)
   }
-  installIn(movedEngineHomes())
+  installIn((Object.keys(sessionStoreContracts) as SessionStoreEngine[]).flatMap((engine) => movedHomes(engine).map((home): [SessionStoreEngine, string] => [engine, home])))
   adopt(options.environment ?? process.env)
   void options.loginShell?.then(adopt)
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port))
