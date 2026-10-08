@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { z } from 'zod'
 import {
-  answerQrSignIn, cancelQrSignIn, claimQrSignIn, extendQrSignIn, lookupQrSignIn, pollQrSignIn, startQrSignIn,
+  answerQrSignIn, cancelQrSignIn, claimQrSignIn, extendQrSignIn, issueBoxTicket, lookupQrSignIn, pollQrSignIn, startQrSignIn,
 } from '../lib/harnessSession.js'
 import { clientIpFromHeaders, countryCodeFromHeaders } from '../lib/clientGeo.js'
 import { validateBody } from '../middlewares/validation.js'
@@ -22,6 +22,7 @@ const start = z.object({
 }).strict()
 const byCode = z.object({ code: z.string().min(1).max(128) }).strict()
 const byPoll = z.object({ pollToken: z.string().min(1).max(128) }).strict()
+const noBody = z.object({}).strict()
 
 /** Per-process fixed windows: generous for a person, a wall for a loop. */
 function limiter(perMinute: number) {
@@ -39,6 +40,7 @@ function limiter(perMinute: number) {
 const startLimit = limiter(10)
 const pollLimit = limiter(90)
 const answerLimit = limiter(20)
+const ticketLimit = limiter(10)
 
 const unavailable = (reply: FastifyReply, e: unknown, what: string) => {
   logger.error(`qr sign-in ${what} failed`, e)
@@ -110,4 +112,15 @@ export async function qrSignInRoutes(app: FastifyInstance): Promise<void> {
   }
   app.post<{ Body: z.infer<typeof byCode> }>('/api/auth/qr/approve', { preHandler: validateBody(byCode) }, answer(true))
   app.post<{ Body: z.infer<typeof byCode> }>('/api/auth/qr/deny', { preHandler: validateBody(byCode) }, answer(false))
+
+  // A headless box: the phone approves before there is a code to scan, and hands the box the ticket.
+  app.post('/api/auth/box/ticket', { preHandler: validateBody(noBody) }, async (req, reply) => {
+    const user = req.user!
+    if (!ticketLimit(user.sub)) return tooMany(reply)
+    try {
+      const out = await issueBoxTicket(user.sub, user.email)
+      logger.info('box ticket issued', { userId: user.sub })
+      return sendSuccess(reply, out)
+    } catch (e) { return unavailable(reply, e, 'ticket') }
+  })
 }

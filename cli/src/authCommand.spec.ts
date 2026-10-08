@@ -98,6 +98,9 @@ function runAsync(root: string, args: string[], backendUrl?: string): Promise<{ 
  *  `auth status` make — real network shape, canned answers, so the CLI's own code runs unmodified.
  *  `routes` stubs any other path (the QR sign-in's `/api/auth/qr/*`). A handler may answer with a
  *  promise, so a test can hold a step open. `calls` records every request in arrival order. */
+/** A route's refusal, answered as the backend's own error envelope with [status]. */
+class Refusal { constructor(readonly status: number, readonly code: string, readonly message: string) {} }
+
 function fakeBackend(handlers: {
   authorizeNative?: (body: any) => any
   exchange?: (body: any) => any
@@ -113,6 +116,11 @@ function fakeBackend(handlers: {
         const body = raw ? JSON.parse(raw) : {}
         calls.push({ url: req.url ?? '', body })
         const send = (data: unknown): void => {
+          if (data instanceof Refusal) {
+            res.writeHead(data.status, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ success: false, error: { code: data.code, message: data.message } }))
+            return
+          }
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ success: true, data }))
         }
@@ -659,4 +667,55 @@ describe('harness login (human)', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain(`  ✓ Already signed in — this machine is "${hostname().slice(0, 60)}" · ${fp}\n    Run \`harness start\` to connect this computer.`)
   })
+})
+
+describe('harness login --ticket', () => {
+  const claimed = () => ({ token: 'tok_box', refreshToken: 'r', expiresIn: 3600, email: 'dee@example.com' })
+
+  it('spends the ticket and signs the box in, with nothing to scan or confirm', async () => {
+    const root = tempRoot()
+    const { base, calls } = await fakeBackend({
+      routes: { '/api/auth/qr/claim': claimed, '/api/auth/me': () => ({ user: { id: 'acct_box' } }) },
+      resolveComputer: () => ({ machine: { machineId: 'm_box' } }),
+    })
+    const result = await runAsync(root, ['login', '--ticket=hnp_ticket', '--json'], base)
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout.trim())).toEqual({ type: 'result', status: 'success', email: 'dee@example.com', fingerprint: expect.stringMatching(FP) })
+    expect(calls).toContainEqual({ url: '/api/auth/qr/claim', body: { pollToken: 'hnp_ticket' } })
+    expect(calls.map((c) => c.url)).not.toContain('/api/auth/qr/start')
+    expect(JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8'))).toMatchObject({ accessToken: 'tok_box', method: 'qr', machineId: 'm_box', signInAcct: 'acct_box' })
+  }, 30_000)
+
+  it('refuses on a computer that is already signed in, even with --force, and leaves the ticket unspent', async () => {
+    const root = tempRoot()
+    seedSession(root)
+    const { base, calls } = await fakeBackend({ routes: { '/api/auth/qr/claim': claimed } })
+    const result = await runAsync(root, ['login', '--force', '--ticket=hnp_ticket', '--json'], base)
+    expect(result.status).toBe(1)
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ type: 'result', status: 'error', code: 'ALREADY_SIGNED_IN' })
+    expect(calls).toEqual([])
+  }, 30_000)
+
+  it('a spent ticket stays a sign-in when the machine lookup fails, so the daemon still moves onto the account', async () => {
+    const root = tempRoot()
+    const { base } = await fakeBackend({
+      routes: { '/api/auth/qr/claim': claimed },
+      resolveComputer: () => new Refusal(503, 'UNAVAILABLE', 'try later'),
+    })
+    const result = await runAsync(root, ['login', '--ticket=hnp_ticket', '--json'], base)
+    expect(result.status).toBe(0)
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ type: 'result', status: 'success', email: 'dee@example.com' })
+    const saved = JSON.parse(readFileSync(join(root, 'auth', 'session.json'), 'utf8')) as Record<string, unknown>
+    expect(saved).toMatchObject({ accessToken: 'tok_box', method: 'qr' })
+    expect(saved).not.toHaveProperty('machineId')
+  }, 30_000)
+
+  it('says TICKET_INVALID for a ticket the backend refuses, and writes no session', async () => {
+    const root = tempRoot()
+    const { base } = await fakeBackend({ routes: { '/api/auth/qr/claim': () => new Refusal(401, 'QR_INVALID', 'Nothing to claim: scan again.') } })
+    const result = await runAsync(root, ['login', '--ticket=hnp_spent', '--json'], base)
+    expect(result.status).toBe(1)
+    expect(JSON.parse(result.stdout.trim())).toMatchObject({ type: 'result', status: 'error', code: 'TICKET_INVALID' })
+    expect(existsSync(join(root, 'auth', 'session.json'))).toBe(false)
+  }, 30_000)
 })
