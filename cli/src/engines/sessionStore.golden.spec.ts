@@ -27,6 +27,10 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 
+// The record holds a UTC record read against a process started in local time, so the answer depends on the zone.
+// It was recorded in America/New_York; pinned here, it is the same on every host (Linux CI runs in UTC, run 37828754630).
+process.env.TZ = 'America/New_York'
+
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/session-store.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_SESSION_STORE_GOLDEN === '1'
 
