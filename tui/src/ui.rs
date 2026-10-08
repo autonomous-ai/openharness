@@ -230,6 +230,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The status bar down a side, and the tabs over the panes beside it.
     crate::bar::draw(buf, app);
     if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
+    crate::pane_drag::draw(buf, app);
     let search_busy = app.said_due.is_some() || app.said_pending > 0;
     let msg_style = app.message_style();
     if let Some(Modal::Picker { kind, mut picker }) = app.modal.take_if(|m| matches!(m, Modal::Picker { kind, .. } if crate::settings::is_panel(kind))) {

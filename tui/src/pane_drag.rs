@@ -1,6 +1,7 @@
 //! Where a dragged pane would land: the pointer over the screen -> what releasing there does.
-use ratatui::layout::{Position, Rect};
-use crate::{app::App, bar::Hit, draw::RangeKind};
+use ratatui::{buffer::Buffer, layout::{Position, Rect}, style::{Color, Modifier}};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use crate::{app::App, bar::Hit, draw::RangeKind, theme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side { Left, Right, Top, Bottom }
@@ -44,8 +45,6 @@ pub fn drop_target(app: &App, src: u64, x: u16, y: u16) -> Drop {
 }
 
 /// The cells that show [drop]: the zone of the target pane (a side half or the whole pane) or the tab's cells.
-// (Until the frame draws the zone.)
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn zone(app: &App, drop: &Drop) -> Option<Rect> {
     let pane = |id: &u64| app.rects.iter().find(|(i, _)| i == id).map(|(_, r)| *r);
     match drop {
@@ -71,6 +70,50 @@ pub fn follow(app: &mut App, x: u16, y: u16) {
     let live = grab.live || x.abs_diff(fx) + y.abs_diff(fy) >= 2;
     let drop = if live { drop_target(app, pane, x, y) } else { Drop::Nothing };
     if let Some(grab) = &mut app.controls.grab { grab.live = live; grab.drop = drop; }
+}
+
+/// What the zone says, in a few words.
+fn hint(app: &App, drop: &Drop) -> Option<String> {
+    let name = |id: &u64| app.panes.get(id).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).map(|a| a.name.clone());
+    match drop {
+        Drop::Nothing => None,
+        Drop::Swap(id) => Some(format!("swap with {}", name(id)?)),
+        Drop::Beside(id, side) => {
+            let word = match side { Side::Left => "left of", Side::Right => "right of", Side::Top => "above", Side::Bottom => "below" };
+            Some(format!("{word} {}", name(id)?))
+        }
+        Drop::Tab(tab) => app.tabs.iter().find(|t| t.id == *tab).map(|t| format!("to {}", t.name)),
+    }
+}
+
+/// Shade [zone] (its symbols stay) and write [text] centred on its middle row, cut to the zone.
+/// A zone of one row (a tab) keeps its own label unless the whole hint fits.
+fn shade(buf: &mut Buffer, zone: Rect, text: Option<&str>, bg: Color, fg: Color, reverse: bool) {
+    let zone = zone.intersection(buf.area);
+    for pos in zone.positions() {
+        let Some(cell) = buf.cell_mut(pos) else { continue };
+        cell.set_bg(bg).set_fg(fg);
+        if reverse { cell.modifier.insert(Modifier::REVERSED) }
+    }
+    let Some(text) = text else { return };
+    let width = UnicodeWidthStr::width(text) as u16;
+    if zone.height == 1 && width > zone.width { return }
+    let (mut x, y) = (zone.x + zone.width.saturating_sub(width) / 2, zone.y + zone.height / 2);
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0) as u16;
+        if w == 0 { continue }
+        if x + w > zone.right() { break }
+        if let Some(cell) = buf.cell_mut((x, y)) { cell.set_char(ch); }
+        x += w;
+    }
+}
+
+/// While a pane is dragged: the zone it will land in, in the theme's accent, with a hint.
+pub fn draw(buf: &mut Buffer, app: &App) {
+    let Some(grab) = app.controls.grab.as_ref().filter(|g| g.live) else { return };
+    let Some(zone) = zone(app, &grab.drop) else { return };
+    // (NO_COLOR paints nothing, so the zone is drawn reversed instead.)
+    shade(buf, zone, hint(app, &grab.drop).as_deref(), theme::paint(theme::accent()), theme::paint(theme::pane_palette().background), theme::no_color());
 }
 
 /// What releasing pane [src] over [drop] does.
@@ -171,6 +214,76 @@ mod tests {
         assert_eq!(top.height + bottom.height, r2.height);
         assert_eq!(bottom.bottom(), r2.bottom());
         assert_eq!(top.bottom(), bottom.y);
+    }
+
+    /// How a cell looks, apart from its symbol.
+    fn look(buf: &Buffer, x: u16, y: u16) -> (Color, Color, Modifier) { let c = &buf[(x, y)]; (c.bg, c.fg, c.modifier) }
+
+    fn row_text(buf: &Buffer, z: Rect, y: u16) -> String { (z.x..z.right()).map(|x| buf[(x, y)].symbol()).collect() }
+
+    #[tokio::test]
+    async fn the_zone_is_shaded_with_a_hint_and_cleared_after() {
+        let mut app = two();
+        let r2 = rect(&app, 2);
+        let before = render(&mut app);
+        app.controls.grab = Some(crate::workspace_controls::Grab::live_for_test(1, Drop::Beside(2, Side::Left)));
+        let buf = render(&mut app);
+        let z = zone(&app, &Drop::Beside(2, Side::Left)).unwrap();
+        assert!(z.x == r2.x && z.width < r2.width);
+        assert_ne!(look(&buf, z.x, z.y + 1), look(&before, z.x, z.y + 1), "the left half is shaded");
+        let row = row_text(&buf, z, z.y + z.height / 2);
+        assert!(row.contains("left of Task 2"), "{row}");
+        assert_eq!(look(&buf, r2.right() - 1, r2.y + 1), look(&before, r2.right() - 1, r2.y + 1), "outside the zone is untouched");
+        app.controls.grab = None;
+        assert_eq!(render(&mut app), before, "no zone once the drag is over");
+    }
+
+    #[tokio::test]
+    async fn a_click_not_yet_a_drag_draws_nothing() {
+        let mut app = two();
+        let before = render(&mut app);
+        let mut grab = crate::workspace_controls::Grab::live_for_test(1, Drop::Swap(2));
+        grab.live = false;
+        app.controls.grab = Some(grab);
+        assert_eq!(render(&mut app), before);
+    }
+
+    #[tokio::test]
+    async fn each_drop_says_what_it_does() {
+        let app = two();
+        let tab = app.tabs[0].id.clone();
+        let name = app.tabs[0].name.clone();
+        assert_eq!(hint(&app, &Drop::Swap(2)).as_deref(), Some("swap with Task 2"));
+        assert_eq!(hint(&app, &Drop::Beside(2, Side::Left)).as_deref(), Some("left of Task 2"));
+        assert_eq!(hint(&app, &Drop::Beside(2, Side::Right)).as_deref(), Some("right of Task 2"));
+        assert_eq!(hint(&app, &Drop::Beside(2, Side::Top)).as_deref(), Some("above Task 2"));
+        assert_eq!(hint(&app, &Drop::Beside(2, Side::Bottom)).as_deref(), Some("below Task 2"));
+        assert_eq!(hint(&app, &Drop::Tab(tab)), Some(format!("to {name}")));
+        assert_eq!(hint(&app, &Drop::Nothing), None);
+    }
+
+    #[test]
+    fn the_shade_takes_the_theme_accent_and_cuts_the_hint_to_the_zone() {
+        let (accent, back) = (theme::accent(), theme::pane_palette().background);
+        assert_ne!(accent, back, "this test needs an accent that differs from the pane background");
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 5));
+        buf.set_string(0, 0, "x", ratatui::style::Style::default());
+        shade(&mut buf, Rect::new(2, 1, 8, 3), Some("swap with a long name"), accent, back, false);
+        assert_eq!(buf[(2, 1)].bg, accent);
+        assert_eq!(buf[(9, 3)].bg, accent);
+        assert_ne!(buf[(10, 2)].bg, accent, "just outside");
+        assert_ne!(buf[(1, 2)].bg, accent, "just outside");
+        let row: String = (2..10).map(|x| buf[(x, 2)].symbol()).collect();
+        assert_eq!(row, "swap wit", "cut at the zone's edge");
+        assert_eq!(buf[(10, 2)].symbol(), " ");
+        // one row (a tab): its own label stays unless the whole hint fits
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 2));
+        buf.set_string(2, 0, "abcd", ratatui::style::Style::default());
+        shade(&mut buf, Rect::new(2, 0, 4, 1), Some("to a longer tab"), accent, back, false);
+        assert_eq!((2..6).map(|x| buf[(x, 0)].symbol()).collect::<String>(), "abcd");
+        shade(&mut buf, Rect::new(2, 0, 6, 1), Some("to b"), accent, back, true);
+        assert_eq!((3..7).map(|x| buf[(x, 0)].symbol()).collect::<String>(), "to b");
+        assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
     }
 
     #[tokio::test]

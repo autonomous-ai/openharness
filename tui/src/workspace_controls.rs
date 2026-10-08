@@ -32,6 +32,12 @@ pub struct Grab {
     pub drop: crate::pane_drag::Drop,
 }
 
+#[cfg(test)]
+impl Grab {
+    /// A drag already under way, over [drop].
+    pub fn live_for_test(pane: u64, drop: crate::pane_drag::Drop) -> Grab { Grab { pane, from: (0, 0), live: true, drop } }
+}
+
 struct MenuTarget {
     token: String,
     window: String,
@@ -430,6 +436,26 @@ pub(crate) mod tests {
     }
 
     fn live(app: &App) -> bool { app.controls.grab.as_ref().is_some_and(|g| g.live) }
+
+    #[tokio::test]
+    async fn the_drop_zone_follows_the_pointer_and_the_frame_after_release_has_none() {
+        let mut app = app(120);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        app.fit_panes();
+        let before = render(&mut app);
+        let g = grip(&app, 1);
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        let r2 = app.rects.iter().find(|(id, _)| *id == 2).unwrap().1;
+        let (cx, cy) = (r2.x + r2.width / 2, r2.y + r2.height / 2);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), cx, cy);
+        let during = render(&mut app);
+        let row: String = (r2.x..r2.right()).map(|x| during[(x, cy)].symbol()).collect();
+        assert!(row.contains("swap with Task 2"), "{row}");
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), cx, cy);
+        assert!(app.redraw_all, "the release repaints the screen once");
+        assert_eq!(render(&mut app), before, "the frame after the release has no zone");
+    }
 
     #[tokio::test]
     async fn a_header_drag_of_two_cells_becomes_a_pane_drag_and_a_short_one_stays_a_click() {
