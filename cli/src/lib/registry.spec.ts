@@ -1362,6 +1362,24 @@ describe('agent identity: the process owns the agent, the session is bound to it
     })
   })
 
+  it('persists a held launch: inactive, with the service it waits for and why, never a failure', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const pending = registry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%11' }], cwd: '/tmp/demo' })!
+    registry.setLaunch(pending.agentId, { state: 'held', service: 'models', detail: `Waiting for the models service.${'.'.repeat(600)}` })
+    expect(registry.byAgent(pending.agentId)).toMatchObject({ active: false, launch: { state: 'held', service: 'models' } })
+    const { registry: reloaded } = await loadRegistryModule()
+    reloaded.load()
+    const kept = reloaded.byAgent(pending.agentId)!
+    expect(kept).toMatchObject({ active: false, launch: { state: 'held', service: 'models' }, tmuxPane: '%11' })
+    expect(kept.launch?.state === 'held' && kept.launch.detail.length).toBe(500)
+    // A held launch that does not say which service, or why, is no launch at all.
+    for (const odd of [{ service: 'Models!', detail: 'x' }, { service: 7, detail: 'x' }, { service: 'models', detail: 7 }]) {
+      reloaded.setLaunch(pending.agentId, { state: 'held', ...odd } as never)
+      expect(reloaded.byAgent(pending.agentId)!.launch).toBeUndefined()
+    }
+  })
+
   // lib/engineHomes.ts: CLAUDE_CONFIG_DIR or CODEX_HOME in the person's profile put the engine's
   // transcripts where no root reached, and no agent bound there.
   it('takes a transcript beneath a home the person moved as the engine\'s own, and nothing beside it', async () => {

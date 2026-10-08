@@ -53,8 +53,7 @@ import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
-import { type GridLaunchMachine } from '../lib/gridLaunch.js'
-import { HERMES_SYSTEM_MANAGED_DIR } from '../lib/gridWebMcp.js'
+import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLaunchWire.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { tmuxSupportsSessionEnv } from '../lib/tmuxVersion.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
@@ -63,7 +62,7 @@ import { processSessionOf } from '../engines/sessionStores.js'
 import { handoffProviderDeps } from '../lib/handoffDiscovery.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
-import { restoreAgents, tmuxSurvey } from '../lib/restoreAgents.js'
+import { restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
 import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
@@ -78,7 +77,7 @@ import { adoptLegacyHarnessSessions, listTmuxPanes } from '../lib/tmuxAgentDisco
 import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { prepareHarnessLaunch } from '../dsh/runtime.js'
 import { ApiConnections } from '../lib/apiConnections.js'
-import { rememberSavedApis } from '../lib/apiModels.js'
+import { rememberSavedApis } from '../lib/gridAssignment.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
@@ -124,7 +123,8 @@ import { createRelaunchMarks, transcriptSize } from './transcripts/relaunch.js'
 import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
-import { createLaunchHelpers } from './agents/launch.js'
+import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
+import { createHeldLaunches, heldPaneArgv } from './agents/heldLaunches.js'
 import { createCancel, createCancelRequest } from './turns/cancel.js'
 import { createPaneWatcher } from './agents/newPane.js'
 import { createAdoption } from './agents/adopt.js'
@@ -406,6 +406,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // move (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
   // applied by `bootHandoff`, which hands the machine over without finishing start-up.
   coreLink.onUpdate((version) => { void daemonBoot.applyStagedUpdate(version) })
+  // Agents held until the service their launch asks is ready, and the passes that launch them
+  // (core/agents/heldLaunches.ts): the boot's restore of only those agents, set where tmux is there to restore into.
+  let restoreOnly: ((only: ReadonlySet<string>) => Promise<RestoreSummary>) | null = null
+  const heldLaunches = createHeldLaunches({
+    registry,
+    restore: (only) => restoreOnly?.(only) ?? Promise.resolve({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] }),
+    log: (line) => console.log(line),
+  })
   wakeGateway({ outOfProcess: servicesTheMasterRuns(process.env, KNOWN_SERVICES), signedIn: !!session, dataDir: env.ADAPTER_DATA_DIR, want: (service) => coreLink.want(service) })
   // …or, under a master too old to run the updater, from the updater this core runs beside itself
   // (core/updaterBeside.ts), in a process of its own: the core downloads no build either way.
@@ -1275,6 +1283,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'devices') devicesLink.connected()
       if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
       devicesWake.connected(service)
+      // A service up again (or up at last): the agents held for it are launched (core/agents/heldLaunches.ts).
+      void heldLaunches.restoreHeld(service)
     },
     disconnected: (service) => {
       engineReaders.disconnected(service)
@@ -1908,8 +1918,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * restart read the row; retarget passes the override the desktop just sent. The config directory is
    * keyed on the agent, so relaunching the same agent rewrites one directory instead of leaving a trail.
    */
+  // Grid and saved-API launches are built by the models service (core/agents/launch.ts `gridLaunchThrough`): a
+  // launch on one while models is down is refused, and one on the engine's own login never asks it.
+  const gridLaunch = gridLaunchThrough(() => ports.models ?? MODELS_OFF)
   const launchOverridesDeps: LaunchOverridesDeps = {
     machine: gridLaunchMachine,
+    gridLaunch,
     writeGridConfigDir,
     tmuxSupportsSessionEnv,
     installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) engineHookFacets.codex.installIn(hookPort, codexHome) },
@@ -1926,7 +1940,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // pass below, which calls these for every pane it rebuilds.
   const launchHelpers = createLaunchHelpers({
     prepareApiTools,
-    savedApis,
     launchOverridesDeps,
     setGridLaunch: (agentId, launch) => registry.setGridLaunch(agentId, launch),
     setTail: (sessionId, offset) => watcher.setTail(sessionId, offset),
@@ -1969,13 +1982,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const saved = isTerminalEngine(entry.engine) ? stoppedAgents.get(entry.agentId) : null
     if (saved && !isTerminalEngine(saved.engine)) retainExitedSession(entry, true)
   }
+  // Later passes over held agents (core/agents/heldLaunches.ts) wait for this one.
+  await heldLaunches.boot(async () => {
   if (tmuxBackend) {
    // Best effort, like the cwd repair above it: panes that cannot be rebuilt cost this boot its
    // tiles, not the daemon. `restoreDegraded` then stops discovery retiring the rows whose panes
    // restore never got to, so the next daemon can put them back.
    try {
     const backend = tmuxBackend
-    const summary = await restoreAgents({
+    const restoreDeps: RestoreAgentsDeps = {
       retainStopped: retainExitedSession,
       keepAbandoned: keepAbandonedConversation,
       registry,
@@ -1994,7 +2009,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // the same Codex profile with its hooks installed; the install check runs inside the pane's
         // own shell.
         const built = await relaunchOverrides(entry)
-        if (!built.ok) return { error: built.error, detail: built.detail }
+        // Models could not be asked: the agent waits for it, held, never failed (core/agents/heldLaunches.ts).
+        if (!built.ok) return built.unavailable ? { held: built.unavailable } : { error: built.error, detail: built.detail }
         if (opts.resumeSessionId) {
           try { prepareSessionResume(entry) } catch (error) {
             return { error: 'RESUME_PREPARATION_FAILED', detail: error instanceof Error ? error.message : String(error) }
@@ -2045,11 +2061,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       releaseRoute: (key) => agentReconciler.releaseRoute(key),
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
-    })
+      // A grid's or a saved API's launch asks models: not before the core is ready (core/agents/heldLaunches.ts).
+      needs: (entry) => entry.gridLaunch ? 'models' : null,
+      waitingLaunch: (_entry, held) => ({ argv: heldPaneArgv(held.detail) }),
+      killPane: async (runtime) => { await backend.kill(runtime) },
+    }
+    // Later passes launch the held agents, into the panes they wait in, outside this pass's transaction.
+    restoreOnly = (only) => restoreAgents({ ...restoreDeps, only })
+    const summary = await restoreAgents({ ...restoreDeps, defer: true })
     // A row restore could not look at keeps its pane for discovery to judge, but not to retire this boot.
     for (const agentId of summary.unsurveyed) restoreUnsurveyed.add(agentId)
-    if (summary.restored.length || summary.failed.length || registry.rebootedSinceLastRun) {
+    if (summary.restored.length || summary.failed.length || summary.held.length || registry.rebootedSinceLastRun) {
       console.log(`[restore] restored ${summary.restored.length} · skipped ${summary.skipped.length} · failed ${summary.failed.length}`
+        + (summary.held.length ? ` · held ${summary.held.length} until the core is ready` : '')
         + (registry.rebootedSinceLastRun ? ' · after reboot' : ''))
     }
    } catch (error) {
@@ -2058,6 +2082,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       + ' · agents keep their rows and come back on the next start')
    }
   }
+  })
   // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
   // agent whose pane is still up is still that harness.
   for (const session of registry.list()) if (session.dsh) attachDsh(session)
@@ -2223,6 +2248,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
     installOpencodePlugin: installOpencodePluginBeforeSpawn,
     gridLaunchMachine,
+    buildGridLaunch: gridLaunch,
     terminalHintMachineName,
     blocksFolder: (cwd) => backend.purgeAgentService?.blocksFolder(cwd),
     gridSetup: () => {
@@ -2350,6 +2376,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     refreshGridWebSearch,
     liveBypassPermission,
     paneSwapDeps,
+    restartHeld: (agentId) => heldLaunches.restartHeld(agentId),
   })
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
@@ -2551,6 +2578,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.openRequests = null
   coreLink.ready()
   console.log('[cli] ready')
+  // Ready first, never after a service: the agents the boot held for one are launched now, in the background.
+  void heldLaunches.restoreHeld()
 }
 
 /**

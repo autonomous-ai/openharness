@@ -1,5 +1,5 @@
 import type { AgentEngine } from '../engines/types.js'
-import { gridCapableEngines } from './gridLaunch.js'
+import { gridCapableEngines } from './gridLaunchWire.js'
 
 /** A model picked for a new agent, and the grid serving it. Where its inference goes is the models
  * service's to resolve (services/models.ts `launchTarget`), on the machine the agent runs on. */

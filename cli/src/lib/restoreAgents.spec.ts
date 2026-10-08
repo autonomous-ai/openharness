@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
-import { GRID_CREDENTIAL_REQUIRED, restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreLaunch } from './restoreAgents.js'
+import { GRID_CREDENTIAL_REQUIRED, heldLaunch, restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
 
 const GRID: GridLaunchOverride = {
@@ -167,7 +167,7 @@ describe('restoreAgents — a survey that could not tell', () => {
     h.deps.liveProcess = async () => { asked.push('engine'); return engines.shift()! }
     const summary = await restoreAgents(h.deps)
     // Its engine is still running: left alone, re-identified, and no second pane opened beside it.
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(asked).toEqual(['pane', 'pane', 'pane', 'engine', 'engine'])
     expect(h.paneCreates).toBe(0)
     expect(h.calls).toContain('updateIdentity:agent-a:7')
@@ -217,7 +217,7 @@ describe('restoreAgents — which agents get a pane back', () => {
 
     const summary = await restoreAgents(h.deps)
 
-    expect(summary).toEqual({ restored: ['agent-a'], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: ['agent-a'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
     // Every registry write of phase 1 happens inside the one transaction, in this order.
     expect(h.calls.slice(0, 5)).toEqual([
@@ -267,7 +267,7 @@ describe('restoreAgents — which agents get a pane back', () => {
   it('leaves a pane that still runs its engine alone, re-identifying a row that lost its pid', async () => {
     const h = harness([row()], { livePanes: ['%3'] })
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.paneCreates).toBe(0)
     // No identity on the row (a misread reboot, a tmux server that outlived the daemon): the live
     // pid is written back so discovery adopts by process rather than by route.
@@ -295,7 +295,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })])
     h.probes.set('%0', [identity(7)])
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: ['gridded'], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: ['gridded'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.launched).toEqual([{ agentId: 'gridded', launch: { argv: ['claude', '--resume', 'session-a', '--grid', 'grid-abc'], env: { GRID_API_KEY: 'gridkey-abc123' } } }])
     await settled(h, 1, 1)
   })
@@ -354,6 +354,157 @@ describe('restoreAgents — which agents get a pane back', () => {
     expect(summary.restored).toEqual(['a', 'b'])
     expect(h.calls.filter((c) => c.startsWith('updateRuntimes'))).toEqual(['updateRuntimes:a:%0@tx', 'updateRuntimes:b:%1@tx'])
     await settled(h, 2, 2)
+  })
+})
+
+describe('restoreAgents — held until the service a launch asks is ready', () => {
+  /** A grid agent's launch asks models; `answers` is what each ask of it gets, in turn (a launch, by default). */
+  const withModels = (h: Harness, answers: Array<'held' | 'refused'> = []) => {
+    const build = h.deps.buildLaunch
+    h.deps.needs = (entry) => entry.gridLaunch ? 'models' : null
+    h.deps.waitingLaunch = (_entry, held) => ({ argv: ['wait', held.detail] })
+    h.deps.killPane = async (runtime) => { h.calls.push(`kill:${runtime.paneId}`) }
+    h.deps.buildLaunch = async (entry, o): Promise<RestoreLaunchResult> => {
+      const answer = entry.gridLaunch ? answers.shift() : undefined
+      if (answer === 'held') { h.launches.push({ agentId: entry.agentId }); return { held: 'models' } }
+      if (answer === 'refused') { h.launches.push({ agentId: entry.agentId }); return { error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no way there' } }
+      return build(entry, o)
+    }
+  }
+  const HELD = heldLaunch('models')
+  const gridRow = (agentId: string, over: Partial<RegisteredSession> = {}) => row({
+    agentId, sessionId: `session-${agentId}`, grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID,
+    runtimes: [{ backend: 'tmux', paneId: `%${agentId.length + 40}` }], primaryRuntimeKey: '', tmuxPane: '', ...over,
+  })
+
+  it('says what a held agent waits for, in the words its pane shows', () => {
+    expect(HELD).toEqual({ state: 'held', service: 'models', detail: 'Waiting for the models service. This harness starts by itself once the models service is running.' })
+    expect(heldLaunch('store')).toMatchObject({ detail: expect.stringContaining('Waiting for the Store.') })
+    expect(heldLaunch('search')).toMatchObject({ detail: expect.stringContaining('Waiting for search.') })
+  })
+
+  it('at boot asks no service: an agent whose launch needs one waits in a pane of its own, held, and the rest come back as ever', async () => {
+    const h = harness([row(), gridRow('gridded')])
+    withModels(h)
+    h.deps.defer = true
+    h.probes.set('%0', [identity(5)])
+    const summary = await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(summary).toEqual({ restored: ['agent-a'], skipped: [], failed: [], held: ['gridded'], unsurveyed: [] })
+    // Only the agent on its own login was built; the grid agent's pane runs the reason, nothing else.
+    expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
+    expect(h.launched.find((l) => l.agentId === 'gridded')?.launch).toEqual({ argv: ['wait', HELD.state === 'held' ? HELD.detail : ''] })
+    expect(h.rows.get('gridded')).toMatchObject({ launch: HELD, runtimes: [{ backend: 'tmux', paneId: '%1' }] })
+    // In the boot's one transaction with every other pane, so no pane id it reuses is left on a stale row.
+    expect(h.calls).toContain('updateRuntimes:gridded:%1@tx')
+    expect(h.calls).toContain('setLaunch:gridded:held@tx')
+  })
+
+  it('launches a held agent into the pane it waits in, outside any transaction, once the service can be asked', async () => {
+    const h = harness([gridRow('gridded', { launch: HELD })], { alivePanes: ['%47'] })
+    withModels(h)
+    h.deps.only = new Set(['gridded'])
+    h.probes.set('%47', [identity(8)])
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: ['gridded'], skipped: [], failed: [], held: [], unsurveyed: [] })
+    expect(h.paneCreates).toBe(0)
+    expect(h.calls.filter((call) => call.endsWith('@tx'))).toEqual([])
+    expect(h.calls).toContain('respawn:%47:claude --resume session-gridded --grid grid-abc')
+    expect(h.rows.get('gridded')?.launch).toEqual({ state: 'starting' })
+    await settled(h, 1, 1)
+  })
+
+  it('asks a service that cannot be asked once a pass: every agent after it that needs it is held unasked', async () => {
+    const h = harness([gridRow('first', { launch: HELD }), gridRow('second', { launch: HELD }), row({ agentId: 'own', sessionId: 'session-own' })], { alivePanes: ['%45'] })
+    withModels(h, ['held', 'held'])
+    h.probes.set('%1', [identity(6)])
+    const summary = await restoreAgents(h.deps)
+    await settled(h, 1, 1)
+    expect(summary.held).toEqual(['first', 'second'])
+    expect(summary.restored).toEqual(['own'])
+    // One ask of models, for the first; the second waits without one, in a new pane since its own went.
+    expect(h.launches.filter((l) => l.agentId !== 'own')).toEqual([{ agentId: 'first' }])
+    expect(h.launched.find((l) => l.agentId === 'second')?.launch.argv[0]).toBe('wait')
+    expect(h.rows.get('first')?.launch).toEqual(HELD)
+    expect(h.rows.get('second')?.launch).toEqual(HELD)
+  })
+
+  it('never fails or skips a held agent: the next restore holds it again, its pane gone with a reboot', async () => {
+    const h = harness([gridRow('gridded', { launch: HELD, resumeOnly: true })])
+    withModels(h)
+    h.deps.defer = true
+    h.deps.retainStopped = vi.fn()
+    const summary = await restoreAgents(h.deps)
+    expect(summary.held).toEqual(['gridded'])
+    expect(summary.skipped).toEqual([])
+    // A confirmed conversation it held: not sent back to the archive like an unconfirmed one.
+    expect(h.deps.retainStopped).not.toHaveBeenCalled()
+    expect(h.rows.get('gridded')?.launch).toEqual(HELD)
+  })
+
+  it('closes the pane of a held agent whose launch then fails, or whose conversation is gone', async () => {
+    const h = harness([gridRow('refused', { launch: HELD }), gridRow('lost', { launch: HELD, resumeOnly: true, sessionId: '' })], { alivePanes: ['%47', '%44'] })
+    withModels(h, ['refused'])
+    const summary = await restoreAgents(h.deps)
+    expect(summary.failed.map((f) => f.agentId)).toEqual(['refused', 'lost'])
+    expect(h.calls).toContain('kill:%47')
+    expect(h.calls).toContain('kill:%44')
+    expect(h.rows.get('refused')?.launch).toMatchObject({ state: 'failed', error: 'GRID_ENGINE_UNSUPPORTED' })
+  })
+
+  it('reports a held agent no pane could be opened for, and opens none without a waiting launch to give it', async () => {
+    const h = harness([gridRow('gridded')], { failCreate: true })
+    withModels(h)
+    h.deps.defer = true
+    expect((await restoreAgents(h.deps)).failed).toEqual([{ agentId: 'gridded', reason: 'tmux said no' }])
+    const bare = harness([gridRow('gridded')])
+    bare.deps.needs = () => 'models'
+    bare.deps.defer = true
+    expect((await restoreAgents(bare.deps)).held).toEqual(['gridded'])
+    expect(bare.launched).toEqual([{ agentId: 'gridded', launch: { argv: [] } }])
+  })
+
+  it('leaves every agent a pass was not asked about as it is', async () => {
+    const h = harness([row(), gridRow('gridded', { launch: HELD })], { alivePanes: ['%47'] })
+    withModels(h, ['held'])
+    h.deps.only = new Set(['gridded'])
+    const summary = await restoreAgents(h.deps)
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: ['gridded'], unsurveyed: [] })
+    expect(h.launches).toEqual([{ agentId: 'gridded' }])
+  })
+
+  it('holds an agent whose fresh relaunch needs a service that cannot be asked, in its pane, never failed', async () => {
+    const h = harness([gridRow('gridded')])
+    withModels(h, [undefined as never, 'held'])
+    h.probes.set('%0', [null, null])
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(h.calls).toContain(`respawn:%0:wait ${HELD.state === 'held' ? HELD.detail : ''}`)
+    expect(h.rows.get('gridded')?.launch).toEqual(HELD)
+    // A waiting pane that cannot be had is the one failure left.
+    const stuck = harness([gridRow('gridded')])
+    withModels(stuck, [undefined as never, 'held'])
+    stuck.deps.respawn = async () => ({ ok: false })
+    stuck.probes.set('%0', [null, null])
+    stuck.states.set('%0', [{ dead: true }])
+    await restoreAgents(stuck.deps)
+    await settled(stuck, 1)
+    expect(stuck.rows.get('gridded')?.launch).toMatchObject({ state: 'failed', error: 'ENGINE_DID_NOT_START', detail: expect.stringContaining('unknown reason') })
+  })
+
+  it('holds a terminal whose adopted engine needs a service to come back, too', async () => {
+    const h = harness([row({ terminalHost: true, engine: 'claude', gridLaunch: GRID })])
+    h.deps.needs = () => null
+    h.deps.waitingLaunch = (_entry, held) => ({ argv: ['wait', held.detail] })
+    const build = h.deps.buildLaunch
+    let asks = 0
+    h.deps.buildLaunch = async (entry, o) => (++asks === 2 ? { held: 'models' } : build(entry, o))
+    h.probes.set('%0', [null, null])
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(h.rows.get('agent-a')?.launch).toEqual(HELD)
   })
 })
 
@@ -517,7 +668,7 @@ describe('restoreAgents — terminals', () => {
   it('leaves a terminal whose pane is still there alone — a shell has no engine process to look for', async () => {
     const h = harness([terminal()], { alivePanes: ['%3'] })
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.paneCreates).toBe(0)
     expect(h.calls).toEqual([])
   })
@@ -525,7 +676,7 @@ describe('restoreAgents — terminals', () => {
   it('recreates a terminal whose pane is gone as a ready shell: no hold, no engine watch', async () => {
     const h = harness([terminal()])
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
     expect(h.calls).toEqual([
       'clearIdentity:term-1@tx',
@@ -540,7 +691,7 @@ describe('restoreAgents — terminals', () => {
   it('puts a terminal whose adopted engine exited while the daemon was down back to a shell, pane kept', async () => {
     const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1, processIdentity: identity(7) })], { alivePanes: ['%3'] })
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.calls).toEqual(['releaseEngine:term-1'])
     expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', sessionId: '' })
   })
@@ -548,7 +699,7 @@ describe('restoreAgents — terminals', () => {
   it('keeps a terminal whose adopted engine is still running exactly as an agent', async () => {
     const h = harness([terminal({ engine: 'claude', sessionId: 'session-t', boundAt: 1 })], { alivePanes: ['%3'], livePanes: ['%3'] })
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.calls).toEqual(['updateIdentity:term-1:1003'])
     expect(h.rows.get('term-1')?.engine).toBe('claude')
   })
@@ -557,7 +708,7 @@ describe('restoreAgents — terminals', () => {
     const h = harness([row({ agentId: 'agent-a', terminalHost: true })], { alivePanes: ['%3'] })
     // `terminalHost` is what releaseEngine's stub keys on; the real registry sets it for any row.
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: [], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.paneCreates).toBe(0)
     expect(h.calls).toEqual(['releaseEngine:agent-a'])
     expect(h.rows.get('agent-a')).toMatchObject({ engine: 'terminal', sessionId: '' })
@@ -576,7 +727,7 @@ describe('restoreAgents — terminals', () => {
   it('brings a terminal whose adopted engine left no conversation id back as a shell', async () => {
     const h = harness([terminal({ engine: 'claude', sessionId: '', boundAt: 1 })])
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.calls[0]).toBe('releaseEngine:term-1')
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
     expect(h.launched[0].launch.argv[0]).toBe('terminal')
@@ -588,7 +739,7 @@ describe('restoreAgents — terminals', () => {
     const h = harness([terminal({ engine, sessionId: 'ses_kept', boundAt: 1 })])
     h.probes.set('%0', [identity(9)])
     const summary = await restoreAgents(h.deps)
-    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], unsurveyed: [] })
+    expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.calls).not.toContain('releaseEngine:term-1')
     expect(h.launches).toEqual([{ agentId: 'term-1', resumeSessionId: 'ses_kept' }])
     expect(h.launched[0].launch.argv).toEqual([engine, '--resume', 'ses_kept'])

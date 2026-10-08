@@ -25,6 +25,13 @@
  * argv `agent_create` used. A row that only knows WHERE it pointed (`grid` without `gridLaunch`,
  * written before the credential was persisted) is not relaunched — on the engine's own login it would
  * spend the wrong account while looking identical — and is marked so the app can say why.
+ *
+ * A launch that asks a service for its part (`needs`: a grid's or a saved API's, from models) is never waited
+ * on at boot (`defer`): the agent is HELD, in a pane of its own that says what it waits for, and a later pass
+ * (`only`, core/agents/heldLaunches.ts) launches it there once the core is up and the service can be asked. A
+ * service that cannot be asked holds the agent the same way, and every agent after it in that pass that
+ * needs the same service, unasked: one pass waits on a service at most once. Held is never failed: the next
+ * restore tries again, and discovery keeps the agent, whose pane is alive.
  */
 
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
@@ -38,7 +45,13 @@ export interface RestoreLaunch {
   env?: Record<string, string>
 }
 
-export type RestoreLaunchResult = RestoreLaunch | { error: string; detail: string }
+/** The launch, why there is none, or the service its launch asks that could not be asked (`held`). */
+export type RestoreLaunchResult = RestoreLaunch | { error: string; detail: string } | { held: string }
+
+/** What a held agent's row says: the service it waits for, and why, in the words its pane shows. */
+export function heldLaunch(service: string, label = service === 'models' ? 'the models service' : service === 'store' ? 'the Store' : service): AgentLaunch {
+  return { state: 'held', service, detail: `Waiting for ${label}. This harness starts by itself once ${label} is running.` }
+}
 
 /** The row knows it was on a grid but not how to get back there. */
 export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
@@ -95,6 +108,16 @@ export interface RestoreAgentsDeps {
   releaseRoute: (routeKey: string) => void
   triggerHint: (runtime: TmuxRuntimeRef, engine: AgentEngine) => Promise<void>
   log: (message: string) => void
+  /** The service a launch of this row asks for its part (a grid's or a saved API's: `models`), or null. */
+  needs?: (entry: RegisteredSession) => string | null
+  /** Boot: hold every row whose launch asks a service rather than ask it now (`heldLaunch`). */
+  defer?: boolean
+  /** Restore only these agents, every other row as it is: a pass over the held ones. */
+  only?: ReadonlySet<string>
+  /** What a held agent's pane runs while it waits: the reason, and nothing else. */
+  waitingLaunch?: (entry: RegisteredSession, launch: Extract<AgentLaunch, { state: 'held' }>) => RestoreLaunch
+  /** Close a held agent's pane whose launch then failed: it would otherwise go on saying it waits. */
+  killPane?: (runtime: TmuxRuntimeRef) => Promise<void>
   /** How long a restored pane may take to show an engine process. Default matches `agent_create`. */
   budgetMs?: number
   /** How long the engine must stay up after appearing before the pane is handed over. */
@@ -109,6 +132,8 @@ export interface RestoreSummary {
   restored: string[]
   skipped: Array<{ agentId: string; reason: string }>
   failed: Array<{ agentId: string; reason: string }>
+  /** Agents held for a service their launch asks (`heldLaunch`), each in a pane that says so. */
+  held: string[]
   /** Agents left as they were because tmux or `ps` could not say whether their pane or engine lives.
    *  Discovery must not retire them this boot: a pane restore never looked at is not one that closed. */
   unsurveyed: string[]
@@ -207,18 +232,27 @@ async function waitForSettle(deps: RestoreAgentsDeps, runtime: TmuxRuntimeRef, s
  * background; the summary says which agents that is happening for.
  */
 export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSummary> {
-  const summary: RestoreSummary = { restored: [], skipped: [], failed: [], unsurveyed: [] }
+  const summary: RestoreSummary = { restored: [], skipped: [], failed: [], held: [], unsurveyed: [] }
   const patience = { left: true }
-  const missing: Array<{ entry: RegisteredSession; runtime: TmuxRuntimeRef }> = []
+  /** `alive`: a held agent's waiting pane, which its launch goes into rather than a new one. */
+  const missing: Array<{ entry: RegisteredSession; runtime: TmuxRuntimeRef; alive?: true }> = []
 
   // Per row, because a survey that gives up on the first bad one gives up on every row behind it —
   // one pane whose `tmux list-panes` timed out, or one archive that could not be written, and the
   // whole desk comes back empty. A row that cannot be surveyed is reported and the rest go on.
   for (const entry of deps.registry.list()) {
+   if (deps.only && !deps.only.has(entry.agentId)) continue
    try {
     const runtime = tmuxRuntime(entry)
     if (!runtime) { summary.skipped.push({ agentId: entry.agentId, reason: 'no tmux pane' }); continue }
     if (entry.launch?.state === 'failed') { summary.skipped.push({ agentId: entry.agentId, reason: 'last launch failed' }); continue }
+    // Held: its pane, alive, runs no engine on purpose, so it is neither a stopped engine nor a terminal. Its
+    // launch goes into that pane, or a new one if the pane went (a reboot).
+    if (entry.launch?.state === 'held') {
+      const alive = deps.livePane ? await surveyed(deps, patience, () => deps.livePane!(runtime)) : false
+      missing.push({ entry, runtime, ...(alive ? { alive: true as const } : {}) })
+      continue
+    }
     // A pane is alive as long as tmux has it, whatever runs in it: every pane is a shell with the
     // engine inside, so an engine that exited while the daemon was down left a shell at its prompt
     // — exactly the exit the reconciler would have caught — and the row is put back to a terminal
@@ -299,8 +333,32 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
 
   const budgetMs = deps.budgetMs ?? DEFAULT_BUDGET_MS
   const watches: Array<() => Promise<void>> = []
-  await deps.registry.transaction(async () => {
-    for (const { entry, runtime: dead } of missing) {
+  /** The services this pass could not ask: every later agent that needs one is held without asking. */
+  const unavailable = new Set<string>()
+  /** Held in its waiting pane: the one it has, or a new one. False when no pane could be opened for it. */
+  const hold = async (entry: RegisteredSession, runtime: TmuxRuntimeRef, alive: boolean, service: string): Promise<boolean> => {
+    const launch = heldLaunch(service) as Extract<AgentLaunch, { state: 'held' }>
+    let pane = runtime
+    if (!alive) {
+      const created = await deps.createPane(entry, deps.waitingLaunch?.(entry, launch) ?? { argv: [] })
+      if (!created.ok) {
+        summary.failed.push({ agentId: entry.agentId, reason: created.reason })
+        deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane to wait in · ${created.reason}`)
+        return false
+      }
+      pane = created.runtime
+      deps.registry.updateRuntimes(entry.agentId, [pane], terminalRouteKey(pane))
+    }
+    deps.registry.setLaunch(entry.agentId, launch)
+    summary.held.push(entry.agentId)
+    deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · held in pane ${pane.paneId} · waiting for ${service}`)
+    return true
+  }
+  // Every missing pane at once, in one transaction (see the module doc). A pass over held agents opens no
+  // pane but the ones they wait in, which are theirs already: it holds no saves back while it asks a service.
+  const inPass = (apply: () => Promise<void>): Promise<void> => deps.only ? apply() : deps.registry.transaction(apply)
+  await inPass(async () => {
+    for (const { entry, runtime: dead, alive } of missing) {
       // No process survives its pane; clear it now or discovery would refuse to adopt the new one
       // into this agent (route adoption requires either no identity or a matching pid).
       deps.registry.clearProcessIdentity(entry.agentId)
@@ -309,16 +367,32 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
         const reason = 'The saved conversation is no longer available. Start a new conversation separately.'
         summary.failed.push({ agentId: entry.agentId, reason })
         deps.registry.setLaunch(entry.agentId, { state: 'failed', error: 'RESUME_UNAVAILABLE', detail: reason })
+        if (alive) await deps.killPane?.(dead)
+        continue
+      }
+      // Never asked at boot, and asked at most once a pass: the core's readiness never waits on a service.
+      const needed = deps.needs?.(entry) ?? null
+      if (needed && (deps.defer || unavailable.has(needed))) {
+        await hold(entry, dead, !!alive, needed)
         continue
       }
       const launch = await deps.buildLaunch(entry, resumeSessionId ? { resumeSessionId } : {})
+      if ('held' in launch) {
+        unavailable.add(launch.held)
+        await hold(entry, dead, !!alive, launch.held)
+        continue
+      }
       if ('error' in launch) {
         summary.failed.push({ agentId: entry.agentId, reason: launch.detail })
         deps.registry.setLaunch(entry.agentId, { state: 'failed', error: launch.error, detail: launch.detail })
         deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not build its launch · ${launch.detail}`)
+        if (alive) await deps.killPane?.(dead)
         continue
       }
-      const created = await deps.createPane(entry, launch)
+      // A held agent's launch goes into the pane it waited in.
+      const created: { ok: true; runtime: TmuxRuntimeRef } | { ok: false; reason: string } = alive
+        ? await deps.respawn(dead, launch).then((spawned) => spawned.ok ? { ok: true as const, runtime: dead } : { ok: false as const, reason: spawned.reason ?? 'the pane could not be reused' })
+        : await deps.createPane(entry, launch)
       if (!created.ok) {
         summary.failed.push({ agentId: entry.agentId, reason: created.reason })
         deps.log(`[restore] ${entry.engine} · agent ${entry.agentId} · could not open a pane · ${created.reason}`)
@@ -366,6 +440,18 @@ async function watchRestoredPane(
     deps.registry.setLaunch(agentId, { state: 'failed', error, detail })
     deps.log(`[restore] ${engine} · agent ${agentId} · failed · ${detail}`)
   }
+  /** Its fresh launch asks a service that could not be asked: held in this pane, never failed. */
+  const holdHere = async (service: string): Promise<false> => {
+    const launch = heldLaunch(service) as Extract<AgentLaunch, { state: 'held' }>
+    const spawned = await deps.respawn(runtime, deps.waitingLaunch?.(entry, launch) ?? { argv: [] })
+    if (!spawned.ok) {
+      fail('ENGINE_DID_NOT_START', `${engine} could not wait for ${service} in its pane: ${spawned.reason ?? 'unknown reason'}`)
+      return false
+    }
+    deps.registry.setLaunch(agentId, launch)
+    deps.log(`[restore] ${engine} · agent ${agentId} · held · waiting for ${service}`)
+    return false
+  }
   const settleMs = deps.settleMs ?? DEFAULT_SETTLE_MS
   let mayRetryFresh = resuming
   /** The pane's engine is gone. True when a fresh relaunch is now under way, false when this is the end. */
@@ -386,6 +472,7 @@ async function watchRestoredPane(
       deps.keepAbandoned?.({ ...entry })
       deps.registry.releaseEngine(agentId)
       const launch = await deps.buildLaunch(deps.registry.byAgent(agentId) ?? { ...entry, engine: 'terminal' }, {})
+      if ('held' in launch) return holdHere(launch.held)
       if ('error' in launch) {
         fail(launch.error, launch.detail)
         return false
@@ -409,6 +496,7 @@ async function watchRestoredPane(
     deps.registry.inheritName(entry.sessionId, agentId)
     deps.registry.unbindSession(entry.sessionId)
     const launch = await deps.buildLaunch(entry, {})
+    if ('held' in launch) return holdHere(launch.held)
     if ('error' in launch) {
       fail(launch.error, launch.detail)
       return false

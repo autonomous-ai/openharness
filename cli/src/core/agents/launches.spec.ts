@@ -9,7 +9,7 @@ import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
-import { parseGridLaunchOverride } from '../../lib/gridLaunch.js'
+import { parseGridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, ProjectFolderError } from '../../lib/projectFolder.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -40,7 +40,7 @@ vi.mock('../../engines/opencode/version.js', async (real) => ({ ...await real<ob
 vi.mock('../../lib/newAgentModel.js', async (real) => ({
   ...await real<object>(), parseNewAgentModel: vi.fn(() => ({ state: 'absent' })),
 }))
-vi.mock('../../lib/gridLaunch.js', async (real) => ({ ...await real<object>(), parseGridLaunchOverride: vi.fn(() => ({ state: 'absent' })) }))
+vi.mock('../../lib/gridLaunchWire.js', async (real) => ({ ...await real<object>(), parseGridLaunchOverride: vi.fn(() => ({ state: 'absent' })) }))
 vi.mock('../../dsh/installed.js', async (real) => ({ ...await real<object>(), installedDsh: vi.fn(() => undefined) }))
 vi.mock('../../dsh/manifest.js', async (real) => ({ ...await real<object>(), dshSupportedEngines: vi.fn(() => ['claude', 'codex']) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({

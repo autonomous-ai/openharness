@@ -46,7 +46,7 @@ import { isSessionStoreEngine, sessionStoreContracts, sessionStoreOf } from '../
 import { admitHook } from '../engines/hooks.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
-import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunch.js'
+import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunchWire.js'
 import { parseScmLaunchRecord, type ScmLaunchRecord } from '../scm/types.js'
 import { commandcodeTranscriptPath } from '../engines/commandcode/contract.js'
 import { agyTranscriptPath } from '../engines/agy/contract.js'
@@ -63,6 +63,12 @@ export type AgentLaunch =
   | { state: 'starting' }
   | { state: 'ready' }
   | { state: 'failed'; error: string; detail?: string }
+  /**
+   * Not launched yet because the service its launch asks could not be asked (core/agents/heldLaunches.ts): a
+   * grid or saved-API agent while models is not running. Nothing about the agent is wrong. It waits in a pane
+   * that says why, and is launched once the service is ready. Never a failure: a restore tries it again.
+   */
+  | { state: 'held'; service: string; detail: string }
 
 /** Claude Code's hooks report `model` as {id, display_name}; Codex/Cursor report a plain string. This is
  *  the boundary where hook JSON becomes persisted state, so anything else is dropped rather than stored —
@@ -655,6 +661,11 @@ function normalizedLaunch(value: unknown): AgentLaunch | undefined {
   if (!value || typeof value !== 'object') return undefined
   const launch = value as { state?: unknown; error?: unknown; detail?: unknown }
   if (launch.state === 'starting' || launch.state === 'ready') return { state: launch.state }
+  if (launch.state === 'held') {
+    const held = value as { service?: unknown; detail?: unknown }
+    if (typeof held.service !== 'string' || !/^[a-z][a-z-]{0,39}$/.test(held.service) || typeof held.detail !== 'string') return undefined
+    return { state: 'held', service: held.service, detail: held.detail.slice(0, 500) }
+  }
   if (launch.state !== 'failed' || typeof launch.error !== 'string' || !launch.error) return undefined
   const error = launch.error.slice(0, 80)
   const detail = typeof launch.detail === 'string' && launch.detail
@@ -2006,7 +2017,8 @@ class Registry {
     if (!entry) return null
     const before = entry.launch
     entry.launch = normalizedLaunch(launch)
-    entry.active = launch.state !== 'failed'
+    // A held agent runs no engine yet: it is not active until its launch is.
+    entry.active = launch.state !== 'failed' && launch.state !== 'held'
     entry.touchedAt = Date.now()
     this.traceLaunch(agentId, before, entry.launch, `setLaunch${launch.state === 'failed' ? ` (${launch.error})` : ''}`)
     this.save()

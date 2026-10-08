@@ -263,6 +263,9 @@ describe('the core API services stand on', () => {
     await expect(MODELS_OFF.launchTarget({ model: 'm', grid: 'mine' })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.moveTarget({ gridName: null, model: 'm' })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.lists()).rejects.toThrow('the models service is unavailable')
+    // A launch on a grid or a saved API is refused while models is off (core/agents/launch.ts `gridLaunchThrough`).
+    await expect(MODELS_OFF.gridLaunch({ engine: 'claude', override: launch, machine: { hermesSystemManaged: false } })).rejects.toThrow('the models service is unavailable')
+    await expect(MODELS_OFF.apiTarget({ connectionId: 'openrouter', model: 'm' })).rejects.toThrow('the models service is unavailable')
     expect(await MODELS_OFF.privateGridName()).toBeNull()
     expect(MODELS_OFF.annotation(grid)).toBeNull()
     expect([MODELS_OFF.prewarm(grid), MODELS_OFF.moved(launch), MODELS_OFF.machines(null, 'here'), MODELS_OFF.signedOut()]).toEqual([undefined, undefined, undefined, undefined])

@@ -3,6 +3,7 @@ import { loadEngine } from '../engines/inProcess.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
 import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -21,7 +22,7 @@ vi.mock('../engines/inProcess.js', async (real) => {
 function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   const calls: string[] = []
   const d: LaunchOverridesDeps = {
-    machine: () => ({ hermesSystemManaged: false }),
+    machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async (key) => { calls.push(`writeConfig:${key}`); return `/state/grid-engine-config/${key}` },
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: (home) => { calls.push(`hooks:${home}`) },
@@ -57,6 +58,14 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual(['writeConfig:agent-1'])
     expect(result.overrides.env.PI_CODING_AGENT_DIR).toBe('/state/grid-engine-config/agent-1')
     expect(result.overrides.clearEnv).not.toContain('PI_CODING_AGENT_DIR')
+  })
+
+  it('names the service that could not be asked, so a restore holds the agent rather than failing it', async () => {
+    const down = async () => ({ ok: false as const, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
+    expect(await buildLaunchOverrides(deps({ gridLaunch: down }).d, 'claude', { gridLaunch: GRID }, 'a'))
+      .toEqual({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
+    expect(await validateLaunchOverrides(deps({ gridLaunch: down }).d, 'claude', { gridLaunch: GRID }))
+      .toEqual({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
   })
 
   it('refuses rather than falling back when the grid cannot be honoured', async () => {

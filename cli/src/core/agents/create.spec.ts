@@ -11,7 +11,7 @@ import { enginePathOverride } from '../../lib/engineBin.js'
 import { buildEngineLaunchArgv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
-import { buildGridEngineLaunch } from '../../lib/gridLaunch.js'
+import type { GridLaunchAnswer, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -60,11 +60,14 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
 }))
 vi.mock('../../lib/setUpWithin.js', async (real) => ({ ...await real<object>(), setUpWithin: vi.fn(async (run: () => Promise<unknown>) => { await run(); return 'done' }) }))
 vi.mock('../../lib/gridConfigDir.js', () => ({ writeGridConfigDir: vi.fn(async () => '/config/harness-claude') }))
-vi.mock('../../lib/gridLaunch.js', async (real) => ({
+vi.mock('../../lib/gridLaunchWire.js', async (real) => ({
   ...await real<object>(),
-  buildGridEngineLaunch: vi.fn(() => ({ ok: true, launch: { env: { GRID_KEY: 'k' }, args: ['--grid'], webSearch: 'off' } })),
   describeGridLaunch: vi.fn(() => '[grid] claude on Home'),
   gridConflictingEnvToClear: vi.fn(() => ['ANTHROPIC_API_KEY']),
+}))
+// The models service's grid launch (`CreateAgentDeps.buildGridLaunch`), as it answers a launch it can build.
+const buildGridLaunch = vi.fn(async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => ({
+  ok: true, launch: { env: { GRID_KEY: 'k' }, args: ['--grid'], webSearch: 'unsupported' }, override: request.override,
 }))
 vi.mock('../../engines/hooks.js', async (real) => {
   const actual = await real<typeof import('../../engines/hooks.js')>()
@@ -107,6 +110,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     hooksDisabled: false,
     installOpencodePlugin: vi.fn(async () => true),
     gridLaunchMachine: vi.fn(() => ({}) as never),
+    buildGridLaunch,
     terminalHintMachineName: () => 'this-mac',
     blocksFolder: vi.fn(() => false),
     gridSetup: vi.fn(() => vi.fn(async () => ({}))) as never,
@@ -166,15 +170,26 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
+    it('for a harness on a grid models cannot build: asked first, so the folder is left as it was', async () => {
+      vi.mocked(installedDsh).mockReturnValue(installed() as never)
+      const grid = { networkId: 'g1', networkName: 'Home', baseUrl: 'http://g', model: 'm' }
+      const { create } = setup()
+      buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
+      expect(await create(request({ dsh: 'blender', grid }))).toEqual({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down' })
+      expect(materializeWorkspace).not.toHaveBeenCalled()
+      expect(preTrustClaudeProject).not.toHaveBeenCalled()
+      vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
+    })
+
     it('for a grid it cannot honour: refused by the launch, a tmux too old, or a config it cannot write', async () => {
       const grid = { networkId: 'g1', networkName: 'Home', baseUrl: 'http://g', model: null }
       const { create } = setup()
-      vi.mocked(buildGridEngineLaunch).mockReturnValueOnce({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' } as never)
+      buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
       expect(await create(request({ grid }))).toEqual({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp' })
       vi.mocked(tmuxSupportsSessionEnv).mockResolvedValueOnce(false)
       expect(await create(request({ grid }))).toMatchObject({ error: 'TMUX_TOO_OLD_FOR_GRID' })
       const configured = { ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'PI_CONFIG', files: {}, links: [] } } }
-      vi.mocked(buildGridEngineLaunch).mockReturnValueOnce(configured as never).mockReturnValueOnce(configured as never)
+      buildGridLaunch.mockResolvedValueOnce(configured as never).mockResolvedValueOnce(configured as never)
       vi.mocked(writeGridConfigDir).mockRejectedValueOnce(new Error('read-only')).mockRejectedValueOnce('worse')
       expect(await create(request({ grid }))).toMatchObject({ error: 'GRID_CONFIG_FAILED', detail: "could not write claude's grid configuration · read-only" })
       expect(await create(request({ grid }))).toMatchObject({ detail: "could not write claude's grid configuration · worse" })
@@ -296,10 +311,10 @@ describe('creating an agent', () => {
       const { create } = setup()
       await create(request({ grid }))
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({
-        grid: { baseUrl: 'http://g', model: 'm1' }, gridLaunchRecord: { override: grid, webSearch: 'off' }, env: expect.objectContaining({ GRID_KEY: 'k' }),
+        grid: { baseUrl: 'http://g', model: 'm1' }, gridLaunchRecord: { override: grid, webSearch: 'unsupported' }, env: expect.objectContaining({ GRID_KEY: 'k' }),
       })
       const withFile = (pointAt?: string) => ({ ok: true, launch: { env: {}, args: [], webSearch: 'off', configDir: { envVar: 'OPENCODE_CONFIG', files: {}, links: [], pointAt } } })
-      vi.mocked(buildGridEngineLaunch).mockReturnValueOnce(withFile('opencode.json') as never).mockReturnValueOnce(withFile() as never)
+      buildGridLaunch.mockResolvedValueOnce(withFile('opencode.json') as never).mockResolvedValueOnce(withFile() as never)
       await create(request({ grid: { ...grid, model: undefined } }))
       await create(request({ grid }))
       expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).toMatchObject({ grid: { model: null }, env: { OPENCODE_CONFIG: '/config/harness-claude/opencode.json' } })
@@ -341,7 +356,7 @@ describe('creating an agent', () => {
       expect(createAndRegisterPane).not.toHaveBeenCalled()
       // Any other engine's launch loads nothing, and its machine facts are asked for that engine.
       vi.mocked(loadEngine).mockClear()
-      vi.mocked(buildGridEngineLaunch).mockReturnValueOnce({ ok: false, error: 'GRID_UNSUPPORTED', detail: 'no' } as never)
+      buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_UNSUPPORTED', detail: 'no' })
       await t.create(request({ engine: 'claude', agent: 'reviewer', grid: { networkName: 'g' } }))
       expect(loadEngine).not.toHaveBeenCalled()
       expect(t.deps.gridLaunchMachine).toHaveBeenCalledWith('claude')

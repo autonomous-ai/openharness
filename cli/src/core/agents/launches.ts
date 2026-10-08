@@ -24,7 +24,7 @@ import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
   permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
 } from '../../lib/engineLaunch.js'
-import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunch.js'
+import { parseGridLaunchOverride, type GridLaunchOverride } from '../../lib/gridLaunchWire.js'
 import { parseNewAgentModel, type NewAgentModel } from '../../lib/newAgentModel.js'
 import { parseProjectFolder, prepareProjectFolder, projectsRoot, ProjectFolderError } from '../../lib/projectFolder.js'
 import type { ScmLaunchRecord } from '../../scm/types.js'

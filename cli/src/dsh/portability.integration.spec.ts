@@ -19,6 +19,7 @@ import { harnessAdapter } from './adapters.js'
 import { materializeWorkspace, skillDirsIn } from './materialize.js'
 import { prepareHarnessLaunch } from './runtime.js'
 import { dshListRows } from './wire.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 const store = fileURLToPath(new URL('../../../store/agents', import.meta.url))
 let root: string
@@ -140,7 +141,7 @@ for (const engine of PROCESS_ENGINES) it(`${engine}: prepare → spawn → tool 
   expect(recorded).toMatchObject({ engine, dsh: pkg.id, dshRuntime: 'created', cwd: workspace })
   expect(JSON.parse(readFileSync(join(workspace, '.harness/verdict.json'), 'utf8'))).toEqual({ ready: true, artifact: 'scene.txt' })
   expect(readFileSync(join(workspace, 'scene.txt'), 'utf8')).toBe('drawn by test/portable\n')
-  const restored = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }), writeGridConfigDir: async () => '/unused',
+  const restored = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/unused',
     tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => {},
     dshLaunch: (_id, ws, selected, key) => prepareHarnessLaunch(pkg, ws, selected, key) }, engine,
   { dsh: pkg.id, cwd: workspace, dshRuntime: 'created' }, 'registered')
