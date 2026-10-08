@@ -82,6 +82,12 @@ new line in compatible agent prompts. Do not intercept agent shortcuts needlessl
 
 ## Multiple computers
 
+For service accounts (Gmail, GitHub, Notion and other services), use
+`harness connections` and read `/usr/share/harness-os/connections.md`.
+These are separate from connecting computers. All agents running as the same
+user on this computer can use its connected accounts without signing in again.
+Account credentials are not synchronized to other computers.
+
 The **Connect a computer** action opens Harness's existing connection flow.
 This computer works without a Harness account. Connecting other computers uses
 the existing sign-in/link flow. If signed out, choose **Sign in on this computer**,
