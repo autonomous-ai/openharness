@@ -101,7 +101,7 @@
  "  exec '/bin/ksh'",
  "harness_codex_probe() {",
  "  harness_codex_mode=0",
- "  harness_codex_seen=$('<daemon-node>' -e 'const {execFileSync}=require('\"'\"'node:child_process'\"'\"');try { const h=execFileSync(process.argv[1],['\"'\"'--help'\"'\"'],{timeout:5000,maxBuffer:1048576,encoding:'\"'\"'utf8'\"'\"',stdio:['\"'\"'ignore'\"'\"','\"'\"'pipe'\"'\"','\"'\"'pipe'\"'\"']});process.exit(/--no-daemon(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }' \"$1\") || harness_codex_mode=$?",
+ "  harness_codex_seen=$('<daemon-node>' -e 'const {execFileSync}=require('\"'\"'node:child_process'\"'\"');try { const h=execFileSync(process.argv[1],['\"'\"'--help'\"'\"'],{timeout:30000,maxBuffer:1048576,encoding:'\"'\"'utf8'\"'\"',stdio:['\"'\"'ignore'\"'\"','\"'\"'pipe'\"'\"','\"'\"'pipe'\"'\"']});process.exit(/--no-daemon(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }' \"$1\") || harness_codex_mode=$?",
  "  case \"$harness_codex_mode\" in",
  "    0) harness_codex_no_daemon=1 ;;",
  "    64) harness_codex_no_daemon= ;;",
