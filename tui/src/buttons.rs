@@ -21,6 +21,11 @@ pub struct Button { pub label: String, pub key: Option<char> }
 #[derive(Clone, Debug)]
 pub struct Row { pub buttons: Vec<Button>, pub chosen: usize, pub hint: String }
 
+/// The keys hint every question's row shows where it fits — one for all, read as the command
+/// panel's keys line: every arrow moves, Enter chooses, Esc cancels. (A button's own letter — `y`,
+/// `s` — still answers; the hint does not list them.)
+pub const KEYS: &str = "↑↓←→ move   enter choose   esc cancel";
+
 pub enum Answer { Chosen(usize), Cancel, Moved, Ignored }
 
 fn cols(text: &str) -> u16 { text.width().min(u16::MAX as usize) as u16 }

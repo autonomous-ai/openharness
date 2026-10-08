@@ -174,7 +174,8 @@ fn show(app: &mut App, message: &str, confirm: bool) -> bool {
     let button = |label: &str, key| crate::buttons::Button { label: label.into(), key };
     let mut buttons = vec![button(if matches!(op.stage, Stage::Failed | Stage::Stop) { "Back" } else { "Cancel" }, None)];
     if confirm { buttons.push(button("Stop", Some('s'))); }
-    let hint = if confirm { "s stop · esc cancel" } else { "" };
+    // (One button, Back: nothing to move between.)
+    let hint = if confirm { crate::buttons::KEYS } else { "" };
     let row = crate::buttons::Row { buttons, chosen: 0, hint: hint.into() };
     menu::open_buttons(app, &title, items, row, vec![format!("close-harness -x {id}"), format!("close-harness -y {id}")])
 }

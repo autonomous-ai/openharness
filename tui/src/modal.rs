@@ -141,7 +141,7 @@ impl Prompt {
             _ => "Send",
         };
         let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
-        crate::buttons::Row { buttons: vec![button("Cancel"), button(action)], chosen: if self.buttons { self.chosen } else { usize::MAX }, hint: "tab buttons".into() }
+        crate::buttons::Row { buttons: vec![button("Cancel"), button(action)], chosen: if self.buttons { self.chosen } else { usize::MAX }, hint: crate::buttons::KEYS.into() }
     }
 }
 
@@ -791,8 +791,14 @@ pub fn theme_options(app: &App, section: &str) -> Vec<Row> {
             [("box", "on", "every pane its own box"), ("line", "off", "tmux's lines between panes")]
                 .iter().map(|(v, label, hint)| opt(format!("border_style:{v}"), label, cur == *v, hint)).collect() }
         "tab" => { let cur = tab_active_of(app);
+            // (`pane`, an older tui.toml's word, is `short`.)
+            let named = match o.get("@hn-window-name", "", None).as_deref() { Some("full") => "full", Some("tmux") => "tmux", _ => "short" };
+            let short = format!("names cut to {} columns, as tmux's", crate::options::TAB_NAME_COLS);
             [("star", "star", "the current tab is marked *"), ("filled", "filled", "the current tab is filled (inverted)")]
-                .iter().map(|(v, label, hint)| opt(format!("window_active:{v}"), label, cur == *v, hint)).collect() }
+                .iter().map(|(v, label, hint)| opt(format!("window_active:{v}"), label, cur == *v, hint))
+                .chain([("short", "short names", short.as_str()), ("full", "full names", "each tab's whole name")]
+                    .iter().map(|(v, label, hint)| opt(format!("window_name:{v}"), label, named == *v, hint)))
+                .collect() }
         "autorename" => { let cur = if o.auto_rename() { "on" } else { "off" };
             [("on", "a window with a repo is named for it and its work, by a small model, in the background (Harness TUI LMStudio)"),
              ("off", "windows keep the names they have")]
@@ -936,7 +942,9 @@ mod theme_row_tests {
         let a0 = app();
         let tab_rows = theme_options(&a0, "tab");
         let tab_ids: Vec<&str> = tab_rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(tab_ids, vec!["window_active:star", "window_active:filled"]);
+        // (How long a tab's name is shown is in the same section: short, the default, or full.)
+        assert_eq!(tab_ids, vec!["window_active:star", "window_active:filled", "window_name:short", "window_name:full"]);
+        assert!(tab_rows[2].lead.iter().any(|s| s.content.contains('✓')), "short names by default");
         // The mark follows the option in use.
         let mut a1 = app();
         let global = crate::options::SetFlags { global: true, ..Default::default() };

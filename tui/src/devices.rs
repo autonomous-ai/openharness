@@ -1524,12 +1524,11 @@ fn action(ask: &Ask, room: u16) -> &'static str {
 /// `[ Cancel ]  [ Yes ]`, or `[ Cancel ]  [ <action> ]` for a typed line, with the chosen button
 /// from the panel's state. [confirm] is passed because a key takes the ask out while it answers.
 fn prompt_row(app: &App, confirm: bool, action: &str) -> buttons::Row {
-    let hint = if confirm { "y yes · n no" } else { "tab buttons" };
     let key = |ch: char| confirm.then_some(ch);
     buttons::Row {
         buttons: vec![Button { label: "Cancel".into(), key: key('n') }, Button { label: action.into(), key: key('y') }],
         chosen: app.devices.prompt_row.get().min(1),
-        hint: hint.into(),
+        hint: buttons::KEYS.into(),
     }
 }
 
@@ -2034,7 +2033,7 @@ mod tests {
         go_to(&mut app, "pw:clear");
         press(&mut app, KeyCode::Enter);
         let (s, buf) = screen(&mut app, 150, 42);
-        assert!(s.contains("[ Cancel ]  [ Yes ]") && s.contains("y yes · n no"), "{s}");
+        assert!(s.contains("[ Cancel ]  [ Yes ]") && s.contains(buttons::KEYS), "the one keys hint every question shows: {s}");
         if !crate::theme::no_color() {
             assert_eq!(Some(bg_of(&s, &buf, "[ Cancel ]")), selected, "starts on Cancel");
             assert_ne!(Some(bg_of(&s, &buf, "[ Yes ]")), selected);

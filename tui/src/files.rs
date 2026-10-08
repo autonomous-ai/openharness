@@ -175,7 +175,7 @@ impl Prompt {
     fn row(&self) -> ButtonRow {
         let button = |label: &str| Button { label: label.into(), key: None };
         let action = if matches!(self.ask, Ask::Rename(_)) { "Rename" } else { "Create" };
-        ButtonRow { buttons: vec![button("Cancel"), button(action)], chosen: if self.buttons { self.chosen } else { usize::MAX }, hint: String::new() }
+        ButtonRow { buttons: vec![button("Cancel"), button(action)], chosen: if self.buttons { self.chosen } else { usize::MAX }, hint: crate::buttons::KEYS.into() }
     }
 
     /// The selection, from the mark to the cursor, when there is one.
@@ -862,7 +862,7 @@ impl Files {
     fn confirm_row(&self) -> ButtonRow {
         let yes = match self.confirm.as_ref().map(|c| &c.doom) { Some(Doom::Purge(..)) => "Delete Permanently", _ => "Delete" };
         let button = |label: &str| Button { label: label.into(), key: None };
-        ButtonRow { buttons: vec![button("Cancel"), button(yes)], chosen: self.confirm.as_ref().map_or(0, |c| c.focus), hint: String::new() }
+        ButtonRow { buttons: vec![button("Cancel"), button(yes)], chosen: self.confirm.as_ref().map_or(0, |c| c.focus), hint: crate::buttons::KEYS.into() }
     }
 
     /// Yes to the confirmation: to the Trash — or, when it can't go there, a second question before

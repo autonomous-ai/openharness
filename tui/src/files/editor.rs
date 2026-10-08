@@ -389,7 +389,7 @@ impl Editor {
     /// The "Save changes?" buttons, in the order shown, the one with the keys chosen.
     fn ask_row(&self) -> crate::buttons::Row {
         let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
-        crate::buttons::Row { buttons: vec![button("Don't save"), button("Cancel"), button("Save")], chosen: self.asking.unwrap_or(2), hint: String::new() }
+        crate::buttons::Row { buttons: vec![button("Don't save"), button("Cancel"), button("Save")], chosen: self.asking.unwrap_or(2), hint: crate::buttons::KEYS.into() }
     }
 
     /// The "Save changes?" question's keys: Left/Right/Tab between its buttons, Enter, Esc cancels.

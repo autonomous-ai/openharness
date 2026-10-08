@@ -6802,8 +6802,10 @@ mod recovery_tests {
     async fn setting_the_tab_name_source_by_hand_changes_the_tab_at_once() {
         let mut app = fixture();
         let format = |app: &App| app.options.get("window-status-format", "", None).unwrap_or_default();
-        crate::commands::execute(&mut app, "set -g @hn-window-name pane");
+        crate::commands::execute(&mut app, "set -g @hn-window-name full");
         assert!(format(&app).contains("#{pane_title}"), "{}", format(&app));
+        crate::commands::execute(&mut app, "set -g @hn-window-name short");
+        assert!(format(&app).contains("#{=/20/…:pane_title}"), "{}", format(&app));
         crate::commands::execute(&mut app, "set -g @hn-window-name tmux");
         assert!(format(&app).contains("#{window_short_name}") && !format(&app).contains("#{pane_title}"), "{}", format(&app));
     }
