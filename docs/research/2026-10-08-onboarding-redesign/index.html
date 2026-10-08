@@ -386,24 +386,14 @@
 
   <!-- ===================== 2. NEW USER ===================== -->
   <h2>2. Arrival: someone with no agents yet</h2>
-  <p class="lede">No New Harness box. Harness opens one tab with a small game OpenCode has already made, the game running beside it, and the composer focused on one question.</p>
+  <p class="lede">No New Harness box. Harness opens one tab with a small game OpenCode has already made. The game runs in the preview, and the composer is focused on one question.
+    The preview is the same <b>DSH viewer</b> every Store harness uses: it opens by itself beside the agent, as Space Dodge's preview on the left (70%) and the agent on the right.</p>
   <div class="win">
     <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">Space Dodge</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
     <div class="ws">
-      <div class="panes" style="grid-template-columns: 1.1fr 1fr">
+      <div class="panes" style="grid-template-columns: 1.55fr 1fr">
         <div class="p">
-          <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">~/harnesses/space-dodge</span></div>
-          <div class="b">
-            <span class="dim">Welcome to Harness: all your machines, all your agents, in one place. Here's a small game to start from.</span><br><br><span class="u">› make a tiny space game I can play in the browser</span><br>
-            <span class="ok">✓</span> index.html · game.js · style.css<br>
-            Space Dodge is ready: arrow keys to move, dodge the rocks,<br>the score goes up every second. It's running on the right.<br><br>
-            <span class="am">What would you like to change in the game?</span><br>
-            <span class="dim">Try: "make the rocks faster", "add a high score", "make the ship blue"</span>
-            <div class="composer">make the rocks bounce off the walls<span class="cur"></span></div>
-          </div>
-        </div>
-        <div class="p">
-          <div class="h">◧ Preview<span class="m">space-dodge/index.html</span></div>
+          <div class="h">◧ Space Dodge<span class="m">preview</span><span style="margin-left:1cqw;color:var(--muted)">⟳</span><span style="margin-left:.8cqw;color:var(--muted)" title="Close viewer">×</span></div>
           <div class="game">
             <div class="score">SCORE 128</div>
             <i class="star" style="left:12%;top:20%"></i><i class="star" style="left:70%;top:12%"></i><i class="star" style="left:40%;top:44%"></i><i class="star" style="left:86%;top:58%"></i><i class="star" style="left:22%;top:66%"></i>
@@ -411,15 +401,48 @@
             <i class="ship"></i>
           </div>
         </div>
+        <div class="p">
+          <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">space-dodge</span></div>
+          <div class="b"><span class="u">› make a tiny space game I can play in the browser</span><br>
+            <span class="ok">✓</span> index.html · game.js<br>
+            Space Dodge is running on the left: arrow keys move the ship, dodge the rocks.<br><br>
+            <span class="am">What would you like to change in the game?</span><br>
+            <span class="dim">"make the rocks faster" · "add a high score" · "make the ship blue"</span>
+            <div class="composer">make the rocks bounce off the walls<span class="cur"></span></div></div>
+        </div>
       </div>
-      <div class="status"><span>Harnesses 1</span><span>Machines 1</span><span class="sp"></span><span>space-dodge</span></div>
+      <div class="status"><span>Harnesses 1</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>space-dodge</span></div>
     </div>
   </div>
-  <p class="note"><b>How:</b> the app ships the finished project and its OpenCode session. On first run both are copied to <code>~/harnesses/space-dodge</code>, and the pane opens that session, so OpenCode's answer is already on screen.
-    The preview is a web-page pane of <code>index.html</code>. Only for someone with no Claude Code, Codex or OpenCode and no sessions.
-    <b>To check before building:</b> that an OpenCode session can be imported on another computer and resumed, and that the preview pane exists or can be added cheaply.</p>
+  <p class="cap"><b>First screen for a brand-new person.</b> Typing a change and pressing Return makes the agent edit the game, and the preview reloads.</p>
+  <div class="win" style="margin-top:22px">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">Space Dodge</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
+    <div class="ws">
+      <div class="panes" style="grid-template-columns: 1fr">
+        <div class="p">
+          <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">space-dodge</span><span style="margin-left:1.2cqw;color:var(--muted)">◧ Preview ⇧⌘V</span></div>
+          <div class="b"><span class="u">› make a tiny space game I can play in the browser</span><br>
+            <span class="ok">✓</span> index.html · game.js<br>
+            Space Dodge is running on the left: arrow keys move the ship, dodge the rocks.<br><br>
+            <span class="am">What would you like to change in the game?</span><br>
+            <span class="dim">"make the rocks faster" · "add a high score" · "make the ship blue"</span>
+            <div class="composer">make the rocks bounce off the walls<span class="cur"></span></div></div>
+        </div>
+      </div>
+      <div class="status"><span>Harnesses 1</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>space-dodge</span></div>
+    </div>
+  </div>
+  <p class="cap"><b>Preview hidden.</b> × on the preview's header hides it. <b>⇧⌘V</b> (or View ▸ Toggle Viewer) brings it back.
+    The small "◧ Preview ⇧⌘V" in the agent's header shows only while a hidden preview exists.</p>
+  <p class="note"><b>How:</b>
+    <b>The starter</b> is a tiny Store-style harness: the finished Space Dodge project, a manifest that runs on OpenCode, and <code>viewer.use: autonomous/web-viewer</code> pointing at its <code>index.html</code>.
+    It is the same shape the community "fork a project" flow already creates (<code>fork_project.dart</code>), which waits for the viewer and shows it.
+    <b>The conversation</b> is a bundled OpenCode session, imported on first run with its folder paths rewritten (checked: an exported session resumes on another computer).
+    <b>The preview</b> is served by the daemon, which starts the viewer on a free local port when the harness attaches. The app opens it at 70/30 without taking focus from the composer.
+    <b>Hide and show</b> use what exists today: Close viewer on the preview, and View ▸ Toggle Viewer to reopen it. What's new is a default key for Toggle Viewer (⇧⌘V; nothing uses it now) and the small header hint.
+    <b>Who gets it:</b> only someone with no Claude Code, Codex or OpenCode and no sessions, the same people OpenCode is downloaded for.
+    <b>To decide:</b> the web viewer is a Store package fetched at install, so the app should bundle it (or fetch it during setup) to make the first screen appear without waiting.</p>
 
-  <!-- ===================== 3. EXISTING USER ===================== -->
   <h2>3. Arrival: someone who already uses Claude Code and Codex</h2>
   <p class="lede">Their most recent sessions open by themselves: the 2 most recent in the first tab, the next 3 in the second.
     No strip or banner. The Claude Code and Codex limits stay in the footer, as they are today, with a low one in amber.</p>
@@ -515,13 +538,13 @@
     <b>Opening panes without starting 9 agents:</b> needs a "show the conversation, start the agent on first keystroke" pane,
     which does not exist yet. It is the largest piece of new work here. Until it exists, the cap could be 2 live panes per tab.</p>
 
-  <h2>For you to decide</h2>
+  <h2>Decided and still open</h2>
   <p class="note" style="font-size:15px;line-height:1.7">
-    1. <b>When setup finishes mid-tour:</b> open Harness by itself at the end of the current slide (proposed), or wait for Open Harness?<br>
-    2. <b>Existing users:</b> one tab per project with mixed agents (rendered), or one tab per agent?<br>
-    3. <b>The starter project for new users:</b> a game (rendered), or something work-like, such as a small landing page?<br>
-    4. <b>The welcome strip:</b> stays until closed (rendered with ×), or disappears after the first message?<br>
-    5. <b>Signed out of Harness:</b> the welcome shows only this Mac's agents, so no sign-in is needed. OK?</p>
+    <b>Decided:</b> Harness opens by itself when setup finishes (at the end of the slide on screen). Existing users get their 2 most recent sessions in tab 1
+    and the next 3 in tab 2. No welcome strip; usage stays in the footer. Tour adds ⌘N and ⌘P and repeats "All your machines. All your agents." OpenCode is downloaded only
+    when there is no agent engine at all.<br>
+    <b>Still open:</b> 1. The starter: the Space Dodge game (rendered), or something work-like such as a small landing page? Both work the same way through the web viewer.
+    2. Is ⇧⌘V right for Toggle Viewer? 3. Add Help ▸ Welcome Tour so the slides can be seen again?</p>
 </main>
 </body>
 </html>
