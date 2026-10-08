@@ -377,14 +377,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Restore did not run this boot (every row), or could not look at these rows (core/agents/discovery.ts).
   let restoreFailed = false
   const restoreUnsurveyed = new Set<string>()
-  // Agents held until the service their launch asks is ready, and the passes that launch them
-  // (core/agents/heldLaunches.ts): the boot's restore of only those agents, set where tmux is there to restore into.
-  let restoreOnly: ((only: ReadonlySet<string>) => Promise<RestoreSummary>) | null = null
-  const heldLaunches = createHeldLaunches({
-    registry,
-    restore: (only) => restoreOnly?.(only) ?? Promise.resolve({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] }),
-    log: (line) => console.log(line),
-  })
   let discoveryReady = false
   let discoveryError: string | null = null
   // How a boot that failed AFTER this server bound turns its own status not-ready: the app reads
@@ -414,6 +406,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // move (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
   // applied by `bootHandoff`, which hands the machine over without finishing start-up.
   coreLink.onUpdate((version) => { void daemonBoot.applyStagedUpdate(version) })
+  // Agents held until the service their launch asks is ready, and the passes that launch them
+  // (core/agents/heldLaunches.ts): the boot's restore of only those agents, set where tmux is there to restore into.
+  let restoreOnly: ((only: ReadonlySet<string>) => Promise<RestoreSummary>) | null = null
+  const heldLaunches = createHeldLaunches({
+    registry,
+    restore: (only) => restoreOnly?.(only) ?? Promise.resolve({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] }),
+    log: (line) => console.log(line),
+  })
   wakeGateway({ outOfProcess: servicesTheMasterRuns(process.env, KNOWN_SERVICES), signedIn: !!session, dataDir: env.ADAPTER_DATA_DIR, want: (service) => coreLink.want(service) })
   // …or, under a master too old to run the updater, from the updater this core runs beside itself
   // (core/updaterBeside.ts), in a process of its own: the core downloads no build either way.

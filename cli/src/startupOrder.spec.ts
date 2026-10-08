@@ -234,11 +234,14 @@ describe('the core\'s request gate (core/main.ts)', () => {
     expect(yields, 'bind the relay callbacks before connect() first').toEqual([])
   })
 
-  it('opens the gate, tells the master it is ready, then says so — last', () => {
+  it('opens the gate, tells the master it is ready, says so, and only then launches what waits for a service', () => {
     const ready = at('coreLink.ready()', opened)
     const logged = at("console.log('[cli] ready')", ready)
     const tail = source.slice(opened, from + text.length).split('\n').map((line) => line.trim()).filter(Boolean)
-    expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')"])
+    // Readiness never waits on a service: the agents the boot held for one are launched after it, in the background
+    // (core/agents/heldLaunches.ts).
+    expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
+      'void heldLaunches.restoreHeld()'])
     expect(logged).toBeGreaterThan(ready)
   })
 })
