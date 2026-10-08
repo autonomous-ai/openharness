@@ -2,7 +2,15 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { claudeProjectMatches, claudeTranscriptCwd, isClaudeProjectTranscript, mangleClaudeProjectDir } from './claudeProject.js'
+import { transcriptProject } from '../discoveries.js'
+
+// The former lib/claudeProject.spec.ts, its cases unchanged, against Claude Code's declared rule (`projectFolder` in
+// claude/discoveryContract.ts) applied by the kit, through the composition the registry and repair call.
+const claude = transcriptProject('claude')!
+const mangleClaudeProjectDir = claude.directoryOf
+const claudeProjectMatches = claude.belongs
+const claudeTranscriptCwd = (transcriptPath: string, limit?: number) => claude.cwdOf(transcriptPath, limit)
+const isClaudeProjectTranscript = claude.isProjectTranscript
 
 const dirs: string[] = []
 const scratch = (): string => { const d = mkdtempSync(join(tmpdir(), 'claude-project-')); dirs.push(d); return d }

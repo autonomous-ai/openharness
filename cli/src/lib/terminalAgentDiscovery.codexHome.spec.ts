@@ -7,17 +7,17 @@ import type { TerminalRootObservation, TerminalRuntimeRef } from './terminalType
  * The Codex profile a process runs under rides the LIVE discovery path, pinned the same way `grid`
  * is in `terminalAgentDiscovery.grid.spec.ts`: a probe wired on the wrong function stays green while
  * every discovered codex row arrives with `codexHome` undefined — and its transcript then fails
- * validation against the default profile. `codexHomeProbe.spec.ts` covers what the probe reads.
+ * validation against the default profile. `engines/kit/processFacts.spec.ts` covers what the probe reads.
  */
 
 const probeGatewayRuntime = vi.hoisted(() => vi.fn())
 const probeGridAssignment = vi.hoisted(() => vi.fn())
-const probeCodexHome = vi.hoisted(() => vi.fn())
+const probeProfileHome = vi.hoisted(() => vi.fn())
 const processRows = vi.hoisted(() => vi.fn())
 
 vi.mock('./gatewayRuntime.js', () => ({ probeGatewayRuntime }))
 vi.mock('./gridAssignment.js', () => ({ probeGridAssignment }))
-vi.mock('./codexHomeProbe.js', () => ({ probeCodexHome }))
+vi.mock('../engines/discoveries.js', async (real) => ({ ...await real<object>(), probeProfileHome }))
 vi.mock('./tmux.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./tmux.js')>(),
   processRows,
@@ -41,14 +41,14 @@ beforeEach(() => {
   probeGatewayRuntime.mockResolvedValue({ kind: null })
   probeGridAssignment.mockReset()
   probeGridAssignment.mockResolvedValue(null)
-  probeCodexHome.mockReset()
+  probeProfileHome.mockReset()
   processRows.mockReset()
 })
 
 describe('Codex profile on the live terminal discovery path', () => {
   it('reports the profile off the process, and the probe decides for every engine', async () => {
     processRows.mockResolvedValue([row(10, 1, 'bash'), row(30, 10, 'codex'), row(20, 1, 'bash'), row(40, 20, 'claude')])
-    probeCodexHome.mockImplementation(async (_identity: unknown, engine: string) => engine === 'codex' ? '/home/u/.codex-work' : null)
+    probeProfileHome.mockImplementation(async (_identity: unknown, engine: string) => engine === 'codex' ? '/home/u/.codex-work' : null)
     const probe = await probeTerminalAgents(
       [backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }, { runtime: OTHER_RUNTIME, rootPid: 20, cwd: '/work' }])],
       ['tmux'],
@@ -56,13 +56,13 @@ describe('Codex profile on the live terminal discovery path', () => {
     )
     const byEngine = Object.fromEntries(probe.agents.map((agent) => [agent.engine, agent.codexHome]))
     expect(byEngine).toEqual({ codex: '/home/u/.codex-work', claude: null })
-    expect(probeCodexHome).toHaveBeenCalledTimes(2)
-    for (const [identity] of probeCodexHome.mock.calls) expect(identity).toMatchObject({ startMarker: START })
+    expect(probeProfileHome).toHaveBeenCalledTimes(2)
+    for (const [identity] of probeProfileHome.mock.calls) expect(identity).toMatchObject({ startMarker: START })
   })
 
   it('passes an unreadable probe through as undefined, so the registry keeps what it knew', async () => {
     processRows.mockResolvedValue([row(10, 1, 'bash'), row(30, 10, 'codex')])
-    probeCodexHome.mockResolvedValue(undefined)
+    probeProfileHome.mockResolvedValue(undefined)
     const probe = await probeTerminalAgents([backendWith([{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])], ['tmux'], 999)
     expect(probe.agents[0]).toHaveProperty('codexHome', undefined)
   })

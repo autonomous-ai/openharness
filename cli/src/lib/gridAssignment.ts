@@ -21,6 +21,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
+import { enginesDeclaring } from '../engines/discoveries.js'
 import { anthropicBaseUrl, GRID_ROUTER_MODEL, relayBaseUrl } from './gridLaunch.js'
 import { readProcessEnv } from './processEnv.js'
 import type { ProcessIdentity } from './registry.js'
@@ -52,13 +53,14 @@ const MODEL_VAR: Partial<Record<AgentEngine, string>> = {
 }
 
 /**
- * Engines whose model was written into argv as `-m <model>` rather than an environment variable.
+ * Engines whose model was written into argv as `-m <model>` rather than an environment variable: Codex's
+ * discovery contract declares it (`modelInArgv`).
  *
  * Codex omits the flag when no model was picked; grok always carries one, because its grid credential
  * rides on a declared model block and "let the grid route" is therefore spelled `-m Auto` rather than
  * by leaving the flag off. [classifyGridAssignment] maps that id back to null.
  */
-const MODEL_IN_ARGV = new Set<AgentEngine>(['codex', 'grok'])
+const MODEL_IN_ARGV = new Set<AgentEngine>([...enginesDeclaring('modelInArgv'), 'grok'])
 
 /**
  * Pi's endpoint is in neither its environment nor its argv — it is in the `models.json` inside the
