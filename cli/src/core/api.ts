@@ -838,7 +838,7 @@ export type VoiceRouteReply = { t: 'taken' } | { t: 'sent'; agentId: string } | 
 
 /** The Devices tab (services/devices.ts): the devices on this computer, and a device's settings. Only
  *  the owner, on this computer or through the owner's own app, may manage them. */
-export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_settings'] as const
+export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_settings', 'pet_preview', 'pet_apply', 'pet_reset', 'pet_status'] as const
 
 /**
  * The core's calls into the devices: what the windows on this computer said that the dial follows, the

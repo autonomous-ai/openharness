@@ -51,6 +51,8 @@ vi.mock('../cable/cableFleet.js', async (real) => {
     turnDone = recorder('turnDone')
     summary = recorder('summary')
     turnError = recorder('turnError')
+    petsChanged = recorder('petsChanged')
+    petDial = () => ({ supported: false, held: [] as string[], sending: null })
     setSettings = vi.fn(async (id: string, _patch: unknown) => (id === 'usb' ? { ok: true } : { ok: false, error: 'That device is not plugged into this computer.' }))
   }
   return { ...actual, CableFleet: FakeCable }
@@ -132,6 +134,7 @@ function start(over: { core?: CoreApi; faults?: string[]; cableDisabled?: boolea
   const onExit = vi.fn()
   const requests = startDevices(core, ports, {
     logsDir: join(dataDir, 'logs'),
+    petsDir: join(dataDir, 'pets'),
     dialSerials: ['E2E'],
     testDialPort: over.testDialPort,
     cableDisabled: over.cableDisabled,
@@ -153,6 +156,25 @@ describe('the devices, as the core starts them', () => {
     expect(seen.cable.args[4]).toMatchObject({ serials: ['E2E'] })
     onExit.mock.calls[0][0]()
     expect(seen.voice.shutdown).toHaveBeenCalled()
+  })
+
+  it('keep the custom pets where petsDir says, and under HARNESS_DEVICES_DIR/pets by default', () => {
+    const dir = join(dataDir, 'pets')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'pets.json'), JSON.stringify({ all: 'a'.repeat(16), engines: {} }))
+    start()
+    expect(seen.host.pets!()!.mapping()).toEqual({ all: 'a'.repeat(16), engines: {} })
+    // Without the option the store sits under env.HARNESS_DEVICES_DIR (never a path hard-coded in the service).
+    const was = env.HARNESS_DEVICES_DIR
+    ;(env as { HARNESS_DEVICES_DIR: string }).HARNESS_DEVICES_DIR = join(dataDir, 'home-devices')
+    try {
+      mkdirSync(join(dataDir, 'home-devices', 'pets'), { recursive: true })
+      writeFileSync(join(dataDir, 'home-devices', 'pets', 'pets.json'), JSON.stringify({ all: 'b'.repeat(16), engines: {} }))
+      startDevices(fakeCore({ dataDir }), emptyPorts(), { logsDir: join(dataDir, 'logs'), cableDisabled: true, log: () => {}, onExit: vi.fn() })
+      expect(seen.host.pets!()!.mapping().all).toBe('b'.repeat(16))
+    } finally {
+      ;(env as { HARNESS_DEVICES_DIR: string }).HARNESS_DEVICES_DIR = was
+    }
   })
 
   it('leave the serial ports alone when told to, and find the end-to-end suite\'s dial where it says', async () => {
@@ -488,5 +510,21 @@ describe('the Devices tab', () => {
     expect(await requests.harness_devices_list({}, owner)).toMatchObject({ protocol: 1, revision: 1, status: { attached: true } })
     expect(await requests.harness_device_settings({ id: 'usb', patch: { brightness: 35 } }, owner)).toMatchObject({ ok: true, revision: 1 })
     expect(seen.cable.setSettings).toHaveBeenCalledWith('usb', { brightness: 35 })
+  })
+  it('answers the pet requests to the owner on this computer only', async () => {
+    const { requests } = start()
+    for (const type of ['pet_preview', 'pet_apply', 'pet_reset', 'pet_status'] as const) {
+      expect(await requests[type]({}, { local: false, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await requests[type]({}, { local: true, owner: false })).toEqual({ error: 'OWNER_REQUIRED' })
+      expect(await requests[type]({}, { local: false, owner: true })).toEqual({ error: 'LOCAL_ONLY' })
+    }
+    expect(await requests.pet_status({}, { local: true, owner: true })).toEqual({
+      mapping: { all: null, engines: {} }, dial: { supported: false, held: [], sending: null }, pets: {},
+    })
+    expect(await requests.pet_apply({ target: 'all', id: '0123456789abcdef' }, { local: true, owner: true })).toMatchObject({ error: 'UNKNOWN_PET' })
+    expect(calls('petsChanged')).toEqual([])
+    // A changed mapping reaches every live dial.
+    expect(await requests.pet_reset({ target: 'all' }, { local: true, owner: true })).toMatchObject({ ok: true })
+    expect(calls('petsChanged')).toEqual([[]])
   })
 })

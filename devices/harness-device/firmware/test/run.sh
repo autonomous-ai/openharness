@@ -20,14 +20,24 @@ python3 "$here/../scripts/gen_pets.py" --check
 python3 "$here/../scripts/gen_arc_geometry.py" --check
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
-   -o "$out/test_character" "$here/test_character.c" \
+   -I "$here/../main" -o "$out/test_character" "$here/test_character.c" "$here/../main/pet_store.c" \
    "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/illustrated.c" "$here/../main/ui/habitat/character_motion.c" \
    "$here/../main/ui/habitat/character_layout.c" "$here/../main/ui/habitat/tux.c" \
    "$here/../main/ui/habitat/focus.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/lvgl_icons.c" "$here/../main/ui/habitat/focus_marks.c" "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/pets.c" \
    "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/octopus_font.c" \
    "$here/../main/ui/habitat/ascii_clip.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c"
-"$out/test_character"
+"$out/test_character" "$here/vectors/pet_min.hpet"
+# The same source again, only the custom-pet cases, under the address sanitizer: a pack read after it is freed.
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${PET_SANITIZERS:-address,undefined}" \
+   -I "$here/../main" -o "$out/test_character_asan" "$here/test_character.c" "$here/../main/pet_store.c" \
+   "$here/../main/ui/habitat/character.c" "$here/../main/ui/habitat/illustrated.c" "$here/../main/ui/habitat/character_motion.c" \
+   "$here/../main/ui/habitat/character_layout.c" "$here/../main/ui/habitat/tux.c" \
+   "$here/../main/ui/habitat/focus.c" "$here/../main/ui/habitat/lvgl_fonts.c" "$here/../main/ui/habitat/lvgl_icons.c" "$here/../main/ui/habitat/focus_marks.c" "$here/../main/ui/habitat/focus_faces.c" "$here/../main/ui/habitat/pets.c" \
+   "$here/../main/ui/habitat/octopus.c" "$here/../main/ui/habitat/octopus_font.c" \
+   "$here/../main/ui/habitat/ascii_clip.c" \
+   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
+"$out/test_character_asan" "$here/vectors/pet_min.hpet" --custom-only
 python3 "$here/test_character_preferences.py"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 \
@@ -84,6 +94,13 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
    -I "$here/../main/ui/habitat" -o "$out/test_cell_zoom" "$here/test_cell_zoom.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
 "$out/test_cell_zoom"
+
+# Custom pets: the pack parser and store, on the daemon's own vector (cli/src/cable/pets/pack.ts). Address sanitizer
+# where the host has it, so a read past a pack or a use after the dropped pack's frame is an error, not a guess.
+cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${PET_SANITIZERS:-address,undefined}" \
+   -I "$here/../main" -o "$out/test_pet_store" "$here/test_pet_store.c" \
+   "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
+"$out/test_pet_store" "$here/vectors/pet_min.hpet"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_voice_buffer" "$here/test_voice_buffer.c" "$here/../main/voice_buffer.c"

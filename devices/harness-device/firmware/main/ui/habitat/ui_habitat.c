@@ -25,6 +25,7 @@ static ht_gallery_t gallery;
 #include "audio_capture.h"
 #include "config_store.h"
 #include "cable_client.h"
+#include "pet_store.h"
 #include "esp_attr.h"
 #include "esp_timer.h"
 #include "esp_log.h"
@@ -2087,6 +2088,7 @@ bool habitat_scene_take(ht_scene_t *f)
 {
 #ifdef DEVICE_CREATURE_GALLERY
     // App snapshots never choose a scene in this visual-only build.
+    pet_store_release_frame();
     if (!s.ready) return false;
     return ht_gallery_take(&gallery, f, ms());
 #endif
@@ -2095,6 +2097,14 @@ bool habitat_scene_take(ht_scene_t *f)
     s.dirty = false;
     s.notice_frame = 0;
     s.hit_count = 0;
+    // The custom pets' memory (pet_store.c): a pack dropped or replaced since the last scene was built is freed here.
+    // The render task is the only caller, and it paints each scene before it takes the next (display_habitat.c), so
+    // nothing drawn from those packs is still being rasterised. The scene it keeps as `front` (for the next damage
+    // diff, or a forced repaint of a wake) was built before this call, so its sprites may point at packs freed here.
+    // That is safe only because ht_damage compares sprite pointers and bounds and never dereferences them; any change
+    // that reads sprite data of the previous frame must keep that frame's packs alive. This call also applies the
+    // staged pet mapping, so every pet lookup while building this scene sees one snapshot.
+    pet_store_release_frame();
     ht_scene_clear(f, BG);
     switch (s.view) {
     case FORM:
@@ -3557,6 +3567,14 @@ void ui_set_brightness(uint8_t level)
     display_lock();
     s.brightness = (level * 100 + 127) / 255;
     display_set_brightness(level);
+    change();
+    display_unlock();
+}
+
+// The cable task staged a pet change (pet_store.c); mark the scene dirty so the next take applies it.
+void ui_pets_changed(void)
+{
+    display_lock();
     change();
     display_unlock();
 }

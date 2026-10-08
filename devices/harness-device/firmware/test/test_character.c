@@ -4,6 +4,7 @@
 #include "../main/ui/habitat/pets.h"
 #include "../main/ui/habitat/focus.h"
 #include "../main/ui/habitat/focus_faces.h"
+#include "../main/pet_store.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -1670,11 +1671,230 @@ static void inbox_layout(void)
     puts("Inbox layout: desktop status colors, neutral prose, balanced short/long blocks, fixed gap, circle bounds and exact incremental redraws PASS");
 }
 
-int main(void)
+/*
+ * THE CUSTOM PET (docs/superpowers/plans/2026-10-08-custom-pet.md, Task 7): a pack the daemon sent, mapped as "all",
+ * draws on the Focus face in place of the built-in pet — the same run count and order, the working alert drawn in
+ * code, the ink inside r 230, and a pack dropped mid-frame still readable until the frame is released. The vector is
+ * the daemon's own encoder output (test/vectors/pet_min.hpet): two 8 x 8 frames, a working scene of the second.
+ */
+static uint8_t vec_buf[4096];
+static size_t vec_len;
+static const char *VEC_ID = "0102030405060708";
+static uint32_t crc32_of(const uint8_t *p, size_t n)
 {
+    uint32_t c = 0xffffffffu;
+    for (size_t i = 0; i < n; i++) {
+        c ^= p[i];
+        for (int k = 0; k < 8; k++) c = (c >> 1) ^ (0xedb88320u & (0u - (c & 1u)));
+    }
+    return ~c;
+}
+static void put32le(uint8_t *p, uint32_t v) { for (int i = 0; i < 4; i++) p[i] = (uint8_t)(v >> (8 * i)); }
+// Offer + slice + finish + map as "all", the way the cable does; the bytes as given (a patched copy is resealed here).
+static void pack_load(const uint8_t *b, size_t n)
+{
+    put32le((uint8_t *)b + 14, (uint32_t)n);
+    put32le((uint8_t *)b + 18, crc32_of(b + 22, n - 22));
+    uint32_t crc = (uint32_t)(b[18] | b[19] << 8 | b[20] << 16 | (uint32_t)b[21] << 24);
+    assert(pet_store_offer(VEC_ID, (uint32_t)n, crc));
+    for (size_t at = 0; at < n; at += 50) assert(pet_store_slice(b + at, n - at < 50 ? n - at : 50));
+    assert(pet_store_finish() == 0);
+    pet_store_map(VEC_ID, NULL, NULL, 0);
+    pet_store_release_frame();                                // the next take: the staged pack and mapping go live
+}
+static void pack_unload(void)
+{
+    pet_store_drop(VEC_ID);
+    pet_store_map(NULL, NULL, NULL, 0);
+    pet_store_release_frame();
+}
+// The offset of the working scene's dx in the vector (the walk test_pet_store.c does): palette, size, three loops.
+static size_t working_dx_at(void)
+{
+    size_t pos = 22;
+    pos += 1 + 2u * vec_buf[pos];
+    pos += 4;
+    for (int l = 0; l < 3; l++) pos += 1 + 2u * vec_buf[pos];
+    return pos + 3;
+}
+static ht_character_face_t custom_face(bool working, unsigned notices)
+{
+    ht_character_face_t f = {.recipient = "Payments refactor", .tab = "", .engine = "claude",
+        .activity = working ? "Coalescing" : "", .status = "", .hint = "", .detail = "",
+        .mood = working ? HT_CHARACTER_WORKING : HT_CHARACTER_IDLE, .clock_ms = 1000,
+        .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff};
+    if (notices) { f.notice_ms = 500; f.notices = (uint16_t)notices; }
+    return f;
+}
+static void ink_inside_r230(const ht_scene_t *scene)
+{
+    ht_raster(scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+    for (int y = 0; y < HT_HEIGHT; y++) for (int x = 0; x < HT_WIDTH; x++)
+        if (full[y * HT_WIDTH + x]) assert((x - 233) * (x - 233) + (y - 233) * (y - 233) < 230 * 230);
+}
+// The code-drawn bubble of a scene: the 68 x 44 box filled 0x006fff; NULL when there is none.
+static const ht_run_t *alert_box(const ht_scene_t *scene)
+{
+    for (int i = 0; i < scene->count; i++)
+        if (scene->runs[i].box.h == 44 && scene->runs[i].w == 68 && scene->runs[i].box.fill == ht_rgb(0x006fff))
+            return &scene->runs[i];
+    return NULL;
+}
+static void focus_custom_pet_resting(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    ht_character_face_t f = custom_face(false, 0);
+    ht_scene_t builtin; ht_scene_clear(&builtin, 0);
+    ht_character_face(&builtin, &c, &f, 0xffff, "");
+    pack_load(vec_buf, vec_len);
+    ht_scene_t scene; ht_scene_clear(&scene, 0);
+    ht_character_face(&scene, &c, &f, 0xffff, "");
+    assert(scene.count == builtin.count);   // THE RULE: same runs, same order
+    const ht_pet_t *pet = pet_store_lookup("claude");
+    assert(pet && pet->cells && !pet->alert_scene);
+    bool drawn = false;
+    for (int i = 0; i < scene.count; i++)
+        for (unsigned k = 0; k < 2; k++)
+            if (scene.runs[i].sprite.cells && scene.runs[i].sprite.cells == pet->cells[k].cells) drawn = true;
+    assert(drawn);
+    ink_inside_r230(&scene);
+    pet_store_release_frame();
+    pack_unload();
+}
+static void focus_custom_pet_working_alert(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    pack_load(vec_buf, vec_len);
+    const ht_pet_t *pet = pet_store_lookup("claude");
+    assert(pet && pet->working_scene && !pet->alert_scene);
+    int sw = pet->working_scene->w, sh = pet->working_scene->h;
+    int sx = (HT_WIDTH - sw) / 2 + pet->working_scene->dx, sy = HT_HEIGHT / 2 - sh / 2 + 4 + pet->working_scene->dy;
+    ht_character_face_t quiet = custom_face(true, 0), told = custom_face(true, 3), many = custom_face(true, 12);
+    ht_scene_t a, b, m;
+    ht_scene_clear(&a, 0); ht_character_face(&a, &c, &quiet, 0xffff, "");
+    ht_scene_clear(&b, 0); ht_character_face(&b, &c, &told, 0xffff, "");
+    ht_scene_clear(&m, 0); ht_character_face(&m, &c, &many, 0xffff, "");
+    assert(a.count == b.count && b.count == m.count);   // the alert takes the slots the built-in one does
+    assert(!alert_box(&a));
+    const ht_run_t *box = alert_box(&b);
+    assert(box);
+    // Centred on the scene's top-right corner, inset 8 px: the scene's corner is at (sx + sw, sy).
+    assert(box->x + 34 == sx + sw - 8 && box->y + 22 == sy + 8);
+    ht_rect_t at = {0};
+    assert(ht_focus_alert_shown(&told, "", &at));
+    assert(at.x == box->x && at.y == box->y && at.w == 68 && at.h == 44);   // the tap target covers it
+    assert(!ht_focus_alert_shown(&quiet, "", &at));
+    assert(ht_focus_alert_pop_ms(&told) == 0);
+    // The count: Inter Medium 26 for one digit, Inter 20 for "9+", on the bubble's fill, inside the box.
+    bool one = false, nine = false;
+    for (int i = 0; i < b.count; i++) if (b.runs[i].font == &ht_lv_inter_med_26.base && !strcmp(b.runs[i].text, "3")) one = true;
+    for (int i = 0; i < m.count; i++) if (m.runs[i].font == &ht_lv_inter_20.base && !strcmp(m.runs[i].text, "9+")) nine = true;
+    assert(one && nine);
+    ht_raster(&b, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+    const uint16_t blue = (uint16_t)((ht_rgb(0x006fff) >> 8) | (ht_rgb(0x006fff) << 8));   // the raster is in panel order
+    assert(full[(box->y + 22) * HT_WIDTH + box->x + 8] == blue);   // the fill reaches the glass
+    int lit = 0;   // ... and the digit is drawn in it
+    for (int y = box->y + 4; y < box->y + 40; y++) for (int x = box->x + 20; x < box->x + 48; x++)
+        lit += full[y * HT_WIDTH + x] != blue && full[y * HT_WIDTH + x] != 0;
+    assert(lit > 10);
+    ink_inside_r230(&b);
+    ink_inside_r230(&m);
+    // The alert is a notice's, not the pet's: a pack without a working scene leaves the pill to ui_habitat.c.
+    ht_character_face_t idle = custom_face(false, 3);
+    assert(!ht_focus_alert_shown(&idle, "", &at));
+    pet_store_release_frame();
+    pack_unload();
+}
+static void focus_custom_ink_inside_r230(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    // Moves the working scene to the glass's upper right so the bubble at its corner would leave r 230 unclamped.
+    uint8_t b[4096];
+    memcpy(b, vec_buf, vec_len);
+    size_t dx = working_dx_at();
+    b[dx] = 165; b[dx + 1] = 0;
+    b[dx + 2] = (uint8_t)(-135 & 0xff); b[dx + 3] = (uint8_t)((-135 >> 8) & 0xff);
+    pack_load(b, vec_len);
+    const ht_pet_t *pet = pet_store_lookup("claude");
+    assert(pet && pet->working_scene->dx == 165 && pet->working_scene->dy == -135);
+    ht_character_face_t f = custom_face(true, 12);
+    ht_scene_t scene; ht_scene_clear(&scene, 0);
+    ht_character_face(&scene, &c, &f, 0xffff, "");
+    const ht_run_t *box = alert_box(&scene);
+    assert(box);
+    int sx = (HT_WIDTH - 8) / 2 + 165, sy = HT_HEIGHT / 2 - 4 + 4 - 135;
+    assert(box->x + 34 < sx + 8 - 8 || box->y + 22 > sy + 8);   // pulled inward
+    ink_inside_r230(&scene);
+    ht_rect_t at;
+    assert(ht_focus_alert_shown(&f, "", &at) && at.x == box->x && at.y == box->y);
+    // ... and the same for the other three quarters of the glass.
+    for (int q = 0; q < 4; q++) {
+        int sdx = (q & 1) ? -165 : 165, sdy = (q & 2) ? 135 : -135;
+        pet_store_release_frame();
+        pack_unload();
+        memcpy(b, vec_buf, vec_len);
+        b[dx] = (uint8_t)(sdx & 0xff); b[dx + 1] = (uint8_t)((sdx >> 8) & 0xff);
+        b[dx + 2] = (uint8_t)(sdy & 0xff); b[dx + 3] = (uint8_t)((sdy >> 8) & 0xff);
+        pack_load(b, vec_len);
+        ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, "");
+        assert(alert_box(&scene));
+        ink_inside_r230(&scene);
+    }
+    pet_store_release_frame();
+    pack_unload();
+}
+// Draw, drop the pack under the drawn scene, draw again, release: under the address sanitizer (the --custom-only
+// build) a pointer used after the free is an error.
+static void focus_swap_mid_scene(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    pack_load(vec_buf, vec_len);
+    ht_character_face_t f = custom_face(true, 2);
+    ht_scene_t first; ht_scene_clear(&first, 0);
+    ht_character_face(&first, &c, &f, 0xffff, "");
+    assert(alert_box(&first));
+    ht_raster(&first, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+    pet_store_drop(VEC_ID);                                  // the cable task: the pack is replaced under the frame
+    pet_store_map(NULL, NULL, NULL, 0);
+    assert(pet_store_lookup("claude"));                      // staged only: this frame's snapshot is unchanged
+    ht_raster(&first, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, scratch);   // the scene still reads the pack
+    assert(!memcmp(full, scratch, sizeof full));
+    pet_store_release_frame();                               // the next take: the pack is freed, the mapping is gone
+    ht_scene_t second; ht_scene_clear(&second, 0);
+    ht_character_face(&second, &c, &f, 0xffff, "");          // now the built-in claude
+    assert(!pet_store_lookup("claude"));
+    assert(first.count == second.count);                      // the same runs either way
+    ht_damage_t d; ht_damage(&first, &second, &d);           // compares the frames by pointer, never reads them
+    ht_raster(&second, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);
+    pet_store_release_frame();
+    ht_raster(&second, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, full);   // the built-in scene needs no pack
+}
+static void custom_pet(void)
+{
+    focus_custom_pet_resting();
+    focus_custom_pet_working_alert();
+    focus_custom_ink_inside_r230();
+    focus_swap_mid_scene();
+    puts("Custom pet: resting, code-drawn working alert, r 230 clamp and a swap mid-scene PASS");
+}
+
+int main(int argc, char **argv)
+{
+    if (argc < 2) { fprintf(stderr, "usage: test_character <pet_min.hpet> [--custom-only]\n"); return 2; }
+    FILE *fp = fopen(argv[1], "rb");
+    assert(fp);
+    vec_len = fread(vec_buf, 1, sizeof vec_buf, fp);
+    fclose(fp);
+    assert(vec_len > 22 && vec_len < sizeof vec_buf);
+    if (argc > 2 && !strcmp(argv[2], "--custom-only")) { custom_pet(); return 0; }
     assert(!strcmp(ht_character_name(HT_CHARACTER_TIM), "Tim"));
     assert(!strcmp(ht_character_name(HT_CHARACTER_TUX), "Tux"));
     clocks(); portraits(); delivery_and_caption(); recap_budget(); focus_face();
-    footer_layout(); inbox_layout();
+    footer_layout(); inbox_layout(); custom_pet();
     printf("Characters: both adapters, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }
