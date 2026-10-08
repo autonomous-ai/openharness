@@ -18,8 +18,9 @@ that stream.
 launch contracts, history/last-turn readers and hook behavior behind `Engine` (`engine.ts`). `registry.ts`
 selects those engines; `launches.ts` and `hooks.ts` expose their respective facets without loading history
 readers. Hook transport, process binding and event delivery stay with core. Claude Code and Codex history/last-turn reads,
-live transcript parsing, runtime profiles/catalogs, screen interpretation and model-control drivers run on demand in supervised workers;
+live transcript parsing, runtime profiles/catalogs, screen interpretation, model-control drivers and question navigation run on demand in supervised workers;
 the other facets still run in core. Explicit inline mode and older masters retain inline implementations. See
+[question control](../../../docs/design/2026-10-08-engine-question-control.md),
 [model control](../../../docs/design/2026-10-08-engine-model-control.md),
 [screen interpretation](../../../docs/design/2026-10-08-engine-screen.md),
 [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md) and the
