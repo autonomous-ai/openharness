@@ -1411,13 +1411,16 @@ pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, p
     let local = crate::local::is_local(&machine);
     if local { app.keep_local_shell_session() }
     let context = command.is_none().then(|| crate::shell_context::prepare(app, focused.as_ref(), !matches!(placement, Placement::Fill(_))));
+    let cwd = shell_cwd(app, focused.as_ref(), &machine, cwd);
     let init = context.as_ref().map(|token| {
-        let cli = if local || app.fleet.machine(&machine).is_some_and(|m| m.local) { std::env::var("HARNESS_SHELL_CLI").ok() } else { None };
-        let mut init = crate::shell_context::bootstrap(token, cli.as_deref(), local || app.fleet.machine(&machine).is_some_and(|m| m.local));
+        let here = local || app.fleet.machine(&machine).is_some_and(|m| m.local);
+        let cli = if here { std::env::var("HARNESS_SHELL_CLI").ok() } else { None };
+        let mut init = crate::shell_context::bootstrap(token, cli.as_deref(), here);
+        crate::shell_context::start_in(&mut init, cwd.as_deref(), here);
+        // (Last: the helper reads it as its last argument.)
         if choose_agent && app.capture.is_none() && !app.headless { init.push("--pick-agent".into()); }
         init
     });
-    let cwd = shell_cwd(app, focused.as_ref(), &machine, cwd);
     let Some(link) = app.link(&machine) else { app.print_new = None; return app.error("That machine is not connected") };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }

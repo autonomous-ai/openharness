@@ -148,9 +148,28 @@ fn look_value_with(fzf_opts: &[String]) -> serde_json::Value {
 fn look_arg() -> String { format!("--look={}", look_value()) }
 
 /// Separate the `--look=` argument from the others.
-fn split_look(args: &[String]) -> (Vec<String>, Option<String>) {
-    let look = args.iter().find_map(|a| a.strip_prefix("--look=")).map(String::from);
-    (args.iter().filter(|a| !a.starts_with("--look=")).cloned().collect(), look)
+fn split_look(args: &[String]) -> (Vec<String>, Option<String>) { split_option(args, "--look=") }
+fn split_option(args: &[String], prefix: &str) -> (Vec<String>, Option<String>) {
+    let value = args.iter().find_map(|a| a.strip_prefix(prefix)).map(String::from);
+    (args.iter().filter(|a| !a.starts_with(prefix)).cloned().collect(), value)
+}
+
+/// The folder a new shell asked for, in its start arguments: on this computer only, where this
+/// build's own binary starts it (a remote's older hn would refuse the argument).
+pub fn start_in(init: &mut Vec<String>, cwd: Option<&str>, local: bool) {
+    if let Some(cwd) = cwd.filter(|c| local && !c.is_empty()) { init.push(format!("--cwd={cwd}")); }
+}
+
+/// Where the shell starts: the folder it asked for; else where it was started, if that is still
+/// a folder; else home. tmux (3.7c) starts a pane in its server's own folder, not the one asked for
+/// (-c), when the server's folder was deleted: its getcwd fails and it skips the chdir. A shell
+/// there is in a folder that is gone, and zsh-syntax-highlighting spins at its first redraw.
+fn start_folder(asked: Option<&str>) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    asked.map(PathBuf::from).filter(|p| p.is_dir())
+        .or_else(|| std::env::current_dir().ok().filter(|d| d.is_dir()))
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_dir()))
+        .unwrap_or_else(|| PathBuf::from("/"))
 }
 
 pub fn bootstrap(token: &str, cli: Option<&str>, local: bool) -> Vec<String> {
@@ -213,11 +232,13 @@ pub fn initialize(args: &[String]) -> std::io::Result<()> {
     let pick_agent = args.last().is_some_and(|arg| arg == "--pick-agent");
     let args = if pick_agent { &args[..args.len()-1] } else { args };
     let (args, look) = split_look(args);
+    let (args, cwd) = split_option(&args, "--cwd=");
     if args.len()>2 { return Err(std::io::Error::other("Invalid shell initialization arguments.")) }
     let picker = std::env::current_exe()?;
     let script = init_script(token, &picker.to_string_lossy(), args.get(1).map(String::as_str).unwrap_or("harness"), look.as_deref());
+    let folder = start_folder(cwd.as_deref());
     let mut command = std::process::Command::new("/bin/sh");
-    command.args(["-c", &script]);
+    command.args(["-c", &script]).current_dir(&folder).env("PWD", &folder);
     if pick_agent { command.env("_HN_START_PICKER", "1"); }
     Err(command.exec())
 }
@@ -812,7 +833,8 @@ fn switch_host(app: &mut App, machine: &str) {
     let machine = machine.to_string();
     let local = app.fleet.machine(&machine).is_some_and(|m| m.local);
     let cli = if local { std::env::var("HARNESS_SHELL_CLI").ok() } else { None };
-    let init = bootstrap(&request.token, cli.as_deref(), local);
+    let mut init = bootstrap(&request.token, cli.as_deref(), local);
+    start_in(&mut init, app.homes.get(&machine).map(String::as_str), local);
     let mut payload = json!({"engine":"terminal", "creationId":uuid::Uuid::new_v4().to_string(), "bypassPermission":false, "argv":init});
     if let Some(home) = app.homes.get(&machine) { payload["cwd"] = json!(home); }
     crate::input::configure_local_shell(app, &machine, &mut payload);
@@ -1358,6 +1380,30 @@ mod tests {
         assert!(script.starts_with("export _HN_CONTEXT='tok'\n"));
         assert!(script.contains(r##"export HN_LOOK='{"background":"#101010","accent":"it'\''s"}'"##),"{script}");
         assert!(!init_script("tok","/bin/hn","harness",None).contains("HN_LOOK"));
+    }
+    #[test]
+    fn a_new_shell_starts_in_the_folder_it_asked_for_whatever_tmux_left_it_in() {
+        let mut local = bootstrap("tok", Some("cli"), true);
+        start_in(&mut local, Some("/work/project"), true);
+        let mut remote = bootstrap("tok", Some("cli"), false);
+        start_in(&mut remote, Some("/work/project"), false);
+        assert!(!remote.iter().any(|a| a.starts_with("--cwd=")), "a remote's older hn would refuse it");
+        let (args, look) = split_look(&local[2..]);
+        let (args, cwd) = split_option(&args, "--cwd=");
+        assert_eq!((args, cwd.as_deref()), (vec!["tok".to_string(), "cli".to_string()], Some("/work/project")));
+        assert!(look.is_some());
+        // The asked folder when it is one; else where the helper was started, while that is a folder.
+        let there = tempfile_dir();
+        assert_eq!(start_folder(Some(there.to_str().unwrap())), there);
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(start_folder(Some("/no/such/folder/for/hn")), here);
+        assert_eq!(start_folder(None), here);
+        let _ = std::fs::remove_dir(&there);
+    }
+    fn tempfile_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("hn-start-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        dir
     }
     #[test]
     fn the_look_travels_in_the_shell_start_arguments() {
