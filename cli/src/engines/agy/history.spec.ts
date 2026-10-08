@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { agyHistoryPage } from '../../core/transcripts/history.js'
+import { wholeHistoryPage } from '../../core/transcripts/history.js'
+import { agyMessagesToEvents } from './normalizer.js'
+
+const agyHistoryPage = (lines: string[], paginated: boolean) => wholeHistoryPage(agyMessagesToEvents(lines), paginated)
 
 const LINES = readFileSync(fileURLToPath(new URL('../../lib/__fixtures__/agy-session.jsonl', import.meta.url)), 'utf8')
   .split('\n').filter(Boolean)

@@ -29,7 +29,22 @@ const MODULES = {
   screens: () => import('../lib/legacyScreen.js'),
   /** Their hook installers, eleven in one file (lib/hooks.ts): run once, as the core starts. */
   hooks: () => import('../lib/hooks.js'),
-}
+  /** The database engines' conversations read whole (lib/databaseHistory.ts), for what the core hands on. */
+  databaseHistory: () => import('../lib/databaseHistory.js'),
+  // Each engine's own: its transcript readers, history and last turn, loaded as one of its sessions enters.
+  opencode: () => import('./opencode/inProcess.js'),
+  cursor: () => import('./cursor/inProcess.js'),
+  kilo: () => import('./kilo/inProcess.js'),
+  devin: () => import('./devin/inProcess.js'),
+  hermes: () => import('./hermes/inProcess.js'),
+  amp: () => import('./amp/inProcess.js'),
+  agy: () => import('./agy/inProcess.js'),
+  grok: () => import('./grok/inProcess.js'),
+  copilot: () => import('./copilot/inProcess.js'),
+  commandcode: () => import('./commandcode/inProcess.js'),
+  muse: () => import('./muse/inProcess.js'),
+  pi: () => import('./pi/inProcess.js'),
+} satisfies Record<OtherEngine | 'screens' | 'hooks' | 'databaseHistory', () => Promise<unknown>>
 export type InProcessModules = { [Name in keyof typeof MODULES]: Awaited<ReturnType<(typeof MODULES)[Name]>> }
 
 export interface InProcessLoader<Modules> {
@@ -73,11 +88,30 @@ export const engineLoaded = loader.loaded
 
 /**
  * Starts loading what a session of `engine` reads, as the session enters the registry (lib/registry.ts
- * `onEnter`): so that nothing it does later, a close's or a message's look at its pane among them, waits for an
- * import. Claude Code, Codex and the terminal load nothing.
+ * `onEnter`): its pane readers and its own code. Nothing the session does later waits for an import then, a
+ * close's or a message's look at its pane among them, and its transcript's attach, which awaits the engine's
+ * code before it starts the tail, finds it loaded. Claude Code, Codex and the terminal load nothing.
  */
 export function preloadEngine(engine: AgentEngine): void {
-  if (isOtherEngine(engine)) void loadEngine('screens')
+  if (!isOtherEngine(engine)) return
+  void loadEngine('screens')
+  void loadEngine(engine)
+}
+
+/**
+ * The engine's code for a line, a Task hook or a pane check that cannot wait: loaded before any of them can come
+ * (the session's attach awaited it), or `null` when it could not be. Not loaded yet is never expected, so it is
+ * said, once per engine, and answered like code that could not load.
+ */
+const unexpected = new Set<string>()
+export function engineNow<Name extends OtherEngine>(name: Name, why: string): InProcessModules[Name] | null {
+  const module = engineLoaded(name)
+  if (module !== undefined) return module
+  if (!unexpected.has(name)) {
+    unexpected.add(name)
+    console.error(`[engine ${name}] ${why} before its code was loaded · skipped`)
+  }
+  return null
 }
 
 /**

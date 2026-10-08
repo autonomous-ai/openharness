@@ -3,6 +3,13 @@ import { engineTranscriptFor } from '../../engines/transcripts.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLastTurnReader } from './lastTurn.js'
+import { loadEngine } from '../../engines/inProcess.js'
+
+// Each engine's readers are its own code, loaded in this process; a test may say one could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 
 // Every engine's own reader is tested with that engine; this file checks that each engine is read its own way.
 const text = (from: string) => ({ text: from })
@@ -59,6 +66,15 @@ describe('the last turn of each engine', () => {
     expect(await read('kilo-s')).toEqual(text('kilo /db/kilo.db kilo-s'))
     expect(await read('hermes-s')).toEqual(text('hermes /db/hermes-hermes-agent.db hermes-s'))
     expect(await read('devin-s')).toEqual(text('devin /db/devin.db devin-s'))
+  })
+
+  it('is nothing for an engine whose code could not be loaded', async () => {
+    const engines = ['opencode', 'kilo', 'hermes', 'devin', 'cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'commandcode']
+    const read = await reader(engines.map((engine) => session(engine, `/t/${engine}.jsonl`)))
+    vi.mocked(loadEngine).mockResolvedValue(null as never)
+    try {
+      for (const engine of engines) expect(await read(`${engine}-s`), engine).toBeNull()
+    } finally { vi.mocked(loadEngine).mockReset() }
   })
 
   it('is read backward for Claude Code, from the rollout for Codex, and from the whole transcript for the rest', async () => {

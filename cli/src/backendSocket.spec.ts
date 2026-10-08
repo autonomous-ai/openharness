@@ -9,7 +9,8 @@ import { BackendSocket } from './backendSocket.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from './testing/relaySocket.js'
 import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
 import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
-import { grokHistoryPage } from './core/transcripts/history.js'
+import { wholeHistoryPage } from './core/transcripts/history.js'
+import { grokMessagesToEvents } from './engines/grok/normalizer.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
 import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
@@ -3020,8 +3021,8 @@ describe('Grok session_get history', () => {
   ).split('\n').filter(Boolean)
 
   it('replays the real transcript for both legacy and web-paginated requests', () => {
-    const full = grokHistoryPage(fixture, false)
-    const paginated = grokHistoryPage(fixture, true)
+    const full = wholeHistoryPage(grokMessagesToEvents(fixture), false)
+    const paginated = wholeHistoryPage(grokMessagesToEvents(fixture), true)
 
     expect(full.events).toEqual(paginated.events)
     expect(full.events[0]).toMatchObject({ type: 'user_message' })
