@@ -33,11 +33,9 @@ SCOPES["full"] = CLI_JOBS | TUI_JOBS | SCOPES["backend"] | DESKTOP_JOBS | {"comp
 SOURCE_INPUTS = {
     "process": (".github/", "scripts/", "desktop/scripts/", ".gitattributes", ".gitignore", ".gitmodules", "Makefile"),
     # VM tests also read CLI protocol definitions, shared layout fixtures,
-    # daemon metadata and store catalog/artwork, including docs/images posters,
-    # and the Hub's publication rules that desktop/lib/community/hub_contract.dart mirrors.
+    # daemon metadata and store catalog/artwork, including docs/images posters.
     "desktop": (".github/", "scripts/", "desktop/", "cli/", "tests/", "daemons/", "store/", "docs/images/",
-                "mobile/pubspec.lock", "backend/src/lib/communityContract.ts",
-                ".gitattributes", ".gitignore", ".gitmodules", "Makefile"),
+                "mobile/pubspec.lock", ".gitattributes", ".gitignore", ".gitmodules", "Makefile"),
 }
 CHECKOUT_STEP = "Verify declared source checkout"
 
