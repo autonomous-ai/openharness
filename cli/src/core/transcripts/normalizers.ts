@@ -11,7 +11,7 @@
  */
 import type { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import type { AmpNormalizer } from '../../engines/amp/normalizer.js'
-import type { LiveParser } from '../../engines/facets/live.js'
+import type { LiveState } from '../../engines/facets/live.js'
 import type { CommandCodeNormalizer } from '../../engines/commandcode/normalizer.js'
 import type { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
@@ -25,7 +25,7 @@ import type { PiNormalizer } from '../../engines/pi/normalizer.js'
 
 export function createSessionNormalizers() {
   // Per-session web turn-lifecycle state; the device mirror keeps its own state + recap.
-  const liveParsers = new Map<string, LiveParser>()
+  const liveParsers = new Map<string, LiveState>()
   const cursorNormalizers = new Map<string, CursorNormalizer>()
   const opencodeReaders = new Map<string, OpencodeReader>()
   const kiloReaders = new Map<string, KiloReader>()

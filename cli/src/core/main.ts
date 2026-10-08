@@ -1,3 +1,7 @@
+import { createScreens } from './engines/screens.js'
+import { createScreenTransport } from './engines/screenTransport.js'
+import { legacyScreen } from '../lib/legacyScreen.js'
+import { masterRunsEngineScreen } from '../harnessd/services.js'
 /**
  * The core's entry: `harness __run`. `runForeground` is the composition root, which builds the core's
  * modules, starts the services through `serviceHost` and wires them to the socket
@@ -20,12 +24,11 @@ import { sqlitePreflightMessage } from '../lib/sqliteAvailability.js'
 import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import { terminalActivity } from '../lib/terminalActivity.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHooks as engineHookFacets } from '../engines/hooks.js'
-import { liveFor } from '../engines/live.js'
+import type { LiveFor } from '../engines/facets/live.js'
 import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
@@ -89,7 +92,9 @@ import { createQuestions } from './questions.js'
 import { createTurnActivity } from './turns/activity.js'
 import { createLastTurnReader } from './transcripts/lastTurn.js'
 import { createEngineReaders } from './engines/readers.js'
-import { READER_SERVICES } from '../engines/worker/protocol.js'
+import { createLiveTransport } from './engines/liveTransport.js'
+import { createLiveWatcher } from './engines/liveWatcher.js'
+import { readerEngine, READER_SERVICES } from '../engines/worker/protocol.js'
 import { createRecaps } from './turns/recaps.js'
 import { createUpdateHandoff, handOverOnceReleased, probeStagedMaster, type TeardownStep } from './updateHandoff.js'
 import { needsUpdaterBeside, startUpdaterBeside } from './updaterBeside.js'
@@ -142,7 +147,7 @@ import { createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
+import { KNOWN_SERVICES, masterRunsEngineRuntime, masterRunsLiveEngines, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink, teamsOutOfProcess } from './teamsLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -175,8 +180,10 @@ import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
 import { agentTokenUsage } from '../lib/agentTokenUsage.js'
-import { RuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfile.js'
-import { RuntimeProfileController } from '../lib/runtimeProfileController.js'
+import { LegacyRuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfileManager.js'
+import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
+import { createRuntimeTransport } from './engines/runtimeTransport.js'
+import { RuntimeProfileController } from '../lib/runtimeControl.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
 import { backendHttpBase } from '../lib/controlPlane.js'
 
@@ -532,7 +539,30 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const syncRecapPool = (): void => {
     ports.devices?.engines(registry.active().map((session) => session.engine))
   }
-  const runtimeProfiles = new RuntimeProfileManager()
+  const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
+  const liveHosted = masterRunsLiveEngines(process.env, process.ppid)
+  const runtimeHosted = liveHosted && masterRunsEngineRuntime(process.env, process.ppid)
+  // An older master's explicit capability report selects compatibility. A failed worker never does.
+  const isolatedLive = (engine: string): boolean => liveHosted
+    && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
+  const screenHosted = masterRunsEngineScreen(process.env, process.ppid)
+  const isolatedScreen = (engine: string): boolean => screenHosted && isolatedLive(engine)
+  const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted
+    ? await import('../services/inline.js') : null
+  let serviceLinksRef: ServiceLinks | null = null
+  const runtimeTransport = createRuntimeTransport({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
+  const screenTransport = createScreenTransport({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
+  const screens = createScreens({ handles: isolatedScreen, transport: screenTransport, resolve: id => registry.resolve(id),
+    inline: (engine, capture) => readerEngine(engine) ? capture === null ? undefined : inline?.screenFor(engine).inspect(capture) : legacyScreen(engine, capture) })
+  const runtimeProfiles = createRuntimeProfiles({
+    legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
+    handles: isolatedRuntime,
+    resolve: id => registry.resolve(id), transport: runtimeTransport })
   // An agent's Model/Effort choices, or every live agent's: what `models_list` answers (services/models.ts)
   // and the dial's picker reads, so neither can show a catalog the machine would not honour.
   const runtimeModels = (agentId?: string): Promise<RuntimeModelOption[]> => {
@@ -656,7 +686,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
       const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
-      return terminalActivity(session.engine, screen.state === 'succeeded' ? screen.value : null)
+      return (await screens.read(session, screen.state === 'succeeded' ? screen.value : null))?.activity?.label ?? null
     },
     // The devices' frames for the windows on this computer, never the cloud (createCoreApi checks their types).
     sendLocal: (frame) => {
@@ -776,18 +806,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // only under a master, which is what gives this core the token they connect with. Their requests are
   // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
   const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
-  const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
-  // The services' own code, for those that run in this process (services/inline.ts): loaded only then, so
-  // one in its own process, as each is by default, is never loaded here.
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) ? await import('../services/inline.js') : null
+  const liveFor: LiveFor = (engine) => isolatedLive(engine) ? undefined : inline?.liveFor(engine)
   // The relay and its E2EE (gateway/): the backend link, the sessions and the keys, which every remote
   // client's frames go through, held at the same gate. In its own process by default (core/gatewayLink.ts),
   // or here (gateway/start.ts); the socket hears it through `fromGateway` and speaks to it in the clear.
   Object.assign(coreApi.terminals, createTerminalSessions({ agents: coreApi.agents, paneState: tmuxPaneState, processState: checkPidRuntime }))
   const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct), autonomousEnv: s?.autonomousEnv ?? env.AUTONOMOUS_ENV })
-  let serviceLinksRef: ServiceLinks | null = null
   const engineReaders = createEngineReaders({ isolated: outOfProcess, inline: inline?.engineTranscriptFor,
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) })
+  const liveTransport = createLiveTransport({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
   const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({
     events: backend.fromGateway,
     notify: (frame) => serviceLinksRef?.notify('gateway', frame) ?? false,
@@ -900,9 +929,17 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const commandcodeNormalizers = normalizers.commandcodeNormalizers
   const sessionTurnState = normalizers.sessionTurnState
   const sessionTurnOpen = normalizers.sessionTurnOpen
-  const watcher = new Watcher()
+  const { watcher, live: engineLive } = createLiveWatcher(new Watcher(), {
+    handles: isolatedLive,
+    transport: liveTransport,
+    bySession: (id) => registry.bySession(id),
+    prepareFrames: (session, frames) => runtimeProfiles.prepareFrames(session, frames),
+    frame: (session, frame) => ingest.acceptFrame(session.sessionId, session.engine, frame, runtimeProfiles.handles(session.engine)),
+    reattach: (session) => attachSession(session, true),
+  })
   // Whether a turn is really working, beyond its transcript (core/turns/activity.ts).
   const activity = createTurnActivity({
+    readScreen: screens.read,
     terminals,
     bySession: (sessionId) => registry.bySession(sessionId),
     sessionTurnOpen,
@@ -957,6 +994,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/transcripts/attach.ts).
   const attach = createAttach({
     liveFor,
+    remoteLive: engineLive,
     terminalGone: terminalControl.terminalGone,
     normalizers,
     watcher,
@@ -989,6 +1027,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.sessionsProvider = history.sessionsList
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
+    readScreen: screens.read,
     resolve: (id) => registry.resolve(id),
     byAgent: (agentId) => registry.byAgent(agentId),
     terminal: terminalControl,
@@ -1007,7 +1046,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.
-    promptTyped: (session, capture) => { if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture) },
+    promptTyped: (session, capture, screen) => { if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question) },
   })
   const input = inputs.input
   const deviceInput = inputs.deviceInput
@@ -1027,6 +1066,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Questions an agent asks the person: shown on the dial and the window, answered from anywhere
   // (core/questions.ts).
   const asking = createQuestions({
+    readQuestion: screens.question,
     resolve: (id) => registry.resolve(id),
     terminal: terminalControl,
     acquireTerminalControl,
@@ -1170,6 +1210,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
     connected: (service) => {
       engineReaders.connected(service)
+      liveTransport.connected(service)
+      runtimeTransport.connected(service)
+      screenTransport.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
@@ -1178,6 +1221,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     },
     disconnected: (service) => {
       engineReaders.disconnected(service)
+      liveTransport.disconnected(service)
+      runtimeTransport.disconnected(service)
+      screenTransport.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()
@@ -1254,6 +1300,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.models = () => ports.models ?? MODELS_OFF
 
   const runtimeController = new RuntimeProfileController({
+    readScreen: screens.read,
     manager: runtimeProfiles,
     getSession: (id) => registry.resolve(id),
     validateRuntime: validateTerminal,
@@ -1973,7 +2020,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         await watcher.pollAll()
         await Promise.all(registry.advertised().map(async (session) => {
           const capture = await captureTerminal(session.agentId, 120)
-          if (capture) runtimeProfiles.ingestPane(session, capture, true)
+          if (capture) await runtimeProfiles.ingestPane(session, capture, true)
         }))
       })
       await syncTerminalTitles()
@@ -2020,7 +2067,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     for (const session of registry.list()) {
       if (!PANE_POLLED_ENGINES.has(session.engine)) continue
       void captureTerminal(session.agentId, 60)
-        .then((capture) => { if (capture) runtimeProfiles.ingestPane(session, capture) })
+        .then((capture) => capture ? runtimeProfiles.ingestPane(session, capture) : undefined)
         .catch(() => undefined)
     }
   }, PANE_POLL_MS)
@@ -2149,6 +2196,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Moving a running agent onto a grid, or back to its own login (core/agents/retarget.ts).
   backend.onRetargetAgent = createAgentRetargeter({
+    readScreen: screens.read,
     purgeBusy: (agentId) => backend.purgeAgentService?.busy(agentId),
     tmuxBackend,
     registry,
@@ -2198,6 +2246,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.purgeProvider = createPurgeRequest({ purgeAgentService: () => lifecycle.purgeAgentService, invalidateStorage: () => { void (ports.monitor ?? MONITOR_OFF).storage([], true) } })
   // Closing agents no window shows, and the cleanup preview (core/agents/close.ts).
   const closing = createAgentClosing({
+    readScreen: screens.read,
     registry,
     cleanupTabs,
     watcher,
@@ -2284,7 +2333,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     ['the question watchers', () => questionWatcher.stopAll()],
     ['the turn heartbeats', () => { for (const t of heartbeats.values()) clearInterval(t); heartbeats.clear() }],
     ['the Cursor sub-agents', () => cursorSubagents.stop()], ['the normalizers', () => normalizers.stopPollers()],
-    ['Cursor discovery', () => cursorDiscovery.stop()], ['the transcript watcher', () => watcher.stop()],
+    ['Cursor discovery', () => cursorDiscovery.stop()], ['the runtime profiles', () => runtimeProfiles.stop()], ['the transcript watcher', () => watcher.stop()],
     // The FIXED hook port, released before the successor binds it (no fallback → EADDRINUSE otherwise).
     // Process-owned agents stay in the persisted registry and are revalidated by its first discovery passes.
     ['the hook connections', () => (hookServer as unknown as { closeAllConnections?: () => void }).closeAllConnections?.()],
@@ -2334,6 +2383,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     normalizers.stopPollers()
     await cursorDiscovery.stop()
     await watcher.stop()
+    runtimeProfiles.stop()
     await ports.sharing?.stop()
     // The data folder's socket first: a successor waiting for this core to leave (lib/localSocket.ts) can
     // start as soon as it is gone, whatever the clients below take to close.

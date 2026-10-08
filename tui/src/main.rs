@@ -40,7 +40,10 @@ mod input;
 mod layout;
 mod desk_layout;
 mod local;
+mod machine_menu;
 mod modal;
+mod buttons;
+mod dialog;
 mod workspace_menu;
 mod workspace_controls;
 mod workspace_events;
@@ -56,6 +59,7 @@ mod os_welcome;
 mod paste;
 mod pane;
 mod pane_frame;
+mod pane_drag;
 mod picker;
 mod proto;
 mod theme;
@@ -70,6 +74,7 @@ mod bar;
 mod bar_more;
 // ── models: the Models view (step 6) ──
 mod models;
+mod runtime_model;
 mod autoname;
 
 use std::io::{self, BufWriter, Write};
@@ -418,6 +423,8 @@ async fn run(config: config::Config) -> io::Result<()> {
     // Whether some pane was selecting last frame (a selection starting is when a ghost is seen).
     let mut was_selecting = false;
     term.clear()?;
+    // (Not `Write::flush`: only the backend's own flush closes the synchronized update the clear opened.)
+    ratatui::backend::Backend::flush(term.backend_mut())?;
     let size = terminal::size()?;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Event>();
@@ -503,6 +510,13 @@ async fn run(config: config::Config) -> io::Result<()> {
     let frame_budget = Duration::from_millis(6);
     let mut last_draw = Instant::now() - frame_budget;
     let mut need_draw = true;
+    // A full repaint asked for, kept until the pass that draws: its clear and its frame are one
+    // synchronized update, never split across passes.
+    let mut repaint_due = false;
+    // Where the frame before drew an overlay (the settle rewrite follows one that closed or shrank).
+    let mut overlay_before: Option<ratatui::layout::Rect> = None;
+    // The size the terminal was last drawn at: a repaint erases only when it differs.
+    let mut drawn_size = term.size()?;
     // Rendered animation and timed UI messages schedule their next frame.
     // Maintenance and incoming input/output keep their own cadence.
     let mut next_repaint: Option<Instant> = None;
@@ -590,13 +604,21 @@ async fn run(config: config::Config) -> io::Result<()> {
         // Welcome forms also need connection and catalog updates, including drafts in
         // background windows. Refill leaves unrelated overlays alone.
         if refill { input::refill(&mut app) }
-        // A scroll that has rested: every row of the screen written again, once — row by row over
-        // what is there, not after erasing it, so it never flashes.
+        // A scroll, a burst or a closed overlay that has rested: the rows written since the last
+        // settle are written again, once — each its text over what is there, so none flashes.
         let settle = app::scroll_settle_in(app.scrolled_at, Instant::now()) == Some(Duration::ZERO);
-        if settle { app.scrolled_at = None }
-        if std::mem::take(&mut app.redraw_all) { term.clear()?; need_draw = true; }
-        else if settle { term.backend_mut().soft_clear_next(); term.clear()?; need_draw = true; }
+        if settle { app.scrolled_at = None; term.backend_mut().settle_next(); need_draw = true }
+        // Two requests in one pass (or one that waited for the frame budget) are one repaint.
+        if std::mem::take(&mut app.redraw_all) { repaint_due = true; need_draw = true; }
         if need_draw && last_draw.elapsed() >= frame_budget {
+            // A changed size is cleared by `draw`'s own resize, inside the frame's update; a clear
+            // here would be a second erase, and a soft one would leave text outside the new rows.
+            let size_changed = !term_out::repaint_is_soft(drawn_size, term.size()?);
+            let repainting = repaint_due || size_changed;
+            if std::mem::take(&mut repaint_due) && !size_changed {
+                term.backend_mut().soft_clear_next();
+                term.clear()?;
+            }
             // (The backend makes each frame's changes one synchronized update, and writes nothing
             // for a frame that changed nothing.)
             let frame_started = Instant::now();
@@ -608,6 +630,13 @@ async fn run(config: config::Config) -> io::Result<()> {
             }
             let done = term.draw(|frame| ui::draw(frame, &mut app))?;
             if let Some(v) = verifier.as_mut() { v.check(done.buffer) }
+            drawn_size = term.size()?;
+            // A burst of cell updates, or an overlay gone or smaller, owes one rewrite of its rows
+            // once the screen rests; a repaint wrote every row, so it owes none.
+            let (due, left) = app::settle_after_frame(repainting, overlay_before, app.overlay_drawn, term.backend().last_cells(), app.scrolled_at, Instant::now());
+            app.scrolled_at = due;
+            if let Some(r) = left { term.backend_mut().owe_rows(r.y..r.bottom()) }
+            overlay_before = app.overlay_drawn;
             // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);
             let code = format!("{shape:?}");

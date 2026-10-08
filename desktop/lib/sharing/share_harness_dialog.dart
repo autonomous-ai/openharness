@@ -48,7 +48,9 @@ class ShareHarnessDialog extends StatefulWidget {
   });
   final String name;
   final ShareAction manage;
-  final Future<void> Function()? publish;
+
+  /// Hands the harness to the Hub, returning what the person does next there.
+  final Future<String> Function()? publish;
   @override
   State<ShareHarnessDialog> createState() => _ShareHarnessDialogState();
 }
@@ -798,12 +800,8 @@ class _ShareHarnessDialogState extends State<ShareHarnessDialog> {
                       _error = null;
                     });
                     try {
-                      await widget.publish!();
-                      if (mounted) {
-                        setState(
-                          () => _notice = 'Review your files and conversation in the Hub, then publish.',
-                        );
-                      }
+                      final next = await widget.publish!();
+                      if (mounted) setState(() => _notice = next);
                     } catch (error) {
                       if (mounted) {
                         setState(

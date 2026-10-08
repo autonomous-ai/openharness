@@ -172,7 +172,11 @@ export class UpstreamLink {
 
       this.heartbeat = watchSocketLiveness(ws, {
         onIdle: (idleMs) => console.log(`[backend] no traffic for ${Math.round(idleMs / 1000)}s — terminating the link`),
-        onWake: (sleptMs, hungUp) => console.log(`[backend] woke after ${Math.round(sleptMs / 1000)}s asleep — ${hungUp ? 'the backend has hung up, redialing' : 're-probing the link'}`),
+        // Two different rules end the socket on a wake, and the trace has to tell them apart: a sleep
+        // the backend cannot have waited through (>= BACKEND_IDLE_DEADLINE_MS), or a second forgiven
+        // wake with nothing heard back. GENUINE_SLEEP_MS (180s) is above this deadline, so the length
+        // alone decides which fired.
+        onWake: (sleptMs, givingUp) => console.log(`[backend] woke after ${Math.round(sleptMs / 1000)}s asleep — ${!givingUp ? 're-probing the link' : sleptMs >= BACKEND_IDLE_DEADLINE_MS ? 'the backend has hung up, redialing' : 'no answer since the last wake, redialing'}`),
         peerGivesUpAfterMs: BACKEND_IDLE_DEADLINE_MS,
       })
 

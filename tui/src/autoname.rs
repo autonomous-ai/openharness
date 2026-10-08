@@ -236,24 +236,29 @@ mod tests {
         assert_eq!(app.auto_name(0), None);
     }
 
-    /// The status bar shows the daemon's name, whole — also where it shows the selected pane's title
-    /// (`@hn-window-name pane`, the default); without one, as before.
+    /// The status bar shows the daemon's name — whole with full names (and tmux's), cut to 20
+    /// columns with short names (the default); without one, as before.
     #[tokio::test]
-    async fn the_status_bar_shows_the_name_whole_in_either_tab_name_mode() {
+    async fn the_status_bar_shows_the_name_in_each_tab_name_mode() {
         let mut app = app();
         window(&mut app, &[1, 2]);
         let key = ask(&app, 0).unwrap().key;
         app.window_name_answer("m", key, Some(json!({"name": "Harness Deploy Release"})));
         let tab = |app: &App| crate::format::expand(app, &app.options.get("window-status-format", "", None).unwrap_or_default(), 0, app.tabs[0].focus, false);
-        for mode in ["pane", "tmux"] {
+        crate::commands::execute(&mut app, "set -g @hn-auto-rename on");
+        assert!(tab(&app).contains("Harness Deploy Relea…"), "short by default: {}", tab(&app));
+        for mode in ["full", "tmux"] {
             crate::commands::execute(&mut app, &format!("set -g @hn-window-name {mode}"));
             crate::commands::execute(&mut app, "set -g @hn-auto-rename on");
             assert!(tab(&app).contains("Harness Deploy Release"), "{mode}: {}", tab(&app));
             crate::commands::execute(&mut app, "set -g @hn-auto-rename off");
             assert!(!tab(&app).contains("Harness Deploy Release"), "{mode}, off: {}", tab(&app));
         }
-        crate::commands::execute(&mut app, "set -g @hn-window-name pane");
+        crate::commands::execute(&mut app, "set -g @hn-window-name full");
         assert!(tab(&app).contains("Lm studio respawn on quit"), "the selected pane's title: {}", tab(&app));
+        crate::commands::execute(&mut app, "set -g @hn-window-name short");
+        // (tmux's #{=/20/…:}: 20 kept, then the marker.)
+        assert!(tab(&app).contains("Lm studio respawn on…"), "cut to 20 columns: {}", tab(&app));
     }
 
     /// A client of a server an older build started takes that build's status bar formats; it derives

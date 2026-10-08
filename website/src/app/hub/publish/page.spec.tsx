@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PublishPage from './page';
+import { readDraft } from '@/lib/community/drafts';
 
 vi.mock('@/lib/community/drafts', async importActual => ({ ...await importActual<typeof import('@/lib/community/drafts')>(), readDraft: vi.fn(async () => undefined), saveDraft: vi.fn(async () => {}) }));
 const mocks = vi.hoisted(() => ({ request: vi.fn(), push: vi.fn(), headers: vi.fn() }));
@@ -18,10 +19,16 @@ describe('explicit publication', () => {
     expect(screen.getByTitle('Publication preview')).toHaveAttribute('sandbox', 'allow-scripts');
     expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
     expect(mocks.request).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('checkbox'));
+    expect(screen.getByText(/index.html is still the original/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Upload HTML output'), { target: { files: [Object.assign(new File(['<h1>My new orbit</h1>'], 'index.html'), { text: async () => '<h1>My new orbit</h1>' })] } });
+    await waitFor(() => expect(screen.queryByText(/still the original/)).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Publish harness' }));
     await waitFor(() => expect(mocks.push).toHaveBeenCalledWith('/hub/published-fixture'));
-    expect(mocks.request.mock.calls[0][1].body).toMatchObject({ forkedFrom: 'starter-orbit', confirmed: true, license: 'MIT', files: project.files, conversation: project.conversation });
+    expect(mocks.request.mock.calls[0][1].body).toMatchObject({ forkedFrom: 'starter-orbit', confirmed: true, license: 'MIT', files: [{ path: 'index.html', content: '<h1>My new orbit</h1>' }], conversation: project.conversation });
+    expect(mocks.request.mock.calls[0][1].body).not.toHaveProperty('originalOutput');
   });
   it('keeps a draft after a failed publication and requires sign-in', async () => {
     mocks.headers.mockReturnValue({}); render(<PublishPage />); await act(async () => {});
@@ -33,9 +40,57 @@ describe('explicit publication', () => {
     fireEvent.change(screen.getByLabelText('Message 1'), { target: { value: 'Make it.' } });
     fireEvent.change(screen.getByLabelText('Upload HTML output'), { target: { files: [Object.assign(new File(['<h1>Test</h1>'], 'index.html'), { text: async () => '<h1>Test</h1>' })] } });
     await waitFor(() => expect(screen.getByTitle('Publication preview')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('checkbox')); mocks.request.mockRejectedValue(new Error('Service unavailable'));
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ })); mocks.request.mockRejectedValue(new Error('Service unavailable'));
     fireEvent.click(screen.getByRole('button', { name: 'Publish harness' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Service unavailable');
     expect(screen.getByDisplayValue('Keep this draft')).toBeInTheDocument(); expect(mocks.push).not.toHaveBeenCalled();
+  });
+  it('holds back a publication that looks like it carries a credential or lacks its harness source', async () => {
+    render(<PublishPage />);
+    const bundle = { ...project, harnessId: 'autonomous/blender', files: [...project.files, { path: 'config.json', content: '{ "apiKey": "abcd1234efgh5678" }' }] };
+    const file = Object.assign(new File([JSON.stringify(bundle)], 'OPEN-HARNESS.json', { type: 'application/json' }), { text: async () => JSON.stringify(bundle) });
+    fireEvent.change(screen.getByLabelText('Import fork bundle'), { target: { files: [file] } });
+    await screen.findByText('config.json looks like it holds a password or secret.');
+    expect(screen.getByText(/This harness needs scenes\/hello.py/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /None of them is a real credential/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Upload HTML output'), { target: { files: [Object.assign(new File(['<h1>Mine</h1>'], 'index.html'), { text: async () => '<h1>Mine</h1>' })] } });
+    await waitFor(() => expect(screen.queryByText(/still the original/)).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeEnabled();
+  });
+  it('never assumes an app page is the output, and says what a chosen page cannot load', async () => {
+    render(<PublishPage />); await act(async () => {});
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Code review' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'What changed and why' } });
+    fireEvent.change(screen.getByLabelText('Message 1'), { target: { value: 'Review this.' } });
+    const folder = [['index.html', '<script src="app.js"></script>'], ['app.js', 'go()']].map(([path, text]) => Object.assign(new File([text], path), { webkitRelativePath: `project/${path}`, text: async () => text }));
+    fireEvent.change(screen.getByLabelText('Choose project folder'), { target: { files: folder } });
+    await screen.findByText(/The Hub shows what a session made/);
+    expect(screen.queryByTitle('Publication preview')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('combobox', { name: /^Output preview/ }), { target: { value: 'index.html' } });
+    expect(await screen.findByText(/Your output loads app.js/)).toBeInTheDocument();
+    expect(screen.queryByText(/The Hub shows what a session made/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeEnabled();
+  });
+  it('still knows a fork\'s original output after a reload or a sign-in', async () => {
+    vi.mocked(readDraft).mockResolvedValueOnce({ ...project, originalOutput: project.files[0].content } as never);
+    render(<PublishPage />);
+    expect(await screen.findByText(/index.html is still the original/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
+  });
+  it('refuses a large file by its size, without reading it', async () => {
+    render(<PublishPage />); await act(async () => {});
+    const read = vi.fn();
+    const model = Object.assign(new File([new Uint8Array(2_400_000)], 'model.glb'), { webkitRelativePath: 'project/model.glb', arrayBuffer: read });
+    fireEvent.change(screen.getByLabelText('Choose project folder'), { target: { files: [model] } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('model.glb is over 3 MB as sent');
+    expect(read).not.toHaveBeenCalled();
   });
 });

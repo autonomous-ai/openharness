@@ -1,8 +1,16 @@
 {
-  "version": "0.1.1",
+  "version": "0.1.2",
   "arch_snapshot": "2026/10/01",
   "architecture": "x86_64",
   "upgrades_from": [
+    {
+      "version": "0.1.2-preview.1",
+      "arch_snapshot": "2026/10/01"
+    },
+    {
+      "version": "0.1.1",
+      "arch_snapshot": "2026/10/01"
+    },
     {
       "version": "0.1.0-preview.14",
       "arch_snapshot": "2026/10/01"

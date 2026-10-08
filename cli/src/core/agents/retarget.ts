@@ -22,8 +22,9 @@ import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } 
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
-import { parseRuntimeProfile, type RuntimeProfileManager } from '../../lib/runtimeProfile.js'
-import { inspectRuntimePane } from '../../lib/runtimeProfileController.js'
+import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
+import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
+import type { ScreenReader } from '../../lib/screenReader.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
@@ -38,6 +39,7 @@ type LaunchHelpers = ReturnType<typeof createLaunchHelpers>
 type RetargetAgent = NonNullable<BackendSocket['onRetargetAgent']>
 
 export interface RetargetDeps {
+  readScreen: ScreenReader
   /** Whether a purge holds this agent (PurgeAgentService.busy). */
   purgeBusy: (agentId: string) => boolean | undefined
   tmuxBackend: TmuxBackend | null
@@ -58,7 +60,7 @@ export interface RetargetDeps {
 }
 
 export function createAgentRetargeter({
-  purgeBusy, tmuxBackend, registry, runtimeProfiles, launchOverridesDeps, captureTerminal, acquireTerminalControl,
+  readScreen, purgeBusy, tmuxBackend, registry, runtimeProfiles, launchOverridesDeps, captureTerminal, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
   announceSession, opencodeDb,
 }: RetargetDeps) {
@@ -143,7 +145,7 @@ export function createAgentRetargeter({
     // the grid.
     const capture = await captureTerminal(session.agentId, 100)
     if (!capture) return { ok: false, error: 'TMUX_FAILED' }
-    if (!inspectRuntimePane(session.engine, capture).idle) return { ok: false, error: 'AGENT_BUSY' }
+    if (!(await readScreen(session, capture))?.pane.idle) return { ok: false, error: 'AGENT_BUSY' }
     // Nothing may type into the pane while it is being replaced.
     if (restartJobs.busy(session.agentId)) return { ok: false, error: 'AGENT_BUSY' }
     const release = acquireTerminalControl(session.agentId)

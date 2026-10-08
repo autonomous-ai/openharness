@@ -345,7 +345,7 @@ export function runMaster(config: MasterConfig): Supervisor {
         // Told which services this master runs, so it routes to exactly those and runs the rest itself;
         // and, from the lean bundle, which cli.js is its CLI (leanCoreEntry.ts).
         env: {
-          ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs),
+          ...env, ...extra, HARNESSD_SERVICE_TOKEN: token, ...serviceProcessesEnv(specs, process.pid),
           ...(script === config.scriptPath ? {} : { [LEAN_CORE_SCRIPT_ENV]: config.scriptPath }),
         },
         stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
@@ -409,4 +409,3 @@ export function runMaster(config: MasterConfig): Supervisor {
   if (!reexec?.replacing()) services.start()
   return supervisor
 }
-

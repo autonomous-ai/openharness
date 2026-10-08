@@ -1,6 +1,7 @@
 //! A height-limited finder running in the shell's own PTY, like fzf --height.
 //! No alternate screen, application modal, shell evaluation, or extra executable.
 use std::fs::{File, OpenOptions};
+use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
@@ -34,6 +35,34 @@ pub struct Items {
     pub folder: Option<String>,
     /// Canonical computer for the draft, including an implicit current computer.
     pub machine: Option<String>,
+    /// How the TUI looks now; every reply says it, `unchanged` ones too.
+    pub look: Option<Look>,
+}
+/// The TUI's look, for the picker to draw in: `#rrggbb` colours (empty: the terminal's own), the
+/// accent as `@hn-accent` takes it, and `lists` = "fzf" when the user chose fzf-styled lists.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Look { pub background: String, pub foreground: String, pub accent: String, pub lists: String }
+
+/// `look.lists` = "fzf": the composer keeps the fzf frame (the user's `@hn-lists fzf`, or fzf
+/// options of their own in the TUI's environment).
+static LISTS_FZF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Draw with [look] from now on, through the setters the TUI's own chrome uses. True when
+/// anything changed.
+pub fn apply_look(look: &Look) -> bool {
+    let colours=(!look.background.is_empty() && !look.foreground.is_empty()).then(||(look.background.clone(),look.foreground.clone()));
+    let before=crate::term_out::accent_override();
+    let mut changed=crate::term_out::set_theme_colours(colours);
+    crate::term_out::set_accent_override((!look.accent.is_empty()).then(||look.accent.clone()));
+    changed|=crate::term_out::accent_override()!=before;
+    changed|=LISTS_FZF.swap(look.lists=="fzf",std::sync::atomic::Ordering::Relaxed)!=(look.lists=="fzf");
+    changed
+}
+
+/// The look the TUI exported as `HN_LOOK` into this shell, for the first frame. True when it applied.
+fn apply_env_look(json:Option<&str>)->bool {
+    json.and_then(|j|serde_json::from_str::<Look>(j).ok()).is_some_and(|look|{apply_look(&look);true})
 }
 impl Items {
     pub fn from_picker(picker: &Picker) -> Self {
@@ -174,7 +203,57 @@ impl Drop for Request {
 }
 
 fn clean(s: &str) -> String { s.chars().filter(|c| !c.is_control()).collect() }
-pub fn exchange(verb:&str,value:&serde_json::Value)->io::Result<serde_json::Value> {
+/// `failed` is the number of failures in a row while the last request failed.
+/// A failure is kept apart from the server's status, so an error that happens
+/// to end in "…" never reads as loading; while a retry is due, the list spins.
+fn is_loading(items_loaded:bool,status:&str,failed:Option<u8>)->bool {
+    match failed {
+        Some(failures)=>retry_after(failures).is_some(),
+        None=>!items_loaded || status.ends_with('…'),
+    }
+}
+/// A failure's message stays readable: beside the spinner while a retry is due,
+/// in the list once the retries are spent. A finished list with a notice (a
+/// failed directory read, a catalog warning) shows it instead of looking empty.
+fn paint_list(next:&mut Buffer,area:Rect,picker:&mut Picker,loading:bool,failure:Option<&str>,lines:Vec<Line<'static>>,bottom:bool)->Position {
+    let previous_empty=std::mem::take(&mut picker.empty);
+    let previous_flash=picker.flash.clone();
+    match failure {
+        Some(message) if loading=>picker.flash=Some((message.into(),Instant::now())),
+        Some(message)=>picker.empty=message.into(),
+        None if !loading && !picker.status.is_empty()=>picker.empty=picker.status.clone(),
+        None=>{},
+    }
+    let at=paint_inline(next,area,picker,loading,lines,bottom);
+    picker.empty=previous_empty;picker.flash=previous_flash;at
+}
+/// The line under a launch that waits for its computer: only once the wait is
+/// long enough to notice (an instant local launch draws nothing), and one row
+/// that fits the pane, since a wrapped line would add a row at every frame.
+fn wait_line(elapsed:Duration,waiting:&str,cols:u16)->Option<String> {
+    const FRAMES:[&str;8]=crate::theme::SPINNER;
+    if elapsed<Duration::from_millis(150) {return None}
+    let who=match clean(waiting).as_str() {"local"|"-"=>"this computer".to_string(),name=>name.to_string()};
+    let line=format!("{} Starting on {who}… Ctrl-C to cancel",FRAMES[(elapsed.as_millis()/100) as usize%FRAMES.len()]);
+    // The last column is left free: some terminals wrap on writing it.
+    Some(crate::ui::clip(&line,usize::from(cols.saturating_sub(1))))
+}
+fn tty_cols(tty:&File)->u16 {
+    use std::os::fd::AsRawFd;
+    let mut size:libc::winsize=unsafe{std::mem::zeroed()};
+    if unsafe{libc::ioctl(tty.as_raw_fd(),libc::TIOCGWINSZ,&mut size)}==0 && size.ws_col>0 {size.ws_col} else {80}
+}
+fn frame_due(loading:bool,last:Instant,now:Instant)->bool { loading && now.duration_since(last)>=Duration::from_millis(120) }
+// A failed list request is retried a few times, then left showing its message.
+fn retry_after(failures:u8)->Option<Duration> { (failures<=3).then(||Duration::from_secs(2)) }
+fn paint_inline(next:&mut Buffer,area:Rect,picker:&mut Picker,loading:bool,lines:Vec<Line<'static>>,bottom:bool)->Position {
+    // `inline_fzf` spins only for a busy picker; mark it for this paint alone.
+    let busy=std::mem::replace(&mut picker.busy,loading.then(||"loading".to_string()));
+    let at=crate::ui::inline_fzf(next,area,picker,loading,lines,bottom);
+    picker.busy=busy;at
+}
+/// `waiting` names the computer; the line turns a spinner until the answer comes.
+pub fn exchange(verb:&str,value:&serde_json::Value,waiting:&str)->io::Result<serde_json::Value> {
     use std::sync::atomic::{AtomicBool,Ordering};
     static INTERRUPTED:AtomicBool=AtomicBool::new(false);
     extern "C" fn interrupted(_:libc::c_int) {INTERRUPTED.store(true,Ordering::Relaxed);}
@@ -184,14 +263,30 @@ pub fn exchange(verb:&str,value:&serde_json::Value)->io::Result<serde_json::Valu
     let _signal=Signal(unsafe{libc::signal(libc::SIGINT,interrupted as *const () as libc::sighandler_t)});
     let mut out=OpenOptions::new().read(true).write(true).open("/dev/tty")?;
     let mut request=Request::new(&mut out,verb,&value.to_string())?;
-    loop {
+    let begun=Instant::now();
+    let mut shown=usize::MAX;
+    let result=loop {
         if INTERRUPTED.load(Ordering::Relaxed) {
-            write!(out,"\x1b]633;hn;{};{};cancel;\x07",request.token,request.id)?;out.flush()?;
-            return Err(io::Error::new(io::ErrorKind::Interrupted,"Launch cancelled."))
+            let cancelled=write!(out,"\x1b]633;hn;{};{};cancel;\x07",request.token,request.id).and_then(|_|out.flush());
+            break cancelled.and_then(|_|Err(io::Error::new(io::ErrorKind::Interrupted,"Launch cancelled.")))
         }
-        if let Some(value)=request.poll_value(&mut out)? { return Ok(value) }
+        match request.poll_value(&mut out) {
+            Ok(Some(value))=>break Ok(value),
+            Ok(None)=>{},
+            Err(e)=>break Err(e),
+        }
+        let frame=(begun.elapsed().as_millis()/100) as usize;
+        // The width is read each frame, so a pane resized meanwhile still gets one row.
+        if frame!=shown && let Some(line)=wait_line(begun.elapsed(),waiting,tty_cols(&out)) {
+            shown=frame;
+            let _=write!(out,"\r\x1b[2K{line}");
+            let _=out.flush();
+        }
         std::thread::sleep(Duration::from_millis(20));
-    }
+    };
+    // The wait line is gone before the shell prints anything of its own.
+    if shown!=usize::MAX {let _=write!(out,"\r\x1b[2K");let _=out.flush();}
+    result
 }
 fn dimensions(rows: u16, origin: u16, picker: &Picker) -> (u16, u16) {
     let height = crate::ui::fzf_rows(rows, theme::fzf_opts().height.unwrap_or(theme::Height {
@@ -239,11 +334,13 @@ fn tty_position(out: &File) -> io::Result<(u16,u16)> {
 struct Screen {
     out: File, top: u16, height: u16, cols: u16, raw: bool,
     widget: bool, anchor_x: u16, previous: Option<Buffer>,
+    /// The row an erase waits at for the next draw, which writes it inside its synchronized update.
+    erase: Option<u16>,
 }
 impl Screen {
     fn new(out: File, picker: &Picker) -> io::Result<Self> {
         terminal::enable_raw_mode()?;
-        let mut screen=Self {out,top:0,height:0,cols:0,raw:true,widget:false,anchor_x:0,previous:None};
+        let mut screen=Self {out,top:0,height:0,cols:0,raw:true,widget:false,anchor_x:0,previous:None,erase:None};
         let (cols, rows)=terminal::size().unwrap_or((80,24));
         // cursor::position retries reader errors indefinitely. Initialize the
         // event source first so an unusable input descriptor returns to the shell.
@@ -268,7 +365,9 @@ impl Screen {
         // Resizing can bring old rows back from the terminal's reflow buffer,
         // beyond today's picker height. Clearing only the current rectangle
         // leaves those old borders behind (especially with Bash/Readline).
-        if self.height>0 {write!(self.out,"\x1b[{};1H\x1b[J",self.top+1)?;}
+        // The erase waits for the redraw, inside its synchronized update: written now, the
+        // terminal would show the picker blank until the redraw comes.
+        if self.height>0 {self.erase=Some(self.erase.map_or(self.top,|t|t.min(self.top)));}
         Ok(())
     }
     fn resize(&mut self,cols:u16,rows:u16,picker:&Picker)->io::Result<()> {
@@ -276,20 +375,14 @@ impl Screen {
         (self.top,self.height)=dimensions(rows,self.top,picker);self.cols=cols;
         self.clear()
     }
-    fn draw(&mut self,picker:&mut Picker,items:Option<&Items>,preview_id:Option<&str>)->io::Result<()> {
+    fn draw(&mut self,picker:&mut Picker,items:Option<&Items>,preview_id:Option<&str>,loading:bool,failure:Option<&str>)->io::Result<()> {
         let area=self.area();
         let mut next=Buffer::empty(area);
         let valid=items.filter(|v| v.preview_id.as_deref()==preview_id && preview_id.is_some());
         let lines=valid.map(|v|v.preview.iter().map(|s|Line::raw(clean(s))).collect()).unwrap_or_default();
         let bottom=valid.is_some_and(|v|v.preview_bottom);
-        let loading=items.is_none() || picker.status.ends_with('…');
-        // Loading uses the usual spinner. A failed directory read or catalog
-        // warning must remain visible instead of looking like an endless load.
-        let previous_empty=std::mem::take(&mut picker.empty);
-        if !loading && !picker.status.is_empty() {picker.empty=picker.status.clone();}
-        let cursor=crate::ui::inline_fzf(&mut next,area,picker,loading,lines,bottom);
-        picker.empty=previous_empty;
-        let bytes=render_diff(self.previous.as_ref(),&next,cursor)?;
+        let cursor=paint_list(&mut next,area,picker,loading,failure,lines,bottom);
+        let bytes=render_diff(self.previous.as_ref(),&next,cursor,self.erase.take())?;
         self.out.write_all(&bytes)?;
         self.out.flush()?;
         self.previous=Some(next);
@@ -297,12 +390,43 @@ impl Screen {
     }
 }
 
-fn render_diff(previous:Option<&Buffer>,next:&Buffer,at:Position)->io::Result<Vec<u8>> {
+/// [erase]: the row a clear erases from to the screen's end, first thing in the update.
+fn render_diff(previous:Option<&Buffer>,next:&Buffer,at:Position,erase:Option<u16>)->io::Result<Vec<u8>> {
     let blank=Buffer::empty(next.area);
     let previous=previous.filter(|p|p.area==next.area).unwrap_or(&blank);
     let mut bytes=b"\x1b[?2026h\x1b[?7l\x1b[?25l".to_vec();
+    if let Some(top)=erase {write!(bytes,"\x1b[{};1H\x1b[J",top+1)?;}
     let mut backend=CrosstermBackend::new(&mut bytes);
-    backend.draw(previous.diff(next).into_iter())?;
+    let cells=previous.diff(next);
+    // A row that holds (or held) a cluster the terminal may count otherwise is written whole and
+    // its rest erased, as the main renderer does: a cell-by-cell update there leaves a stale character.
+    let held=|buf:&Buffer,y:u16|(next.area.x..next.area.right()).any(|x|crate::term_out::risky(buf[(x,y)].symbol()));
+    let whole:BTreeSet<u16>=cells.iter().map(|c|c.1).collect::<BTreeSet<_>>().into_iter()
+        .filter(|y|held(next,*y)||held(previous,*y)).collect();
+    backend.draw(cells.into_iter().filter(|c|!whole.contains(&c.1)))?;
+    let width=|c:&ratatui::buffer::Cell|unicode_width::UnicodeWidthStr::width(c.symbol()).max(1) as u16;
+    for y in whole {
+        // Every cell up to its last that is not blank (the erase takes the blanks after it); the
+        // area is the terminal's full width, so the erase reaches nothing of anyone else's.
+        let end=(next.area.x..next.area.right()).rev().find(|x|next[(*x,y)]!=ratatui::buffer::Cell::EMPTY)
+            .map_or(next.area.x,|x|x+width(&next[(x,y)]));
+        let mut row=Vec::new();
+        let mut x=next.area.x;
+        while x<end { row.push((x,y,&next[(x,y)])); x+=width(&next[(x,y)]); }
+        // Each draw places its first cell: after a cluster the terminal may have counted
+        // otherwise, the next cell goes where hn counts it.
+        let mut placed=true;
+        for run in row.split_inclusive(|c|crate::term_out::risky(c.2.symbol())) {
+            backend.draw(run.iter().copied())?;
+            placed=!run.last().is_some_and(|c|crate::term_out::risky(c.2.symbol()));
+        }
+        // A row that reaches the last column needs no erase (the cursor waiting there would take
+        // that column's cell with it).
+        if end<next.area.right() {
+            if !placed||row.is_empty() {write!(backend,"\x1b[{};{}H",y+1,end+1)?;}
+            write!(backend,"\x1b[K")?;
+        }
+    }
     backend.set_cursor_position(at)?;
     write!(bytes,"\x1b[0m\x1b[?25h\x1b[?7h\x1b[?2026l")?;
     Ok(bytes)
@@ -312,7 +436,9 @@ impl Drop for Screen {
         if let Ok(token)=std::env::var("_HN_CONTEXT") {
             let _=write!(self.out,"\x1b]633;hn;{};{};close-picker;\x07",token,uuid::Uuid::new_v4());
         }
-        let _=self.clear();
+        // No redraw follows: the picker's rows are erased at once.
+        let top=self.erase.take().map_or(self.top,|t|t.min(self.top));
+        if self.height>0 {let _=write!(self.out,"\x1b[{};1H\x1b[J",top+1);}
         let y=if self.widget {self.top.saturating_sub(1)} else {self.top};
         let x=if self.widget {self.anchor_x.min(self.cols.saturating_sub(1))} else {0};
         if self.height>0 {let _=write!(self.out,"\x1b[0m\x1b[?2004l\x1b[{};{}H\x1b[?25h",y+1,x+1);}
@@ -465,6 +591,7 @@ pub fn run(args:&[String])->io::Result<i32> {
     let composing=source=="compose";
     let unified=source=="choose";
     if uuid::Uuid::parse_str(&std::env::var("_HN_CONTEXT").unwrap_or_default()).is_err() {return Err(io::Error::other("Open this picker from a Harness shell."))}
+    apply_env_look(std::env::var("HN_LOOK").ok().as_deref());
     let mut picker=Picker::new("","");
     picker.query=if automatic {draft.as_ref().unwrap().initial()} else if source=="compose" {String::new()} else {clean(args.get(1).map(String::as_str).unwrap_or("")).chars().take(128).collect()};picker.qend();
     let unified=unified || source=="compose";
@@ -485,6 +612,10 @@ pub fn run(args:&[String])->io::Result<i32> {
     let mut due=Instant::now();
     let mut last_id=None;
     let mut dirty=true;
+    let mut last_draw=Instant::now();
+    let mut failures=0u8;
+    // The last request's error, apart from the server's own status line.
+    let mut failure:Option<String>=None;
     loop {
         let current=picker.current_id();
         if current!=last_id {
@@ -493,9 +624,11 @@ pub fn run(args:&[String])->io::Result<i32> {
             // brief settle, so a held arrow doesn't launch a preview for every row.
             if picker.preview {due=Instant::now()+Duration::from_millis(35);}
         }
-        if dirty {
+        // A visible spinner turns on its own; an idle picker draws nothing.
+        let loading=is_loading(items.is_some(),&picker.status,failure.is_some().then_some(failures));
+        if dirty || frame_due(loading,last_draw,Instant::now()) {
             theme::begin_animation_frame(true);
-            screen.draw(&mut picker,items.as_ref(),last_id.as_deref())?;dirty=false;
+            screen.draw(&mut picker,items.as_ref(),last_id.as_deref(),loading,failure.as_deref())?;dirty=false;last_draw=Instant::now();
         }
         if request.is_none() && Instant::now()>=due {
             requested_preview=if picker.preview {picker.current_id()} else {None};
@@ -510,7 +643,26 @@ pub fn run(args:&[String])->io::Result<i32> {
             last_query=picker.query.clone();
         }
         if let Some(r)=&mut request {
-            if let Some(mut value)=r.poll(&mut screen.out)? {
+            let polled=r.poll(&mut screen.out);
+            if let Err(e)=&polled {
+                // "Office is offline", "Harness did not answer": say it in the list
+                // and retry a few times, instead of ending the picker unseen.
+                failures=failures.saturating_add(1);
+                failure=Some(e.to_string());
+                if items.is_none() {items=Some(Items::default());}
+                request=None;dirty=true;
+                due=Instant::now()+retry_after(failures).unwrap_or(Duration::from_secs(86400));
+            } else if let Some(mut value)=polled? {
+                failures=0;
+                if failure.take().is_some() {dirty=true;}
+                // Before `unchanged`: a theme change does not change a catalog's revision.
+                if let Some(look)=&value.look {
+                    let panel=panel_now(&theme::default_opts());
+                    if apply_look(look) {
+                        dirty=true;
+                        if composing && panel!=panel_now(&theme::default_opts()) {compose_scope(&mut picker,kind);}
+                    }
+                }
                 if !value.unchanged {
                     // Older preview servers omit this optional field. The request
                     // still supplies the exact id; never associate it with today's cursor.
@@ -556,7 +708,7 @@ pub fn run(args:&[String])->io::Result<i32> {
             }
         }
         if old_query!=picker.query {
-            due=Instant::now()+Duration::from_millis(150);
+            due=Instant::now()+Duration::from_millis(150);failures=0;
             if let Some(action)=crate::input::finder_binding(&mut picker,"change",if theme::fzf().reverse {-1}else{1}) {end=action;}
             if composing && kind=="folder" && folder_parts(old_query.strip_prefix(':').unwrap_or(&old_query)).0!=folder_parts(picker.query.strip_prefix(':').unwrap_or(&picker.query)).0 {
                 // A late reply from the old folder must never be selectable in
@@ -656,9 +808,24 @@ fn composer_kind(query:&str,agents:bool)->&'static str {
         _=>if agents {"agent"} else {"sessions"},
     }
 }
-fn compose_scope(picker:&mut Picker,kind:&str) {
+/// Whether the composer takes the command panel's look: it does unless the user drew their lists
+/// themselves with `--layout`/`--border`/`--info`/`--color` (or their short forms) in their fzf
+/// options.
+pub(crate) fn composer_panel(opts:&[String])->bool {
+    const OWN:[&str;10]=["--layout","--reverse","+r","--border","--no-border","--info","--inline-info","--no-info","--color","--style"];
+    !opts.iter().any(|v|OWN.contains(&v.split('=').next().unwrap_or(v)))
+}
+/// [composer_panel] for these options, and the TUI's look says the user did not choose fzf's lists.
+fn panel_now(opts:&[String])->bool { composer_panel(opts) && !LISTS_FZF.load(std::sync::atomic::Ordering::Relaxed) }
+fn compose_scope(picker:&mut Picker,kind:&str) { compose_scope_with(picker,kind,panel_now(&theme::default_opts())) }
+/// [compose_scope] with the look decided by the caller (`panel`), not by the environment.
+fn compose_scope_with(picker:&mut Picker,kind:&str,panel:bool) {
     picker.title=match kind {"agent"=>"Agent","host"=>"Computer","folder"=>"Project","model"=>"Model",_=>"Compose"}.into();
-    picker.placeholder=match kind {"sessions"=>"Search sessions","agent"=>"Search agents","part"=>"@ computer   : project   % model",_=>"Search"}.into();
+    picker.placeholder=match kind {
+        "sessions"=>"Search sessions   @ computer   : project   % model   & agent",
+        "agent"=>"Search agents   @ computer   : project   % model   & agent",
+        "part"=>"@ computer   : project   % model",_=>"Search"}.into();
+    picker.shell_panel=kind!="sessions" && panel;
     picker.prefixed=!["part","sessions"].contains(&kind) && picker.query.starts_with(['&','@',':','%']);
     picker.scope_prefix=match kind {"agent"=>Some('&'),"model"=>Some('%'),_=>None};
     picker.preview=kind=="sessions";
@@ -667,6 +834,64 @@ fn compose_scope(picker:&mut Picker,kind:&str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::{Color,Modifier};
+    fn look(bg:&str,fg:&str,accent:&str,lists:&str)->Look {
+        Look{background:bg.into(),foreground:fg.into(),accent:accent.into(),lists:lists.into()}
+    }
+    fn reset_look() {
+        crate::term_out::set_theme_colours(None);crate::term_out::set_accent_override(None);apply_look(&look("","","",""));
+    }
+    #[test]
+    fn a_replys_look_changes_the_pickers_chrome() {
+        let _l=crate::term_out::colours_lock();
+        assert!(apply_look(&look("#ffffff","#111111","#ff0000","")));
+        assert_eq!(theme::accent(),Color::Rgb(255,0,0));
+        assert_eq!(crate::term_out::terminal_colours(),Some(("#ffffff".into(),"#111111".into())));
+        assert!(!apply_look(&look("#ffffff","#111111","#ff0000","")),"the same look changes nothing");
+        // An indexed accent is kept in the form `@hn-accent` takes.
+        assert!(apply_look(&look("#ffffff","#111111","colour33","")));
+        assert_eq!(theme::accent(),Color::Indexed(33));
+        // No colours in the look: the picker is back to the terminal's own.
+        assert!(apply_look(&look("","","","")));
+        assert_eq!(crate::term_out::accent_override(),None);
+        assert!(!crate::term_out::theme_chosen());
+        reset_look();
+    }
+    #[test]
+    fn a_replys_look_does_not_bring_colours_back_under_no_color() {
+        let _l=crate::term_out::colours_lock();
+        apply_look(&look("#ffffff","#111111","#ff0000","fzf"));
+        let chrome=crate::settings::chrome_with(true);
+        reset_look();
+        assert_eq!(chrome.base,ratatui::style::Style::default());
+        assert_eq!(chrome.accent,ratatui::style::Style::default().add_modifier(Modifier::BOLD));
+        assert_eq!(chrome.selected,ratatui::style::Style::default().add_modifier(Modifier::REVERSED));
+    }
+    #[test]
+    fn the_looks_lists_decide_whether_the_composer_keeps_the_fzf_frame() {
+        let _l=crate::term_out::colours_lock();
+        assert!(panel_now(&[]));
+        assert!(apply_look(&look("","","","fzf")));
+        assert!(!panel_now(&[]));
+        let mut picker=Picker::new("","");
+        compose_scope(&mut picker,"model");
+        assert!(!picker.shell_panel);
+        assert!(apply_look(&look("","","","")));
+        assert!(panel_now(&[]));
+        reset_look();
+    }
+    #[test]
+    fn the_first_frame_uses_the_look_the_tui_exported() {
+        let _l=crate::term_out::colours_lock();
+        let json=r##"{"background":"#101010","foreground":"#eeeeee","accent":"#00ff00","lists":"fzf"}"##;
+        assert!(apply_env_look(Some(json)));
+        assert_eq!(theme::accent(),Color::Rgb(0,255,0));
+        assert!(!panel_now(&[]));
+        reset_look();
+        assert!(!apply_env_look(Some("not json")),"a broken look is ignored");
+        assert!(!apply_env_look(None));
+        reset_look();
+    }
     #[test]
     fn machine_identity_preserves_folders_for_current_computer_and_aliases() {
         let row=Row::new("M2","M2").extra("local-id");
@@ -767,6 +992,118 @@ mod tests {
             picker.clear_query();assert_eq!(picker.query,prefix.to_string());picker.backspace(false);assert!(picker.query.is_empty());
         }
     }
+    fn composer_picker(labels:&[&str])->Picker {
+        let mut p=Picker::new("","");
+        p.query="%gpt".into();p.qend();
+        compose_scope_with(&mut p,"model",true);
+        p.set_rows(labels.iter().map(|l|Row::new(*l,*l).detail(vec![ratatui::text::Span::raw("OpenAI")])).collect());
+        p
+    }
+    fn row_text(buf:&Buffer,y:u16,w:u16)->String { (0..w).map(|x|buf[(x,y)].symbol().to_string()).collect() }
+    #[test]
+    fn the_composer_is_drawn_like_the_command_panel() {
+        let _l=crate::term_out::colours_lock();
+        let c=crate::settings::chrome();
+        let mut picker=composer_picker(&["gpt-6-astra","gpt-6-astra-fast"]);
+        assert!(picker.shell_panel);
+        let area=Rect::new(0,0,60,6);
+        let mut buf=Buffer::empty(area);
+        crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+        let row=|y:u16|row_text(&buf,y,60);
+        assert!(!row(0).contains('╭') && !row(0).contains('│'),"no border: {}",row(0));
+        assert!(row(0).trim_start().starts_with("› %gpt"),"{}",row(0));
+        assert!(row(1).starts_with(" 2/2 ─"),"{}",row(1));
+        assert!(row(5).contains("↑↓ move") && row(5).contains("esc back"),"{}",row(5));
+        let sel=(0..60).find(|x|buf[(*x,2)].symbol()=="g").unwrap();
+        // (Under NO_COLOR the chosen row has no band, only a modifier.)
+        assert_eq!(buf[(sel,2)].bg,c.selected.bg.unwrap_or(Color::Reset),"the chosen row on the panel's lifted band");
+        assert!(buf[(sel,2)].modifier.contains(c.selected.add_modifier));
+        if let Some(bg)=c.selected.bg {
+            assert!(buf[(sel,2)].modifier.contains(Modifier::BOLD));
+            assert_ne!(buf[(sel,3)].bg,bg);
+        } else {
+            assert!(!buf[(sel,3)].modifier.contains(c.selected.add_modifier));
+        }
+    }
+    #[test]
+    fn the_ghost_shows_whole_scopes_and_the_panel_survives_tiny_areas() {
+        let _l=crate::term_out::colours_lock();
+        let mut picker=Picker::new("","");
+        compose_scope_with(&mut picker,"agent",true);
+        picker.set_rows(vec![Row::new("claude","Claude Code")]);
+        assert_eq!(picker.placeholder,"Search agents   @ computer   : project   % model   & agent");
+        for w in [1,8,23,24,30,60,140] { for h in 1..12 {
+            let area=Rect::new(0,0,w,h);
+            let mut buf=Buffer::empty(area);
+            let at=crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+            assert!(area.contains(at),"{w}x{h}: {at:?}");
+            let first=row_text(&buf,0,w);
+            assert!(!first.contains("Search agents1"),"{w}x{h}: {first}");
+        } }
+        let area=Rect::new(0,0,140,6);
+        let mut buf=Buffer::empty(area);
+        crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+        let first=row_text(&buf,0,140);
+        for scope in ["@ computer",": project","% model","& agent"] {assert!(first.contains(scope),"{scope}: {first}");}
+        let area=Rect::new(0,0,40,6);
+        let mut buf=Buffer::empty(area);
+        crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+        let first=row_text(&buf,0,40);
+        assert!(first.contains("@ computer") && !first.contains("% model") && !first.contains('…'),"whole scopes only: {first}");
+    }
+    #[test]
+    fn the_panel_spins_in_the_rule_while_loading_and_the_sessions_list_keeps_fzfs_frame() {
+        let _l=crate::term_out::colours_lock();
+        let mut picker=composer_picker(&["gpt-6-astra"]);
+        picker.status="Searching models…".into();
+        let area=Rect::new(0,0,60,6);
+        let mut buf=Buffer::empty(area);
+        paint_inline(&mut buf,area,&mut picker,true,vec![],false);
+        let rule=row_text(&buf,1,60);
+        assert!(rule.contains("Searching models…") && rule.contains("1/1"),"{rule}");
+        assert!(picker.busy.is_none());
+        let mut sessions=Picker::new("","");
+        compose_scope_with(&mut sessions,"sessions",true);
+        assert!(!sessions.shell_panel);
+    }
+    #[test]
+    fn the_users_own_fzf_look_keeps_the_fzf_frame() {
+        let words=|s:&str|s.split(' ').map(String::from).collect::<Vec<_>>();
+        assert!(composer_panel(&[]));
+        assert!(composer_panel(&words("--height=40% --multi")));
+        for opts in ["--layout=reverse","--border=rounded","--info=inline","--color=light","--reverse","--no-border","--style=full"] {
+            assert!(!composer_panel(&words(opts)),"{opts}");
+        }
+    }
+    #[test]
+    fn opting_out_of_the_panel_draws_the_fzf_frame() {
+        let mut picker=Picker::new("","");
+        configure(&mut picker,false);
+        compose_scope_with(&mut picker,"model",false);
+        picker.set_rows(vec![Row::new("gpt","gpt-6-astra")]);
+        assert!(!picker.shell_panel);
+        let area=Rect::new(0,0,60,8);
+        let mut buf=Buffer::empty(area);
+        crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],false);
+        assert!((0..8).any(|y|row_text(&buf,y,60).contains('╭')),"the fzf frame");
+        theme::fzf_reset();
+    }
+    #[test]
+    fn a_composer_low_in_the_pane_opens_upward_like_the_launcher() {
+        let _l=crate::term_out::colours_lock();
+        let mut picker=composer_picker(&["gpt-6-astra","gpt-6-astra-fast"]);
+        let area=Rect::new(0,0,60,6);
+        let mut buf=Buffer::empty(area);
+        let at=crate::ui::inline_fzf(&mut buf,area,&mut picker,false,vec![],true);
+        let row=|y:u16|row_text(&buf,y,60);
+        assert!(row(5).trim_start().starts_with("› %gpt"),"query at the bottom: {}",row(5));
+        assert_eq!(at.y,5);
+        assert!(row(4).starts_with(" 2/2 ─"),"{}",row(4));
+        assert!(row(3).contains("↑↓ move") && row(3).contains("esc back"),"{}",row(3));
+        assert!(row(2).contains("gpt-6-astra") && !row(2).contains("fast"),"first row nearest the query: {}",row(2));
+        assert!(row(1).contains("gpt-6-astra-fast"),"{}",row(1));
+        assert!(!row(0).contains("gpt"),"{}",row(0));
+    }
     #[test]
     fn scope_characters_filter_only_the_unified_picker_and_can_be_removed() {
         let mut picker=Picker::new("","");
@@ -808,6 +1145,75 @@ mod tests {
         }
     }
     #[test]
+    fn frames_are_due_only_while_loading() {
+        let t=Instant::now();
+        assert!(frame_due(true,t,t+Duration::from_millis(150)));
+        assert!(!frame_due(true,t,t+Duration::from_millis(50)));
+        assert!(!frame_due(false,t,t+Duration::from_secs(5)),"an idle picker draws nothing");
+        assert!(is_loading(false,"",None) && is_loading(true,"Searching folders…",None) && !is_loading(true,"Office is offline",None));
+    }
+    #[test]
+    fn a_failed_request_says_why_while_retrying_and_after() {
+        let area=Rect::new(0,0,60,12);
+        let text=|buf:&Buffer|buf.content().iter().map(|c|c.symbol()).collect::<String>();
+        // An error that ends in "…" is still an error: once the retries are
+        // spent it stops spinning. During the 2 s retry gaps the spinner turns.
+        let message="Office went to sleep…";
+        // The fzf frame and the composer's panel both say it, a typed query too.
+        for (panel,query) in [(false,""),(true,""),(true,"gpt")] {
+            for (failures,spins) in [(1,true),(3,true),(4,false)] {
+                let mut picker=Picker::new("","");configure(&mut picker,false);
+                if panel {compose_scope_with(&mut picker,"model",true);}
+                picker.query=query.into();picker.qend();
+                let empty=picker.empty.clone();
+                let loading=is_loading(true,&picker.status,Some(failures));
+                assert_eq!(loading,spins,"{failures}");
+                let mut buf=Buffer::empty(area);
+                theme::begin_animation_frame(true);
+                paint_list(&mut buf,area,&mut picker,loading,Some(message),vec![],false);
+                assert_eq!(theme::needs_animation_frame(),spins,"{panel} {failures}");
+                assert!(text(&buf).contains(message),"{panel} {query:?} {failures}: the message is not shown");
+                // While it retries, the list under the message is blank, as the fzf frame's is.
+                assert!(!text(&buf).contains("Nothing matches"),"{panel} {query:?} {failures}");
+                assert!(picker.flash.is_none() && picker.empty==empty,"the message is not left on the picker");
+            }
+        }
+        theme::fzf_reset();
+    }
+    #[test]
+    fn the_launch_wait_line_is_one_row_and_waits_before_it_shows() {
+        use unicode_width::UnicodeWidthStr;
+        let at=Duration::from_millis;
+        assert_eq!(wait_line(at(100),"Office",80),None,"an instant launch draws nothing");
+        assert_eq!(wait_line(at(200),"Office",80).as_deref(),Some(format!("{} Starting on Office… Ctrl-C to cancel", crate::theme::SPINNER[2]).as_str()));
+        for name in ["local","-"] {assert!(wait_line(at(200),name,80).unwrap().contains("Starting on this computer…"),"{name}");}
+        // A long (CJK) name in a narrow pane stays on one row: a wrapped line
+        // would add a row at every frame, and the final erase clears only one.
+        for cols in [0,1,2,10,20,39] {
+            let line=wait_line(at(300),"日本語のとても長いコンピューター名",cols).unwrap();
+            assert!(line.width()<=usize::from(cols.saturating_sub(1)),"{cols}: {line}");
+        }
+    }
+    #[test]
+    fn a_failed_list_request_retries_three_times_then_stays_put() {
+        assert_eq!(retry_after(1),Some(Duration::from_secs(2)));
+        assert_eq!(retry_after(3),Some(Duration::from_secs(2)));
+        assert_eq!(retry_after(4),None,"never an endless retry loop");
+    }
+    #[test]
+    fn a_loading_inline_picker_spins_and_a_loaded_one_does_not() {
+        let area=Rect::new(0,0,60,12);
+        for loading in [true,false,true] {
+            let mut picker=Picker::new("","");configure(&mut picker,false);
+            let mut buf=Buffer::empty(area);
+            theme::begin_animation_frame(true);
+            paint_inline(&mut buf,area,&mut picker,loading,vec![],false);
+            assert_eq!(theme::needs_animation_frame(),loading);
+            assert!(picker.busy.is_none(),"the busy mark is not left on the picker");
+        }
+        theme::fzf_reset();
+    }
+    #[test]
     fn inline_renderer_survives_tiny_resizes_and_preserves_its_query() {
         let mut picker=Picker::new("","");
         configure(&mut picker,true);
@@ -830,16 +1236,74 @@ mod tests {
         let area=Rect::new(0,4,120,18);
         let mut first=Buffer::empty(area);
         let at=crate::ui::inline_fzf(&mut first,area,&mut picker,false,vec![],false);
-        let full=render_diff(None,&first,at).unwrap();
-        let idle=render_diff(Some(&first),&first,at).unwrap();
+        let full=render_diff(None,&first,at,None).unwrap();
+        let idle=render_diff(Some(&first),&first,at,None).unwrap();
         assert!(idle.len()<100&&idle.len()*10<full.len(),"full={} idle={}",full.len(),idle.len());
         picker.move_by(1);
         let mut next=Buffer::empty(area);
         let at=crate::ui::inline_fzf(&mut next,area,&mut picker,false,vec![],false);
-        let moved=render_diff(Some(&first),&next,at).unwrap();
-        assert!(!moved.windows(4).any(|w|w==b"\x1b[2K"),"navigation erased a row");
+        let moved=render_diff(Some(&first),&next,at,None).unwrap();
+        assert!(!moved.windows(3).any(|w|w==b"\x1b[K")&&!moved.windows(4).any(|w|w==b"\x1b[2K"),"navigation erased a row");
         assert!(moved.len()<full.len()/2,"full={} move={}",full.len(),moved.len());
         theme::fzf_reset();
+    }
+    #[test]
+    fn a_row_with_a_risky_symbol_is_written_whole_then_its_rest_erased() {
+        use ratatui::style::Style;
+        let area=Rect::new(0,4,20,3);
+        let mut first=Buffer::empty(area);
+        first.set_string(0,4,"plain",Style::default());
+        first.set_string(0,5,"go ⚡ now",Style::default());
+        let mut next=first.clone();
+        next.set_string(8,5,"x",Style::default()); // a one-cell change on the risky row
+        next.set_string(8,4,"y",Style::default()); // and on a plain row
+        let bytes=render_diff(Some(&first),&next,Position::new(0,4),None).unwrap();
+        let s=String::from_utf8_lossy(&bytes);
+        assert!(!s.contains("\x1b[2K"),"a row is never erased before its text: {s:?}");
+        // Row 5 (screen row 6) from its first column; the cell after ⚡ placed where hn counts it.
+        let row=s.find("\x1b[6;1Hgo ⚡").unwrap_or_else(||panic!("row 5 written whole: {s:?}"));
+        let after=s[row..].find("\x1b[6;6H nox").unwrap_or_else(||panic!("placed after the risky symbol: {s:?}"));
+        assert_eq!(s.matches("\x1b[K").count(),1,"only the risky row is erased: {s:?}");
+        assert!(s.find("\x1b[K").unwrap()>row+after,"its rest erased after its text: {s:?}");
+        assert!(s.contains("\x1b[5;9Hy"),"the plain row stays a cell-by-cell update: {s:?}");
+        // A terminal holding a longer, stale row 5: nothing of it survives.
+        let mut pane=crate::pane::Pane::new(1,"m","a",20,8);
+        pane.feed("\x1b[6;1Hgo ⚡ now STALE".as_bytes());
+        pane.feed(&bytes);
+        use alacritty_terminal::index::{Column,Line};
+        let text:String=(0..16).filter(|x|*x!=4).map(|x|pane.term.grid()[Line(5)][Column(x)].c).collect();
+        assert_eq!(text,"go ⚡ nox       ","{s:?}");
+    }
+    #[test]
+    fn a_ctrl_l_or_resize_redraw_erases_inside_its_synchronized_update() {
+        let path=std::env::temp_dir().join(format!("hn-picker-screen-{}-{}",std::process::id(),uuid::Uuid::new_v4()));
+        let out=OpenOptions::new().create_new(true).read(true).write(true).open(&path).unwrap();
+        let mut screen=Screen{out,top:4,height:6,cols:40,raw:false,widget:false,anchor_x:0,previous:None,erase:None};
+        let mut picker=Picker::new("","");
+        picker.set_rows(vec![Row::new("1","one"),Row::new("2","two")]);
+        // (No items yet: loading.)
+        screen.draw(&mut picker,None,None,true,None).unwrap();
+        let first=std::fs::read(&path).unwrap().len();
+        // Ctrl-L: nothing is written until the redraw, which erases inside its own update.
+        screen.clear().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap().len(),first,"the erase waits for the redraw");
+        screen.draw(&mut picker,None,None,true,None).unwrap();
+        // A resize: erased from the higher of the old and the new top.
+        screen.resize(40,8,&picker).unwrap();
+        let top=screen.top.min(4);
+        screen.draw(&mut picker,None,None,true,None).unwrap();
+        let bytes=std::fs::read(&path).unwrap();
+        drop(screen);
+        let _=std::fs::remove_file(&path);
+        let s=String::from_utf8_lossy(&bytes[first..]);
+        let frames:Vec<&str>=s.split_inclusive("\x1b[?2026l").collect();
+        assert_eq!(frames.len(),2,"{s:?}");
+        for f in &frames {
+            assert!(f.starts_with("\x1b[?2026h")&&f.ends_with("\x1b[?2026l"),"{s:?}");
+            assert_eq!(f.matches("\x1b[J").count(),1,"one erase, inside the update: {s:?}");
+        }
+        assert!(frames[0].contains("\x1b[5;1H\x1b[J"),"{s:?}");
+        assert!(frames[1].contains(&format!("\x1b[{};1H\x1b[J",top+1)),"{s:?}");
     }
     #[test]
     fn paste_is_inserted_at_the_query_cursor_and_fzf_editing_keys_work() {

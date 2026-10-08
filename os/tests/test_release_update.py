@@ -1,8 +1,9 @@
 import copy
-from contextlib import nullcontext
+from contextlib import nullcontext, redirect_stdout
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -130,18 +131,25 @@ class ReleaseChannel(unittest.TestCase):
         system = SimpleNamespace(operation_lock=lambda: nullcontext(), installed=lambda: {'root_uuid': 'fixture'},
             snapshot_date=lambda date: date, PACMAN_CONFIG=config, pending_update=lambda: None,
             update=lambda date, **options: self.events.append(('system', date, options)))
-        def apply(folder, system, base, installation):
+        def apply(folder, system, base, installation, steps):
             self.assertEqual((folder / self.manifest['package']['name']).read_bytes(), self.package)
             self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
             self.events.append(('harness', folder))
+            steps('Saving a recovery point')
         return SimpleNamespace(system_module=lambda: system, validate_bundle=Mock(),
-            prepare_kernel_bundle=Mock(),
+            prepare_kernel_bundle=Mock(), Steps=update.load_runtime_updater().Steps,
             validate_base=update.load_runtime_updater().validate_base, latest=lambda: None, apply=apply)
 
     def test_root_download_is_private_and_full_base_upgrade_precedes_package_application(self):
         updater = self.fake_updater()
-        with patch.object(update.os, 'geteuid', return_value=0), patch.object(update, 'load_runtime_updater', return_value=updater):
+        shown = io.StringIO()
+        with patch.object(update.os, 'geteuid', return_value=0), patch.object(update, 'load_runtime_updater', return_value=updater), redirect_stdout(shown):
             update.apply(self.url + '/metadata.json')
+        # Numbered steps in the Updates terminal, the base upgrade counted when the snapshot moves.
+        self.assertEqual([line for line in shown.getvalue().splitlines() if line.startswith('Step ')], [
+            'Step 1 of 5 · Downloading and checking the update…',
+            'Step 2 of 5 · Updating the Arch Linux base…',
+            'Step 3 of 5 · Saving a recovery point…'])
         self.assertEqual(self.events[0], ('system', '2026/10/01', {'noninteractive': True}))
         self.assertEqual(self.events[1][0], 'harness')
         self.assertFalse(self.events[1][1].exists(), 'Root download is removed after the transaction')

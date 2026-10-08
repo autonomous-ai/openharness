@@ -11,7 +11,7 @@ audience, not its name.
 
 Product names and interface copy follow the [Naming System](../docs/naming-system.md).
 
-**Harness 0.1.1:** the USB opens the installer directly. Installation works offline.
+**Harness 0.1.2:** the USB opens the installer directly. Installation works offline.
 After shutdown, remove the USB and boot the installed disk. If disconnected,
 the Wi-Fi page opens first and advances automatically when connected; Ethernet
 skips that step. OpenCode starts on the left with two real terminals on the right.
@@ -76,6 +76,18 @@ VM-verified installation, firmware preservation and offline recovery; physical
 hardware and automatic T2 kernel upgrades remain unverified. Apple Silicon and Raspberry Pi do not have
 installable Harness images yet. See the [hardware targets](DEVELOPMENT.md#mac-support-targets)
 for requirements and remaining work.
+
+## Connected accounts
+
+Run `harness connections` to open the local Connections page. Connect GitHub,
+Notion, Linear, Asana or Figma with a personal token, then any local agent can
+use the account through the same CLI. Tokens stay outside projects and agent
+configuration. No Intern hardware or device registration is required.
+
+This preview includes manual-token connections. Browser OAuth and automatic
+token renewal are not available yet. Existing installations receive the feature
+through the OS update channel after publication; no reinstall is needed. See
+[Connections](connectors/README.md) for the exact scope and validation limits.
 
 ## Design
 

@@ -282,7 +282,7 @@ mod tests {
             let mut buf=Buffer::empty(area);
             draw(&mut buf,&mut app,area);
             let text=(0..h).map(|y|(0..w).map(|x|buf[(x,y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
-            for expected in ["What task should this agent work on?","New Harness","All","New Terminal","Recent task"] {
+            for expected in ["What should it do?","New Harness","All","New Terminal","Recent task"] {
                 assert!(text.contains(expected),"{w}x{h} missing {expected}: {text}");
             }
             for removed in ["machines connected", " Task ", "Browse All Harnesses", "Open Terminal", "Enter start", "Task is optional"] {
@@ -298,6 +298,66 @@ mod tests {
             assert!(app.welcome.forms[&tab].hits.iter().any(|(_,f)|*f==Field::Recent(8)),"selected recent row must scroll into view");
             app.welcome.forms.get_mut(&tab).unwrap().focus=Field::Task;
         }
+    }
+
+    #[tokio::test]
+    async fn the_welcome_chooser_drops_down_under_the_settings_and_leaves_the_task_in_view() {
+        let mut app = app();
+        ensure(&mut app, None, Some("/work/project".into()));
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        form.focus = Field::Project;
+        child(&mut app, &mut form, Choice::Project, "");
+        store_form(&mut app, form);
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, &mut app, area);
+        assert!(app.welcome.forms[&tab].child_area.is_empty(), "not entered yet: nothing drops down");
+        app.welcome.forms.get_mut(&tab).unwrap().child_active = true;
+        draw(&mut buf, &mut app, area);
+        let form = &app.welcome.forms[&tab];
+        let chips = form.hits.iter().find(|(_, f)| *f == Field::Model).unwrap().0;
+        assert_eq!((form.child_area.x, form.child_area.y), (form.area.x, chips.y + 1), "under the settings row");
+        assert_eq!(form.child_area.width, form.area.width.min(60));
+        assert!(form.task_area.intersection(form.child_area).is_empty(), "the task box stays visible");
+        assert_eq!(buf[(form.child_area.x + 1, form.child_area.y)].symbol(), "›");
+    }
+
+    #[tokio::test]
+    async fn the_welcome_task_box_says_when_the_agent_takes_no_task() {
+        let mut app = app();
+        ensure(&mut app, None, None);
+        let mut form = take_active(&mut app).unwrap();
+        set_engine(&mut form, "terminal");
+        form.draft.what.label = "Terminal".into();
+        form.focus = Field::Task;
+        store_form(&mut app, form);
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::empty(area);
+        draw(&mut buf, &mut app, area);
+        let text = (0..40).map(|y| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Not available for Terminal"), "{text}");
+        assert!(!text.contains("What should it do?"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_chosen_recent_row_on_the_small_page_uses_the_panels_chosen_row() {
+        let _l = crate::term_out::colours_lock();
+        let mut app = app();
+        ensure(&mut app, None, Some("/work/project".into()));
+        let mut form = take_active(&mut app).unwrap();
+        form.recent = (0..3).map(|i| HomeRow::Harness("local".into(), format!("{i}"))).collect();
+        form.recent_labels = (0..3).map(|i| (format!("Previous work {i}"), "office · app".into())).collect();
+        form.focus = Field::Recent(1);
+        let area = Rect::new(0, 0, 50, 30);
+        let mut buf = Buffer::empty(area);
+        view::draw(&mut buf, area, &mut form);
+        let row = form.hits.iter().find(|(_, f)| *f == Field::Recent(1)).unwrap().0;
+        let c = crate::settings::chrome();
+        let cell = &buf[(row.x + 2, row.y)];
+        assert_eq!(cell.symbol(), "P");
+        assert_eq!(cell.bg, c.selected.bg.unwrap_or(ratatui::style::Color::Reset));
+        assert!(cell.modifier.contains(c.selected.add_modifier));
     }
 
     #[tokio::test]
@@ -624,6 +684,49 @@ mod tests {
         app.fleet.agents.remove(&key);
         prepare(&app, &mut form);
         assert_eq!(form.focus, Field::Browse);
+    }
+
+    /// A bare app with three agents, the page on `focus`, and the key pressed.
+    fn press_on(focus: Field, code: KeyCode) -> (App, String) {
+        let mut app = app();
+        for i in 0..3 {
+            let a = crate::fleet::agent_from("local", &json!({"id":format!("{i}"), "name":format!("Work {i}"), "engine":"codex"}), None);
+            app.fleet.agents.insert(a.key(), a);
+        }
+        ensure(&mut app, None, Some("/work/project".into()));
+        let tab = app.tab().id.clone();
+        let mut form = take_active(&mut app).unwrap();
+        prepare(&app, &mut form);
+        form.focus = focus;
+        store_form(&mut app, form);
+        event(&mut app, code, KeyModifiers::NONE);
+        (app, tab)
+    }
+
+    #[tokio::test]
+    async fn right_opens_a_recent_row_and_left_goes_back_to_the_task() {
+        let (app, tab) = press_on(Field::Recent(1), KeyCode::Left);
+        assert_eq!(app.welcome.forms[&tab].focus, Field::Task);
+        assert!(app.tab().home, "← opens nothing");
+        // Enter is the reference: whatever it does to the app, → does the same.
+        let (enter, etab) = press_on(Field::Recent(1), KeyCode::Enter);
+        let (right, rtab) = press_on(Field::Recent(1), KeyCode::Right);
+        assert!(!enter.tab().home && !right.tab().home, "the harness opened, so the page is left");
+        assert_eq!((right.tab().home, right.welcome.forms.contains_key(&rtab)),
+            (enter.tab().home, enter.welcome.forms.contains_key(&etab)));
+        assert!(right.welcome.forms.get(&rtab).is_none_or(|f| f.child.is_none() && !f.child_active),
+            "→ on a row never leaves an empty chooser open");
+    }
+
+    #[tokio::test]
+    async fn right_on_browse_and_terminal_does_what_enter_does() {
+        for field in [Field::Browse, Field::Terminal] {
+            let (enter, etab) = press_on(field, KeyCode::Enter);
+            let (right, rtab) = press_on(field, KeyCode::Right);
+            assert_eq!(right.welcome.forms.contains_key(&rtab), enter.welcome.forms.contains_key(&etab), "{field:?}");
+            assert!(right.welcome.forms.get(&rtab).is_none_or(|f| f.child.is_none() && !f.child_active),
+                "{field:?}: → leaves no empty chooser");
+        }
     }
 
     #[tokio::test]

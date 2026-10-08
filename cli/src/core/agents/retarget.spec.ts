@@ -5,7 +5,7 @@ import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
-import { parseRuntimeProfile } from '../../lib/runtimeProfile.js'
+import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import { inspectRuntimePane } from '../../lib/runtimeProfileController.js'
 import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import { clearPaneRemainOnExit } from '../../lib/tmux.js'
@@ -28,7 +28,7 @@ vi.mock('../../lib/restartAgent.js', async (real) => ({
   bypassPermissionFor: vi.fn(async (_s: unknown, live: () => Promise<boolean>) => live()),
   restartAgent: vi.fn(async () => ({ ok: true, resumed: true, processIdentity: { pid: 2, startMarker: 'new', executable: '/bin/claude' } })),
 }))
-vi.mock('../../lib/runtimeProfile.js', async (real) => ({ ...await real<object>(), parseRuntimeProfile: vi.fn(() => ({ engine: 'claude', model: 'opus' })) }))
+vi.mock('../../lib/runtimeProfileWire.js', async (real) => ({ ...await real<object>(), parseRuntimeProfile: vi.fn(() => ({ engine: 'claude', model: 'opus' })) }))
 vi.mock('../../lib/runtimeProfileController.js', async (real) => ({ ...await real<object>(), inspectRuntimePane: vi.fn(() => ({ idle: true })) }))
 vi.mock('../../lib/tmux.js', async (real) => ({
   ...await real<object>(), clearPaneRemainOnExit: vi.fn(async () => {}),
@@ -45,6 +45,7 @@ const agent = (over: Partial<RegisteredSession> = {}): RegisteredSession => ({
 function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDeps> = {}) {
   const release = vi.fn()
   const deps: RetargetDeps = {
+    readScreen: async (session, capture) => ({ pane: inspectRuntimePane(session.engine, capture ?? ''), question: null, messageHold: null, teamHold: null, activity: null, busy: false, stoppedGoal: false }),
     purgeBusy: vi.fn(() => false),
     tmuxBackend: { clearEnv: vi.fn(async () => ({ state: 'succeeded' })) } as unknown as RetargetDeps['tmuxBackend'],
     registry: {

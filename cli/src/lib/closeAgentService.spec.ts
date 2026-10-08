@@ -1,5 +1,6 @@
+import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { CloseAgentService, inspectCloseActivity, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
+import { CloseAgentService, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -373,3 +374,7 @@ it('a concurrent deferred tick never starts a second stop', async () => {
   expect(deps.stop).toHaveBeenCalledOnce()
   finish(); await closing
 })
+
+function inspectCloseActivity(session: Parameters<typeof inspectCloseReading>[0], capture: string | null, turnOpen: boolean | undefined, needsInput: boolean) {
+  return inspectCloseReading(session, capture === null ? null : screenFor(session.engine).inspect(capture), turnOpen, needsInput)
+}

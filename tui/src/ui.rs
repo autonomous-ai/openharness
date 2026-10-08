@@ -10,7 +10,9 @@ use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, StatefulWidget, Widget};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -37,6 +39,7 @@ pub fn next_repaint(app: &App, frame_started: Instant) -> Option<Instant> {
     if let Some((_, _, at)) = app.toast.as_ref().filter(|_| app.toast_ms() != u64::MAX) {
         deadline(*at, app.toast_ms());
     }
+    if let Some((_, at)) = app.copied { deadline(at, COPIED_MS) }
     let hints = !(app.options.tmux_look() && app.options.get("@hn-hint-time", "", None).is_none());
     if app.prefix && hints {
         if let Some(at) = app.prefix_at { deadline(at, app.keymap.hint_ms); }
@@ -189,6 +192,7 @@ fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static s
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     crate::workspace_controls::begin_frame(app);
+    crate::pane_drag::let_go_if_gone(app);
     theme::begin_animation_frame(app.options.animations());
     app.renumber();
     // automatic-rename as of this frame: a pane that went into a mode ([tmux]) or out of one is
@@ -218,7 +222,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // (The settings panel is not one: it floats over the panes, as the New Harness form does.)
     let full_screen = matches!(&app.modal, Some(Modal::Picker { kind, .. }) if theme::fzf_opts().height.is_none() && !crate::settings::is_panel(kind));
     if !full_screen {
-        if app.tab().home || app.tab().root.is_none() { cursor = empty_window(buf, app, body); themed_home(buf, body); }
+        let opening = app.tab().opening.clone().filter(|_| !app.tab().home && app.tab().root.is_none() && app.shell_inputs.contains_key(&app.tab().id));
+        if let Some(what) = opening { opening_window(buf, body, &what); themed_home(buf, body); }
+        else if app.tab().home || app.tab().root.is_none() { cursor = empty_window(buf, app, body); themed_home(buf, body); }
         else { cursor = window(buf, app, body) }
     }
     // Panes in clock mode: the time over each (its cursor hidden).
@@ -230,6 +236,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The status bar down a side, and the tabs over the panes beside it.
     crate::bar::draw(buf, app);
     if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
+    crate::pane_drag::draw(buf, app);
     let search_busy = app.said_due.is_some() || app.said_pending > 0;
     let msg_style = app.message_style();
     if let Some(Modal::Picker { kind, mut picker }) = app.modal.take_if(|m| matches!(m, Modal::Picker { kind, .. } if crate::settings::is_panel(kind))) {
@@ -285,16 +292,44 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     // (Not under @hn-look tmux unless @hn-hint-time asks for it: tmux shows nothing after the prefix.)
     let hints = !(app.options.tmux_look() && app.options.get("@hn-hint-time", "", None).is_none());
-    if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
+    let hinted = if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) } else { None };
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
-    let speaking = matches!(app.modal, Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
+    let speaking = matches!(&app.modal, Some(Modal::Prompt(p)) if !p.dialog()) || matches!(app.modal, Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
     if !hidden || speaking { if let Some(pos) = status_line(buf, app, status) { cursor = Some(pos) } }
     crate::os_welcome::draw_dock(buf, app);
+    copied(buf, app);
     // A menu is tmux's overlay: over the status line too, where it is kept on the screen.
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
+    if let Some(pos) = draw_prompt(buf, app) { cursor = Some(pos) }
+    app.overlay_drawn = overlay_area(app, area, body, status, hinted);
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
+    crate::devices::cancel_unfit(app);
+}
+
+/// Where this frame drew an overlay, for the settle rewrite: one that is gone or no longer covers
+/// the cells it did may have left some kept wrongly (see `app::settle_due`). [hints]: the prefix's
+/// key hints, when drawn.
+fn overlay_area(app: &App, screen: Rect, body: Rect, status: Rect, hints: Option<Rect>) -> Option<Rect> {
+    let spoken = app.toast.as_ref().is_some_and(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms()));
+    let area = match &app.modal {
+        Some(Modal::Picker { picker, .. }) => Some(picker.screen_area.get()),
+        // (Drawn clipped to the screen: a box placed past its edge. A confirmation's box is two rows
+        // taller, for its blank row and its buttons.)
+        Some(Modal::Menu(m)) if m.buttons.is_some() => Some(crate::workspace_menu::dialog_box(m).intersection(screen)),
+        Some(Modal::Menu(m)) => Some(Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 2).intersection(screen)),
+        Some(Modal::NewHarness(form)) => Some(form.drawn_area()),
+        Some(Modal::Popup { x, y, width, height, .. }) => Some(Rect::new(*x, *y, *width, *height).intersection(screen)),
+        // (hn's own questions are dialogs over the panes; tmux's prompts take the status line.)
+        Some(Modal::Prompt(p)) if p.dialog() => prompt_layout(app).map(|(r, _)| r),
+        Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) => Some(status),
+        Some(Modal::DisplayPanes { .. }) => Some(body),
+        Some(Modal::Copy { .. }) | None if spoken => Some(status),
+        Some(Modal::Copy { .. }) | None => None,
+    };
+    let area = area.filter(|r| r.width > 0 && r.height > 0);
+    match (area, hints.filter(|r| r.width > 0 && r.height > 0)) { (Some(a), Some(h)) => Some(a.union(h)), (a, h) => a.or(h) }
 }
 
 /// tmux's menu (menu_draw_cb, screen_write_menu, screen_write_box): a box width + 4 wide at its
@@ -303,23 +338,29 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// dim when disabled — its key right-aligned as (k); '' a rule across, joined to the sides.
 fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     let opt = |name: &str, default: &str| Some(app.style_spec(name, app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| default.to_string());
+    let lines = opt("menu-border-lines", "single");
+    // A menu with buttons is a dialog: its box takes the command panel's surface so the box and
+    // its buttons match; the vertical menus keep menu-style.
+    if let Some(b) = &m.buttons {
+        let c = crate::settings::chrome();
+        // (An overlay: the window behind it dimmed, as every question is asked.)
+        let over = app.body();
+        return confirmation(m, &b.row, &lines, &c).render_over(over, crate::workspace_menu::dialog_box(m), buf);
+    }
     let base = Style::default();
     // tmux's menu_set_style keeps colours, clearing attributes for each menu pair.
     let plain = |mut st: Style| { st.add_modifier = Modifier::empty(); st.sub_modifier = Modifier::empty(); st };
     let style = plain(crate::draw::style_over(&opt("menu-style", "default"), base));
     let selected = plain(crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base));
     let border = plain(crate::draw::style_over(&opt("menu-border-style", "default"), style));
-    let lines = opt("menu-border-lines", "single");
-    let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
+    let (.., hz, _, lj, rj) = box_set(&lines);
     let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
     let (x0, y0) = (m.x, m.y);
-    crate::term_out::clear_extras(Rect::new(x0, y0, w, h));
-    let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
-    for y in y0..y0 + h { for x in x0..x0 + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
-    let (x1, y1) = (x0 + w - 1, y0 + h - 1);
-    for x in x0 + 1..x1 { put(buf, x, y0, hz, border); put(buf, x, y1, hz, border) }
-    for y in y0 + 1..y1 { put(buf, x0, y, vt, border); put(buf, x1, y, vt, border) }
-    put(buf, x0, y0, tl, border); put(buf, x1, y0, tr, border); put(buf, x0, y1, bl, border); put(buf, x1, y1, br, border);
+    let area = Rect::new(x0, y0, w, h);
+    crate::term_out::clear_extras(area);
+    // The box: cleared, in menu-style, its border in menu-border-lines and menu-border-style.
+    Clear.render(area, buf);
+    Block::bordered().border_set(dialog_border(&lines)).border_style(border).style(style).render(area, buf);
     let draw_at = |buf: &mut Buffer, x: u16, y: u16, text: &str, st: Style, avail: u16| {
         for (i, cell) in crate::draw::format_draw_over(text, st, avail).into_iter().enumerate() {
             if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((x + i as u16, y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
@@ -329,24 +370,85 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     for (i, it) in m.items.iter().enumerate() {
         let y = y0 + 1 + i as u16;
         if it.separator {
-            put(buf, x0, y, lj, border);
-            for x in x0 + 1..x1 { put(buf, x, y, hz, border) }
-            put(buf, x1, y, rj, border);
+            // A rule across, joined to the sides.
+            Line::from_iter([Span::styled(lj, border), Span::styled(hz.repeat(w.saturating_sub(2) as usize), border), Span::styled(rj, border)]).render(Rect::new(x0, y, w, 1), buf);
             continue;
         }
         // screen_write_menu: the row padded first, then a disabled item's words drawn dim.
         let pad = if m.choice == Some(i) && !it.disabled { selected } else { style };
-        for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", pad) }
+        Block::new().style(pad).render(Rect::new(x0 + 1, y, m.width + 2, 1), buf);
         let st = if it.disabled { style.add_modifier(Modifier::DIM) } else { pad };
-        let text = if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) };
-        draw_at(buf, x0 + 2, y, &text, st, m.width);
+        draw_at(buf, x0 + 2, y, &menu_text(it), st, m.width);
     }
+}
+
+/// An item's words, its key right-aligned as (k).
+fn menu_text(it: &crate::modal::MenuItem) -> String {
+    if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) }
+}
+
+/// menu-border-lines as a ratatui border set, for the dialogs drawn as `Block`s.
+pub fn dialog_border(lines: &str) -> border::Set<'static> {
+    let (tl, tr, bl, br, hz, vt, ..) = box_set(lines);
+    border::Set { top_left: tl, top_right: tr, bottom_left: bl, bottom_right: br, vertical_left: vt, vertical_right: vt, horizontal_top: hz, horizontal_bottom: hz }
+}
+
+/// One of hn's own questions (Rename Tab, Rename Harness, Send, Broadcast, Answer, Message) as the
+/// shared `Dialog` in the middle of the panes, in menu-border-lines: its line of context, the
+/// input and its buttons. None where the buttons, or the input, cannot fit.
+pub fn prompt_dialog<'a>(app: &App, p: &'a crate::modal::Prompt, row: &'a crate::buttons::Row, c: &'a crate::settings::Chrome) -> Option<(Rect, crate::dialog::Dialog<'a>)> {
+    let over = app.body();
+    let room = over.width.saturating_sub(4);
+    if row.buttons_width() > room { return None }
+    let lines = Some(app.style_spec("menu-border-lines", app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| "single".into());
+    let body = if p.body.is_empty() { Vec::new() } else { crate::dialog::wrap(&p.body, room.min(crate::dialog::INPUT_W), c.base) };
+    let mut d = crate::dialog::Dialog::new(&p.title, body, row, c);
+    d.border = dialog_border(&lines);
+    d.input = Some(crate::dialog::Input { label: &p.field, value: &p.value, caret: p.cursor, select: None, secret: p.secret, focused: !p.buttons, width: crate::dialog::INPUT_W });
+    if !d.fit(over.height) { return None }
+    Some((d.place(over), d))
+}
+
+/// The open question's box and the parts inside it (for drawing and clicks alike).
+pub fn prompt_layout(app: &App) -> Option<(Rect, crate::dialog::Areas)> {
+    let Some(Modal::Prompt(p)) = &app.modal else { return None };
+    if !p.dialog() { return None }
+    let (row, c) = (p.row(), crate::settings::chrome());
+    let (r, d) = prompt_dialog(app, p, &row, &c)?;
+    Some((r, d.areas(r)))
+}
+
+/// Draws the open question, if it is one of hn's dialogs: where its caret is. One with no room
+/// to be drawn is cancelled, never kept invisible to answer keys.
+fn draw_prompt(buf: &mut Buffer, app: &mut App) -> Option<Position> {
+    let Some(Modal::Prompt(p)) = &app.modal else { return None };
+    if !p.dialog() { return None }
+    let (row, c) = (p.row(), crate::settings::chrome());
+    let Some((r, d)) = prompt_dialog(app, p, &row, &c) else {
+        app.modal = None;
+        app.back_to_list = None;
+        app.say(crate::workspace_menu::TOO_SMALL_TO_ANSWER, theme::WARN);
+        return None;
+    };
+    crate::term_out::clear_extras(r);
+    d.render_over(app.body(), r, buf);
+    d.cursor(r)
+}
+
+/// A confirmation (a menu with buttons: Close Tab, Stop Harness) as the shared `Dialog`: in
+/// menu-border-lines, its tmux-format title and notes as `Line`s. Its notes are never chosen or
+/// dimmed: the buttons have the keys and the mouse.
+fn confirmation<'a>(m: &crate::modal::Menu, row: &'a crate::buttons::Row, lines: &str, c: &'a crate::settings::Chrome) -> crate::dialog::Dialog<'a> {
+    let border = dialog_border(lines);
+    let title = if m.title.is_empty() { Line::default() } else { crate::draw::format_line(&m.title, c.muted, m.width, (border.horizontal_top, c.muted)) };
+    let body = m.items.iter().map(|it| crate::draw::format_line(&menu_text(it), c.base, m.width, (" ", c.base))).collect();
+    crate::dialog::Dialog { title, border, ..crate::dialog::Dialog::new("", body, row, c) }
 }
 
 /// A pause after the prefix: every key that can come next, from the live table (your binds too),
 /// in a box over the bottom of the window — tmux's keys, with the hint zellij users praise.
-fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
-    if body.width < 16 || body.height < 4 { return }
+fn which_key(buf: &mut Buffer, app: &App, body: Rect) -> Option<Rect> {
+    if body.width < 16 || body.height < 4 { return None }
     let mut items: Vec<(String, String)> = Vec::new();
     let mut digits = false;
     for b in &app.keymap.prefix_table {
@@ -375,13 +477,12 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
     let panel = Style::default().bg(pal.surface);
     let border = Style::default().fg(pal.border).bg(pal.surface);
     crate::term_out::clear_extras(area);
-    for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(panel); } } }
-    for x in area.x..area.x + area.width { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + area.height - 1, "─", border) }
-    for y in area.y..area.y + area.height { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + area.width - 1, y, "│", border) }
-    buf.set_string(area.x, area.y, "┌", border); buf.set_string(area.x + area.width - 1, area.y, "┐", border);
-    buf.set_string(area.x, area.y + area.height - 1, "└", border); buf.set_string(area.x + area.width - 1, area.y + area.height - 1, "┘", border);
+    // The box: cleared, on the surface, bordered, the prefix's name over its top rule from its
+    // third column (a `Block`'s title starts by the corner: one more of the rule first).
     let title = format!(" {} ", crate::keys::name(&app.keymap.prefix));
-    buf.set_string(area.x + 2, area.y, &title, Style::default().fg(pal.foreground).bg(pal.surface).add_modifier(Modifier::BOLD));
+    let title = Line::from_iter([Span::styled("─", border), Span::styled(title, Style::default().fg(pal.foreground).bg(pal.surface).add_modifier(Modifier::BOLD))]);
+    Clear.render(area, buf);
+    Block::bordered().border_style(border).style(panel).title(title).render(area, buf);
     let inner_rows = area.height.saturating_sub(2) as usize;
     // Column-major, like ls: read down, then across.
     let fits = cols * inner_rows.max(1);
@@ -400,6 +501,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
         let room = col_w - key_w - 3;
         buf.set_stringn(x + key_w as u16 + 1, y, clip(what, room), room, Style::default().fg(pal.foreground).bg(pal.surface));
     }
+    Some(area)
 }
 
 
@@ -503,7 +605,9 @@ fn pane_chrome(buf: &mut Buffer, app: &App) {
         let marker = if app.marked == Some(*id) { "◆" } else { " " };
         if title.width > 0 { if let Some(cell) = buf.cell_mut((title.x, title.y)) { cell.set_symbol(marker).set_style(style); } }
         let text = Rect::new(title.x + 1.min(title.width), title.y, title.width.saturating_sub(2), 1);
-        title_line(buf, app, *id, text, style);
+        let name = title_line(buf, app, *id, text, style);
+        // (The whole header row drags the pane, but for its name only where it is a divider.)
+        crate::workspace_controls::name_span_on_divider(app, *id, name);
     }
 }
 
@@ -531,7 +635,9 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
         let style = border_style(app, t.active);
         let (x, y) = (body.x + t.x as u16, body.y + t.y as u16);
         for (k, g) in t.fill.iter().enumerate() { if let Some(cell) = buf.cell_mut((x + k as u16, y)) { cell.set_symbol(g).set_style(style); } }
-        title_line(buf, app, t.pane, Rect::new(x, y, t.width as u16, 1), style);
+        let name = title_line(buf, app, t.pane, Rect::new(x, y, t.width as u16, 1), style);
+        // (Only the name drags the pane: the line after it is the divider, which resizes.)
+        crate::workspace_controls::name_span(app, t.pane, name);
     }
 }
 
@@ -563,15 +669,18 @@ fn border_style(app: &App, active: bool) -> Style {
 /// name, its state symbol, and as far as the pane is wide, its project and branch), drawn as
 /// screen_redraw_make_pane_status draws it — format_draw over the border, so #[align=right],
 /// #[align=centre] and #[fill] place it as tmux does, the border showing wherever the format
-/// writes nothing.
-fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
-    if area.width == 0 { return }
+/// writes nothing. Returns how many leading cells the format drew (the name).
+fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) -> u16 {
+    if area.width == 0 { return 0 }
     let area = crate::workspace_controls::title(buf, app, id, area, style);
-    let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return };
+    let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return 0 };
     let expanded = crate::format::expand(app, &fmt, app.active, Some(id), true);
-    for (i, cell) in crate::draw::format_draw_over(&expanded, style, area.width).into_iter().enumerate() {
+    let cells = crate::draw::format_draw_over(&expanded, style, area.width);
+    let drawn = cells.iter().position(|c| c.is_none()).unwrap_or(cells.len()) as u16;
+    for (i, cell) in cells.into_iter().enumerate() {
         if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((area.x + i as u16, area.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
     }
+    drawn
 }
 
 // ── box panes ──
@@ -612,6 +721,8 @@ fn boxes(buf: &mut Buffer, app: &App) {
         let cells = crate::draw::format_draw_over(&expanded, words, t.width);
         // ` title `: a blank after the words where the line would run on.
         let end = cells.iter().position(|c| c.is_none()).unwrap_or(cells.len());
+        // (The whole header row drags the pane, but for its name only where it is a divider.)
+        crate::workspace_controls::name_span_on_divider(app, id, end as u16);
         for (i, cell) in cells.into_iter().enumerate() {
             if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((t.x + i as u16, t.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
         }
@@ -638,6 +749,30 @@ pub(crate) const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ 
 fn empty_window(buf: &mut Buffer, app: &mut App, area: Rect) -> Option<Position> {
     if crate::input::os_home(app) { os_welcome(buf, app, area); None }
     else { crate::new_harness::draw_welcome(buf, app, area) }
+}
+
+/// How long "Copied" stays over the pane a selection was copied from.
+const COPIED_MS: u64 = 1200;
+
+/// "✓ Copied" in the bottom right of the pane a selection just went to the clipboard from, for a
+/// moment (not under @hn-look tmux: tmux says nothing).
+fn copied(buf: &mut Buffer, app: &mut App) {
+    let Some((pane, at)) = app.copied else { return };
+    if at.elapsed() >= Duration::from_millis(COPIED_MS) { app.copied = None; return }
+    if app.options.tmux_look() || app.modal.is_some() { return }
+    let Some(rect) = app.rects.iter().find(|(id, _)| *id == pane).map(|(_, r)| app.content_of(app.tab(), *r)) else { return };
+    let label = " ✓ Copied ";
+    let width = label.width() as u16;
+    if rect.width < width + 2 || rect.height < 2 { return }
+    let (x, y) = (rect.right() - width - 1, rect.bottom() - 2);
+    buf.set_string(x, y, label, Style::default().fg(Color::Black).bg(theme::accent()).add_modifier(Modifier::BOLD));
+}
+
+/// A command's window while its terminal starts: a quiet line, nothing to choose.
+fn opening_window(buf: &mut Buffer, area: Rect, what: &str) {
+    let line = Line::styled(if what.is_empty() { "Opening…".to_string() } else { format!("Opening {what}…") }, fg(theme::MUTED));
+    let x = area.x + area.width.saturating_sub(line.width() as u16) / 2;
+    buf.set_line(x, area.y + area.height / 2, &line, area.width.saturating_sub(x - area.x));
 }
 
 fn os_welcome(buf: &mut Buffer, app: &App, area: Rect) {
@@ -688,7 +823,7 @@ mod os_welcome_tests {
                     for action in ["Install Harness", "Try without installing", "Wi-Fi", "Super+b"] {
                         assert!(!text.contains(action), "ordinary hn must not offer {action}: {text}");
                     }
-                    assert!(text.contains("Task") || text.contains("What task should"), "{text}");
+                    assert!(text.contains("Task") || text.contains("What should it do?"), "{text}");
                 } else if live {
                     assert!(text.contains("Enter  Install Harness"), "{text}");
                     assert!(text.contains("t      Try without installing"), "{text}");
@@ -763,7 +898,8 @@ fn status_line(buf: &mut Buffer, app: &mut App, rect: Rect) -> Option<Position> 
     // (A prompt's completion menu keeps the prompt on the status line under it.)
     let under_menu = match &app.modal { Some(Modal::Menu(m)) => m.complete.as_ref().map(|c| &c.prompt), _ => None };
     let prompt_like: Option<(String, String, usize, String, bool)> = match (&app.modal, under_menu) {
-        (_, Some(p)) | (Some(Modal::Prompt(p)), _) => {
+        // (hn's own questions are dialogs over the panes: the status line stays.)
+        (_, Some(p)) | (Some(Modal::Prompt(p)), _) if !p.dialog() => {
             let shown: String = if p.secret { "*".repeat(p.value.chars().count()) } else { p.value.clone() };
             Some((p.label.clone(), shown, p.cursor, p.hint.clone(), p.vi_normal))
         }
@@ -1456,7 +1592,7 @@ fn fzf_in_frame(buf: &mut Buffer, frame: FzfFrame, picker: &mut Picker, kind: &P
         // --ghost: yours, cut at the edge as fzf cuts it.
         pbuf.set_stringn(ia.x + pw, prompt_y, ghost, q_room, pal.ghost.style());
         typed_w = ghost.width().min(q_room) as u16;
-        shift = typed_w as i32;
+        shift = typed_w as i32 + 2;
     } else if picker.query.is_empty() && !picker.placeholder.is_empty() {
         // The placeholder (fzf's --ghost), whole scopes only, leaving an inline count its place.
         let room = if mode.starts_with("inline") { q_room.saturating_sub(16) } else { q_room };
@@ -1464,7 +1600,7 @@ fn fzf_in_frame(buf: &mut Buffer, frame: FzfFrame, picker: &mut Picker, kind: &P
         for part in picker.placeholder.split("   ") { if text.width() + part.width() + 3 > room { break } if !text.is_empty() { text.push_str("   ") } text.push_str(part) }
         pbuf.set_stringn(ia.x + pw, prompt_y, &text, q_room, pal.ghost.style());
         typed_w = text.width() as u16;
-        if !text.is_empty() { shift = typed_w as i32 }
+        if !text.is_empty() { shift = typed_w as i32 + 2 }
     }
     let cursor = Position::new(ia.x + pw + before_w as u16, prompt_y);
     picker.prompt_at.set((prompt_y, ia.x + pw));
@@ -1484,10 +1620,10 @@ fn fzf_in_frame(buf: &mut Buffer, frame: FzfFrame, picker: &mut Picker, kind: &P
     // spins in the spinner's pair where fzf's does, and gives an info prefix that pair too.
     let (info_style, sep_style, spin_style) = (pal.info.style(), pal.separator.style(), pal.spinner.style());
     let reading = picker.busy.is_some() || matches!(kind, PickerKind::Open { .. }) && search_busy;
-    // fzf's makeSpinner (ASCII under --no-unicode).
-    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    // hn's spinner, as everywhere else (fzf's makeSpinner keeps to a cell's top rows); ASCII under
+    // --no-unicode, as fzf's.
     const ASCII_SPINNER: [&str; 8] = ["-", "\\", "|", "/", "-", "\\", "|", "/"];
-    let frames: &[&str] = if theme::fzf().unicode { &SPINNER } else { &ASCII_SPINNER };
+    let frames: &[&str] = if theme::fzf().unicode { &theme::SPINNER } else { &ASCII_SPINNER };
     let spinner = frames[if reading { theme::animation_frame() % frames.len() } else { 0 }];
     let w = ia.width as i32;
     let put = |pbuf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { pbuf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
@@ -2506,6 +2642,7 @@ fn preview_text(buf: &mut Buffer, picker: &Picker, pb: &PreviewBox, text: Vec<Li
 /// The shell owns a reserved region below its prompt. Draw the very same finder
 /// there, without applying --height a second time or accessing application state.
 pub(crate) fn inline_fzf(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, text: Vec<Line<'static>>, bottom_up: bool) -> Position {
+    if picker.shell_panel { return inline_panel(buf, area, picker, busy, bottom_up) }
     let kind = PickerKind::ShellContext;
     let frame = fzf_frame_at(area);
     let inner = frame.inner;
@@ -2525,6 +2662,180 @@ pub(crate) fn inline_fzf(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy
         preview_text(buf, picker, &pb, text, bottom_up, true, true);
     }
     at
+}
+
+/// [InlinePanel] in the theme's chrome; where the text cursor goes.
+fn inline_panel(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, upward: bool) -> Position {
+    let c = crate::settings::chrome();
+    let mut panel = InlinePanel { busy, upward, chrome: &c, cursor: Position::default() };
+    (&mut panel).render(area, buf, picker);
+    panel.cursor
+}
+
+/// The shell composer, drawn with the command panel's own pieces (`settings::chrome()` and its
+/// query line, count rule, rows and keys line) in the reserved region, no border. Top-down, or
+/// [upward] (a composer low in its pane) mirrored as the launcher's lists are: the query at the
+/// bottom, its count over it, the keys over that, the rows going up from there. Rendered by
+/// reference, it leaves the query's text cursor in [cursor].
+pub(crate) struct InlinePanel<'a> {
+    pub busy: bool,
+    pub upward: bool,
+    pub chrome: &'a crate::settings::Chrome,
+    pub cursor: Position,
+}
+
+impl StatefulWidget for &mut InlinePanel<'_> {
+    type State = Picker;
+    fn render(self, area: Rect, buf: &mut Buffer, picker: &mut Picker) {
+        use crate::settings::{CountRule, KeysLine, QueryLine, Surface};
+        use ratatui::layout::{Constraint::{Fill, Length}, Layout, Margin};
+        let c = self.chrome;
+        Surface(c.base).render(area, buf);
+        let ghost = picker.placeholder.clone();
+        let inside = |p: Position| Position::new(p.x.min(area.right().saturating_sub(1)), p.y);
+        // Too small for the list: the query alone, as the panel's own too-small notice keeps its title.
+        if area.height < 4 || area.width < 24 {
+            let mut query = QueryLine::new(picker, &ghost, c);
+            query.render(Rect { height: 1, ..area }, buf);
+            self.cursor = inside(query.cursor);
+            return;
+        }
+        let inner = area.inner(Margin::new(1, 0));
+        let [query, rule, list, keys] = if self.upward {
+            let [list, keys, rule, query] = Layout::vertical([Fill(1), Length(1), Length(1), Length(1)]).areas(inner);
+            [query, rule, list, keys]
+        } else {
+            Layout::vertical([Length(1), Length(1), Fill(1), Length(1)]).areas(inner)
+        };
+        let mut line = QueryLine::new(picker, &ghost, c);
+        line.render(query, buf);
+        self.cursor = inside(line.cursor);
+        let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+        // While it waits on something the rule ends in the usual spinner (and what is being waited for).
+        // A flash (a failed request being retried) says itself there in the status's place, as the fzf
+        // frame's info line does.
+        let said = picker.flash.as_ref().map_or(picker.status.as_str(), |f| f.0.as_str());
+        let wait = if self.busy {
+            Some(if said.is_empty() { theme::spinner(0).to_string() } else { format!("{} {}", theme::spinner(0), said) })
+        } else { picker.flash.as_ref().map(|f| f.0.clone()) };
+        // (The wait after the rule, a column apart, in at most half the line.)
+        let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(rule.width / 2));
+        let [count, waiting] = Layout::horizontal([Fill(1), Length(room)]).areas(rule);
+        CountRule { shown: picker.visible.len(), total, marked: None, chrome: c }.render(count, buf);
+        if let Some(t) = wait {
+            let [_, said] = Layout::horizontal([Length(1), Fill(1)]).areas(waiting);
+            Span::styled(crate::settings::fit(&t, said.width).0, c.muted).render(said, buf);
+        }
+        crate::settings::list_from(buf, picker, list, c, true, self.upward);
+        KeysLine { keys: &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")], chrome: c }.render(keys, buf);
+    }
+}
+
+/// The shell composer as it was drawn by hand (2026-10-08), its chrome passed in, kept so the
+/// widget that replaced it can be shown to draw the very same buffer.
+#[cfg(test)]
+pub(crate) mod oracle {
+    use super::*;
+
+    pub fn inline_panel(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, upward: bool, c: &crate::settings::Chrome) -> Position {
+        crate::settings::oracle::fill(buf, area, c.base);
+        let ghost = picker.placeholder.clone();
+        let inside = |p: Position| Position::new(p.x.min(area.right().saturating_sub(1)), p.y);
+        // Too small for the list: the query alone, as the panel's own too-small notice keeps its title.
+        if area.height < 4 || area.width < 24 {
+            let (at, _) = crate::settings::oracle::query_line(buf, picker, area.x, area.y, area.width, &ghost, c);
+            return inside(at);
+        }
+        let (x, w) = (area.x + 1, area.width - 2);
+        let (qy, ry, ky, list) = if upward {
+            (area.bottom() - 1, area.bottom() - 2, area.bottom() - 3, Rect::new(x, area.y, w, area.height - 3))
+        } else {
+            (area.y, area.y + 1, area.bottom() - 1, Rect::new(x, area.y + 2, w, area.height - 3))
+        };
+        let (at, _) = crate::settings::oracle::query_line(buf, picker, x, qy, w, &ghost, c);
+        let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+        // While it waits on something the rule ends in the usual spinner (and what is being waited for).
+        // A flash (a failed request being retried) says itself there in the status's place, as the fzf
+        // frame's info line does.
+        let said = picker.flash.as_ref().map_or(picker.status.as_str(), |f| f.0.as_str());
+        let wait = if busy {
+            Some(if said.is_empty() { theme::spinner(0).to_string() } else { format!("{} {}", theme::spinner(0), said) })
+        } else { picker.flash.as_ref().map(|f| f.0.clone()) };
+        let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(w / 2));
+        crate::settings::oracle::count_rule(buf, picker.visible.len(), total, None, x, ry, w - room, c);
+        if let Some(t) = wait { crate::settings::oracle::put(buf, x + w - room + 1, ry, room.saturating_sub(1), &t, c.muted); }
+        crate::settings::list_from(buf, picker, list, c, true, upward);
+        crate::settings::oracle::keys_line(buf, &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")], x, ky, w, c);
+        inside(at)
+    }
+}
+
+#[cfg(test)]
+mod inline_panel_tests {
+    use super::*;
+    use crate::picker::Row;
+    use crate::settings::oracle::{chromes, grounds, LONG};
+
+    /// A composer's picker: a short catalog in two groups, [query] typed (its cursor at [at]).
+    fn composer(query: &str, at: usize) -> Picker {
+        let mut p = Picker::new("", "Search agents   @ computer   : project   % model   & agent");
+        p.shell_panel = true;
+        p.set_rows((0..14).map(|i| Row::new(format!("m{i}"), format!("gpt-6-{i}")).detail(vec![Span::raw("OpenAI")]).group(if i < 5 { "Recent" } else { "All" })).collect());
+        p.query = query.into();
+        p.refilter();
+        p.qcursor = at;
+        p
+    }
+
+    /// The shell composer drawn with the InlinePanel widget is the composer the hand-drawn one
+    /// drew: down and upward, every width up to 160, waiting or failed or not, in a dark theme, a
+    /// light one and NO_COLOR.
+    #[test]
+    fn the_shell_composer_widget_draws_what_the_hand_drawn_one_did() {
+        let _l = crate::term_out::colours_lock();
+        // (The spinner still, so the two draws a moment apart show the same frame.)
+        theme::begin_animation_frame(false);
+        let n = LONG.chars().count();
+        // (query, its cursor, busy, the status, a flash, the catalog's own total)
+        let cases: [(&str, usize, bool, &str, Option<&str>, Option<usize>); 8] = [
+            ("", 0, false, "", None, None),
+            ("gpt", 3, false, "", None, None),
+            (LONG, n, false, "", None, None),
+            (LONG, 0, false, "", None, None),
+            ("", 0, true, "", None, None),
+            ("gp", 2, true, "Searching models…", None, Some(40)),
+            ("gp", 2, false, "", Some("Could not list models: the daemon is not running"), None),
+            ("zzz", 3, false, "", None, Some(0)),
+        ];
+        // (Every width the line widgets are checked at is too slow here: the too-small ones, the
+        // edge at 24, and wider ones in steps.)
+        let widths = [1, 2, 8, 23, 24, 25, 30, 40, 47, 64, 80, 96, 120, 159, 160];
+        for c in chromes() { for upward in [false, true] { for w in widths { for h in [1, 3, 4, 5, 8, 12] {
+            let area = Rect::new(2, 1, w, h);
+            // (Over cells already written: the panel clears what it covers and touches nothing else.)
+            let [_, ground] = grounds(Rect::new(0, 0, w + 4, h + 2));
+            {
+                for (query, at, busy, status, flash, total) in cases {
+                    let make = || {
+                        let mut p = composer(query, at);
+                        p.status = status.into();
+                        p.flash = flash.map(|f| (f.to_string(), Instant::now()));
+                        p.total_rows = total;
+                        p
+                    };
+                    let (mut a, mut b) = (make(), make());
+                    let (mut old, mut new) = (ground.clone(), ground.clone());
+                    let was = oracle::inline_panel(&mut old, area, &mut a, busy, upward, &c);
+                    let mut panel = InlinePanel { busy, upward, chrome: &c, cursor: Position::default() };
+                    (&mut panel).render(area, &mut new, &mut b);
+                    let what = format!("{w}x{h} upward {upward} {query:?} at {at} busy {busy} {status:?} {flash:?}");
+                    assert_eq!(was, panel.cursor, "{what}");
+                    assert_eq!((a.xoffset.get(), a.prompt_at.get(), &a.row_at), (b.xoffset.get(), b.prompt_at.get(), &b.row_at), "{what}");
+                    assert!(old == new, "{what}: the cells that differ, as drawn now: {:?}", old.diff(&new));
+                }
+            }
+        } } } }
+    }
 }
 
 /// A pane's terminal, drawn into a preview box: its bottom, where the work is.
@@ -2700,7 +3011,7 @@ fn clock(buf: &mut Buffer, app: &App, rect: Rect) {
 }
 
 
-fn clip(text: &str, cols: usize) -> String {
+pub(crate) fn clip(text: &str, cols: usize) -> String {
     if text.width() <= cols { return text.to_string() }
     if cols == 0 { return String::new() }
     let mut out = String::new();
@@ -3003,6 +3314,40 @@ mod theme_render_tests {
         (0..42).map(|y| (0..150).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
     }
 
+    /// A command's window (Super+u's Updates) says what is opening while its terminal starts,
+    /// not the New Harness form; with nothing on its way, an empty window is the form again.
+    #[test]
+    fn a_command_window_says_what_it_opens_while_its_terminal_starts() {
+        let mut app = app();
+        app.tab_mut().name = "Updates".into();
+        app.tab_mut().opening = Some("Updates".into());
+        let id = app.tab().id.clone();
+        app.shell_inputs.insert(id.clone(), Default::default());
+        let s = screen(&mut app);
+        assert!(s.contains("Opening Updates…"), "{s}");
+        assert!(!s.contains("What task should"), "no New Harness form while the command starts:\n{s}");
+        // The terminal never came (the request failed): back to what an empty window shows.
+        app.shell_inputs.remove(&id);
+        assert!(!screen(&mut app).contains("Opening Updates…"));
+    }
+
+    /// A selection let go goes to the clipboard and says so over its pane for a moment.
+    #[test]
+    fn a_copied_selection_says_copied_over_its_pane_for_a_moment() {
+        let mut app = app();
+        app.panes.insert(1, Pane::new(1, "local", "shell", 100, 30));
+        app.tab_mut().root = Some(crate::layout::Node::new(1, 150, 41));
+        app.tab_mut().focus = Some(1);
+        app.fit_panes();
+        assert!(!screen(&mut app).contains("Copied"));
+        app.copied = Some((1, Instant::now()));
+        assert!(screen(&mut app).contains("✓ Copied"));
+        assert!(next_repaint(&app, Instant::now()).is_some(), "a frame comes to take it away");
+        app.copied = Some((1, Instant::now() - Duration::from_millis(COPIED_MS + 1)));
+        assert!(!screen(&mut app).contains("Copied"));
+        assert!(app.copied.is_none());
+    }
+
     /// `theme` opens the settings panel over the window (not fzf's full-screen list), and a key
     /// into a section shows that section's options — which a fleet refresh leaves open.
     #[test]
@@ -3180,6 +3525,73 @@ mod theme_render_tests {
         assert!(matches!(kind, PickerKind::Commands), "{s}");
         assert_eq!(picker.current_id().as_deref(), Some("cmd:theme"));
         assert_eq!(picker.screen_area.get(), at, "back in the palette's place");
+    }
+
+    /// A panel whose rows drop from 10 to 2 is smaller in the next frame: the cells it covered
+    /// before are owed one settle rewrite; the same panel again, or a bigger one, owes none.
+    #[test]
+    fn a_panel_that_shrinks_or_closes_owes_one_settle_rewrite() {
+        let t0 = std::time::Instant::now();
+        let mut app = app();
+        let open = |app: &mut App, n: usize| {
+            let mut picker = Picker::new("layout", "");
+            picker.set_rows((0..n).map(|i| crate::picker::Row::new(&format!("r{i}"), &format!("row {i}"))).collect());
+            app.modal = Some(Modal::Picker { kind: PickerKind::Layout, picker });
+        };
+        assert_eq!(app.overlay_drawn, None);
+        open(&mut app, 10);
+        screen(&mut app);
+        let ten = app.overlay_drawn.expect("a panel was drawn");
+        open(&mut app, 10);
+        screen(&mut app);
+        assert_eq!(crate::app::settle_due(Some(ten), app.overlay_drawn, 5, None, t0), None, "the same panel");
+        open(&mut app, 2);
+        screen(&mut app);
+        let two = app.overlay_drawn.expect("a panel was drawn");
+        assert!(two.height < ten.height, "{two:?} {ten:?}");
+        assert_eq!(crate::app::settle_due(Some(ten), Some(two), 5, None, t0), Some(t0), "10 rows down to 2");
+        assert_eq!(crate::app::settle_due(Some(two), Some(ten), 5, None, t0), None, "2 up to 10 covers what it did");
+        app.modal = None;
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, None);
+        assert_eq!(crate::app::settle_due(Some(two), app.overlay_drawn, 5, None, t0), Some(t0), "closed");
+    }
+
+    /// The rect kept for the settle rewrite is where the frame drew: a menu or popup placed past
+    /// the screen's edge is clipped to it, as drawn; the prefix's key hints are an overlay too.
+    #[test]
+    fn the_overlay_rect_is_on_the_screen_and_takes_in_the_key_hints() {
+        let mut app = app();
+        let whole = Rect::new(0, 0, 150, 42);
+        let items = (0..3).map(|i| modal::MenuItem { label: format!("item {i}"), key: String::new(), command: String::new(), disabled: false, separator: false }).collect();
+        app.modal = Some(Modal::Menu(modal::Menu { title: "m".into(), items, choice: None, x: 140, y: 40, width: 20, stay_open: false, no_mouse: false, mouse: None, tree: None, complete: None, responsive: None, buttons: None }));
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, Some(Rect::new(140, 40, 10, 2)), "the menu, clipped to the screen");
+        // A confirmation's box is two rows taller than a menu's (its blank row and buttons); hn's
+        // own question is a dialog over the panes, not the status line.
+        let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
+        let row = crate::buttons::Row { buttons: vec![button("Cancel"), button("Stop")], chosen: 0, hint: String::new() };
+        assert!(crate::workspace_menu::open_buttons(&mut app, "Close Tab", vec![crate::workspace_menu::note("Working")], row, vec!["x".into(), "y".into()]));
+        screen(&mut app);
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("the confirmation") };
+        assert_eq!(app.overlay_drawn, Some(crate::workspace_menu::dialog_box(m)));
+        app.modal = None;
+        crate::input::run(&mut app, "rename-tab");
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, prompt_layout(&app).map(|(r, _)| r));
+        assert!(app.overlay_drawn.is_some_and(|r| r.y < app.body().bottom()), "over the panes");
+        app.modal = None;
+        app.modal = Some(Modal::Popup { pane: 999, x: 130, y: 35, width: 40, height: 20, border: true, title: String::new(), look: Default::default() });
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, Some(Rect::new(130, 35, 20, 7)), "the popup, clipped to the screen");
+        assert!(app.overlay_drawn.is_some_and(|r| r.intersection(whole) == r));
+        app.modal = None;
+        app.prefix = true;
+        app.prefix_at = Some(std::time::Instant::now() - Duration::from_secs(5));
+        let s = screen(&mut app);
+        let hints = app.overlay_drawn.unwrap_or_else(|| panic!("the key hints are an overlay:\n{s}"));
+        let body = app.body();
+        assert_eq!((hints.x, hints.width, hints.bottom()), (body.x, body.width, body.bottom()), "{hints:?} {body:?}");
     }
 
     // ── tabs ──
@@ -3381,6 +3793,29 @@ mod theme_render_tests {
         key(&mut app, KeyCode::Esc);
         assert!(app.modal.is_none());
     }
+
+    /// Close Tab / Stop Harness end in one row, `[ Cancel ]  [ Stop ]`, the way out first.
+    #[test]
+    fn a_confirmation_draws_its_buttons_on_one_row_and_keys_choose() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut app = app();
+        let button = |label: &str, key| crate::buttons::Button { label: label.into(), key };
+        let row = crate::buttons::Row { buttons: vec![button("Cancel", None), button("Stop", Some('s'))], chosen: 0, hint: "s stop · esc cancel".into() };
+        assert!(crate::workspace_menu::open_buttons(&mut app, "Close Tab · zsh", vec![crate::workspace_menu::note("Stop? Saved history will remain.")],
+            row, vec!["close-harness -x x".into(), "close-harness -y x".into()]));
+        let s = screen(&mut app);
+        let lines: Vec<&str> = s.lines().collect();
+        let at = lines.iter().position(|l| l.contains("[ Cancel ]")).unwrap_or_else(|| panic!("no button row:\n{s}"));
+        let line = lines[at];
+        assert!(line.contains("[ Stop ]") && line.find("[ Cancel ]") < line.find("[ Stop ]"), "{line}");
+        assert!(!line.contains("esc cancel"), "the hint is not on the buttons' row: {line}");
+        assert!(!lines[at + 1].contains("esc cancel") && lines[at + 2].contains("esc cancel"), "a blank row, then the hint as the box's last line:\n{s}");
+        let key = |app: &mut App, code| crate::input::modal_key(app, KeyEvent::new(code, KeyModifiers::NONE));
+        key(&mut app, KeyCode::Right);
+        assert!(matches!(app.modal, Some(Modal::Menu(_))), "moving keeps the menu");
+        key(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none());
+    }
 }
 
 #[cfg(test)]
@@ -3419,5 +3854,470 @@ mod which_key_tests {
                 assert!(any, "the shortcut box should draw on the themed pane surface ({w}x{h})");
             }
         }
+    }
+}
+
+/// tmux's menu and the prefix's key hints as they were drawn cell by cell (2026-10-08), before
+/// their boxes were `Block`s, and the checks that the `Block`s draw the very same buffers.
+#[cfg(test)]
+mod box_oracle_tests {
+    use super::*;
+    use crate::app::App;
+
+    fn old_menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
+        let opt = |name: &str, default: &str| Some(app.style_spec(name, app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| default.to_string());
+        let lines = opt("menu-border-lines", "single");
+        let base = Style::default();
+        let plain = |mut st: Style| { st.add_modifier = Modifier::empty(); st.sub_modifier = Modifier::empty(); st };
+        let style = plain(crate::draw::style_over(&opt("menu-style", "default"), base));
+        let selected = plain(crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base));
+        let border = plain(crate::draw::style_over(&opt("menu-border-style", "default"), style));
+        let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
+        let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
+        let (x0, y0) = (m.x, m.y);
+        let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
+        for y in y0..y0 + h { for x in x0..x0 + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
+        let (x1, y1) = (x0 + w - 1, y0 + h - 1);
+        for x in x0 + 1..x1 { put(buf, x, y0, hz, border); put(buf, x, y1, hz, border) }
+        for y in y0 + 1..y1 { put(buf, x0, y, vt, border); put(buf, x1, y, vt, border) }
+        put(buf, x0, y0, tl, border); put(buf, x1, y0, tr, border); put(buf, x0, y1, bl, border); put(buf, x1, y1, br, border);
+        let draw_at = |buf: &mut Buffer, x: u16, y: u16, text: &str, st: Style, avail: u16| {
+            for (i, cell) in crate::draw::format_draw_over(text, st, avail).into_iter().enumerate() {
+                if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((x + i as u16, y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
+            }
+        };
+        if !m.title.is_empty() { draw_at(buf, x0 + 2, y0, &m.title, border, w.saturating_sub(4)) }
+        for (i, it) in m.items.iter().enumerate() {
+            let y = y0 + 1 + i as u16;
+            if it.separator {
+                put(buf, x0, y, lj, border);
+                for x in x0 + 1..x1 { put(buf, x, y, hz, border) }
+                put(buf, x1, y, rj, border);
+                continue;
+            }
+            let pad = if m.choice == Some(i) && !it.disabled { selected } else { style };
+            for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", pad) }
+            let st = if it.disabled { style.add_modifier(Modifier::DIM) } else { pad };
+            draw_at(buf, x0 + 2, y, &menu_text(it), st, m.width);
+        }
+    }
+
+    /// The key hints as they were drawn, box and items.
+    fn old_which_key(buf: &mut Buffer, app: &App, body: Rect) -> Option<Rect> {
+        if body.width < 16 || body.height < 4 { return None }
+        let mut items: Vec<(String, String)> = Vec::new();
+        let mut digits = false;
+        for b in &app.keymap.prefix_table {
+            let key = crate::keys::name(&b.chord);
+            if b.command.starts_with("select-window -t ") && key.len() == 1 && key.chars().all(|c| c.is_ascii_digit()) { digits = true; continue }
+            let what = if b.note.is_empty() { b.command.clone() } else { b.note.clone() };
+            items.push((key, what));
+        }
+        if digits { items.insert(0, ("0-9".into(), "Select window 0 to 9".into())) }
+        const FIRST: &[&str] = &["c", "N", "n", "p", "l", "0-9", "w", "s", "d", "%", "\"", "x", "z", "o", ";", "[", "]", ":", "?", "&", ",", "$", "!", "q", "t", "{", "}", "Space"];
+        items.sort_by_key(|(k, _)| FIRST.iter().position(|f| f == k).unwrap_or(FIRST.len()));
+        let key_w = items.iter().map(|(k, _)| k.width()).max().unwrap_or(1).min(8);
+        let col_w: usize = key_w + if body.width >= 150 { 44 } else { 32 };
+        let cols = ((body.width as usize).saturating_sub(4) / col_w).max(1);
+        let col_w = ((body.width as usize).saturating_sub(4) / cols).max(col_w);
+        let rows_needed = items.len().div_ceil(cols);
+        let height = (rows_needed as u16 + 2).min((body.height / 3).max(4)).min(body.height);
+        let area = Rect::new(body.x, body.y + body.height - height, body.width, height);
+        let pal = theme::pane_palette();
+        let panel = Style::default().bg(pal.surface);
+        let border = Style::default().fg(pal.border).bg(pal.surface);
+        for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(panel); } } }
+        for x in area.x..area.x + area.width { buf.set_string(x, area.y, "─", border); buf.set_string(x, area.y + area.height - 1, "─", border) }
+        for y in area.y..area.y + area.height { buf.set_string(area.x, y, "│", border); buf.set_string(area.x + area.width - 1, y, "│", border) }
+        buf.set_string(area.x, area.y, "┌", border); buf.set_string(area.x + area.width - 1, area.y, "┐", border);
+        buf.set_string(area.x, area.y + area.height - 1, "└", border); buf.set_string(area.x + area.width - 1, area.y + area.height - 1, "┘", border);
+        let title = format!(" {} ", crate::keys::name(&app.keymap.prefix));
+        buf.set_string(area.x + 2, area.y, &title, Style::default().fg(pal.foreground).bg(pal.surface).add_modifier(Modifier::BOLD));
+        let inner_rows = area.height.saturating_sub(2) as usize;
+        let fits = cols * inner_rows.max(1);
+        if items.len() > fits && fits > 0 {
+            let more = format!(" +{} more — {} ? ", items.len() - fits + 1, crate::keys::name(&app.keymap.prefix));
+            let mx = (area.x + area.width).saturating_sub(more.width() as u16 + 2);
+            buf.set_string(mx, area.y + area.height - 1, &more, Style::default().fg(pal.muted).bg(pal.surface).add_modifier(Modifier::DIM));
+        }
+        for (i, (key, what)) in items.iter().enumerate() {
+            let (col, row) = (i / inner_rows.max(1), i % inner_rows.max(1));
+            if col >= cols || (items.len() > fits && i + 1 >= fits) { break }
+            let x = area.x + 2 + (col * col_w) as u16;
+            let y = area.y + 1 + row as u16;
+            buf.set_string(x, y, format!("{key:>key_w$}"), Style::default().fg(theme::accent()).bg(pal.surface).add_modifier(Modifier::BOLD));
+            let room = col_w - key_w - 3;
+            buf.set_stringn(x + key_w as u16 + 1, y, clip(what, room), room, Style::default().fg(pal.foreground).bg(pal.surface));
+        }
+        Some(area)
+    }
+
+    fn app(size: (u16, u16)) -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        App::new(19789, sink, size)
+    }
+
+    /// A screen already written over, so a cell the old drawing left alone shows.
+    fn ground(area: Rect) -> Buffer {
+        let mut buf = Buffer::empty(area);
+        for p in area.positions() { buf[p].set_symbol("x").set_style(Style::default().fg(Color::Red).bg(Color::Blue).add_modifier(Modifier::ITALIC)); }
+        buf
+    }
+
+    /// tmux's menu box as a `Block` draws what it did: items, keys, a disabled note, rules, the
+    /// chosen row and none, a `#[…]` title, in each menu-border-lines and with styles set, at the
+    /// screen's corner and in its middle.
+    #[test]
+    fn the_menu_box_as_a_block_draws_what_it_did() {
+        let item = |label: &str, key: &str| crate::modal::MenuItem { label: label.into(), key: key.into(), command: "x".into(), disabled: false, separator: false };
+        let items = vec![
+            item("New window", "c"), item("Split #[bold]right", "%"),
+            crate::modal::MenuItem { separator: true, ..item("", "") },
+            crate::modal::MenuItem { disabled: true, ..item("Nothing to paste", "") },
+            item("日本語の項目", ""), item("Kill", "X"),
+        ];
+        let screen = Rect::new(0, 0, 60, 14);
+        for lines in ["single", "double", "heavy", "simple", "rounded", "padded", "none"] {
+            for styled in [false, true] {
+                let mut app = app((60, 14));
+                let g = crate::options::SetFlags { global: true, ..Default::default() };
+                app.options.set("menu-border-lines", Some(lines), &g, "", 0).unwrap();
+                if styled {
+                    app.options.set("menu-style", Some("bg=colour236,fg=colour250"), &g, "", 0).unwrap();
+                    app.options.set("menu-border-style", Some("fg=colour39"), &g, "", 0).unwrap();
+                    app.options.set("menu-selected-style", Some("bg=colour24,fg=white,bold"), &g, "", 0).unwrap();
+                }
+                for (x, y) in [(0, 0), (17, 3)] { for choice in [None, Some(0), Some(3), Some(5)] { for title in ["", "Pane", "#[fg=red]Tab #1 ## (x)"] {
+                    let m = crate::modal::Menu { title: title.into(), items: items.clone(), choice, x, y, width: 24, stay_open: false, no_mouse: false, mouse: None, tree: None, complete: None, responsive: None, buttons: None };
+                    let (mut old, mut new) = (ground(screen), ground(screen));
+                    old_menu(&mut old, &app, &m);
+                    menu(&mut new, &app, &m);
+                    assert_eq!(new, old, "{lines} styled {styled} at ({x}, {y}) choice {choice:?} title {title:?}");
+                } } }
+            }
+        }
+    }
+
+    /// The key hints' box as a `Block` draws what it did, at every size it is drawn in, under its
+    /// items.
+    #[test]
+    fn the_key_hints_box_as_a_block_draws_what_it_did() {
+        let _colours = crate::term_out::colours_lock();
+        let app = app((150, 42));
+        for (w, h) in [(16, 4), (40, 10), (80, 24), (150, 42), (200, 60)] {
+            let body = Rect::new(0, 0, w, h);
+            let (mut old, mut new) = (ground(body), ground(body));
+            let was = old_which_key(&mut old, &app, body);
+            assert_eq!(which_key(&mut new, &app, body), was, "{w}x{h}");
+            assert_eq!(new, old, "{w}x{h}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod confirm_box_tests {
+    use super::*;
+    use crate::app::App;
+    use crate::buttons::{oracle as row_oracle, Button, Row};
+    use crate::modal::Menu;
+    use crate::settings::Chrome;
+
+    /// The confirmation box as it was drawn by hand, cell by cell (menu() with buttons), before it
+    /// was a ratatui Block: what it must still look like.
+    fn old_confirm(buf: &mut Buffer, m: &Menu, lines: &str, c: &Chrome) {
+        let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(lines);
+        let (style, border) = (c.base, c.muted);
+        let (w, h) = (m.width + 4, m.items.len() as u16 + 2 + 2);
+        let (x0, y0) = (m.x, m.y);
+        let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
+        for y in y0..y0 + h { for x in x0..x0 + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
+        let (x1, y1) = (x0 + w - 1, y0 + h - 1);
+        for x in x0 + 1..x1 { put(buf, x, y0, hz, border); put(buf, x, y1, hz, border) }
+        for y in y0 + 1..y1 { put(buf, x0, y, vt, border); put(buf, x1, y, vt, border) }
+        put(buf, x0, y0, tl, border); put(buf, x1, y0, tr, border); put(buf, x0, y1, bl, border); put(buf, x1, y1, br, border);
+        let draw_at = |buf: &mut Buffer, x: u16, y: u16, text: &str, st: Style, avail: u16| {
+            for (i, cell) in crate::draw::format_draw_over(text, st, avail).into_iter().enumerate() {
+                if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((x + i as u16, y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
+            }
+        };
+        if !m.title.is_empty() { draw_at(buf, x0 + 2, y0, &m.title, border, w.saturating_sub(4)) }
+        for (i, it) in m.items.iter().enumerate() {
+            let y = y0 + 1 + i as u16;
+            if it.separator {
+                put(buf, x0, y, lj, border);
+                for x in x0 + 1..x1 { put(buf, x, y, hz, border) }
+                put(buf, x1, y, rj, border);
+                continue;
+            }
+            // (A confirmation's notes are never chosen: its buttons have the keys and the mouse.)
+            for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", style) }
+            let text = if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) };
+            draw_at(buf, x0 + 2, y, &text, style, m.width);
+        }
+        let b = m.buttons.as_ref().unwrap();
+        row_oracle::draw(&b.row, buf, x0 + 2, x0 + 2 + m.width, y0 + 1 + m.items.len() as u16 + 1, c);
+    }
+
+    /// The box as drawn now: the shared Dialog.
+    fn drawn(buf: &mut Buffer, m: &Menu, lines: &str, c: &Chrome) {
+        let row = &m.buttons.as_ref().unwrap().row;
+        (&confirmation(m, row, lines, c)).render(crate::workspace_menu::dialog_box(m), buf)
+    }
+
+    /// What a terminal shows: a cell hidden behind a wide character is never sent (ratatui's diff
+    /// and term_out's rows both skip it), so it is blanked here. (The only difference a wide
+    /// title makes: the Block's title `Span` resets that cell, the old loop wrote a styled blank.)
+    fn shown(mut buf: Buffer) -> Buffer {
+        let a = buf.area;
+        for y in a.top()..a.bottom() {
+            let mut x = a.left();
+            while x < a.right() {
+                let w = buf[(x, y)].symbol().width().max(1) as u16;
+                for hidden in x + 1..(x + w).min(a.right()) { buf[(hidden, y)].reset() }
+                x += w;
+            }
+        }
+        buf
+    }
+
+    fn dialog(size: (u16, u16), lines: &str, title: &str, notes: &[&str], row: Row) -> (App, Menu) {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, size);
+        let g = crate::options::SetFlags { global: true, ..Default::default() };
+        app.options.set("menu-border-lines", Some(lines), &g, "", 0).unwrap();
+        let actions = row.buttons.iter().map(|b| format!("set -g @clicked {}", b.label)).collect();
+        let notes = notes.iter().map(|n| crate::workspace_menu::note(n)).collect();
+        assert!(crate::workspace_menu::open_buttons(&mut app, title, notes, row, actions), "{title} at {size:?}");
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("no dialog") };
+        let m = m.clone();
+        assert_eq!(m.choice, None, "a confirmation's notes are never chosen");
+        (app, m)
+    }
+
+    /// The Close Tab box (and a failed stop's, and ones with wide or `#` titles) draws exactly as
+    /// before it was a Block with a Paragraph and the row widget: every cell of an 80×24 and a
+    /// 40×12 screen, in each menu-border-lines, a dark and a light theme and NO_COLOR. (Rows with
+    /// no keys hint: the hint left the buttons' row for the box's last line on purpose, tested in
+    /// `a_confirmation_draws_its_buttons_on_one_row_and_keys_choose`.)
+    #[test]
+    fn the_confirmation_box_draws_as_the_old_one() {
+        let b = |label: &str, key| Button { label: label.into(), key };
+        let stop = Row { buttons: vec![b("Cancel", None), b("Stop", Some('s'))], chosen: 0, hint: String::new() };
+        let back = Row { buttons: vec![b("Back", None)], chosen: 0, hint: String::new() };
+        // (menu() and the direct draw each read hn's colours: no other test may change them between.)
+        let _colours = crate::term_out::colours_lock();
+        let cases: [(&str, Vec<&str>, Row, bool); 4] = [
+            ("Close Tab · zsh", vec!["Working · zsh", "The terminal and its running commands will end."], stop.clone(), true),
+            ("Stop Harness · build", vec!["1 stopped. The session or connection changed. Check it before trying again."], back, true),
+            ("Close Tab · #1 ## (x)", vec!["Idle · #1"], Row { chosen: 1, ..stop.clone() }, true),
+            ("关闭标签 · 终端", vec!["正在运行 · 终端", "终端及其命令将结束。"], stop, false),   // see `shown`
+        ];
+        for c in row_oracle::chromes() {
+            for size in [(80, 24), (40, 12)] {
+                for lines in ["single", "double", "heavy", "simple", "rounded", "padded", "none"] {
+                    for (title, notes, row, exact) in &cases {
+                        let (app, m) = dialog(size, lines, title, notes, row.clone());
+                        let screen = Rect::new(0, 0, size.0, size.1);
+                        let (mut old, mut new) = (row_oracle::canvas(screen), row_oracle::canvas(screen));
+                        old_confirm(&mut old, &m, lines, &c);
+                        drawn(&mut new, &m, lines, &c);
+                        if *exact { assert_eq!(new, old, "{title} at {size:?} in {lines}") }
+                        else { assert_eq!(shown(new), shown(old), "{title} at {size:?} in {lines}") }
+                        // menu() draws a menu with buttons as this box, in menu-border-lines, as an
+                        // overlay: the window behind it dimmed with the panel's backdrop.
+                        let (mut routed, mut direct) = (row_oracle::canvas(screen), row_oracle::canvas(screen));
+                        menu(&mut routed, &app, &m);
+                        crate::settings::backdrop(&mut direct, app.body(), crate::settings::chrome().backdrop);
+                        drawn(&mut direct, &m, lines, &crate::settings::chrome());
+                        assert_eq!(routed, direct, "{title} at {size:?} in {lines}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod prompt_dialog_tests {
+    use super::*;
+    use crate::app::App;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::backend::Backend;
+
+    fn app(size: (u16, u16)) -> App {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, size);
+        app.fleet.local_id = "local".into();
+        app
+    }
+
+    /// The screen as text, and where the terminal's cursor was put.
+    fn screen(app: &mut App) -> (String, Option<Position>) {
+        let (w, h) = app.size;
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        term.draw(|f| { draw(f, app); }).unwrap();
+        let at = term.backend_mut().get_cursor_position().ok();
+        let buf = term.backend().buffer().clone();
+        ((0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n"), at)
+    }
+
+    fn press(app: &mut App, code: KeyCode) { crate::input::handle(app, Event::Key(KeyEvent::new(code, KeyModifiers::NONE))) }
+    fn typed(app: &mut App, text: &str) { for ch in text.chars() { press(app, KeyCode::Char(ch)) } }
+    fn click(app: &mut App, at: Position) {
+        crate::input::handle(app, Event::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: at.x, row: at.y, modifiers: KeyModifiers::NONE }));
+    }
+    fn open(app: &App) -> Option<&crate::modal::Prompt> { match &app.modal { Some(Modal::Prompt(p)) => Some(p), _ => None } }
+
+    /// Rename… from the tab's menu: a dialog titled with the tab, its name in the input with the
+    /// caret at its end, `[ Cancel ]  [ Rename ]` — not tmux's `(rename-tab)` on the status line.
+    #[test]
+    fn rename_tab_is_a_dialog_with_the_name_in_its_input() {
+        let mut app = app((120, 30));
+        app.mouse = true;
+        let name = app.tab().name.clone();
+        crate::input::run(&mut app, "rename-tab");
+        let (s, cursor) = screen(&mut app);
+        assert!(s.contains(&format!("┌─Rename Tab · {name}")) && s.contains("Tab name") && s.contains("[ Cancel ]  [ Rename ]"), "{s}");
+        assert!(s.contains(&format!("│{name}")), "the name in the input:\n{s}");
+        assert!(!s.contains("(rename-tab)"), "not on the status line:\n{s}");
+        let (r, a) = prompt_layout(&app).expect("fits");
+        let field = Rect::new(a.input.unwrap().x + 1, a.input.unwrap().y + 1, a.input.unwrap().width - 2, 1);
+        assert_eq!(cursor, Some(Position::new(field.x + name.chars().count() as u16, field.y)), "the caret after the name");
+        assert!(r.y > 0 && r.bottom() < 29, "over the panes");
+        // The caret edits where it is; Enter renames.
+        press(&mut app, KeyCode::Home);
+        typed(&mut app, "my ");
+        press(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none());
+        assert_eq!(app.tab().name, format!("my {name}"));
+    }
+
+    /// ↓ takes the keys from the input to the buttons, ↑ and ↓ move between them, and ↑ from
+    /// Cancel's row… goes back up to the input.
+    #[test]
+    fn the_arrows_go_down_to_the_buttons_and_back_up() {
+        let mut app = app((120, 30));
+        crate::input::run(&mut app, "rename-tab");
+        press(&mut app, KeyCode::Down);
+        assert!(open(&app).is_some_and(|p| p.buttons && p.chosen == 1), "↓: on the buttons, Rename chosen");
+        press(&mut app, KeyCode::Left);
+        assert!(open(&app).is_some_and(|p| p.chosen == 0), "← → between them");
+        press(&mut app, KeyCode::Up);
+        assert!(open(&app).is_some_and(|p| !p.buttons), "↑: the input again");
+    }
+
+    #[test]
+    fn esc_and_cancel_change_nothing_and_tab_moves_the_keys_to_the_buttons() {
+        let mut app = app((120, 30));
+        app.mouse = true;
+        let name = app.tab().name.clone();
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "x");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none() && app.tab().name == name, "Esc");
+        // status-keys vi is the status line's: Esc still cancels a dialog.
+        crate::commands::execute(&mut app, "set -g status-keys vi");
+        crate::input::run(&mut app, "rename-tab");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none(), "Esc under status-keys vi");
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "x");
+        press(&mut app, KeyCode::Tab);
+        assert!(open(&app).is_some_and(|p| p.buttons && p.chosen == 1), "Rename chosen");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(open(&app).map(|p| p.chosen), Some(0), "← → between the buttons");
+        // A letter is typed, and the input has the keys again.
+        typed(&mut app, "y");
+        assert!(open(&app).is_some_and(|p| !p.buttons && p.value == format!("{name}xy")));
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Enter);
+        assert!(app.modal.is_none() && app.tab().name == name, "Enter on [ Cancel ]");
+    }
+
+    #[test]
+    fn the_mouse_answers_with_a_button_and_cancels_outside() {
+        let mut app = app((120, 30));
+        app.mouse = true;
+        let name = app.tab().name.clone();
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "2");
+        screen(&mut app);
+        let (r, a) = prompt_layout(&app).expect("fits");
+        let buttons = { let p = open(&app).unwrap(); p.row().areas(a.row) };
+        press(&mut app, KeyCode::Tab);
+        click(&mut app, Position::new(a.input.unwrap().x + 2, a.input.unwrap().y + 1));
+        assert!(open(&app).is_some_and(|p| !p.buttons), "a click on the input gives it the keys");
+        click(&mut app, Position::new(r.x + 1, r.y + 1));
+        assert!(open(&app).is_some(), "the box's own rule does nothing");
+        click(&mut app, Position::new(buttons[1].x + 1, buttons[1].y));
+        assert!(app.modal.is_none() && app.tab().name == format!("{name}2"), "[ Rename ]");
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "3");
+        click(&mut app, Position::new(buttons[0].x + 1, buttons[0].y));
+        assert!(app.modal.is_none() && app.tab().name == format!("{name}2"), "[ Cancel ]");
+        crate::input::run(&mut app, "rename-tab");
+        typed(&mut app, "3");
+        click(&mut app, Position::new(0, 0));
+        assert!(app.modal.is_none() && app.tab().name == format!("{name}2"), "outside");
+    }
+
+    #[test]
+    fn a_paste_goes_in_at_the_caret() {
+        let mut app = app((120, 30));
+        crate::input::run(&mut app, "send");
+        typed(&mut app, "fix tests");
+        for _ in 0..5 { press(&mut app, KeyCode::Left) }
+        press(&mut app, KeyCode::Tab);
+        crate::input::handle(&mut app, Event::Paste("the\nnew ".into()));
+        assert!(open(&app).is_some_and(|p| p.value == "fix the new tests" && p.cursor == 12 && !p.buttons), "{:?}", open(&app).map(|p| (&p.value, p.cursor)));
+    }
+
+    /// Send, Broadcast, Rename Harness, Message and Answer are the same dialog with their own
+    /// title, line, label and action.
+    #[test]
+    fn hn_s_other_questions_are_dialogs_with_their_own_action() {
+        let mut app = app((120, 30));
+        crate::input::run(&mut app, "send");
+        let (s, _) = screen(&mut app);
+        // (Its line wrapped to the input's width.)
+        for want in ["┌─Send to Harness", "Harness picks the harness that fits best;", "confirm.", "What should be done?", "[ Cancel ]  [ Send ]"] { assert!(s.contains(want), "{want}:\n{s}") }
+        press(&mut app, KeyCode::Esc);
+        let kinds = [
+            (crate::modal::PromptKind::Broadcast, "Broadcast"),
+            (crate::modal::PromptKind::RenameHarness { machine: "m".into(), agent: "a".into() }, "Rename"),
+            (crate::modal::PromptKind::Message { machine: "m".into(), agent: "a".into() }, "Send"),
+            (crate::modal::PromptKind::Answer { machine: "m".into(), agent: "a".into(), request: "r".into() }, "Answer"),
+        ];
+        for (kind, action) in kinds {
+            let mut p = crate::modal::Prompt::status(kind, "", "");
+            (p.title, p.field) = ("Title".into(), "Field".into());
+            app.modal = Some(Modal::Prompt(p));
+            let (s, _) = screen(&mut app);
+            assert!(s.contains("┌─Title") && s.contains(&format!("[ Cancel ]  [ {action} ]")), "{action}:\n{s}");
+        }
+    }
+
+    /// tmux's own prompts (C-b , and every command-prompt, choose-tree's) stay on the status line.
+    #[test]
+    fn tmux_s_command_prompt_keeps_the_status_line() {
+        let mut app = app((120, 30));
+        crate::commands::execute(&mut app, "command-prompt -I zsh -p (rename-window) \"rename-window '%%'\"");
+        assert!(open(&app).is_some_and(|p| !p.dialog()));
+        let (s, _) = screen(&mut app);
+        assert!(s.lines().last().unwrap().starts_with("(rename-window) zsh"), "{s}");
+        assert!(!s.contains("┌─"), "no dialog:\n{s}");
+        assert!(prompt_layout(&app).is_none());
+    }
+
+    #[test]
+    fn a_dialog_that_cannot_fit_is_cancelled() {
+        let mut app = app((20, 6));
+        let name = app.tab().name.clone();
+        crate::input::run(&mut app, "rename-tab");
+        screen(&mut app);
+        assert!(app.modal.is_none(), "an invisible question must not keep answering keys");
+        assert_eq!(app.toast.as_ref().map(|t| t.0.as_str()), Some("Make the terminal larger to answer this"));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tab().name, name);
     }
 }

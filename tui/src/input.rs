@@ -24,6 +24,14 @@ pub fn handle(app: &mut App, event: CEvent) {
         // A key is the session's activity (session_update_activity): a script's command with no -t
         // goes to the session used last.
         CEvent::Key(key) if key.kind != KeyEventKind::Release => {
+            // Escape lets go of a held pane (and is used up only when a drag was showing); the
+            // release that follows still belongs to the header press.
+            if key.code == KeyCode::Esc {
+                if let Some(live) = app.controls.grab.as_ref().map(|g| g.live) {
+                    crate::pane_drag::cancel(app);
+                    if live { return }
+                }
+            }
             let now = crate::app::epoch_secs();
             // (This client used now: a shell's command with no target comes here — each second.)
             if now != app.session_activity { crate::ipc::mark_active() }
@@ -264,7 +272,17 @@ pub fn send_to_pane(app: &mut App, focus: u64, bytes: Vec<u8>) {
 fn on_paste(app: &mut App, text: String) {
     if paste_form(app, &text) { return }
     if let Some(Modal::Picker { picker, .. }) = &mut app.modal { for c in text.chars().filter(|c| !c.is_control()) { picker.type_char(c) } return }
-    if let Some(Modal::Prompt(prompt)) = &mut app.modal { prompt.value.push_str(&text.replace(['\r', '\n'], " ")); return }
+    // (At the cursor, which goes after it, as a typed line does; a dialog's input has the keys again.)
+    if let Some(Modal::Prompt(prompt)) = &mut app.modal {
+        let mut chars: Vec<char> = prompt.value.chars().collect();
+        let at = prompt.cursor.min(chars.len());
+        let pasted: Vec<char> = text.replace(['\r', '\n'], " ").chars().collect();
+        prompt.cursor = at + pasted.len();
+        chars.splice(at..at, pasted);
+        prompt.value = chars.into_iter().collect();
+        prompt.buttons = false;
+        return;
+    }
     app.tab_mut().home = false;
     if let Some(buffer) = app.shell_inputs.get(&app.tab().id) { buffer.lock().unwrap().push(text.into_bytes()); return }
     let Some(focus) = app.focused() else { return };
@@ -322,6 +340,7 @@ fn on_mouse(app: &mut App, mouse: MouseEvent) {
 /// preview, whichever it is over; a click takes a row, a second one opens it; in the preview a
 /// drag scrolls it and a drag on its border resizes it; a click outside the box closes it.
 fn modal_mouse(app: &mut App, mouse: MouseEvent) {
+    if matches!(&app.modal, Some(Modal::Prompt(p)) if p.dialog()) { return prompt_mouse(app, mouse) }
     if matches!(app.modal, Some(Modal::NewHarness(_))) { return crate::new_harness::mouse(app, mouse) }
     // --no-mouse: a list the mouse does nothing to.
     if theme::fzf_opts().no_mouse && matches!(app.modal, Some(Modal::Picker { .. })) { return }
@@ -954,14 +973,11 @@ fn local_offset_hours() -> u64 {
     ((24 + sign * hours) % 24) as u64
 }
 
-/// A status-line prompt, tmux's way: `(rename-window) name`. [label] becomes the hint shown dim
-/// at the right when the line has room.
-fn prompt(app: &mut App, kind: PromptKind, title: &str, label: &str, hint: &str, value: &str, secret: bool) {
-    let tag = format!("({}) ", title.to_lowercase().replace(' ', "-"));
-    let mut p = Prompt::status(kind, &tag, value);
-    p.title = title.into();
-    p.hint = if hint.is_empty() { label.to_string() } else { hint.to_string() };
-    p.secret = secret;
+/// One of hn's own questions, as the shared dialog: titled [title], [body] above an input box
+/// labelled [field] with [value] in it, the caret at its end.
+fn prompt(app: &mut App, kind: PromptKind, title: &str, field: &str, body: &str, value: &str) {
+    let mut p = Prompt::status(kind, "", value);
+    (p.title, p.field, p.body) = (title.into(), field.into(), body.into());
     app.modal = Some(Modal::Prompt(p));
 }
 
@@ -1028,6 +1044,7 @@ fn remode(app: &App, kind: PickerKind, picker: &mut Picker) -> (PickerKind, bool
 pub fn run(app: &mut App, command: &str) {
     match command {
         "account" | "login" => crate::account::open(app),
+        "signout" | "logout" => crate::account::ask_sign_out(app, false),
         "hardware-devices" => crate::hardware::open(app),
         "open" => launch(app, "", Filter::All),
         "palette" => launch(app, ">", Filter::All),
@@ -1052,11 +1069,11 @@ pub fn run(app: &mut App, command: &str) {
             let focused = focused_agent(app);
             new_shell_from(app, focused, Placement::Auto(None), None, None);
         }
-        "send" => prompt(app, PromptKind::Send, "Send to harness", "What should be done?", "Harness picks the harness that fits best; you confirm.", "", false),
+        "send" => prompt(app, PromptKind::Send, "Send to Harness", "What should be done?", "Harness picks the harness that fits best; you confirm.", ""),
         "broadcast" => {
             let n = app.tab().panes().len();
             if n == 0 { app.say("No harnesses in this tab", theme::MUTED); return }
-            prompt(app, PromptKind::Broadcast, &format!("Broadcast to {n} harness{}", if n == 1 { "" } else { "es" }), "Message", "Sent as a turn to every harness in this tab.", "", false)
+            prompt(app, PromptKind::Broadcast, &format!("Broadcast · {n} Harness{}", if n == 1 { "" } else { "es" }), "Message", "Sent as a turn to every harness in this tab.", "")
         }
         "clone" => {
             let Some((machine, agent)) = focused_agent(app) else { app.say("This pane has no harness in it", theme::MUTED); return };
@@ -1076,13 +1093,13 @@ pub fn run(app: &mut App, command: &str) {
         "rename" => {
             let Some((machine, agent)) = focused_agent(app) else { return };
             let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
-            prompt(app, PromptKind::RenameHarness { machine, agent }, "Rename Harness", "New name", "", &name, false)
+            prompt(app, PromptKind::RenameHarness { machine, agent }, &format!("Rename Harness · {}", crate::format::short_name(&name, 30)), "New name", "", &name)
         }
         "tab" => crate::commands::execute(app, "new-window"),
         "rename-tab" => {
             let name = app.tab().name.clone();
             let target = PromptKind::RenameTab { session:app.session_id, window:app.tab().id.clone(), owner:app.fleet.local_id.clone() };
-            prompt(app, target, "Rename Tab", "Tab name", "", &name, false);
+            prompt(app, target, &format!("Rename Tab · {}", crate::format::short_name(&name, 30)), "Tab name", "", &name);
         }
         "close-tab" => crate::session_close::tab(app, app.active),
         "next-tab" => { let n = app.tabs.len(); let i = (app.active + 1) % n; app.select_tab(i) }
@@ -1281,8 +1298,7 @@ fn new_what(app: &mut App, machine: String) { crate::new_harness::open(app, Some
 pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool, look: crate::modal::PopupLook) {
     let focused = focused_agent(app);
     let machine = shell_machine(app, focused.as_ref());
-    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
-    let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
+    let cwd = shell_cwd(app, focused.as_ref(), &machine, cwd);
     let Some(link) = app.link(&machine) else { app.print_new = None; return app.error("That machine is not connected") };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
@@ -1361,6 +1377,18 @@ pub fn shell_machine(app: &App, focused: Option<&(String, String)>) -> String {
     if app.daemon_down && app.fleet.machine(&machine).is_some_and(|m| m.local) { crate::local::MACHINE.into() } else { machine }
 }
 
+/// The folder a new shell on [machine] starts in: [cwd] (`-c`), else where the focused pane's
+/// shell says it is now (OSC 7), else where its harness started. On this computer, a folder that
+/// is gone — a deleted worktree, a cleaned /tmp — is none (the shell starts at home): a shell
+/// started there cannot tell where it is, and line editors can hang on it (zsh-syntax-highlighting
+/// does at the first key).
+fn shell_cwd(app: &App, focused: Option<&(String, String)>, machine: &str, cwd: Option<String>) -> Option<String> {
+    let live = focused.and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
+    let cwd = cwd.or(live).or_else(|| focused.and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
+    let here = crate::local::is_local(machine) || app.fleet.machine(machine).is_some_and(|m| m.local);
+    cwd.filter(|c| !here || std::path::Path::new(c).is_dir())
+}
+
 pub(crate) fn configure_local_shell(app: &App, machine: &str, payload: &mut serde_json::Value) {
     if crate::local::is_local(machine) {
         payload["paneId"] = json!(crate::ids::next(crate::ids::Kind::Pane));
@@ -1383,15 +1411,16 @@ pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, p
     let local = crate::local::is_local(&machine);
     if local { app.keep_local_shell_session() }
     let context = command.is_none().then(|| crate::shell_context::prepare(app, focused.as_ref(), !matches!(placement, Placement::Fill(_))));
+    let cwd = shell_cwd(app, focused.as_ref(), &machine, cwd);
     let init = context.as_ref().map(|token| {
-        let cli = if local || app.fleet.machine(&machine).is_some_and(|m| m.local) { std::env::var("HARNESS_SHELL_CLI").ok() } else { None };
-        let mut init = crate::shell_context::bootstrap(token, cli.as_deref(), local || app.fleet.machine(&machine).is_some_and(|m| m.local));
+        let here = local || app.fleet.machine(&machine).is_some_and(|m| m.local);
+        let cli = if here { std::env::var("HARNESS_SHELL_CLI").ok() } else { None };
+        let mut init = crate::shell_context::bootstrap(token, cli.as_deref(), here);
+        crate::shell_context::start_in(&mut init, cwd.as_deref(), here);
+        // (Last: the helper reads it as its last argument.)
         if choose_agent && app.capture.is_none() && !app.headless { init.push("--pick-agent".into()); }
         init
     });
-    // The folder: -c, else where the pane's shell says it is now (OSC 7), else where it started.
-    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
-    let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
     let Some(link) = app.link(&machine) else { app.print_new = None; return app.error("That machine is not connected") };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
@@ -1409,6 +1438,15 @@ pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, p
     let buffered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     app.starting_shell = Some(buffered.clone());
     let tab = match &placement { Placement::Fill(id) => id.clone(), Placement::At(at) => at.tab.clone(), _ => app.tab().id.clone() };
+    // A command's own window (Super+u's Updates, Super+w's Wi-Fi) says what is opening while its
+    // terminal starts: the daemon takes about a second, and the empty window's New Harness form
+    // flashed there first, as if the shortcut had opened that instead.
+    if let Some(command) = &command {
+        if let Some(window) = app.tabs.iter_mut().find(|t| t.id == tab && t.root.is_none() && !t.home) {
+            let program = command.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+            window.opening = Some(if window.name.is_empty() || window.name == "New Tab" { program } else { window.name.clone() });
+        }
+    }
     app.shell_inputs.insert(tab, buffered.clone());
     // Completion state belongs to this request, including concurrent -d/-P callers.
     let print_new = app.print_new.take();
@@ -1644,6 +1682,20 @@ pub(crate) fn modal_key(app: &mut App, key: KeyEvent) {
                     return;
                 }
             }
+            // A confirmation's buttons own the keys; the vertical menu's keys (q, j, k …) do nothing here.
+            if let Some(b) = menu.buttons.as_mut() {
+                use crate::buttons::Answer;
+                let command = match b.row.key(key.code, key.modifiers) {
+                    Answer::Chosen(i) => b.actions.get(i).cloned(),
+                    Answer::Cancel => b.actions.first().cloned(),
+                    // q leaves like Esc; j, k and the rest do nothing.
+                    Answer::Ignored if key.code == KeyCode::Char('q') && !ctrl => b.actions.first().cloned(),
+                    Answer::Moved | Answer::Ignored => None,
+                };
+                if let Some(command) = command { return commands::execute_in(app, &command, menu.mouse.clone()) }
+                app.modal = Some(Modal::Menu(menu));
+                return;
+            }
             if let Some(i) = menu.items.iter().position(|it| !it.disabled && !it.separator && !it.key.is_empty() && it.key == name) {
                 menu.choice = Some(i);
                 return menu_chosen(app, menu);
@@ -1690,12 +1742,36 @@ pub(crate) fn modal_key(app: &mut App, key: KeyEvent) {
         Modal::Copy { pane } => { app.modal = Some(Modal::Copy { pane }); mode_key(app, pane, &keys::of(&key)); }
         Modal::Prompt(p) => {
             prompt_key(app, key, p);
-            // A message or an answer typed from the list: back to it, its query and place kept.
-            if app.modal.is_none() { if let Some(back) = app.back_to_list.take() { app.modal = Some(Modal::Picker { kind: back.0, picker: back.1 }); refill(app) } }
-            else if !matches!(app.modal, Some(Modal::Prompt(_))) { app.back_to_list = None }
+            after_prompt(app);
         }
         Modal::Picker { kind, picker } => picker_key(app, key, kind, picker),
     }
+}
+
+/// After a prompt's key or click: a message or an answer typed from the list goes back to it, its
+/// query and place kept.
+fn after_prompt(app: &mut App) {
+    if app.modal.is_none() { if let Some(back) = app.back_to_list.take() { app.modal = Some(Modal::Picker { kind: back.0, picker: back.1 }); refill(app) } }
+    else if !matches!(app.modal, Some(Modal::Prompt(_))) { app.back_to_list = None }
+}
+
+/// The mouse on one of hn's question dialogs: a button answers, a click on the input gives it the
+/// keys, the rest of the box does nothing and a click outside it cancels.
+fn prompt_mouse(app: &mut App, mouse: MouseEvent) {
+    let Some((r, a)) = crate::ui::prompt_layout(app) else { return };
+    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) { return }
+    let at = ratatui::layout::Position::new(mouse.column, mouse.row);
+    let Some(Modal::Prompt(mut p)) = app.modal.take() else { return };
+    if !r.contains(at) { return after_prompt(app) }
+    match p.row().click(a.row, at) {
+        Some(1) => submit_prompt(app, p),
+        Some(_) => {}
+        None => {
+            if a.input.is_some_and(|i| i.contains(at)) { p.buttons = false }
+            app.modal = Some(Modal::Prompt(p));
+        }
+    }
+    after_prompt(app);
 }
 
 /// The status-line prompt (status_prompt_key): tmux's `status-keys emacs` — each change runs an
@@ -1727,9 +1803,30 @@ fn prompt_key(app: &mut App, key: KeyEvent, mut p: Prompt) {
         if ask.single() { if let KeyCode::Char(c) = key.code { if !ctrl && !alt { return crate::tree::answer(app, pane, ask, Some(&c.to_string())) } } }
         if (key.code == KeyCode::Esc && !vi) || (ctrl && matches!(key.code, KeyCode::Char('c' | 'g'))) { return crate::tree::answer(app, pane, ask, None) }
     }
+    // hn's own questions are dialogs, keyed as the Machines inputs are: Tab takes the keys to the
+    // buttons and back, a printable key is typed wherever they were, Esc cancels (status-keys vi
+    // is the status line's). In the input the keys below edit the line as in tmux's prompt.
+    if p.dialog() {
+        // (↓ from the input to the buttons, ↑ back up, as Tab goes either way.)
+        let across = match key.code { KeyCode::Tab | KeyCode::BackTab => true, KeyCode::Down => !p.buttons, KeyCode::Up => p.buttons, _ => false };
+        if across { p.buttons = !p.buttons; app.modal = Some(Modal::Prompt(p)); return }
+        if matches!(key.code, KeyCode::Char(_)) && !ctrl && !alt { p.buttons = false }
+        if p.buttons {
+            let mut row = p.row();
+            match row.key(key.code, key.modifiers) {
+                crate::buttons::Answer::Chosen(1) => return submit_prompt(app, p),
+                crate::buttons::Answer::Chosen(_) | crate::buttons::Answer::Cancel => return,
+                crate::buttons::Answer::Moved => p.chosen = row.chosen,
+                crate::buttons::Answer::Ignored => {}
+            }
+            app.modal = Some(Modal::Prompt(p));
+            return;
+        }
+        if key.code == KeyCode::Esc { return }
+    }
     let (single, incremental, ptype) = match &p.kind { PromptKind::Command { one, incremental, ptype, .. } => (*one, *incremental, *ptype), PromptKind::Tree { ask, .. } => (false, false, ask.ptype()), _ => (false, false, 0) };
     // status-keys vi (tmux's default when $EDITOR names vi): Esc leaves insert for normal mode.
-    let vi = app.options.get("status-keys", "", None).as_deref() == Some("vi");
+    let vi = !p.dialog() && app.options.get("status-keys", "", None).as_deref() == Some("vi");
     if vi && p.vi_normal { prompt_vi_normal(app, key, p); return }
     if vi && key.code == KeyCode::Esc && !ctrl && !alt { p.vi_normal = true; app.modal = Some(Modal::Prompt(p)); return }
     // Entry mode (status_prompt_translate_key): these keys do what emacs's do, a character is
@@ -1973,7 +2070,7 @@ fn prompt_menu(app: &App, p: &Prompt, items: Vec<crate::modal::MenuItem>, list: 
     let y = if app.status_top { lines } else { app.size.1.saturating_sub(3 + height) };
     let x = (offset + unicode_width::UnicodeWidthStr::width(p.label.as_str())).saturating_sub(2) as u16;
     let x = x.min(app.size.0.saturating_sub(width + 4));
-    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None, responsive: None,
+    crate::modal::Menu { title: String::new(), items, choice: Some(0), x, y, width, stay_open: false, no_mouse: true, mouse: None, tree: None, responsive: None, buttons: None,
         complete: Some(Box::new(crate::modal::Complete { prompt: p.clone(), list, flag, window_target })) }
 }
 
@@ -2417,7 +2514,7 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
                 if let Some((machine, agent)) = picker.current_id().and_then(|id| split_key(&id)) {
                     let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
                     app.back_to_list = Some(Box::new((kind, picker)));
-                    return prompt(app, PromptKind::Message { machine, agent }, "Message", &name, &format!("to {name}"), "", false);
+                    return prompt(app, PromptKind::Message { machine, agent }, &format!("Message · {}", crate::format::short_name(&name, 30)), "Message", "", "");
                 }
             }
             // M-a: the question's answer typed — option numbers (several for a multi-choice one) or
@@ -2428,15 +2525,11 @@ fn picker_key(app: &mut App, key: KeyEvent, kind: PickerKind, picker: Picker) {
                         let row = format!("{machine}:{agent}");
                         let row = picker.current_id().unwrap_or(row);
                         let request = match answerable(app, &picker, &row) { Ok(r) => r, Err(why) => { picker.say(why); app.modal = Some(Modal::Picker { kind, picker }); return } };
-                        let how = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
+                        let how = if q.multi { format!("1–{} (several: 1,3) or your own words", q.options.len()) } else if q.options.is_empty() { "Your answer".to_string() } else { format!("1–{} or your own words", q.options.len()) };
                         // Who asks and what, while you type (the list is gone behind the prompt).
-                        let name = app.fleet.agent(&machine, &agent).map(|a| crate::format::short_name(&a.name, 24)).unwrap_or_default();
-                        let mut p = Prompt::status(PromptKind::Answer { machine, agent, request }, &format!("({name}) "), "");
-                        p.title = "Answer".into();
-                        p.hint = format!("{} — {how}", q.prompt);
+                        let name = app.fleet.agent(&machine, &agent).map(|a| crate::format::short_name(&a.name, 30)).unwrap_or_default();
                         app.back_to_list = Some(Box::new((kind, picker)));
-                        app.modal = Some(Modal::Prompt(p));
-                        return;
+                        return prompt(app, PromptKind::Answer { machine, agent, request }, &format!("Answer · {name}"), &how, &q.prompt, "");
                     }
                 }
             }
@@ -3205,7 +3298,7 @@ fn submit_prompt(app: &mut App, p: Prompt) {
             // kept, offered as a message to it — Enter sends it, Escape drops it.
             let keep = |app: &mut App, why: &str| {
                 let name = app.fleet.agent(&machine, &agent).map(|a| a.name.clone()).unwrap_or_default();
-                prompt(app, PromptKind::Message { machine: machine.clone(), agent: agent.clone() }, "Message", &name, &format!("{why} — send it to {name} as a message?"), &value, false);
+                prompt(app, PromptKind::Message { machine: machine.clone(), agent: agent.clone() }, &format!("Message · {}", crate::format::short_name(&name, 30)), "Message", &format!("{why}. Send it to {name} as a message?"), &value);
             };
             if q.as_ref().is_some_and(|q| q.request_id != request) { return keep(app, "That question changed while you typed") }
             let text = q.and_then(|q| crate::fleet::answer_text(&q, &value));
@@ -3280,7 +3373,7 @@ pub fn is_command(id: &str) -> bool {
         | "last-tab" | "next-waiting" | "prev-waiting" | "resume-focused" | "last-harness" | "tree" | "files" | "info" | "messages" | "keys"
         | "theme" | "appearance" | "commands" | "choose-buffer" | "quit" | "keybinds"
         // ── machines & devices ──
-        | "connect-machine" | "add-phone" | "devices" | "hardware-devices" | "account" | "login" | "change-agent")
+        | "connect-machine" | "add-phone" | "devices" | "hardware-devices" | "account" | "login" | "signout" | "logout" | "change-agent")
 }
 
 
@@ -3556,16 +3649,30 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
         app.modal = Some(Modal::Menu(menu));
         return;
     }
-    let count = menu.items.len() as u16;
+    // A confirmation's blank row, button row and hint line sit under its notes.
+    let count = if menu.buttons.is_some() { crate::workspace_menu::dialog_box(&menu).height.saturating_sub(2) } else { menu.items.len() as u16 };
     let (px, py, width) = (menu.x, menu.y, menu.width);
     if m.x < px || m.x > px + 4 + width || m.y < py + 1 || m.y > py + count {
         let close = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
-        if close { return }
+        if close {
+            // A confirmation closed from outside is a cancel, not a vanished question.
+            let cancel = menu.buttons.as_ref().and_then(|b| b.actions.first().cloned());
+            if let Some(command) = cancel { commands::execute_in(app, &command, menu.mouse.clone()) }
+            return;
+        }
         menu.choice = None;
         app.modal = Some(Modal::Menu(menu));
         return;
     }
     let chosen = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
+    if let Some(b) = &menu.buttons {
+        // Only a button does anything: the notes, the blank row and the gaps and hint keep the dialog.
+        let row = crate::dialog::areas(crate::workspace_menu::dialog_box(&menu), crate::workspace_menu::dialog_parts(&menu)).row;
+        let hit = if chosen { b.row.click(row, ratatui::layout::Position::new(m.x, m.y)) } else { None };
+        if let Some(command) = hit.and_then(|i| b.actions.get(i)).cloned() { return commands::execute_in(app, &command, menu.mouse.clone()) }
+        app.modal = Some(Modal::Menu(menu));
+        return;
+    }
     // The click's row is authoritative even if no mouse-motion report preceded it.
     // In particular, a menu opened by the keyboard must not run its previous selection.
     menu.choice = Some((m.y - (py + 1)) as usize);
@@ -3576,6 +3683,29 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A new shell on this computer never starts in a folder that is gone (a cleaned /tmp, a
+    /// deleted worktree): it starts at home. Another computer's folders are its daemon's to check.
+    #[test]
+    fn a_new_shell_on_this_computer_never_starts_in_a_folder_that_is_gone() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        app.fleet.local_id = "here".into();
+        for (id, local) in [("here", true), ("far", false)] {
+            app.fleet.machines.push(crate::fleet::Machine { shared: false, id: id.into(), name: id.into(), local, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        }
+        let gone = std::env::temp_dir().join(format!("hn-gone-{}", uuid::Uuid::new_v4())).to_string_lossy().into_owned();
+        let kept = std::env::temp_dir().to_string_lossy().into_owned();
+        for (machine, agent, cwd) in [("here", "gone", &gone), ("here", "kept", &kept), ("far", "remote", &gone)] {
+            app.fleet.agents.insert((machine.into(), agent.into()), crate::fleet::agent_from(machine, &json!({"id":agent,"engine":"codex","project":{"cwd":cwd}}), None));
+        }
+        let focus = |m: &str, a: &str| Some((m.to_string(), a.to_string()));
+        assert_eq!(shell_cwd(&app, focus("here", "gone").as_ref(), "here", None), None, "home, not a folder that is gone");
+        assert_eq!(shell_cwd(&app, focus("here", "kept").as_ref(), "here", None), Some(kept.clone()));
+        assert_eq!(shell_cwd(&app, None, "here", Some(gone.clone())), None, "-c to a gone folder too");
+        assert_eq!(shell_cwd(&app, focus("here", "gone").as_ref(), crate::local::MACHINE, None), None, "hn's own local shells too");
+        assert_eq!(shell_cwd(&app, focus("far", "remote").as_ref(), "far", None), Some(gone), "another computer's daemon checks its own");
+    }
 
     #[test]
     fn conversation_owner_matches_computer_engine_and_prefers_running_harness() {
@@ -3666,6 +3796,42 @@ mod tests {
         mouse.row = 4;
         handle(&mut app, CEvent::Mouse(mouse));
         assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("yes"));
+    }
+
+    #[tokio::test]
+    async fn a_click_on_a_confirmation_button_runs_it_and_between_buttons_nothing() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        app.mouse = true;
+        let button = |label: &str, key| crate::buttons::Button { label: label.into(), key };
+        let row = crate::buttons::Row { buttons: vec![button("Cancel", None), button("Stop", Some('s'))], chosen: 0, hint: String::new() };
+        let ask = |app: &mut App| {
+            let row = row.clone();
+            assert!(crate::workspace_menu::open_buttons(app, "Close Tab", vec![crate::workspace_menu::note("Stop?")], row,
+                vec!["set -g @clicked cancel".into(), "set -g @clicked stop".into()]));
+        };
+        ask(&mut app);
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("closed") };
+        let y = m.y + 1 + m.items.len() as u16 + 1;
+        let cells = m.buttons.as_ref().unwrap().row.areas(ratatui::layout::Rect::new(m.x + 2, y, m.width, 1));
+        let press = |x, y| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE };
+        let gap = cells[0].right();
+        handle(&mut app, CEvent::Mouse(press(gap, y)));
+        assert!(matches!(app.modal, Some(Modal::Menu(_))), "the gap between the buttons keeps the dialog");
+        assert!(app.options.get("@clicked", "", None).is_none());
+        handle(&mut app, CEvent::Mouse(press(cells[1].x + 2, y - 1)));
+        assert!(matches!(app.modal, Some(Modal::Menu(_))), "the blank row above the buttons does nothing");
+        handle(&mut app, CEvent::Mouse(press(cells[1].x + 2, y)));
+        assert!(app.modal.is_none());
+        assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("stop"));
+
+        // A press outside the box cancels: the question never just vanishes.
+        let mut app = App::new(19789, tokio::sync::mpsc::unbounded_channel().0, (100, 30));
+        app.mouse = true;
+        ask(&mut app);
+        handle(&mut app, CEvent::Mouse(press(0, 0)));
+        assert!(app.modal.is_none());
+        assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("cancel"));
     }
 
     #[test]
@@ -3883,5 +4049,18 @@ mod tests {
         assert_eq!(picker.theme_in.as_deref(), Some("theme"), "Enter opened the section");
         assert!(picker.rows.iter().all(|r| r.id.starts_with("theme:")), "the section's options show");
         assert!(picker.rows.iter().any(|r| r.lead.iter().any(|s| s.content.as_ref() == "✓ ")), "the current option is marked");
+    }
+
+    /// Focus-in and a resize each ask the main loop for a full repaint: `redraw_all`, one flag the
+    /// loop takes once per pass, so requests in one pass are one repaint.
+    #[test]
+    fn focus_in_and_a_resize_ask_for_a_repaint() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        for event in [CEvent::FocusGained, CEvent::Resize(100, 30)] {
+            app.redraw_all = false;
+            handle(&mut app, event.clone());
+            assert!(app.redraw_all, "{event:?}");
+        }
     }
 }

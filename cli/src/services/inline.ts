@@ -13,6 +13,9 @@
  * declared in core/api.ts, which it loads either way.
  */
 export { engineTranscriptFor } from '../engines/transcripts.js'
+export { liveFor } from '../engines/live.js'
+export { screenFor } from '../engines/screens.js'
+export { runtimeFor } from '../engines/runtime.js'
 export { startGateway } from '../gateway/start.js'
 export { startCommandBar } from './commandBar.js'
 export { startDevices } from './devices.js'

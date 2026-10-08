@@ -183,11 +183,22 @@ def painted_workspace(alpha, beta):
                for name, (x, y, w) in positions)
 
 
+MENU = '⋮'
+
+
 def pane_menu_item(item, row):
-    """The first pane's … in title row [row], then [item]: the agent and the model change there."""
-    click_text('…', row=row)
+    """The first pane's menu (⋮) in title row [row], then [item]: the agent and the model change there."""
+    click_text(MENU, row=row)
     shown(item)
     click_text(item)
+
+
+def close_from_menu(row, occurrence=0):
+    """A pane's menu (⋮) in title row [row], then its close item (x): Stop Harness or Close. The
+    title has no close button."""
+    click_text(MENU, occurrence=occurrence, row=row)
+    shown('Move to new tab')
+    keys('x')
 
 
 def alpha_agent_picker():
@@ -220,11 +231,19 @@ def machine_prompt_journey():
         shown('•' * len('fixture pasted password'))
         assert 'fixture pasted password' not in screen()
 
+    def dialog(title, action):
+        # The question is asked in its own box; the panel's search line stays the search.
+        shown('┌─' + title)
+        shown('[ Cancel ]  [ ' + action + ' ]')
+        assert 'Search machines, links and steps' in screen()
+
     hn('devices')
     shown('Set password…')
     click_text('Set password…')
     shown('New remote password')
+    dialog('Set Remote Password', 'Continue')
     paste_password()
+    assert '│' + '•' * len('fixture pasted password') in screen(), 'the password is typed into the dialog input'
     # A list click used to become Enter and accept the unfinished password.
     click_text('Refresh links')
     shown('New remote password')
@@ -234,6 +253,7 @@ def machine_prompt_journey():
     paste_password()
     click_text('Continue')
     shown("Set this computer's remote password?")
+    dialog('Set Remote Password', 'Yes')
     assert not actions()
     snapshot('machine-password-confirmation')
     click_text('Cancel')
@@ -245,7 +265,7 @@ def machine_prompt_journey():
     click_text('Continue')
     paste_password()
     click_text('Continue')
-    click_text(' Yes ')
+    click_text('[ Yes ]')
     wait(lambda: actions() == ['set'], 'one explicitly confirmed password write')
     shown('Clear password…')
     click_text('Clear password…')
@@ -254,8 +274,9 @@ def machine_prompt_journey():
         tmux('resize-window', '-t', 'test', '-x', str(cols), '-y', str(rows))
         wait(lambda: value('#{client_width}x#{client_height}') == f'{cols}x{rows}', 'client follows terminal resize')
         shown('Prevent new links')
-        shown(' Cancel ')
-        shown(' Yes ')
+        shown('┌─Clear Remote Password')
+        shown('[ Cancel ]')
+        shown('[ Yes ]')
         snapshot(f'machine-confirmation-{cols}x{rows}')
     click_text('Cancel')
     assert actions() == ['set']
@@ -357,9 +378,9 @@ def mirror_journey(command, source):
     replacement_agent = next(a['id'] for a in api()['agents'][api()['local']] if a['engine'] == 'claude' and a['name'] == source and a['status'] != 'stopped')
     api({'action': 'activity', 'agent': replacement_agent, 'activity': 'working'})
     before_stop = len(requests('agent_close'))
-    click_text('×', row=0)
+    close_from_menu(row=0)
     shown('Stop? Saved history will remain.')
-    click_text('(s)')
+    click_text('[ Stop ]')
     wait(lambda: original_pane not in hn('list-panes', '-s', '-t', 'mirror-review', '-F', '#{pane_id}').splitlines(), 'confirmed Stop closes the owning session view')
     wait(lambda: source not in tmux('capture-pane', '-p', '-t', 'test:0').splitlines()[0], 'owner no longer shows the stopped harness')
     stop_calls = [r['payload']['mode'] for r in requests('agent_close')[before_stop:] if r['payload']['agentId'] == replacement_agent]
@@ -389,18 +410,26 @@ def overlay_dismiss_journey(alpha):
     print('PASS workspace: overlay dismissal and pane actions consume the complete mouse click', flush=True)
 
 
-def title_drag_journey(alpha, beta):
+def title_drag_journey(alpha, beta, look='line'):
     original = value('#{window_layout}')
     border = hn('show', '-gv', '@hn-border', ok=False)
-    hn('set', '-g', '@hn-border', 'line')
+    hn('set', '-g', '@hn-border', look)
     hn('select-layout', 'even-vertical')
     x, top = map(int, value('#{pane_left} #{pane_top}', beta).split())
-    wait(lambda: 'Beta task' in screen().splitlines()[top - 1], 'lower title is painted at its divider')
+    # The line look's title is the divider row above the pane; the box look's frame, with the title
+    # in it, sits on that same row.
+    corner = {'line': '─', 'box': '┌'}[look]
+    wait(lambda: 'Beta task' in screen().splitlines()[top - 1] and corner in screen().splitlines()[top - 1],
+         f'lower {look} title is painted at its divider')
     before = len(api()['inputs'])
+    # The line right of the name (the name itself drags the pane).
+    line = screen().splitlines()[top - 1]
+    col = next(c for c in range(line.index('Beta task') + len('Beta task') + 1, x + int(value('#{pane_width}', beta)) - 7)
+               if line[c] == '─')
     for code, row, ending in [(0, top - 1, 'M'), (32, top + 1, 'M'), (0, top + 1, 'm')]:
-        raw = f'\x1b[<{code};{x + 5};{row + 1}{ending}'.encode()
+        raw = f'\x1b[<{code};{col + 1};{row + 1}{ending}'.encode()
         tmux('send-keys', '-H', '-t', TARGET, *[f'{b:02x}' for b in raw])
-    wait(lambda: int(value('#{pane_top}', beta)) == top + 2, 'dragging the plain title resizes its divider')
+    wait(lambda: int(value('#{pane_top}', beta)) == top + 2, f'dragging the {look} title beside its name resizes its divider')
     assert len(api()['inputs']) == before, 'title drag must not reach the terminal program'
     hn('select-layout', original)
     if border:
@@ -410,7 +439,122 @@ def title_drag_journey(alpha, beta):
     hn('select-pane', '-t', alpha)
     wait(lambda: value('#{window_layout}') == original, 'restore layout after title drag')
     wait(lambda: painted_workspace(alpha, beta), 'restored layout paints both pane titles')
-    print('PASS workspace: plain title divider drags retain tmux resize behavior', flush=True)
+    print(f'PASS workspace: {"plain" if look == "line" else look} title divider drags retain tmux resize behavior', flush=True)
+
+
+def pane_drag_journey(alpha, beta):
+    original = value('#{window_layout}')
+    border = hn('show', '-gv', '@hn-border', ok=False)
+    hn('set', '-g', '@hn-border', 'box')
+    hn('select-pane', '-t', alpha)
+
+    def box(pane):
+        return tuple(map(int, value('#{pane_left} #{pane_top} #{pane_width} #{pane_height}', pane).split()))
+
+    def name_cell(pane, name):
+        # The name in the pane's header, above its first row (the box frame adds one), once painted there.
+        x, y, w, _ = box(pane)
+        lines = screen().splitlines()
+        for row in range(y - 1, max(y - 4, -1), -1):
+            index = lines[row].find(name) if row < len(lines) else -1
+            if index >= 0 and x - 1 <= width(lines[row][:index]) <= x + w:
+                return width(lines[row][:index]) + 2, row
+        return None
+
+    def held(pane, name):
+        wait(lambda: name_cell(pane, name), f'{name} title is painted over its pane')
+        return name_cell(pane, name)
+
+    def drag(start, end):
+        (sx, sy), (ex, ey) = start, end
+        for code, x, y, ending in [(0, sx, sy, 'M'), (32, sx + 2, sy + 1, 'M'), (32, ex, ey, 'M'), (0, ex, ey, 'm')]:
+            raw = f'\x1b[<{code};{x + 1};{y + 1}{ending}'.encode()
+            tmux('send-keys', '-H', '-t', TARGET, *[f'{b:02x}' for b in raw])
+
+    def ids(*target):
+        return hn('list-panes', *target, '-F', '#{pane_id}').splitlines()
+
+    before = len(api()['inputs'])
+    x, y, w, h = box(beta)
+    drag(held(alpha, 'Alpha task'), (x + w // 2, y + h // 2))
+    wait(lambda: ids() == [beta, alpha], 'dropping on the middle of Beta swaps the two panes')
+    assert value('#{pane_active}', alpha) == '1', 'the held pane keeps the focus after a swap'
+    hn('select-pane', '-t', beta)
+    x, y, w, h = box(beta)
+    drag(held(alpha, 'Alpha task'), (x + w // 2, y + h - 2))
+    wait(lambda: box(alpha)[0] == box(beta)[0] and box(alpha)[1] > box(beta)[1],
+         "dropping on Beta's bottom quarter puts Alpha below it")
+    assert value('#{pane_active}', alpha) == '1', 'the held pane is focused where it lands'
+    print('PASS workspace: dropping a pane by its name swaps it or puts it beside another', flush=True)
+
+    # A tab: Beta in a window of its own is dropped on this window's name in the status bar.
+    hn('swap-pane', '-s', alpha, '-t', beta)
+    hn('select-layout', original)
+    number = value('#{window_index}', alpha)
+    hn('break-pane', '-d', '-n', 'Dragged', '-s', beta)
+    hn('select-window', '-t', 'Dragged')
+
+    def tab():
+        # The status bar's " N:name" cell of this window (the clock's "10:17" is not one).
+        lines = screen().splitlines()
+        for row in range(len(lines) - 1, len(lines) - 3, -1):
+            if (index := lines[row].find(f' {number}:')) >= 0:
+                return width(lines[row][:index]) + 3, row
+        return None
+    wait(lambda: value('#{window_name}') == 'Dragged' and tab(), f'the status bar shows tab {number}')
+    drag(held(beta, 'Beta task'), tab())
+    wait(lambda: beta in ids('-t', f':{number}'), f'dropping on the tab moves Beta into window {number}')
+    wait(lambda: 'Dragged' not in hn('list-windows', '-F', '#{window_name}').splitlines(),
+         'the window Beta left, with no pane, closes')
+    assert value('#{window_index}') == number and value('#{pane_active}', beta) == '1', \
+        'the view follows the held pane into its window, focused there'
+    assert ids('-t', f':{number}') == [alpha, beta], ids('-t', f':{number}')
+    assert len(api()['inputs']) == before, ('a pane drag must not reach the terminal program', api()['inputs'][before:])
+    hn('select-layout', original)
+    if border:
+        hn('set', '-g', '@hn-border', border)
+    else:
+        hn('set', '-gu', '@hn-border')
+    hn('select-pane', '-t', alpha)
+    wait(lambda: value('#{window_layout}') == original, 'restore layout after pane drags')
+    wait(lambda: painted_workspace(alpha, beta), 'restored layout paints both pane titles')
+    print('PASS workspace: dropping a pane on a tab moves it into that window', flush=True)
+
+
+def side_bar_machines_journey():
+    # In the side bar each machine lists its harnesses no window here shows: a click opens one in
+    # a window, a right press on the machine offers what can be done on it, and a harness that
+    # stops leaves the list.
+    bar = hn('show', '-gv', '@hn-status-bar', ok=False)
+    hn('set', '-g', '@hn-status-bar', 'left')
+    width = 26
+    windows = lambda: len(hn('list-windows', '-F', '#{window_id}').splitlines())
+    shown('✓ Remote')
+    api({'action': 'remote-agent', 'agent': 'delta', 'name': 'Delta remote task'})
+    shown('Delta remote task')
+    snapshot('side-bar-machines')
+    before = windows()
+    click_text('Delta remote task', before=width)
+    wait(lambda: windows() == before + 1, 'a click opens the harness in a window')
+    shown('Delta remote task terminal')
+    # (The second: the first is the bar's top line, the machine this window is on.)
+    click_text('✓ Remote', occurrence=1, button=2, before=width)
+    shown('New Harness on Remote…')
+    shown('Open its harnesses')
+    snapshot('side-bar-machine-menu')
+    keys('Escape')
+    wait(lambda: 'New Harness on Remote…' not in screen(), 'Esc closes the machine menu')
+    # Its window closed, the harness is a row under its machine again; stopped, it goes.
+    hn('kill-window')
+    wait(lambda: windows() == before, 'its window closes')
+    shown('Delta remote task')
+    api({'action': 'remote-agent', 'agent': 'delta', 'stop': True})
+    wait(lambda: 'Delta remote task' not in screen(), 'a stopped harness leaves the side bar')
+    if bar:
+        hn('set', '-g', '@hn-status-bar', bar)
+    else:
+        hn('set', '-gu', '@hn-status-bar')
+    print('PASS workspace: the side bar lists each machine\'s harnesses, opens one with a click, and offers its menu', flush=True)
 
 
 mock = None
@@ -460,9 +604,18 @@ try:
     if '--title-drag' in sys.argv:
         api({'action': 'terminal-mouse'})
         title_drag_journey(alpha, beta)
+        title_drag_journey(alpha, beta, 'box')
+        sys.exit(0)
+    if '--pane-drag' in sys.argv:
+        api({'action': 'terminal-mouse'})
+        pane_drag_journey(alpha, beta)
+        sys.exit(0)
+    if '--side-bar' in sys.argv:
+        side_bar_machines_journey()
         sys.exit(0)
 
     machine_prompt_journey()
+    side_bar_machines_journey()
 
     # Local use is complete before any sign-in. The tiny footer entry explains the benefit,
     # then lets the user return without starting an authentication request.
@@ -474,13 +627,12 @@ try:
     assert not login_events()
     wait(lambda: 'Continue with Google' not in screen(), 'back to local workspace')
 
-    # The pane menu's agent and model act on the captured pane even if external focus changes.
+    # The title's agent and model labels act on the captured pane even if external focus changes.
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
-    assert 'Codex' not in screen().splitlines()[y - 1] and 'GPT-6 Astra' not in screen().splitlines()[y - 1], 'no agent or model label in the title'
-    pane_menu_item('Change agent…', row=y - 1)
+    click_text('Codex', row=y - 1)
     alpha_agent_picker()
     keys('Escape')
-    pane_menu_item('Change model…', row=y - 1)
+    click_text('GPT-6 Astra', row=y - 1)
     shown('Fixture local model')
     hn('select-pane', '-t', beta)
     click_text('Fixture local model', before=85)
@@ -559,6 +711,10 @@ try:
     shown('Arrange panes')
     click_text('Rename')
     shown('Tab name')
+    # hn's own rename is a dialog with an input box, not tmux's status-line prompt.
+    shown('┌─Rename Tab ·')
+    shown('[ Cancel ]  [ Rename ]')
+    snapshot('rename-tab-dialog')
     hn('select-window', '-t', 'Remote')
     keys('C-u')
     tmux('send-keys', '-l', '-t', 'test', 'Renamed workspace')
@@ -595,16 +751,16 @@ try:
     hn('select-pane', '-t', beta)
     api({'action': 'config', 'patch': {'closeFailure': 'SAVE_FAILED'}})
     x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', beta).split())
-    click_text('×', occurrence=1, row=y - 1)
+    close_from_menu(occurrence=1, row=y - 1)
     shown('Cancel')
     assert not [r for r in requests('agent_close') if r['payload'].get('mode') != 'inspect']
     snapshot('confirm-stop')
     keys('Enter')
     wait(lambda: 'Cancel' not in screen(), 'Cancel is the default stop action')
     assert len(hn('list-panes', '-F', '#{pane_id}').splitlines()) == 2
-    click_text('×', occurrence=1, row=y - 1)
+    close_from_menu(occurrence=1, row=y - 1)
     shown('Stop? Saved history will remain.')
-    click_text('(s)')
+    click_text('[ Stop ]')
     shown('could not save')
     assert len(hn('list-panes', '-F', '#{pane_id}').splitlines()) == 2
     snapshot('stop-save-failed')
@@ -617,6 +773,8 @@ try:
     api({'action': 'terminal-mouse'})
     overlay_dismiss_journey(alpha)
     title_drag_journey(alpha, beta)
+    title_drag_journey(alpha, beta, 'box')
+    pane_drag_journey(alpha, beta)
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
     before = len(api()['inputs'])
     click(x + 4, y + 4)
@@ -697,7 +855,7 @@ try:
     hn('select-window', '-t', 'Remote')
     shown('Gamma remote task terminal')
     _, remote_y = map(int, value('#{pane_left} #{pane_top}').split())
-    click_text('×', row=remote_y - 1)
+    close_from_menu(row=remote_y - 1)
     wait(lambda: not any(t['id'] == 'remote' for t in api()['desk']['tabs']), 'idle remote session is stopped and removed')
     remote_close = [r['payload']['mode'] for r in requests('agent_close') if r['payload']['agentId'] == 'gamma']
     assert remote_close == ['inspect', 'idle'], remote_close

@@ -514,7 +514,7 @@ pub fn run(args: &[String]) -> std::io::Result<i32> {
     };
     let mut launch = Launch::parse(agent, &args[1..]).map_err(std::io::Error::other)?;
     launch.cwd = std::env::current_dir()?.to_string_lossy().into_owned();
-    let plan = crate::shell_picker::exchange("compose-launch", &serde_json::to_value(&launch)?)?;
+    let plan = crate::shell_picker::exchange("compose-launch", &serde_json::to_value(&launch)?, launch.host.as_deref().unwrap_or("this computer"))?;
     if plan["attached"] == true {
         if let Some(message) = plan["message"].as_str().filter(|s| !s.is_empty()) {
             eprintln!("{message}");

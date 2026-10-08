@@ -130,6 +130,48 @@ pub fn status(app: &App, pane: Option<u64>) -> String {
         .chars().filter(|c| !c.is_control()).collect::<String>().replace('#', "##")
 }
 
+/// The TUI's look as a shell picker draws it (see `shell_picker::Look`): colours of the chosen
+/// theme, else the terminal's answer (empty until it answers: the picker keeps its default);
+/// `lists` is "fzf" when the user chose fzf's lists, by `@hn-lists fzf` or fzf options of their own.
+fn look_value() -> serde_json::Value { look_value_with(&crate::theme::default_opts()) }
+/// [look_value] with the fzf options given, not read from the environment.
+fn look_value_with(fzf_opts: &[String]) -> serde_json::Value {
+    let (background, foreground) = crate::term_out::terminal_colours().unwrap_or_default();
+    let accent = crate::term_out::accent_override()
+        .or_else(|| crate::term_out::native_accent().map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")))
+        .unwrap_or_default();
+    let fzf = crate::settings::fzf_lists() || !crate::shell_picker::composer_panel(fzf_opts);
+    json!(crate::shell_picker::Look { background, foreground, accent, lists: if fzf { "fzf" } else { "" }.into() })
+}
+
+/// The look a new shell starts with, as `HN_LOOK` for its first picker frame.
+fn look_arg() -> String { format!("--look={}", look_value()) }
+
+/// Separate the `--look=` argument from the others.
+fn split_look(args: &[String]) -> (Vec<String>, Option<String>) { split_option(args, "--look=") }
+fn split_option(args: &[String], prefix: &str) -> (Vec<String>, Option<String>) {
+    let value = args.iter().find_map(|a| a.strip_prefix(prefix)).map(String::from);
+    (args.iter().filter(|a| !a.starts_with(prefix)).cloned().collect(), value)
+}
+
+/// The folder a new shell asked for, in its start arguments: on this computer only, where this
+/// build's own binary starts it (a remote's older hn would refuse the argument).
+pub fn start_in(init: &mut Vec<String>, cwd: Option<&str>, local: bool) {
+    if let Some(cwd) = cwd.filter(|c| local && !c.is_empty()) { init.push(format!("--cwd={cwd}")); }
+}
+
+/// Where the shell starts: the folder it asked for; else where it was started, if that is still
+/// a folder; else home. tmux (3.7c) starts a pane in its server's own folder, not the one asked for
+/// (-c), when the server's folder was deleted: its getcwd fails and it skips the chdir. A shell
+/// there is in a folder that is gone, and zsh-syntax-highlighting spins at its first redraw.
+fn start_folder(asked: Option<&str>) -> std::path::PathBuf {
+    use std::path::PathBuf;
+    asked.map(PathBuf::from).filter(|p| p.is_dir())
+        .or_else(|| std::env::current_dir().ok().filter(|d| d.is_dir()))
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from).filter(|h| h.is_dir()))
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
 pub fn bootstrap(token: &str, cli: Option<&str>, local: bool) -> Vec<String> {
     // The core receives only literal argv. Shell setup runs in the native helper after the PTY opens.
     let mut argv = if let Some(bin) = local.then(|| std::env::current_exe().ok()).flatten() {
@@ -137,11 +179,29 @@ pub fn bootstrap(token: &str, cli: Option<&str>, local: bool) -> Vec<String> {
     } else { vec![cli.unwrap_or("harness").into(), "tui".into()] };
     argv.extend(["--shell-init".into(), token.into()]);
     if let Some(cli) = cli { argv.push(cli.into()); }
+    // Only this build's own binary is known to take it; a remote's older hn would refuse the argument.
+    if local { argv.push(look_arg()); }
     argv
 }
 
 /// A connected shell uses the service's durable receipt, never an agent_create command string.
-pub async fn open_shell(link: &crate::daemon::Link, mut payload: serde_json::Value) -> Result<serde_json::Value, crate::daemon::RpcError> {
+/// A folder that is gone on that computer (CWD_NOT_FOUND): the shell starts at its home instead.
+pub async fn open_shell(link: &crate::daemon::Link, payload: serde_json::Value) -> Result<serde_json::Value, crate::daemon::RpcError> {
+    let gone = |code: &str| code == "CWD_NOT_FOUND";
+    let asked = payload["cwd"].as_str().is_some_and(|c| !c.is_empty());
+    match open_shell_once(link, payload.clone()).await {
+        // (A receipt says why it failed as `failure.code`; a refusal as `error`.)
+        Ok(reply) if asked && [&reply["error"], &reply["failure"]["code"]].iter().any(|c| c.as_str().is_some_and(gone)) => {},
+        Err(e) if asked && gone(&e.code) => {},
+        other => return other,
+    }
+    let mut home = payload;
+    home["cwd"] = json!("");
+    home["creationId"] = json!(uuid::Uuid::new_v4().to_string());
+    open_shell_once(link, home).await
+}
+
+async fn open_shell_once(link: &crate::daemon::Link, mut payload: serde_json::Value) -> Result<serde_json::Value, crate::daemon::RpcError> {
     if payload["cwd"].as_str().is_none_or(str::is_empty) {
         let folder = link.rpc("fs_list_dir", json!({"path":""}), Duration::from_secs(20)).await?;
         let path = folder["path"].as_str().ok_or_else(|| crate::daemon::RpcError::new("CWD_NOT_FOUND", "That computer's home folder is unavailable."))?;
@@ -157,6 +217,13 @@ pub async fn open_shell(link: &crate::daemon::Link, mut payload: serde_json::Val
     }
 }
 
+/// The script a new shell runs first: its context, the picker, and (when given) the TUI's look.
+fn init_script(token: &str, picker: &str, cli: &str, look: Option<&str>) -> String {
+    let look = look.map(|l| format!("export HN_LOOK={}\n", quote(l))).unwrap_or_default();
+    format!("export _HN_CONTEXT={}\nexport _HN_PICKER={}\nexport _HN_CLI={}\n{look}{}", quote(token), quote(picker), quote(cli),
+        include_str!("shell_bootstrap.sh").replace("@INTEGRATION@", include_str!("shell_integration.sh")))
+}
+
 pub fn initialize(args: &[String]) -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;
     let Some(token) = args.first().filter(|v| uuid::Uuid::parse_str(v).is_ok()) else {
@@ -164,14 +231,14 @@ pub fn initialize(args: &[String]) -> std::io::Result<()> {
     };
     let pick_agent = args.last().is_some_and(|arg| arg == "--pick-agent");
     let args = if pick_agent { &args[..args.len()-1] } else { args };
+    let (args, look) = split_look(args);
+    let (args, cwd) = split_option(&args, "--cwd=");
     if args.len()>2 { return Err(std::io::Error::other("Invalid shell initialization arguments.")) }
-    let helpers = include_str!("shell_integration.sh");
     let picker = std::env::current_exe()?;
-    let script = format!("export _HN_CONTEXT={}\nexport _HN_PICKER={}\nexport _HN_CLI={}\n{}", quote(token),
-        quote(&picker.to_string_lossy()), quote(args.get(1).map(String::as_str).unwrap_or("harness")),
-        include_str!("shell_bootstrap.sh").replace("@INTEGRATION@", helpers));
+    let script = init_script(token, &picker.to_string_lossy(), args.get(1).map(String::as_str).unwrap_or("harness"), look.as_deref());
+    let folder = start_folder(cwd.as_deref());
     let mut command = std::process::Command::new("/bin/sh");
-    command.args(["-c", &script]);
+    command.args(["-c", &script]).current_dir(&folder).env("PWD", &folder);
     if pick_agent { command.env("_HN_START_PICKER", "1"); }
     Err(command.exec())
 }
@@ -371,6 +438,12 @@ fn scan(carry: &mut Vec<u8>, bytes: &[u8], pane: u64) -> Vec<Request> {
 
 fn reply(app: &mut App, request: &Request, code: u8, text: &str) {
     reply_data(app, request, code, text, None);
+}
+/// A picker's catalog reply, carrying how the TUI looks now. An `unchanged` one carries it too:
+/// a theme change leaves a catalog's revision alone.
+fn catalog_reply(app: &mut App, request: &Request, mut data: serde_json::Value) {
+    if data.is_object() { data["look"] = look_value(); }
+    reply_data(app, request, 0, "", Some(data));
 }
 fn reply_data(app: &mut App, request: &Request, code: u8, text: &str, data: Option<serde_json::Value>) {
     let data = data.map(std::sync::Arc::new);
@@ -687,7 +760,7 @@ fn inline_list(app: &mut App, request: Request) {
     let revision = hash.finish().to_string();
     if args["revision"].as_str() == Some(revision.as_str()) { data = json!({"unchanged":true}); }
     data["revision"] = json!(revision);
-    reply_data(app, &request, 0, "", Some(data));
+    catalog_reply(app, &request, data);
 }
 
 fn load_routes(app: &mut App, request: Request) {
@@ -760,7 +833,8 @@ fn switch_host(app: &mut App, machine: &str) {
     let machine = machine.to_string();
     let local = app.fleet.machine(&machine).is_some_and(|m| m.local);
     let cli = if local { std::env::var("HARNESS_SHELL_CLI").ok() } else { None };
-    let init = bootstrap(&request.token, cli.as_deref(), local);
+    let mut init = bootstrap(&request.token, cli.as_deref(), local);
+    start_in(&mut init, app.homes.get(&machine).map(String::as_str), local);
     let mut payload = json!({"engine":"terminal", "creationId":uuid::Uuid::new_v4().to_string(), "bypassPermission":false, "argv":init});
     if let Some(home) = app.homes.get(&machine) { payload["cwd"] = json!(home); }
     crate::input::configure_local_shell(app, &machine, &mut payload);
@@ -847,7 +921,10 @@ pub fn tick(app: &mut App) {
     if app.shell_context.pending.as_ref().is_some_and(|r| r.verb != "compose-launch" && !r.verb.ends_with("-inline")) && !matches!(app.modal, Some(Modal::Picker { kind:PickerKind::ShellContext, .. })) {
         cancel(app);
     }
-    if app.shell_context.pending.as_ref().is_some_and(|r| r.at.elapsed() > Duration::from_secs(if r.verb == "compose-launch" { 180 } else { 100 })) {
+    // A line-editor request is kept 5 s past the shell's own wait for that action
+    // (shell_integration.sh `_hn_attempts`), so the shell always gives up first.
+    let limit = |verb: &str| match verb { "compose-launch" => 180, "host-inline" => 105, "session-inline" => 185, "model-inline" => 65, _ => 100 };
+    if app.shell_context.pending.as_ref().is_some_and(|r| r.at.elapsed() > Duration::from_secs(limit(&r.verb))) {
         finish(app, 1, "The request timed out. Your shell is unchanged.");
     }
 }
@@ -1254,6 +1331,95 @@ mod tests {
         assert_eq!(app.panes.len(),1);
     }
     #[tokio::test]
+    async fn catalog_replies_carry_the_tuis_theme() {
+        let _l = crate::term_out::colours_lock();
+        let _restore = LookGuard;
+        crate::term_out::set_theme_colours(Some(("#101010".into(), "#eeeeee".into())));
+        crate::term_out::set_accent_override(Some("#ff0000".into()));
+        crate::settings::set_fzf_lists(true);
+        let mut app = app();
+        let token = prepare(&mut app,None,false); bind(&mut app,&token,"local","shell");
+        output(&mut app,1,&request(&token,"list-host",r#"{"query":"","revision":""}"#));
+        let data = app.shell_context.replies.back().unwrap().data.as_ref().unwrap();
+        assert_eq!(data["look"]["accent"],"#ff0000");
+        assert_eq!(data["look"]["background"],"#101010");
+        assert_eq!(data["look"]["foreground"],"#eeeeee");
+        assert_eq!(data["look"]["lists"],"fzf");
+        let revision = data["revision"].as_str().unwrap().to_string();
+        crate::settings::set_fzf_lists(false);
+        output(&mut app,1,&request(&token,"list-host",&json!({"query":"","revision":revision}).to_string()));
+        let data = app.shell_context.replies.back().unwrap().data.as_ref().unwrap();
+        assert_eq!(data["unchanged"],true);
+        assert_eq!(data["look"]["accent"],"#ff0000","an unchanged reply still says the theme");
+        // A reply that is no catalog (a plan, an acknowledgement) carries no look.
+        let plan = request(&token,"model-inline","0");
+        output(&mut app,1,&plan);
+        assert!(app.shell_context.replies.back().unwrap().data.as_ref().is_none_or(|d| d.get("look").is_none()));
+    }
+    /// Puts hn's process-wide colours and list style back, even when an assertion fails.
+    struct LookGuard;
+    impl Drop for LookGuard {
+        fn drop(&mut self) {
+            crate::term_out::set_theme_colours(None); crate::term_out::set_accent_override(None);
+            crate::settings::set_fzf_lists(false);
+        }
+    }
+    #[test]
+    fn the_looks_lists_follow_the_choice_not_the_developers_environment() {
+        let _l = crate::term_out::colours_lock();
+        let _restore = LookGuard;
+        let words = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        assert_eq!(look_value_with(&[])["lists"], "");
+        assert_eq!(look_value_with(&words("--layout=reverse --border"))["lists"], "fzf");
+        crate::settings::set_fzf_lists(true);
+        assert_eq!(look_value_with(&[])["lists"], "fzf", "@hn-lists fzf");
+    }
+    #[test]
+    fn a_new_shell_starts_with_the_tuis_look_in_its_environment() {
+        let script = init_script("tok","/bin/hn","harness",Some(r##"{"background":"#101010","accent":"it's"}"##));
+        assert!(script.starts_with("export _HN_CONTEXT='tok'\n"));
+        assert!(script.contains(r##"export HN_LOOK='{"background":"#101010","accent":"it'\''s"}'"##),"{script}");
+        assert!(!init_script("tok","/bin/hn","harness",None).contains("HN_LOOK"));
+    }
+    #[test]
+    fn a_new_shell_starts_in_the_folder_it_asked_for_whatever_tmux_left_it_in() {
+        let mut local = bootstrap("tok", Some("cli"), true);
+        start_in(&mut local, Some("/work/project"), true);
+        let mut remote = bootstrap("tok", Some("cli"), false);
+        start_in(&mut remote, Some("/work/project"), false);
+        assert!(!remote.iter().any(|a| a.starts_with("--cwd=")), "a remote's older hn would refuse it");
+        let (args, look) = split_look(&local[2..]);
+        let (args, cwd) = split_option(&args, "--cwd=");
+        assert_eq!((args, cwd.as_deref()), (vec!["tok".to_string(), "cli".to_string()], Some("/work/project")));
+        assert!(look.is_some());
+        // The asked folder when it is one; else where the helper was started, while that is a folder.
+        let there = tempfile_dir();
+        assert_eq!(start_folder(Some(there.to_str().unwrap())), there);
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(start_folder(Some("/no/such/folder/for/hn")), here);
+        assert_eq!(start_folder(None), here);
+        let _ = std::fs::remove_dir(&there);
+    }
+    fn tempfile_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("hn-start-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        dir
+    }
+    #[test]
+    fn the_look_travels_in_the_shell_start_arguments() {
+        let _l = crate::term_out::colours_lock();
+        let _restore = LookGuard;
+        crate::term_out::set_theme_colours(Some(("#101010".into(),"#eeeeee".into())));
+        let argv = bootstrap("tok",Some("cli"),true);
+        let remote = bootstrap("tok",Some("cli"),false);
+        crate::term_out::set_theme_colours(None);
+        assert!(argv.iter().any(|a| a.starts_with("--look={") && a.contains("#101010")),"{argv:?}");
+        assert!(!remote.iter().any(|a| a.starts_with("--look=")),"a remote's older hn would refuse it");
+        let (args, look) = split_look(&argv[2..]);
+        assert_eq!(args, ["tok".to_string(),"cli".to_string()]);
+        assert!(look.unwrap().contains("#eeeeee"));
+    }
+    #[tokio::test]
     async fn inline_model_selection_uses_stable_ids_and_retry_does_not_repeat_it() {
         let mut app=app();
         let token=prepare(&mut app,None,false);bind(&mut app,&token,"local","shell");
@@ -1302,6 +1468,34 @@ mod tests {
         output(&mut app,1,format!("\x1b]633;hn;{token};{id};cancel;\x07").as_bytes());
         assert!(app.shell_context.pending.is_none());
         assert_eq!(app.shell_context.replies.back().unwrap().code,1);
+    }
+
+    #[tokio::test]
+    async fn an_inline_request_the_shell_gave_up_on_is_dropped_and_frees_the_picker() {
+        let mut app=app();
+        let token=prepare(&mut app,None,false);bind(&mut app,&token,"local","shell");
+        let id=uuid::Uuid::new_v4().to_string();
+        let waiting=|verb:&str,age:u64|Some(Request{token:token.clone(),id:uuid::Uuid::new_v4().to_string(),pane:1,verb:verb.into(),query:"Gone".into(),at:Instant::now()-Duration::from_secs(age)});
+        // the shell waits as long as the TUI's own budget for each action; the TUI
+        // keeps the request 5 s longer than that
+        for (verb,limit) in [("host-inline",100),("session-inline",180),("model-inline",60)] {
+            app.shell_context.pending=waiting(verb,limit+2);
+            tick(&mut app);assert!(app.shell_context.pending.is_some(),"{verb} outlives the shell's {limit} s wait");
+            app.shell_context.pending=waiting(verb,limit+6);
+            tick(&mut app);
+            assert!(app.shell_context.pending.is_none(),"{verb} expires 5 s after the shell gives up");
+            assert_eq!(app.shell_context.replies.back().unwrap().code,1);
+        }
+        let pending=|age:u64|Some(Request{token:token.clone(),id:id.clone(),pane:1,verb:"host-inline".into(),query:"Gone".into(),at:Instant::now()-Duration::from_secs(age)});
+        // a later request is served, not refused with "close the current picker first"
+        output(&mut app,1,&request(&token,"model-inline","default"));
+        assert_eq!(app.shell_context.replies.back().unwrap().code,0);
+        // a cancel for a waiting -inline request frees the picker at once
+        app.shell_context.pending=pending(1);
+        output(&mut app,1,format!("\x1b]633;hn;{token};{id};cancel;\x07").as_bytes());
+        assert!(app.shell_context.pending.is_none());
+        output(&mut app,1,&request(&token,"model-inline","default"));
+        assert_eq!(app.shell_context.replies.back().unwrap().code,0);
     }
 
     #[tokio::test]

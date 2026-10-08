@@ -1,11 +1,12 @@
-import 'package:url_launcher/url_launcher.dart';
-
 import '../state/app_state.dart';
+import 'hub_links.dart';
 
-Future<void> publishHarness(
+/// A browser cannot read a harness's files, so the person chooses them on the Hub.
+Future<String> publishHarness(
   AppNotifier app,
   String machineId,
   String agentId,
 ) async {
-  await launchUrl(Uri.parse('https://harness.autonomous.ai/hub/publish'));
+  await openHubPage(hubPublishPage);
+  return 'A browser cannot send a harness\'s files. Choose its project folder on the Hub page that opened.';
 }

@@ -215,7 +215,8 @@ try:
     other = next(w for w in hn('list-windows', '-F', '#{window_id}').splitlines() if w != current)
     hn('select-window', '-t', other)
     previous = value(hn('show', '-gwv', 'window-status-format'), current)
-    assert previous.startswith(label + '-'), (previous, label)
+    # (No `-` for the window used before: tmux's last-window flag says nothing hn's tabs need.)
+    assert previous.startswith(label) and not previous[len(label):].startswith('-'), (previous, label)
     hn('select-window', '-t', current)
     assert 'reverse' not in value('#{fleet}')
     assert 'reverse' not in value('#{tree_mode_format}')
@@ -303,7 +304,7 @@ try:
     x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', second).split())
     def waiting_heading():
         return tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].strip()
-    wait(lambda: re.search(r'\(2\) \?\s+…\s+×$', waiting_heading()), 'long pane names retain their suffix and waiting indicator before the mouse controls')
+    wait(lambda: re.search(r'\(2\) \?\s+Codex\s+(?:default\s+)?⋮$', waiting_heading()), 'long pane names retain their suffix and waiting indicator before the agent, model and menu controls')
     assert '…' in waiting_heading()
     assert value('#{pane_title}', second) == long_title, 'raw pane title must remain unchanged'
     hn('select-pane', '-t', second, '-T', original_title)
@@ -335,7 +336,7 @@ try:
         def context_before_controls():
             heading = tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].rstrip()
             suffix = heading.partition(branch_context)[2]
-            return branch_context in heading and bool(re.fullmatch(r'\s+…\s+×', suffix))
+            return branch_context in heading and bool(re.fullmatch(r'\s+(?:Claude Code\s+default\s+)?⋮', suffix))
         wait(context_before_controls, 'machine, project, branch and PR align beside the right-hand controls')
         snapshot('panes-zoomed' if target == first else 'panes-remote-zoomed')
         keys('C-b', 'z')

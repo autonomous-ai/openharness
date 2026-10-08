@@ -105,6 +105,26 @@ pub fn scroll_settle_in(scrolled_at: Option<Instant>, now: Instant) -> Option<Du
     scrolled_at.map(|at| (at + SCROLL_SETTLE).saturating_duration_since(now))
 }
 
+/// A frame that wrote more cells than this, one by one, is a burst worth one settle rewrite.
+pub const SETTLE_CELLS: usize = 400;
+
+/// When the next settle repaint was last owed: now when the overlay drawn last frame is gone or no
+/// longer covers where it was (it closed, shrank or moved: cells under its old edge may be kept
+/// wrongly), or the frame wrote over SETTLE_CELLS cells; otherwise what was owed already.
+pub fn settle_due(overlay_before: Option<Rect>, overlay_now: Option<Rect>, cells: usize, owed_since: Option<Instant>, now: Instant) -> Option<Instant> {
+    let uncovered = overlay_before.is_some_and(|b| overlay_now.is_none_or(|n| n.intersection(b) != b));
+    if uncovered || cells > SETTLE_CELLS { Some(now) } else { owed_since }
+}
+
+/// What a drawn frame leaves the settle rewrite: when it is owed from ([settle_due]), and the rect
+/// of an overlay gone or no longer covering where it was — its rows are written again then too.
+/// A repaint frame wrote every row: it owes nothing more (what was owed stays as it was).
+pub fn settle_after_frame(repainting: bool, overlay_before: Option<Rect>, overlay_now: Option<Rect>, cells: usize, owed_since: Option<Instant>, now: Instant) -> (Option<Instant>, Option<Rect>) {
+    if repainting { return (owed_since, None) }
+    let left = overlay_before.filter(|b| overlay_now.is_none_or(|n| n.intersection(*b) != *b));
+    (settle_due(overlay_before, overlay_now, cells, owed_since, now), left)
+}
+
 pub fn use_order() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -305,6 +325,9 @@ pub struct Tab {
     pub named: bool,
     /// The recent-harness home page over this window's shell; scripts still see a real pane.
     pub home: bool,
+    /// What this empty window is opening (`Updates`, `hn-os`): a command's window shows that
+    /// while its terminal starts, not the New Harness form the user did not ask for.
+    pub opening: Option<String>,
     pub root: Option<Node>,
     pub focus: Option<u64>,
     pub zoomed: bool,
@@ -356,7 +379,7 @@ impl Tab {
     pub fn home() -> Tab { Tab::with_wid("New Tab", NO_WID) }
     /// A window with the id it had (a session another client kept, the desk's).
     pub fn with_wid(name: &str, wid: u64) -> Tab {
-        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None, shared_geometry: None }
+        Tab { id: Uuid::new_v4().simple().to_string(), wid: std::cell::Cell::new(wid), size: None, name: name.to_string(), named: false, home: false, opening: None, root: None, focus: None, zoomed: false, last: Vec::new(), order: Vec::new(), points: HashMap::new(), alerts: 0, last_output: Instant::now(), activity: crate::format::now_secs(), layout_at: None, on_desk: false, sync: false, first_named: false, layout: json!({}), desk_layout: json!({}), desk_panes: Vec::new(), desk_preset: None, shared_geometry: None }
     }
     fn fit_layout(&mut self, size: (u16, u16), status: layout::Status) -> bool {
         let Some(root) = self.root.as_mut() else { return false };
@@ -471,6 +494,8 @@ pub struct App {
     pub first_session: u32,
     pub modal: Option<Modal>,
     pub toast: Option<(String, Color, Instant)>,
+    /// A selection just went to the clipboard: the pane, and when (a moment's "Copied" over it).
+    pub copied: Option<(u64, Instant)>,
     /// How long hn's own notice stays (a harness waiting on you: longer than display-time's
     /// 750 ms, which is for tmux's messages); none for any other message.
     pub toast_hold: Option<u64>,
@@ -491,10 +516,14 @@ pub struct App {
     pub repeat_until: Option<Instant>,
     /// Redraw everything next frame (refresh-client).
     pub redraw_all: bool,
-    /// When the wheel last turned. A scroll rewrites most of the screen cell by cell; once it stops
+    /// When the settle rewrite was last owed (the wheel turned, an overlay closed or shrank, or a
+    /// frame wrote a great many cells). A scroll rewrites most of the screen cell by cell; once it stops
     /// for SCROLL_SETTLE the whole screen is written once more, so a cell the terminal missed
     /// (a ghost of the old text) is overwritten whatever the reason it was missed.
     pub scrolled_at: Option<Instant>,
+    /// Where the last frame drew an overlay (a list, menu, form, popup, prompt or notice), set by
+    /// `ui::draw`: a frame that finds it gone or smaller owes a settle rewrite.
+    pub overlay_drawn: Option<Rect>,
     /// tmux `status-position`.
     pub status_top: bool,
     pub mouse: bool,
@@ -884,6 +913,7 @@ impl App {
             first_session: 0,
             modal: None,
             toast: None,
+            copied: None,
             display_ms: 750,
             toast_hold: None,
             toast_exact: None,
@@ -1006,6 +1036,7 @@ impl App {
             repeat_until: None,
             redraw_all: false,
             scrolled_at: None,
+            overlay_drawn: None,
             status_top: false,
             mouse: true,
             loop_seen: Vec::new(),
@@ -5673,8 +5704,10 @@ impl App {
             }
             let gone: Vec<String> = self.tabs.iter().filter(|t| t.root.is_none()).map(|t| t.id.clone()).collect();
             self.tabs.retain(|t| t.root.is_some());
-            for id in gone { self.nums.remove(&id); }
+            // Windows gone: renumber-windows closes the gap, so what stays starts at base-index.
+            for id in gone { if self.nums.remove(&id).is_some() { self.window_gone = true } }
             if self.tabs.is_empty() { self.tabs.push(Tab::home()) }
+            self.renumber();
             self.active = self.active.min(self.tabs.len() - 1);
             self.keep_local_shell_session();
             self.fit_panes();
@@ -6545,6 +6578,37 @@ mod scroll_settle_tests {
         assert_eq!(scroll_settle_in(Some(t0), t0 + SCROLL_SETTLE), Some(Duration::ZERO));
         assert_eq!(scroll_settle_in(Some(t0), t0 + SCROLL_SETTLE * 4), Some(Duration::ZERO));
     }
+
+    #[test]
+    fn a_closed_or_smaller_overlay_or_a_large_cell_by_cell_frame_owes_one_settle_repaint() {
+        let t0 = Instant::now();
+        let big = Some(Rect::new(10, 5, 40, 12));
+        assert_eq!(settle_due(big, None, 10, None, t0), Some(t0), "an overlay closed");
+        assert_eq!(settle_due(big, big, 10, None, t0), None, "still open, as it was");
+        assert_eq!(settle_due(None, big, 10, None, t0), None, "one opened: nothing under it is stale");
+        assert_eq!(settle_due(big, Some(Rect::new(10, 5, 40, 4)), 10, None, t0), Some(t0), "its rows dropped from 10 to 2");
+        assert_eq!(settle_due(big, Some(Rect::new(12, 5, 40, 12)), 10, None, t0), Some(t0), "it moved");
+        assert_eq!(settle_due(big, Some(Rect::new(8, 4, 44, 14)), 10, None, t0), None, "it grew over where it was");
+        assert_eq!(settle_due(None, None, SETTLE_CELLS + 1, None, t0), Some(t0), "many cells one by one");
+        assert_eq!(settle_due(None, None, 3, None, t0), None, "a key echo");
+        let earlier = t0 - Duration::from_millis(100);
+        assert_eq!(settle_due(big, None, 10, Some(earlier), t0), Some(t0), "a new burst pushes it later");
+        assert_eq!(settle_due(None, None, 3, Some(earlier), t0), Some(earlier), "a quiet frame leaves what is owed as it was");
+    }
+
+    #[test]
+    fn a_repaint_frame_owes_no_settle_and_an_overlay_that_left_owes_its_rows() {
+        let t0 = Instant::now();
+        let earlier = t0 - Duration::from_millis(100);
+        let big = Some(Rect::new(10, 5, 40, 12));
+        // A repaint that also closed a panel (close_popup, Settings) wrote every row already.
+        assert_eq!(settle_after_frame(true, big, None, 0, None, t0), (None, None), "no second rewrite owed");
+        assert_eq!(settle_after_frame(true, big, None, 0, Some(earlier), t0), (Some(earlier), None), "what was owed stays as it was");
+        assert_eq!(settle_after_frame(false, big, None, 10, None, t0), (Some(t0), big), "a panel closed: its rows are owed");
+        assert_eq!(settle_after_frame(false, big, Some(Rect::new(10, 5, 40, 4)), 10, None, t0), (Some(t0), big), "it shrank");
+        assert_eq!(settle_after_frame(false, big, big, 10, None, t0), (None, None), "still open, as it was");
+        assert_eq!(settle_after_frame(false, None, None, SETTLE_CELLS + 1, None, t0), (Some(t0), None), "a burst: its own rows only");
+    }
 }
 
 #[cfg(test)]
@@ -6746,8 +6810,10 @@ mod recovery_tests {
     async fn setting_the_tab_name_source_by_hand_changes_the_tab_at_once() {
         let mut app = fixture();
         let format = |app: &App| app.options.get("window-status-format", "", None).unwrap_or_default();
-        crate::commands::execute(&mut app, "set -g @hn-window-name pane");
+        crate::commands::execute(&mut app, "set -g @hn-window-name full");
         assert!(format(&app).contains("#{pane_title}"), "{}", format(&app));
+        crate::commands::execute(&mut app, "set -g @hn-window-name short");
+        assert!(format(&app).contains("#{=/20/…:pane_title}"), "{}", format(&app));
         crate::commands::execute(&mut app, "set -g @hn-window-name tmux");
         assert!(format(&app).contains("#{window_short_name}") && !format(&app).contains("#{pane_title}"), "{}", format(&app));
     }
@@ -6817,6 +6883,36 @@ mod recovery_tests {
         assert!(app.panes.contains_key(&1) && app.panes.contains_key(&3));
         assert!(!app.panes.contains_key(&4) && !app.panes.contains_key(&2));
         assert!(app.tabs.iter().all(|t| !t.on_desk));
+    }
+
+    /// Signed out with renumber-windows on (the OS's), the windows that stay are numbered from
+    /// base-index again, not left at the numbers they had among the account's tabs.
+    #[tokio::test]
+    async fn the_windows_left_after_a_sign_out_are_numbered_from_the_first() {
+        let mut app = fixture();
+        app.desk_mode = DeskMode::Account;
+        app.fleet.local_id = "test-peer".into();
+        app.options.global_session.insert("base-index".into(), "1".into());
+        app.options.global_session.insert("renumber-windows".into(), "on".into());
+        app.panes.get_mut(&1).unwrap().machine_id = "other-peer".into();
+        app.panes.get_mut(&2).unwrap().machine_id = "other-peer".into();
+        let mut tabs = Vec::new();
+        for (i, pane) in [1u64, 2, 3].into_iter().enumerate() {
+            let mut tab = Tab::with_wid(&format!("tab {pane}"), i as u64 + 1);
+            tab.root = Some(Node::new(pane, 80, 23));
+            tab.focus = Some(pane);
+            tab.on_desk = true;
+            tabs.push(tab);
+        }
+        app.tabs = tabs;
+        app.session_desk = true;
+        app.signed_in = true;
+        app.renumber();
+        assert_eq!(app.win_num(2), 3);
+
+        app.follow_account(false);
+        assert_eq!(app.tabs.len(), 1, "only this computer's tab stays");
+        assert_eq!(app.win_num(0), 1, "and it is window 1, not 3");
     }
 
     /// Windows saved before the sign-in name the computer id; hn started after it moves them to the

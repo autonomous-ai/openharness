@@ -10,7 +10,7 @@
  */
 import { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import { AmpNormalizer } from '../../engines/amp/normalizer.js'
-import type { LiveFor } from '../../engines/facets/live.js'
+import type { LiveFor, LiveParser } from '../../engines/facets/live.js'
 import { CommandCodeNormalizer, commandCodeRunError, commandCodeRunErrorSummary } from '../../engines/commandcode/normalizer.js'
 import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
@@ -25,6 +25,7 @@ import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from './normalizers.js'
 import { createSideReads } from './sideReads.js'
+import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 
 export interface IngestDeps {
   liveFor: LiveFor
@@ -52,7 +53,7 @@ export function createIngest({
   // audiences: web (send, ServerEvents) and device (mirror.ingest → curated commander_event cards).
   /** One transcript line through its engine's normalizer. The events, not yet emitted — the two
    *  callers below differ only in what they know about the line's age. */
-  const ingestLine = (evt: LineEvent): ReturnType<CursorNormalizer['ingest']> | null => {
+  const observeLine = (evt: Pick<LineEvent, 'sessionId' | 'engine' | 'text'>, profileAccepted = false): RegisteredSession | null => {
     if (!has(evt.sessionId)) return null // scope to terminal-registered sessions
     const session = bySession(evt.sessionId)
     if (!session || session.engine !== evt.engine) return null
@@ -63,13 +64,18 @@ export function createIngest({
         service.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
       }
     })
-    sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
+    if (!profileAccepted) sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
+    return session
+  }
+  const ingestLine = (evt: LineEvent): ReturnType<CursorNormalizer['ingest']> | null => {
+    const session = observeLine(evt)
+    if (!session) return null
     let events: LiveEvent[]
     const adapter = liveFor(session.engine)
     if (adapter) {
       let parser = liveParsers.get(evt.sessionId)
-      if (!parser || parser.engine !== session.engine) { parser = adapter.create(session); liveParsers.set(evt.sessionId, parser) }
-      const read = parser.ingest(evt.text)
+      if (!parser || parser.engine !== session.engine || !('ingest' in parser)) { parser = adapter.create(session); liveParsers.set(evt.sessionId, parser) }
+      const read = (parser as LiveParser).ingest(evt.text)
       events = read.events
       if (read.failure !== undefined) announceTurnAborted(evt.sessionId, session.engine, read.failure)
     } else if (session.engine === 'cursor') {
@@ -159,5 +165,10 @@ export function createIngest({
       }
     })
   }
-  return { ingestLine, wireWatcher }
+  const acceptFrame = (sessionId: string, engine: RegisteredSession['engine'], frame: LiveFrame, profileAccepted = false): void => {
+    if (!observeLine({ sessionId, engine, text: frame.raw }, profileAccepted)) return
+    if (frame.failure !== undefined) announceTurnAborted(sessionId, engine, frame.failure)
+    emit(sessionId, frame.events, { replay: frame.replay })
+  }
+  return { ingestLine, wireWatcher, acceptFrame }
 }
