@@ -1297,8 +1297,7 @@ fn new_what(app: &mut App, machine: String) { crate::new_harness::open(app, Some
 pub fn popup(app: &mut App, (x, y, w, h): (u16, u16, u16, u16), border: bool, cwd: Option<String>, command: Option<String>, title: String, close_on_exit: bool, look: crate::modal::PopupLook) {
     let focused = focused_agent(app);
     let machine = shell_machine(app, focused.as_ref());
-    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
-    let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
+    let cwd = shell_cwd(app, focused.as_ref(), &machine, cwd);
     let Some(link) = app.link(&machine) else { app.print_new = None; return app.error("That machine is not connected") };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
@@ -1377,6 +1376,18 @@ pub fn shell_machine(app: &App, focused: Option<&(String, String)>) -> String {
     if app.daemon_down && app.fleet.machine(&machine).is_some_and(|m| m.local) { crate::local::MACHINE.into() } else { machine }
 }
 
+/// The folder a new shell on [machine] starts in: [cwd] (`-c`), else where the focused pane's
+/// shell says it is now (OSC 7), else where its harness started. On this computer, a folder that
+/// is gone — a deleted worktree, a cleaned /tmp — is none (the shell starts at home): a shell
+/// started there cannot tell where it is, and line editors can hang on it (zsh-syntax-highlighting
+/// does at the first key).
+fn shell_cwd(app: &App, focused: Option<&(String, String)>, machine: &str, cwd: Option<String>) -> Option<String> {
+    let live = focused.and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
+    let cwd = cwd.or(live).or_else(|| focused.and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
+    let here = crate::local::is_local(machine) || app.fleet.machine(machine).is_some_and(|m| m.local);
+    cwd.filter(|c| !here || std::path::Path::new(c).is_dir())
+}
+
 pub(crate) fn configure_local_shell(app: &App, machine: &str, payload: &mut serde_json::Value) {
     if crate::local::is_local(machine) {
         payload["paneId"] = json!(crate::ids::next(crate::ids::Kind::Pane));
@@ -1405,9 +1416,7 @@ pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, p
         if choose_agent && app.capture.is_none() && !app.headless { init.push("--pick-agent".into()); }
         init
     });
-    // The folder: -c, else where the pane's shell says it is now (OSC 7), else where it started.
-    let live = focused.as_ref().and_then(|(m, a)| app.find_pane(m, a)).and_then(|(_, p)| app.panes.get(&p)).and_then(|p| p.cwd.clone().or_else(|| p.live_path.clone()));
-    let cwd = cwd.or(live).or_else(|| focused.as_ref().and_then(|(m, a)| app.fleet.agent(m, a)).map(|a| a.cwd.clone()).filter(|c| !c.is_empty()));
+    let cwd = shell_cwd(app, focused.as_ref(), &machine, cwd);
     let Some(link) = app.link(&machine) else { app.print_new = None; return app.error("That machine is not connected") };
     let mut payload = json!({ "engine": "terminal", "creationId": uuid::Uuid::new_v4().to_string(), "bypassPermission": false });
     if let Some(cwd) = &cwd { payload["cwd"] = json!(cwd) }
@@ -3659,6 +3668,29 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A new shell on this computer never starts in a folder that is gone (a cleaned /tmp, a
+    /// deleted worktree): it starts at home. Another computer's folders are its daemon's to check.
+    #[test]
+    fn a_new_shell_on_this_computer_never_starts_in_a_folder_that_is_gone() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        app.fleet.local_id = "here".into();
+        for (id, local) in [("here", true), ("far", false)] {
+            app.fleet.machines.push(crate::fleet::Machine { shared: false, id: id.into(), name: id.into(), local, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        }
+        let gone = std::env::temp_dir().join(format!("hn-gone-{}", uuid::Uuid::new_v4())).to_string_lossy().into_owned();
+        let kept = std::env::temp_dir().to_string_lossy().into_owned();
+        for (machine, agent, cwd) in [("here", "gone", &gone), ("here", "kept", &kept), ("far", "remote", &gone)] {
+            app.fleet.agents.insert((machine.into(), agent.into()), crate::fleet::agent_from(machine, &json!({"id":agent,"engine":"codex","project":{"cwd":cwd}}), None));
+        }
+        let focus = |m: &str, a: &str| Some((m.to_string(), a.to_string()));
+        assert_eq!(shell_cwd(&app, focus("here", "gone").as_ref(), "here", None), None, "home, not a folder that is gone");
+        assert_eq!(shell_cwd(&app, focus("here", "kept").as_ref(), "here", None), Some(kept.clone()));
+        assert_eq!(shell_cwd(&app, None, "here", Some(gone.clone())), None, "-c to a gone folder too");
+        assert_eq!(shell_cwd(&app, focus("here", "gone").as_ref(), crate::local::MACHINE, None), None, "hn's own local shells too");
+        assert_eq!(shell_cwd(&app, focus("far", "remote").as_ref(), "far", None), Some(gone), "another computer's daemon checks its own");
+    }
 
     #[test]
     fn conversation_owner_matches_computer_engine_and_prefers_running_harness() {

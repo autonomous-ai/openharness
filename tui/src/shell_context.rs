@@ -166,7 +166,23 @@ pub fn bootstrap(token: &str, cli: Option<&str>, local: bool) -> Vec<String> {
 }
 
 /// A connected shell uses the service's durable receipt, never an agent_create command string.
-pub async fn open_shell(link: &crate::daemon::Link, mut payload: serde_json::Value) -> Result<serde_json::Value, crate::daemon::RpcError> {
+/// A folder that is gone on that computer (CWD_NOT_FOUND): the shell starts at its home instead.
+pub async fn open_shell(link: &crate::daemon::Link, payload: serde_json::Value) -> Result<serde_json::Value, crate::daemon::RpcError> {
+    let gone = |code: &str| code == "CWD_NOT_FOUND";
+    let asked = payload["cwd"].as_str().is_some_and(|c| !c.is_empty());
+    match open_shell_once(link, payload.clone()).await {
+        // (A receipt says why it failed as `failure.code`; a refusal as `error`.)
+        Ok(reply) if asked && [&reply["error"], &reply["failure"]["code"]].iter().any(|c| c.as_str().is_some_and(gone)) => {},
+        Err(e) if asked && gone(&e.code) => {},
+        other => return other,
+    }
+    let mut home = payload;
+    home["cwd"] = json!("");
+    home["creationId"] = json!(uuid::Uuid::new_v4().to_string());
+    open_shell_once(link, home).await
+}
+
+async fn open_shell_once(link: &crate::daemon::Link, mut payload: serde_json::Value) -> Result<serde_json::Value, crate::daemon::RpcError> {
     if payload["cwd"].as_str().is_none_or(str::is_empty) {
         let folder = link.rpc("fs_list_dir", json!({"path":""}), Duration::from_secs(20)).await?;
         let path = folder["path"].as_str().ok_or_else(|| crate::daemon::RpcError::new("CWD_NOT_FOUND", "That computer's home folder is unavailable."))?;
