@@ -737,9 +737,14 @@ HARNESSJS
 #     every start, so a download that fails here is retried by `harness start`. Never linked into
 #     ~/.local/bin — that path is grid's own installer's (uv's, on a Mac) — the daemon puts the
 #     managed grid on an agent pane's PATH itself. Host mode installs no CLI, so no grid either.
+#     The desktop app's first run leaves grid to its first use (the daemon's ensureGrid installs it
+#     when a grid feature is first reached): it was a 17 s download in front of a new user's first
+#     harness on a fresh Mac (macOS VM, 2026-10-08), for an add-on most never open.
 if [ "$INSTALL_MODE" != "host" ]; then
-  echo "▸ Installing the managed grid into $RUNTIME_DIR"
-  install_managed_grid || echo "  · the grid runtime will be fetched by the daemon on its next start"
+  if [ "$INSTALL_MODE" != "desktop" ]; then
+    echo "▸ Installing the managed grid into $RUNTIME_DIR"
+    install_managed_grid || echo "  · grid will be set up the first time a grid feature is used"
+  fi
   "$NODE_BIN" "$HOME/.harness/cli/cli.js" dsh builtins || echo "  · Core harnesses will be prepared on the next start"
 fi
 
