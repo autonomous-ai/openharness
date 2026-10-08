@@ -48,6 +48,13 @@ void main() {
     },
   );
 
+  testWidgets('names Claude Code in full, as the pane header does', (
+    tester,
+  ) async {
+    await tester.pumpWidget(_host(AgentInstallCover(engine: 'claude')));
+    expect(find.text('Getting Claude Code ready…'), findsOneWidget);
+  });
+
   testWidgets('a failed install says so and offers Try again', (tester) async {
     var tried = 0;
     await tester.pumpWidget(
