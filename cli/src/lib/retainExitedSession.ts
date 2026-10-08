@@ -52,8 +52,14 @@ export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
     // `retained` means here what it means in `forgetSession`: the row is archived, not gone, so the
     // client re-reads its inventory and finds it among the saved harnesses. Sent BEFORE the archive
     // frame, which is behind an await, so the view closes at once rather than a filesystem turn later.
-    deps.send({ type: 'agent_deleted', payload: { agentId: entry.agentId, retained: true } })
+    //
+    // `successor` names the shell that keeps the pane, so a window moves its tiles there instead of
+    // closing them: the engine's last screen is the reason it stopped. Without it a first Claude Code
+    // harness that could not reach Anthropic closed its only pane and left a new user on an empty box
+    // with no message (fresh macOS VM, 2026-10-08). The shell is released first (synchronous), so
+    // the frame still goes out before anything awaited.
     const terminal = paneAlive ? deps.registry.releaseEngine(entry.agentId, true) : null
+    deps.send({ type: 'agent_deleted', payload: { agentId: entry.agentId, retained: true, ...(terminal ? { successor: terminal.agentId } : {}) } })
     if (!paneAlive) deps.registry.removeAgent(entry.agentId)
     deps.syncRecapPool()
     void deps.publishStoppedAgent(saved).catch(error => deps.warn('[resume] could not announce saved harness', error))

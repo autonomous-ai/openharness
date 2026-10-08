@@ -9506,6 +9506,38 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// An engine that exited left its pane's shell running under [successor]
+  /// (the daemon's retainExitedSession). Its tiles move to that shell instead
+  /// of closing, so the engine's last screen — the reason it stopped — stays in
+  /// front of the person. A first Claude Code harness that could not reach
+  /// Anthropic closed its only pane and left a new user on an empty box with
+  /// no message (fresh macOS VM, 2026-10-08). The retained deletion reloads the
+  /// machine, and that load attaches the tiles once the successor is listed.
+  Future<void> _handOverViews(
+    MachineState machine,
+    String agentId,
+    String successor,
+  ) async {
+    final machineId = machine.machine.machineId;
+    final terminals = allPanes
+        .where((p) => p.machineId == machineId && p.agentId == agentId)
+        .toList();
+    if (terminals.isEmpty) return;
+    for (final pane in terminals) {
+      await _detachSession(pane, sendClose: false);
+      if (allPanes.contains(pane) && pane.agentId == agentId) {
+        pane.agentId = successor;
+      }
+    }
+    for (final swarm in swarms) {
+      if (swarm.titleMachineId == machineId && swarm.titleAgentId == agentId) {
+        swarm.titleAgentId = successor;
+      }
+    }
+    _persistLayout();
+    notifyListeners();
+  }
+
   Future<void> _removeAgent(MachineState machine, String agentId) async {
     // Repeated retained-stop events must not invalidate the history refresh
     // already in flight. There is no newer removal when nothing changed.
@@ -16299,6 +16331,10 @@ class AppNotifier extends ChangeNotifier {
           );
         }
         final agentId = _eventAgentId(machine, event, payload);
+        final successor = payload['successor'];
+        if (agentId != null && successor is String && successor.isNotEmpty) {
+          await _handOverViews(machine, agentId, successor);
+        }
         if (agentId != null) {
           await _removeAgent(machine, agentId);
         }

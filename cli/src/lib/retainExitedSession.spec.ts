@@ -45,7 +45,10 @@ describe('retainExitedSession', () => {
     const entry = row()
     h.retain(entry, true)
 
-    expect(h.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
+    // `successor` lets a window move its tiles to the shell, where the engine's last screen says why
+    // it stopped, instead of closing them.
+    expect(h.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true, successor: 'agent-shell' } }])
+    expect(h.calls.indexOf('release:agent-a:true')).toBeLessThan(h.calls.indexOf('send:agent_deleted'))
     // The archive exists BEFORE the client is told to go looking for it, and the ending reaches the
     // client before the frame that is behind an await.
     expect(h.calls.indexOf('save:agent-a')).toBeLessThan(h.calls.indexOf('send:agent_deleted'))
