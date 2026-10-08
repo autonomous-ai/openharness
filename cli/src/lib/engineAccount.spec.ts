@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +14,7 @@ function home() {
   return root
 }
 const linux = { env: {}, platform: 'linux' as const }
+const touch = (path: string, seconds: number) => utimesSync(path, seconds, seconds)
 
 describe('engineAccount', () => {
   it('reads Claude Code as signed out with nothing there, and never asks the Keychain off macOS', async () => {
@@ -22,34 +24,73 @@ describe('engineAccount', () => {
     expect(asked).toEqual([])
   })
 
-  it('finds Claude Code signed in by its credential file, its macOS Keychain item, or an API key', async () => {
+  it('finds Claude Code signed in by its credential file, an apiKeyHelper, its Keychain item, or the environment', async () => {
     const withFile = home()
-    mkdirSync(join(withFile, '.claude', 'projects'), { recursive: true })
+    mkdirSync(join(withFile, '.claude'), { recursive: true })
     writeFileSync(join(withFile, '.claude', '.credentials.json'), '{}')
-    utimesSync(join(withFile, '.claude', 'projects'), 1_700_000_000, 1_700_000_000)
-    expect(await engineAccount('claude', { home: withFile, ...linux }))
-      .toEqual({ signedIn: true, lastUsedAt: 1_700_000_000_000 })
+    expect((await engineAccount('claude', { home: withFile, ...linux })).signedIn).toBe(true)
+
+    const helper = home()
+    mkdirSync(join(helper, '.claude'))
+    writeFileSync(join(helper, '.claude', 'settings.json'), JSON.stringify({ apiKeyHelper: '~/bin/key' }))
+    expect((await engineAccount('claude', { home: helper, ...linux })).signedIn).toBe(true)
 
     const asked: string[] = []
     expect((await engineAccount('claude', { home: home(), env: {}, platform: 'darwin',
       keychainHas: async service => { asked.push(service); return true } })).signedIn).toBe(true)
     expect(asked).toEqual(['Claude Code-credentials'])
 
-    expect((await engineAccount('claude', { home: home(), env: { ANTHROPIC_API_KEY: 'k' }, platform: 'linux' })).signedIn).toBe(true)
+    for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX']) {
+      expect((await engineAccount('claude', { home: home(), env: { [name]: '1' }, platform: 'linux' })).signedIn, name).toBe(true)
+    }
+  })
+
+  it('looks up the Keychain service Claude Code names for a custom config folder', async () => {
+    const root = home()
+    const custom = join(root, 'claude-dir')
+    const asked: string[] = []
+    await engineAccount('claude', { home: root, env: { CLAUDE_CONFIG_DIR: custom }, platform: 'darwin',
+      keychainHas: async service => { asked.push(service); return false } })
+    expect(asked).toEqual([`Claude Code-credentials-${createHash('sha256').update(custom).digest('hex').slice(0, 8)}`])
+  })
+
+  // ~/.claude.json is rewritten on every launch (and by Harness's folder trust), and Codex's
+  // `sessions` folder changes once a year: neither says which engine the person works in.
+  it('reads last use from the newest Claude Code project folder and the newest Codex day folder', async () => {
+    const root = home()
+    mkdirSync(join(root, '.claude', 'projects', 'old'), { recursive: true })
+    mkdirSync(join(root, '.claude', 'projects', 'new'), { recursive: true })
+    touch(join(root, '.claude', 'projects', 'old'), 1_600_000_000)
+    touch(join(root, '.claude', 'projects', 'new'), 1_700_000_000)
+    writeFileSync(join(root, '.claude.json'), '{}')
+    touch(join(root, '.claude.json'), 1_900_000_000)
+    expect((await engineAccount('claude', { home: root, ...linux })).lastUsedAt).toBe(1_700_000_000_000)
+
+    for (const day of ['2026/09/30', '2026/10/08', '2025/12/31']) mkdirSync(join(root, '.codex', 'sessions', day), { recursive: true })
+    touch(join(root, '.codex', 'sessions', '2026', '10', '08'), 1_800_000_000)
+    touch(join(root, '.codex', 'sessions', '2026', '09', '30'), 1_850_000_000)
+    expect((await engineAccount('codex', { home: root, ...linux })).lastUsedAt).toBe(1_800_000_000_000)
+    expect((await engineAccount('codex', { home: home(), ...linux })).lastUsedAt).toBeNull()
   })
 
   it('finds Codex signed in only with a token or key in auth.json, or an API key', async () => {
     const root = home()
     expect((await engineAccount('codex', { home: root, ...linux })).signedIn).toBe(false)
-    mkdirSync(join(root, '.codex', 'sessions'), { recursive: true })
+    mkdirSync(join(root, '.codex'), { recursive: true })
     writeFileSync(join(root, '.codex', 'auth.json'), JSON.stringify({ tokens: null, OPENAI_API_KEY: null }))
     expect((await engineAccount('codex', { home: root, ...linux })).signedIn).toBe(false)
     writeFileSync(join(root, '.codex', 'auth.json'), JSON.stringify({ tokens: { refresh_token: 'r' } }))
-    utimesSync(join(root, '.codex', 'sessions'), 1_800_000_000, 1_800_000_000)
-    expect(await engineAccount('codex', { home: root, ...linux })).toEqual({ signedIn: true, lastUsedAt: 1_800_000_000_000 })
+    expect((await engineAccount('codex', { home: root, ...linux })).signedIn).toBe(true)
     writeFileSync(join(root, '.codex', 'auth.json'), 'not json')
     expect((await engineAccount('codex', { home: root, ...linux })).signedIn).toBe(false)
     expect((await engineAccount('codex', { home: root, env: { OPENAI_API_KEY: 'k' }, platform: 'linux' })).signedIn).toBe(true)
+  })
+
+  it('answers unknown for a Codex that keeps its credentials in the OS keyring', async () => {
+    const root = home()
+    mkdirSync(join(root, '.codex'))
+    writeFileSync(join(root, '.codex', 'config.toml'), 'model = "gpt"\ncli_auth_credentials_store = "keyring"\n')
+    expect((await engineAccount('codex', { home: root, ...linux })).signedIn).toBeNull()
   })
 
   it('follows CODEX_HOME and CLAUDE_CONFIG_DIR, and answers unknown for other engines', async () => {

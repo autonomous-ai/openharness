@@ -32,7 +32,12 @@ export interface RetainExitedSessionDeps {
   detachDsh(agentId: string): void
   syncRecapPool(): void
   warn(message: string, error: unknown): void
+  /** Injected for tests; Date.now otherwise. */
+  now?: () => number
 }
+
+/** How soon after it appeared an engine's exit counts as a failed start rather than an ending. */
+export const EARLY_EXIT_MS = 2 * 60_000
 
 export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
   /** Retain the conversation's identity; a surviving shell gets its own live identity. */
@@ -53,13 +58,16 @@ export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
     // client re-reads its inventory and finds it among the saved harnesses. Sent BEFORE the archive
     // frame, which is behind an await, so the view closes at once rather than a filesystem turn later.
     //
-    // `successor` names the shell that keeps the pane, so a window moves its tiles there instead of
-    // closing them: the engine's last screen is the reason it stopped. Without it a first Claude Code
-    // harness that could not reach Anthropic closed its only pane and left a new user on an empty box
-    // with no message (fresh macOS VM, 2026-10-08). The shell is released first (synchronous), so
-    // the frame still goes out before anything awaited.
+    // An engine that exits soon after it was started names the shell that keeps its pane as
+    // `successor`, so a window moves its tiles there instead of closing them: the engine's last
+    // screen is the only place that says why it stopped. A first Claude Code harness that could not
+    // reach Anthropic closed its only pane and left a new user on an empty box with no message (fresh
+    // macOS VM, 2026-10-08). Any later exit (`/exit`, Ctrl-C after work) still closes its views as
+    // above. The shell is released first (synchronous), so the frame still goes out before anything
+    // awaited.
     const terminal = paneAlive ? deps.registry.releaseEngine(entry.agentId, true) : null
-    deps.send({ type: 'agent_deleted', payload: { agentId: entry.agentId, retained: true, ...(terminal ? { successor: terminal.agentId } : {}) } })
+    const early = (deps.now?.() ?? Date.now()) - entry.registeredAt < EARLY_EXIT_MS
+    deps.send({ type: 'agent_deleted', payload: { agentId: entry.agentId, retained: true, ...(terminal && early ? { successor: terminal.agentId } : {}) } })
     if (!paneAlive) deps.registry.removeAgent(entry.agentId)
     deps.syncRecapPool()
     void deps.publishStoppedAgent(saved).catch(error => deps.warn('[resume] could not announce saved harness', error))

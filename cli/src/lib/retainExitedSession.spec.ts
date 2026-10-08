@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { createRetainExitedSession, type RetainExitedSessionDeps } from './retainExitedSession.js'
+import { createRetainExitedSession, EARLY_EXIT_MS, type RetainExitedSessionDeps } from './retainExitedSession.js'
 import type { RegisteredSession } from './registry.js'
 
 const row = (over: Partial<RegisteredSession> = {}): RegisteredSession => ({
@@ -45,9 +45,7 @@ describe('retainExitedSession', () => {
     const entry = row()
     h.retain(entry, true)
 
-    // `successor` lets a window move its tiles to the shell, where the engine's last screen says why
-    // it stopped, instead of closing them.
-    expect(h.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true, successor: 'agent-shell' } }])
+    expect(h.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
     expect(h.calls.indexOf('release:agent-a:true')).toBeLessThan(h.calls.indexOf('send:agent_deleted'))
     // The archive exists BEFORE the client is told to go looking for it, and the ending reaches the
     // client before the frame that is behind an await.
@@ -57,6 +55,20 @@ describe('retainExitedSession', () => {
     expect(h.calls).toContain('release:agent-a:true')
     expect(h.calls).not.toContain('remove:agent-a')
     expect(h.calls).toContain('announce:agent-shell')
+  })
+
+  // Only a failed start hands its tiles to the shell: there the engine's last screen is the only
+  // place that says why it stopped. A later exit keeps closing its views (#262).
+  it('an engine that exits soon after it appeared names the shell that keeps its pane', () => {
+    const h = harness({ now: () => 1_000 + 30_000 })
+    h.retain(row({ registeredAt: 1_000 }), true)
+    expect(h.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true, successor: 'agent-shell' } }])
+    const late = harness({ now: () => 1_000 + EARLY_EXIT_MS })
+    late.retain(row({ registeredAt: 1_000 }), true)
+    expect(late.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
+    const dead = harness({ now: () => 1_000 })
+    dead.retain(row({ registeredAt: 1_000 }), false)
+    expect(dead.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
   })
 
   it('a pane that died with its engine leaves no shell, and its views close just the same', () => {
