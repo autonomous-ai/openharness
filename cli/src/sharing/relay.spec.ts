@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AuthSessionManager } from '../lib/authSession.js'
 import { b64e, newIdentity } from '../lib/e2ee/core.js'
 import { ownerHandshake } from './crypto.js'
-const state = vi.hoisted(() => ({ sockets: [] as any[], stop: vi.fn() }))
+const state = vi.hoisted(() => ({ sockets: [] as any[], stop: vi.fn(), liveness: undefined as any }))
 vi.mock('ws', async () => {
   const { EventEmitter } = await import('node:events')
   class FakeWebSocket extends EventEmitter {
@@ -14,7 +14,7 @@ vi.mock('ws', async () => {
   }
   return { WebSocket: FakeWebSocket }
 })
-vi.mock('../lib/wsLiveness.js', () => ({ BACKEND_IDLE_DEADLINE_MS: 75_000, watchSocketLiveness: () => ({ stop: state.stop }) }))
+vi.mock('../lib/wsLiveness.js', () => ({ BACKEND_IDLE_DEADLINE_MS: 75_000, watchSocketLiveness: (_ws: unknown, opts: unknown) => { state.liveness = opts; return { stop: state.stop } } }))
 import { HarnessShareRelay, SharingEndedError } from './relay.js'
 import { SHARE_REQUEST_TYPES, SHARE_RESULT_TYPES } from './protocol.js'
 describe('recipient relay', () => {
@@ -141,4 +141,19 @@ describe('recipient relay', () => {
     const fourth = await begin(); const offline = expect(fourth.pending).rejects.toThrow('offline')
     fourth.ws.emit('close', 1006, Buffer.alloc(0)); await offline
   })
+
+  it('says out loud when the liveness watcher is the one that gave up', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { pending } = await begin()
+    pending.catch(() => {}) // afterEach closes the relay, which rejects this handshake
+    state.liveness.onIdle(80_000)
+    expect(log).toHaveBeenCalledWith('[sharing] machine no traffic for 80s — terminating')
+    // A wake can end the socket too, and never reaches onIdle (wsLiveness.ts, the wake branch).
+    state.liveness.onWake(90_000, true)
+    expect(log).toHaveBeenCalledWith('[sharing] machine woke after 90s asleep — giving up on the link')
+    state.liveness.onWake(50_000, false)
+    expect(log).toHaveBeenCalledWith('[sharing] machine woke after 50s asleep — re-probing')
+    log.mockRestore()
+  })
+
 })

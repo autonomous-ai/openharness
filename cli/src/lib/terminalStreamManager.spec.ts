@@ -716,6 +716,28 @@ describe('TerminalStreamManager', () => {
       && frame.payload.reason === 'heartbeat timeout')).toBe(true)
   })
 
+  // A sweep read as a sleep carries each lease by `slept`, which `sleptFor` defines as the gap MINUS
+  // one period — so every sweep still charges one EXPIRY_SWEEP_MS of silence however late it ran, and
+  // a throttled machine cannot hold a dead client's lease open. Guards against "carry the whole gap",
+  // which would never expire.
+  it('still expires a lease when every sweep is late enough to read as a sleep', async () => {
+    let asleepMs = 0
+    await manager.stop()
+    manager = newManager({ now: () => Date.now() + asleepMs })
+    await manager.handleFrame('web-1', 'terminal_open', {
+      requestId: 'open-1', protocolVersion: 3, agentId: 'agent-1', cols: 100, rows: 30,
+    })
+    // Twelve sweeps, each landing 15s late (gap 20s > 2 x 5s, so every one is read as a sleep) and no
+    // `terminal_alive` in any of them. Six periods of charged silence is the 30s timeout.
+    for (let i = 0; i < 12; i++) {
+      asleepMs += 15_000
+      await vi.advanceTimersByTimeAsync(5_000)
+    }
+    expect(stream.closed).toBe(true)
+    expect(sent.some((frame) => frame.type === 'terminal_closed'
+      && frame.payload.reason === 'heartbeat timeout')).toBe(true)
+  })
+
   // The incumbent's banner says WHO took over, so the close it gets carries what the winner
   // declared on open — verbatim through a relay, since the daemon never learns a peer's name.
   it('names the taker on the close when the winner introduced itself', async () => {
