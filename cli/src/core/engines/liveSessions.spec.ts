@@ -234,6 +234,32 @@ describe('core engine stream authority', () => {
     expect(t.live.tails(t.session.sessionId, t.file)).toBe(false)
   })
 
+  it('delivers a turn written after the rewrite was found, before the re-attach, as fresh, not history', async () => {
+    // e2e/bounded.e2e.ts since #1019: the re-attach comes a second after the rewrite is found, and the turn
+    // the agent ran in that second was folded into history, so no client ever saw it start or end.
+    const t = await setup(prompt('a much longer original turn'))
+    const original = await t.attach()
+    await writeFile(t.file, prompt('history') + done)
+    await expect(t.live.pollSession(t.session.sessionId)).rejects.toThrow('ENGINE_TRANSCRIPT_CHANGED')
+    await appendFile(t.file, prompt('fresh') + done)
+    // Core pulls with the old cursor until it re-attaches; each pull finds the change again.
+    await expect(t.live.pollSession(t.session.sessionId)).rejects.toThrow('ENGINE_TRANSCRIPT_CHANGED')
+    const said = t.log.mock.calls.filter(([line]) => String(line).includes('transcript rewritten in place — attaching it again'))
+    expect(said).toEqual([[`[engine] ${t.session.sessionId} transcript rewritten in place — attaching it again from where it was rewritten`]])
+    const hold = await t.live.hold(t.session.sessionId, t.file)
+    const replacement = await t.prepare()
+    expect(replacement.state.ask).toMatchObject({ rewritten: true, rewrittenFrom: original.state.ask.token })
+    expect(t.live.install(replacement)).toBe(true)
+    hold!.release()
+    await t.live.pollSession(t.session.sessionId)
+    const turns = t.frames.flatMap(frame => frame.events.filter(event => event.type.startsWith('turn_'))
+      .map(event => [event.type, (event.payload as { userMessage?: string } | undefined)?.userMessage ?? null, frame.replay]))
+    expect(turns).toEqual([
+      ['turn_started', 'history', true], ['turn_ended', null, true],
+      ['turn_started', 'fresh', false], ['turn_ended', null, false],
+    ])
+  })
+
   it('activates a replacement under a hold and replays its history before delivering a fresh turn', async () => {
     const t = await setup(prompt('a much longer original turn'))
     await t.attach()
