@@ -13,6 +13,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
 import { createIngest, type IngestDeps } from './ingest.js'
 import { createSessionNormalizers } from './normalizers.js'
+import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 
 const CODEX_FAILED = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', error: { message: 'rate limited' } } })
 const COMMANDCODE_FAILED = JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Error: 500\nTrace ID: 932a' }] } })
@@ -43,6 +44,24 @@ const line = (sessionId: string, engine: string, text = '{}'): LineEvent => ({ s
 
 describe('ingesting a transcript line', () => {
   afterEach(() => vi.restoreAllMocks())
+
+  it('accepts worker events only for the bound engine, preserving replay and side reads without constructing a parser', () => {
+    const p = setup({ s1: 'claude' }, { liveFor: () => { throw new Error('worker events are already normalized') } })
+    const frame: LiveFrame = { raw: CLAUDE_PROMPT, events: [{ type: 'turn_started', payload: { userMessage: 'hello' } }],
+      profile: true, observe: true, replay: true, turn: { identity: 'worker:turn', turnOpen: true, continued: false } }
+    p.ingest.acceptFrame('unknown', 'claude', frame)
+    p.ingest.acceptFrame('s1', 'codex', frame)
+    expect(p.deps.emit).not.toHaveBeenCalled()
+    p.ingest.acceptFrame('s1', 'claude', frame)
+    expect(p.deps.emit).toHaveBeenCalledWith('s1', frame.events, { replay: true })
+    expect(p.deps.runtimeProfiles.ingest).toHaveBeenCalledWith(p.sessions.get('s1'), frame.raw)
+    p.ingest.acceptFrame('s1', 'claude', { ...frame, replay: false, failure: 'rate limited' })
+    expect(p.deps.announceTurnAborted).toHaveBeenCalledWith('s1', 'claude', 'rate limited')
+    expect(vi.mocked(p.deps.announceTurnAborted).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(p.deps.emit).mock.invocationCallOrder[1])
+    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: false })
+    expect(p.normalizers.hasState('s1')).toBe(false)
+  })
 
   it('takes lines only for a registered session of the engine that wrote them', () => {
     const { ingest, deps } = setup({ s1: 'claude', s2: 'codex' })

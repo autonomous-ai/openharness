@@ -37,7 +37,7 @@ function subagent(value: unknown): boolean {
 }
 
 /** Reject malformed adapter output before handing it to a window; never accept live turn mutations. */
-function event(value: unknown): value is SessionEvent {
+export function sessionEvent(value: unknown): value is SessionEvent {
   if (!record(value) || !record(value.payload)) return false
   const p = value.payload
   switch (value.type) {
@@ -60,7 +60,7 @@ function event(value: unknown): value is SessionEvent {
 export function historyAnswer(value: unknown): value is HistoryAnswer {
   return record(value) && Object.keys(value).every(key => ['events', 'timestamp', 'hasMore', 'oldestCursor', 'staleCursor'].includes(key))
     && typeof value.timestamp === 'string' && Number.isFinite(Date.parse(value.timestamp))
-    && Array.isArray(value.events) && value.events.every(event)
+    && Array.isArray(value.events) && value.events.every(sessionEvent)
     && (value.hasMore === undefined || typeof value.hasMore === 'boolean')
     && (value.oldestCursor === undefined || value.oldestCursor === null || typeof value.oldestCursor === 'string')
     && (value.staleCursor === undefined || value.staleCursor === true)
