@@ -67,7 +67,7 @@ import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
 import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
-import { repairClaudeCwd } from '../lib/cwdRepair.js'
+import { repairProjectCwds } from '../lib/cwdRepair.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
 import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
@@ -1942,7 +1942,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Best effort: an archive directory that cannot be listed, or a row that cannot be rewritten, is a
   // line in the log, never a daemon that does not come up.
   try {
-    const repaired = await repairClaudeCwd({ registry, stoppedAgents, log: (message) => console.log(message) })
+    const repaired = await repairProjectCwds({ registry, stoppedAgents, log: (message) => console.log(message) })
     if (repaired.registry || repaired.archived) console.log(`[repair] cwd · ${repaired.registry} live · ${repaired.archived} saved`)
   } catch (error) {
     console.warn(`[repair] cwd repair skipped · ${error instanceof Error ? error.message : error}`)

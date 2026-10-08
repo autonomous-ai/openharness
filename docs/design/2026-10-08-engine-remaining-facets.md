@@ -44,6 +44,14 @@ About 230 lines would leave. Transport, credential, routes and `registry.registe
 
 ## (c) Launch, discovery and resume
 
+Split into five sub-batches. See [engine launch](2026-10-08-engine-launch.md), which records (c1) and (c2)
+and plans (c3) to (c5). (c1) is done: the Codex pane script's startup probe and retry, its own-login provider,
+and the two engines' context and env flags are now declared data, applied by `engines/kit`. (c2) is done too:
+folder trust, the resume repair and the instruction-file fallbacks. So is (c3): process signatures, resume ids, the
+profile home and the project folder of a transcript, read on every discovery pass. Like (b), nothing moved into a
+worker.
+The map below is as it stood before (c1).
+
 | File | Engine-specific behavior | Stays in core | Can move | Risk |
 | --- | --- | --- | --- | --- |
 | `engines/{claude,codex}/launch.ts`, `engines/launches.ts` | argv contracts | building argv | nothing: stays declared data | `buildEngineLaunchArgv` is synchronous, also at restore |
@@ -109,11 +117,10 @@ About 220 lines would leave, and with them core's only native child process and 
    With this approach nothing moves into a worker. About 230 lines of Claude/Codex code leave the core
    closure, and a few dozen lines of declared data come in.
 4. **(c) Launch, discovery and resume.** The largest. It has the most synchronous call sites (registry
-   load, discovery tables, argv). Split it into sub-batches:
-   - resume preparation and trust writes (async callers, before spawn)
-   - session repair and adoption readers
-   - splitting the shared normalizers into `engines/kit`
-   - static tables and argv stay declared data
+   load, discovery tables, argv). It is split by risk into (c1) launch argv and the pane script (done),
+   (c2) launch preparation (trust writes and the resume repair, done), (c3) discovery and process matching (done),
+   (c4) registry load and session identity, and (c5) adoption readers and the shared normalizers
+   ([engine launch](2026-10-08-engine-launch.md)). Session control stays worker-free throughout, as in (b).
 
 This puts (d) before (b) and (c), unlike the order the owner listed. The reason: async work that is
 self-contained goes first; work with synchronous hot paths and dependencies at daemon start goes last.

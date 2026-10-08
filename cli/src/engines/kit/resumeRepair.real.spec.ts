@@ -1,5 +1,5 @@
 /** Offline wire regression against the installed Codex CLI (verified with 0.154.0).
- * RUN_CODEX_RESUME_E2E=1 npm exec vitest run src/engines/codex/portableHistory.real.spec.ts
+ * RUN_CODEX_RESUME_E2E=1 npm exec vitest run src/engines/kit/resumeRepair.real.spec.ts
  * Only the loopback mock is contacted; no vendor credential or inference is used. */
 import { execFile } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { expect, it } from 'vitest'
-import { prepareCodexResume } from './portableHistory.js'
+import { prepareResume as prepareCodexResume } from '../launchPrep.js'
 
 it.skipIf(process.env.RUN_CODEX_RESUME_E2E !== '1')('resumes the same Codex conversation after a rejected reasoning id is repaired', async () => {
   const profile = mkdtempSync(join(tmpdir(), 'codex-resume-wire-'))

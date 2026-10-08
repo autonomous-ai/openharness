@@ -15,6 +15,8 @@ import {
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
+import { ENGINE_EXIT_PANE_OPTION } from './engineExitOption.js'
+import { discoveryField, versionedInstalls } from '../engines/discoveries.js'
 import { psEnv } from './childLocale.js'
 import { processStartTicks } from './processLiveness.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
@@ -640,34 +642,15 @@ function commTruncatedPrefixOf(seen: string, want: string): boolean {
   return Buffer.byteLength(seen) === 15 && want.length > seen.length && want.startsWith(seen)
 }
 
-/**
- * Claude's native installer exposes `~/.local/bin/claude` as a symlink to a binary whose basename is
- * only its version (`~/.local/share/claude/versions/2.1.246`). During early startup both `comm` and
- * argv[0] can still contain that target path, before Claude rewrites either one to `claude`.
- *
- * Match the vendor-specific install layout, never a bare semver: an unrelated process called
- * `2.1.246` is not evidence that Claude is running.
- */
-function claudeNativeInstallPath(value: string): boolean {
-  const normalized = value.replace(/\\/g, '/').toLowerCase()
-  return /(?:^|\/)\.local\/share\/claude\/versions\/[^/]+$/.test(normalized)
-}
-
 interface EngineProcessSignature {
   basenames: readonly RegExp[]
   entrypoints: readonly RegExp[]
 }
 
-/** Vendor-supported native names and launcher/package entrypoints, independent of install prefix. */
+/** Vendor-supported native names and launcher/package entrypoints, independent of install prefix. Claude Code's
+ *  and Codex's are their discovery contracts' (engines/discoveries.ts). */
 export const ENGINE_PROCESS_SIGNATURES: Readonly<Record<RegisteredSession['engine'], EngineProcessSignature>> = {
-  claude: {
-    basenames: [/^claude$/],
-    entrypoints: [/@anthropic-ai[\/\\]claude-code[\/\\]cli\.js$/],
-  },
-  codex: {
-    basenames: [/^codex$/, /^codex-(?:aarch64|x86_64)-(?:apple-darwin|unknown-linux-(?:gnu|musl))$/],
-    entrypoints: [/@openai[\/\\]codex[\/\\]bin[\/\\]codex(?:\.js)?$/],
-  },
+  ...discoveryField('process'),
   cursor: {
     basenames: [/^cursor-agent$/],
     entrypoints: [/cursor-agent[\/\\]versions[\/\\][^/\\]+[\/\\]index\.js$/],
@@ -753,8 +736,9 @@ function heuristicEngineProcessMatchScore(
   if (signature.basenames.some((pattern) => pattern.test(executable) || pattern.test(entrybase))) return 3
   if (signature.entrypoints.some((pattern) => pattern.test(entrypoint))) return 2
 
-  // Native Claude exposes a version-only target; only the vendor layout makes that name meaningful.
-  if (engine === 'claude' && (claudeNativeInstallPath(row.executable) || claudeNativeInstallPath(entrypoint))) return 3
+  // A native binary named only by its version (Claude Code's): only the vendor layout makes that name meaningful.
+  const versioned = versionedInstalls[engine]
+  if (versioned && (versioned(row.executable) || versioned(entrypoint))) return 3
 
   if (engine === 'cursor') {
     return agentAliasOwner([row.imageFileKey, row.entrypointFileKey], ownership) === 'cursor' ? 4 : 0
@@ -883,10 +867,11 @@ function selectEngineProcess(
  *
  * The id pattern is a filter, not decoration: `-r` on Command Code takes "a name (use quotes for
  * multi-word names)", so a title would otherwise be registered as a session id.
+ *
+ * Claude Code's and Codex's entries are their discovery contracts' (`resumeArgs`, engines/discoveries.ts).
  */
-const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: string[]; id: RegExp; unless?: string[] }>> = {
-  claude: { flags: ['--resume', '-r'], id: /^[0-9a-f-]{16,}$/i, unless: ['--fork-session'] },
-  codex: { flags: ['resume'], id: /^[0-9a-f-]{16,}$/i },
+const RESUME_ARGS: Partial<Record<RegisteredSession['engine'], { flags: readonly string[]; id: RegExp; unless?: readonly string[] }>> = {
+  ...discoveryField('resumeArgs'),
   cursor: { flags: ['--resume'], id: /^[0-9a-f-]{16,}$/i },
   // `--fork` continues from the id but writes a NEW session, so the id in argv is the parent's.
   opencode: { flags: ['--session', '-s'], id: /^ses_[A-Za-z0-9]+$/, unless: ['--fork'] },
@@ -1253,13 +1238,7 @@ export async function setPaneStyle(pane: string, style: string): Promise<boolean
 }
 
 /** What tmux knows about a pane right now. See `agentCreateDiagnosis.ts` for why this is read. */
-/**
- * The pane option an engine's launch wrapper sets when the engine exits and the pane falls back to
- * a shell (engineLaunch.ts, `harness_after`): the engine's exit status. Empty/absent while the
- * wrapper is still running the engine — and for the whole life of the fallback shell after that,
- * once something reads it, so `respawn` clears it before every new launch in the same pane.
- */
-export const ENGINE_EXIT_PANE_OPTION = '@harness_engine_exit'
+export { ENGINE_EXIT_PANE_OPTION }
 
 export interface TmuxPaneState {
   dead: boolean

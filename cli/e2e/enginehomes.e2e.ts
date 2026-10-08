@@ -349,7 +349,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   // daemon's own CODEX_HOME before the relaunch (portableHistory.ts) and refused as outside the profile: the
   // restart failed after Codex had already been stopped, and the reopen said RESUME_PREPARATION_FAILED. And
   // the relaunch names the person's own provider, the `model_provider` in the moved config.toml: it read the
-  // daemon's ~/.codex/config.toml (ownLoginProvider.ts) and named Codex's default, which outranks the config.
+  // daemon's ~/.codex/config.toml (Codex's `ownProvider`) and named Codex's default, which outranks the config.
   it('codex with CODEX_HOME: a restart and a reopen come back on the conversation, on the provider its config names', async () => {
     const d = await IsolatedDaemon.create()
     daemon = d

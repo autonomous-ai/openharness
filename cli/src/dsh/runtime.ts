@@ -7,6 +7,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathS
 import { basename, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
+import { instructionFileOf, launchContract } from '../engines/launches.js'
 import { HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
 import { installedDsh, type InstalledDsh } from './installed.js'
 import { dshAccountEnv, dshLaunch, type DshAccount, type DshLaunch } from './launch.js'
@@ -97,13 +98,15 @@ export function migrateHarnessInstructions(workspace: string, current: Installed
 function installBootstrap(workspace: string, engine: AgentEngine): void {
   const adapter = harnessAdapter(engine)
   const file = adapter.instructionFiles.find(name => existsSync(join(workspace, name)))
-    ?? (engine === 'claude' ? 'CLAUDE.md' : 'AGENTS.md')
+    ?? instructionFileOf(engine) ?? 'AGENTS.md'
   const path = join(workspace, file)
   const before = existsSync(path) ? readFileSync(path, 'utf8') : ''
   if (before.includes(HARNESS_BOOTSTRAP)) return
   if (before.includes('<!-- harness:runtime')) throw new Error(`The Harness bootstrap in ${path} was edited; restore it before launching.`)
-  const projectRules = engine === 'claude' && existsSync(join(workspace, 'AGENTS.md')) && !before.split('\n').some(line => line.trim() === '@AGENTS.md')
-    ? '@AGENTS.md\n' : ''
+  // An engine that reads the project's AGENTS.md only through an import line in its own file gets that line.
+  const imports = launchContract(engine)?.instructionImport
+  const projectRules = imports && existsSync(join(workspace, imports.file)) && !before.split('\n').some(line => line.trim() === imports.line)
+    ? `${imports.line}\n` : ''
   // Preserve all project bytes. Only the generic, env-dispatched bootstrap is shared by sessions.
   writeManagedFile(path, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${projectRules}${HARNESS_BOOTSTRAP}`)
 }

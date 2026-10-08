@@ -17,7 +17,7 @@ import { DSH_ID_RE } from '../dsh/id.js'
 import { AGENT_NAME_RE } from './engineLaunch.js'
 import { resumesConversation } from './resumeCapability.js'
 import { namingTitle } from './sessionTitle.js'
-import { claudeProjectMatches, claudeTranscriptCwd, isClaudeProjectTranscript } from './claudeProject.js'
+import { transcriptProject } from '../engines/discoveries.js'
 import { automaticAgentName, engineLabel, isAutomaticName } from './agentNames.js'
 import {
   closeSync,
@@ -1603,11 +1603,13 @@ class Registry {
     // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
     // from a subfolder). Claude's transcript never moves from the project dir it was started in, so a
     // cwd that does not round-trip to that directory name is not this session's folder — the row's own
-    // is kept when it does, else the transcript names the folder itself (claudeProject.ts).
-    const cwd = !sameSession && engine === 'claude' && effectiveTranscriptPath && input.cwd
-        && isClaudeProjectTranscript(effectiveTranscriptPath) && !claudeProjectMatches(input.cwd, effectiveTranscriptPath)
-      ? (existing?.cwd && claudeProjectMatches(existing.cwd, effectiveTranscriptPath) ? existing.cwd
-        : claudeTranscriptCwd(effectiveTranscriptPath) ?? input.cwd)
+    // is kept when it does, else the transcript names the folder itself (`projectFolder` in Claude Code's
+    // discovery contract, engines/kit/projectFolder.ts).
+    const project = !sameSession && effectiveTranscriptPath && input.cwd ? transcriptProject(engine) : null
+    const cwd = project && effectiveTranscriptPath && input.cwd
+        && project.isProjectTranscript(effectiveTranscriptPath) && !project.belongs(input.cwd, effectiveTranscriptPath)
+      ? (existing?.cwd && project.belongs(existing.cwd, effectiveTranscriptPath) ? existing.cwd
+        : project.cwdOf(effectiveTranscriptPath) ?? input.cwd)
       : baseCwd
     const entry: RegisteredSession = {
       schemaVersion: 2,

@@ -1,12 +1,12 @@
 /**
  * Relaunch helpers: what a restart, a retarget, a restore or a resume needs to bring an agent's pane
  * back. Its launch overrides, rebuilt from the row (an API's key as saved now); the web-search decision
- * refreshed; a permission flag the engine no longer takes dropped, rather than the pane; and a Codex
- * rollout repaired for resume, with the tail moved to its new length.
+ * refreshed; a permission flag the engine no longer takes dropped, rather than the pane; and the history made
+ * resumable (Codex's rollout, engines/launchPrep.ts), with the tail moved to its new length.
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
-import { prepareCodexResume } from '../../engines/codex/portableHistory.js'
+import { prepareResume, repairedItemsName } from '../../engines/launchPrep.js'
 import { ApiConnectionError, type ApiConnections } from '../../lib/apiConnections.js'
 import { refreshApiLaunch } from '../../lib/apiModels.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
@@ -93,13 +93,13 @@ export function createLaunchHelpers({ prepareApiTools, savedApis, launchOverride
   }
 
   const prepareSessionResume = (session: RegisteredSession): void => {
-    const repair = prepareCodexResume(session)
+    const repair = prepareResume(session)
     if (repair.repairedItems) {
       // The rollout we tail was just shrunk in place. Move the tail to the repaired length now, before
       // the resumed engine appends, or the watcher would read the whole repaired history as new lines
       // and the live normalizer would replay the conversation into web/device. See Watcher.setTail.
       if (repair.repairedBytes !== undefined) setTail(session.sessionId, repair.repairedBytes)
-      console.log(`[resume] repaired ${repair.repairedItems} Codex reasoning items · backup: ${repair.backupPath}`)
+      console.log(`[resume] repaired ${repair.repairedItems} ${repairedItemsName(session.engine)} · backup: ${repair.backupPath}`)
     }
   }
   return { relaunchOverrides, refreshGridWebSearch, downgradedPermission, prepareSessionResume }

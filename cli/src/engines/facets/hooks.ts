@@ -25,7 +25,7 @@ export interface HookTurnContext {
 export type HookAdmission = { accepted: true } | { accepted: false; reason: string }
 
 /** A daemon setting that names a folder, such as `CODEX_HOME`. */
-type FolderSetting = { [K in keyof Env]: Env[K] extends string ? K : never }[keyof Env]
+export type FolderSetting = { [K in keyof Env]: Env[K] extends string ? K : never }[keyof Env]
 
 /**
  * Where an engine reads its hooks, and how Harness keeps its own block there. Declared data, applied by the

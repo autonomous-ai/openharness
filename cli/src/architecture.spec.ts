@@ -156,12 +156,25 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
   'services/workspaces.ts → ../lib/registry.js': 'sessionDisplayTitle, a pure helper',
 }
 
+/** Claude Code's and Codex's declared contracts that core reads in line, and the rollout reader the registry keeps
+ *  until (c4): what a launch's or discovery's closure may reach of the two engines. */
+const LAUNCH_CONTRACTS = new Set(['engines/claude/launch.ts', 'engines/codex/launch.ts'])
+const DECLARED = new Set(['engines/claude/hookContract.ts', 'engines/codex/hookContract.ts', 'engines/claude/discoveryContract.ts',
+  'engines/codex/discoveryContract.ts', 'engines/codex/rollout.ts'])
+
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
   /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission|nativeControl)\.ts$/,
   // Claude Code's and Codex's hooks are declared data (hookContract.ts) that the kit applies in core: no hook code
   // of theirs is the core's, and none runs in a worker either (docs/design/2026-10-08-engine-hooks.md).
   /^engines\/(claude|codex)\/(hooks|installHooks)\.ts$/,
+  // Their launch specifics are declared data too (launch.ts): Codex's startup probe and retry and its own-login
+  // provider are the kit's, in core, and never a worker's (docs/design/2026-10-08-engine-launch.md).
+  /^engines\/codex\/ownLoginProvider\.ts$/, /^lib\/codexStartupRetry\.ts$/,
+  // So is their launch preparation: folder trust and the resume repair are declared, and the kit applies them.
+  /^engines\/codex\/portableHistory\.ts$/, /^lib\/claudeTrust\.ts$/,
+  // And what discovery reads off their processes and transcripts (discoveryContract.ts, applied by the kit).
+  /^lib\/(claudeProject|codexHomeProbe)\.ts$/,
   /^lib\/(askQuestion|runtimeProfileController|composerScreen|teamWriteHold|messageHold|terminalActivity|codexTurnRecovery)\.ts$/,
   /^engines\/(screens|modelControls|questionControls|submissions|nativeControls)\.ts$/,
   // Claude Code's and Codex's reading of their composer: shared by the two, loaded only by their workers.
@@ -338,6 +351,35 @@ describe('the daemon\'s shape', () => {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)), entry).toEqual([])
     }
     expect([...closureOf('engines/hooks.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
+  })
+
+  it('discovery loads the engines\' declared contracts alone', () => {
+    // The pass and what it reads off a process, the grid's model, the start-up repair, and the registry, which
+    // still holds Codex's rollout reader for its load-time repair until (c4).
+    for (const entry of ['lib/tmux.ts', 'lib/terminalAgentDiscovery.ts', 'lib/gridAssignment.ts', 'lib/cwdRepair.ts', 'lib/registry.ts',
+      'engines/discoveries.ts', 'engines/kit/processFacts.ts', 'engines/kit/projectFolder.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !DECLARED.has(file) && !LAUNCH_CONTRACTS.has(file)), entry).toEqual([])
+    }
+    expect([...closureOf('engines/discoveries.ts').keys()].filter(file => /^engines\/(claude|codex)\//.test(file)).sort())
+      .toEqual(['engines/claude/discoveryContract.ts', 'engines/codex/discoveryContract.ts'])
+  })
+
+  it('building a launch loads the engines\' declared launch contracts alone', () => {
+    const contracts = new Set(['engines/claude/launch.ts', 'engines/codex/launch.ts'])
+    // The builders: the argv and its script, a relaunch's overrides, a harness's flags.
+    for (const entry of ['lib/engineLaunch.ts', 'lib/launchOverrides.ts', 'engines/launches.ts', 'engines/kit/launchArgs.ts',
+      'engines/kit/launchStartup.ts', 'dsh/adapters.ts', 'engines/launchPrep.ts', 'engines/kit/folderTrust.ts',
+      'engines/kit/resumeRepair.ts', 'dsh/runtime.ts', 'lib/apiInstructions.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)), entry).toEqual([])
+    }
+    expect([...closureOf('lib/engineLaunch.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
+    // The launches themselves reach the registry too, whose hook admission reads the hook contracts and whose
+    // load-time repair still reads Codex rollouts (rollout.ts, a later step of the plan). Nothing else of the two.
+    const declared = new Set([...contracts, ...DECLARED])
+    for (const entry of ['core/agents/create.ts', 'core/agents/fork.ts', 'core/agents/restart.ts', 'core/agents/swap.ts',
+      'core/agents/launch.ts', 'core/agents/launches.ts', 'lib/resumeAgentService.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !declared.has(file)), entry).toEqual([])
+    }
   })
 
   it('the core loads the other engines\' code only through engines/inProcess.ts, but for the files still listed', () => {

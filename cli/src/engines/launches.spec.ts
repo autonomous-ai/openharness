@@ -1,20 +1,27 @@
 /**
- * Reading a Codex `config.toml` for the provider an agent goes back to.
+ * Codex's own provider, declared (`ownProvider` in codex/launch.ts), read by the kit (kit/launchArgs.ts)
+ * through the composition core calls (`ownLoginProviderArgs`). The cases below are the former
+ * engines/codex/ownLoginProvider.spec.ts's, unchanged, run against the composed pieces.
  *
  * The parsing is deliberately small — one key, top level only — so what is worth pinning is where
  * it must NOT find that key, and what it hands back when it finds nothing.
  */
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import {
-  CODEX_DEFAULT_PROVIDER,
-  codexConfigPath,
-  ownLoginProviderArgs,
-  parseCodexModelProvider,
-} from './ownLoginProvider.js'
+import { launchHome } from '../lib/engineHomes.js'
+import { launch as codex } from './codex/launch.js'
+import { topLevelString } from './kit/launchArgs.js'
+import { harnessAdapters, launchContract, launchField, ownLoginProviderArgs } from './launches.js'
+
+const own = codex.ownProvider!
+const CODEX_DEFAULT_PROVIDER = own.fallback
+const parseCodexModelProvider = (toml: string): string | null => topLevelString(toml, own.key)
+const codexConfigPath = (home: string | null | undefined, environment?: NodeJS.ProcessEnv): string =>
+  join(launchHome(own.home, home, environment), own.file)
 
 // The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
-vi.mock('../../lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
+vi.mock('../lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
 afterEach(() => { shell.env = {} })
 
 describe('parseCodexModelProvider', () => {
@@ -115,5 +122,25 @@ describe('ownLoginProviderArgs', () => {
     const throws = () => { throw new Error('EACCES') }
     expect(ownLoginProviderArgs('codex', null, { read: () => { try { return throws() } catch { return null } }, env: {} }))
       .toEqual(['-c', `model_provider="${CODEX_DEFAULT_PROVIDER}"`])
+  })
+})
+
+describe('the launch contracts, composed', () => {
+  it('finds a contract only for an engine that declares one', () => {
+    expect(launchContract('codex')).toBe(codex)
+    expect(launchContract('claude')?.resumeArgs).toEqual(['--resume'])
+    expect(launchContract('opencode')).toBeUndefined()
+    expect(launchContract('terminal')).toBeUndefined()
+    expect(launchField('resumeArgs')).toEqual({ claude: ['--resume'], codex: ['resume'] })
+  })
+
+  it('hands a harness each engine\'s declared flags as argv', () => {
+    expect(harnessAdapters.claude.contextArgs?.('/w/"a"/CONTEXT.md'))
+      .toEqual(['--append-system-prompt', 'Read the harness context at "/w/\\"a\\"/CONTEXT.md" before working.'])
+    expect(harnessAdapters.claude.envArgs).toBeUndefined()
+    expect(harnessAdapters.codex.contextArgs).toBeUndefined()
+    expect(harnessAdapters.codex.envArgs?.({ OK: 'a "b"', 'NOT-OK': 'x', 'a.b': 'y' }))
+      .toEqual(['-c', 'shell_environment_policy.set.OK="a \\"b\\""'])
+    expect(harnessAdapters.codex.instructionFiles).toEqual(['AGENTS.override.md', 'AGENTS.md'])
   })
 })

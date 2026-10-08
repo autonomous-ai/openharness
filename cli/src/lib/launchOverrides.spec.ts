@@ -130,7 +130,7 @@ describe('buildLaunchOverrides — coming back off a grid', () => {
   // leaves the NAME stored with nothing defining it, and `codex resume` dies before the TUI is up:
   //   thread/resume failed: failed to load configuration: Model provider `grid` not found
   // The daemon's only answer was to abandon the conversation ("retrying fresh"). Reproduced against
-  // codex-cli 0.155.1; see `engines/codex/ownLoginProvider.ts`.
+  // codex-cli 0.155.1; see `ownProvider` in `engines/codex/launch.ts`.
 
   it('names a provider for Codex even when no model is remembered', async () => {
     // The case a model-shaped fix misses entirely: nothing to re-select, and the stale provider is
