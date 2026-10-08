@@ -104,3 +104,58 @@ sides keep their lines.
 - **Closure** (`core/main.ts`): 67,045 lines in 370 files before, 65,858 in 367 after. `gridLaunch.ts` (1,121),
   `gridWebMcp.ts` (446), `apiModels.ts` (171) and `codingContext.ts` (12) left; `gridLaunchWire.ts` (473) came
   in. `architecture.spec.ts` lists the three as edge files.
+
+## (L2) and (L3), as designed after (L1)
+
+Each has a choice the owner or the coordinator should confirm before it is built.
+
+### (L2) Grid assignment and the saved APIs
+
+- **Ask only for a process that could be on a grid.** Discovery reads every agent's process each pass, and models
+  is started on demand. So the core asks models (`ModelsPort.gridAssignments`, one call per pass) only for a
+  process that carries what a grid launch writes:
+  - the engine's endpoint variable;
+  - Pi's config folder or OpenCode's config file;
+  - a `model_providers.….base_url` argument.
+
+  Those names are declared in the wire and pinned to the classifier. Any other process is on no grid, which is
+  what the classifier answers today, so discovery of agents on their own login never starts models. Only the
+  variables the classifier reads are sent, never a key. If models is down, the answer is unknown (`undefined`),
+  and the row keeps its assignment, as a failed process read does today.
+- **Choice: no cache.** A process's environment cannot change, but the saved APIs that make an endpoint count can.
+  Today every pass classifies again, so an agent already on an API saved later is recognised. To stay identical,
+  the answer is not cached, so models stays started while an agent runs on a grid, or with its own
+  `ANTHROPIC_BASE_URL`. Caching by process would let it sleep, at the cost of that recognition.
+- **The saved APIs' endpoints are models'.** The core stops reading `connections.json` at start and stops
+  remembering endpoints (`rememberApiBase` leaves with the classifier).
+- **Choice: API instructions.** Every non-terminal launch writes the saved-API instructions into the agent's folder
+  when any API is saved (`apiInstructions.ts`). Moved to models, either:
+  - the core asks models only when `connections.json` exists, so users who never saved an API never start models
+    at launch; a launch while models is down goes ahead without the instructions and logs the warning it logs
+    today; or
+  - the instructions stay in the core, which keeps reading the list of saved APIs (no keys) for this.
+
+### (L3) Harness packages (DSH)
+
+- **A Store port.** The Store runs beside the viewers, always on. It gains two port calls:
+  - `dshMaterialize({ dsh, workspace, engine, account })` (create only): the template and the init. It answers
+    what it laid out and its warnings, which the core logs and uses for folder trust as today. Bound: the init's
+    5 minutes plus a margin, in `LONG_ANSWERS`.
+  - `dshLaunch({ dsh, workspace, engine, key, account, forkOf })`: the session's runtime, its env and its args.
+    Callers: create, every relaunch and fork.
+- **What the core keeps.**
+  - The installed index (`installed.ts`), and from `manifest.ts` the checks it makes before asking: the id's
+    shape, the engines a package supports, a pinned permission mode.
+  - `compatibility.ts`, and the session variables a launch clears (`launch.ts`).
+- **What leaves.** `runtime.ts`, `materialize.ts`, `shell.ts`, `adapters.ts`, and `dshLaunch`: about 560 lines.
+  `PROJECT_INSTRUCTION_FILES`, which `scm/scmProjects.ts` reads, moves beside it.
+- **Errors.** `DSH_UNAVAILABLE`: "The Store is not running, so Blender cannot be prepared for this agent. Try again
+  in a moment."
+- **Choice: restore at boot.** Restoring a harness agent now asks the Store. Today the core waits 5 s for the Store
+  at boot and then restores anyway. Proposed: wait up to 30 s when harness agents are to be restored. One the
+  Store still cannot prepare stays stopped, with the reason.
+- **Proof.**
+  - A DSH launch shapes golden first: create, relaunch and fork across the harness adapters, the workspace's files
+    with their bytes, the logs and every refusal.
+  - End to end, the Store's host killed: plain launches work; a harness create or restart is refused at once; once
+    the Store is back, it works.
