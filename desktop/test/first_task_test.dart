@@ -28,6 +28,26 @@ void main() {
       ).allMatches(table!.group(1)!))
         m.group(1)!: m.group(2) != 'null',
     };
+    // Engines whose launch moved into an engine contract (cli/src/engines/<id>/launch.ts) are
+    // spread into the table from there; read them where they are declared.
+    if (table.group(1)!.contains("...launchField('firstPromptArgs')")) {
+      final launches = RegExp(
+        r'export const engineLaunches = \{([^}]*)\}',
+      ).firstMatch(File('../cli/src/engines/launches.ts').readAsStringSync());
+      expect(
+        launches,
+        isNotNull,
+        reason: 'engineLaunches moved or changed shape',
+      );
+      for (final id in launches!.group(1)!.split(',').map((s) => s.trim())) {
+        if (id.isEmpty) continue;
+        final contract = RegExp(r'firstPromptArgs:\s*(null|\[)').firstMatch(
+          File('../cli/src/engines/$id/launch.ts').readAsStringSync(),
+        );
+        expect(contract, isNotNull, reason: '$id has no firstPromptArgs');
+        entries.putIfAbsent(id, () => contract!.group(1) != 'null');
+      }
+    }
     expect(entries, isNotEmpty);
     expect({
       for (final e in entries.entries)
