@@ -9,9 +9,11 @@ import 'primitives.dart';
 
 const int e2eVersion = 1;
 
-/// Frames this client must send as ciphertext — core.ts `ENCRYPTED_DOWN_TYPES`. test/e2ee/ holds it
-/// to the CLI's own list, because a type missing here fails nowhere: the frame simply leaves in the
-/// clear, and for terminal_* the relay then drops it as TERMINAL_FRAME_REJECTED.
+/// Frames this client must send as ciphertext — the machine's `encryptDownFrame` rule
+/// (applicationFrames.ts: core.ts `ENCRYPTED_DOWN_TYPES` and the request sets beside it).
+/// test/e2ee/ holds it to that whole rule, because a type missing here fails nowhere: the frame
+/// simply leaves in the clear and the machine answers E2EE_REQUIRED (for terminal_* the relay
+/// drops it as TERMINAL_FRAME_REJECTED).
 const Set<String> encryptedDownTypes = {
   'harness_devices_list',
   'harness_device_settings',
@@ -102,6 +104,29 @@ const Set<String> encryptedDownTypes = {
   'p2p_ice_candidate',
   'p2p_abort',
   'p2p_promote',
+  // The rest of what the machine requires sealed: its rule is `encryptDownFrame`
+  // (cli/src/lib/e2ee/applicationFrames.ts), the set above OR the sets named beside
+  // it (`git_pull_request` is above, beside `git_project_info`). These are listed
+  // before anything sends them.
+  'agent_purge',
+  'agent_worktree_delete',
+  'agents_cleanup_preview',
+  'viewer_request',
+  'viewer_data',
+  'viewer_ack',
+  'viewer_end',
+  'viewer_close',
+  'pair_watch',
+  'pair_journal',
+  'pair_read',
+  'pair_list',
+  'pair_answer',
+  'pair_send',
+  'pair_stop',
+  'pair_start',
+  'pair_pause',
+  'pair_resume',
+  'pair_plate_get',
 };
 
 /// Requests an older CLI took in the clear and a current one refuses unsealed — applicationFrames.ts

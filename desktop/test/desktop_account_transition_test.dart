@@ -46,6 +46,28 @@ class _Api extends ApiClient {
   Future<Map<String, dynamic>?> me() async => null;
 }
 
+/// An account desk that records what this window sends it.
+class _DeskApi extends _Api {
+  final ops = <Map<String, dynamic>>[];
+  final _tabs = <Object?>[];
+  var _revision = 0;
+
+  Map<String, dynamic> get _doc => {'revision': _revision, 'tabs': _tabs};
+
+  @override
+  Future<Map<String, dynamic>?> desk() async => _doc;
+
+  @override
+  Future<Map<String, dynamic>?> deskOps(List<Map<String, dynamic>> sent) async {
+    ops.addAll(sent);
+    for (final op in sent) {
+      if (op['op'] == 'seed') _tabs.addAll(op['tabs'] as List);
+    }
+    _revision++;
+    return _doc;
+  }
+}
+
 class _Desktop extends AppNotifier {
   _Desktop(this.storage, this.loginFixture)
     : super(
@@ -307,6 +329,48 @@ void main() {
       await login;
       expect(app.signedIn, isFalse);
       expect(app.status, AppStatus.authenticated);
+    },
+  );
+
+  test(
+    "a tab made signed out reaches the desk on the account's machine id",
+    () async {
+      final app = _Desktop(MemoryStore(), _Login())..signedIn = false;
+      addTearDown(app.dispose);
+      final desk = _DeskApi();
+      app.api = desk;
+      await app.refreshMachines();
+      app.adoptSessionForTest(
+        TerminalSession(
+          machineId: 'computer-local',
+          agentId: 'guest-agent',
+          agentName: 'Guest',
+          engineId: 'codex',
+          send: (_, _) async => true,
+          sendBinary: (_) async => true,
+        )..streamId = 'guest',
+      );
+      app.renameSwarm(app.activeSwarmId, 'Made signed out');
+      await app.flushPaneLayout();
+
+      await app.login();
+      await _settle();
+
+      final seeded = [
+        for (final op in desk.ops)
+          if (op['op'] == 'seed') ...(op['tabs'] as List).cast<Map>(),
+      ];
+      final onDesk = {
+        for (final tab in seeded)
+          for (final pane in (tab['panes'] as List).cast<Map>())
+            pane['machineId'],
+      };
+      expect(onDesk, isNot(contains('computer-local')));
+      expect(onDesk, contains('account-local'));
+      expect(
+        app.allPanes.map((pane) => pane.machineId),
+        everyElement('account-local'),
+      );
     },
   );
 

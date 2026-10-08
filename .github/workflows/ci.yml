@@ -157,6 +157,12 @@ jobs:
             /docs/images/
             /mobile/pubspec.lock
             /backend/src/lib/communityContract.ts
+            /mobile/lib/p2p/terminal_p2p_plugin.dart
+            /mobile/lib/p2p/terminal_p2p_link.dart
+            /mobile/lib/p2p/terminal_p2p_policy.dart
+            /mobile/lib/ws/terminal_transport_plugin.dart
+            /mobile/lib/ws/relay_codec.dart
+            /mobile/lib/e2ee/relay_session_crypto.dart
             /.gitattributes
             /.gitignore
             /.gitmodules

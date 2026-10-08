@@ -64,7 +64,13 @@ class WorkspaceChrome {
     this.compactTabs,
     this.compactFooter,
     this.compactBelow = 0,
+    this.firstMachine,
   });
+
+  /// Shown over the workspace while none of the account's computers is
+  /// connected, instead of opening the machine picker unasked. Null keeps the
+  /// picker.
+  final Widget Function(BuildContext context)? firstMachine;
 
   final double Function(BuildContext context) leadingWidth;
   final Widget Function(BuildContext context, WorkspaceCommands commands)

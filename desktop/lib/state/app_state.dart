@@ -118,6 +118,7 @@ import '../notify/system_notifications.dart' as notify_system;
 import 'account_devices.dart';
 import '../viewer/device_log.dart' show DevLogHead;
 import '../viewer/device_log_sync.dart';
+import '../viewer/removed_machines.dart';
 import '../e2ee/bytes.dart' show b64e;
 import '../viewer/device_history.dart' show DeviceLogHistory;
 
@@ -4490,6 +4491,7 @@ class AppNotifier extends ChangeNotifier {
   Future<void> _finishBootstrapSignedIn() async {
     final revision = _authRevision;
     if (!_authWorkCurrent(revision)) return;
+    _localSeatFollowed = false;
     // Which sign-in this app is under is the device log's to know before anything below can read it
     // (a restored pane, the dial, the pool, a connection's push): synchronous, ahead of the first await.
     // A sign-in by hand just now is `fresh`; a stored session (the app opening) is not.
@@ -4514,6 +4516,7 @@ class AppNotifier extends ChangeNotifier {
     // Every exit below clears the message: a boot superseded by a sign-out/sign-in mid-way (the
     // `_authWorkCurrent` returns) used to leave "Starting local service…" on a screen nothing would
     // ever repaint.
+    await _identifyBeforeLayout(revision);
     await _restorePaneLayout(claimOnAttach: true);
     _armLaunchClaimExpiry();
     if (!_authWorkCurrent(revision)) {
@@ -4548,18 +4551,18 @@ class AppNotifier extends ChangeNotifier {
     // independent of machine discovery and must not delay work — and a guest
     // has no profile to load.
     if (signedIn) unawaited(_loadProfile());
-    // The desk too: tabs from the other computers appear as intent, like the
-    // restored ones, and attach as their machines answer. It is the ACCOUNT's
-    // desk (`Desk{userId}`), so a guest has none — asking for one would earn a
-    // 401 on every poll for a document that cannot exist.
-    if (signedIn) _deskEnsure(revision);
     // The account's device key log: this app's key joins it (an existing sign-in too, from before
     // the log existed), and every machine it names is trusted with no password.
     if (signedIn) {
       if (_deviceLog case final log?) {
         // Which sign-in by hand this log's marks belong to is the log's own (minted at the start of
         // this boot by `beginSignIn`), never the profile's id — nothing to wait for.
-        unawaited(log.register().whenComplete(_syncPendingDevices));
+        unawaited(
+          log.register().whenComplete(() {
+            unawaited(_syncPendingDevices());
+            unawaited(_rereadRemovedMachines());
+          }),
+        );
       } else {
         // A desktop build: the daemon's own copy says which devices are still waiting to be seen.
         unawaited(_syncPendingDevices());
@@ -4574,8 +4577,11 @@ class AppNotifier extends ChangeNotifier {
     if (!_authWorkCurrent(revision)) return;
     // The account may have changed while this window was closed — see
     // [_followLocalMachineId]. Done AFTER the list, which is what says which id
-    // this computer is served under now.
-    await _followLocalMachineId(revision);
+    // this computer is served under now. The desk follows it: tabs from the
+    // other computers appear as intent and attach as their machines answer. It
+    // is the ACCOUNT's desk (`Desk{userId}`), so a guest has none — asking for
+    // one would earn a 401 on every poll for a document that cannot exist.
+    await _followLocalMachineIdThenDesk(revision);
     if (_authWorkCurrent(revision)) notifyListeners();
   }
 
@@ -4846,6 +4852,23 @@ class AppNotifier extends ChangeNotifier {
     });
     _profileInFlight = load;
     return load;
+  }
+
+  /// Who signed in, before the saved tabs are restored (see
+  /// [PaneLayoutStore.restorableFor]). A browser is the window anyone may sign
+  /// in on, and it has no daemon to wait for, so this costs one request there;
+  /// a native build reaches the profile through its daemon and keeps restoring
+  /// first. Unknown — the request failed — restores as before.
+  Future<void> _identifyBeforeLayout(int revision) async {
+    if (viewer == null || !signedIn) return;
+    try {
+      final me = await api.me();
+      if (me != null && _authWorkCurrent(revision)) {
+        currentUser = CurrentUserProfile.fromMe(me);
+      }
+    } catch (_) {
+      /* Unknown: the profile load after boot tries again. */
+    }
   }
 
   Future<void> _readProfile(int revision) async {
@@ -6543,6 +6566,13 @@ class AppNotifier extends ChangeNotifier {
   /// exactly one more follows it. A bulk rename pushes once per machine;
   /// without this each push would be its own pair of requests. A timer tick
   /// that finds a read open has nothing to add and is dropped.
+  /// Read the machine list again quietly — no loading state, the rows on
+  /// screen stay — as a missed `machines_changed` push would. For a screen
+  /// waiting on a computer this window has no connection to hear that push
+  /// through: an account with none connected yet (the browser's connect page).
+  Future<void> rereadMachines() =>
+      _rereadMachinesInBackground(pushed: false);
+
   Future<void> _rereadMachinesInBackground({required bool pushed}) async {
     if (_disposed || status != AppStatus.authenticated) return;
     if (_sharingDiscoveryBusy) {
@@ -6621,6 +6651,50 @@ class AppNotifier extends ChangeNotifier {
 
   void _stopOfflineRetry(String machineId) {
     _offlineRetryTimers.remove(machineId)?.cancel();
+  }
+
+  /// Dials [machineId] now instead of at the link retry's next tick. A machine
+  /// that trusts this device through the account's device key log answers with
+  /// no password at all. True once it is connected; false when it still wants
+  /// this device linked (a CLI from before the log, or a log that does not name
+  /// this device yet), or has not answered within [timeout].
+  Future<bool> connectTrusted(
+    String machineId, {
+    Duration timeout = const Duration(seconds: 12),
+  }) async {
+    final state = machineStates[machineId];
+    if (state == null || state.machine.isShared) return false;
+    final done = Completer<bool>();
+    var dialed = false;
+    void settle() {
+      final now = machineStates[machineId];
+      if (done.isCompleted) return;
+      if (now == null) return done.complete(false);
+      final status = now.connectionStatus;
+      if (status == ConnectionStatus.connected && !now.needsLink) {
+        return done.complete(true);
+      }
+      if (status == ConnectionStatus.connecting ||
+          status == ConnectionStatus.reconnecting) {
+        dialed = true;
+      } else if (dialed && now.needsLink) {
+        done.complete(false);
+      }
+    }
+
+    addListener(settle);
+    final timer = Timer(timeout, () {
+      if (!done.isCompleted) done.complete(false);
+    });
+    try {
+      await _pool?.closeMachine(machineId);
+      if (machineStates[machineId] case final current?) _connectMachine(current);
+      settle();
+      return await done.future;
+    } finally {
+      timer.cancel();
+      removeListener(settle);
+    }
   }
 
   void _startLinkRetry(String machineId) {
@@ -6953,6 +7027,7 @@ class AppNotifier extends ChangeNotifier {
     newDevices.clear();
     departedDevices.clear();
     deviceRemovals.clear();
+    removedMachines = const {};
     _queuedDeviceNotices.clear();
     deviceConflict = null;
     _dismissedConflict = null;
@@ -7007,11 +7082,31 @@ class AppNotifier extends ChangeNotifier {
       onChanged: () {
         devicesRevision++;
         unawaited(_syncPendingDevices());
+        unawaited(_rereadRemovedMachines());
         unawaited(_redialPinnedMachines());
         if (!_disposed) notifyListeners();
       },
     );
     services.links.deviceLog = log;
+  }
+
+  /// Viewer builds only: machines the account's device key log took out and gave no new key since,
+  /// by the seq of the removal (`viewer/removed_machines.dart`). The connect page says such a machine
+  /// was removed rather than offline — it is signed out, and opening Harness on it will not bring it
+  /// back.
+  Map<String, int> removedMachines = const {};
+
+  Future<void> _rereadRemovedMachines() async {
+    final keys = viewer?.keys;
+    if (keys == null) return;
+    try {
+      final next = removedMachinesOf(await keys.deviceLog());
+      if (_disposed || mapEquals(next, removedMachines)) return;
+      removedMachines = next;
+      notifyListeners();
+    } catch (_) {
+      // Unreadable now; the next change to the log reads it again.
+    }
   }
 
   /// What the device log announced while the app was not yet signed in (starting up): the log has
@@ -7895,9 +7990,9 @@ class AppNotifier extends ChangeNotifier {
     }
     if (signedIn && currentUser == null) unawaited(_loadProfile());
     // A boot that found the daemon still connecting finishes THROUGH here (see
-    // `_loadProfile`), so the desk is joined here as well — once.
+    // `_loadProfile`), so the local id is followed and the desk joined here as
+    // well — once, after the list, as the boot does.
     if (signedIn) {
-      _deskEnsure(revision);
       // The first boot's read may have found nothing to say yet (or been dropped); read again —
       // until one has succeeded.
       if (!_pendingBootReadDone) unawaited(_syncPendingDevices());
@@ -7905,6 +8000,8 @@ class AppNotifier extends ChangeNotifier {
     try {
       if (!await refreshMachines() || !_authWorkCurrent(revision)) return;
       if (!automatic) _lastError = null;
+      if (!_localSeatFollowed) await _followLocalMachineIdThenDesk(revision);
+      if (signedIn) _deskEnsure(revision);
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       _reportMachineLoadError(error, automatic: automatic);
@@ -14348,8 +14445,26 @@ class AppNotifier extends ChangeNotifier {
   /// answered the first read with an error, not with a desk.
   void _deskEnsure(int authRevision) {
     if (workspaceEnabled?.call() == false) return;
+    if (!_localSeatFollowed) return;
     if (_desk.enabled || _deskJoining != null) return;
     unawaited(_deskStart(authRevision));
+  }
+
+  /// Whether this sign-in has followed this computer's machine id
+  /// ([_followLocalMachineId]) — re-seated the tiles this window made while
+  /// signed out, which sit on the computer's own id. The desk is not joined
+  /// before: its seed is every local tab it lacks, and a tab still on that id
+  /// landed on the ACCOUNT's desk naming a machine nothing serves, opening on
+  /// every window of it as "This machine isn't available" — a new user's first
+  /// sign-in on the desktop did exactly that.
+  bool _localSeatFollowed = false;
+
+  /// [_followLocalMachineId], then the desk it was holding back.
+  Future<void> _followLocalMachineIdThenDesk(int revision) async {
+    await _followLocalMachineId(revision);
+    if (!_authWorkCurrent(revision)) return;
+    _localSeatFollowed = true;
+    if (signedIn) _deskEnsure(revision);
   }
 
   Future<void> _deskJoin(int authRevision) async {
@@ -14854,6 +14969,7 @@ class AppNotifier extends ChangeNotifier {
             ? savedActive!
             : saved.last.id,
         monitorHarnesses: _monitorHarnesses,
+        owner: currentUser?.id,
       ),
     );
   }
@@ -14890,8 +15006,16 @@ class AppNotifier extends ChangeNotifier {
     final revision = _layoutRevision;
     final authRevision = _authRevision;
     final savedProfile = await store.loadMachineProfile();
-    final saved = await store.loadSwarms();
-    final known = await store.loadMonitorHarnesses(saved);
+    final loaded = await store.loadSwarms();
+    // Another account's tabs and history — a browser someone else signed in
+    // on — are not this one's to see: start from an empty desk instead.
+    final foreign =
+        loaded != null &&
+        !PaneLayoutStore.restorableFor(loaded, currentUser?.id);
+    final saved = foreign ? null : loaded;
+    final known = foreign
+        ? const <(String, String)>[]
+        : await store.loadMonitorHarnesses(saved);
     if (!_authWorkCurrent(authRevision)) return;
     // This window's own choice, never the desk's. No saved choice — a window
     // that never picked one — is All machines.

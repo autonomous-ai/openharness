@@ -83,7 +83,14 @@ class RelaySessionCrypto {
 
   /// Takes the machine's `e2e_welcome`; true once the session is usable. False means the machine
   /// did not prove it holds the identity this app pinned for it, or the welcome did not open.
+  ///
+  /// ⚠️ **One welcome per session.** Once one has made the session usable, any other is refused
+  /// and changes nothing. A welcome is signed but not fresh: the relay can hand the same one back
+  /// at any time, and taking it again reset the group key to the one it carried — undoing every
+  /// `e2e_rekey` since, which is how the machine locks out a client it revoked. That client still
+  /// holds the old key, and could then write into this session's view.
   Future<bool> handleWelcome(Map<String, dynamic> payload) async {
+    if (ready) return false;
     try {
       final adapterEphPub = _bytesField(payload, 'ephPub');
       final sig = _bytesField(payload, 'sig');
@@ -119,10 +126,16 @@ class RelaySessionCrypto {
 
   /// Takes an `e2e_rekey` — the machine rotated its group key, which it does when it revokes a
   /// client. False when it does not open.
+  ///
+  /// ⚠️ Held to the same replay window as every other frame under [_s2c]: the machine seals a
+  /// rekey with the very counter its pairwise frames take (manager.ts `rotateGroupKey`), so one
+  /// seen before is one replayed. Unchecked, the relay could hand back an OLD rekey after a newer
+  /// one and roll the group key back to one a revoked client still holds.
   bool handleRekey(Map<String, dynamic> payload) {
     final s2c = _s2c;
     final n = payload['n'], enc = payload['enc'];
     if (s2c == null || n is! int || enc is! String || enc.isEmpty) return false;
+    if (!_s2cRecv.allows(n)) return false;
     try {
       final opened = aeadOpen(s2c, n, utf8Bytes('e2e-rekey'), b64d(enc));
       final next = opened == null ? null : jsonObjectOf(opened);
@@ -132,6 +145,7 @@ class RelaySessionCrypto {
       }
       _groupKey = b64d(groupKey);
       _epoch = epoch;
+      _s2cRecv.commit(n);
       return true;
     } on FormatException {
       return false;

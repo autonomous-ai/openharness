@@ -26,6 +26,13 @@ function withCoverPath<T extends { id: string; cover: string | null }>(row: T): 
   const { cover, ...rest } = row
   return { ...rest, ...(cover ? { cover: `/api/community/harnesses/${row.id}/cover` } : {}) }
 }
+const searchMaxChars = 80
+/** The fields a reader searches by. TODO(BE): an unanchored match scans the environment's publications; move to an Atlas Search index once the feed outgrows that. */
+const searchFields = ['title', 'description', 'authorName', 'category', 'engine', 'harnessId'] as const
+function searchWhere(q?: string) {
+  if (!q) return {}
+  return { OR: searchFields.map(field => ({ [field]: { contains: q, mode: 'insensitive' as const } })) }
+}
 const params = z.object({ id: identifier })
 const file = z.object({
   path: z.string().regex(communityPathPattern).refine(path =>
@@ -98,13 +105,13 @@ async function publication(id: string, autonomousEnv: string) {
 export async function communityRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('onSend', async (_req, reply) => { reply.header('Cache-Control', 'no-store') })
 
-  const feedQuery = z.object({ cursor: z.string().uuid().optional(), following: z.enum(['true', 'false']).optional(), mine: z.enum(['true', 'false']).optional() }).strict()
+  const feedQuery = z.object({ cursor: z.string().uuid().optional(), following: z.enum(['true', 'false']).optional(), mine: z.enum(['true', 'false']).optional(), q: z.string().trim().min(1).max(searchMaxChars).optional() }).strict()
   app.get<{ Querystring: z.infer<typeof feedQuery> }>('/api/community/harnesses', { preHandler: validateQuery(feedQuery) }, async (req, reply) => {
     const autonomousEnv = environment(req)
     if ((req.query.following === 'true' || req.query.mine === 'true') && !req.user) return sendError(reply, 'Sign in to see your harnesses and creators you follow.', 'UNAUTHORIZED', 401)
     const follows = req.user ? await prisma.communityFollow.findMany({ where: { autonomousEnv, userId: req.user.sub }, select: { authorId: true } }) : []
     const rows = await prisma.communityHarness.findMany({
-      where: { autonomousEnv, deletedAt: null, ...(req.query.following === 'true' ? { authorId: { in: follows.map(row => row.authorId) } } : {}), ...(req.query.mine === 'true' ? { authorId: req.user!.sub } : {}) },
+      where: { autonomousEnv, deletedAt: null, ...(req.query.following === 'true' ? { authorId: { in: follows.map(row => row.authorId) } } : {}), ...(req.query.mine === 'true' ? { authorId: req.user!.sub } : {}), ...searchWhere(req.query.q) },
       select: { id: true, title: true, description: true, category: true, engine: true, harnessId: true, authorId: true, authorName: true, forkedFrom: true, createdAt: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 31,
       ...(req.query.cursor ? { cursor: { id: req.query.cursor }, skip: 1 } : {}),

@@ -263,6 +263,99 @@ void main() {
     }
   }
 
+  group('a browser shared by two accounts', () {
+    String layout({String? owner}) => jsonEncode({
+      'version': 1,
+      'owner': ?owner,
+      'activeId': 'theirs',
+      'swarms': [
+        {
+          'id': 'theirs',
+          'name': 'GroupMe',
+          'panes': [
+            {'machineId': 'their-mac', 'agentId': 'their-agent'},
+          ],
+        },
+      ],
+      'monitorHarnesses': [
+        ['their-mac', 'their-agent'],
+      ],
+    });
+
+    WorkspaceAccountFixture signedInAs(
+      String account, {
+      required String saved,
+    }) {
+      final app = WorkspaceAccountFixture(
+        MemoryStore()..values['swarm_layout_v1'] = saved,
+        WorkspaceAccountLogin(),
+      );
+      app.currentUser = CurrentUserProfile.fromMe({
+        'user': {'id': account, 'email': '$account@example.invalid'},
+      });
+      return app;
+    }
+
+    test('another account\'s tabs and history do not open', () async {
+      final app = signedInAs('new-account', saved: layout(owner: 'old-account'));
+      addTearDown(app.dispose);
+
+      await app.restorePaneLayoutForTest();
+
+      expect(app.swarms.map((s) => s.name), isNot(contains('GroupMe')));
+      expect(app.allPanes, isEmpty);
+      expect(app.hasOpenedHarness('their-mac', 'their-agent'), isFalse);
+    });
+
+    test('the same account gets its tabs back', () async {
+      final app = signedInAs('old-account', saved: layout(owner: 'old-account'));
+      addTearDown(app.dispose);
+
+      await app.restorePaneLayoutForTest();
+
+      expect(app.swarms.map((s) => s.name), contains('GroupMe'));
+      expect(app.hasOpenedHarness('their-mac', 'their-agent'), isTrue);
+    });
+
+    test('a layout saved before owners were recorded still opens', () async {
+      final app = signedInAs('any-account', saved: layout());
+      addTearDown(app.dispose);
+
+      await app.restorePaneLayoutForTest();
+
+      expect(app.swarms.map((s) => s.name), contains('GroupMe'));
+    });
+
+    test('a saved layout names the account it belongs to', () async {
+      final storage = MemoryStore();
+      final app = WorkspaceAccountFixture(storage, WorkspaceAccountLogin());
+      addTearDown(app.dispose);
+      app.currentUser = CurrentUserProfile.fromMe({
+        'user': {'id': 'new-account', 'email': 'new@example.invalid'},
+      });
+
+      await arrangeAccountWorkspace(app);
+
+      final saved = jsonDecode(storage.values['swarm_layout_v1']!) as Map;
+      expect(saved['owner'], 'new-account');
+    });
+
+    test('signing in finds out who it is before restoring', () async {
+      final storage = MemoryStore()
+        ..values['swarm_layout_v1'] = layout(owner: 'old-account');
+      final app = WorkspaceAccountFixture(storage, WorkspaceAccountLogin());
+      addTearDown(app.dispose);
+      await app.logout();
+
+      // The fixture's backend answers `fixture-account`.
+      await app.login();
+
+      expect(app.currentUser?.id, 'fixture-account');
+      expect(app.swarms.map((s) => s.name), isNot(contains('GroupMe')));
+      expect(app.hasOpenedHarness('their-mac', 'their-agent'), isFalse);
+    });
+  });
+
   for (final cancel in [false, true]) {
     test(
       'sign-in ${cancel ? 'can be cancelled while waiting for' : 'waits for'} expired terminal cleanup',
