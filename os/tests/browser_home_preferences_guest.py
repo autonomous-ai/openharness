@@ -7,6 +7,7 @@ No observer or debugging switch is installed in the production OS.
 """
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -54,7 +55,7 @@ def browser(root, log):
     with log.open('wb') as error:
         child = subprocess.Popen(['/bin/sh', '-c',
             'exec /usr/bin/chromium --headless --no-first-run --no-default-browser-check '
-            '--remote-debugging-pipe --enable-unsafe-extension-debugging '
+            '--remote-debugging-pipe '
             '--allow-chrome-scheme-url --user-data-dir="$1" about:blank 3<&0 4>&1',
             'harness-test-browser-choices', str(root)], stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=error, start_new_session=True)
@@ -79,6 +80,35 @@ def management(chrome, expression, session):
         '(value) => chrome.runtime.lastError ? reject(new Error(chrome.runtime.lastError.message)) : resolve(value)); })', session)
 
 
+def custom_page(root):
+    """Install a signed test extension through Chromium's supported Linux path.
+
+    CDP loadUnpacked is intentionally transient across browser restarts. A real
+    external installation lets the test observe an existing persistent choice.
+    The generated key and extension stay only inside this disposable VM.
+    """
+    fixture = Path('/tmp/harness-custom-newtab')
+    fixture.mkdir(mode=0o700)
+    (fixture / 'manifest.json').write_text(json.dumps({'manifest_version': 3,
+        'name': 'Custom tab fixture', 'version': '1.0',
+        'chrome_url_overrides': {'newtab': 'index.html'}}))
+    (fixture / 'index.html').write_text('<!doctype html><title>New Tab</title><h1>CUSTOM TAB</h1>')
+    subprocess.run(['/usr/bin/chromium', '--headless', '--no-message-box',
+        '--user-data-dir=/tmp/harness-custom-pack-profile', '--pack-extension=' + str(fixture)],
+        stdin=subprocess.DEVNULL, capture_output=True, check=True, timeout=30)
+    key = fixture.with_suffix('.pem')
+    key.chmod(0o600)
+    public = subprocess.check_output(['/usr/bin/openssl', 'pkey', '-in', str(key),
+        '-pubout', '-outform', 'DER'], timeout=10)
+    identity = hashlib.sha256(public).hexdigest()[:32].translate(
+        str.maketrans('0123456789abcdef', 'abcdefghijklmnop'))
+    descriptor = root / 'External Extensions' / (identity + '.json')
+    descriptor.parent.mkdir(parents=True)
+    descriptor.write_text(json.dumps({'external_crx': str(fixture.with_suffix('.crx')),
+                                     'external_version': '1.0'}))
+    return identity
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['disabled', 'enabled', 'inspect', 'custom'])
@@ -90,6 +120,8 @@ def main():
     root = Path.home() / '.config/chromium'
     identity = json.loads(Path('/usr/share/harness-os/browser-home/extension.json').read_text())['extension_id']
     result = {'action': args.action, 'identity': identity, 'mechanism': 'Chromium management API, private test-only CDP pipe'}
+    if args.action == 'custom':
+        result['custom_id'] = custom_page(root)
     with browser(root, args.output.with_suffix('.log')) as chrome:
         target = chrome.call('Target.createTarget', {'url': 'chrome://extensions/'})['targetId']
         session = chrome.call('Target.attachToTarget', {'targetId': target, 'flatten': True})['sessionId']
@@ -98,13 +130,11 @@ def main():
             assert time.monotonic() < deadline, 'Extensions management page did not load'
             time.sleep(.1)
         if args.action == 'custom':
-            fixture = Path('/tmp/harness-custom-newtab')
-            fixture.mkdir(exist_ok=True)
-            (fixture / 'manifest.json').write_text(json.dumps({'manifest_version': 3,
-                'name': 'Custom tab fixture', 'version': '1.0',
-                'chrome_url_overrides': {'newtab': 'index.html'}}))
-            (fixture / 'index.html').write_text('<!doctype html><title>New Tab</title><h1>CUSTOM TAB</h1>')
-            result['custom_id'] = chrome.call('Extensions.loadUnpacked', {'path': str(fixture)})['id']
+            deadline = time.monotonic() + 15
+            while not any(item['id'] == result['custom_id'] and item['enabled']
+                          for item in management(chrome, 'chrome.management.getAll(', session)):
+                assert time.monotonic() < deadline, 'Custom extension did not install'
+                time.sleep(.1)
         elif args.action in ('disabled', 'enabled'):
             management(chrome, 'chrome.management.setEnabled(' + json.dumps(identity) + ', ' +
                        ('true' if args.action == 'enabled' else 'false') + ', ', session)

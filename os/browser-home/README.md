@@ -9,6 +9,10 @@ updating existing installations only. Startup preferences, bookmarks and explici
 URLs stay untouched. A user can disable/remove it in `chrome://extensions` or
 choose another New Tab extension. Chromium remembers removal across OS updates.
 
+The extension is locally signed rather than published in the Chrome Web Store.
+Chromium may flag its source in Extensions' Safety Check; that browser warning
+is preserved, along with the controls to disable or remove it.
+
 The extension has only `nativeMessaging` permission. It has no network access,
 content scripts, history, tab or bookmark permissions. Clicking
 Connections starts a short-lived native host which accepts only the Connections
