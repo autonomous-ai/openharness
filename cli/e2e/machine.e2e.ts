@@ -6,7 +6,7 @@
  * must bring each back with its conversation when it is opened again. After a restart it brings them
  * back on its own.
  */
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -111,7 +111,11 @@ describe('what the machine does to the daemon', () => {
     await client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
     const working = await until('the isolated engine to read as working', async () => {
       const now = await row(client, agent.id)
-      return now?.activity?.state === 'working' && now.processIdentity?.pid ? now : null
+      // Process identity is private registry state, not part of the clients' agent list.
+      const registered = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8'))
+        .find((entry: Row) => entry.agentId === agent.id)
+      return now?.activity?.state === 'working' && registered?.processIdentity?.pid
+        ? registered : null
     }, 15_000, 250)
     // This PID came from the disposable daemon's private pane, never the owner's daemon or client.
     expect(working.cwd).toBe(join(d.projectsDir, `engine-crash-${engine}`))
