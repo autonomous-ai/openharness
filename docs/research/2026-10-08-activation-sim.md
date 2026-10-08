@@ -56,6 +56,8 @@ vendor binaries, so their real login screens appear.
 | D1 | branch, CLI 9.0.2 preinstalled | D, both signed in (fake), Codex last | yes | box opens on Codex; answered within 12 s of Enter | none | — | — |
 | A5 | branch-2 (setup-time task, f8112ccd0), CLI release | A | yes | task typed and sent during setup at 21 s; first file at 70 s after opening, no further action (released CLI: grid still downloaded, OpenCode installed in the pane) | none | — | — |
 | A6 | branch-2 (af410791d), CLI release | A | yes | task sent during setup at 14 s; first file at 72 s; the person was in Finder meanwhile | none | back in Harness: "An agent finished while you were away. Get a notification next time? Turn on" | — |
+| C1 | branch-2, CLI release | C, Codex from npm, not signed in | no | — | blocker: "could not verify Codex startup options" (first `codex --help` past the 5 s check) | — | — |
+| C2 | branch-2 + CLI 9.0.3 (e1aa14ed7) | C, same | sign-in screen | box keeps OpenCode, picker says Codex Needs sign-in; picking Codex opens its own sign-in screen with the task held | none from Harness (sign-in is the person's step) | — | — |
 | B1 | branch, CLI release | B, Claude Code 2.1.294 installed, not signed in | no | — | default still OpenCode; picker shows no install state; Claude Code exited at start ("Unable to connect to Anthropic services", transient network) and its pane vanished: user back on an empty box with a stray "Terminal harness" | — | **~20** |
 
 ## Findings
@@ -141,6 +143,13 @@ vendor binaries, so their real login screens appear.
     (af410791d). `index.html` in OpenCode's answer is underlined as a link on hover (c4b4df780);
     links open with ⌘-click, which this VNC server cannot send (⌘T arrived as "t"), so the open itself
     is covered by `terminal_link_opener_test.dart` rather than the VM.
+
+### C1/C2 — Codex installed from npm, not signed in
+
+20. The first run of a freshly installed Codex is slow (2.9 s idle, the second 0.05 s); at first
+    launch it passed the 5 s `--no-daemon` startup check and the harness failed with "could not
+    verify Codex startup options". The check now allows 30 s (e1aa14ed7); C2 opens Codex's own
+    sign-in screen (ChatGPT, device code or API key) and holds the task.
 
 ## Next
 
