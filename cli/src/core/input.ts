@@ -24,6 +24,7 @@ import type { SubmissionReader } from '../lib/submissionReader.js'
 import type { ScreenReading } from '../engines/facets/screen.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
 import type { TerminalControl } from './terminals/control.js'
+import { launchBound } from './engines/sessionBinding.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
@@ -91,7 +92,10 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
         // (a re-attach can blank one capture): only what is on screen holds the Enter back, never a
         // read that failed once. Still not read after that, it is held, as nothing says it is safe.
         for (let tries = 1; ; tries++) {
-          const next = await readScreen(session, await captureTerminal(id))
+          // Read under the record as it now stands when it is the launch typed into, bound to its first
+          // conversation since (sessionBinding.ts `launchBound`); under any other change, as typed, which
+          // the reading's fence refuses.
+          const next = await readScreen(launchBound(session, resolve(id)), await captureTerminal(id))
           const before = next ? next.messageHold : 'screen_unreadable'
           if (before === 'popup_open') return null
           if (!before || !passingHold(before) || tries >= ENTER_CHECK_TRIES) return before
