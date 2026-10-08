@@ -7,6 +7,7 @@ export const SCREEN_READ = 'engine_screen_read'
 export const SCREEN_CAPABILITIES = 'engine_screen_capabilities'
 export const SCREEN_WAIT_MS = 1_000
 export const SCREEN_IN_FLIGHT = 8
+export const SCREEN_QUEUED = 64
 export const SCREEN_CAPTURE_BYTES = 256 * 1024
 export const SCREEN_REPLY_BYTES = 1024 * 1024
 const HOLDS = ['permission_open', 'question_open', 'menu_open', 'rewind_picker_open', 'transcript_open',

@@ -18,7 +18,10 @@ export function engineScreenRequests(engine: ReaderEngine, deps: ScreenRequestDe
     if (!asker.owner || !asker.local || asker.connection !== undefined || payload.version !== SCREEN_VERSION) return failure('ENGINE_INVALID_REQUEST')
     if (closed?.aborted) return failure('ENGINE_UNAVAILABLE')
     if (method === SCREEN_CAPABILITIES) return { version: SCREEN_VERSION, screen: SCREEN_VERSION, engine }
-    if (!screenCapture(payload.capture) || Object.keys(payload).some(key => key !== 'version' && key !== 'capture')) return failure('ENGINE_INVALID_REQUEST')
+    // ServiceLinks adds its routing id inside the payload. It is transport
+    // metadata, not a terminal capability or engine input.
+    if (!screenCapture(payload.capture) || Object.keys(payload).some(key => !['version', 'capture', 'requestId'].includes(key))
+      || (payload.requestId !== undefined && (typeof payload.requestId !== 'string' || payload.requestId.length > 200))) return failure('ENGINE_INVALID_REQUEST')
     if (pending >= SCREEN_IN_FLIGHT) return failure('ENGINE_BUSY')
     pending++
     let timer: ReturnType<typeof setTimeout> | undefined

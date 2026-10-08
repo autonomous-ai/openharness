@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { screenFor } from '../../engines/screens.js'
 import { engineScreenRequests } from '../../engines/worker/screenRequests.js'
-import { SCREEN_CAPABILITIES, SCREEN_IN_FLIGHT, SCREEN_READ, SCREEN_REPLY_BYTES, SCREEN_WAIT_MS } from '../../engines/worker/screenProtocol.js'
+import { SCREEN_CAPABILITIES, SCREEN_IN_FLIGHT, SCREEN_QUEUED, SCREEN_READ, SCREEN_REPLY_BYTES, SCREEN_WAIT_MS } from '../../engines/worker/screenProtocol.js'
 import { createScreenTransport, type ScreenTransport } from './screenTransport.js'
 
 const capture = '────────────\n❯\n────────────\n? for shortcuts'
@@ -19,7 +19,7 @@ describe('screen transport', () => {
     let transport: ScreenTransport
     const call = vi.fn(async (service, method, payload) => {
       if (call.mock.calls.length === 1) transport.connected(service)
-      return await requests[method](payload, { owner: true, local: true })
+      return await requests[method]({ ...payload, requestId: `core-route-${call.mock.calls.length}` }, { owner: true, local: true })
     })
     transport = createScreenTransport({ call })
     expect(await transport.read('claude', capture)).toEqual(answer.answer)
@@ -37,13 +37,26 @@ describe('screen transport', () => {
     let finish!: (value: typeof answer) => void
     const pending = new Promise<typeof answer>(resolve => { finish = resolve })
     t.call.mockImplementation(() => pending)
-    const tasks = Array.from({ length: SCREEN_IN_FLIGHT }, () => t.read())
+    const tasks = Array.from({ length: SCREEN_IN_FLIGHT + SCREEN_QUEUED }, () => t.read())
     await expect(t.read()).rejects.toThrow('ENGINE_BUSY')
     t.transport.disconnected('engine-claude'); t.transport.connected('engine-claude')
     finish(answer)
     for (const task of tasks) await expect(task).rejects.toThrow('ENGINE_STALE_REPLY')
     t.call.mockImplementation(async (_s, method) => method === SCREEN_CAPABILITIES ? capability : answer)
     expect(await t.read()).toEqual(answer.answer)
+  })
+
+  it('serves a burst of pane polls fairly and expires queued work without sending it late', async () => {
+    const t = setup(); await t.read()
+    const burst = await Promise.all(Array.from({ length: 24 }, () => t.read()))
+    expect(burst).toHaveLength(24)
+    expect(burst.every(value => value.messageHold === null)).toBe(true)
+    vi.useFakeTimers()
+    t.call.mockClear().mockImplementation(() => new Promise(() => {}))
+    const waiting = Array.from({ length: 24 }, () => t.read().catch(error => error.code))
+    await vi.advanceTimersByTimeAsync(SCREEN_WAIT_MS + 1)
+    expect(await Promise.all(waiting)).toEqual(Array(24).fill('ENGINE_UNAVAILABLE'))
+    expect(t.call).toHaveBeenCalledTimes(SCREEN_IN_FLIGHT)
   })
   it('enforces one deadline across cold negotiation and a read, including a hung link', async () => {
     const t = setup(); let time = 10

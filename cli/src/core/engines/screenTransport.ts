@@ -1,7 +1,7 @@
 /** Core's screen port: plain snapshots, a single deadline, and connection-generation fencing. */
 import type { ScreenReading } from '../../engines/facets/screen.js'
 import { EngineReadError, readerEngine, READER_ERRORS, READER_SERVICES, type ReaderEngine } from '../../engines/worker/protocol.js'
-import { screenReading, screenCapture, SCREEN_CAPABILITIES, SCREEN_IN_FLIGHT, SCREEN_READ, SCREEN_REPLY_BYTES,
+import { screenReading, screenCapture, SCREEN_CAPABILITIES, SCREEN_IN_FLIGHT, SCREEN_QUEUED, SCREEN_READ, SCREEN_REPLY_BYTES,
   SCREEN_VERSION, SCREEN_WAIT_MS } from '../../engines/worker/screenProtocol.js'
 
 export interface ScreenTransportDeps {
@@ -10,7 +10,7 @@ export interface ScreenTransportDeps {
 
 export function createScreenTransport(deps: ScreenTransportDeps) {
   const states = new Map(Object.values(READER_SERVICES).map(service => [service as string,
-    { generation: 0, connected: false, capable: false, pending: 0 }]))
+    { generation: 0, connected: false, capable: false, pending: 0, waiting: [] as Array<() => void> }]))
   const fail = (code: EngineReadError['code']): never => { throw new EngineReadError(code) }
   return {
     connected(service: string): void {
@@ -24,10 +24,17 @@ export function createScreenTransport(deps: ScreenTransportDeps) {
     async read(engine: string, capture: string): Promise<ScreenReading> {
       if (!readerEngine(engine) || !screenCapture(capture)) fail('ENGINE_INVALID_REQUEST')
       const service = READER_SERVICES[engine as ReaderEngine], state = states.get(service)!
-      if (state.pending >= SCREEN_IN_FLIGHT) fail('ENGINE_BUSY')
       const generation = state.generation + (state.connected ? 0 : 1)
       const deadline = performance.now() + SCREEN_WAIT_MS
-      state.pending++
+      // A poll tick can capture dozens of panes together. Refusing every read
+      // after the first eight starves the same later sessions on every tick.
+      // FIFO admission is bounded, and spends the caller's original deadline.
+      // Earlier active reads have the same hard budget and release their slots
+      // even on a hung link; expired queued reads send nothing and release next.
+      if (state.pending >= SCREEN_IN_FLIGHT) {
+        if (state.waiting.length >= SCREEN_QUEUED) fail('ENGINE_BUSY')
+        await new Promise<void>(resolve => { state.waiting.push(resolve) })
+      } else state.pending++
       const call = async (method: string, payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
         const remaining = Math.ceil(deadline - performance.now())
         if (remaining <= 0) fail('ENGINE_UNAVAILABLE')
@@ -56,7 +63,11 @@ export function createScreenTransport(deps: ScreenTransportDeps) {
         if (Buffer.byteLength(JSON.stringify(reply)) > SCREEN_REPLY_BYTES || !screenReading(reply.answer)) fail('ENGINE_INVALID_REPLY')
         return reply.answer as ScreenReading
       } catch (error) { throw error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE') }
-      finally { state.pending-- }
+      finally {
+        const next = state.waiting.shift()
+        if (next) next()
+        else state.pending--
+      }
     },
   }
 }

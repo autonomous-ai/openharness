@@ -36,8 +36,8 @@ connection. They are absent from the public client router. Version 1 allows:
 | --- | --- |
 | Capture | 256 KiB of UTF-8 |
 | Reply | 1 MiB including the envelope |
-| Concurrent reads | 8 per engine, without an unbounded queue |
-| Core deadline | 1 second including capability negotiation and worker startup |
+| Concurrent reads | 8 per engine, with at most 64 waiting in FIFO order |
+| Core deadline | 1 second including queueing, capability negotiation and worker startup |
 
 Core validates reply fields, pane flags, question rows and hold values. Each
 result is fenced to the connection generation and the session/process/terminal
@@ -58,7 +58,7 @@ core merely to install this facet.
 
 ## Remaining engine isolation
 
-This completes screen interpretation, not the full engine boundary. Native model
+This moves the screen reads described above; the full engine boundary remains in progress. Native model
 picker drivers in `lib/runtimeControl.ts`, answer key selection and fingerprint
 normalization in `lib/questionController.ts`, submission verification, hooks and
 installers, launch/discovery/resume and native control connections still need
