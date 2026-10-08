@@ -196,6 +196,28 @@ void main() {
     },
   );
 
+  test('Player allowance follows the machine and expires at the first reset', () async {
+    var now = instant;
+    final reset = instant.add(const Duration(minutes: 2));
+    final source = _Source(UsageProvider.claude, () async => reading(session: 99.7, reset: reset));
+    final usage = UsageController(sources: [source], autoStart: false,
+      remote: () async => [MachineUsage(machineName: 'Remote', readings: [
+        reading(account: '1122334455667788', session: 40, reset: reset),
+      ])]);
+    final menu = ModelsMenuController(usage: usage, now: () => now);
+    addTearDown(usage.dispose);addTearDown(menu.dispose);
+    await menu.refresh();
+    final own = menu.subscriptionFor('claude', local: true, machineName: 'M2')!;
+    expect(own['remainingPercent'], closeTo(0.3, 0.001));
+    expect(own['validUntil'], reset.millisecondsSinceEpoch);
+    expect(menu.subscriptionFor('claude', local: false, machineName: 'Remote')!['remainingPercent'], 60);
+    expect(menu.subscriptionFor('claude', local: false, machineName: 'Unknown'), isNull);
+    expect(menu.subscriptionFor('codex', local: true, machineName: 'M2'), isNull);
+    now = reset;
+    final stale = menu.subscriptionFor('claude', local: true, machineName: 'M2')!;
+    expect(stale['remainingPercent'], isNull);expect(stale['validUntil'], isNull);
+  });
+
   test('unidentified accounts do not invent an account label', () async {
     final source = _Source(
       UsageProvider.claude,

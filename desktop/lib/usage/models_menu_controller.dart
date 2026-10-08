@@ -185,7 +185,16 @@ class ModelsMenuController extends ChangeNotifier {
             : reading.message ?? status,
       );
     }
+    DateTime? validUntil;
+    if (valid && reading.fetchedAt != null) {
+      validUntil = reading.fetchedAt!.add(maxAge);
+      for (final window in windows) {
+        final reset = window.resetsAt;
+        if (reset != null && reset.isBefore(validUntil!)) validUntil = reset;
+      }
+    }
     return {
+      'validUntil': validUntil?.millisecondsSinceEpoch,
       'title': provider,
       'account': _accountLabel(reading),
       'status': status,

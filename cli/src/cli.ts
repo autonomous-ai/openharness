@@ -44,7 +44,7 @@ import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBu
 import { CableSession } from './cable/cableSession.js'
 import { CableFleet } from './cable/cableFleet.js'
 import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
-import { terminalActivity } from './cable/terminalActivity.js'
+import { terminalActivitySnapshot } from './cable/terminalActivity.js'
 
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
 import { DeviceLink } from './device/deviceLink.js'
@@ -6701,11 +6701,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   const cableHost = new DaemonCableHost({
-    activityText: async (agentId) => {
+    activitySnapshot: async (agentId) => {
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
       const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
-      return terminalActivity(session.engine, screen.state === 'succeeded' ? screen.value : null)
+      const activity = terminalActivitySnapshot(session.engine, screen.state === 'succeeded' ? screen.value : null)
+      return activity ? { ...activity, action: mirror.latestAction(session.sessionId) } : null
     },
     machineName: () => { try { return readFileSync(MACHINE_NAME_FILE, 'utf8').trim() || 'This machine' } catch { return 'This machine' } },
     machineId: () => backend.machineId,

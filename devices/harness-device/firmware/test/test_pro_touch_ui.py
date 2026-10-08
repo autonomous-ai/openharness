@@ -138,7 +138,8 @@ static agent_t *active(void) { return s.active >= 0 && s.active < s.count ? &s.a
 static void notice_flush_reads(uint32_t at) { (void)at; }
 static unsigned notice_unread(void) { return unread; }
 static bool home_caption_tick(uint32_t at) { (void)at; return false; }
-static bool status_animated(void) { return false; }
+static bool status_animated(void);
+static const char *voice_status(void);
 static unsigned status_speed(void) { return 1; }
 static bool home_caption_rotates(void) { return false; }
 static ht_character_mood_t character_mood(void) { return HT_CHARACTER_IDLE; }
@@ -180,7 +181,7 @@ static void view(view_t v);
 '''
 for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_read", "pro_reader_source", "pro_reader_owner", "pro_reader_matches", "pro_reader_notice_index", "pro_reader_openable", "pro_reader_latest", "pro_reader_focus", "pro_selection_owned", "pro_carry_route_clear", "pro_carry_owned", "pro_carry_available", "pro_carry_target_matches", "pro_carry_choose", "pro_reader_copy", "pro_reader_begin", "pro_reader_back", "pro_send_feedback_clear", "pro_send_feedback_matches", "pro_send_feedback_begin", "pro_send_feedback_text", "pro_work_local", "pro_work_visible", "pro_work_block_reason", "pro_work_available", "pro_work_capture_pin", "pro_work_capture_available", "pro_work_draft_available", "pro_busy_reset", "ensure", "waiting", "is_question", "pro_speech_allowed", "pro_speech_visible", "pro_speech_emotion",
              "pro_speech_caption", "pro_speech_cancel", "ui_companion_speech_begin", "ui_companion_speech_clear",
-             "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "status_wake_ms",
+             "pro_speech_tick", "pro_busy_elapsed", "pro_surface_mood", "pro_player_working_visible", "status_animated", "status_wake_ms",
              "question_view", "hit_contains", "home_footer", "pro_written_control",
              "settings_item", "settings_count", "tabs_move", "selection_emit", "visit_emit", "pro_open_in_app", "make_action", "input_cancel", "view",
              "question_rows", "question_move", "pro_question_back", "draft_move",
@@ -190,7 +191,7 @@ for name in ("copy", "find", "pane_memory", "pane_memory_apply", "notice_mark_re
              "voice_close", "power", "notice_sync_view", "pro_result_source_reset", "pro_notice_source", "ui_set_connected", "ui_draft_source", "ui_focus_project",
              "ui_swarms_replace", "ui_tiles_replace", "ui_project_remove", "ui_project_apply_order",
              "ui_project_clear_all", "ui_project_set_name", "ui_project_set_machine", "ui_set_selected_machine",
-             "recap_preview", "activity_text", "event", "ui_project_emit", "ui_project_restore_event",
+             "recap_preview", "activity_text", "event", "ui_project_emit", "ui_project_restore_event", "ui_project_player_activity", "ui_player_overview", "ui_player_context",
              "ui_prune_stale_busy", "ui_cancel_acked") :
     code += function(name)
 selection_actions = SOURCE.split("    case A_SELECT_EXTEND:", 1)[1].split("    case A_CARRY:", 1)[0]
@@ -280,9 +281,13 @@ void pro_visual_character(ht_scene_t *f, const ht_character_t *c, ht_character_m
 }
 '''
 controls = (NATIVE / "pro_controls.inc").read_text()
+code += '#include "pro_player_icons.h"\n'
 code += function("pro_hit", controls) + function("pro_control", controls) + function("pro_heading", controls) + function("pro_appearance", controls)
 code += function("pro_voice_samples", controls) + function("pro_voice_params", controls) + function("pro_launcher", controls) + function("pro_row", controls) + function("pro_language", controls)
 code += function("pro_note", controls) + function("pro_today", controls) + function("pro_selection", controls)
+code += function("pro_clamp_list", controls)
+code += (NATIVE / "pro_player.inc").read_text()
+code += function("pro_player_tabs", (NATIVE / "pro_player_controls.inc").read_text())
 code += function("pro_read_text", controls) + function("pro_unknown_answer", controls) + function("pro_reader", controls)
 code += (NATIVE / "pro_living_controls.inc").read_text()
 code += (NATIVE / "pro_home.inc").read_text()
@@ -486,9 +491,12 @@ static void check_scene(void) {
         if (r->pro_kind != 1) continue;
         for (unsigned j=i+1;j<scene.count;j++) {
             const ht_run_t *b=&scene.runs[j];
-            if (b->pro_kind==1)
+            if (b->pro_kind==1) {
+                if (overlap((ht_rect_t){r->x,r->y,r->w,r->pro_height},(ht_rect_t){b->x,b->y,b->w,b->pro_height}))
+                    fprintf(stderr,"Text overlap: %s (%d,%d %dx%d) / %s (%d,%d %dx%d)\n",r->text,r->x,r->y,r->w,r->pro_height,b->text,b->x,b->y,b->w,b->pro_height);
                 assert(!overlap((ht_rect_t){r->x,r->y,r->w,r->pro_height},
                                 (ht_rect_t){b->x,b->y,b->w,b->pro_height}));
+            }
         }
     }
     for (int i=0;i<s.hit_count;i++) {
@@ -508,6 +516,9 @@ static void render_actual(void) {
     else if (s.view==LIVING) pro_living_review(&scene);
     else if (s.view==READER) pro_reader(&scene);
     else if (question_view(s.view) && s.q.pending && s.q.uncertain) pro_unknown_answer(&scene);
+    else if (s.player && s.view==TABS) pro_player_tabs(&scene);
+    else if (s.player && s.view==AGENTS) pro_player_library(&scene);
+    else if (s.player) pro_player_home(&scene);
     else if (s.view==VOICE) pro_render_voice(&scene); else pro_render_home(&scene);
     check_scene();
 }
@@ -1519,8 +1530,141 @@ static void living_summary_transition(void) {
     habitat_touch_cancel();sample(false,360,340,3100);surface_tick(now);assert(s.view==READER&&!starts);
 }
 
+static void player_save(const char *name) {
+    const char *dir=getenv("HARNESS_PLAYER_PREVIEW");if(!dir)return;
+    static uint16_t pixels[720*720];
+    ht_raster(&scene,(ht_rect_t){0,0,720,720},pixels);
+    char path[1024];snprintf(path,sizeof path,"%s/%s.ppm",dir,name);
+    FILE *out=fopen(path,"wb");assert(out);fprintf(out,"P6\n720 720\n255\n");
+    for(unsigned i=0;i<720*720;i++){
+        unsigned v=pixels[i];unsigned char rgb[3]={(v>>11)*255/31,((v>>5)&63)*255/63,(v&31)*255/31};
+        fwrite(rgb,1,3,out);
+    }fclose(out);
+}
+static void player_fixture(void) {
+    reset();s.player=true;
+    s.player_overview=(pro_player_overview_t){.harnesses=37,.machines=7,.models=6,.received=true,.received_ms=now,.valid_ms=60000};
+    const pro_player_context_t context={.id="a",.machine="M2",.project="openharness",.branch="dev/firmware-pro",.engine="codex",.remaining_bp=2300,.valid_ms=60000};
+    ui_player_context(&context);
+    COPY(s.agents[0].name,"Harness OS");COPY(s.agents[0].engine,"codex");
+    ui_project_emit("a","session-a","processing","Working...",NULL);
+    ui_project_player_activity("a","Read os-tests.log, receipt.json",931);
+}
+static void player_screens(void) {
+    player_fixture();render_actual();player_save("01-working");
+    for(unsigned frame=0;frame<10;frame++) {
+        s.status_phase=frame;render_actual();char name[32];snprintf(name,sizeof name,"working-%02u",frame);player_save(name);
+    }
+    COPY(s.agents[0].engine,"claude");COPY(s.player_context[0].engine,"claude");s.player_context[0].remaining_bp=0;render_actual();player_save("06-claude");COPY(s.agents[0].engine,"codex");
+    tap(360,370,75);assert(starts==1&&recording&&s.view==VOICE);
+    render_actual();player_save("02-listening");
+    tap(360,370,75);assert(stops==1&&!recording);
+    player_fixture();s.notice_count=1;s.notice[0].question=true;
+    COPY(s.notice[0].agent_id,"a");COPY(s.notice[0].summary,"Run the migration?");
+    render_actual();player_save("03-question");
+    player_fixture();s.count=6;
+    const char *names[]={"Harness Product Line","daemon refactoring","Catch up on lamp GTM","Harness OS","Deploy dev firmware","computer mini"};
+    for(int i=0;i<6;i++){snprintf(s.agents[i].id,sizeof s.agents[i].id,"pane-%d",i);COPY(s.agents[i].name,names[i]);}
+    s.agents[1].busy=true;s.agents[4].player.finished=s.agents[5].player.finished=true;
+    s.active=1;s.notice_count=2;s.notice[0].question=s.notice[1].question=true;
+    COPY(s.notice[0].agent_id,"pane-2");COPY(s.notice[1].agent_id,"pane-3");
+    s.player_overview=(pro_player_overview_t){.harnesses=37,.machines=7,.models=6,.received=true,.received_ms=now,.valid_ms=60000};
+    s.view=AGENTS;render_actual();player_save("04-library");
+    s.notice_count=0;for(int i=0;i<6;i++){s.agents[i].busy=false;s.agents[i].player.finished=true;}
+    render_actual();assert(scene.count<HT_RUNS); // Every completion icon must fit the scene budget.
+    player_fixture();ui_set_connected(false);render_actual();player_save("05-disconnected");
+}
+static void player_data_lifetime(void) {
+    player_fixture();uint32_t seconds;
+    assert(pro_player_elapsed(&s.agents[0].player,now+2000,&seconds)&&seconds==933);
+    assert(!pro_player_elapsed(&s.agents[0].player,now+26000,&seconds));
+    ui_project_player_activity("a","Read README.md",-1);
+    assert(!s.agents[0].player.has_elapsed&&!strcmp(s.agents[0].player.action,"Read README.md"));
+    ui_project_emit("a","session-a","done","",NULL);
+    assert(s.agents[0].player.finished&&!s.agents[0].busy);
+    ui_project_player_activity("a","Stale action",1);
+    assert(!strcmp(s.agents[0].player.action,"Read README.md"));
+    surface_tick(now);assert(s.view==HOME); // Completion never opens a separate reader in Player.
+    ui_project_emit("a","session-a","processing","Working",NULL);
+    assert(!s.agents[0].player.action[0]&&!s.agents[0].player.finished);
+    ui_project_player_activity("a","Read next.ts",0);
+    ui_set_connected(false);
+    assert(!s.agents[0].player.action[0]&&!s.agents[0].player.has_elapsed);
+}
+static void player_gestures(void) {
+    player_fixture();render_actual();tap(630,45,75);assert(starts==1&&s.view==VOICE);
+    render_actual();tap(24,24,75);assert(stops==1&&!recording);
+    player_fixture();render_actual();swipe(520,350,260,350);assert(switches==1&&!starts&&!travel);
+    player_fixture();render_actual();swipe(360,470,360,250);assert(travel&&!starts&&!switches);
+    player_fixture();render_actual();sample(true,360,350,2000);now=2700;surface_tick(now);
+    assert(s.view==TABS&&!starts);sample(false,360,350,2750);assert(!starts);
+    player_fixture();render_actual();tap(50,52,90);assert(s.view==AGENTS&&!starts);
+    sample(true,360,350,2000);now=2700;surface_tick(now);
+    assert(s.view==TABS&&!starts);sample(false,360,350,2750);
+    player_fixture();render_actual();assert(habitat_next_wake_ms()>PRO_LIVING_STEP_MS);
+}
+
+static bool player_has_text(const char *text) {
+    for(int i=0;i<scene.count;i++) if(!strcmp(scene.runs[i].text,text)) return true;
+    return false;
+}
+static void player_context_lifetime(void) {
+    player_fixture();render_actual();
+    assert(player_has_text("23%"));
+    assert(player_has_text("M2   openharness   (dev/firmware-pro)"));
+    assert(!player_has_text("Codex")&&!player_has_text("Tap to speak"));
+    for(int i=0;i<scene.count;i++) if(!strcmp(scene.runs[i].text,"Working")) assert(scene.runs[i].y>=640);
+    s.player_context[0].remaining_bp=30;render_actual();assert(player_has_text("<1%"));
+    s.player_context[0].remaining_bp=0;render_actual();assert(player_has_text("0%"));
+    COPY(s.player_context[0].engine,"claude");render_actual();assert(player_has_text("-"));
+    COPY(s.player_context[0].engine,"codex");
+    now+=60001;surface_tick(now);render_actual();assert(player_has_text("-"));
+    assert(!s.player_overview.received&&s.player_context[0].remaining_bp==-1);
+    assert(player_has_text("M2   openharness   (dev/firmware-pro)"));
+    player_fixture();
+    COPY(s.agents[0].name,"A long session title that spans two lines");
+    COPY(s.player_context[0].branch,"dev/firmware-pro-a-very-long-branch-that-has-to-wrap-across-lines-without-hitting-the-action");
+    render_actual(); // The production scene checker rejects overlapping text and hits.
+    ui_set_connected(false);assert(!s.player_context[0].id[0]);
+    player_fixture();
+    pro_player_context_t context={.remaining_bp=-1};
+    for(int i=0;i<24;i++) {snprintf(context.id,sizeof context.id,"old-%d",i);ui_player_context(&context);}
+    COPY(context.id,"old-10");COPY(context.project,"keep me");ui_player_context(&context);
+    for(int i=0;i<23;i++) {snprintf(context.id,sizeof context.id,"new-%d",i);ui_player_context(&context);}
+    COPY(s.agents[0].id,"old-10");
+    assert(pro_player_context(active())&&!strcmp(pro_player_context(active())->project,"keep me"));
+}
+static void player_animation(void) {
+    player_fixture();now=1000;surface_tick(now);assert(status_animated());
+    assert(habitat_next_wake_ms()<=100&&s.status_phase==0);
+    now+=100;surface_tick(now);assert(s.status_phase==1);
+    ui_project_emit("a","session-a","done","",NULL);surface_tick(now);
+    assert(!status_animated()&&s.status_phase==0);
+    ui_project_emit("a","session-a","processing","Working",NULL);
+    s.notice_count=1;s.notice[0].question=true;COPY(s.notice[0].agent_id,"a");
+    assert(!status_animated());s.notice_count=0;
+    s.view=SETTINGS;assert(!status_animated());
+    s.view=AGENTS;s.count=7;s.offset=1;assert(!status_animated());
+    s.offset=0;assert(status_animated());s.quiet=true;assert(!status_animated());
+    s.quiet=false;asleep=true;assert(!status_animated());asleep=false;
+    s.view=HOME;ui_project_emit("a","session-a","error","",NULL);
+    render_actual();assert(s.agents[0].player.failed&&player_has_text("Stopped with an error"));
+}
+static void player_tabs_contacts(void) {
+    player_fixture();s.tab_count=8;
+    for(int i=0;i<s.tab_count;i++) {snprintf(s.tabs[i].id,sizeof s.tabs[i].id,"t%d",i);snprintf(s.tabs[i].name,sizeof s.tabs[i].name,"Tab %d",i+1);}
+    COPY(s.selected_tab,"t0");s.view=TABS;render_actual();
+    assert(player_has_text("Tab 6")&&!player_has_text("Tab 7"));
+    tabs_move(1000);render_actual();assert(s.offset==2&&player_has_text("Tab 8"));
+    const hit_t *last=action_hit(A_TAB);assert(last&&last->value==2);
+    tap(70,40,80);assert(s.view==AGENTS&&!starts);
+    s.view=TABS;s.offset=2;render_actual();tap(200,148,80);
+    assert(queued_action.kind==A_TAB&&!strcmp(queued_action.id,"t2")&&s.loading&&!starts);
+}
+
 int main(int argc,char **argv) {
     const struct { const char *name; test_fn run; } tests[]={
+        {"player_context_lifetime",player_context_lifetime},{"player_animation",player_animation},{"player_tabs_contacts",player_tabs_contacts},{"player_screens",player_screens},{"player_data_lifetime",player_data_lifetime},{"player_gestures",player_gestures},
         {"search_match_contacts",search_match_contacts},{"carry_chooser_contacts",carry_chooser_contacts},{"reader_navigation_parity",reader_navigation_parity},{"reader_footer_scroll",reader_footer_scroll},{"reader_stale_contacts",reader_stale_contacts},{"reader_latest_contact",reader_latest_contact},
         {"question_back_parity",question_back_parity},{"question_back_stale_contact",question_back_stale_contact},{"question_back_immutable",question_back_immutable},
         {"footer_send_feedback",footer_send_feedback},{"work_identity_callbacks",work_identity_callbacks},{"busy_observation",busy_observation},{"busy_connection_loss",busy_connection_loss},{"busy_precedence",busy_precedence},

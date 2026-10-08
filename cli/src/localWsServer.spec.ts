@@ -398,10 +398,25 @@ describe('local CLI WebSocket', () => {
     // Like app_panes: a fact about this desk, so the machine never sees it.
     expect(backend.frames.map((frame) => frame.type)).toEqual([])
 
+    ws.send(JSON.stringify({ type: 'app_swarms', payload: {
+      active: 's1', swarms: [{ id: 's1', name: 'Work', agentIds: ['a1', 'a2'] }],
+      overview: { harnesses: 37, machines: 7, models: 6, contexts: [
+        { id: 'a1', machine: 'M2', project: 'openharness', branch: 'dev/firmware-pro', engine: 'codex', remaining: 0.3, validUntil: 1900000000000 },
+        { id: 'a1', remaining: 99 }, // Duplicates cannot replace the named session's allowance.
+        { id: 'outside-active-tab', remaining: 88 },
+        { id: 'a2', project: 'x'.repeat(200), branch: 'bad\nbranch', remaining: 101 },
+      ] },
+    } }))
+    await vi.waitFor(() => expect(seen).toHaveLength(2))
+    expect(seen[1]).toMatchObject({ overview: { harnesses: 37, machines: 7, models: 6, contexts: [
+      { id: 'a1', machine: 'M2', remaining: 0.3, validUntil: 1900000000000 },
+      { id: 'a2', project: 'x'.repeat(79), branch: 'bad branch', remaining: null, validUntil: 0 },
+    ] } })
+
     ws.close()
     // The window is gone, and so are its tabs.
-    await vi.waitFor(() => expect(seen).toHaveLength(2))
-    expect(seen[1]).toBeNull()
+    await vi.waitFor(() => expect(seen).toHaveLength(3))
+    expect(seen[2]).toBeNull()
   })
 
   it('follows an explicit app_focus, and keeps it off the wire', async () => {

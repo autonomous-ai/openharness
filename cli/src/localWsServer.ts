@@ -269,7 +269,27 @@ function appSwarmsFrom(payload: unknown): AppSwarms | null {
     tiles.push({ x1, y1, x2, y2, agentId: typeof t.agentId === 'string' ? t.agentId : '' })
     if (tiles.length === 24) break   // the window's own ceiling, same as the rows above
   }
-  return { active, swarms, tiles }
+  const raw = p.overview as Record<string, unknown> | undefined
+  const count = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 && v <= 1_000_000
+  const percent = (v: unknown): number | null => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 100 ? v : null
+  const label = (v: unknown, length: number): string => typeof v === 'string' ? v.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, length) : ''
+  const contexts: NonNullable<AppSwarms['overview']>['contexts'] = []
+  const memberIds = new Set(swarms.find(s => s.id === active)?.agentIds ?? [])
+  const seen = new Set<string>()
+  for (const row of Array.isArray(raw?.contexts) ? raw.contexts : []) {
+    if (!row || typeof row !== 'object') continue
+    const c = row as Record<string, unknown>
+    if (typeof c.id !== 'string' || Buffer.byteLength(c.id) >= 48 || !memberIds.has(c.id) || seen.has(c.id)) continue
+    seen.add(c.id)
+    contexts.push({ id: c.id, machine: label(c.machine, 63), project: label(c.project, 79),
+      branch: label(c.branch, 95), engine: label(c.engine, 15), remaining: percent(c.remaining),
+      validUntil: typeof c.validUntil === 'number' && Number.isSafeInteger(c.validUntil) ? c.validUntil : 0 })
+    if (contexts.length === 24) break
+  }
+  const overview = raw && count(raw.harnesses) && count(raw.machines) && count(raw.models) ? {
+    harnesses: raw.harnesses, machines: raw.machines, models: raw.models, contexts,
+  } : undefined
+  return { active, swarms, tiles, ...(overview ? { overview } : {}) }
 }
 
 function binaryBytes(raw: RawData): Uint8Array {

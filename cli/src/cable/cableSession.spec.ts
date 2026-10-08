@@ -205,6 +205,27 @@ describe('cable session', () => {
     } finally { await session.stop() }
   })
 
+  it('relays one real action and native elapsed time separately from liveness', async () => {
+    const { session, port } = await connect(makeHost({ activitySnapshot: async () =>
+      ({ text: 'Working', action: 'Read · README.md', elapsedSeconds: 931 }) }))
+    try {
+      await session.turnStarted('a1')
+      expect(port.sent.at(-1)).toEqual({ t: 'turn.activity', agentId: 'a1', text: 'Working',
+        action: 'Read · README.md', elapsedSeconds: 931 })
+    } finally { await session.stop() }
+  })
+
+  it('discards action and timer data when a completed turn supersedes the read', async () => {
+    let finish!: (value: { text: string; action: string; elapsedSeconds: number }) => void
+    const { session, port } = await connect(makeHost({ activitySnapshot: () => new Promise(resolve => { finish = resolve }) }))
+    try {
+      const pending = session.turnStarted('a1'); await settle()
+      await session.turnDone('a1')
+      finish({ text: 'Working', action: 'Read · old.ts', elapsedSeconds: 100 }); await pending
+      expect(port.sent.some(message => message.t === 'turn.activity')).toBe(false)
+    } finally { await session.stop() }
+  })
+
   it.each(['done', 'summary', 'error', 'disconnect'])(
     'drops a terminal activity read arriving after %s', async end => {
       let finish!: (text: string | null) => void
@@ -1465,6 +1486,32 @@ describe('cable session', () => {
     await new Promise((r) => setTimeout(r, 2500))      // two ticks
     expect(port.types().filter((t) => t.startsWith('agents'))).toEqual([])
     await session.stop()
+  })
+
+  it('streams machine-specific Player context, preserves fractions, and expires quota', async () => {
+    const stats = { harnesses: 37, machines: 7, models: 6, contexts: [
+      { id: 'a1', machine: 'Remote', project: 'openharness', branch: 'dev/firmware-pro', engine: 'claude', remaining: 0.3, validUntil: Date.now() + 45_000 },
+      { id: 'a2', machine: 'M2', project: 'project', branch: 'main', engine: 'codex', remaining: 23, validUntil: Date.now() + 60_000 },
+    ] }
+    const { session, port } = await connect(makeHost({ playerOverview: () => stats }))
+    try {
+      await session.syncPlayerOverview(true)
+      expect(port.sent.find(m => m.t === 'player.overview')).toMatchObject({ harnesses: 37, machines: 7, models: 6 })
+      expect(port.sent.filter(m => m.t === 'player.context')).toMatchObject([
+        { id: 'a1', machine: 'Remote', remaining: 0.3 }, { id: 'a2', machine: 'M2', remaining: 23 },
+      ])
+      expect(port.sent.find(m => m.t === 'player.context')?.validMs).toBeLessThanOrEqual(45_000)
+      port.sent.length = 0
+      await session.syncPlayerOverview()
+      expect(port.sent).toEqual([])
+      stats.contexts[0].validUntil = Date.now() - 1
+      await session.syncPlayerOverview()
+      expect(port.sent.find(m => m.id === 'a1')).toMatchObject({ remaining: null, validMs: 0 })
+      expect(port.sent.find(m => m.id === 'a2')).toMatchObject({ remaining: 23 })
+      // A fresh connection must get metadata immediately, even with an unchanged snapshot.
+      await port.close('test reconnect')
+      expect(session['playerOverviewKey']).toBe('')
+    } finally { await session.stop() }
   })
 
   it('sends the account-wide count and the tab beside the list, not the rows behind them', async () => {

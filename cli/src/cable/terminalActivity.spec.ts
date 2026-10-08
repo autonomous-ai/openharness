@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { terminalActivity } from './terminalActivity.js'
+import { terminalActivity, terminalActivitySnapshot } from './terminalActivity.js'
 
 describe('terminalActivity', () => {
+  it('preserves native elapsed time independently of the status wording', () => {
+    expect(terminalActivitySnapshot('codex', '• Working (15m 31s • esc to interrupt)'))
+      .toEqual({ text: 'Working', elapsedSeconds: 931 })
+    expect(terminalActivitySnapshot('claude', '✻ Coalescing… (1h 11m 34s · ↓ 31.2k tokens)'))
+      .toEqual({ text: 'Coalescing...', elapsedSeconds: 4294 })
+    expect(terminalActivitySnapshot('claude', '✳ Boogieing...')).toEqual({ text: 'Boogieing...' })
+    expect(terminalActivitySnapshot('codex', 'Failed (exit 2)\n• Working (0s • esc to interrupt)'))
+      .toEqual({ text: 'Working', elapsedSeconds: 0 })
+  })
   it.each([
     ['codex', '◦ Working (27m 18s • esc to interrupt)', 'Working'],
     ['codex', '• Thinking (1s • esc to interrupt)', 'Thinking'],

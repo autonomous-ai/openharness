@@ -4,6 +4,7 @@
  * Controls retain recipient, revision and explicit review guards. Instruction
  * choices use the existing voice command and draft protocols. */
 #if HT_FACE_PX >= 720
+#include "pro_player_icons.h"
 
 static int pro_hit(int x, int y, int w, int h, action_kind_t action, int value, bool enabled)
 {
@@ -29,7 +30,7 @@ static void pro_control(ht_scene_t *f, int x, int y, int w, int h, const char *l
     if (enabled && action == A_STOP_YES) fill = color(0xa44343);
     uint16_t ink = !enabled ? DIM : pressed || primary || action == A_STOP_YES ?
                    color(0xfffdf5) : FG;
-    ht_pro_rect(f, x, y, w, h, 22, fill);
+    ht_pro_rect(f, x, y, w, h, s.player ? 4 : 22, fill);
     const ht_pro_font_t *font = &ht_pro_32;
     if (ht_pro_width(font, label) > w - 36) font = &ht_pro_24;
     int text_width = ht_pro_width(font, label);
@@ -42,6 +43,13 @@ static void pro_heading(ht_scene_t *f, const char *title, action_kind_t back)
     bool enabled = !(back == A_QUESTION_BACK && s.q.pending) &&
                    !((back == A_DRAFT_OPTIONS || back == A_DRAFT_BACK) && draft.pending) &&
                    !(back == A_FORM_BACK && form.pending && strncmp(form.id, "find-", 5));
+    if (s.player) {
+        pro_hit(16,8,450,78,back,0,enabled);
+        ht_pro_image(f,24,27,&player_back);
+        ht_pro_text(f,70,26,616,&ht_pro_32,FG,title);
+        ht_pro_rect(f,0,104,720,1,0,color(0xb9b8af));
+        return;
+    }
     const char *label = back == A_DRAFT_OPTIONS ? "Options" :
         back == A_QUESTION_BACK && s.view == QUESTION ? PRO_TR("Previous") : PRO_TR("Back");
     pro_control(f, 28, 28, 136, 64, label, back, 0, enabled);
@@ -79,6 +87,13 @@ static void pro_row(ht_scene_t *f, int y, const char *name, const char *detail,
 {
     int hit = pro_hit(32, y, 656, 96, action, value, enabled);
     bool pressed = hit >= 0 && hit == s.pressed;
+    if (s.player) {
+        if (pressed || selected) ht_pro_rect(f,0,y,698,96,0,FG);
+        uint16_t ink=pressed || selected ? BG : enabled ? FG : DIM;
+        ht_pro_text(f,40,y+10,612,&ht_pro_32,ink,name);
+        ht_pro_text(f,40,y+56,612,&ht_pro_24,pressed || selected ? BG : DIM,detail ? detail : "");
+        return;
+    }
     ht_pro_rect(f, 32, y, 656, 96, 24, pressed || selected ? SEL : color(0xfcfbf4));
     if (selected) ht_pro_rect(f, 32, y + 22, 5, 52, 2, ACCENT);
     ht_pro_text(f, 54, y + 10, 612, &ht_pro_32, !enabled ? DIM : pressed || selected ? ACCENT : FG, name);

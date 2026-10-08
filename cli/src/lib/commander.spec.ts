@@ -19,6 +19,21 @@ describe('CommanderMirror recap events', () => {
     rmSync(dataDir, { recursive: true, force: true })
   })
 
+  it('Player keeps only the latest literal tool action from the current turn', () => {
+    const mirror = new CommanderMirror({ send: () => {}, sendWeb: () => {}, hasDevice: () => true,
+      summarize: async () => null, dataDir })
+    expect(mirror.latestAction('session')).toBe('')
+    mirror.ingest([
+      { type: 'turn_started', payload: { userMessage: 'check it' } },
+      { type: 'tool_start', payload: { tool: 'Read', input: { file_path: '/work/README.md' } } },
+    ] as LiveEvent[], 'session')
+    expect(mirror.latestAction('session')).toBe('Read · /work/README.md')
+    mirror.ingest([{ type: 'tool_start', payload: { tool: 'Bash', input: { command: 'npm test' } } }] as LiveEvent[], 'session')
+    expect(mirror.latestAction('session')).toBe('Bash · npm test')
+    mirror.ingest([{ type: 'turn_started', payload: { userMessage: 'next task' } }] as LiveEvent[], 'session')
+    expect(mirror.latestAction('session')).toBe('')
+  })
+
   it('keeps what the user ASKED, not only what the agent answered', async () => {
     // The router reads these to decide where a spoken follow-up belongs, and a recap answers the wrong
     // question for that: measured on this desk, "Chiến tranh thế giới thứ hai kết thúc vào năm nào?"

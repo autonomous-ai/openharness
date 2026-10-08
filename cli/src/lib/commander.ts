@@ -820,6 +820,14 @@ export class CommanderMirror {
     return this.states.get(sessionId)?.turnOpen === true
   }
 
+  /** One literal recent action for the Player. No command output or generated recap. */
+  latestAction(sessionId: string): string {
+    const st = this.states.get(sessionId)
+    if (!st?.turnOpen || !st.lastTool) return ''
+    return [st.lastTool.text, st.lastTool.recap].filter(value => typeof value === 'string' && value)
+      .join(' · ').replace(/[\r\n\t]+/g, ' ').slice(0, 180)
+  }
+
   heartbeat(sessionId: string): boolean {
     const st = this.states.get(sessionId)
     if (!st) return false

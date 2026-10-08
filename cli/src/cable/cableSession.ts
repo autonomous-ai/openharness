@@ -1,4 +1,5 @@
 import { CableSpeech, type SpeechProvider } from './cableSpeech.js'
+import type { TerminalActivitySnapshot } from './terminalActivity.js'
 import { configuredCreatureVoice } from './creatureVoiceConfig.js'
 // The message layer: what the daemon and the dial SAY to each other, on top of the bytes serial.ts moves.
 //
@@ -208,6 +209,17 @@ export interface AppSwarms {
   swarms: Array<{ id: string; name: string; agentIds: string[]; panes: number }>
   /** The ACTIVE swarm's grid. Empty from a window that predates the field, or one with no panes. */
   tiles: CableTile[]
+  overview?: PlayerOverview
+}
+
+export interface PlayerOverview {
+  harnesses: number
+  machines: number
+  models: number
+  contexts: Array<{
+    id: string; machine: string; project: string; branch: string; engine: string
+    remaining: number | null; validUntil: number
+  }>
 }
 
 /** Why the list is as short as it is. The dial renders this, instead of drawing an empty wheel. */
@@ -260,11 +272,13 @@ export interface CableHost {
   listAgentSnapshot?(): Promise<{ agents: CableAgent[]; tab: string; total: number }>
   /** Every agent across the account — the overview's number. The dial gets the count, never the rows. */
   agentTotal(): number
+  playerOverview?(): PlayerOverview | null
   /** The active tab's id, or '' with no window: what lets the dial tell an empty tab from a shut app. */
   activeSwarm(): string
   /** Who an agent is, for a card about one the dial does not hold. Undefined for an id never listed. */
   describe(agentId: string): { name: string; engine: string; machine: string } | undefined
   activityText?(agentId: string): Promise<string | null>
+  activitySnapshot?(agentId: string): Promise<TerminalActivitySnapshot | null>
   sendTurn(agentId: string, text: string): void | { ok: true } | { ok: false; machine?: string; reason?: string }
   stopTurn(agentId: string): void
   /**
@@ -595,6 +609,7 @@ export class CableSession {
       // the tab should not lag the tiles that belong to it.
       await this.syncSwarms()
       await this.syncAgents()
+      await this.syncPlayerOverview()
       void this.refreshFocusedActivity()
     }
   }
@@ -691,6 +706,8 @@ export class CableSession {
     // A new port is a new dial until proven otherwise; tell it everything.
     this.lastAgentsKey = ''
     this.lastMachinesKey = ''
+    this.playerOverviewKey = ''
+    this.playerOverviewAt = 0
     // INCLUDING which images it has been offered. `offered` holds bare version strings and named no dial,
     // so without this it outlived the session its comment claims it belongs to and became per-DAEMON:
     // offer 0.0.42 to one dial, unplug it, plug in a second still on 0.0.41, and the second is refused
@@ -727,6 +744,8 @@ export class CableSession {
     this.expectedAppFocusEchoUntil = 0
     this.lastAgentsKey = ''
     this.lastMachinesKey = ''
+    this.playerOverviewKey = ''
+    this.playerOverviewAt = 0
     this.voice = null
     this.voiceGeneration++
     // The dial keeps its running image; the half-written slot is erased again by the next accepted offer.
@@ -1578,6 +1597,33 @@ export class CableSession {
     return this.queued(() => this.syncAgentsNow(force))
   }
 
+  private playerOverviewKey = ''
+  private playerOverviewAt = 0
+
+  async syncPlayerOverview(force = false): Promise<void> {
+    return this.queued(async () => {
+      if (!this.host.playerOverview) return
+      const stats = this.host.playerOverview()
+      const now = Date.now()
+      const payload = { t: 'player.overview', harnesses: stats?.harnesses ?? this.host.agentTotal(),
+        machines: stats?.machines ?? -1, models: stats?.models ?? -1, validMs: 60_000 }
+      const contexts = (stats?.contexts ?? []).slice(0, 24).map(context => ({
+        ...context,
+        remaining: context.validUntil > now ? context.remaining : null,
+      }))
+      const key = JSON.stringify([payload, contexts])
+      if (!force && key === this.playerOverviewKey && now - this.playerOverviewAt < 30_000) return
+      await this.send(payload)
+      // A frame per pane keeps even Unicode context below the cable's 8192-byte ceiling.
+      for (const { validUntil, ...context } of contexts) {
+        await this.send({ t: 'player.context', ...context,
+          validMs: Math.max(0, Math.min(60_000, validUntil - now)) })
+      }
+      this.playerOverviewKey = key
+      this.playerOverviewAt = now
+    })
+  }
+
   private async syncAgentsNow(force: boolean): Promise<void> {
     const snapshot = this.host.listAgentSnapshot ? await this.host.listAgentSnapshot() : {
       agents: await this.host.listAgents(), tab: this.host.activeSwarm(), total: this.host.agentTotal(),
@@ -1587,7 +1633,7 @@ export class CableSession {
     // same zero rows and draws a different screen, so that flip has to push. The tab's id does not — the
     // dial names the tab from the `swarms` frame — and keying on it made every tab switch push twice,
     // once when `app_swarms` named the new tab over the old panes and again when `app_panes` arrived.
-    const key = `${tab ? 'window' : ''}|${CableSession.agentsKey(agents)}`
+    const key = `${tab ? 'window' : ''}|${total}|${CableSession.agentsKey(agents)}`
     if (!force && key === this.lastAgentsKey) return
     this.lastAgentsKey = key
     // Every push, and only pushes. The dial showing a different number from the daemon is a question this
@@ -1717,6 +1763,7 @@ export class CableSession {
       await this.syncMachines(true)
       await this.syncSwarms(true)
       await this.syncAgents(true)
+      await this.syncPlayerOverview(true)
     } finally {
       this.restoring = false
     }
@@ -1855,13 +1902,24 @@ export class CableSession {
     const read = {}
     this.activityReads.set(agentId, read)
     await this.send({ t: 'turn.started', agentId, text })
-    if (!this.link?.isOpen || !this.host.activityText) { this.activityReads.delete(agentId); return }
-    let activity: string | null = null
-    try { activity = await this.host.activityText(agentId) } catch { /* unavailable is not a status */ }
+    if (!this.link?.isOpen || (!this.host.activityText && !this.host.activitySnapshot)) { this.activityReads.delete(agentId); return }
+    let activity: TerminalActivitySnapshot | null = null
+    try { activity = await this.readActivity(agentId) } catch { /* unavailable is not a status */ }
     // A terminal capture must never revive a completed turn or overwrite a newer heartbeat.
     if (this.activityReads.get(agentId) !== read) return
     this.activityReads.delete(agentId)
-    await this.send({ t: 'turn.activity', agentId, text: activity ?? '' })
+    await this.sendActivity(agentId, activity)
+  }
+  private async readActivity(agentId: string): Promise<TerminalActivitySnapshot | null> {
+    if (this.host.activitySnapshot) return this.host.activitySnapshot(agentId)
+    const text = await this.host.activityText?.(agentId)
+    return text ? { text } : null
+  }
+  private async sendActivity(agentId: string, activity: TerminalActivitySnapshot | null): Promise<void> {
+    await this.send({ t: 'turn.activity', agentId, text: activity?.text ?? '',
+      ...(activity?.action !== undefined ? { action: activity.action } : {}),
+      ...(Number.isSafeInteger(activity?.elapsedSeconds) && activity!.elapsedSeconds! >= 0 && activity!.elapsedSeconds! <= 2_592_000
+        ? { elapsedSeconds: activity!.elapsedSeconds } : {}) })
   }
   private readonly activityReads = new Map<string, object>()
   private readonly activityEndedAt = new Map<string, number>()
@@ -1875,7 +1933,7 @@ export class CableSession {
     const agentId = this.desiredFocus
     const link = this.link
     const now = Date.now()
-    if (this.stopped || !this.isConnected || !agentId || !this.host.activityText
+    if (this.stopped || !this.isConnected || !agentId || (!this.host.activityText && !this.host.activitySnapshot)
         || this.activityRefreshPending || this.activityReads.has(agentId)
         || now - (this.activityEndedAt.get(agentId) ?? -Infinity) < 3_000
         || (this.activityRefreshAgent === agentId && now - this.activityRefreshAt < 3_000)) return
@@ -1887,19 +1945,19 @@ export class CableSession {
     const current = () => !this.stopped && this.isConnected && this.link === link
       && this.desiredFocus === agentId && this.activityReads.get(agentId) === read
     try {
-      const activity = await this.host.activityText(agentId)
+      const activity = await this.readActivity(agentId)
       if (!current()) return
       // A visible engine footer is direct evidence of work. Recover liveness even
       // when the transcript's turn.started happened before we attached.
       if (activity) {
         this.speech.observeBusy(agentId)
-        await this.send({ t: 'turn.started', agentId, text: activity })
+        await this.send({ t: 'turn.started', agentId, text: activity.text })
       }
       if (!current()) return
-      await this.send({ t: 'turn.activity', agentId, text: activity ?? '' })
-      if (this.activityLabels.get(agentId) !== (activity ?? '')) {
-        this.activityLabels.set(agentId, activity ?? '')
-        this.log(`cable: terminal activity ${agentId}: ${activity || '(no live footer)'}`)
+      await this.sendActivity(agentId, activity)
+      if (this.activityLabels.get(agentId) !== (activity?.text ?? '')) {
+        this.activityLabels.set(agentId, activity?.text ?? '')
+        this.log(`cable: terminal activity ${agentId}: ${activity?.text || '(no live footer)'}`)
       }
     } catch { /* A capture failure says nothing about whether the turn ended. */ }
     finally {

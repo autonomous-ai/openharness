@@ -163,6 +163,7 @@ typedef enum {
 #endif
 } action_kind_t;
 #ifdef DEVICE_PRO_COMPANION
+#include "pro_player.h"
 typedef enum {
     PRO_SPEECH_WARM, PRO_SPEECH_HAPPY, PRO_SPEECH_EXCITED, PRO_SPEECH_GENTLE,
     PRO_SPEECH_SAD, PRO_SPEECH_THOUGHTFUL, PRO_SPEECH_CURIOUS, PRO_SPEECH_ANGRY
@@ -189,6 +190,9 @@ typedef struct {
     char id[ID_MAX], session[80], preview[240], full[PANE_RESULT_BYTES], activity[100];
     uint32_t used, busy_ms, last_busy;
     bool busy, live_summary, dismissed, awaiting_result;
+#ifdef DEVICE_PRO_COMPANION
+    pro_player_state_t player;
+#endif
 } pane_memory_t;
 typedef struct {
     char id[ID_MAX], name[CABLE_NAME_MAX], engine[12], machine_id[ID_MAX], machine[CABLE_NAME_MAX], model[192],
@@ -199,6 +203,9 @@ typedef struct {
     bool busy, has_event, recap_ready;
     uint32_t busy_ms, last_busy;
     int tokens;
+#ifdef DEVICE_PRO_COMPANION
+    pro_player_state_t player;
+#endif
 } agent_t;
 typedef struct {
     char key[256], prompt[256], options[OPTION_MAX][256], answer[1600];
@@ -262,6 +269,9 @@ static EXT_RAM_BSS_ATTR struct {
         char machine[ID_MAX], session[80], engine[12];
     } work_capture;
     pro_metrics_t metrics;
+    pro_player_overview_t player_overview;
+    pro_player_context_t player_context[PRO_PLAYER_CONTEXTS];
+    unsigned player_context_next;
     pro_carry_review_t carry_review;
     struct {
         char id[48], host[ID_MAX];
@@ -288,6 +298,7 @@ static EXT_RAM_BSS_ATTR struct {
     char living_summary_agent[ID_MAX];
     uint32_t living_started;
     bool living_watch;
+    bool player;
     struct {
         uint32_t id, poll_due;
         char agent[ID_MAX], caption[240];
@@ -615,6 +626,9 @@ static void pane_memory_apply(agent_t *a, pane_memory_t *m)
     a->last_busy = m->last_busy;
     a->has_event = m->preview[0] != 0;
     a->recap_ready = a->has_event && !m->dismissed && !m->awaiting_result && !m->busy;
+#ifdef DEVICE_PRO_COMPANION
+    a->player = m->player;
+#endif
 }
 #ifdef DEVICE_PRO_COMPANION
 static bool pro_reader_source(void)
@@ -882,17 +896,22 @@ static bool pro_work_draft_available(void)
 }
 static void pro_busy_reset(void)
 {
+    memset(&s.player_overview,0,sizeof s.player_overview);
+    memset(s.player_context,0,sizeof s.player_context);
+    s.player_context_next=0;
     // These anchors describe this device's uninterrupted observation, not
     // engine runtime. Invalidate off-roster memory too before a reload.
     for (int i = 0; i < PANE_MEMORY_MAX; i++) {
         s.memory[i].busy = false;
         s.memory[i].busy_ms = s.memory[i].last_busy = 0;
         s.memory[i].activity[0] = 0;
+        memset(&s.memory[i].player,0,sizeof s.memory[i].player);
     }
     for (int i = 0; i < s.count; i++) {
         s.agents[i].busy = false;
         s.agents[i].busy_ms = s.agents[i].last_busy = 0;
         s.agents[i].tool[0] = 0;
+        memset(&s.agents[i].player,0,sizeof s.agents[i].player);
     }
     s.pro_busy_visible = false;
 }
@@ -1018,6 +1037,12 @@ static void tabs_open(void)
     view(TABS);
     if (s.view != TABS) return;
     ht_tab_carousel_reset(&tab_carousel, s.tab_count, workspace_index(s.selected_tab));
+#ifdef DEVICE_PRO_COMPANION
+    if (s.player) {
+        int index=workspace_index(s.selected_tab);
+        s.offset=index>5 ? index-5 : 0;
+    }
+#endif
 }
 static void workspace_failed(const char *message)
 {
@@ -1464,10 +1489,28 @@ static bool home_caption_tick(uint32_t now)
     const agent_t *a = active();
     return ht_character_caption_tick(&home_caption, now, a ? a->id : "", home_caption_rotates());
 }
+static bool pro_player_working_visible(void)
+{
+#ifdef DEVICE_PRO_COMPANION
+    if (!s.player || !s.connected || s.loading) return false;
+    if (s.view==HOME || s.view==AGENT) {
+        const agent_t *a=active();
+        return a && a->busy && !is_question(a->id);
+    }
+    if (s.view==AGENTS && !s.carry_route.choosing) {
+        for (int i=s.offset;i<s.count && i<s.offset+6;i++)
+            if (i>=0 && s.agents[i].busy && !is_question(s.agents[i].id)) return true;
+    }
+#endif
+    return false;
+}
 static bool status_animated(void)
 {
     if (s.nap || s.quiet || s.locked || display_is_asleep() || s.touch_down)
         return false;
+#ifdef DEVICE_PRO_COMPANION
+    if (s.player) return pro_player_working_visible();
+#endif
     if (s.view == VOICE) return !s.voice_review_preview && voice_status()[0];
     return home_caption_rotates() && home_caption.activity && !s.straight_title;
 }
@@ -1478,6 +1521,9 @@ static unsigned status_speed(void)
 }
 static uint32_t status_wake_ms(uint32_t now)
 {
+#ifdef DEVICE_PRO_COMPANION
+    if (s.player) return 100-now%100;
+#endif
     unsigned speed = status_speed();
     return (ht_shimmer_wake_ms(now * speed) + speed - 1) / speed;
 }
@@ -1517,7 +1563,7 @@ static void surface_tick(uint32_t now)
             ht_gesture_guard(&gesture,now); tap.kind=A_VOICE; dispatch(tap);
         }
     }
-    if (s.living_summary_agent[0] && living_home && !s.touch_down && !s.living_tap.pending &&
+    if (!s.player && s.living_summary_agent[0] && living_home && !s.touch_down && !s.living_tap.pending &&
         !s.voice_open && !s.locked && !display_is_asleep() && !s.loading && s.connected) {
         if (active() && !strcmp(active()->id,s.living_summary_agent) && active()->recap_ready) {
             action_t read={.kind=A_READER,.dy=(int)s.result_generation};
@@ -1526,7 +1572,7 @@ static void surface_tick(uint32_t now)
             if(s.view==READER)s.reader.live=true;
         } else s.living_summary_agent[0]=0;
     }
-    if ((s.view==LIVING || s.view==HOME || s.view==AGENT || s.view==VOICE) &&
+    if ((s.view==LIVING || (!s.player && (s.view==HOME || s.view==AGENT || s.view==VOICE))) &&
         !s.locked && !display_is_asleep()) {
         unsigned frame = s.quiet && s.view!=VOICE ? 0 : pro_living_frame(now-s.living_started);
         if (frame != s.living_frame) { s.living_frame = (uint8_t)frame; change(); }
@@ -1541,7 +1587,12 @@ static void surface_tick(uint32_t now)
     notice_flush_reads(now);
     if (s.view == TABS && !s.locked && !display_is_asleep() && ht_tab_carousel_tick(&tab_carousel, now)) change();
     if (home_caption_tick(now)) change();
-    uint8_t phase = status_animated() ? ht_shimmer_phase(now * status_speed()) : 0;
+    uint8_t phase = status_animated() ?
+#ifdef DEVICE_PRO_COMPANION
+        (s.player ? (now/100)%10 : ht_shimmer_phase(now * status_speed())) : 0;
+#else
+        ht_shimmer_phase(now * status_speed()) : 0;
+#endif
     if (phase != s.status_phase) { s.status_phase = phase; change(); }
     bool main = s.view == HOME || s.view == AGENT;
     bool visible = !s.locked && !display_is_asleep() &&
@@ -1551,6 +1602,25 @@ static void surface_tick(uint32_t now)
         ((main && s.connected && !s.loading) || s.view == VOICE);
 #endif
     uint32_t held = now - s.touch_started;
+#ifdef DEVICE_PRO_COMPANION
+    if (s.player_overview.received && (uint32_t)(now-s.player_overview.received_ms)>=s.player_overview.valid_ms) {
+        s.player_overview.received=false;
+        change();
+    }
+    for(unsigned i=0;i<PRO_PLAYER_CONTEXTS;i++) {
+        pro_player_context_t *context=&s.player_context[i];
+        if(context->id[0] && context->remaining_bp>=0 && (uint32_t)(now-context->received_ms)>=context->valid_ms) {
+            context->remaining_bp=-1;
+            change();
+        }
+    }
+    if (s.player && s.view==AGENTS && !s.carry_route.choosing && !s.locked &&
+        !display_is_asleep() && s.touch_down && !s.touch_cancelled && gesture.live &&
+        !gesture.guarded && !gesture.moved && held>=650 && held<5000) {
+        tabs_open();
+        return;
+    }
+#endif
     bool review_preview = cable_client_supports(CABLE_FEATURE_DRAFT) &&
         visible && s.view == VOICE && s.voice_open && !s.voice_search &&
         !s.voice_waiting && !s.voice_start_pending && audio_client_recording() &&
@@ -1563,7 +1633,7 @@ static void surface_tick(uint32_t now)
         // Enter directly. The opening contact is consumed until a real release,
         // so lifting or sliding after the hold cannot also select a tab.
 #ifdef DEVICE_PRO_COMPANION
-        view(LAUNCHER);
+        if (s.player) tabs_open(); else view(LAUNCHER);
 #else
         tabs_open();
 #endif
@@ -2173,6 +2243,9 @@ static const char *settings_item(int wanted, action_kind_t *action)
         {"Select text", A_SELECT_BEGIN, CABLE_FEATURE_SELECTION},
     };
     for (unsigned i = 0; i < sizeof items / sizeof items[0]; i++) {
+#ifdef DEVICE_PRO_COMPANION
+        if (s.player && items[i].action==A_COMPANION) continue;
+#endif
         if (items[i].feature && !cable_client_supports(items[i].feature)) continue;
         if (wanted-- == 0) {
             if (action) *action = items[i].action;
@@ -2196,7 +2269,11 @@ static void tabs_move(int dy)
     if (!step) return;
     s.tab_drag %= TAB_ROW_HEIGHT;
     int count = s.view == AGENTS ? s.count : s.view == SETTINGS ? settings_count() : s.tab_count;
-    int last = count > TAB_ROWS ? count - TAB_ROWS : 0;
+    int rows=TAB_ROWS;
+#ifdef DEVICE_PRO_COMPANION
+    if (s.player && (s.view==TABS || (s.view==AGENTS && !s.carry_route.choosing))) rows=6;
+#endif
+    int last = count > rows ? count - rows : 0;
     int next = s.offset + step;
     if (next < 0) next = 0;
     if (next > last) next = last;
@@ -2507,6 +2584,8 @@ static void render_lock(ht_scene_t *f)
 }
 #ifdef DEVICE_PRO_COMPANION
 #include "pro_controls.inc"
+#include "pro_player.inc"
+#include "pro_player_controls.inc"
 #include "pro_home.inc"
 #endif
 bool habitat_scene_take(ht_scene_t *f)
@@ -2527,6 +2606,9 @@ bool habitat_scene_take(ht_scene_t *f)
         return true;
     }
 #ifdef DEVICE_PRO_COMPANION
+    if (s.player && (s.view==HOME || s.view==AGENT || s.view==VOICE)) { pro_player_home(f); return true; }
+    if (s.player && s.view==AGENTS && !s.carry_route.choosing) { pro_player_library(f); return true; }
+    if (s.player) { pro_player_controls(f); return true; }
     if (s.view == HOME || s.view == AGENT) { pro_render_home(f); return true; }
     if (s.view == VOICE) { pro_render_voice(f); return true; }
     if (pro_render_controls(f)) return true;
@@ -4455,6 +4537,9 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         s.tab_strip_drag = 0;
 #endif
         if (s.view == TABS && pressed_action.kind == A_TAB) ht_tab_carousel_begin(&tab_carousel, x, now);
+#ifdef DEVICE_PRO_COMPANION
+        if (s.player) ht_tab_carousel_cancel(&tab_carousel);
+#endif
         ht_gesture_begin(&gesture, x, y, now, ((uint32_t)s.view << 8) | pressed_action.kind);
         if (pressed_action.kind != A_PET && pressed_action.kind != A_FORM_MAIN && pressed_action.kind != A_FORM_SAY &&
             pressed_action.kind != A_ANSWER && pressed_action.kind != A_DRAFT_SEND && pressed_action.kind != A_DRAFT_EDIT &&
@@ -4477,6 +4562,10 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
             if (pressed_action.kind==A_TABS && ht_workspace_move(&workspace,x,y,gesture.axis,now)) change();
 #endif
         } else if (s.view == TABS) {
+#ifdef DEVICE_PRO_COMPANION
+            if (s.player && gesture.axis==1) tabs_move((s.last_y-y)*(scroll_reversed ? -1 : 1));
+            else if (!s.player)
+#endif
             if (gesture.axis == 2 && ht_tab_carousel_move(&tab_carousel, x, now)) change();
         } else if ((s.view == AGENTS || s.view == SETTINGS) && gesture.axis == 1) {
             tabs_move((s.last_y - y) * (scroll_reversed ? -1 : 1));
@@ -4522,7 +4611,11 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
     }
     if (!down && s.touch_down) {
         ht_touch_result_t result = ht_gesture_end(&gesture, x, y, now);
-        if (!s.touch_cancelled && (s.view == AGENTS || s.view == SETTINGS) && gesture.axis == 1)
+        if (!s.touch_cancelled && (s.view == AGENTS || s.view == SETTINGS
+#ifdef DEVICE_PRO_COMPANION
+            || (s.player && s.view==TABS)
+#endif
+            ) && gesture.axis == 1)
             tabs_move((s.last_y - y) * (scroll_reversed ? -1 : 1));
         bool tab_contact = s.view == TABS && tab_carousel.touching;
         bool tab_tap = tab_contact && ht_tab_carousel_end(&tab_carousel, x, gesture.axis == 2, now);
@@ -4577,7 +4670,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         } else if (result == HT_TOUCH_TAP && pressed_action.kind == A_PET &&
                    (surface || s.view == VOICE || s.view == SELECTION)) {
 #ifdef DEVICE_PRO_COMPANION
-            if (surface) {
+            if (surface && !s.player) {
                 bool second=s.living_tap.pending && (int32_t)(now-s.living_tap.until)<=0 &&
                     abs(x-s.living_tap.x)<110 && abs(y-s.living_tap.y)<110;
                 if (second) {
@@ -4617,7 +4710,7 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
                 pressed_action.kind = A_DRAFT_OPTIONS; dispatch(pressed_action);
             } else if (surface && pressed_action.kind == A_PET)
 #ifdef DEVICE_PRO_COMPANION
-                view(LAUNCHER);
+                { if (s.player) tabs_open(); else view(LAUNCHER); }
 #else
                 tabs_open();
 #endif
@@ -4796,7 +4889,7 @@ uint32_t habitat_next_wake_ms(void)
         delay = left > 0 ? (uint32_t)left : 1;
     }
     if (!s.locked && !display_is_asleep() &&
-        (s.view==LIVING || s.view==HOME || s.view==AGENT || s.view==VOICE) && (!s.quiet || s.view==VOICE))
+        (s.view==LIVING || (!s.player && (s.view==HOME || s.view==AGENT || s.view==VOICE))) && (!s.quiet || s.view==VOICE))
         delay=PRO_LIVING_STEP_MS-(now-s.living_started)%PRO_LIVING_STEP_MS;
     if (s.living_tap.pending && !s.touch_down) {
         int32_t left=(int32_t)(s.living_tap.until-now);
@@ -4831,7 +4924,11 @@ uint32_t habitat_next_wake_ms(void)
         uint32_t due = status_wake_ms(now);
         if (due < delay) delay = due;
     }
-    if ((s.view == HOME || s.view == AGENT) && pressed_action.kind == A_PET && s.touch_down && !s.touch_cancelled &&
+    if ((((s.view == HOME || s.view == AGENT) && pressed_action.kind == A_PET)
+#ifdef DEVICE_PRO_COMPANION
+        || (s.player && s.view==AGENTS && !s.carry_route.choosing)
+#endif
+        ) && s.touch_down && !s.touch_cancelled &&
         gesture.live && !gesture.moved && !gesture.guarded) {
         uint32_t elapsed = now - s.touch_started;
         uint32_t due = 650;
@@ -5003,6 +5100,7 @@ void ui_init(void)
     pro_visual_init();
     pro_living_init();
     s.living_selected=config_load_pro_living(0);
+    s.player=true; // Harness Player is the Pro interface; older firmware is the rollback.
     s.living_character=s.living_selected;
     s.living_started=ms();
 #endif
@@ -5419,6 +5517,7 @@ static void event(const char *id, const char *session, const char *kind, const c
         m->busy = false;
         m->busy_ms = m->last_busy = 0;
         m->activity[0] = 0;
+        memset(&m->player,0,sizeof m->player);
         if (a) {
             a->busy = false;
             a->busy_ms = a->last_busy = 0;
@@ -5452,6 +5551,9 @@ static void event(const char *id, const char *session, const char *kind, const c
             if (!m->busy) {
                 m->busy_ms = ms();
                 m->activity[0] = 0;
+#ifdef DEVICE_PRO_COMPANION
+                memset(&m->player,0,sizeof m->player);
+#endif
                 if (a && i == s.active) s.character_activity++;
             }
             m->busy = true;
@@ -5469,6 +5571,9 @@ static void event(const char *id, const char *session, const char *kind, const c
                 a->last_busy = m->last_busy;
                 COPY(a->session, m->session);
                 COPY(a->tool, m->activity);
+#ifdef DEVICE_PRO_COMPANION
+                a->player=m->player;
+#endif
             }
         }
         if (a) change();
@@ -5476,6 +5581,13 @@ static void event(const char *id, const char *session, const char *kind, const c
         return;
     }
     if (!restore) { m->busy = false; m->activity[0] = 0; }
+#ifdef DEVICE_PRO_COMPANION
+    if (!restore) {
+        m->player.finished=kind && (!strcmp(kind,"done") || !strcmp(kind,"summary") || !strcmp(kind,"error"));
+        m->player.failed=kind && !strcmp(kind,"error");
+        m->player.has_elapsed=false;
+    }
+#endif
     bool has_text = text_ && *text_ && strcmp(text_, "done");
     if ((has_text || (recap && *recap)) && !(restore && (m->live_summary || m->awaiting_result || m->busy))) {
         char preview[sizeof m->preview];
@@ -5502,6 +5614,23 @@ static void event(const char *id, const char *session, const char *kind, const c
     if (a) change();
     display_unlock();
 }
+#ifdef DEVICE_PRO_COMPANION
+void ui_project_player_activity(const char *id, const char *action, int elapsed_seconds)
+{
+    display_lock();
+    pane_memory_t *m=pane_memory(id,false);
+    if (s.connected && m && m->busy && ms()-m->last_busy<=25000) {
+        // An absent field means unavailable, never an invented action or a local timer.
+        if (action) recap_preview(m->player.action,sizeof m->player.action,action);
+        m->player.has_elapsed=elapsed_seconds>=0 && elapsed_seconds<=2592000;
+        m->player.elapsed_seconds=m->player.has_elapsed ? (uint32_t)elapsed_seconds : 0;
+        m->player.observed_ms=ms();
+        int i=find(id);
+        if (i>=0) { s.agents[i].player=m->player; change(); }
+    }
+    display_unlock();
+}
+#endif
 void ui_project_emit(const char *id, const char *session, const char *kind, const char *text_,
                      const char *recap)
 {
@@ -5621,6 +5750,44 @@ void ui_fleet_set(int total, bool window)
     change();
     display_unlock();
 }
+#ifdef DEVICE_PRO_COMPANION
+void ui_player_overview(int harnesses, int machines, int models, int valid_ms)
+{
+    display_lock();
+    s.player_overview=(pro_player_overview_t){
+        .harnesses=harnesses>=0 ? harnesses : s.total,
+        .machines=machines>=0 ? machines : s.machine_count,
+        .models=models>=0 ? models : -1,
+        .received_ms=ms(),.valid_ms=valid_ms>0 && valid_ms<=60000 ? valid_ms : 0,
+        .received=s.connected && valid_ms>0 && valid_ms<=60000,
+    };
+    change();
+    display_unlock();
+}
+void ui_player_context(const pro_player_context_t *context)
+{
+    if (!context || !context->id[0]) return;
+    display_lock();
+    if (s.connected) {
+        unsigned slot=PRO_PLAYER_CONTEXTS;
+        for(unsigned i=0;i<PRO_PLAYER_CONTEXTS;i++)
+            if (!strcmp(s.player_context[i].id,context->id)) { slot=i;break; }
+        if(slot==PRO_PLAYER_CONTEXTS) {
+            slot=0;
+            for(unsigned i=0;i<PRO_PLAYER_CONTEXTS;i++) {
+                if(!s.player_context[i].id[0]) { slot=i;break; }
+                if((uint32_t)(s.player_context_next-s.player_context[i].revision)>
+                   (uint32_t)(s.player_context_next-s.player_context[slot].revision)) slot=i;
+            }
+        }
+        s.player_context[slot]=*context;
+        s.player_context[slot].received_ms=ms();
+        s.player_context[slot].revision=++s.player_context_next;
+        change();
+    }
+    display_unlock();
+}
+#endif
 void ui_focus_project(const char *id)
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;

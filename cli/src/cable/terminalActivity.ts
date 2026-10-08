@@ -1,5 +1,16 @@
-/** Read only an engine's live footer. No generated status words or transcript inference. */
+export interface TerminalActivitySnapshot {
+  text: string
+  elapsedSeconds?: number
+  /** Most recent native tool name/argument, not a generated explanation. */
+  action?: string
+}
+
 export function terminalActivity(engine: string, screen: string | null): string | null {
+  return terminalActivitySnapshot(engine, screen)?.text ?? null
+}
+
+/** Read only an engine's live footer. No generated status words or transcript inference. */
+export function terminalActivitySnapshot(engine: string, screen: string | null): TerminalActivitySnapshot | null {
   if (!screen || (engine !== 'claude' && engine !== 'codex')) return null
   const lines = screen.replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/)
@@ -21,7 +32,16 @@ export function terminalActivity(engine: string, screen: string | null): string 
     const match = engine === 'codex'
       ? /^[•◦⠁-⣿]\s+(.{1,60}?)\s+\([^\n]*\besc to interrupt\b[^\n]*\)\s*$/i.exec(line)
       : /^[✢✳✶✻✽·*]\s+([\p{L}][\p{L}\p{N} '\u2019-]{0,55}(?:…|\.{3}))(?:\s+\([^\n]*\))?\s*$/u.exec(line)
-    if (match) return match[1].trim().replace(/…/g, '...')
+    if (match) {
+      const snapshot: TerminalActivitySnapshot = { text: match[1].trim().replace(/…/g, '...') }
+      const duration = /\(\s*((?:\d+[hms]\s*){1,3})[•·]/u.exec(line)?.[1]
+      if (duration) {
+        const seconds = [...duration.matchAll(/(\d+)([hms])/g)]
+          .reduce((sum, part) => sum + Number(part[1]) * ({ h: 3600, m: 60, s: 1 }[part[2]] ?? 0), 0)
+        if (Number.isSafeInteger(seconds) && seconds <= 2_592_000) snapshot.elapsedSeconds = seconds
+      }
+      return snapshot
+    }
   }
   return null
 }

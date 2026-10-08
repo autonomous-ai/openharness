@@ -80,6 +80,7 @@ import 'desk_sync.dart';
 import 'pane_layout_store.dart';
 import 'terminal_pane.dart';
 import 'device_visit.dart';
+import 'harness_sessions.dart';
 import 'swarm.dart';
 import '../terminal/terminal_binary.dart';
 import '../update/desktop_updater.dart';
@@ -2604,6 +2605,51 @@ class AppNotifier extends ChangeNotifier {
   /// unchanged and the `foreground` flag riding with it is the point.
   void announceWindowForeground() => _announceOpenPanesToDial();
 
+  /// Player uses the same known sessions and project labels as the desktop.
+  /// Only reported model identities count; there is no guessed default model.
+  /// Context travels for this tab only, bounded like the device's pane roster.
+  Map<String, Object?> get playerOverview {
+    final sessions = harnessSessions(this);
+    final models = <String>{
+      for (final session in sessions)
+        if (session.agent.gridModel ?? session.agent.modelName case final model?)
+          if (model.isNotEmpty) model,
+    };
+    final contexts = <Map<String, Object?>>[];
+    final seen = <(String, String)>{};
+    for (final pane in panes) {
+      final id = pane.agentId;
+      if (id == null || !seen.add((pane.machineId, id))) continue;
+      final machine = machineStates[pane.machineId];
+      final agent = machine?.agents.where((a) => a.id == id).firstOrNull;
+      if (machine == null || agent == null) continue;
+      final project = machine.projectOf(agent);
+      final allowance = agent.gridModel == null
+          ? _modelsMenu?.subscriptionFor(
+              agent.engine ?? '',
+              local: machine.isLocalMachine,
+              machineName: machine.machine.displayName,
+            )
+          : null;
+      contexts.add({
+        'id': id,
+        'machine': machine.machine.displayName,
+        'project': project?.label ?? '',
+        'branch': project?.shownBranch ?? '',
+        'engine': agent.engine ?? '',
+        'remaining': allowance?['remainingPercent'],
+        'validUntil': allowance?['validUntil'] ?? 0,
+      });
+      if (contexts.length == 24) break;
+    }
+    return {
+      'harnesses': sessions.length,
+      'machines': machineStates.length,
+      'models': models.length,
+      'contexts': contexts,
+    };
+  }
+
   void _announceOpenPanesToDial() {
     final pool = _pool;
     if (pool == null) return;
@@ -2678,6 +2724,7 @@ class AppNotifier extends ChangeNotifier {
           'panes': swarm.panes.length,
         },
     ];
+    final overview = playerOverview;
     for (final machineId in machineStates.keys) {
       final connection = pool[machineId];
       if (connection == null) continue;
@@ -2710,6 +2757,7 @@ class AppNotifier extends ChangeNotifier {
               // Only the active one's. It is the only grid the device draws, and sending every tab's
               // geometry would be two dozen shapes to carry one.
               'tiles': activeTiles,
+              'overview': overview,
             })
             .catchError((_) => false),
       );
@@ -6326,7 +6374,8 @@ class AppNotifier extends ChangeNotifier {
   /// picker read this ONE controller. Each used to own its own, read at a different moment, and the
   /// picker said "Not signed in" beside a menu showing the same account with 8% left.
   ModelsMenuController get modelsMenu =>
-      _modelsMenu ??= ModelsMenuController(remote: readRemoteUsage);
+      _modelsMenu ??= (ModelsMenuController(remote: readRemoteUsage)
+        ..addListener(_announceOpenPanesToDial));
 
   Future<Map<String, dynamic>> localModels(
     String machineId, {

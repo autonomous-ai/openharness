@@ -1,4 +1,4 @@
-"""Bake local Avenir outlines into bounded 4-bit proportional text atlases."""
+"""Bake regular Helvetica outlines into bounded 4-bit Pro text atlases."""
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 import math
@@ -11,7 +11,7 @@ vietnamese = list(range(0x1ea0, 0x1efa)) + [0x102,0x103,0x110,0x111,0x128,0x129,
                                         0x168,0x169,0x1a0,0x1a1,0x1af,0x1b0]
 for size in (24, 32, 42, 56):
     height = math.ceil(size * 1.375)
-    f = ImageFont.truetype('/System/Library/Fonts/Avenir Next.ttc', size * 2, index=5 if size < 42 else 2)
+    f = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', size * 2, index=0)
     data = bytearray()
     glyphs = []
     masks = {}

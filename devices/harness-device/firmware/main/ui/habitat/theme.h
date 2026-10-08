@@ -5,11 +5,11 @@
 // All colors are RGB565-representable at full brightness. Conversion and the
 // existing saved brightness setting remain at the UI boundary; no theme heap.
 #ifdef DEVICE_PRO_COMPANION
-#define HT_THEME_CANVAS    0xf4f2e8u
-#define HT_THEME_TEXT      0x263b34u
-#define HT_THEME_SECONDARY 0x627466u
-#define HT_THEME_ACCENT    0x78558eu
-#define HT_THEME_SELECTION 0xe6e8dcu
+#define HT_THEME_CANVAS    0xeeede5u
+#define HT_THEME_TEXT      0x191a18u
+#define HT_THEME_SECONDARY 0x73746eu
+#define HT_THEME_ACCENT    0x191a18u
+#define HT_THEME_SELECTION 0xdeddd5u
 #define HT_THEME_ERROR     0x9b3d4au
 #define HT_PATTERN_X 192
 #define HT_PATTERN_Y 252

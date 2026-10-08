@@ -1109,6 +1109,12 @@ static void handle_message(const cJSON *root)
     if (strcmp(t, "turn.activity") == 0) {
 #ifdef DEVICE_HABITAT
         if (agent_id) ui_project_emit(agent_id, "", "activity", str_of(p, "text"), NULL);
+#ifdef DEVICE_PRO_COMPANION
+        const cJSON *elapsed=cJSON_GetObjectItemCaseSensitive(p,"elapsedSeconds");
+        int seconds=cJSON_IsNumber(elapsed) && elapsed->valuedouble>=0 && elapsed->valuedouble<=2592000 &&
+            elapsed->valuedouble==(double)elapsed->valueint ? elapsed->valueint : -1;
+        if (agent_id) ui_project_player_activity(agent_id,str_of(p,"action"),seconds);
+#endif
 #endif
         return;
     }
@@ -1181,7 +1187,11 @@ static void handle_message(const cJSON *root)
         return;
     }
     if (strcmp(t, "turn.error") == 0) {
+#ifdef DEVICE_PRO_COMPANION
+        if (agent_id) ui_project_emit(agent_id, "", "error", "", NULL);
+#else
         if (agent_id) ui_project_emit(agent_id, "", "done", "", NULL);
+#endif
         ui_cable_toast(str_of(p, "message"));
         return;
     }
@@ -1204,6 +1214,39 @@ static void handle_message(const cJSON *root)
     if (strcmp(t,"draft.state")==0) { ui_draft_state(p);return; }
 #ifdef DEVICE_PRO_COMPANION
     if (strcmp(t,"metrics.state")==0) { ui_metrics_state(p);return; }
+    if (strcmp(t,"player.overview")==0) {
+        const char *keys[]={"harnesses","machines","models","validMs"};
+        int values[]={-1,-1,-1,0};
+        const int limits[]={1000000,1000000,1000000,60000};
+        for(int i=0;i<4;i++) {
+            const cJSON *v=cJSON_GetObjectItemCaseSensitive(p,keys[i]);
+            if(cJSON_IsNumber(v) && v->valuedouble>=0 && v->valuedouble<=limits[i] && v->valuedouble==v->valueint)
+                values[i]=v->valueint;
+        }
+        ui_player_overview(values[0],values[1],values[2],values[3]);
+        return;
+    }
+    if (strcmp(t,"player.context")==0) {
+        const char *id=str_of(p,"id");
+        if(!id || !id[0] || strlen(id)>=48) return;
+        pro_player_context_t context={.remaining_bp=-1};
+        snprintf(context.id,sizeof context.id,"%s",id);
+        const char *keys[]={"machine","project","branch","engine"};
+        char *dest[]={context.machine,context.project,context.branch,context.engine};
+        const size_t sizes[]={sizeof context.machine,sizeof context.project,sizeof context.branch,sizeof context.engine};
+        for(int i=0;i<4;i++) {
+            const char *value=str_of(p,keys[i]);
+            snprintf(dest[i],sizes[i],"%s",value ? value : "");
+        }
+        const cJSON *remaining=cJSON_GetObjectItemCaseSensitive(p,"remaining");
+        if(cJSON_IsNumber(remaining) && remaining->valuedouble>=0 && remaining->valuedouble<=100)
+            context.remaining_bp=remaining->valuedouble>0 && remaining->valuedouble<0.01 ? 1 : (int)(remaining->valuedouble*100);
+        const cJSON *valid=cJSON_GetObjectItemCaseSensitive(p,"validMs");
+        if(cJSON_IsNumber(valid) && valid->valuedouble>0 && valid->valuedouble<=60000 && valid->valuedouble==valid->valueint)
+            context.valid_ms=valid->valueint;
+        ui_player_context(&context);
+        return;
+    }
 #endif
     if (strcmp(t,"voice.draft")==0) {
         const char *upload_id=str_of(p,"uploadId");

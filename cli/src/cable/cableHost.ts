@@ -9,6 +9,7 @@
 // as the very `commander_event` cards the WiFi device receives — teed at the socket rather than emitted
 // again here, so the two device surfaces cannot drift.
 import { join } from 'node:path'
+import type { TerminalActivitySnapshot } from './terminalActivity.js'
 import { notificationReadToken, type UnreadNotification } from './notificationRead.js'
 
 import { AuthSessionManager, readAuthSession } from '../lib/authSession.js'
@@ -38,6 +39,7 @@ export interface RecentTurn {
 export interface CableHostWiring {
   /** Exact live terminal footer for a local agent; absent when no footer is visible. */
   activityText?: (agentId: string) => Promise<string | null>
+  activitySnapshot?: (agentId: string) => Promise<TerminalActivitySnapshot | null>
   /** The person's own last questions to a LOCAL agent, newest first. */
   recentAsks: (agentId: string) => string[]
   machineName: () => string
@@ -492,6 +494,10 @@ export class DaemonCableHost implements CableHost {
     return this.flatCount
   }
 
+  playerOverview() {
+    return this.swarms?.overview ?? null
+  }
+
   /** The active tab's id, or '' with no window. Travels on `agents.end` so the dial can tell an empty
    *  tab from a shut window — the two draw different screens. */
   activeSwarm(): string {
@@ -516,6 +522,13 @@ export class DaemonCableHost implements CableHost {
   async activityText(agentId: string): Promise<string | null> {
     if (!this.isLocalAgent(agentId)) return null
     return await this.wiring.activityText?.(agentId) ?? null
+  }
+
+  async activitySnapshot(agentId: string): Promise<TerminalActivitySnapshot | null> {
+    if (!this.isLocalAgent(agentId)) return null
+    if (this.wiring.activitySnapshot) return this.wiring.activitySnapshot(agentId)
+    const text = await this.wiring.activityText?.(agentId)
+    return text ? { text } : null
   }
 
   /**

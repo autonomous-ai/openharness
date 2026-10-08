@@ -356,6 +356,12 @@ void ui_notif_replace(const cable_notif_t *rows, int count);
 // `recap` (optional, may be NULL): a short headline shown on the tile at a glance; `text` is the
 // fuller body shown in the tap-to-read reader. When `recap` is NULL the tile previews `text`.
 void ui_project_emit(const char *project_id, const char *session_id, const char *kind, const char *text, const char *recap);
+#ifdef DEVICE_PRO_COMPANION
+#include "habitat/pro_player.h"
+void ui_project_player_activity(const char *project_id, const char *action, int elapsed_seconds);
+void ui_player_overview(int harnesses, int machines, int models, int valid_ms);
+void ui_player_context(const pro_player_context_t *context);
+#endif
 // Restore a persisted historical card without changing the live busy lifecycle for this project.
 void ui_project_restore_event(const char *project_id, const char *kind, const char *text, const char *recap);
 void ui_project_clear_event(const char *project_id);
