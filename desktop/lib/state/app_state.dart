@@ -34,6 +34,7 @@ import '../auth/sign_in_client.dart';
 import '../auth/sign_in_provider.dart';
 import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
+import '../core/harness_cli_runner.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
@@ -4945,6 +4946,35 @@ class AppNotifier extends ChangeNotifier {
         );
     }
     _startDaemonSupervision(discovery);
+    _installMissingAgents();
+  }
+
+  bool _agentsInstallStarted = false;
+
+  /// A new user's first harness waited for its agent to install in the pane (OpenCode ~15 s, longer
+  /// for Claude Code and Codex). Once this computer's daemon is up, the CLI installs whichever of
+  /// the default agents are missing, in the background and OpenCode first
+  /// (`harness engines install-missing`); a harness started meanwhile waits for that install rather
+  /// than running its own. Once per launch. An older CLI without the command answers an error,
+  /// which is only logged.
+  void _installMissingAgents() {
+    if (_agentsInstallStarted || kUnderTest || viewer != null) return;
+    _agentsInstallStarted = true;
+    unawaited(() async {
+      try {
+        final result = await HarnessCliRunner().run([
+          'engines',
+          'install-missing',
+          '--background',
+        ]);
+        appLog.info(
+          'agents',
+          'background install: ${'${result.stdout}'.trim()} ${'${result.stderr}'.trim()}'.trim(),
+        );
+      } catch (error) {
+        appLog.warn('agents', 'background install did not start: $error');
+      }
+    }());
   }
 
   /// One line per probe STATE the gate lands in, never per tick: this gate was silent, and the one
