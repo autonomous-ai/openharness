@@ -1,7 +1,7 @@
 //! Where a dragged pane would land: the pointer over the screen -> what releasing there does.
 use ratatui::{buffer::Buffer, layout::{Constraint, Layout, Position, Rect}, style::{Color, Modifier, Style}, text::Line, widgets::{Block, Widget}};
 use unicode_width::UnicodeWidthStr;
-use crate::{app::App, bar::Hit, draw::RangeKind, theme};
+use crate::{app::App, bar::Hit, draw::RangeKind, layout::Dir, theme};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side { Left, Right, Top, Bottom }
@@ -41,7 +41,11 @@ pub fn drop_target(app: &App, src: u64, x: u16, y: u16) -> Drop {
     // the nearest edge band wins (distance as a share of the band); outside every band, the middle swaps
     let near = [(dl, bx, Side::Left), (dr, bx, Side::Right), (dt, by, Side::Top), (db, by, Side::Bottom)]
         .into_iter().filter(|(d, b, _)| d < b).min_by_key(|(d, b, _)| *d as u32 * 1000 / *b as u32);
-    match near { Some((_, _, side)) => Drop::Beside(id, side), None => Drop::Swap(id) }
+    let Some((_, _, side)) = near else { return Drop::Swap(id) };
+    // Already there (its neighbour on that side, in the same split): join-pane would only halve [id].
+    let (dir, before) = match side { Side::Left => (Dir::Horizontal, true), Side::Right => (Dir::Horizontal, false), Side::Top => (Dir::Vertical, true), Side::Bottom => (Dir::Vertical, false) };
+    if app.tab().root.as_ref().and_then(|root| root.neighbour(id, dir, before)) == Some(src) { return Drop::Nothing }
+    Drop::Beside(id, side)
 }
 
 /// The cells that show [drop]: the zone of the target pane (a side half or the whole pane) or the tab's cells.
@@ -66,8 +70,7 @@ pub fn zone(app: &App, drop: &Drop) -> Option<Rect> {
 /// The held pane follows the pointer: a drag once it moved 2 cells from the press, a click until then.
 pub fn follow(app: &mut App, x: u16, y: u16) {
     let Some(grab) = &app.controls.grab else { return };
-    let (pane, (fx, fy)) = (grab.pane, grab.from);
-    let live = grab.live || x.abs_diff(fx) + y.abs_diff(fy) >= 2;
+    let (pane, live) = (grab.pane, grab.moved(x, y));
     let drop = if live { drop_target(app, pane, x, y) } else { Drop::Nothing };
     if let Some(grab) = &mut app.controls.grab { grab.live = live; grab.drop = drop; }
 }
@@ -174,12 +177,38 @@ mod tests {
         assert_eq!(app.rects.len(), 2, "this test needs both panes laid out");
         let r2 = rect(&app, 2);
         assert_eq!(drop_target(&app, 1, r2.x + r2.width / 2, r2.y + r2.height / 2), Drop::Swap(2));
-        assert_eq!(drop_target(&app, 1, r2.x + 1, r2.y + r2.height / 2), Drop::Beside(2, Side::Left));
+        // (1 is already left of 2: see the test below)
+        assert_eq!(drop_target(&app, 1, r2.x + 1, r2.y + r2.height / 2), Drop::Nothing);
         assert_eq!(drop_target(&app, 1, r2.right() - 2, r2.y + r2.height / 2), Drop::Beside(2, Side::Right));
         assert_eq!(drop_target(&app, 1, r2.x + r2.width / 2, r2.y + 1), Drop::Beside(2, Side::Top));
         assert_eq!(drop_target(&app, 1, r2.x + r2.width / 2, r2.bottom() - 2), Drop::Beside(2, Side::Bottom));
         let r1 = rect(&app, 1);
         assert_eq!(drop_target(&app, 1, r1.x + 3, r1.y + 3), Drop::Nothing);
+    }
+
+    #[tokio::test]
+    async fn beside_a_pane_on_the_side_it_already_is_is_nothing() {
+        // 1 | 2: 1 is already left of 2, 2 already right of 1 (join-pane would only halve the target)
+        let side = two();
+        let (r1, r2) = (rect(&side, 1), rect(&side, 2));
+        assert_eq!(drop_target(&side, 1, r2.x + 1, r2.y + r2.height / 2), Drop::Nothing);
+        assert_eq!(drop_target(&side, 2, r1.right() - 2, r1.y + r1.height / 2), Drop::Nothing);
+        assert_eq!(drop_target(&side, 2, r1.x + 1, r1.y + r1.height / 2), Drop::Beside(1, Side::Left), "the far side is a move");
+        // 1 over 2
+        let mut stack = app(100);
+        stack.tabs.truncate(1);
+        stack.tabs[0].root.as_mut().unwrap().split(1, 2, Dir::Vertical);
+        stack.fit_panes(); render(&mut stack);
+        let (r1, r2) = (rect(&stack, 1), rect(&stack, 2));
+        assert_eq!(drop_target(&stack, 1, r2.x + r2.width / 2, r2.y + 1), Drop::Nothing);
+        assert_eq!(drop_target(&stack, 2, r1.x + r1.width / 2, r1.bottom() - 2), Drop::Nothing);
+        assert_eq!(drop_target(&stack, 1, r2.x + r2.width / 2, r2.bottom() - 2), Drop::Beside(2, Side::Bottom), "below 2 is a move");
+        // 1 | 2 | 3: left of 3 is a move for 1 (2 is between them), not for 2
+        let mut row = three(120);
+        render(&mut row);
+        let r3 = rect(&row, 3);
+        assert_eq!(drop_target(&row, 1, r3.x + 1, r3.y + r3.height / 2), Drop::Beside(3, Side::Left));
+        assert_eq!(drop_target(&row, 2, r3.x + 1, r3.y + r3.height / 2), Drop::Nothing);
     }
 
     #[tokio::test]

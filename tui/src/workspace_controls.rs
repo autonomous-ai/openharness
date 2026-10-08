@@ -26,10 +26,16 @@ pub struct State {
 /// A pane held by its title. Its release belongs to the header press, as any control's does.
 pub struct Grab {
     pub pane: u64,
-    pub from: (u16, u16),
+    from: (u16, u16),
     /// true once the pointer moved 2 cells: a drag, no longer a click
     pub live: bool,
     pub drop: crate::pane_drag::Drop,
+}
+
+impl Grab {
+    /// Whether the pointer at (x, y) makes it a drag: 2 cells from the press along either axis
+    /// (a one-cell diagonal wobble is still a click).
+    pub fn moved(&self, x: u16, y: u16) -> bool { self.live || x.abs_diff(self.from.0).max(y.abs_diff(self.from.1)) >= 2 }
 }
 
 #[cfg(test)]
@@ -565,6 +571,22 @@ pub(crate) mod tests {
                     assert_eq!(resized, !kept, "{look:?} {status}: cell {x} of the divider title");
                 }
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_one_cell_diagonal_wobble_on_a_stacked_title_changes_nothing() {
+        for dx in [1i32, -1] {
+            let mut app = stacked(("@hn-border", "box"), "top");
+            let name = grip(&app, 2);
+            let (order, layout) = (app.tabs[0].panes(), app.tab().root.as_ref().unwrap().to_tmux());
+            let (x, y) = (name.x + 1, name.y);
+            let wobble = ((x as i32 + dx) as u16, y - 1);
+            send(&mut app, MouseEventKind::Down(MouseButton::Left), x, y);
+            send(&mut app, MouseEventKind::Drag(MouseButton::Left), wobble.0, wobble.1);
+            assert!(!live(&app), "one cell each way is still a click (dx={dx})");
+            send(&mut app, MouseEventKind::Up(MouseButton::Left), wobble.0, wobble.1);
+            assert_eq!((app.tabs[0].panes(), app.tab().root.as_ref().unwrap().to_tmux()), (order, layout), "dx={dx}");
         }
     }
 
