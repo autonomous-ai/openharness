@@ -143,9 +143,9 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
-  /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker)\.ts$/,
+  /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl)\.ts$/,
   /^lib\/(askQuestion|runtimeProfileController|composerScreen|teamWriteHold|messageHold|terminalActivity|codexTurnRecovery)\.ts$/,
-  /^engines\/(screens|modelControls)\.ts$/,
+  /^engines\/(screens|modelControls|questionControls)\.ts$/,
   // The pilot reader implementations and their host are never loaded by supervised core.
   /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
   /^engines\/(runtime|(claude|codex)\/runtimeProfile)\.ts$/, /^lib\/runtimeProfile\.ts$/,

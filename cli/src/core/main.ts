@@ -1,3 +1,5 @@
+import { createQuestionControls } from './engines/questionControls.js'
+import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
 import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
@@ -547,12 +549,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // An older master's explicit capability report selects compatibility. A failed worker never does.
   const isolatedLive = (engine: string): boolean => liveHosted
     && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
+  const questionControlHosted = masterRunsEngineQuestionControl(process.env, process.ppid)
+  const isolatedQuestionControl = (engine: string): boolean => questionControlHosted && isolatedLive(engine)
   const modelControlHosted = masterRunsEngineModelControl(process.env, process.ppid)
   const isolatedModelControl = (engine: string): boolean => modelControlHosted && isolatedLive(engine)
   const screenHosted = masterRunsEngineScreen(process.env, process.ppid)
   const isolatedScreen = (engine: string): boolean => screenHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted
     ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
@@ -567,6 +571,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
     handles: isolatedRuntime,
     resolve: id => registry.resolve(id), transport: runtimeTransport })
+  const questionControls = createQuestionControls({
+    handles: isolatedQuestionControl, inline: engine => inline?.questionControlFor(engine), resolve: id => registry.resolve(id),
+    call: (service, method, payload, waitMs) => serviceLinksRef?.call(service, method, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    text: (target, text, allowed) => submitTerminal(target, text, { allowed }), key: keyTerminal,
+  })
   const modelControls = createModelControls({
     handles: isolatedModelControl, inline: engine => inline?.modelControlFor(engine), resolve: id => registry.resolve(id),
     call: (service, method, payload, waitMs) => serviceLinksRef?.call(service, method, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
@@ -1078,6 +1087,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Questions an agent asks the person: shown on the dial and the window, answered from anywhere
   // (core/questions.ts).
   const asking = createQuestions({
+    questionControlFor: questionControls.forSession,
     readQuestion: screens.question,
     resolve: (id) => registry.resolve(id),
     terminal: terminalControl,
@@ -1202,7 +1212,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell']),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload) => await modelControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
+    answer: async (service, query, payload) => await questionControls.answer(service, query, payload) ?? await modelControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
@@ -1226,6 +1236,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       runtimeTransport.connected(service)
       screenTransport.connected(service)
       modelControls.connected(service)
+      questionControls.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
@@ -1238,6 +1249,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       runtimeTransport.disconnected(service)
       screenTransport.disconnected(service)
       modelControls.disconnected(service)
+      questionControls.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()

@@ -10,6 +10,7 @@ const agents = new Map<string, RegisteredSession>([
 
 function setup(over: Partial<QuestionDeps> = {}) {
   const deps: QuestionDeps = {
+    questionControlFor: () => undefined,
     readQuestion: (session, capture) => parseEngineQuestionPane(session.engine, capture),
     resolve: (id) => agents.get(id),
     terminal: {
