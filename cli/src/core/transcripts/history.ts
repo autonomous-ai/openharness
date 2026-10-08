@@ -14,7 +14,9 @@
  * four database engines: each had its own copy of the same windowing, and they now share one.
  */
 import { stat } from 'node:fs/promises'
-import { engineFor } from '../../engines/registry.js'
+import type { EngineTranscript } from '../../engines/facets/transcript.js'
+import { EngineReadError } from '../../engines/worker/protocol.js'
+import { transcriptReadIdentity } from './readIdentity.js'
 import { enrichSubagentStats } from '../../engines/kit/history.js'
 import { agyMessagesToEvents } from '../../engines/agy/normalizer.js'
 import { ampMessagesToEvents } from '../../engines/amp/normalizer.js'
@@ -48,9 +50,9 @@ export interface HistoryDeps {
   /** The conversations kept as stopped harnesses (lib/stoppedAgents.ts): a stop's, an exited engine's,
    *  and one a restart, a move or a restore had to leave for a new one. */
   stopped: () => readonly RegisteredSession[]
-  /** Claude Code's and Codex's pages, and every transcript's line count: one pager, so the line index it
-   *  keeps for a transcript serves both requests and is not built twice. */
+  /** Line counts, and the explicit inline compatibility path's pages. Isolated readers own their indexes. */
   pages: Pick<TranscriptPager, 'claude' | 'codex' | 'lineCount'>
+  readerFor: (engine: string) => EngineTranscript | undefined
   /** The database engines' stores. */
   dbs: { opencode: string; kilo: string; devin: string }
   /** Hermes keeps a store per profile: the one this session's lives in. */
@@ -138,7 +140,7 @@ function databasePage<M>(
   }
 }
 
-export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: HistoryDeps) {
+export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFor }: HistoryDeps) {
   // Devin, OpenCode and Kilo keep one store on this machine. Hermes keeps one per HOME, so its path is
   // the session's own (`hermesDb`) rather than this machine's default.
   const databases = new Map<string, DatabasePage>([
@@ -147,6 +149,8 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: Histor
     ['opencode', databasePage((s) => readOpencodeMessages(dbs.opencode, s.sessionId), opencodeMessagesToEvents, windowOpencodeMessages)],
     ['kilo', databasePage((s) => readKiloMessages(dbs.kilo, s.sessionId), kiloMessagesToEvents, windowKiloMessages)],
   ])
+
+  const lookup = (id: string) => resolve(id) ?? stopped().find((saved) => saved.sessionId === id)
 
   /** The reply to a `session_get` request, for the socket to send as it is. */
   const sessionGet = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
@@ -157,7 +161,7 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: Histor
     // file (that let a caller read any *.jsonl on the computer, incl. unshared claude history /
     // traversal). A kept conversation used to answer NOT_FOUND, so a conversation the daemon had to
     // leave for a new one could no longer be read at all (round 24).
-    const s = resolve(sessionId) ?? stopped().find((saved) => saved.sessionId === sessionId)
+    const s = lookup(sessionId)
     if (!s) return { error: 'NOT_FOUND' }
     // The registry finds an agent by its agent id too, and the reply names the id it was asked by. What
     // is read is the conversation's own, `s.sessionId`: an engine's store, Amp's export and Cursor's task
@@ -180,10 +184,17 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: Histor
         oldestCursor: null,
       }
     }
-    const engine = engineFor(s.engine)
-    if (engine) {
-      const { events, timestamp, ...page } = await engine.transcript.historyPage(s, { limit, before }, pages)
-      return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
+    const reader = readerFor(s.engine)
+    if (reader) {
+      const identity = transcriptReadIdentity(s)
+      try {
+        const { events, timestamp, ...page } = await reader.historyPage(s, { limit, before }, pages)
+        if (transcriptReadIdentity(lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
+        return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
+      } catch (error) {
+        const failed = error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')
+        return { error: failed.code, retryable: failed.retryable }
+      }
     }
     // Read from the end and bounded: these engines have no pages of their own yet, and one huge
     // transcript read whole would take the whole daemon down (lib/transcriptTail.ts). History past

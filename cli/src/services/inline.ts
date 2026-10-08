@@ -12,6 +12,7 @@
  * target, and its test"). The core still routes these services' requests and holds their fallbacks: both are
  * declared in core/api.ts, which it loads either way.
  */
+export { engineTranscriptFor } from '../engines/transcripts.js'
 export { startGateway } from '../gateway/start.js'
 export { startCommandBar } from './commandBar.js'
 export { startDevices } from './devices.js'

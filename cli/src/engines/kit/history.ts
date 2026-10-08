@@ -3,8 +3,7 @@ import { join } from 'node:path'
 import { SubagentStats, type SessionEvent } from '../../lib/normalize.js'
 import { streamRecords } from '../../lib/transcriptTail.js'
 import type { HistoryPage } from '../../lib/transcriptPages.js'
-import type { RegisteredSession } from '../../lib/registry.js'
-import type { HistoryAsk, HistoryAnswer } from '../facets/transcript.js'
+import type { HistoryAsk, HistoryAnswer, TranscriptSession } from '../facets/transcript.js'
 
 /** Fill in missing sub-agent aggregates on tool_end events by reading the sub-agent's own transcript
  *  (`<session>/subagents/agent-<id>.jsonl`). Async/background launchers only record
@@ -30,7 +29,7 @@ export async function enrichSubagentStats(events: SessionEvent[], transcriptPath
 }
 
 /** Bounded paging is shared machinery; each engine supplies its pager and replay rules. */
-export async function pagedHistory(session: RegisteredSession, { limit, before }: HistoryAsk,
+export async function pagedHistory(session: TranscriptSession, { limit, before }: HistoryAsk,
   page: (path: string, options: HistoryAsk) => Promise<HistoryPage>, replay: (lines: string[]) => SessionEvent[]): Promise<HistoryAnswer> {
   if (!session.transcriptPath) return { events: [], timestamp: new Date(session.touchedAt).toISOString(), hasMore: false, oldestCursor: null }
   const found = await page(session.transcriptPath, limit ? { limit, before } : {})

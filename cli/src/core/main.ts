@@ -87,6 +87,8 @@ import { createInput } from './input.js'
 import { createQuestions } from './questions.js'
 import { createTurnActivity } from './turns/activity.js'
 import { createLastTurnReader } from './transcripts/lastTurn.js'
+import { createEngineReaders } from './engines/readers.js'
+import { READER_SERVICES } from '../engines/worker/protocol.js'
 import { createRecaps } from './turns/recaps.js'
 import { createUpdateHandoff, handOverOnceReleased, probeStagedMaster, type TeardownStep } from './updateHandoff.js'
 import { needsUpdaterBeside, startUpdaterBeside } from './updaterBeside.js'
@@ -783,6 +785,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   Object.assign(coreApi.terminals, createTerminalSessions({ agents: coreApi.agents, paneState: tmuxPaneState, processState: checkPidRuntime }))
   const account = (s = readAuthSession()): GatewayAccount => ({ machineId: s?.machineId ?? null, signIn: signInOf(s?.signInEpoch, s?.signInAcct), autonomousEnv: s?.autonomousEnv ?? env.AUTONOMOUS_ENV })
   let serviceLinksRef: ServiceLinks | null = null
+  const engineReaders = createEngineReaders({ isolated: outOfProcess, inline: inline?.engineTranscriptFor,
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) })
   const gatewayLink = outOfProcess.has('gateway') ? createGatewayLink({
     events: backend.fromGateway,
     notify: (frame) => serviceLinksRef?.notify('gateway', frame) ?? false,
@@ -976,7 +980,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const neverFoldedHistory = attach.neverFoldedHistory
   const replayedFirstTurn = attach.replayedFirstTurn
   // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
-  const history = createHistory({ resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
+  const history = createHistory({ readerFor: engineReaders.forEngine, resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
     pages: new TranscriptPager(), dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
     hermesDb: (s) => hermesDbForSession(s) })
   backend.historyProvider = history.sessionGet
@@ -1046,6 +1050,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // The turn's last text, for its recap, whatever the engine (core/transcripts/lastTurn.ts).
   const readLastTurn = createLastTurnReader({
+    readerFor: engineReaders.forEngine,
     bySession: (sessionId) => registry.bySession(sessionId),
     dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
     hermesDb: (s) => hermesDbForSession(s),
@@ -1140,10 +1145,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // An experiment's process runs once on, the devices' once there is one, models' and the gateway's once needed: a request asks.
     // Shell is in the always-running edge host, but its first request can beat that host's connection.
     // Hold it through the same bounded startup gate; after any disconnect, fail promptly as before.
-    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, 'models', 'gateway', 'shell']),
+    onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell']),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload) => (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
+    answer: async (service, query, payload) => engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
@@ -1162,6 +1167,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload) },
     binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
     connected: (service) => {
+      engineReaders.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
@@ -1169,6 +1175,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       devicesWake.connected(service)
     },
     disconnected: (service) => {
+      engineReaders.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()

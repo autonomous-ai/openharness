@@ -29,7 +29,8 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   side of the recaps: the turn lifecycle it tells them, and what it reads back.
 - `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
   and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
-- `engines/`: the engines' hooks.
+- `engines/`: hook coordination and the reader port. Claude Code/Codex history and last-turn readers
+  run in supervised workers; core passes snapshots, validates replies and owns binding/turn state.
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
   `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.
   `cardText.ts`: an engine's error, rewritten for a device's card.

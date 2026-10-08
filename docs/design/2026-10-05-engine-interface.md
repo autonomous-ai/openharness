@@ -1,5 +1,10 @@
 # Engines behind one interface
 
+> Process pilot: Claude Code and Codex history/last-turn reads now run in supervised workers. Other
+> facets remain in core. See [the reader contract](2026-10-07-engine-readers.md) for scope, limits,
+> failure behavior and compatibility. This is not complete engine isolation.
+
+
 > **Status, 2026-10-07: resumed by the owner, a few engines per batch.** The first batch moves Claude
 > Code and Codex launch contracts, paged history and last-turn reads behind an `Engine` interface. It
 > preserves their existing argv and transcript behavior. The second batch moves their hook installation,
