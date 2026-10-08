@@ -76,6 +76,11 @@ jobs:
             .github
             scripts
       - name: Validate the integration workflows
+        # actionlint needs Go 1.25 or newer, and `go run` otherwise switches to the newest toolchain it is told of.
+        # On 2026-10-08 that was go1.26.9, listed before it was published (proxy and checksum database: 404), and
+        # every PR's planning failed. A toolchain that exists keeps planning off Go's release timing.
+        env:
+          GOTOOLCHAIN: go1.26.8
         run: >-
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           .github/workflows/ci.yml .github/workflows/cli-e2e.yml .github/workflows/ci-health.yml
