@@ -831,6 +831,20 @@ void main() {
     expect(box.agentStatus('terminal'), isNull);
   });
 
+  test('a default agent that cannot be installed here still asks for another', () async {
+    final fixture = _Fixture();
+    fixture.connection.replies['engines_probe'] = (_) => {
+      'engines': [
+        {'engine': 'opencode', 'installed': false, 'installable': false},
+      ],
+    };
+    final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
+    addTearDown(box.dispose);
+    await _settle();
+    expect(box.engine, 'opencode');
+    expect(box.requiredChoice?.message, 'OpenCode is unavailable. Choose an agent.');
+  });
+
   test('a remembered agent that is no longer installed still asks for a replacement', () async {
     final fixture = _Fixture();
     fixture.connection.replies['engines_probe'] = (_) => {

@@ -296,7 +296,16 @@ Future<Map<String, List<String>?>> _refreshRemoteBranches(
 /// Whether [path] or a folder above it holds `.git`: a directory, or the file
 /// a linked worktree has.
 Future<bool> _insideGitCheckout(String path) async {
-  var dir = p.normalize(p.absolute(path));
+  // git resolves the folder physically: ~/proj linked into a repository's
+  // packages/app is in that repository though nothing above ~/proj says so.
+  final String real;
+  try {
+    real = await Directory(path).resolveSymbolicLinks();
+  } on FileSystemException {
+    // Gone or unreadable: let git give its own answer.
+    return true;
+  }
+  var dir = p.normalize(p.absolute(real));
   while (true) {
     final type = await FileSystemEntity.type(p.join(dir, '.git'));
     if (type != FileSystemEntityType.notFound) return true;

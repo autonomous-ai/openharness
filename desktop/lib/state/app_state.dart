@@ -9519,6 +9519,12 @@ class AppNotifier extends ChangeNotifier {
     String successor,
   ) async {
     final machineId = machine.machine.machineId;
+    // An explicit Close or a Change agent owns these panes until it finishes,
+    // as [_removeAgent] honours; a shell must not take them from under it.
+    if (_closingViewAgents.containsKey((machineId, agentId)) ||
+        _agentChanges[(machineId, agentId)]?.preservingViews == true) {
+      return;
+    }
     final terminals = allPanes
         .where((p) => p.machineId == machineId && p.agentId == agentId)
         .toList();

@@ -1237,18 +1237,31 @@ class NewHarnessController extends ChangeNotifier {
     // The desktop composer is where almost every first task is typed. Without
     // this its harnesses kept the clock name (`opencode-2026-10-08-13-24`,
     // "Untitled Pane") unless something else happened to rebuild the project.
-    _followTask();
+    _followTask(debounce: true);
     notifyListeners();
   }
 
+  Timer? _projectRefresh;
+
   /// A suggested project follows the task it will be named after; a name the
-  /// person typed is theirs and stays.
-  void _followTask() {
+  /// person typed is theirs and stays. Typed in the composer, the check for a
+  /// taken folder name (a directory listing, or a request to a remote machine)
+  /// waits for a pause rather than running on every keystroke; Start reserves
+  /// the folder itself either way.
+  void _followTask({bool debounce = false}) {
     if (_project.generated case final suggested?) {
       final next = _generatedProject();
       if (next.generated?.generatedTask != suggested.generatedTask) {
         _project = next;
-        unawaited(_refreshGeneratedProject());
+        _projectRefresh?.cancel();
+        if (debounce) {
+          _projectRefresh = Timer(
+            const Duration(milliseconds: 300),
+            () => unawaited(_refreshGeneratedProject()),
+          );
+        } else {
+          unawaited(_refreshGeneratedProject());
+        }
       }
     }
   }
@@ -1426,11 +1439,15 @@ class NewHarnessController extends ChangeNotifier {
         message: '$harnessLabel is unavailable. Choose an agent or harness.',
       );
     }
+    final engineState = machine.engines[_engine];
     if (!compatibleEngines.contains(_engine) ||
         (_rememberedAgent &&
-            _engineRemembered &&
             !_selectionTouched &&
-            machine.engines[_engine]?.installed == false)) {
+            engineState?.installed == false &&
+            // The product default installs on Create; one that cannot be
+            // installed here (a custom path that is gone, an ambiguous
+            // binary) is as unavailable as a remembered one.
+            (_engineRemembered || !engineState!.installable))) {
       return (
         field: _harnessId == null
             ? NewHarnessField.harness
@@ -3697,6 +3714,7 @@ class NewHarnessController extends ChangeNotifier {
     // Its files were copied out for delivery; only the list goes.
     attachments?.dispose();
     _appTick?.cancel();
+    _projectRefresh?.cancel();
     _listDebounce?.cancel();
     app.removeListener(_onApp);
     _modelUsage?.removeListener(_refresh);

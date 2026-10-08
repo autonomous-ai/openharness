@@ -68,6 +68,23 @@ Future<bool> _checkout(String _) async => true;
 void main() {
   // A fresh Mac's /usr/bin/git is Apple's installer stub (exit 1): a folder that
   // is not a checkout must read as one without starting git at all.
+  test('a folder linked into a checkout is read as part of it', () async {
+    final root = await Directory.systemTemp.createTemp('harness-linked-');
+    addTearDown(() => root.delete(recursive: true));
+    final repo = await Directory('${root.path}/repo/packages/app').create(recursive: true);
+    await Directory('${root.path}/repo/.git').create();
+    final link = await Link('${root.path}/proj').create(repo.path);
+    var started = 0;
+    await readLocalGitProject(
+      link.path,
+      startProcess: (_, _) async {
+        started++;
+        return _GitProcess(code: 128);
+      },
+    );
+    expect(started, greaterThan(0));
+  });
+
   test('a folder with no .git above it is not a Git project, and git is never started', () async {
     final folder = await Directory.systemTemp.createTemp('harness-plain-');
     addTearDown(() => folder.delete(recursive: true));
