@@ -11,6 +11,16 @@ Preview 12 adds one-action updates, including mouse activation, while preserving
 running agents and terminals. Remote-launcher argument tests passed but remote
 display/SSH interaction is still unverified.
 
+## Test artifact retention
+
+After a test passes and its VMs stop, discard its writable disk copies. Retain
+logs and receipts; do not archive `guest.raw`, `target.raw`, `encrypted.raw` or
+maintenance disks in task worktrees. The Asahi acceptance drivers enforce this
+after writing a passing receipt. Failed disks are temporary diagnosis artifacts:
+remove them when the diagnosis/task ends. Remove downloaded fixture images when
+the task ends too; Actions retains the reproducible producer artifacts. Never
+remove an active VM disk or an original input during a test.
+
 ## Next release priorities
 
 ### NVIDIA readiness
