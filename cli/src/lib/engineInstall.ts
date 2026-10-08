@@ -7,7 +7,7 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { isTerminalEngine, type AgentEngine, type ProcessEngine } from '../engines/types.js'
 
 /** How to find the executable after the installer returns. */
@@ -156,3 +156,49 @@ export function engineInstallPaths(recipe: EngineInstallRecipe): string[] {
 export const INSTALLABLE_ENGINES: ReadonlySet<AgentEngine> = new Set(
   Object.keys(ENGINE_INSTALL) as AgentEngine[],
 )
+
+/**
+ * How long one engine's install may run with nobody watching (`harness engines install-missing`)
+ * before it is killed and reported failed. A healthy one takes seconds: OpenCode's native installer
+ * about fourteen, an npm package under a minute on a slow line. Ten minutes is for a network that is
+ * merely bad; past it the install is hung (a download that stalled without closing), and a pane
+ * waiting on its lock is better off trying for itself.
+ */
+export const ENGINE_INSTALL_TIMEOUT_MS = 10 * 60_000
+
+/**
+ * Where the install locks live: one folder per engine being installed (`engineInstallLockPath`).
+ *
+ * Product-root state, under the home rather than a daemon's data folder, because what the lock
+ * guards is shared by every process of this OS user: a pane of the release daemon, a pane of a dev
+ * daemon and the desktop's background install (`harness engines install-missing`) all install into
+ * the same `~/.local` or `~/.opencode`. Two npm installs of one package into one prefix at once
+ * leave it half written, which is what the lock is for.
+ */
+export function engineInstallLockDir(): string {
+  return join(homedir(), '.harness', 'run', 'engine-install')
+}
+
+/**
+ * The lock for one recipe, named by the executable it installs (`opencode.lock`, `claude.lock`), so
+ * a pane and the background install of the same engine find the same lock whichever of them built
+ * the recipe. A test fixture names its executable by path; only a plain file name is used.
+ */
+export function engineInstallLockPath(recipe: EngineInstallRecipe): string {
+  const name = basename(recipe.executable.names[0] ?? 'engine').replace(/[^A-Za-z0-9._-]/g, '_') || 'engine'
+  return join(engineInstallLockDir(), `${name}.lock`)
+}
+
+/** The vendor names an install line uses (docs/naming-system.md keeps them intact). */
+const VENDOR_NAMES: Readonly<Record<string, string>> = {
+  opencode: 'OpenCode',
+  claude: 'Claude Code',
+  codex: 'Codex',
+  pi: 'pi',
+}
+
+/** What an install line calls the engine: the vendor's name, else the command a person would type. */
+export function engineInstallName(recipe: EngineInstallRecipe): string {
+  const command = basename(recipe.executable.names[0] ?? '')
+  return VENDOR_NAMES[command] ?? (command || 'the engine')
+}

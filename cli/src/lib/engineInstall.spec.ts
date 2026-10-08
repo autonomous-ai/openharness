@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import { PROCESS_ENGINES } from '../engines/types.js'
 import { ENGINE_INSTALL } from './engineInstall.js'
-import { buildEngineLaunchArgv } from './engineLaunch.js'
+import { backgroundInstallArgv, buildEngineLaunchArgv } from './engineLaunch.js'
+import { engineBin } from './engineBin.js'
+import { existsSync } from 'node:fs'
 import { launchScriptOf } from '../testing/launchScript.js'
 
 const OFFICIAL_COMMANDS = {
@@ -54,6 +56,17 @@ describe('ENGINE_INSTALL', () => {
       ))
       expect(script).toContain('harness_find_engine')
       expect(() => execFileSync('/bin/sh', ['-n', '-c', script])).not.toThrow()
+    }
+  })
+
+  it('generates valid POSIX background install scripts for every recipe, in every shell one may run in', () => {
+    const shells = ['/bin/sh', '/bin/bash', '/bin/zsh', '/bin/dash'].filter(existsSync)
+    for (const engine of PROCESS_ENGINES) {
+      for (const shell of shells) {
+        const script = launchScriptOf(backgroundInstallArgv(engineBin(engine), ENGINE_INSTALL[engine], shell))
+        expect(script).toContain('harness_install_lock')
+        expect(() => execFileSync(shell, ['-n', '-c', script]), `${engine} in ${shell}`).not.toThrow()
+      }
     }
   })
 })
