@@ -2162,6 +2162,9 @@ class AppNotifier extends ChangeNotifier {
     machine.connectionStatus = settling
         ? ConnectionStatus.connecting
         : nextStatus;
+    if (kTypingTrace) {
+      typingEvent('link ${_shortId(machineId)} → ${nextStatus.name}');
+    }
     if (nextStatus == ConnectionStatus.connected) {
       _refreshDeviceLogAfterReconnect();
       machine.needsLink = false;
@@ -2442,7 +2445,13 @@ class AppNotifier extends ChangeNotifier {
   /// for as long as somebody keeps typing would never run at all.
   static const _typingWaitLimit = Duration(seconds: 60);
 
-  /// Per machine, a tick waiting for the typing on it to stop — see [_agentSyncTick].
+  /// How far short of a whole [agentSyncInterval] a list may have been read and still let a tick
+  /// run: a tick's own list is read a second or two after the tick, so the next one finds it a
+  /// little under an interval old, and that is the clock working, not a list read lately.
+  static const _listedLatelySlack = Duration(seconds: 15);
+
+  /// Per machine, a tick waiting — for the typing on it to stop, or for its list to come due —
+  /// see [_agentSyncTick].
   final Map<String, Timer> _agentSyncHolds = {};
 
   /// Whether somebody is typing into a terminal on [machineId]: a keystroke sent to it in the last
@@ -2461,6 +2470,14 @@ class AppNotifier extends ChangeNotifier {
   /// that finds a keystroke gone in the last [_typingQuiet] waits that long and looks again, up to
   /// [_typingWaitLimit] from when it was due; the periodic ticks meanwhile leave it to the one
   /// waiting.
+  ///
+  /// ⚠️ **Due one interval after the list was last read, not on the timer's own clock.** Find
+  /// opening ([reachAllMachines]) and a push that falls back to a reload read the whole list as
+  /// well, and a tick landing a minute later asked the machine for the same answer again — a second
+  /// or two of its queue, keystrokes included, for nothing. A list read over this socket within the
+  /// interval did the tick's job, liveness included (it was answered), so the tick waits until that
+  /// list comes due and looks again. The gap between two answered lists stays one interval, which
+  /// is what [agentSyncStaleTicks] counts on.
   void _agentSyncTick(String machineId, DateTime dueSince) {
     final machine = machineStates[machineId];
     if (machine == null) {
@@ -2469,6 +2486,25 @@ class AppNotifier extends ChangeNotifier {
     }
     if (_agentSyncHolds.containsKey(machineId)) return;
     final now = DateTime.now();
+    final listedAt = machine.agentsListedAt;
+    final sinceListed = listedAt == null ? null : now.difference(listedAt);
+    // A clock set back puts the list in the future: no telling when it was read, so the tick runs.
+    if (sinceListed != null &&
+        !sinceListed.isNegative &&
+        sinceListed < agentSyncInterval - _listedLatelySlack) {
+      if (kTypingTrace) {
+        typingEvent(
+          'list tick ${_shortId(machineId)}: read ${sinceListed.inSeconds}s ago,'
+          ' waits ${(agentSyncInterval - sinceListed).inSeconds}s',
+        );
+      }
+      _agentSyncHolds[machineId] = Timer(agentSyncInterval - sinceListed, () {
+        _agentSyncHolds.remove(machineId);
+        if (_disposed || !_agentSyncTimers.containsKey(machineId)) return;
+        _agentSyncTick(machineId, DateTime.now());
+      });
+      return;
+    }
     if (_typingOn(machineId, now) &&
         now.difference(dueSince) < _typingWaitLimit) {
       _agentSyncHolds[machineId] = Timer(_typingQuiet, () {
@@ -2530,7 +2566,25 @@ class AppNotifier extends ChangeNotifier {
   /// list from before its Harness restarted, with every agent made since
   /// invisible — and, with the list feeding `deskGroups`, a desk tab whose
   /// harnesses had all silently vanished off the phone.
+  ///
+  /// ⚠️ **One at a time per machine.** A phone back from minutes in the background finds every
+  /// timer due at once — a tick held for a fresh list ([_agentSyncTick]) and the periodic one
+  /// beside it — and both asked the machine for the whole list in the same instant (measured,
+  /// 2026-10-08).
   Future<void> _syncAgentsIfChanged(MachineState machine) async {
+    final machineId = machine.machine.machineId;
+    if (!_agentSyncInFlight.add(machineId)) return;
+    try {
+      await _syncAgentsOnce(machine);
+    } finally {
+      _agentSyncInFlight.remove(machineId);
+    }
+  }
+
+  /// Per machine, a [_syncAgentsIfChanged] still waiting on its answer.
+  final Set<String> _agentSyncInFlight = {};
+
+  Future<void> _syncAgentsOnce(MachineState machine) async {
     if (machine.connectionStatus != ConnectionStatus.connected) return;
     if (machine.agentsLoadInFlight != null) {
       return; // a real (foreground) load already owns this tick
@@ -2538,12 +2592,20 @@ class AppNotifier extends ChangeNotifier {
     final machineId = machine.machine.machineId;
     final revision = _authRevision;
     final connection = _conn(machineId);
+    final tickAsked = kTypingTrace ? (Stopwatch()..start()) : null;
+    if (kTypingTrace) typingEvent('list tick ${_shortId(machineId)}: ask');
     try {
       final response = await connection.request(
         'agents_list',
         payload: kAgentsListPayload,
         timeout: const Duration(seconds: 10),
       );
+      if (tickAsked != null) {
+        typingEvent(
+          'list tick ${_shortId(machineId)}: answered'
+          ' in ${tickAsked.elapsedMilliseconds}ms',
+        );
+      }
       _agentSyncTimeouts.remove(machineId);
       if (!_machineWorkCurrent(machine, revision)) return;
       // ⚠️ A terminal switched off by a negotiation that never got an answer stayed off until
@@ -4012,11 +4074,11 @@ class AppNotifier extends ChangeNotifier {
     terminal.addListener(check);
   }
 
-  /// The longest a launch's agent list waits for the terminal on screen — see
-  /// [_yieldToLaunchTerminal].
-  static const _launchListYield = Duration(milliseconds: 1500);
+  /// The longest an agent list waits for the terminal on screen — see [_yieldToFocusedTerminal].
+  static const _listYield = Duration(milliseconds: 1500);
 
-  /// Let the terminal on screen answer before [machine]'s agent list is asked for — at launch only.
+  /// Let the terminal on screen answer before [machine]'s agent list is asked for — at launch, and
+  /// on a reconnect.
   ///
   /// ⚠️ **Why the list waits (owner, 2026-10-01).** The terminal a launch reopens and the machine's
   /// agent list left on the same connection in the same instant, and the terminal came second: on
@@ -4025,17 +4087,20 @@ class AppNotifier extends ChangeNotifier {
   /// agent at once, stopped ones included (`agents_list` in the CLI's `backendSocket.ts`), and the
   /// one stream somebody was waiting to type into queued behind it.
   ///
-  /// Nothing on screen needs the list first: a launch draws from last run's
-  /// ([MachineState.agentsFromCache]), which is also what limits this to a launch — a reconnect
-  /// already has a confirmed list, and asks at once as it always did. Over the moment the terminal
-  /// shows its first live frame or stops opening (failed, taken, gone), and after
-  /// [_launchListYield] whatever happens: the list never waits on a terminal that is not coming.
+  /// Nothing on screen needs the list first. A launch draws from last run's
+  /// ([MachineState.agentsFromCache]); a reconnect — back after minutes in the background, or
+  /// across a network change — still holds the list it read before the drop
+  /// ([_listHeldThroughDrop]), and reopens the
+  /// terminal from it ([_reopenFromHeldList]). Any other read waits for nothing: the list there
+  /// is the news somebody asked for. Over the moment the terminal shows its first live frame or
+  /// stops opening (failed, taken, gone), and after [_listYield] whatever happens: the list never
+  /// waits on a terminal that is not coming.
   ///
-  /// What it costs: for up to that long, an agent deleted elsewhere since the last run is still
-  /// drawn (`_AgentGone` in `terminal_page.dart` needs the real list), and the list's news — a new
-  /// agent, a rename — arrives that much later.
-  Future<void> _yieldToLaunchTerminal(MachineState machine) async {
-    if (!machine.agentsFromCache) return;
+  /// What it costs: for up to that long, an agent deleted elsewhere since the list was read is
+  /// still drawn (`_AgentGone` in `terminal_page.dart` needs the real list), and the list's news —
+  /// a new agent, a rename — arrives that much later.
+  Future<void> _yieldToFocusedTerminal(MachineState machine) async {
+    if (!machine.agentsFromCache && !_listHeldThroughDrop(machine)) return;
     final pane = focusedPane;
     final terminal = pane?.session;
     if (pane == null ||
@@ -4043,8 +4108,16 @@ class AppNotifier extends ChangeNotifier {
         pane.machineId != machine.machine.machineId) {
       return;
     }
-    await _untilTerminalLive(terminal, _launchListYield);
+    await _untilTerminalLive(terminal, _listYield);
   }
+
+  /// Whether [machine]'s agent list was read from it, but over a socket that has dropped since
+  /// ([MachineState.agentsListedAt] is cleared by the drop): a reconnect's list, still on screen
+  /// while the machine is asked again.
+  bool _listHeldThroughDrop(MachineState machine) =>
+      machine.agentLoadStatus == AgentLoadStatus.loaded &&
+      !machine.agentsFromCache &&
+      machine.agentsListedAt == null;
 
   /// Until [terminal] shows its first live frame or stops opening (failed, taken, gone) — and never
   /// longer than [bound], so nothing waits on a terminal that is not coming.
@@ -4483,6 +4556,12 @@ class AppNotifier extends ChangeNotifier {
     // went quiet from one that is answering everything else first (see the catch below).
     DateTime? listAskedAt;
     debugPrint('agents_list start: ${machine.machine.machineId}');
+    if (kTypingTrace) {
+      typingEvent(
+        'list load ${_shortId(machine.machine.machineId)}: start'
+        ' (had list: $hadAgents)',
+      );
+    }
     try {
       const inventoryTimeout = Duration(seconds: 10);
       // ⚠️ **The handshake has its OWN budget, and running out of it is not a
@@ -4533,11 +4612,15 @@ class AppNotifier extends ChangeNotifier {
         connection,
         revision,
       );
-      // The launch's own terminal first — see [_yieldToLaunchTerminal]. Outside [remaining]: the
-      // wait is the phone's choice, not the machine being slow to answer.
-      await _yieldToLaunchTerminal(machine);
+      // The terminal on screen first, at launch and on a reconnect — see [_yieldToFocusedTerminal].
+      // Outside [remaining]: the wait is the phone's choice, not the machine being slow to answer.
+      await _yieldToFocusedTerminal(machine);
       if (!_machineWorkCurrent(machine, revision)) return;
       listAskedAt = DateTime.now();
+      final asked = kTypingTrace ? (Stopwatch()..start()) : null;
+      if (kTypingTrace) {
+        typingEvent('list load ${_shortId(machine.machine.machineId)}: ask');
+      }
       final response = await StartupTrace.time(
         'agents.list',
         () => connection.request(
@@ -4572,6 +4655,12 @@ class AppNotifier extends ChangeNotifier {
         // Several machines answering together write once: a save asked for while an older one
         // still waits replaces it, and the encode is off the UI thread ([MachineCache.save]).
         _writeMachineCache(cache);
+      }
+      if (asked != null) {
+        typingEvent(
+          'list load ${_shortId(machine.machine.machineId)}: answered'
+          ' in ${asked.elapsedMilliseconds}ms (${agents.length} agents)',
+        );
       }
       _replaceAgents(machine, agents);
       machine.agentLoadStatus = AgentLoadStatus.loaded;
@@ -6614,7 +6703,15 @@ class AppNotifier extends ChangeNotifier {
       }
       final pending = machine.pendingOfflineAgentId;
       if (pending != null) {
-        unawaited(_recoverPendingAgent(machine, pending));
+        // Back from off, the list held is from before its Harness went away; otherwise only a
+        // socket dropped, and the list held still stands.
+        unawaited(
+          _recoverPendingAgent(
+            machine,
+            pending,
+            listStands: wasOnline != false,
+          ),
+        );
       } else if (_connectionReady(machineId) &&
           (wasOnline == false || panesFor(machineId).any(_paneNeedsAttach))) {
         // ⚠️ **A machine that was OFF and is back owes a fresh list, whether or
@@ -6707,11 +6804,35 @@ class AppNotifier extends ChangeNotifier {
         now.difference(said.at) < _relayOfflineStands;
   }
 
+  /// Machines whose [_recoverPendingAgent] began on a machine that had been away — see
+  /// [_reopenFromHeldList], which a later call must not run for them.
+  final Set<String> _recoveringAfterAway = {};
+
+  /// Bring the agent a lost socket was showing back on screen, once [machine] can be asked again.
+  ///
+  /// [listStands] says the machine itself never went away — only this phone's socket to it — so
+  /// the list read before the drop still names its agents ([_reopenFromHeldList]).
   Future<void> _recoverPendingAgent(
     MachineState machine,
-    String agentId,
-  ) async {
+    String agentId, {
+    bool listStands = false,
+  }) async {
     final machineId = machine.machine.machineId;
+    // ⚠️ **Before the in-flight check, and without a single await before it.** A return to the
+    // app usually starts a recovery from `/api/machines` while the socket is still dialling, and
+    // that one polls every 250ms — so when the socket came up, this call returned as a duplicate,
+    // the reconnect sent its `agents_list`, and the poll's reopen went out 40ms behind it, to wait
+    // out the whole list on the machine's queue all the same (measured on a phone, 254 agents,
+    // 2026-10-08). Run here, the reopen leaves inside `_onConnectionStatus`, before the list it
+    // starts, and the list then waits for it ([_yieldToFocusedTerminal]).
+    if (listStands &&
+        !_recoveringAfterAway.contains(machineId) &&
+        _reopenFromHeldList(machine, agentId)) {
+      return;
+    }
+    // Marked even when one is already running: that one asks the machine, and none after it may
+    // reopen from the held list while it does.
+    if (!listStands) _recoveringAfterAway.add(machineId);
     if (!_offlineRecoveryInFlight.add(machineId)) return;
     try {
       // E2EE and agents_list can become ready in separate frames after a
@@ -6761,7 +6882,40 @@ class AppNotifier extends ChangeNotifier {
       }
     } finally {
       _offlineRecoveryInFlight.remove(machineId);
+      _recoveringAfterAway.remove(machineId);
     }
+  }
+
+  /// [_recoverPendingAgent]'s first move on a socket that only dropped: the agent reopened from the
+  /// list read before the drop, now, rather than after the machine has listed every agent again.
+  /// False — nothing done — unless the socket is up, that list stands ([_listHeldThroughDrop]) and
+  /// it names the agent with a terminal to open; the caller then asks the machine, as it always did.
+  ///
+  /// Synchronous to the reopen: [selectAgent] moves the terminal to `opening` before its first
+  /// await, which is what the list's wait for it reads.
+  bool _reopenFromHeldList(MachineState machine, String agentId) {
+    final machineId = machine.machine.machineId;
+    if (_disposed ||
+        machine.nodeOnline != true ||
+        machine.pendingOfflineAgentId != agentId ||
+        !_connectionReady(machineId) ||
+        !_listHeldThroughDrop(machine) ||
+        !machine.terminalCapabilityAvailable) {
+      return false;
+    }
+    final agent = machine.agents.where((a) => a.id == agentId).firstOrNull;
+    if (agent == null || !agent.terminalAvailable) return false;
+    machine.pendingOfflineAgentId = null;
+    // The same two roads as the loop in [_recoverPendingAgent]: focus is not taken back from
+    // somebody who has moved to another machine meanwhile.
+    if (selectedMachineId == machineId) {
+      unawaited(
+        selectAgent(machineId, agentId, intent: AttachIntent.automatic),
+      );
+    } else {
+      notifyListeners();
+    }
+    return true;
   }
 
   /// Enable-time fallback: preserve the user's current choice and acknowledge it.
@@ -8163,6 +8317,13 @@ class AppNotifier extends ChangeNotifier {
   /// Safe to call on every resume. [WsPool.reconnectAll] skips connections that are already open
   /// and connections somebody closed on purpose, so a tab switch that cost nothing costs nothing.
   void handleAppResumed() {
+    if (kTypingTrace) {
+      final pane = focusedPane;
+      typingEvent(
+        'resume: app back in front, on'
+        ' ${pane == null ? '-' : '${_shortId(pane.machineId)}/${_shortId(pane.agentId ?? '-')}'}',
+      );
+    }
     _pool?.reconnectAll();
     // Back in front of the agent that was on screen: whatever it finished
     // while the phone was in a pocket has now been seen.

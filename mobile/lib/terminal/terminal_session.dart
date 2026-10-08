@@ -284,7 +284,8 @@ class TerminalSession extends ChangeNotifier {
   void notifyListeners() {
     if (kTypingTrace && status != _tracedStatus) {
       typingEvent(
-        'session ${_tracedStatus?.name ?? '-'} → ${status.name}'
+        'session ${agentId.length > 8 ? agentId.substring(0, 8) : agentId}'
+        ' ${_tracedStatus?.name ?? '-'} → ${status.name}'
         '${errorCode == null ? '' : ' ($errorCode)'}',
       );
       _tracedStatus = status;
@@ -1007,7 +1008,8 @@ class TerminalSession extends ChangeNotifier {
           if (frame.kind == TerminalBinaryKind.keyframe) {
             if (kTypingTrace) {
               typingEvent(
-                'out KEYFRAME seq=${frame.seq} ${frame.cols}×${frame.rows}'
+                'out KEYFRAME ${agentId.length > 8 ? agentId.substring(0, 8) : agentId}'
+                ' seq=${frame.seq} ${frame.cols}×${frame.rows}'
                 ' ${bytes.length}B (status=${status.name}) — replaces the terminal',
               );
             }

@@ -194,7 +194,40 @@ class _BodyState extends State<_Body> {
     final drawn = phoneMachineGroupedRows(groups);
     final terms = query.isEmpty ? const <String>[] : phoneSearchTerms(query);
     final now = DateTime.now();
-    return ListView(
+    // ⚠️ **Built as they scroll in, not all at once** — Find's rule (`PhoneSearchResults._find`).
+    // This screen rebuilds on every notify and every preview the store publishes, and an eager list
+    // made every row's widget each time, its content snippet included: a few hundred agents for the
+    // dozen on screen.
+    final items = <Widget Function()>[];
+    // Where each row and heading is, so one keeps its own element when the ranking moves it.
+    final itemAt = <String, int>{};
+    for (final group in groups) {
+      final header = 'machine:${group.machineId}';
+      itemAt[header] = items.length;
+      items.add(
+        () => KeyedSubtree(
+          key: ValueKey(header),
+          child: _MachineHeader(notifier: notifier, group: group),
+        ),
+      );
+      for (final row in group.rows) {
+        itemAt[row.id] = items.length;
+        items.add(
+          () => PhoneSearchRow(
+            key: ValueKey(row.id),
+            row: row,
+            terms: terms,
+            now: now,
+            openable: row.entry?.isOpenable ?? false,
+            resuming: _resuming == row.id,
+            busy: _resuming != null,
+            quote: phoneContentSnippet(row, terms, notifier.sessionPreviews),
+            onTap: () => _open(drawn, row),
+          ),
+        );
+      }
+    }
+    return ListView.builder(
       // The keyboard may be up and the finger already on the glass; dragging the list is how
       // somebody reaches a row without putting it away first.
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
@@ -204,22 +237,10 @@ class _BodyState extends State<_Body> {
         16,
         MediaQuery.paddingOf(context).bottom + 16,
       ),
-      children: [
-        for (final group in groups) ...[
-          _MachineHeader(notifier: notifier, group: group),
-          for (final row in group.rows)
-            PhoneSearchRow(
-              row: row,
-              terms: terms,
-              now: now,
-              openable: row.entry?.isOpenable ?? false,
-              resuming: _resuming == row.id,
-              busy: _resuming != null,
-              quote: phoneContentSnippet(row, terms, notifier.sessionPreviews),
-              onTap: () => _open(drawn, row),
-            ),
-        ],
-      ],
+      itemCount: items.length,
+      itemBuilder: (context, i) => items[i](),
+      findChildIndexCallback: (key) =>
+          key is ValueKey<String> ? itemAt[key.value] : null,
     );
   }
 
