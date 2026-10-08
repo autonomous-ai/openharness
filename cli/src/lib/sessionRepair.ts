@@ -23,7 +23,8 @@ import { headBytes } from '../engines/kit/continuation.js'
 import { findSessionFileOf, sessionMetaOf } from '../engines/sessionFiles.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
-import { hermesDbPath } from '../engines/hermes/contract.js'
+import { HERMES_HOMES, hermesDbPath } from '../engines/hermes/contract.js'
+import { listStoreHomes } from '../engines/kit/storeHomes.js'
 import { loadEngine, type InProcessModules } from '../engines/inProcess.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 import { sessionRoots } from './engineHomes.js'
@@ -327,8 +328,8 @@ export async function findLiveSession(
   const real = await realpath(cwd).catch(() => cwd)
   const dirs = real === cwd ? [cwd] : [cwd, real]
   const dirList = placeholders(dirs.length)
-  // Muse's, Hermes's, Copilot's and agy's readers of their own files are their code, loaded where they are read
-  // (engines/inProcess.ts). An engine whose code could not be loaded has no repair answer: its process stays
+  // Muse's, Copilot's and agy's readers of their own files are their code, loaded where they are read
+  // (engines/inProcess.ts); Hermes's homes are declared (engines/hermes/contract.ts). An engine whose code could not be loaded has no repair answer: its process stays
   // unbound, as when nothing is found.
   switch (engine) {
     case 'pi':
@@ -406,9 +407,7 @@ export async function findLiveSession(
       // never rebind a profile agent after a restart (openharness#191). Each store is asked on its
       // own and the answers are pooled, so two homes claiming the same cwd is ambiguous — exactly as
       // two rows in one store already are — rather than "whichever home was listed first".
-      const hermes = await loadEngine('hermes')
-      if (!hermes) return null
-      const homes = await hermes.listHermesHomes()
+      const homes = await listStoreHomes(HERMES_HOMES, env.HERMES_HOME)
       const found: RepairedSession[] = []
       for (const home of homes) {
         const one = await dbEngineSession(

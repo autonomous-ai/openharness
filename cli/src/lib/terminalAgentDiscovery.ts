@@ -8,7 +8,7 @@ import {
 import { probeGatewayRuntime } from './gatewayRuntime.js'
 import { probeGridAssignment, type GridAssignment } from './gridAssignment.js'
 import { probeProfileHome } from '../engines/discoveries.js'
-import { probeHermesHome } from '../engines/hermes/homeProbe.js'
+import { loadEngine } from '../engines/inProcess.js'
 import { probeDsh } from '../dsh/probe.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
@@ -264,8 +264,12 @@ export async function probeTerminalAgents(
     agent.grid = await probeGridAssignment(agent.processIdentity, agent.engine, agent.args)
     // And, for Codex, the profile it runs under — a fact about the process the row cannot otherwise learn.
     agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine)
-    // …and, for Hermes, the home — same cached read, and it beats looking the session up in every store.
-    agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine)
+    // …and, for Hermes, the home — same cached read, and it beats looking the session up in every store. Read by
+    // Hermes's own code, loaded for a Hermes process alone (engines/inProcess.ts); without it the process could
+    // not be read, which never overwrites what the registry knows.
+    agent.hermesHome = agent.engine === 'hermes'
+      ? await (await loadEngine('hermes'))?.probeHermesHome(agent.processIdentity, agent.engine)
+      : null
     // And the DSH it was created as — same read, so a pane the daemon did not create is labelled too.
     agent.dsh = await probeDsh(agent.processIdentity)
   }))

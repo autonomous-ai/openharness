@@ -60,23 +60,24 @@ describe('session repair, with the other engines\' code loaded when asked', () =
   })
 
   it('has no answer for an engine whose code could not be loaded', async () => {
-    loader.refused = new Set(['muse', 'hermes', 'copilot', 'agy', 'pi'])
+    loader.refused = new Set(['muse', 'copilot', 'agy', 'pi'])
     try {
       expect(await repair.findLiveSession('muse', CWD, STARTED_AT)).toBeNull()
-      expect(await repair.findLiveSession('hermes', CWD, STARTED_AT)).toBeNull()
       expect(await repair.findLiveSession('copilot', CWD, STARTED_AT, { pid: 4242 })).toBeNull()
       expect(await repair.findLiveSession('agy', CWD, STARTED_AT, { pid: 4242 })).toBeNull()
       await expect(repair.findResumedTranscript('pi', 'abc123', { cwd: CWD })).rejects.toThrow('The Pi conversation location is unavailable.')
     } finally { loader.refused = new Set() }
   })
 
-  it('loads nothing for Claude Code, Codex, or an engine whose files it reads itself', async () => {
+  it('loads nothing for Claude Code, Codex, or an engine whose files or stores it reads itself', async () => {
     loader.asked.length = 0
     await repair.findLiveSession('claude', CWD, STARTED_AT)
     await repair.findLiveSession('codex', CWD, STARTED_AT)
     await repair.findResumedTranscript('claude', UUID)
     await repair.findLiveSession('grok', CWD, STARTED_AT)
     await repair.findLiveSession('pi', CWD, STARTED_AT)
+    // Hermes's homes are declared: its stores are read without its code.
+    await repair.findLiveSession('hermes', CWD, STARTED_AT)
     expect(loader.asked).toEqual([])
   })
 })

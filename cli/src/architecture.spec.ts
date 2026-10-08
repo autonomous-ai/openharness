@@ -258,9 +258,7 @@ const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
   'lib/sessionSearch/externals/muse.ts': '(o5) adoption\'s readers',
   'lib/sessionSearch/externals/opencode.ts': '(o5) adoption\'s readers',
   'engines/cursor/home.ts': '(o5) adoption\'s readers, through lib/sessionSearch/externals/index.ts',
-  'engines/hermes/home.ts': '(o6) homes: the hook server\'s admission and discovery\'s probe',
-  'engines/hermes/homeProbe.ts': '(o6) homes: discovery\'s probe',
-  'engines/hermes/reader.ts': '(o6) homes: the hook server\'s source check; (o5) adoption\'s readers',
+  'engines/hermes/reader.ts': '(o5) adoption\'s readers',
   'engines/opencode/sessionModel.ts': '(o6) launch data: retarget\'s session model',
   'engines/opencode/version.ts': '(o6) launch data: OpenCode\'s version',
   'lib/sessionSearch/externals/pi.ts': '(o5) adoption\'s readers',
@@ -293,6 +291,10 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['engines/kit/notifyHooks.ts', '(o6)'],
   ['lib/sessionCheckpoint.ts', '(o6)'],
   ['lib/purgeAgentService.ts', '(o6)'],
+  // Hermes's admission and homes, declared and read by the kit; its home probe, loaded for a Hermes process.
+  ['hookServer.ts', '(o6)'],
+  ['core/engines/hooks.ts', '(o6)'],
+  ['lib/terminalAgentDiscovery.ts', '(o6)'],
 ]
 
 describe('the daemon\'s shape', () => {
@@ -437,8 +439,8 @@ describe('the daemon\'s shape', () => {
     for (const [entry, batch] of FACETS_FREE_OF_THEM) {
       expect([...closureOf(entry).keys()].filter(theirs), `${entry}, free of their code since ${batch}`).toEqual([])
     }
-    // (o2) The start's hook step loads the other engines' installers through the loader. What else it reaches
-    // of theirs (the hook server's Hermes source check, the registry's layouts) leaves in (o6).
+    // (o2) The start's hook step loads the other engines' installers through the loader; since (o6) it reaches none
+    // of their code at all (above).
     expect(closureOf('core/engines/hooks.ts').has('lib/hooks.ts'), 'core/engines/hooks.ts loads lib/hooks.ts through engines/inProcess.ts').toBe(false)
     // What an engine declares is data the kit reads: its own walk reaches the kit, the engines' types and the
     // environment, and nothing of any engine's code.
