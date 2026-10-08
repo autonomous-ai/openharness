@@ -220,12 +220,7 @@ const EDGE: RegExp[] = [
  * The edge files the core's process still loads, each with the step of the plan that takes it out. The
  * list only shrinks: an entry no longer reached fails the test, so remove it with the move that ends it.
  */
-const CORE_MAY_REACH: Record<string, string> = {
-  // Devin keeps its conversations in Claude Code's message format, and its search reader replays them with Claude
-  // Code's normalizer: core reaches both through Devin's reader until adoption loads it lazily.
-  'engines/claude/normalize.ts': '(o5) Devin\'s search reader (lib/sessionSearch/externals/devin.ts → engines/devin/normalizer.ts)',
-  'lib/normalize.ts': '(o5) Devin\'s search reader, as above',
-}
+const CORE_MAY_REACH: Record<string, string> = {}
 
 /** The other twelve engines' own files: their folders but for the data they declare, their search readers, and the
  *  shared files that hold only their code. */
@@ -242,29 +237,7 @@ const theirs = (file: string): boolean => THEIRS.some((pattern) => pattern.test(
  * (docs/design/2026-10-08-other-engines-out-of-core.md, section 5). The list only shrinks: an entry no longer
  * reached fails the test, so remove it with the move that ends it. Empty, the core loads none of their code.
  */
-const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
-  'engines/copilot/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/devin/errorLog.ts': '(o5) adoption\'s readers',
-  'engines/devin/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/devin/reader.ts': '(o5) adoption\'s readers',
-  'engines/hermes/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/kilo/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/kilo/reader.ts': '(o5) adoption\'s readers',
-  'engines/opencode/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/opencode/reader.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/agy.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/commandcode.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/copilot.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/cursor.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/devin.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/grok.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/hermes.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/muse.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/opencode.ts': '(o5) adoption\'s readers',
-  'engines/cursor/home.ts': '(o5) adoption\'s readers, through lib/sessionSearch/externals/index.ts',
-  'engines/hermes/reader.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/pi.ts': '(o5) adoption\'s readers',
-}
+const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {}
 
 /** Core's entries for each facet, and the sub-batch after which they reach none of the other engines' files. */
 const FACETS_FREE_OF_THEM: Array<[string, string]> = [
@@ -307,6 +280,10 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['lib/engineLaunch.ts', '(o6)'],
   ['lib/gridLaunch.ts', '(o6)'],
   ['lib/subscriptionModel.ts', '(o6)'],
+  // Adoption: the other engines' readers, each loaded on the first scan or question that needs it.
+  ['lib/sessionSearch/externals/index.ts', '(o5)'],
+  ['lib/sessionSearch/external.ts', '(o5)'],
+  ['core/agents/adopt.ts', '(o5)'],
 ]
 
 describe('the daemon\'s shape', () => {
@@ -418,9 +395,9 @@ describe('the daemon\'s shape', () => {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(?!kit\/|facets\/|types\.ts$)/.test(file)), entry).toEqual([])
     }
     expect(parsedFile(join(SRC, 'engines/kit/adoption.ts')).imports.map(path => relative(SRC, path)).filter(file => /^engines\/(?!kit\/|facets\/)/.test(file))).toEqual([])
-    // Core's adoption reaches the two engines' code only through Devin's reader (CORE_MAY_REACH, (o5)).
-    const viaDevin = new Set(closureOf('lib/sessionSearch/externals/devin.ts').keys())
-    expect(theirs('lib/sessionSearch/externals/index.ts').filter(file => !viaDevin.has(file))).toEqual([])
+    // Core's adoption reaches none of the two engines' code: Devin's reader, which replays its store with Claude
+    // Code's normalizer, is loaded with Devin's code ((o5)).
+    expect(theirs('lib/sessionSearch/externals/index.ts')).toEqual([])
   })
 
   it('building a launch loads the engines\' declared launch contracts alone', () => {
