@@ -551,6 +551,11 @@ class _SwarmScreenState extends State<SwarmScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
+        // A computer new to Harness opens on agents, not on an empty box.
+        if (app.firstArrival.pending) {
+          if (await app.firstArrival.run(app)) return;
+          if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
+        }
         final setup = app.takeSetupTask();
         await _newAgent(
           task: setup?.task,

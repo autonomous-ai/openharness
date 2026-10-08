@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/model_manager_controller.dart';
 import '../companions/coding_memory_connection.dart';
+import 'first_arrival.dart';
 import 'harness_monitor_controller.dart';
 import 'agent_handoff_file.dart';
 import 'agent_switch_handoff.dart';
@@ -3006,6 +3007,7 @@ class AppNotifier extends ChangeNotifier {
        // without one (the tests) nothing is written anywhere.
        dial = DialState(paneLayoutStore?.storage),
        agentPreference = AgentPreference(paneLayoutStore?.storage),
+       firstArrival = FirstArrival(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        session = authSession,
        _store = configStore,
@@ -3144,6 +3146,9 @@ class AppNotifier extends ChangeNotifier {
   final DialState dial;
   final AgentPreference agentPreference;
   final ProjectHistory projectHistory;
+
+  /// The first workspace on a computer new to Harness opens with agents already in it.
+  final FirstArrival firstArrival;
 
   TerminalPane? get focusedPane {
     final id = focusedPaneId;
@@ -4161,6 +4166,7 @@ class AppNotifier extends ChangeNotifier {
         // ([AgentPrefetch.start] decides).
         if (result.plan.any((item) => item.step == EnvironmentStep.harness)) {
           agentPrefetch?.start();
+          firstArrival.begin(downloads: agentPrefetch?.started ?? false);
         }
         status = AppStatus.preparingEnvironment;
         result = await _installUnattended(result);
@@ -4555,6 +4561,7 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     await dial.restore();
+    await firstArrival.restore();
     if (!_authWorkCurrent(revision)) {
       _bootStatusMessage = null;
       return;
@@ -10512,15 +10519,16 @@ class AppNotifier extends ChangeNotifier {
     String query, {
     SearchWhen? when,
     int limit = 30,
+    Duration budget = const Duration(seconds: 4),
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     final elapsed = Stopwatch()..start();
-    const budget = Duration(seconds: 4);
     List<SessionContentHit>? hits;
     try {
       // Discovery is asynchronous. An unfinished index is not a final empty
       // answer; ask again briefly, within the same budget as one slow request.
-      for (var attempt = 0; attempt < 20; attempt++) {
+      final attempts = budget.inMilliseconds ~/ 200;
+      for (var attempt = 0; attempt < attempts; attempt++) {
         if (_disposed || !searchableMachineIds.contains(machineId)) return hits;
         final remaining = budget - elapsed.elapsed;
         if (remaining <= Duration.zero) return hits;
@@ -10541,7 +10549,7 @@ class AppNotifier extends ChangeNotifier {
         // Older daemons omit ready; retain their single-request behavior.
         if (reply['ready'] != false || reply['discoveryError'] == true)
           return hits;
-        if (attempt == 19 ||
+        if (attempt == attempts - 1 ||
             budget - elapsed.elapsed < const Duration(milliseconds: 200))
           return hits;
         await Future<void>.delayed(const Duration(milliseconds: 200));
