@@ -25,6 +25,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-vi
 .card-head{display:flex;align-items:center;gap:10px}
 .card-head h3{font-size:16px;margin:0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mark{flex:none;width:26px;height:26px;border-radius:6px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:14px}
+.logo{object-fit:contain;background:#2a2a2a;padding:2px}
 .badge{font-size:12px;color:#9fb0ff;background:#1d2450;border-radius:6px;padding:1px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px}
 .badge.warn{color:#ffd28a;background:#4a3511}
 .card-actions{margin-left:auto;display:flex;gap:6px;align-items:center}

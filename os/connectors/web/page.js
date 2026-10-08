@@ -27,6 +27,12 @@ function node(tag, text, className) {
   return element;
 }
 function mark(item) {
+  if (item.icon) {
+    const image = node("img", "", "mark logo");
+    image.src = item.icon;
+    image.alt = "";
+    return image;
+  }
   const tile = node("span", (item.name || "?").trim().charAt(0).toUpperCase(), "mark");
   tile.style.background = item.color || "#59634b";
   return tile;

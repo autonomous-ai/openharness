@@ -31,6 +31,10 @@ import oauth
 import renew
 
 ASSETS = Path(__file__).parent / "web"
+# Bundled service icons: Autonomous's connector icons, Simple Icons (CC0) and
+# the services' own favicons, so the page loads nothing from the network.
+ICONS = {path.stem: path.name for path in (ASSETS / "icons").iterdir() if path.suffix in (".png", ".svg")}
+ICON_TYPES = {".png": "image/png", ".svg": "image/svg+xml"}
 GATEWAY_CACHE_SECONDS = 60
 
 
@@ -119,10 +123,11 @@ def catalog(vault, offered=None):
     items = []
     for code, item in store.CATALOG.items():
         card = vault.status(code, tokens.get(code) or {})
-        card.update(description=item["description"], color=item["color"], auth=item["auth"], custom=False, reason="")
+        card.update(description=item["description"], color=item["color"], auth=item["auth"], custom=False, reason="",
+                    icon="/icons/" + ICONS[code] if code in ICONS else "")
         if item["auth"] == "app" and card["state"] == "not_connected":
             if not signed_in:
-                card["reason"] = "Sign in to Harness first (harness login)."
+                card["reason"] = "Needs harness login"
             elif offered and code not in offered:
                 card["reason"] = "Not available yet."
         items.append(card)
@@ -130,7 +135,8 @@ def catalog(vault, offered=None):
         if code in store.CATALOG:
             continue
         card = vault.status(code, token)
-        card.update(description=token.get("mcp_entry", {}).get("url", ""), color="#59634b", auth="custom", custom=True, reason="")
+        card.update(description=token.get("mcp_entry", {}).get("url", ""), color="#59634b", auth="custom", custom=True,
+                    reason="", icon="")
         items.append(card)
     return {"connections": items, "signed_in": signed_in}
 
@@ -181,7 +187,7 @@ class PageHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
+        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
         self.end_headers()
         self.wfile.write(raw)
 
@@ -221,6 +227,10 @@ class PageHandler(BaseHTTPRequestHandler):
         files = {"/": ("index.html", "text/html; charset=utf-8"),
                  "/style.css": ("style.css", "text/css; charset=utf-8"),
                  "/page.js": ("page.js", "text/javascript; charset=utf-8")}
+        # Only the names listed at start-up: never a path from the request.
+        icon = self.path.removeprefix("/icons/")
+        if icon in ICONS.values():
+            files[self.path] = ("icons/" + icon, ICON_TYPES[Path(icon).suffix])
         if self.path not in files:
             self.reply(404, {"error": "Not found."})
             return

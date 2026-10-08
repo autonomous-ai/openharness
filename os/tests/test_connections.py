@@ -480,6 +480,16 @@ class Page(Case):
         self.assertEqual(json.loads(raw)["state"], "not_connected")
         self.assertIsNone(self.vault.token("linear"))
 
+    def test_every_service_has_a_bundled_icon_and_only_those_are_served(self):
+        self.assertEqual(set(store.CATALOG) - set(connections.ICONS), set())
+        cards = json.loads(self.request("/api/connections", headers=self.auth())[2])["connections"]
+        status, headers, raw = self.request(cards[0]["icon"])
+        self.assertEqual(status, 200)
+        self.assertIn(headers["Content-Type"], ("image/png", "image/svg+xml"))
+        self.assertTrue(raw)
+        for path in ("/icons/../connection_store.py", "/icons/x.png", "/icons/"):
+            self.assertEqual(self.request(path)[0], 404, path)
+
     def test_add_custom_with_headers_and_bad_requests(self):
         body = {"name": "My Tools", "url": "https://tools.example/mcp", "headers": {"Authorization": "Bearer pat-fixture"}}
         status, _, raw = self.request("/api/custom", "POST", body, self.auth())
