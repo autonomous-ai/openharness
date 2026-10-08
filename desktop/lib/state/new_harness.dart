@@ -3605,9 +3605,16 @@ class NewHarnessController extends ChangeNotifier {
           ? firstMessage
           : null,
       // A new project named by the person, or after its task, names the agent
-      // too — until the engine titles the session. A clock-named one leaves
-      // it to the machine ("Solder harness 9-18 13:02").
-      name: projectFolderRequest?.agentName,
+      // too — until the engine titles the session. So does a first message
+      // sent into an existing folder: a returning user's second harness in
+      // their project read "Untitled Pane" until the engine titled it (fresh
+      // macOS VM, 2026-10-08). Only a harness started with nothing to say is
+      // left to the machine ("Solder harness 9-18 13:02").
+      name:
+          projectFolderRequest?.agentName ??
+          (takesTask && firstMessage.isNotEmpty
+              ? taskProjectTitle(firstMessage)
+              : null),
       attempt: attempt,
     );
     // Before the disposed check: on an empty tab the new pane replaces this

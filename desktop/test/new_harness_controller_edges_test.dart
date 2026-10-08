@@ -559,6 +559,23 @@ void main() {
     expect(create['projectName'], 'make-a-small-web-page-that');
   });
 
+  test('a first message into an existing folder names the agent too', () async {
+    final fixture = _Fixture();
+    final box = fixture.box(folder: '/work/repo');
+    await _settle();
+    box.setTask('Add a dark mode toggle\nand keep the colours');
+    await box.create();
+    final create = fixture.connection.requests('agent_create').single;
+    expect(create['name'], 'Add a dark mode toggle');
+    expect(create.containsKey('projectName'), isFalse);
+
+    final silent = _Fixture();
+    final empty = silent.box(folder: '/work/repo');
+    await _settle();
+    await empty.create();
+    expect(silent.connection.requests('agent_create').single.containsKey('name'), isFalse);
+  });
+
   test('a clock-named project leaves the agent for the machine to name', () async {
     final fixture = _Fixture();
     final box = fixture.box(folder: null, autoProject: true);
