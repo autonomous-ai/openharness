@@ -7,7 +7,7 @@ declares what it needs as data on its launch contract (`Engine.launch`, `engines
 Shared mechanics in `engines/kit` read that data, and core runs them in line.
 
 (c) is too large to land as one change. It is split into five sub-batches, each green on its own. This
-document records (c1) and (c2), which are done, and plans the other three.
+document records (c1), (c2) and (c3), which are done, and plans the other two.
 
 ## (c1) Launch argv and the pane script: done
 
@@ -171,6 +171,80 @@ lost its own walk (16 lines). **Came in:** `kit/resumeRepair.ts` (259), `kit/fol
 
 They reach no Claude Code or Codex file but the declared contracts and `rollout.ts`, the registry's until (c4).
 
+## (c3) Discovery and process matching: done
+
+Discovery runs on every pass, as the registry loads and at start-up. A new facet, `DiscoveryContract`
+(`engines/facets/discovery.ts`), declares what core reads off each engine's process and transcripts. Each engine
+declares it in `engines/{claude,codex}/discoveryContract.ts`, and `engines/discoveries.ts` composes what callers use.
+
+| Was | Now |
+| --- | --- |
+| Claude Code's and Codex's rows of `ENGINE_PROCESS_SIGNATURES` in `lib/tmux.ts` | `process.basenames` and `process.entrypoints`, spread into the table for every engine |
+| `claudeNativeInstallPath` in `lib/tmux.ts` | `process.versionedInstall` (`.local/share/claude/versions`), compiled once by `kit/processFacts.ts` and looked up as a plain property |
+| Claude Code's and Codex's rows of `RESUME_ARGS` in `lib/tmux.ts` | `resumeArgs`: the flags, the id's shape, and the flags under which the id is a parent's |
+| `codex` in `lib/gridAssignment.ts` `MODEL_IN_ARGV` | `modelInArgv` |
+| `lib/codexHomeProbe.ts` | `profile`: the variable a process carries and the setting naming the default. `kit/processFacts.ts` `profileFromEnv` reads it; `discoveries.ts` `probeProfileHome` is what the pass calls. |
+| `lib/claudeProject.ts`, and the `engine === 'claude'` checks in `lib/cwdRepair.ts` and `registry.register` | `projectFolder`: how a folder maps to a directory name, the marker, the field and the scan cap. `kit/projectFolder.ts` applies it; `discoveries.ts` `transcriptProject(engine)` is null for an engine with no such rule. `repairClaudeCwd` became `repairProjectCwds`. |
+
+### The same answers
+
+**Golden record.** `engines/discovery.golden.spec.ts` was recorded in its own commit, through a composition of the
+former code. It holds:
+
+- **222 process rows against every engine:** the score and evidence, and whether the row is an unresolved `agent`.
+  The rows cover native names, platform builds, npm and bun entrypoints, Claude's versioned native install and
+  decoys of it, help and version probes, Windows paths, and every other engine's.
+- **43 command lines against every engine:** the session resumed, and the permission mode and approval named.
+- **8 grid launches:** the model.
+- **13 environments:** the profile home.
+- **35 transcript cases:** whether a transcript is in a project directory, which folders it belongs to, the folder
+  it names for itself (past one read, with a character across reads, within a limit), and the start-up repair.
+
+Every case runs with `process.platform` pinned to darwin and to linux, and linux's are stored where they differ
+(none). The spec passes unchanged against the kit, and 12 one-line mutations each fail it:
+
+- Claude's install path, fork flag, resume flags, project marker and folder field;
+- Codex's model rule, profile variable and platform builds;
+- the kit's length bound, separator handling, real-path check and decoder.
+
+The former `claudeProject` and `codexHomeProbe` specs run their cases unchanged against the composition.
+
+### The discovery pass's time
+
+`discoverTerminalAgentsFromSnapshot` was timed on one fixed process table: 1,941 processes, with 60 panes running
+Claude Code (native, npm and the versioned install), Codex (native, npm and a platform build), OpenCode, Cursor, Pi
+and Hermes. Each pane runs helpers below it, and 1,400 unrelated processes sit beside them. The table was built
+once, with no file-identity evidence. Each run made 400 passes after 50 warm-up ones, and five runs alternated
+between the former code and this change on the same machine.
+
+| | Median of run medians | Runs' medians | Runs' minimums |
+| --- | --- | --- | --- |
+| Before (`f6abddcf6`) | 10.14 ms | 9.90 – 10.73 ms | 9.70 – 10.41 ms |
+| After | 10.31 ms | 10.17 – 10.83 ms | 9.91 – 10.50 ms |
+
+The difference, under 2%, is within the runs' spread. A first version that looked the versioned install up in a
+`Map` twice per row and engine cost about 4% in the same comparison, and is not what landed.
+
+### Core closure
+
+| | Lines | Files |
+| --- | --- | --- |
+| Before ((c2)) | 73,370 | 391 |
+| After | 73,488 | 394 |
+
+**Left:** `lib/claudeProject.ts` (92 lines) and `lib/codexHomeProbe.ts` (40). `lib/tmux.ts` is 16 lines shorter.
+**Came in:**
+
+- the two contracts (51 lines of data);
+- `engines/discoveries.ts` (87);
+- `kit/processFacts.ts` (36);
+- `kit/projectFolder.ts` (86).
+
+`architecture.spec.ts` lists the two removed files as edge files. A new closure test checks that the discovery modules
+reach no Claude Code or Codex file except the declared contracts and `rollout.ts`, which the registry holds until (c4):
+`tmux.ts`, `terminalAgentDiscovery.ts`, `gridAssignment.ts`, `cwdRepair.ts`, the registry, the composition and both
+kit modules.
+
 ## The plan for the rest of (c)
 
 The sub-batches are ordered by risk: pure functions first, then async writes, then the hot and synchronous
@@ -178,8 +252,7 @@ paths. Each one records today's behavior in a golden spec first, in its own comm
 
 | | Scope | Why it is in this place | Golden proof |
 | --- | --- | --- | --- |
-| **(c3) Discovery and process matching** | `lib/tmux.ts` process signatures and `RESUME_ARGS`, `claudeNativeInstallPath`, `lib/gridAssignment.ts` `MODEL_IN_ARGV`, `lib/codexHomeProbe.ts`, `lib/claudeProject.ts`, `lib/cwdRepair.ts`, and the moved homes in `lib/engineHomes.ts` (with the `CODEX_HOME` env literal at create and relaunch). | This is static data, but it is read for every process row on every discovery pass, and a wrong answer adopts or drops agents. | A recorded classification of a corpus of process rows: executable, argv, environment → engine, session, bypass, model, home. |
-| **(c4) Registry load and session identity** | The registry's Codex child-rollout repair (`lib/registry.ts` with `engines/codex/rollout.ts`), `lib/sessionRepair.ts` (about 190 of 716 lines), `lib/captureResumeIdentity.ts`, `lib/handoffDiscovery.ts`. | Synchronous, at load before any worker exists, and on the hook path. A wrong answer loses bindings at every restart. It goes after (c3) because it reuses (c3)'s homes. | Recorded transcripts and pid records → binding, session id and repair, read with the same bounds. |
+| **(c4) Registry load and session identity** | The registry's Codex child-rollout repair (`lib/registry.ts` with `engines/codex/rollout.ts`), `lib/sessionRepair.ts` (about 190 of 716 lines), `lib/captureResumeIdentity.ts`, `lib/handoffDiscovery.ts`, and the moved engine homes of `lib/engineHomes.ts` (with the `CODEX_HOME` env literal at create and relaunch), which the registry and session repair read. | Synchronous, at load before any worker exists, and on the hook path. A wrong answer loses bindings at every restart. The moved homes go with it, since the registry and session repair are what read them. | Recorded transcripts and pid records → binding, session id and repair, read with the same bounds. |
 | **(c5) Adoption readers and shared normalizers** | `lib/sessionSearch/externals/{claude,codex}.ts`, `lib/transcriptPages.ts`, `lib/transcriptReader.ts` and `lib/transcriptActivity.ts`. Also splitting the functions `engines/claude/normalize.ts` and `engines/codex/{normalizer,subagent}.ts` share with other engines into `engines/kit`. | The largest (1,000 to 2,000 lines) but async. Listing and paging sessions for adoption is not session control. Those readers may run in a worker, as long as adoption fails safe when it is down: refused with a reason, never a wrong session. | The adoption and paging specs, unchanged, plus a recorded corpus of transcripts → pages. |
 
 **Out of (c).** These stay as they are, as tables over every engine:

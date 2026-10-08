@@ -22,7 +22,8 @@ readers. Hook transport, process binding and event delivery stay with core. Thei
 worker ([hooks](../../../docs/design/2026-10-08-engine-hooks.md)). So are their launch specifics (`claude/launch.ts`,
 `codex/launch.ts`): Codex's pane startup probe and retry, its own-login provider, the harness context and env
 flags, folder trust and the resume repair, applied by `kit/launchStartup.ts`, `kit/launchArgs.ts`,
-`kit/folderTrust.ts` and `kit/resumeRepair.ts` ([launch](../../../docs/design/2026-10-08-engine-launch.md)). Claude Code and Codex history/last-turn reads,
+`kit/folderTrust.ts` and `kit/resumeRepair.ts`, and what discovery reads off their processes and transcripts
+(`claude/discoveryContract.ts`, `codex/discoveryContract.ts`, `kit/processFacts.ts`, `kit/projectFolder.ts`) ([launch](../../../docs/design/2026-10-08-engine-launch.md)). Claude Code and Codex history/last-turn reads,
 live transcript parsing, runtime profiles/catalogs, screen interpretation, submission readings, model-control drivers, question navigation and Codex's app-server connection run on demand in supervised workers;
 the other facets still run in core. Explicit inline mode and older masters retain inline implementations. See
 [hooks](../../../docs/design/2026-10-08-engine-hooks.md),

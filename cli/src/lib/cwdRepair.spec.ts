@@ -30,7 +30,7 @@ function transcript(project: string, sessionId: string, cwds: string[]): string 
 async function fixture() {
   const { registry } = await import('./registry.js')
   const { StoppedAgentStore } = await import('./stoppedAgents.js')
-  const { repairClaudeCwd } = await import('./cwdRepair.js')
+  const { repairProjectCwds: repairClaudeCwd } = await import('./cwdRepair.js')
   const store = new StoppedAgentStore(join(directory, 'stopped-agents'))
   const project = join(directory, 'repo')
   mkdirSync(join(project, 'cli'), { recursive: true })
@@ -48,7 +48,7 @@ async function fixture() {
   return { registry, store, repairClaudeCwd, project, open, bind, logs, log: (m: string) => { logs.push(m) } }
 }
 
-describe('repairClaudeCwd', () => {
+describe('repairProjectCwds (Claude Code rows)', () => {
   it('moves drifted live and archived rows to their transcript folder, leaves the rest alone, and is idempotent', async () => {
     const { registry, store, repairClaudeCwd, project, open, bind, logs, log } = await fixture()
     // Drifted: the row says the subfolder, the transcript lives under the project and names it on line 3.
