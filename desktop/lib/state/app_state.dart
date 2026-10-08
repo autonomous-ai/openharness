@@ -10963,10 +10963,11 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
-  /// How long, from its start, an OpenCode create waits for [agentPrefetch]: a download took
-  /// 7–12 s in the VM runs.
+  /// How long, from its start, a create waits for its agent's download beside setup
+  /// ([agentPrefetch]): OpenCode took 7–12 s in the VM runs, Codex and Claude Code (one npm, after
+  /// setup's Node) 20–40 s more.
   @visibleForTesting
-  Duration agentPrefetchWait = const Duration(seconds: 30);
+  Duration agentPrefetchWait = const Duration(seconds: 90);
 
   /// A Claude Code or Codex conversation Harness did not start, opened as a
   /// harness that resumes it, in its own folder (Cmd-P, `ExternalSessionRef`).
@@ -11280,13 +11281,14 @@ class AppNotifier extends ChangeNotifier {
         !machine.isLocalMachine &&
         creation._projectFolder?.isGenerated == true &&
         creation._projectNameRetries < 64;
-    // OpenCode still downloading beside setup ([AgentPrefetch]): the pane would start a second install
+    // An agent still downloading beside setup ([AgentPrefetch]): the pane would start a second install
     // of it. Waited for here, once the creation is registered (its tab and split are held), and only
-    // for what is left of [agentPrefetchWait] since the download began.
+    // for what is left of [agentPrefetchWait] since that download began.
+    final prefetchedEngine = choices['engine'];
     if (!creation.awaitingConfirmation &&
-        choices['engine'] == 'opencode' &&
+        prefetchedEngine is String &&
         machine.isLocalMachine) {
-      final download = agentPrefetch?.waitFor(agentPrefetchWait);
+      final download = agentPrefetch?.waitFor(prefetchedEngine, agentPrefetchWait);
       if (download != null) {
         await download;
         final moved = creation.background

@@ -119,43 +119,117 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('AgentPrefetch', () {
+    // Each test hands out one fake installer per process the prefetch starts, in order: OpenCode's,
+    // then the one npm for Codex and Claude Code.
+    AgentPrefetch prefetchWith({
+      required List<_Install> installs,
+      List<List<String>>? runs,
+      Set<String>? inPlace,
+      String? node = '/rt/node-v22/bin/node',
+      List<String>? lines,
+      DateTime Function()? now,
+    }) {
+      var next = 0;
+      return AgentPrefetch(
+        start: (executable, arguments) async {
+          runs?.add([executable, ...arguments]);
+          return installs[next++];
+        },
+        skip: () => false,
+        installed: (engine) => inPlace?.contains(engine) ?? false,
+        managedNode: () => node,
+        log: lines?.add ?? (_) {},
+        now: now,
+        nodePoll: const Duration(milliseconds: 5),
+      );
+    }
+
+    test('downloads OpenCode at once, then Codex and Claude Code with one npm through Harness\'s Node', () async {
+      final runs = <List<String>>[];
+      final opencode = _Install();
+      final npm = _Install();
+      final inPlace = <String>{};
+      final lines = <String>[];
+      final prefetch = prefetchWith(
+        installs: [opencode, npm],
+        runs: runs,
+        inPlace: inPlace,
+        lines: lines,
+      );
+      prefetch.start();
+      prefetch.start();
+      await pumpEventQueue();
+      expect(runs, hasLength(2));
+      expect(runs.first, [
+        '/bin/bash',
+        '-c',
+        'set -o pipefail; curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path',
+      ]);
+      expect(runs.last[2], contains("export PATH='/rt/node-v22/bin':"));
+      expect(runs.last[2], contains('NPM_CONFIG_PREFIX="\$HOME/.local"'));
+      expect(
+        runs.last[2],
+        contains('npm install -g @openai/codex @anthropic-ai/claude-code'),
+      );
+      expect(prefetch.progress.value.total, 3);
+      expect(prefetch.started, isTrue);
+
+      inPlace.add('opencode');
+      opencode.finish(0, 'Installed\n');
+      await pumpEventQueue();
+      expect(prefetch.progress.value.done, 1);
+      expect(prefetch.waitFor('opencode', const Duration(seconds: 90)), isNull);
+      expect(prefetch.waitFor('codex', const Duration(seconds: 90)), isNotNull);
+
+      inPlace.addAll(['codex', 'claude']);
+      npm.finish(0);
+      await prefetch.everything;
+      expect(prefetch.progress.value.finished, isTrue);
+      expect(lines, [
+        startsWith('OpenCode downloaded during setup in '),
+        startsWith('Codex and Claude Code downloaded during setup in '),
+      ]);
+    });
+
     test(
-      'runs the CLI recipe once, and settles when OpenCode is in place',
+      'waits for Harness\'s Node before npm, and gives up on it after a while',
       () async {
+        var node = null as String?;
         final runs = <List<String>>[];
-        final install = _Install();
-        final lines = <String>[];
-        var installed = false;
+        final opencode = _Install()..finish(0);
+        final npm = _Install();
+        var next = 0;
+        final installs = [opencode, npm];
         final prefetch = AgentPrefetch(
           start: (executable, arguments) async {
             runs.add([executable, ...arguments]);
-            return install;
+            return installs[next++];
           },
           skip: () => false,
-          installed: () => installed,
+          installed: (_) => false,
+          managedNode: () => node,
+          nodePoll: const Duration(milliseconds: 5),
+        )..start();
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(runs, hasLength(1), reason: 'no npm without Node');
+        node = '/rt/bin/node';
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(runs, hasLength(2));
+        npm.finish(0);
+        await prefetch.everything;
+
+        final lines = <String>[];
+        final never = AgentPrefetch(
+          start: (_, _) async => _Install()..finish(0),
+          skip: () => false,
+          installed: (_) => false,
+          managedNode: () => null,
           log: lines.add,
-        );
-        prefetch.start();
-        prefetch.start();
-        await pumpEventQueue();
-        expect(runs, [
-          [
-            '/bin/bash',
-            '-c',
-            'set -o pipefail; curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path',
-          ],
-        ]);
-        final waiting = prefetch.waitFor(const Duration(seconds: 30));
-        expect(waiting, isNotNull);
-        installed = true;
-        install.finish(0, 'Installed\n');
-        await waiting;
-        await pumpEventQueue();
-        expect(
-          lines.single,
-          startsWith('OpenCode downloaded during setup in '),
-        );
-        expect(prefetch.waitFor(const Duration(seconds: 30)), isNull);
+          nodePoll: const Duration(milliseconds: 5),
+          nodeWait: const Duration(milliseconds: 20),
+        )..start();
+        await never.everything;
+        expect(lines, contains(contains("Harness's Node never arrived")));
       },
     );
 
@@ -168,40 +242,46 @@ void main() {
         },
         skip: () => true,
       )..start();
-      expect(prefetch.waitFor(const Duration(seconds: 30)), isNull);
+      expect(prefetch.waitFor('opencode', const Duration(seconds: 30)), isNull);
+      expect(prefetch.everything, isNull);
+      expect(prefetch.started, isFalse);
       expect(started, isFalse);
     });
 
-    test('a download that leaves no OpenCode is logged as not finished, whatever its exit code', () async {
-      final install = _Install();
+    test('a download that leaves no agent is logged as not finished, whatever its exit code', () async {
       final lines = <String>[];
-      final prefetch = AgentPrefetch(
-        start: (_, _) async => install,
-        skip: () => false,
-        installed: () => false,
-        log: lines.add,
-      )..start();
-      final waiting = prefetch.waitFor(const Duration(seconds: 30));
-      install.finish(0, 'curl: (6) Could not resolve host\n');
-      await waiting;
+      final opencode = _Install();
+      final npm = _Install();
+      final prefetch = prefetchWith(installs: [opencode, npm], lines: lines);
+      prefetch.start();
       await pumpEventQueue();
-      expect(lines.single, contains('did not finish (exit 0'));
-      expect(lines.single, contains('the first harness installs it instead'));
+      opencode.finish(0, 'curl: (6) Could not resolve host\n');
+      npm.finish(0);
+      await prefetch.everything;
+      expect(lines.first, contains('did not finish (exit 0'));
+      expect(lines.first, contains('the pane installs it instead'));
     });
 
-    test('the wait budget counts from the download start, so a slow download delays one create at most', () {
+    test('the wait budget counts from each download\'s start, so a slow one delays one create at most', () async {
       var now = DateTime(2026, 10, 8, 12);
-      final install = _Install();
-      final prefetch = AgentPrefetch(
-        start: (_, _) async => install,
-        skip: () => false,
-        installed: () => false,
-        now: () => now,
-      )..start();
-      expect(prefetch.waitFor(const Duration(seconds: 30)), isNotNull);
+      final opencode = _Install();
+      final npm = _Install();
+      final prefetch = prefetchWith(installs: [opencode, npm], now: () => now);
+      prefetch.start();
+      await pumpEventQueue();
+      expect(
+        prefetch.waitFor('opencode', const Duration(seconds: 30)),
+        isNotNull,
+      );
       now = now.add(const Duration(seconds: 31));
-      expect(prefetch.waitFor(const Duration(seconds: 30)), isNull);
-      install.finish(0);
+      expect(prefetch.waitFor('opencode', const Duration(seconds: 30)), isNull);
+      expect(
+        prefetch.waitFor('cursor', const Duration(seconds: 30)),
+        isNull,
+        reason: 'never downloaded here',
+      );
+      opencode.finish(0);
+      npm.finish(0);
     });
 
     group('a computer that already has an agent engine', () {
@@ -262,6 +342,7 @@ void main() {
             return _Install()..finish(0);
           },
           skip: () => false,
+          managedNode: () => null,
         ),
       );
       addTearDown(app.dispose);
@@ -336,7 +417,8 @@ void main() {
         agentPrefetch: AgentPrefetch(
           start: (_, _) async => install,
           skip: () => false,
-          installed: () => installed,
+          installed: (_) => installed,
+          managedNode: () => null,
         ),
       );
       machine(local: true);
@@ -365,9 +447,9 @@ void main() {
       expect(connection.creates, hasLength(2));
     });
 
-    test('other agents never wait for it', () async {
-      await app.createAgent('m', engine: 'claude', folder: '/work');
-      expect(connection.creates.single['engine'], 'claude');
+    test('an agent not downloaded during setup never waits for it', () async {
+      await app.createAgent('m', engine: 'cursor', folder: '/work');
+      expect(connection.creates.single['engine'], 'cursor');
     });
 
     test('on another machine never waits for it', () async {
