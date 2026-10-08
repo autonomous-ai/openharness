@@ -221,7 +221,6 @@ const THEIRS: RegExp[] = [
   new RegExp(`^engines/${OTHERS}/(?!contract\\.ts$)`),
   new RegExp(`^lib/sessionSearch/externals/${OTHERS}\\.ts$`),
   /^lib\/(hooks|questionPane|legacyScreen|legacyPane|hermesHome|databaseHistory)\.ts$/,
-  /^core\/engines\/cursorTasks\.ts$/, /^core\/turns\/agyBackstop\.ts$/, /^core\/transcripts\/databaseHistory\.ts$/,
 ]
 const theirs = (file: string): boolean => THEIRS.some((pattern) => pattern.test(file))
 
@@ -231,15 +230,8 @@ const theirs = (file: string): boolean => THEIRS.some((pattern) => pattern.test(
  * reached fails the test, so remove it with the move that ends it. Empty, the core loads none of their code.
  */
 const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
-  'core/engines/cursorTasks.ts': '(o3) transcripts: Cursor\'s Task hooks, built on first use',
-  'core/transcripts/databaseHistory.ts': '(o3) transcripts: database history',
-  'core/turns/agyBackstop.ts': '(o3) transcripts: agy\'s backstop, built on first use',
-  'engines/amp/threadExport.ts': '(o3) transcripts: history',
-  'engines/cursor/pendingTasks.ts': '(o3) transcripts: Cursor\'s pending tasks',
-  'engines/cursor/subagent.ts': '(o3) transcripts: history and Cursor\'s Task hooks',
-  'engines/cursor/taskHookQueue.ts': '(o3) transcripts: Cursor\'s Task hooks',
-  'lib/databaseHistory.ts': '(o3) transcripts: database history',
-  'lib/hermesHome.ts': '(o3) transcripts: attach, history and last turn',
+  'engines/cursor/pendingTasks.ts': '(o6) Cursor\'s pending tasks, read at the start and cleared on Stop and forget: a declared file, then a lazy load',
+  'lib/hermesHome.ts': '(o6) homes: which Hermes store a session\'s history is in',
   'engines/agy/runtimeProfile.ts': '(o4) runtime profiles',
   'engines/amp/runtimeProfile.ts': '(o4) runtime profiles',
   'engines/commandcode/runtimeProfile.ts': '(o4) runtime profiles and model switching',
@@ -293,6 +285,15 @@ const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
 const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['core/engines/screens.ts', '(o1)'],
   ['lib/questionController.ts', '(o1)'],
+  // The live path, history and the last turn; and the core's own files that once held their code: Cursor's
+  // Task hooks, built from its code on first use, agy's backstop, and the database engines' history.
+  ['core/transcripts/ingest.ts', '(o3)'],
+  ['core/transcripts/attach.ts', '(o3)'],
+  ['core/transcripts/history.ts', '(o3)'],
+  ['core/transcripts/lastTurn.ts', '(o3)'],
+  ['core/transcripts/databaseHistory.ts', '(o3)'],
+  ['core/engines/cursorTasks.ts', '(o3)'],
+  ['core/turns/agyBackstop.ts', '(o3)'],
 ]
 
 describe('the daemon\'s shape', () => {
@@ -426,8 +427,11 @@ describe('the daemon\'s shape', () => {
     const reached = [...closure.keys()].filter(theirs).sort()
     expect(reached.filter((file) => !OTHER_ENGINES_CORE_MAY_REACH[file]), 'Load their code through engines/inProcess.ts (loadEngine), or declare what the core needs of it in engines/<name>/contract.ts.').toEqual([])
     expect(Object.keys(OTHER_ENGINES_CORE_MAY_REACH).filter((file) => !closure.has(file)), 'No longer loaded by the core: remove it from OTHER_ENGINES_CORE_MAY_REACH').toEqual([])
+    // Until (o6) gives the registry declared layouts, what it reaches of theirs is reached by whatever imports it
+    // (history.ts names a session's project through it, as the frames do).
+    const throughRegistry = new Set(closureOf('lib/registry.ts').keys())
     for (const [entry, batch] of FACETS_FREE_OF_THEM) {
-      expect([...closureOf(entry).keys()].filter(theirs), `${entry}, free of their code since ${batch}`).toEqual([])
+      expect([...closureOf(entry).keys()].filter((file) => theirs(file) && !throughRegistry.has(file)), `${entry}, free of their code since ${batch}`).toEqual([])
     }
     // (o2) The start's hook step loads the other engines' installers through the loader. What else it reaches
     // of theirs (the hook server's Hermes source check, the registry's layouts) leaves in (o6).

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TailHold } from '../../watcher/watcher.js'
 import { createAttach, type AttachDeps } from './attach.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import { createSessionNormalizers } from './normalizers.js'
 import type { RelaunchMark } from './relaunch.js'
 import type { PreparedLive } from '../engines/liveSessions.js'
@@ -68,6 +69,12 @@ const transcript = (lines: unknown[] = []): string => {
 const session = (engine: string, transcriptPath?: string, over: Partial<RegisteredSession> = {}): RegisteredSession =>
   ({ agentId: `${engine}-agent`, sessionId: `${engine}-s`, engine, transcriptPath, ...over }) as RegisteredSession
 
+// Each engine's code is loaded in this process before an attach folds; a test may say it could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
+
 const IDLE_AGY = 'done\n\n  ? for shortcuts'
 const started = (userMessage = 'go') => ({ type: 'turn_started', payload: { userMessage } })
 const CLAUDE_PROMPT = { type: 'user', message: { role: 'user', content: 'hello' }, uuid: 'u1' }
@@ -123,6 +130,47 @@ function remoteSetup(open = false) {
   const p = setup({ remoteLive: remote, liveFor: vi.fn(() => { throw new Error('isolated parser must stay in its worker') }) })
   return { ...p, remote, candidate, handle }
 }
+
+describe('the order of an attach of another engine\'s session', () => {
+  it('loads the engine\'s code, then folds, then starts the tail: no line can come before its normalizer', async () => {
+    let loaded!: () => void
+    const real = await loadEngine('muse')
+    vi.mocked(loadEngine).mockImplementationOnce(() => new Promise((settle) => { loaded = () => settle(real as never) }) as never)
+    const run = setup()
+    const path = transcript([{ any: 'line' }])
+    const attaching = run.attach.attachSession(session('muse', path))
+    await new Promise((settle) => setTimeout(settle, 20))
+    expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+    expect(run.normalizers.hasState('muse-s')).toBe(false)
+    loaded()
+    expect(await attaching).toBe(true)
+    expect(run.normalizers.museNormalizers.has('muse-s')).toBe(true)
+    expect(run.deps.watcher.addSession).toHaveBeenCalledTimes(1)
+    // Claude Code and Codex never ask for it.
+    vi.mocked(loadEngine).mockClear()
+    await setup().attach.attachSession(session('codex', transcript([])))
+    expect(loadEngine).not.toHaveBeenCalled()
+  })
+})
+
+describe('attaching a session whose engine\'s code could not be loaded', () => {
+  it('follows it with no normalizer or reader, says so, and folds nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(loadEngine).mockResolvedValueOnce(null as never).mockResolvedValueOnce(null as never)
+    const file = setup()
+    const path = transcript([{ any: 'line' }])
+    expect(await file.attach.attachSession(session('grok', path))).toBe(true)
+    expect(file.normalizers.hasState('grok-s')).toBe(false)
+    expect(file.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'grok-s', transcriptPath: path }), {})
+    expect(file.deps.emit).not.toHaveBeenCalled()
+    const store = setup()
+    expect(await store.attach.attachSession(session('opencode'))).toBe(true)
+    expect(store.normalizers.hasState('opencode-s')).toBe(false)
+    expect(warn).toHaveBeenCalledWith('[agent] grok-age attached without its engine\'s code · engine=grok · its transcript is not read')
+    expect(warn).toHaveBeenCalledWith('[agent] opencode attached without its engine\'s code · engine=opencode · its transcript is not read')
+    warn.mockRestore()
+  })
+})
 
 describe('attaching a session', () => {
   afterEach(() => {

@@ -1,6 +1,6 @@
 import { liveFor } from '../../engines/live.js'
 import { EventEmitter } from 'node:events'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import { AmpNormalizer } from '../../engines/amp/normalizer.js'
 import { CommandCodeNormalizer } from '../../engines/commandcode/normalizer.js'
@@ -14,6 +14,15 @@ import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../wat
 import { createIngest, type IngestDeps } from './ingest.js'
 import { createSessionNormalizers } from './normalizers.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
+import { engineNow, loadEngine, OTHER_ENGINES } from '../../engines/inProcess.js'
+
+// A test of the line path stands for an attach that has loaded the engines' code before their tails started
+// (core/transcripts/attach.ts); a test may say it is not there.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, engineNow: vi.fn(actual.engineNow) }
+})
+beforeAll(async () => { for (const engine of OTHER_ENGINES) await loadEngine(engine) })
 
 const CODEX_FAILED = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', error: { message: 'rate limited' } } })
 const COMMANDCODE_FAILED = JSON.stringify({ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Error: 500\nTrace ID: 932a' }] } })
@@ -143,6 +152,18 @@ describe('ingesting a transcript line', () => {
       run.ingest.ingestLine(line(engine, engine))
       expect(maps[engine].get(engine), `${engine} keeps its normalizer`).toBe(first)
     }
+  })
+
+  it('reads no events from a file engine\'s lines while its code is unavailable, and makes no normalizer', () => {
+    const engines = ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'commandcode']
+    const run = setup(Object.fromEntries(engines.map((engine) => [engine, engine])))
+    vi.mocked(engineNow).mockReturnValue(null)
+    for (const engine of engines) {
+      expect(run.ingest.ingestLine(line(engine, engine, engine === 'commandcode' ? COMMANDCODE_FAILED : '{}')), engine).toEqual([])
+      expect(run.normalizers.hasState(engine), engine).toBe(false)
+    }
+    expect(run.deps.announceTurnAborted).not.toHaveBeenCalled()
+    vi.mocked(engineNow).mockReset()
   })
 
   it('creates a live parser once, preserving the terminal fallback', () => {
