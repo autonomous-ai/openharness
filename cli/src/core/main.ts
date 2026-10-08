@@ -1,3 +1,5 @@
+import { createModelControls } from './engines/modelControls.js'
+import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
 import { legacyScreen } from '../lib/legacyScreen.js'
@@ -545,10 +547,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // An older master's explicit capability report selects compatibility. A failed worker never does.
   const isolatedLive = (engine: string): boolean => liveHosted
     && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
+  const modelControlHosted = masterRunsEngineModelControl(process.env, process.ppid)
+  const isolatedModelControl = (engine: string): boolean => modelControlHosted && isolatedLive(engine)
   const screenHosted = masterRunsEngineScreen(process.env, process.ppid)
   const isolatedScreen = (engine: string): boolean => screenHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted
     ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
@@ -563,6 +567,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
     handles: isolatedRuntime,
     resolve: id => registry.resolve(id), transport: runtimeTransport })
+  const modelControls = createModelControls({
+    handles: isolatedModelControl, inline: engine => inline?.modelControlFor(engine), resolve: id => registry.resolve(id),
+    call: (service, method, payload, waitMs) => serviceLinksRef?.call(service, method, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+    catalog: session => runtimeProfiles.codexCatalog(session), capture: captureTerminal,
+    text: (target, text, allowed) => submitTerminal(target, text, { allowed }), key: keyTerminal,
+    waitForModel: (id, ms) => runtimeProfiles.waitForModel(id, ms), waitForProfile: (id, ms) => runtimeProfiles.waitForProfile(id, ms),
+    confirmEffort: (id, effort) => runtimeProfiles.confirmEffort(id, effort),
+  })
   // An agent's Model/Effort choices, or every live agent's: what `models_list` answers (services/models.ts)
   // and the dial's picker reads, so neither can show a catalog the machine would not honour.
   const runtimeModels = (agentId?: string): Promise<RuntimeModelOption[]> => {
@@ -1190,7 +1202,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     onDemand: new Set([...experiments, ...DEVICES_ON_DEMAND, ...Object.values(READER_SERVICES), 'models', 'gateway', 'shell']),
     want: (service) => experimentHooks.want(service),
     // The gateway's first: its `backend` reads (the device key log) were refused below as NOT_AN_EXPERIMENT.
-    answer: async (service, query, payload) => engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
+    answer: async (service, query, payload) => await modelControls.answer(service, query, payload) ?? engineReaders.answer(service) ?? (service === 'gateway' && gatewayLink ? gatewayLink.answer(query, payload) : null) ?? deliveries.answer(service, query, payload)
       ?? await answerExperimentQuery(coreApi, experiments, service, query, payload)
       ?? await terminalWatch.answer(service, query, payload)
       ?? (service === 'orchestrator' ? orchestratorLink.answer(query, payload) : null)
@@ -1213,6 +1225,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       liveTransport.connected(service)
       runtimeTransport.connected(service)
       screenTransport.connected(service)
+      modelControls.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
@@ -1224,6 +1237,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       liveTransport.disconnected(service)
       runtimeTransport.disconnected(service)
       screenTransport.disconnected(service)
+      modelControls.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()
@@ -1300,6 +1314,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.models = () => ports.models ?? MODELS_OFF
 
   const runtimeController = new RuntimeProfileController({
+    modelControlFor: modelControls.forSession,
     readScreen: screens.read,
     manager: runtimeProfiles,
     getSession: (id) => registry.resolve(id),

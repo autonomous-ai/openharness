@@ -15,6 +15,7 @@
 export { engineTranscriptFor } from '../engines/transcripts.js'
 export { liveFor } from '../engines/live.js'
 export { screenFor } from '../engines/screens.js'
+export { modelControlFor } from '../engines/modelControls.js'
 export { runtimeFor } from '../engines/runtime.js'
 export { startGateway } from '../gateway/start.js'
 export { startCommandBar } from './commandBar.js'

@@ -122,7 +122,7 @@ describe('read-only engine worker', () => {
     const run = vi.fn(() => ({ stop: vi.fn() }))
     for (const [name, start] of [['claude', runClaudeReader], ['codex', runCodexReader]] as const) {
       const process = start({ ...opts, requests, run })
-      expect(run).toHaveBeenLastCalledWith({ name: `engine-${name}`, socketPath: opts.socketPath, machineId: opts.machineId, token: opts.token, requests })
+      expect(run).toHaveBeenLastCalledWith({ name: `engine-${name}`, socketPath: opts.socketPath, machineId: opts.machineId, token: opts.token, requests, onConnected: expect.any(Function), onDisconnected: expect.any(Function) })
       expect(process.stop).toBeTypeOf('function')
     }
     expect(runEngineReader('claude', opts).stop).toBeTypeOf('function')

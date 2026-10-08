@@ -51,7 +51,7 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 
 | Process | Services | Why its own | Started |
 |---|---|---|---|
-| `engine-claude`, `engine-codex` | history/last-turn readers and live parsers (`src/engines/worker/`) | engine parsing outside core; read-only snapshots and no core capabilities | on demand |
+| `engine-claude`, `engine-codex` | history, live parsers, runtime profiles, screens and model control (`src/engines/worker/`) | engine behavior outside core; snapshots and revocable model-control grants | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | always |
 | `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell | light pure-JS services: isolated from the core, not from each other | always |

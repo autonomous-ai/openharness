@@ -5,6 +5,7 @@
  * PERF_REPORT=<file> writes JSON; raw artifacts stay in its recorded private temporary directory.
  * Run alone. CPU is the core's process CPU (100% = one logical CPU), never the master's/children's.
  * PERF_READERS=1 additionally measures reader PIDs and history pages every 2 s; totals include them.
+ * PERF_MODEL_CONTROLS=1 adds a window of alternating model changes in the two engine types.
  * PERF_BUNDLE_SOURCE identifies an externally built baseline bundle; its bytes are hashed either way.
  * On macOS set HARNESS_PROCESS_IMAGES_ARTIFACT to a verified local build for release-like discovery.
  */
@@ -98,6 +99,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
     const warmup = knob('PERF_WARMUP_SECONDS', 20, 0, 120)
     const historyMiB = knob('PERF_HISTORY_MIB', 1, 0, 8)
     const measureReaders = process.env.PERF_READERS === '1'
+    const measureControls = process.env.PERF_MODEL_CONTROLS === '1'
     const profile = process.env.PERF_PROFILE === '1'
     const heaps = process.env.PERF_HEAP === '1'
     const bundle = process.env.E2E_BUNDLE_PATH
@@ -116,7 +118,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         dirty: Boolean(git('status', '--porcelain')), bundleSource: process.env.PERF_BUNDLE_SOURCE ?? git('rev-parse', 'HEAD'), bundleSha256: sha(bundle), preloadSha256: sha(preload) },
       machine: { platform: platform(), release: release(), node: process.version, logicalCpus: cpus().length,
         cpu: cpus()[0]?.model, ramBytes: totalmem(), tmux: execFileSync('tmux', ['-V'], { encoding: 'utf8', timeout: 5_000 }).trim() },
-      workload: { readerPageEveryMs: measureReaders ? 2000 : null, agents, active, windows: 2, terminalStreams: 4, seconds, warmup, historyMiB,
+      workload: { modelControls: measureControls, readerPageEveryMs: measureReaders ? 2000 : null, agents, active, windows: 2, terminalStreams: 4, seconds, warmup, historyMiB,
         turnDelayMs: '5000 + a unique round offset', inventoryEveryMs: 60_000, heartbeatEveryMs: 5_000, ackEveryMs: 16 },
       instrumentation: { profile, heaps, delayResolutionMs: 10, rssSampleEveryMs: 1_000, cpuPercentBasis: 'one logical CPU',
         scope: measureReaders ? 'core PID and both reader PIDs; excludes master, other services, engines and tmux' : 'core PID only; excludes master, services, engines and tmux', heapPausesOutsideWindows: true },
@@ -134,6 +136,8 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       machine = await startPhoneMachine({ env: { NODE_OPTIONS: nodeOptions.join(' '),
         HARNESS_E2E_PERF_READERS: measureReaders ? '1' : '0', HARNESS_E2E_PERF_DIR: artifactDir, HARNESS_E2E_PERF_TOKEN: token } })
       const d = machine.machine.daemon
+      if (measureControls) writeFileSync(join(d.engineConfig.codexHome, 'models_cache.json'),
+        readFileSync(join(CLI_ROOT, 'src/lib/__fixtures__/codex-home-0.160/models_cache.json')))
       corePid = d.corePid()
       if (!corePid) throw new Error('no owned core PID')
       report.corePid = corePid
@@ -174,11 +178,12 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         client.send('message', { agentId: id, content })
         await ended
       }
-      const phase = async (label: string, turning: boolean) => {
+      const phase = async (label: string, turning: boolean, controlling = false) => {
         await checkDesk()
         const before = windows.map(w => w.stats())
         const turns = Array.from({ length: turning ? active : 0 }, () => 0)
         const latencies: number[] = []
+        const controlLatencies: Record<string, number[]> = { claude: [], codex: [] }
         let running = true
         let problem: unknown
         const readers = measureReaders ? [...harnessdProcesses(d)].filter(([name]) => name.startsWith('engine-')) : []
@@ -204,6 +209,21 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
             if (running) { turns[i]++; latencies.push(performance.now() - began) }
           }
         })
+        const controls = (controlling ? saved.slice(0, active) : []).map(async agent => {
+          let changes = 0
+          while (running) {
+            const model = agent.engine === 'claude' ? (changes % 2 ? 'opus' : 'sonnet') : (changes % 2 ? 'gpt-5.5' : 'gpt-6-luna')
+            const selectedModel = `runtime-v1:${agent.id}:${agent.engine}:${model}@high`
+            const began = performance.now()
+            try {
+              const answer = await client.request('agent_update', { agentId: agent.id, selectedModel }, 45_000)
+              if (answer.error || answer.agent?.selectedModel !== selectedModel) throw new Error(`model control: ${JSON.stringify(answer)}`)
+              if (running) controlLatencies[agent.engine].push(performance.now() - began)
+              changes++
+            } catch (error) { problem ??= error; return }
+            await sleep(250)
+          }
+        })
         let readerMetrics: Record<string, any>[] = []
         let metrics: Record<string, any>
         try { await sleep(seconds * 1000) }
@@ -213,16 +233,21 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
           metrics = measured[0]; readerMetrics = measured.slice(1)
         }
         const after = windows.map(w => w.stats())
-        await Promise.all([...workers, reads])
+        await Promise.all([...workers, ...controls, reads])
         if (problem) throw problem
         expect(metrics!.cpu.percent).toBeGreaterThanOrEqual(0)
         expect(Number.isFinite(metrics!.cpu.percent)).toBe(true)
         expect(metrics!.memory.rssMax).toBeGreaterThan(0)
         expect(metrics!.eventLoop.delaySamples).toBeGreaterThan(0)
         if (turning) for (const count of turns) expect(count).toBeGreaterThan(0)
+        if (controlling) for (const agent of saved.slice(0, active)) expect(controlLatencies[agent.engine].length).toBeGreaterThan(0)
         latencies.sort((a, b) => a - b)
         readLatencies.sort((a, b) => a - b)
         report.phases.push({ ...metrics!, readers: readerMetrics,
+          modelControls: Object.fromEntries(Object.entries(controlLatencies).map(([engine, values]) => {
+            values.sort((a, b) => a - b)
+            return [engine, { count: values.length, p50Ms: values[Math.floor(values.length * .5)] ?? null, p95Ms: values[Math.floor(values.length * .95)] ?? null }]
+          })),
           historyReads: { count: readLatencies.length, p50Ms: readLatencies[Math.floor(readLatencies.length * .5)] ?? null, p95Ms: readLatencies[Math.floor(readLatencies.length * .95)] ?? null },
           coreAndReaders: { cpuPercent: metrics!.cpu.percent + readerMetrics.reduce((sum, m) => sum + m.cpu.percent, 0), rssMean: metrics!.memory.rssMean + readerMetrics.reduce((sum, m) => sum + m.memory.rssMean, 0) }, turns, completedTurns: turns.reduce((a, b) => a + b, 0),
           turnLatencyMs: { p50: latencies[Math.floor(latencies.length * .5)] ?? null, p95: latencies[Math.floor(latencies.length * .95)] ?? null },
@@ -268,6 +293,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       await sleep(warmup * 1000)
       await phase('populated-idle', false)
       await phase('active', true)
+      if (measureControls) await phase('model-control', false, true)
       report.agents = saved
       report.state = 'passed'
     } catch (error) {
