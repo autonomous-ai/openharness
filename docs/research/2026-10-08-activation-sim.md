@@ -62,6 +62,8 @@ vendor binaries, so their real login screens appear.
 | I1 | #1054 (background install, third-review fixes) + CLI 9.0.5 installed by the app | A | yes | background install started 42 s after open (OpenCode 7.4 s, Claude Code 8.4 s, Codex 11.7 s, Pi 11.5 s); first harness answered 23 s after Enter, nothing installed in its pane; a second launch (CLI present) started no install | none | — | — |
 | I2 | #1054 redesign (one Node lock), CLI 9.0.6 installed by the app | A, harness started as the box appeared | yes | the pane said "OpenCode is already installing in the background — waiting for it"; OpenCode was in place 1 s after the pane opened, but the pane waited behind Claude Code, Codex and Pi: first result 46 s after Enter | one lock serialized unrelated agents | — | — |
 | I3 | #1054 + waiting fix (8d0093761), CLI 9.0.7 | same | yes | the pane went ahead as soon as OpenCode was in place: first result 14 s after Enter, 62 s after first open | none | — | — |
+| R1 | #1054 build, the I3 VM the next "day" | A, restarted Mac | — | Harness reopened at login with the first harness; OpenCode resumed its session (`--session`) and answered a follow-up; a second harness in the same project wrote its change 13 s after Enter | none | restored, no prompt; new task in one step | **20/20 for the second session** |
+| R2 | main + move prompt (#1061), real `.dmg` layout | A, opens Harness inside the disk image | — | prompt "Move Harness to Applications?"; Move reopened it from Applications in 3–4 s (also when Gatekeeper translocated it) and ejected the image | one prompt that saves the second session | — | — |
 | B1 | branch, CLI release | B, Claude Code 2.1.294 installed, not signed in | no | — | default still OpenCode; picker shows no install state; Claude Code exited at start ("Unable to connect to Anthropic services", transient network) and its pane vanished: user back on an empty box with a stray "Terminal harness" | — | **~20** |
 
 ## Findings
@@ -155,16 +157,30 @@ vendor binaries, so their real login screens appear.
     verify Codex startup options". The check now allows 30 s (e1aa14ed7); C2 opens Codex's own
     sign-in screen (ChatGPT, device code or API key) and holds the task.
 
+### R1 — the next day, after a restart
+
+21. Nothing to fix: macOS reopened Harness at login, the daemon resumed OpenCode with its session id,
+    the follow-up turn worked, and a new harness from the + tab started in the last project (13 s to
+    the first change). Both tabs read "code" (expected, see the QA notes).
+
+### R2 — Harness opened from inside the disk image
+
+22. **No Harness on day 2.** Double-clicking Harness in the disk image window (instead of dragging it)
+    works that day, but after the image is ejected or the Mac restarts there is nothing in
+    Applications, Launchpad or Spotlight, and the updater cannot replace a bundle on a read-only
+    volume. Fixed in #1061: before the engine starts, "Move Harness to Applications?" copies it, reopens
+    it from Applications and ejects the image; opening the image's copy again later goes to the
+    installed one. Moving a copy out of Downloads was dropped: it raised macOS's "access files in your
+    Downloads folder" prompt, and the website only hands out the `.dmg`.
+
 ## Next
 
-- Finish finding 9 (above), then rerun B1.
-- Background agent install (owner asked 2026-10-08): moved out of PR #1047 into its own PR (branch
-  `user-activation-install`) after three review rounds found concurrency problems in its cross-process
-  install locks; #1047 keeps the pane's own install and the simple OpenCode npm fallback.
-- Default to the agent the person already uses (installed and signed in, most recent), else OpenCode.
-- Mark installed / installs-on-start in the agent picker.
-- Runs C (Codex), D (both), and signed-in variants via `cli/e2e/harness/fakeEngine.mjs`.
-- Open a PR for `user-activation`; nothing is pushed yet.
+- Merge #1047, then #1052 (rebased on main) and #1061; release desktop and CLI.
+- Background install (#1054) is parked as a draft after five reviews found cross-process lock races;
+  it saves ~10–25 s on the first harness. Options in the PR: the desktop holds a create until that
+  agent's install finished (no pane lock), npm-prefix plus per-agent locks, or drop it.
+- Still open: closing the window quits the app (product decision); first-run telemetry for signed-out
+  users; bundling Node and the CLI in the app to cut ~40 s of setup.
 
 ## Fixes
 
@@ -173,7 +189,6 @@ PR #1047 (branch `user-activation`):
 | Fix |
 |-----|
 | The first New Harness box starts the default agent instead of "OpenCode is unavailable". |
-| Agents install in the background as the app opens (`harness engines install-missing --background`); panes wait on the same lock. |
 | OpenCode falls back to `npm install -g opencode-ai` when its GitHub download does not finish. |
 | The box opens on the Claude Code or Codex the person already uses (installed, signed in, most recent). |
 | The agent picker says Installed / Needs sign-in / Installs on start. |
@@ -183,7 +198,7 @@ PR #1047 (branch `user-activation`):
 | No Local Network prompt on reopen without a paired robot. |
 | Desktop first run no longer downloads grid. |
 | Setup copy no longer promises a sign-in. |
-| Review of #1047: successor only for a failed start; truer sign-in and last use; handover respects Close/Change; non-installable default still unavailable; symlinked folders; debounced folder check; install lock hardening (in progress). |
+| Review of #1047: successor only for a failed start; truer sign-in and last use; handover respects Close/Change; non-installable default still unavailable; symlinked folders; debounced folder check. |
 
 Follow-up branch `user-activation-2`:
 
@@ -192,3 +207,15 @@ Follow-up branch `user-activation-2`:
 | Type the first task during setup; Return starts it once the computer is ready. |
 | Change agent after a failed start carries the first task to the new agent. |
 | Web pages and PDFs an agent names open with a click, relative names from its project folder. |
+
+Background install, PR #1054 (branch `user-activation-install`, parked draft):
+
+| Fix |
+|-----|
+| Agents the person does not have install in the background at first launch (`harness agents install-missing --background`); a pane that needs one waits for it. |
+
+PR #1061 (branch `user-activation-move`):
+
+| Fix |
+|-----|
+| Opened from inside the disk image: offer to move Harness to Applications, reopen it there and eject the image. |
