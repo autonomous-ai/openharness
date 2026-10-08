@@ -40,6 +40,7 @@ mod input;
 mod layout;
 mod desk_layout;
 mod local;
+mod machine_menu;
 mod modal;
 mod buttons;
 mod dialog;

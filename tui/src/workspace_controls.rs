@@ -54,7 +54,7 @@ struct MenuTarget {
 
 pub fn begin_frame(app: &App) { app.controls.hits.borrow_mut().clear(); app.controls.grips.borrow_mut().clear(); }
 
-fn enabled(app: &App) -> bool { app.mouse && !app.headless && !app.options.tmux_look() && !app.read_only() }
+pub(crate) fn enabled(app: &App) -> bool { app.mouse && !app.headless && !app.options.tmux_look() && !app.read_only() }
 
 pub fn register(app: &App, rect: Rect, action: Action) {
     if rect.width > 0 && rect.height > 0 { app.controls.hits.borrow_mut().push((rect, action)); }
@@ -222,6 +222,12 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
         MouseEventKind::Down(MouseButton::Right) => {
             let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p) | Action::Close(p)) => Some(p), _ => None };
             if let Some(pane) = pane { begin_press(app, MouseButton::Right); pane_menu(app, pane, at); return true; }
+            // A machine's heading in the side bar: what can be done on it.
+            if let Some(crate::bar::Hit::Machine(machine, _)) = crate::bar::hit_at(app, mouse.column, mouse.row) {
+                begin_press(app, MouseButton::Right);
+                crate::machine_menu::open(app, &machine, at);
+                return true;
+            }
             let tab = crate::bar::hit_at(app, mouse.column, mouse.row).and_then(|hit| match hit { crate::bar::Hit::Window(i) => Some(i), _ => None }).or_else(|| {
                 let top = if app.status_top { 0 } else { app.size.1.saturating_sub(app.status_lines()) };
                 app.status_ranges.iter().find_map(|(row, hit)| {

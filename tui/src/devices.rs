@@ -1097,6 +1097,12 @@ fn machine_action(app: &mut App, rest: &str) {
     }
 }
 
+/// Machines & devices on [machine]: its own actions (rename, connect, remove…).
+pub(crate) fn open_machine(app: &mut App, machine: &str) {
+    open(app, View::Machines);
+    sub(app, format!("m:{machine}"));
+}
+
 /// [machine]'s harnesses: the Open list on it ("Open its harnesses").
 pub(crate) fn open_machine_list(app: &mut App, machine: &str) {
     let kind = PickerKind::Open { filter: crate::modal::Filter::All, machine: Some(machine.to_string()), project: None };

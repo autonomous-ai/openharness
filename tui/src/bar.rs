@@ -524,8 +524,10 @@ pub fn hit_at(app: &App, x: u16, y: u16) -> Option<Hit> {
     app.bar.hits.iter().rev().find(|(r, h)| inside(r) && !list(h)).or_else(|| app.bar.hits.iter().find(|(r, _)| inside(r))).map(|(_, h)| h.clone())
 }
 
-/// What a click on [hit] does: the tmux command its key would run, or the bar's own change.
-pub fn click(app: &mut App, hit: Hit) {
+/// What a click on [hit], pressed at [at] (where a machine's menu opens), does: the tmux command
+/// its key would run, or the bar's own change. A machine with no window here: its menu,
+/// Connect…, or what is wrong with it — not for a read-only client or tmux's look.
+pub fn click(app: &mut App, hit: Hit, at: Option<(u16, u16)>) {
     let select = |app: &mut App, i: usize| { let n = app.win_num(i); crate::commands::execute(app, &format!("select-window -t :{n}")) };
     match hit {
         Hit::Pane(i, id) => {
@@ -538,6 +540,7 @@ pub fn click(app: &mut App, hit: Hit) {
         // (Open here already — a slow attach clicked twice: open-harness goes to its window.)
         Hit::Harness(m, a) => crate::commands::execute(app, &format!("open-harness -s {}", crate::tmuxconf::quote_word(&format!("{m}:{a}")))),
         Hit::More(m) => crate::devices::open_machine_list(app, &m),
+        Hit::Machine(m, None) if crate::workspace_controls::enabled(app) => crate::machine_menu::click(app, &m, at),
         Hit::Machine(_, None) | Hit::Separator | Hit::Windows | Hit::Machines => {}
     }
 }
@@ -591,7 +594,7 @@ pub fn mouse(app: &mut App, ev: &MouseEvent) -> bool {
                 if app.bar.pressed.take().is_some_and(|t| t.elapsed() < DOUBLE_CLICK) { app.set_bar_width(WIDTH); app.persist_look() }
                 else { app.bar.pressed = Some(Instant::now()); app.bar.resizing = true; app.redraw_all = true }
             }
-            Some(h) => click(app, h),
+            Some(h) => click(app, h, Some((ev.column, ev.row.saturating_add(1)))),
             None => {}
         },
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => { if let Some(h) = hit { wheel(app, h, matches!(ev.kind, MouseEventKind::ScrollUp)) } }
@@ -671,9 +674,9 @@ mod tests {
                 assert_eq!(app.tab().root.as_ref().unwrap().size(), (body.width, body.height));
                 let _ = screen(&mut app);
                 // Folded, the rail's four columns.
-                click(&mut app, Hit::Fold);
+                click(&mut app, Hit::Fold, None);
                 assert_eq!(app.body().width, w - RAIL);
-                click(&mut app, Hit::Unfold);
+                click(&mut app, Hit::Unfold, None);
                 assert_eq!(app.body().width, w - WIDTH);
             }
         }
@@ -869,7 +872,7 @@ mod tests {
         assert!(!matches!(app.panes[&2].phase, Phase::Watching(_)), "a key to it takes it");
         let _ = screen(&mut app);
         let hit = app.bar.hits.iter().find(|(_, h)| *h == Hit::Pane(0, 3)).map(|(_, h)| h.clone()).unwrap();
-        click(&mut app, hit);
+        click(&mut app, hit, None);
         assert_eq!(app.focused(), Some(3));
         assert!(!matches!(app.panes[&3].phase, Phase::Watching(_)), "a click on it takes it");
     }
@@ -1072,5 +1075,63 @@ mod tests {
         let scroll = app.bar.scroll[1];
         assert_eq!(top(&mut app), before, "the first entry shown is the same one");
         assert!(app.bar.scroll[1] > scroll, "its index moved down with the rows above it");
+    }
+
+    // ── a machine row always does something ──
+
+    fn machine(id: &str, name: &str, status: &str, reach: crate::fleet::Reach) -> crate::fleet::Machine {
+        crate::fleet::Machine { shared: false, id: id.into(), name: name.into(), local: false, status: status.into(), reach }
+    }
+
+    #[tokio::test]
+    async fn a_ready_machine_without_a_window_opens_its_menu() {
+        let mut app = with_grid(2);
+        app.mouse = true;
+        click_on(&mut app, |h| *h == Hit::Machine("grid".into(), None));
+        let Some(crate::modal::Modal::Menu(m)) = &app.modal else { panic!("a menu") };
+        assert_eq!(m.title, "grid-dev");
+        let labels: Vec<_> = m.items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"New Harness on grid-dev…") && labels.contains(&"Open its harnesses"), "{labels:?}");
+        assert!(!labels.contains(&"Connect…"));
+    }
+
+    #[tokio::test]
+    async fn a_machine_that_needs_a_link_opens_connect_and_an_offline_one_says_so() {
+        let mut app = app((120, 50), "left");
+        app.mouse = true;
+        app.fleet.machines.push(machine("lb", "linux-box", "online", crate::fleet::Reach::NeedsLink));
+        click_on(&mut app, |h| *h == Hit::Machine("lb".into(), None));
+        assert!(matches!(app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Devices(crate::devices::View::Connect), .. })));
+        app.modal = None;
+        app.fleet.machines.push(machine("air", "MacBook-Air.local", "offline", crate::fleet::Reach::Offline));
+        click_on(&mut app, |h| *h == Hit::Machine("air".into(), None));
+        assert!(app.toast.as_ref().is_some_and(|t| t.0.contains("MacBook-Air.local is offline")), "{:?}", app.toast);
+        assert!(matches!(app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Devices(crate::devices::View::Machines), .. })));
+    }
+
+    #[tokio::test]
+    async fn a_machine_with_a_window_here_still_jumps_to_it_and_a_right_press_opens_its_menu() {
+        let mut app = app((120, 50), "left");
+        app.mouse = true;
+        app.select_tab(1);
+        click_on(&mut app, |h| matches!(h, Hit::Machine(m, Some(0)) if m == "lab"));
+        assert_eq!(app.active, 0);
+        // Right press: through the same path the real input takes (workspace_controls first).
+        let r = rect_of(&mut app, |h| matches!(h, Hit::Machine(m, _) if m == "local"));
+        let press = ev(MouseEventKind::Down(MouseButton::Right), r.x + 3, r.y);
+        assert!(crate::workspace_controls::mouse(&mut app, &press));
+        assert!(matches!(&app.modal, Some(crate::modal::Modal::Menu(m)) if m.title == "studio"));
+    }
+
+    #[tokio::test]
+    async fn a_read_only_client_gets_no_menu_and_no_machine_action() {
+        let mut app = with_grid(2);
+        app.mouse = true;
+        app.client_flags.push("read-only".into());
+        let r = rect_of(&mut app, |h| matches!(h, Hit::Machine(m, _) if m == "grid"));
+        assert!(!crate::workspace_controls::mouse(&mut app, &ev(MouseEventKind::Down(MouseButton::Right), r.x + 3, r.y)));
+        assert!(app.modal.is_none());
+        click_on(&mut app, |h| *h == Hit::Machine("grid".into(), None));
+        assert!(app.modal.is_none(), "the left click keeps today's: nothing");
     }
 }
