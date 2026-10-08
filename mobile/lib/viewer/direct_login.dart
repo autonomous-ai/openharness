@@ -247,8 +247,9 @@ class _LoopbackCallback {
   }
 }
 
-/// What the in-app page shows once the redirect lands. iOS takes it down by itself
-/// (`closeSignInPage`), so it only ever flashes there.
+/// What the in-app page shows once the redirect lands. On iOS it only ever flashes: the script goes
+/// on to [signInReturnUrl], where the auth session takes the page down (`SignInPageChannel`), and
+/// `closeSignInPage` does it anyway once the sign-in is in.
 ///
 /// Android's Custom Tab stays up over the app, and nothing in the app can close it — so there the
 /// page goes back to the app itself, through [signInReturnUrl] (`SignInReturnActivity`), which
@@ -261,7 +262,8 @@ String _page(String title) {
             'text-decoration:none;font-weight:600">Back to Harness</a></p>'
             '<p style="color:#666;font-size:14px">or close this page</p>'
             '<script>location.replace("$signInReturnUrl")</script>'
-      : '<p>Close this page to go back to Harness.</p>';
+      : '<p>Close this page to go back to Harness.</p>'
+            '<script>location.replace("$signInReturnUrl")</script>';
   return '<!doctype html><meta charset="utf-8">'
       '<meta name="viewport" content="width=device-width,initial-scale=1">'
       '<title>$title</title>'
