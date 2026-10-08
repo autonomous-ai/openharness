@@ -132,10 +132,6 @@ Machine:
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
-  harness engines install-missing [--background]
-                               install OpenCode, Claude Code, Codex and pi where they are missing, one at
-                               a time, OpenCode first; never reinstalls one. JSON line per engine; log in
-                               ~/.harness/logs/engine-install.log. --background detaches and returns
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -2601,17 +2597,6 @@ switch (cmd) {
     break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
-    break
-  case 'engines':
-    // The desktop runs `engines install-missing --background` as it opens (lib/engineWarmup.ts).
-    if (args[0] === 'install-missing') {
-      import('./lib/engineWarmup.js')
-        .then(({ installMissingCommand }) => installMissingCommand({
-          background: flags.includes('--background'),
-          self: [process.execPath, ...process.execArgv, SCRIPT_PATH],
-        }))
-        .then((code) => { process.exitCode = code }).catch(onError)
-    } else { console.error(`Unknown command: engines ${args[0] ?? ''}`); usage(1) }
     break
   case 'tui':
     tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)

@@ -18,7 +18,6 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness status` · `harness version` · `harness update [--force]` | Running, pid, machine id, session count · version · update now. |
 | `harness dsh list` · `harness dsh update <owner/name>` | Installed harness package versions and available updates · update one package while preserving its workspaces. |
 | `harness machines [list] [--json]` · `harness machines delete <id>` | This account's machines · remove another machine (never this one). |
-| `harness engines install-missing [--background]` | Install OpenCode, Claude Code, Codex and pi where this computer lacks them, one at a time, OpenCode first, with the same recipe, shell and lock a pane uses, so a pane started meanwhile waits for it; an engine already there is never reinstalled. A JSON line per engine (`already-installed`, `installed`, `failed` or `skipped`, with a `reason`); log in `~/.harness/logs/engine-install.log`, state in `~/.harness/run/engine-install/status.json`. The desktop runs it with `--background`, which detaches and returns at once. |
 | `harness pair <code>` · `harness pairings` · `harness unpair <#\|fp\|--all>` | Pair a browser with the code the web client shows; list; unpair. |
 | `harness pair <verb> [--json]` · `harness pair talk <words…>` · `harness pair mcp` | Your paired daemon's control interface (below): read every harness on every machine; talk to the daemon. |
 | `harness remote-password set\|status\|clear` | This machine's persistent password for machine-to-machine links. |
