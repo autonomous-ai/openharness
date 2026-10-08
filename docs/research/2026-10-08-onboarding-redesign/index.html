@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onboarding Redesign</title>
+<style>
+  :root {
+    --page: #0f0f0e; --text: #f5f5f0; --muted: #9a9a90; --line: rgba(255,250,240,.10);
+    --bg: #141413; --surface: #1c1c1a; --elev: #262624; --sub: #3a3a36;
+    --amber: #ff9f0a; --green: #32d74b; --red: #ff453a; --blue: #0a84ff; --rose: #e879a0; --gold: #d4a574;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text); font: 16px/1.5 var(--sans); }
+  main { max-width: 1180px; margin: 0 auto; padding: 40px 16px 96px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -.01em; }
+  h2 { font-size: 22px; margin: 64px 0 6px; }
+  h3 { font-size: 16px; margin: 28px 0 8px; color: var(--muted); font-weight: 600; }
+  p.lede { color: var(--muted); margin: 0 0 18px; max-width: 760px; }
+  .principles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 22px 0 6px; }
+  .principles div { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; font-size: 15px; }
+  .principles b { display: block; margin-bottom: 2px; }
+  .note { color: var(--muted); font-size: 14px; margin: 10px 2px 0; max-width: 900px; }
+  .note b { color: var(--text); font-weight: 600; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  .stack { display: grid; gap: 26px; }
+  @media (max-width: 860px) { .grid2 { grid-template-columns: 1fr; } }
+  .cap { margin: 8px 2px 0; font-size: 14px; color: var(--muted); }
+  .cap b { color: var(--text); }
+
+  /* A macOS window drawn at 1280x800 and scaled with its container (cqw units). */
+  .win { container-type: inline-size; width: 100%; aspect-ratio: 16 / 10; border-radius: 1cqw; overflow: hidden;
+    background: var(--bg); border: 1px solid rgba(255,255,255,.08); box-shadow: 0 2cqw 5cqw rgba(0,0,0,.55); position: relative; }
+  .win .bar { height: 4.6cqw; display: flex; align-items: center; gap: .6cqw; padding: 0 1.4cqw; border-bottom: 1px solid var(--line); background: #171716; }
+  .dots { display: flex; gap: .65cqw; margin-right: 1.6cqw; }
+  .dots i { width: 1.05cqw; height: 1.05cqw; border-radius: 50%; display: block; }
+  .dots i:nth-child(1) { background: #ff5f57; } .dots i:nth-child(2) { background: #febc2e; } .dots i:nth-child(3) { background: #28c840; }
+  .tab { font-size: 1.12cqw; color: var(--muted); padding: .6cqw 1.6cqw; border-radius: .6cqw; white-space: nowrap; display: flex; align-items: center; gap: .55cqw; }
+  .tab.on { background: var(--elev); color: var(--text); }
+  .tab img { width: 1.2cqw; height: 1.2cqw; border-radius: .25cqw; }
+  .tab .plus { font-size: 1.5cqw; color: var(--muted); }
+  .bar .sp { flex: 1; }
+  .bar .store { font-size: 1.05cqw; color: var(--muted); border: 1px solid var(--line); border-radius: 2cqw; padding: .35cqw 1.1cqw; }
+
+  /* Setup tour */
+  .tour { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .tour .stage { flex: 1; display: grid; grid-template-columns: 1fr 1.15fr; align-items: center; padding: 0 5cqw; gap: 3cqw;
+    background: radial-gradient(70cqw 50cqw at 80% 40%, rgba(255,159,10,.10), transparent 60%), radial-gradient(60cqw 40cqw at 10% 90%, rgba(232,121,160,.07), transparent 60%); }
+  .tour .kicker { font-size: 1.1cqw; letter-spacing: .14em; text-transform: uppercase; color: var(--amber); font-weight: 600; margin-bottom: 1.2cqw; }
+  .tour h4 { font-size: 3.5cqw; line-height: 1.08; margin: 0 0 1.6cqw; letter-spacing: -.02em; font-weight: 700; }
+  .tour .copy { font-size: 1.55cqw; line-height: 1.5; color: #cfcfc6; max-width: 34cqw; }
+  .tour .pager { display: flex; gap: .7cqw; margin-top: 3cqw; align-items: center; }
+  .tour .pager i { width: .75cqw; height: .75cqw; border-radius: 50%; background: var(--sub); display: block; }
+  .tour .pager i.on { width: 2.4cqw; border-radius: 1cqw; background: var(--amber); }
+  .tour .arrow { position: absolute; right: 2cqw; top: 46%; width: 3.6cqw; height: 3.6cqw; border-radius: 50%; background: rgba(255,255,255,.06);
+    border: 1px solid var(--line); display: grid; place-items: center; color: var(--text); font-size: 1.8cqw; }
+  .tour .foot { height: 7.6cqw; border-top: 1px solid var(--line); background: #121211; display: flex; flex-direction: column; justify-content: center; padding: 0 5cqw; gap: .8cqw; }
+  .tour .foot .row { display: flex; align-items: center; gap: 1cqw; font-size: 1.1cqw; color: var(--muted); }
+  .tour .foot .row .tri { font-size: .9cqw; }
+  .tour .foot .row .sp { flex: 1; }
+  .tour .foot .track { height: .45cqw; border-radius: .3cqw; background: var(--elev); overflow: hidden; }
+  .tour .foot .track i { display: block; height: 100%; background: linear-gradient(90deg, var(--amber), #ffb340); border-radius: .3cqw; }
+  .tour .foot .btn { background: var(--amber); color: #1a1205; font-weight: 700; font-size: 1.15cqw; padding: .55cqw 1.8cqw; border-radius: 2cqw; }
+  .tour .foot .log { font-family: var(--mono); font-size: .95cqw; color: var(--muted); line-height: 1.55; }
+
+  /* Illustrations */
+  .art { position: relative; height: 38cqw; }
+  .card { position: absolute; background: var(--surface); border: 1px solid var(--line); border-radius: 1.2cqw; box-shadow: 0 1.5cqw 3cqw rgba(0,0,0,.45); }
+  .mach { width: 16cqw; padding: 1.3cqw; }
+  .mach .t { font-size: 1.15cqw; font-weight: 600; display: flex; align-items: center; gap: .6cqw; }
+  .mach .t svg { width: 1.6cqw; height: 1.6cqw; }
+  .mach .s { font-size: .95cqw; color: var(--muted); margin-top: .3cqw; }
+  .mach .ag { display: flex; gap: .45cqw; margin-top: 1cqw; }
+  .mach .ag img { width: 2cqw; height: 2cqw; border-radius: .45cqw; }
+  .hub { width: 15cqw; height: 15cqw; border-radius: 50%; display: grid; place-items: center; text-align: center; font-weight: 700; font-size: 1.4cqw;
+    background: radial-gradient(circle at 35% 30%, #3a2a12, #1c1c1a 70%); border: 1px solid rgba(255,159,10,.35); box-shadow: 0 0 6cqw rgba(255,159,10,.18); }
+  .hub small { display: block; font-weight: 500; font-size: 1cqw; color: var(--muted); margin-top: .3cqw; }
+  svg.lines { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .panes4 { width: 42cqw; height: 30cqw; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: .6cqw; padding: .6cqw; }
+  .p { background: #161615; border: 1px solid var(--line); border-radius: .7cqw; overflow: hidden; display: flex; flex-direction: column; }
+  .p .h { display: flex; align-items: center; gap: .55cqw; font-size: .95cqw; padding: .55cqw .8cqw; border-bottom: 1px solid var(--line); color: #d4d4cc; }
+  .p .h img { width: 1.3cqw; height: 1.3cqw; border-radius: .3cqw; }
+  .p .h .m { color: var(--muted); font-family: var(--mono); font-size: .85cqw; margin-left: auto; }
+  .p .b { font-family: var(--mono); font-size: .92cqw; line-height: 1.55; padding: .7cqw .9cqw; color: #bdbdb4; flex: 1; overflow: hidden; }
+  .p .b .u { color: var(--text); }
+  .p .b .ok { color: var(--green); } .p .b .am { color: var(--amber); } .p .b .dim { color: #6b6b62; }
+  .busy { display: inline-block; width: .6cqw; height: .6cqw; border-radius: 50%; background: var(--amber); margin-right: .3cqw; box-shadow: 0 0 .8cqw var(--amber); }
+  .phone { width: 15cqw; height: 31cqw; border-radius: 2.4cqw; background: #0b0b0a; border: .5cqw solid #2c2c29; padding: 1.1cqw .9cqw; box-shadow: 0 2cqw 4cqw rgba(0,0,0,.6); }
+  .phone .notch { width: 5cqw; height: 1.1cqw; background: #2c2c29; border-radius: 1cqw; margin: 0 auto 1cqw; }
+  .phone .ask { margin-top: 1cqw; background: var(--surface); border: 1px solid rgba(255,159,10,.4); border-radius: 1cqw; padding: .9cqw; font-size: .95cqw; }
+  .phone .ask b { display: block; font-size: 1.05cqw; margin-bottom: .4cqw; }
+  .phone .btns { display: flex; gap: .5cqw; margin-top: .8cqw; }
+  .phone .btns span { flex: 1; text-align: center; padding: .45cqw 0; border-radius: .8cqw; background: var(--elev); font-size: .9cqw; }
+  .phone .btns span.y { background: var(--amber); color: #1a1205; font-weight: 700; }
+  .timeline { position: absolute; left: 0; right: 0; bottom: 1cqw; display: flex; align-items: center; gap: 1cqw; font-size: 1cqw; color: var(--muted); }
+  .timeline i { flex: 1; height: 1px; background: linear-gradient(90deg, transparent, var(--line), transparent); }
+  .pill { font-size: .95cqw; border: 1px solid var(--line); border-radius: 2cqw; padding: .3cqw .9cqw; background: var(--surface); color: var(--text); }
+  .device img { width: 100%; height: 100%; object-fit: cover; border-radius: 1.4cqw; }
+
+  /* Workspace */
+  .ws { position: absolute; inset: 4.6cqw 0 0 0; display: flex; flex-direction: column; }
+  .welcome { margin: 1.2cqw 1.2cqw 0; background: linear-gradient(120deg, rgba(255,159,10,.10), rgba(232,121,160,.05) 55%, rgba(255,255,255,.02));
+    border: 1px solid rgba(255,159,10,.22); border-radius: 1cqw; padding: 1.3cqw 1.6cqw; display: flex; gap: 2cqw; align-items: center; }
+  .welcome .w1 { flex: 1.3; }
+  .welcome .w1 .t { font-size: 1.6cqw; font-weight: 700; letter-spacing: -.01em; }
+  .welcome .w1 .d { font-size: 1.12cqw; color: #cfcfc6; margin-top: .3cqw; }
+  .welcome .stats { flex: 1; display: grid; gap: .55cqw; font-size: 1.02cqw; }
+  .welcome .stats div { display: flex; align-items: center; gap: .6cqw; color: #d4d4cc; }
+  .welcome .stats img { width: 1.4cqw; height: 1.4cqw; border-radius: .3cqw; }
+  .meter { width: 7cqw; height: .5cqw; border-radius: .3cqw; background: var(--elev); overflow: hidden; flex: none; }
+  .meter i { display: block; height: 100%; border-radius: .3cqw; }
+  .welcome .x { color: var(--muted); font-size: 1.3cqw; align-self: flex-start; }
+  .panes { flex: 1; display: grid; gap: .8cqw; padding: 1.2cqw; min-height: 0; }
+  .panes .p .b { font-size: 1cqw; }
+  .composer { margin-top: .6cqw; border: 1px solid rgba(255,159,10,.45); border-radius: .7cqw; padding: .6cqw .8cqw; color: var(--text); font-family: var(--mono); font-size: 1cqw; background: #1a1916; }
+  .composer .cur { display: inline-block; width: .55cqw; height: 1.15cqw; background: var(--amber); vertical-align: -.2cqw; margin-left: .2cqw; }
+  .status { height: 2.6cqw; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 1.6cqw; padding: 0 1.4cqw; font-family: var(--mono); font-size: .9cqw; color: var(--muted); }
+  .status .sp { flex: 1; }
+  .game { background: radial-gradient(circle at 50% 30%, #1d2440, #0b0d17 70%); position: relative; flex: 1; }
+  .game .ship { position: absolute; left: 46%; bottom: 14%; width: 0; height: 0; border-left: 1.4cqw solid transparent; border-right: 1.4cqw solid transparent; border-bottom: 2.4cqw solid var(--amber); }
+  .game .rock { position: absolute; border-radius: 50%; background: #6b6b62; }
+  .game .score { position: absolute; left: 1cqw; top: .8cqw; font-family: var(--mono); font-size: 1cqw; color: var(--text); }
+  .game .star { position: absolute; width: .25cqw; height: .25cqw; background: #fff; border-radius: 50%; opacity: .7; }
+
+  /* Picker */
+  .pick { position: absolute; left: 30cqw; top: 13cqw; width: 26cqw; background: var(--surface); border: 1px solid var(--line); border-radius: 1cqw; box-shadow: 0 2cqw 4cqw rgba(0,0,0,.6); overflow: hidden; }
+  .pick .q { padding: 1cqw 1.3cqw; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 1.15cqw; }
+  .pick .r { display: flex; align-items: center; gap: .9cqw; padding: .8cqw 1.3cqw; font-size: 1.2cqw; }
+  .pick .r img { width: 1.6cqw; height: 1.6cqw; border-radius: .35cqw; }
+  .pick .r.on { background: rgba(255,159,10,.14); }
+  .pick .r .ck { margin-left: auto; color: var(--amber); }
+  .pick .sec { padding: .7cqw 1.3cqw .3cqw; font-size: .9cqw; color: var(--muted); text-transform: uppercase; letter-spacing: .1em; }
+  .box { position: absolute; left: 30cqw; top: 7.5cqw; display: flex; gap: .8cqw; }
+  .chip { font-size: 1.15cqw; border: 1px solid var(--line); border-radius: 2cqw; padding: .45cqw 1.1cqw; background: var(--surface); display: flex; gap: .5cqw; align-items: center; }
+  .chip img { width: 1.4cqw; height: 1.4cqw; border-radius: .3cqw; }
+  .inline { position: absolute; inset: 7.5cqw 3cqw 4cqw 3cqw; }
+  .zoom { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; place-items: center; z-index: 9; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Onboarding redesign, for approval</h1>
+  <p class="lede">Renders only; nothing is built yet. They replace the setup checklist, the New Harness box and the
+    picker's badges you marked up. The copy, numbers and session names in them are examples.</p>
+  <div class="principles">
+    <div><b>Teach while it installs</b>Five short slides on what Harness does, with the install as one quiet line underneath, like an OS installer.</div>
+    <div><b>Land in work, not in a form</b>No setup field and no New Harness box. Harness opens straight into panes that are already working.</div>
+    <div><b>Use what they already have</b>If you have Claude Code or Codex, nothing else is downloaded, and your recent sessions open in tabs by project.</div>
+    <div><b>No status clutter</b>No Installed, Installs on start or Needs sign-in labels. An install or sign-in happens when you pick that agent.</div>
+  </div>
+
+  <!-- ===================== 1. SETUP TOUR ===================== -->
+  <h2>1. First launch: a tour while Harness sets up</h2>
+  <p class="lede">Slides advance every ~7 s, and the arrow or dots move them by hand. The bottom line is the only sign of the install: one sentence, a thin bar and a time left.
+    "Details" opens the log for the rare person who wants it; a failure turns that line red with Retry.</p>
+
+  <div class="win">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="sp"></span></div>
+    <div class="tour">
+      <div class="stage">
+        <div>
+          <div class="kicker">Welcome to Harness</div>
+          <h4>All your machines,<br>one window.</h4>
+          <div class="copy">Your laptop, the desktop under your desk, a box in the cloud. Run agents on any of them and switch between them like tabs.</div>
+          <div class="pager"><i class="on"></i><i></i><i></i><i></i><i></i></div>
+        </div>
+        <div class="art">
+          <svg class="lines" viewBox="0 0 100 80" preserveAspectRatio="none">
+            <path d="M50 40 L20 14" stroke="rgba(255,159,10,.45)" stroke-width=".25" stroke-dasharray="1 1" fill="none"/>
+            <path d="M50 40 L84 18" stroke="rgba(255,159,10,.45)" stroke-width=".25" stroke-dasharray="1 1" fill="none"/>
+            <path d="M50 40 L52 72" stroke="rgba(255,159,10,.45)" stroke-width=".25" stroke-dasharray="1 1" fill="none"/>
+          </svg>
+          <div class="hub" style="left:36%;top:31%;position:absolute"><div><img src="../../../desktop/assets/app_icon.png" alt="" style="width:5.5cqw;height:5.5cqw;display:block;margin:0 auto .5cqw">Harness<small>this Mac</small></div></div>
+          <div class="card mach" style="left:0;top:0">
+            <div class="t"><svg viewBox="0 0 24 24" fill="none" stroke="#d4d4cc" stroke-width="1.6"><rect x="3" y="5" width="18" height="11" rx="1.5"/><path d="M1 19h22"/></svg>MacBook</div>
+            <div class="s">2 agents working</div>
+            <div class="ag"><img src="../../../desktop/assets/model-icons/claude.png" alt=""><img src="../../../desktop/assets/engine-icons/codex.png" alt=""></div>
+          </div>
+          <div class="card mach" style="right:0;top:3cqw">
+            <div class="t"><svg viewBox="0 0 24 24" fill="none" stroke="#d4d4cc" stroke-width="1.6"><rect x="4" y="4" width="16" height="12" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>Studio desktop</div>
+            <div class="s">1 agent working</div>
+            <div class="ag"><img src="../../../desktop/assets/engine-icons/opencode.png" alt=""></div>
+          </div>
+          <div class="card mach" style="left:36%;bottom:0">
+            <div class="t"><svg viewBox="0 0 24 24" fill="none" stroke="#d4d4cc" stroke-width="1.6"><rect x="4" y="3" width="16" height="7" rx="1"/><rect x="4" y="14" width="16" height="7" rx="1"/><path d="M8 6.5h.01M8 17.5h.01"/></svg>Cloud box</div>
+            <div class="s">3 agents working</div>
+            <div class="ag"><img src="../../../desktop/assets/engine-icons/codex.png" alt=""><img src="../../../desktop/assets/model-icons/claude.png" alt=""><img src="../../../desktop/assets/engine-icons/pi.png" alt=""></div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow">›</div>
+      <div class="foot">
+        <div class="row"><span class="tri">▸</span><span>Setting up Harness on this Mac</span><span class="sp"></span><span>about 30 s left</span></div>
+        <div class="track"><i style="width:22%"></i></div>
+      </div>
+    </div>
+  </div>
+  <p class="cap"><b>Slide 1 of 5: machines.</b> The bottom line names no component: no tmux, no Node, no CLI. ▸ opens the log.</p>
+
+  <div class="stack" style="margin-top:22px">
+    <div>
+      <div class="win">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="sp"></span></div>
+        <div class="tour">
+          <div class="stage">
+            <div>
+              <div class="kicker">Every agent</div>
+              <h4>All your agents, side by side.</h4>
+              <div class="copy">Claude Code, Codex, OpenCode and a dozen more in one grid. Give each job to the agent that is best at it.</div>
+              <div class="pager"><i></i><i class="on"></i><i></i><i></i><i></i></div>
+            </div>
+            <div class="art" style="display:grid;place-items:center">
+              <div class="card panes4" style="position:relative">
+                <div class="p"><div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">api</span></div><div class="b"><span class="u">› add rate limits</span><br><span class="ok">✓</span> middleware.ts<br><span class="busy"></span>running tests…</div></div>
+                <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">web</span></div><div class="b"><span class="u">› fix the login page</span><br><span class="ok">✓</span> 3 files changed<br>done in 41 s</div></div>
+                <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">docs</span></div><div class="b"><span class="u">› write the changelog</span><br><span class="busy"></span>writing…</div></div>
+                <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/cursor.png" alt="">Cursor<span class="m">ios</span></div><div class="b"><span class="u">› review PR #212</span><br><span class="am">?</span> needs your answer</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="arrow">›</div>
+          <div class="foot"><div class="row"><span class="tri">▸</span><span>Setting up Harness on this Mac</span><span class="sp"></span><span>about 22 s left</span></div><div class="track"><i style="width:44%"></i></div></div>
+        </div>
+      </div>
+      <p class="cap"><b>Slide 2: agents.</b> Four live panes, each a different agent.</p>
+    </div>
+    <div>
+      <div class="win">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="sp"></span></div>
+        <div class="tour">
+          <div class="stage">
+            <div>
+              <div class="kicker">Always there</div>
+              <h4>Sessions that keep going.</h4>
+              <div class="copy">Close the lid, quit, restart. Every session is where you left it, conversation and all.</div>
+              <div class="pager"><i></i><i></i><i class="on"></i><i></i><i></i></div>
+            </div>
+            <div class="art">
+              <div class="card p" style="left:2cqw;top:2cqw;width:38cqw;height:26cqw;position:absolute">
+                <div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">api · main</span></div>
+                <div class="b"><span class="dim">Yesterday 18:02</span><br><span class="u">› migrate the users table</span><br><span class="ok">✓</span> migration 0042 written<br><span class="dim">─── Mac restarted ───</span><br><span class="dim">Today 09:14 · resumed</span><br><span class="u">› now backfill the emails</span><br><span class="busy"></span>working…</div>
+              </div>
+              <div class="timeline"><span class="pill">Mon 18:02</span><i></i><span class="pill">restart</span><i></i><span class="pill" style="border-color:rgba(255,159,10,.5)">Tue 09:14 · same session</span></div>
+            </div>
+          </div>
+          <div class="arrow">›</div>
+          <div class="foot"><div class="row"><span class="tri">▸</span><span>Setting up Harness on this Mac</span><span class="sp"></span><span>about 15 s left</span></div><div class="track"><i style="width:62%"></i></div></div>
+        </div>
+      </div>
+      <p class="cap"><b>Slide 3: persistent sessions.</b></p>
+    </div>
+    <div>
+      <div class="win">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="sp"></span></div>
+        <div class="tour">
+          <div class="stage">
+            <div>
+              <div class="kicker">On the go</div>
+              <h4>Your agents in your pocket.</h4>
+              <div class="copy">The Harness phone app shows every session. When an agent needs you, answer from anywhere.</div>
+              <div class="pager"><i></i><i></i><i></i><i class="on"></i><i></i></div>
+            </div>
+            <div class="art" style="display:grid;place-items:center">
+              <div class="phone">
+                <div class="notch"></div>
+                <div class="p" style="height:12cqw"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">web</span></div><div class="b" style="font-size:.85cqw"><span class="u">› ship the pricing page</span><br><span class="ok">✓</span> built<br><span class="busy"></span>deploying…</div></div>
+                <div class="ask"><b>Codex needs you</b>Deploy to production?<div class="btns"><span>Not now</span><span class="y">Deploy</span></div></div>
+              </div>
+            </div>
+          </div>
+          <div class="arrow">›</div>
+          <div class="foot"><div class="row"><span class="tri">▸</span><span>Setting up Harness on this Mac</span><span class="sp"></span><span>about 8 s left</span></div><div class="track"><i style="width:81%"></i></div></div>
+        </div>
+      </div>
+      <p class="cap"><b>Slide 4: mobile.</b> Could include a QR code to get the app.</p>
+    </div>
+    <div>
+      <div class="win">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="sp"></span></div>
+        <div class="tour">
+          <div class="stage">
+            <div>
+              <div class="kicker">On your desk</div>
+              <h4>A dial for your agents.</h4>
+              <div class="copy">The Harness device shows what every agent is doing, and a turn and a press answer the one that needs you.</div>
+              <div class="pager"><i></i><i></i><i></i><i></i><i class="on"></i></div>
+            </div>
+            <div class="art device" style="height:30cqw"><img src="../../../desktop/assets/devices/harness-desk.webp" alt="The Harness device on a desk"></div>
+          </div>
+          <div class="foot">
+            <div class="row"><span style="color:var(--green)">●</span><span style="color:var(--text)">Harness is ready</span><span class="sp"></span><span class="btn">Open Harness</span></div>
+            <div class="track"><i style="width:100%;background:var(--green)"></i></div>
+          </div>
+        </div>
+      </div>
+      <p class="cap"><b>Slide 5: device; setup done.</b> When the bar finishes, Open Harness appears. Proposed: it also opens by itself once the current slide ends.</p>
+    </div>
+    <div>
+      <div class="win">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="sp"></span></div>
+        <div class="tour">
+          <div class="stage" style="filter:brightness(.55)">
+            <div>
+              <div class="kicker">Every agent</div>
+              <h4>All your agents, side by side.</h4>
+              <div class="pager"><i></i><i class="on"></i><i></i><i></i><i></i></div>
+            </div>
+            <div></div>
+          </div>
+          <div class="foot" style="height:16cqw;justify-content:flex-start;padding-top:1.4cqw">
+            <div class="row"><span class="tri">▾</span><span>Setting up Harness on this Mac</span><span class="sp"></span><span>about 22 s left</span></div>
+            <div class="track"><i style="width:44%"></i></div>
+            <div class="log">✓ Terminal tools ready<br>↓ Harness runtime 112 of 187 MB<br>· Agents: Claude Code found, signed in. Nothing else to download.</div>
+          </div>
+        </div>
+      </div>
+      <p class="cap"><b>Details open.</b> The same information as today, folded away. The last line is where "Claude Code found, nothing else to download" (or "Downloading OpenCode") would go.</p>
+    </div>
+  </div>
+  <p class="note"><b>What changes underneath:</b> the setup checklist, its first-task field, the "Next: start your first harness" footer and Copy diagnostics leave the first screen. Copy diagnostics moves into Details.
+    OpenCode downloads only when the computer has no Claude Code, Codex or OpenCode yet. #1067 already checks for that.</p>
+
+  <!-- ===================== 2. NEW USER ===================== -->
+  <h2>2. Arrival: someone with no agents yet</h2>
+  <p class="lede">No New Harness box. Harness opens one tab with a small game OpenCode has already made, the game running beside it, and the composer focused on one question.</p>
+  <div class="win">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">Space Dodge</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
+    <div class="ws">
+      <div class="welcome">
+        <div class="w1"><div class="t">Welcome to Harness.</div><div class="d">All your machines, all your agents, now managed in one place. Here's a little game an agent made to get you started.</div></div>
+        <div class="stats">
+          <div><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode is ready, free, no account needed</div>
+          <div><img src="../../../desktop/assets/model-icons/claude.png" alt=""><img src="../../../desktop/assets/engine-icons/codex.png" alt="" style="margin-left:-.4cqw">Have Claude Code or Codex? Add them anytime from <b style="color:var(--text)">+</b></div>
+        </div>
+        <div class="x">×</div>
+      </div>
+      <div class="panes" style="grid-template-columns: 1.1fr 1fr">
+        <div class="p">
+          <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">~/harnesses/space-dodge</span></div>
+          <div class="b">
+            <span class="u">› make a tiny space game I can play in the browser</span><br>
+            <span class="ok">✓</span> index.html · game.js · style.css<br>
+            Space Dodge is ready: arrow keys to move, dodge the rocks,<br>the score goes up every second. It's running on the right.<br><br>
+            <span class="am">What would you like to change in the game?</span><br>
+            <span class="dim">Try: "make the rocks faster", "add a high score", "make the ship blue"</span>
+            <div class="composer">make the rocks bounce off the walls<span class="cur"></span></div>
+          </div>
+        </div>
+        <div class="p">
+          <div class="h">◧ Preview<span class="m">space-dodge/index.html</span></div>
+          <div class="game">
+            <div class="score">SCORE 128</div>
+            <i class="star" style="left:12%;top:20%"></i><i class="star" style="left:70%;top:12%"></i><i class="star" style="left:40%;top:44%"></i><i class="star" style="left:86%;top:58%"></i><i class="star" style="left:22%;top:66%"></i>
+            <i class="rock" style="left:20%;top:30%;width:3cqw;height:3cqw"></i><i class="rock" style="left:62%;top:22%;width:2cqw;height:2cqw"></i><i class="rock" style="left:75%;top:52%;width:3.6cqw;height:3.6cqw;background:#52524c"></i>
+            <i class="ship"></i>
+          </div>
+        </div>
+      </div>
+      <div class="status"><span>Harnesses 1</span><span>Machines 1</span><span class="sp"></span><span>space-dodge</span></div>
+    </div>
+  </div>
+  <p class="note"><b>How:</b> the app ships the finished project and its OpenCode session. On first run both are copied to <code>~/harnesses/space-dodge</code>, and the pane opens that session, so OpenCode's answer is already on screen.
+    The preview is a web-page pane of <code>index.html</code>. Only for someone with no Claude Code, Codex or OpenCode and no sessions.
+    <b>To check before building:</b> that an OpenCode session can be imported on another computer and resumed, and that the preview pane exists or can be added cheaply.</p>
+
+  <!-- ===================== 3. EXISTING USER ===================== -->
+  <h2>3. Arrival: someone who already uses Claude Code and Codex</h2>
+  <p class="lede">Their recent work opens by itself, one tab per project. Each tab has that project's latest 1–2 Claude Code and 1–2 Codex sessions side by side.
+    The first screen shows several agents together.</p>
+  <div class="win">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span>
+      <span class="tab on">harness-web</span><span class="tab">api-server</span><span class="tab">ios-app</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
+    <div class="ws">
+      <div class="welcome">
+        <div class="w1"><div class="t">Welcome to Harness.</div><div class="d">All your machines, all your agents, now managed in one place. We opened your 9 most recent sessions in 3 projects; type in any of them to pick up where you left off.</div></div>
+        <div class="stats">
+          <div><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="meter"><i style="width:64%;background:var(--green)"></i></span>64% of this week left. Looking good.</div>
+          <div><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="meter"><i style="width:14%;background:var(--amber)"></i></span>14% left. Getting low.</div>
+          <div style="color:var(--muted)">Last 30 days: 23 Claude Code sessions, 71 Codex sessions. You really love Codex.</div>
+        </div>
+        <div class="x">×</div>
+      </div>
+      <div class="panes" style="grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr">
+        <div class="p"><div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">harness-web · auth-redesign</span></div><div class="b"><span class="dim">2 h ago</span><br><span class="u">› make the sign-in page match the new brand</span><br><span class="ok">✓</span> SignIn.tsx, theme.ts updated<br>Want me to update the screenshots in the docs too?<div class="composer"><span class="cur"></span></div></div></div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">harness-web · main</span></div><div class="b"><span class="dim">yesterday</span><br><span class="u">› find why the build is slow</span><br><span class="ok">✓</span> 3 fixes, build 94 s → 31 s<br>Opened PR #418.</div></div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">harness-web · pricing</span></div><div class="b"><span class="dim">yesterday</span><br><span class="u">› add annual pricing toggle</span><br><span class="ok">✓</span> done, tests pass</div></div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">harness-web · e2e</span></div><div class="b"><span class="dim">3 days ago</span><br><span class="u">› write e2e tests for checkout</span><br><span class="am">?</span> stopped: needed a test card number</div></div>
+      </div>
+      <div class="status"><span>Harnesses 9</span><span>Machines 1</span><span class="sp"></span><span>harness-web</span></div>
+    </div>
+  </div>
+  <p class="note"><b>How:</b>
+    <b>Which sessions:</b> the last 14 days of Claude Code and Codex sessions, grouped by project folder. That's at most 3 tabs (the busiest projects) and at most 4 panes each (2 per agent, most recent first).
+    <b>Resumed lazily:</b> each pane shows its conversation straight away, and the agent itself starts only when you type in it, so 9 panes don't start 9 agents.
+    <b>The numbers:</b> the limits come from the usage reader the app already has (Models menu). The session counts come from the session history Harness already indexes.
+    For someone with only Claude Code, the same, with Claude Code panes only.</p>
+
+  <!-- ===================== 4. PICKER ===================== -->
+  <h2>4. Choosing an agent: no badges</h2>
+  <p class="lede">The picker lists agents and nothing else. Anything an agent needs is handled after you pick it, inside its own pane.</p>
+  <div class="stack">
+    <div>
+      <div class="win">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab">harness-web</span><span class="tab on">New Tab</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span></div>
+        <div class="box"><span class="chip"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex ⌄</span><span class="chip">This Mac ⌄</span><span class="chip">harness-web ⌄</span></div>
+        <div class="pick">
+          <div class="q">Search agents</div>
+          <div class="sec">Yours</div>
+          <div class="r on"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="ck">✓</span></div>
+          <div class="r"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code</div>
+          <div class="sec">More agents</div>
+          <div class="r"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode</div>
+          <div class="r"><img src="../../../desktop/assets/engine-icons/cursor.png" alt="">Cursor</div>
+          <div class="r"><img src="../../../desktop/assets/engine-icons/copilot.png" alt="">Copilot</div>
+          <div class="r"><img src="../../../desktop/assets/engine-icons/grok.png" alt="">Grok</div>
+        </div>
+      </div>
+      <p class="cap"><b>The picker:</b> agents you use first, then the rest. No status words.</p>
+    </div>
+    <div>
+      <div class="win">
+        <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab">harness-web</span><span class="tab on"><img src="../../../desktop/assets/engine-icons/cursor.png" alt="">Cursor</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span></div>
+        <div class="ws">
+          <div class="panes" style="grid-template-columns:1fr">
+            <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/cursor.png" alt="">Cursor<span class="m">harness-web</span></div>
+              <div class="b" style="display:grid;place-items:center;text-align:center;font-family:var(--sans);font-size:1.3cqw">
+                <div><div style="font-size:1.7cqw;color:var(--text);font-weight:600;margin-bottom:.6cqw">Getting Cursor ready…</div>
+                  <div style="width:24cqw;margin:0 auto" class="meter"><i style="width:58%;background:var(--amber)"></i></div>
+                  <div style="margin-top:.8cqw;color:var(--muted)">about 10 s · your message is waiting and goes as soon as it starts</div></div>
+              </div></div>
+          </div>
+        </div>
+      </div>
+      <p class="cap"><b>After picking one that isn't installed:</b> its pane opens at once with one progress line, and the message is sent when it starts.
+        For one that needs a sign-in, the pane shows that agent's own sign-in screen.</p>
+    </div>
+  </div>
+
+  <h2>For you to decide</h2>
+  <p class="note" style="font-size:15px;line-height:1.7">
+    1. <b>When setup finishes mid-tour:</b> open Harness by itself at the end of the current slide (proposed), or wait for Open Harness?<br>
+    2. <b>Existing users:</b> one tab per project with mixed agents (rendered), or one tab per agent?<br>
+    3. <b>The starter project for new users:</b> a game (rendered), or something work-like, such as a small landing page?<br>
+    4. <b>The welcome strip:</b> stays until closed (rendered with ×), or disappears after the first message?<br>
+    5. <b>Signed out of Harness:</b> the welcome shows only this Mac's agents, so no sign-in is needed. OK?</p>
+</main>
+</body>
+</html>
