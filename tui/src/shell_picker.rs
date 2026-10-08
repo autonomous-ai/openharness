@@ -820,6 +820,26 @@ mod tests {
         reset_look();
     }
     #[test]
+    fn a_replys_look_does_not_bring_colours_back_under_no_color() {
+        let _l=crate::term_out::colours_lock();
+        struct Env(Option<std::ffi::OsString>);
+        impl Drop for Env {
+            fn drop(&mut self) {
+                // SAFETY: tests that set the environment's colours hold the colour lock.
+                unsafe { match self.0.take() { Some(v)=>std::env::set_var("NO_COLOR",v), None=>std::env::remove_var("NO_COLOR") } }
+                reset_look();
+            }
+        }
+        let _env=Env(std::env::var_os("NO_COLOR"));
+        // SAFETY: as above.
+        unsafe { std::env::set_var("NO_COLOR","1"); }
+        apply_look(&look("#ffffff","#111111","#ff0000","fzf"));
+        let chrome=crate::settings::chrome();
+        assert_eq!(chrome.base,ratatui::style::Style::default());
+        assert_eq!(chrome.accent,ratatui::style::Style::default().add_modifier(Modifier::BOLD));
+        assert_eq!(chrome.selected,ratatui::style::Style::default().add_modifier(Modifier::REVERSED));
+    }
+    #[test]
     fn the_looks_lists_decide_whether_the_composer_keeps_the_fzf_frame() {
         let _l=crate::term_out::colours_lock();
         assert!(panel_now(&[]));

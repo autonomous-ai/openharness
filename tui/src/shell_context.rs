@@ -133,12 +133,14 @@ pub fn status(app: &App, pane: Option<u64>) -> String {
 /// The TUI's look as a shell picker draws it (see `shell_picker::Look`): colours of the chosen
 /// theme, else the terminal's answer (empty until it answers: the picker keeps its default);
 /// `lists` is "fzf" when the user chose fzf's lists, by `@hn-lists fzf` or fzf options of their own.
-fn look_value() -> serde_json::Value {
+fn look_value() -> serde_json::Value { look_value_with(&crate::theme::default_opts()) }
+/// [look_value] with the fzf options given, not read from the environment.
+fn look_value_with(fzf_opts: &[String]) -> serde_json::Value {
     let (background, foreground) = crate::term_out::terminal_colours().unwrap_or_default();
     let accent = crate::term_out::accent_override()
         .or_else(|| crate::term_out::native_accent().map(|[r, g, b]| format!("#{r:02x}{g:02x}{b:02x}")))
         .unwrap_or_default();
-    let fzf = crate::settings::fzf_lists() || !crate::shell_picker::composer_panel(&crate::theme::default_opts());
+    let fzf = crate::settings::fzf_lists() || !crate::shell_picker::composer_panel(fzf_opts);
     json!(crate::shell_picker::Look { background, foreground, accent, lists: if fzf { "fzf" } else { "" }.into() })
 }
 
@@ -400,12 +402,14 @@ fn scan(carry: &mut Vec<u8>, bytes: &[u8], pane: u64) -> Vec<Request> {
 fn reply(app: &mut App, request: &Request, code: u8, text: &str) {
     reply_data(app, request, code, text, None);
 }
+/// A picker's catalog reply, carrying how the TUI looks now. An `unchanged` one carries it too:
+/// a theme change leaves a catalog's revision alone.
+fn catalog_reply(app: &mut App, request: &Request, mut data: serde_json::Value) {
+    if data.is_object() { data["look"] = look_value(); }
+    reply_data(app, request, 0, "", Some(data));
+}
 fn reply_data(app: &mut App, request: &Request, code: u8, text: &str, data: Option<serde_json::Value>) {
-    let data = data.map(|mut data| {
-        // Every reply says how the TUI looks now (an `unchanged` one too: a theme change leaves a catalog's revision alone).
-        if data.is_object() { data["look"] = look_value(); }
-        std::sync::Arc::new(data)
-    });
+    let data = data.map(std::sync::Arc::new);
     app.shell_context.replies.push_back(Reply { request: request.clone(), code, text: text.into(), data: data.clone(), at: Instant::now() });
     // Catalog retries are idempotent without retaining hundreds of large snapshots.
     while app.shell_context.replies.iter().filter(|r| r.data.is_some()).count() > 2 {
@@ -719,7 +723,7 @@ fn inline_list(app: &mut App, request: Request) {
     let revision = hash.finish().to_string();
     if args["revision"].as_str() == Some(revision.as_str()) { data = json!({"unchanged":true}); }
     data["revision"] = json!(revision);
-    reply_data(app, &request, 0, "", Some(data));
+    catalog_reply(app, &request, data);
 }
 
 fn load_routes(app: &mut App, request: Request) {
@@ -1291,6 +1295,7 @@ mod tests {
     #[tokio::test]
     async fn catalog_replies_carry_the_tuis_theme() {
         let _l = crate::term_out::colours_lock();
+        let _restore = LookGuard;
         crate::term_out::set_theme_colours(Some(("#101010".into(), "#eeeeee".into())));
         crate::term_out::set_accent_override(Some("#ff0000".into()));
         crate::settings::set_fzf_lists(true);
@@ -1308,8 +1313,28 @@ mod tests {
         let data = app.shell_context.replies.back().unwrap().data.as_ref().unwrap();
         assert_eq!(data["unchanged"],true);
         assert_eq!(data["look"]["accent"],"#ff0000","an unchanged reply still says the theme");
-        assert_eq!(data["look"]["lists"],"","and the lists as they are now");
-        crate::term_out::set_theme_colours(None); crate::term_out::set_accent_override(None);
+        // A reply that is no catalog (a plan, an acknowledgement) carries no look.
+        let plan = request(&token,"model-inline","0");
+        output(&mut app,1,&plan);
+        assert!(app.shell_context.replies.back().unwrap().data.as_ref().is_none_or(|d| d.get("look").is_none()));
+    }
+    /// Puts hn's process-wide colours and list style back, even when an assertion fails.
+    struct LookGuard;
+    impl Drop for LookGuard {
+        fn drop(&mut self) {
+            crate::term_out::set_theme_colours(None); crate::term_out::set_accent_override(None);
+            crate::settings::set_fzf_lists(false);
+        }
+    }
+    #[test]
+    fn the_looks_lists_follow_the_choice_not_the_developers_environment() {
+        let _l = crate::term_out::colours_lock();
+        let _restore = LookGuard;
+        let words = |s: &str| s.split(' ').map(String::from).collect::<Vec<_>>();
+        assert_eq!(look_value_with(&[])["lists"], "");
+        assert_eq!(look_value_with(&words("--layout=reverse --border"))["lists"], "fzf");
+        crate::settings::set_fzf_lists(true);
+        assert_eq!(look_value_with(&[])["lists"], "fzf", "@hn-lists fzf");
     }
     #[test]
     fn a_new_shell_starts_with_the_tuis_look_in_its_environment() {
@@ -1321,6 +1346,7 @@ mod tests {
     #[test]
     fn the_look_travels_in_the_shell_start_arguments() {
         let _l = crate::term_out::colours_lock();
+        let _restore = LookGuard;
         crate::term_out::set_theme_colours(Some(("#101010".into(),"#eeeeee".into())));
         let argv = bootstrap("tok",Some("cli"),true);
         let remote = bootstrap("tok",Some("cli"),false);
