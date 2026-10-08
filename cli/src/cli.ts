@@ -45,7 +45,7 @@ import { flashCommand } from './lib/flash.js'
 import { awaitLoginCallback, extractCallbackParams, LOGIN_TIMEOUT_MESSAGE, type LoginCallbackParams } from './lib/loginCallback.js'
 import { AUTH_DIR, AuthSessionError, AuthSessionManager, clearAuthSession, knownSsoClientId, newSignInEpoch, readAuthSession, ssoClientIdFor, writeAuthSession, type AuthSession } from './lib/authSession.js'
 import { handOffToGrid } from './lib/gridHandoff.js'
-import { qrSignIn } from './lib/qrSignIn.js'
+import { claimTicket, qrSignIn, type QrSignInTokens } from './lib/qrSignIn.js'
 import { pickSignInMethod, signInMethodFlag, signInProviderName, withSignInProvider, type SignInMethod, type SignInProvider } from './lib/signInMethodPicker.js'
 import { watchJsonDriver, type JsonDriver } from './lib/jsonDriver.js'
 import { terminalQr } from './lib/terminalQr.js'
@@ -397,7 +397,7 @@ async function loginCommand(
   foreground: boolean,
   force: boolean,
   json: boolean,
-  opts: { chained?: boolean; entryPoint?: string; method?: SignInMethod | 'ask' } = {},
+  opts: { chained?: boolean; entryPoint?: string; method?: SignInMethod | 'ask'; ticket?: string } = {},
 ): Promise<SignInOutcome> {
   if (foreground) throw new Error('`harness login` does not run the adapter. Use `harness start -f`.')
   // Which surface asked to sign in. A person in a terminal is `cli`; the desktop app runs this same
@@ -472,6 +472,9 @@ async function loginCommand(
       setWaiting(false)
     }
   }
+  // A box ticket before anything else: unlike every other sign-in it must never land on a computer
+  // that is already signed in, even with --force — the ticket stays unspent for the box it was for.
+  if (opts.ticket) return await ticketSignIn(json, emit, opts.ticket, (email) => succeed(false, email))
   if (readAuthSession() && !force) {
     // Guarded exactly like the identical call after the exchange below. Unguarded, a hiccup on
     // `/api/machines/resolve-computer` reached `onError`, which is JSON-unaware — so the ONE mode a
@@ -581,12 +584,7 @@ async function qrSignInCommand(
   succeed: (email: string) => Promise<SignInOutcome>,
   hooks: SignInHooks = {},
 ): Promise<SignInOutcome> {
-  const fail = (code: string, message: string): SignInOutcome => {
-    if (json) emit({ type: 'result', status: 'error', code, message })
-    else console.error(`\n  ✗ ${message}\n`)
-    process.exitCode = 1
-    return { signedIn: false }
-  }
+  const fail = signInFailure(json, emit)
   let shown = false
   const result = await qrSignIn({
     post: (path, body) => postJson(path, body),
@@ -615,7 +613,51 @@ async function qrSignInCommand(
     },
   })
   if (!result.ok) return fail(result.code, result.message)
-  const { tokens } = result
+  return await saveSignIn(result.tokens, (message) => fail('BACKEND_ERROR', message), succeed)
+}
+
+/** A refused sign-in: its coded result line under --json, a line on stderr otherwise; exit code 1. */
+function signInFailure(json: boolean, emit: (line: Record<string, unknown>) => void): (code: string, message: string) => SignInOutcome {
+  return (code, message) => {
+    if (json) emit({ type: 'result', status: 'error', code, message })
+    else console.error(`\n  ✗ ${message}\n`)
+    process.exitCode = 1
+    return { signedIn: false }
+  }
+}
+
+/**
+ * `harness login --ticket=<t>`: a headless box (no screen for a QR, no one to confirm) signed in with
+ * the ticket the phone handed it during setup. Refused on a computer that is already signed in, before
+ * the ticket is spent: whoever set this box up first keeps it.
+ */
+async function ticketSignIn(
+  json: boolean,
+  emit: (line: Record<string, unknown>) => void,
+  ticket: string,
+  succeed: (email: string) => Promise<SignInOutcome>,
+): Promise<SignInOutcome> {
+  const fail = signInFailure(json, emit)
+  if (readAuthSession()) return fail('ALREADY_SIGNED_IN', 'This computer is already signed in. The ticket was not used.')
+  const result = await claimTicket((path, body) => postJson(path, body), ticket)
+  if (!result.ok) return fail(result.code, result.message)
+  // The ticket is spent and the session written: a failure here would leave the box signed in yet
+  // reporting failure, its retry refused as ALREADY_SIGNED_IN and its daemon never moved onto the
+  // account. The machine id is not needed for that — the daemon starts on the computer id and
+  // resolves it itself (`resolveMachineIfUnknown`) — so the sign-in stands.
+  return await saveSignIn(result.tokens, (message) => {
+    console.error(`  (machine id not resolved yet — ${message}; the daemon resolves it as it starts)`)
+    return succeed(result.tokens.email)
+  }, succeed)
+}
+
+/** A QR or ticket sign-in's session on disk, its account recorded and its machine resolved.
+ *  `unresolved` answers a machine lookup that failed after the session was already written. */
+async function saveSignIn(
+  tokens: QrSignInTokens,
+  unresolved: (message: string) => SignInOutcome | Promise<SignInOutcome>,
+  succeed: (email: string) => Promise<SignInOutcome>,
+): Promise<SignInOutcome> {
   const signInEpoch = newSignInEpoch()
   const autonomousEnv = tokens.autonomousEnv ?? env.AUTONOMOUS_ENV
   writeAuthSession({
@@ -633,7 +675,7 @@ async function qrSignInCommand(
   try {
     await resolveComputerMachine()
   } catch (err) {
-    return fail('BACKEND_ERROR', (err as Error).message)
+    return await unresolved((err as Error).message)
   }
   return await succeed(tokens.email)
 }
@@ -2441,6 +2483,7 @@ switch (cmd) {
     // account: the desktop app reads that line and does not wait for a restart it observes anyway.
     loginCommand(foreground, flags.includes('--force'), flags.includes('--json'), {
       entryPoint: entryPointFlag(),
+      ticket: flags.find((f) => f.startsWith('--ticket='))?.slice('--ticket='.length) || undefined,
       method: signInMethodFlag(flags) ?? (flags.includes('--json') || !process.stdin.isTTY ? undefined : 'ask'),
     })
       .then((outcome) => outcome.signedIn ? restartDaemonForIdentity(outcome.stoppedDaemon) : undefined)

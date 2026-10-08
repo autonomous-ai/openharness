@@ -58,7 +58,7 @@ vi.mock('../services/UserService.js', () => ({
 vi.mock('../services/index.js', () => ({ userService: { get: fakes.get, toPublic: (u: unknown) => u } }))
 
 import { authenticateAccessToken, SsoAuthError } from '../lib/ssoAuth.js'
-import { redeemHandoff, startHandoff, QR_SIGN_IN_MAX_LIFE_SEC } from '../lib/harnessSession.js'
+import { redeemHandoff, startHandoff, BOX_TICKET_TTL_SEC, QR_SIGN_IN_MAX_LIFE_SEC } from '../lib/harnessSession.js'
 import { qrSignInRoutes } from './qrSignIn.js'
 import { authRoutes } from './auth.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
@@ -176,5 +176,36 @@ describe('sign a computer in by scanning its QR', () => {
     const computer = (await post('/api/auth/qr/claim', { pollToken })).json().data.token
     expect((await post('/api/auth/handoff', {}, { authorization: `Bearer ${computer}` })).statusCode).toBe(200)
     expect((await post('/api/auth/handoff', {}, { authorization: `Bearer ${phone}` })).statusCode).toBe(403)
+  })
+
+  describe('a box ticket', () => {
+    const ticket = async () => (await post('/api/auth/box/ticket', {}, asPhone())).json().data as { ticket: string; expiresIn: number }
+
+    it('signs a headless box in as a computer, once, with nothing to scan or confirm', async () => {
+      const t = await ticket()
+      expect(t.expiresIn).toBe(BOX_TICKET_TTL_SEC)
+      const keys = [...fakes.redis.keys()].filter((k) => k.startsWith('hnauth:qr'))
+      expect(keys).toHaveLength(3)   // the record, its poll key, and the answer lock
+      for (const k of keys) expect(fakes.ttls.get(k)).toBe(BOX_TICKET_TTL_SEC)
+      expect((await post('/api/auth/qr/poll', { pollToken: t.ticket })).json().data).toEqual({ status: 'approved', email: 'dee@example.com' })
+      const claimed = (await post('/api/auth/qr/claim', { pollToken: t.ticket })).json().data
+      expect(claimed).toMatchObject({ email: 'dee@example.com', kind: 'computer' })
+      expect(fakes.sessions.at(-1)).toMatchObject({ kind: 'computer', label: 'Harness', userId: USER })
+      await expect(authenticateAccessToken(claimed.token, 'prod', { allowHarnessSession: 'computer' })).resolves.toMatchObject({ sub: USER, harnessSessionKind: 'computer' })
+      const again = await post('/api/auth/qr/claim', { pollToken: t.ticket })
+      expect(again.statusCode).toBe(401)
+      expect(again.json().error.code).toBe('QR_INVALID')
+    })
+
+    it('needs a sign-in and takes no body', async () => {
+      expect((await post('/api/auth/box/ticket', {})).statusCode).toBe(401)
+      expect((await post('/api/auth/box/ticket', { label: 'x' }, asPhone())).statusCode).toBe(400)
+    })
+
+    it('is a wall for a loop', async () => {
+      const codes: number[] = []
+      for (let i = 0; i < 11; i++) codes.push((await post('/api/auth/box/ticket', {}, asPhone())).statusCode)
+      expect(codes.at(-1)).toBe(429)
+    })
   })
 })
