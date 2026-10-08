@@ -59,6 +59,7 @@ vendor binaries, so their real login screens appear.
 | C1 | branch-2, CLI release | C, Codex from npm, not signed in | no | — | blocker: "could not verify Codex startup options" (first `codex --help` past the 5 s check) | — | — |
 | C2 | branch-2 + CLI 9.0.3 (e1aa14ed7) | C, same | sign-in screen | box keeps OpenCode, picker says Codex Needs sign-in; picking Codex opens its own sign-in screen with the task held | none from Harness (sign-in is the person's step) | — | — |
 | A7 | everything combined (PR #1047 + follow-up), the app installing CLI 9.0.4 itself | A | yes | task typed and sent during setup at 15 s; first file at 69 s after opening, no other step; background install then added Claude Code (9.9 s), Codex, Pi | none | — | **~97** |
+| I1 | #1054 (background install, third-review fixes) + CLI 9.0.5 installed by the app | A | yes | background install started 42 s after open (OpenCode 7.4 s, Claude Code 8.4 s, Codex 11.7 s, Pi 11.5 s); first harness answered 23 s after Enter, nothing installed in its pane; a second launch (CLI present) started no install | none | — | — |
 | B1 | branch, CLI release | B, Claude Code 2.1.294 installed, not signed in | no | — | default still OpenCode; picker shows no install state; Claude Code exited at start ("Unable to connect to Anthropic services", transient network) and its pane vanished: user back on an empty box with a stray "Terminal harness" | — | **~20** |
 
 ## Findings
