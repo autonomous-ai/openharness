@@ -9,8 +9,9 @@ import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
-import { hermesSessionSource, isHermesInteractiveSource } from './engines/hermes/reader.js'
-import { hermesDbPath, listHermesHomes } from './engines/hermes/home.js'
+import { HERMES_HOMES, HERMES_SOURCE, hermesDbPath } from './engines/hermes/contract.js'
+import { listStoreHomes } from './engines/kit/storeHomes.js'
+import { isInteractiveSource, storeSessionSource } from './engines/kit/storeSource.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
 import { sid } from './lib/log.js'
@@ -365,8 +366,10 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
 async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers): Promise<void> {
   // EVERY home, not just the default. A `hermes -p <name>` session's row lives in that profile's own
   // store, so asking the default one answered `null` (unknown) six times and fell through — and, worse,
-  // the home found here is the one the whole row then reads its history from (openharness#191).
-  const homes = await listHermesHomes()
+  // the home found here is the one the whole row then reads its history from (openharness#191). Hermes's homes
+  // and the source that tells a delegated session are declared (engines/hermes/contract.ts) and read by the kit:
+  // admission never waits for Hermes's code.
+  const homes = await listStoreHomes(HERMES_HOMES, env.HERMES_HOME)
   let hermesHome: string | undefined
   for (let i = 0; i < HERMES_KIND_TRIES; i++) {
     if (i > 0) await new Promise((resolve) => { const t = setTimeout(resolve, HERMES_KIND_WAIT_MS); t.unref?.() })
@@ -374,14 +377,14 @@ async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers
     if (isRecentlyDeleted(body.sessionId)) return
     let source: string | null = null
     for (const home of homes) {
-      const answer = await hermesSessionSource(hermesDbPath(home), body.sessionId ?? '')
+      const answer = await storeSessionSource(HERMES_SOURCE, hermesDbPath(home), body.sessionId ?? '')
       if (answer === null) continue          // not in this store — try the next home
       source = answer
       if (home !== env.HERMES_HOME) hermesHome = home
       break
     }
     if (source === null) continue
-    if (!isHermesInteractiveSource(source)) {
+    if (!isInteractiveSource(HERMES_SOURCE, source)) {
       console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · hermes_subagent`)
       return
     }

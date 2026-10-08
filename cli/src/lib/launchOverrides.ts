@@ -13,6 +13,7 @@
  */
 
 import { join } from 'node:path'
+import { loadEngine } from '../engines/inProcess.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
 import { ownLoginProviderArgs } from '../engines/launches.js'
@@ -59,7 +60,7 @@ export type LaunchOverridesResult =
 
 export interface LaunchOverridesDeps {
   /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
-  machine: () => GridLaunchMachine
+  machine: (engine: AgentEngine) => GridLaunchMachine
   writeGridConfigDir: (
     key: string,
     files: NonNullable<GridEngineLaunch['configDir']>['files'],
@@ -135,8 +136,11 @@ export async function validateLaunchOverrides(
   engine: AgentEngine,
   source: LaunchSource,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
+  // Which OpenCode is installed decides its argv (`machine`), read by OpenCode's own probe: loaded here for an
+  // OpenCode launch alone (engines/inProcess.ts), and the launch refused without it rather than given a guess.
+  if (engine === 'opencode' && !await loadEngine('opencode')) return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
   if (!source.gridLaunch) return { ok: true }
-  const built = buildGridEngineLaunch(engine, source.gridLaunch, deps.machine())
+  const built = buildGridEngineLaunch(engine, source.gridLaunch, deps.machine(engine))
   if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
   // Only a launch that SETS variables needs the tmux that can set them.
   if (!(await deps.tmuxSupportsSessionEnv())) {
@@ -188,7 +192,7 @@ export async function buildLaunchOverrides(
   // handing the engine a flag it does not know. The same guard covers an opencode agent created on
   // v1 and relaunched on v2, whose TUI has no `--agent`: a resumed v2 session keeps the agent it
   // stored (`session_v2.agent`), so nothing is lost by not naming it.
-  const opencodeMajor = deps.machine().opencodeMajor ?? null
+  const opencodeMajor = deps.machine(engine).opencodeMajor ?? null
   if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
     overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
   }
@@ -218,7 +222,7 @@ async function buildBaseLaunchOverrides(
   // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
-    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, deps.machine().opencodeMajor ?? null)
+    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, deps.machine(engine).opencodeMajor ?? null)
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
     const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
@@ -232,7 +236,7 @@ async function buildBaseLaunchOverrides(
     }
   }
   if (source.gridLaunch) {
-    const built = buildGridEngineLaunch(engine, source.gridLaunch, deps.machine())
+    const built = buildGridEngineLaunch(engine, source.gridLaunch, deps.machine(engine))
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
     const env: Record<string, string> = { ...built.launch.env }
     if (built.launch.configDir) {

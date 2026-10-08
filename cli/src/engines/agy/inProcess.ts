@@ -5,3 +5,4 @@
  */
 export { AgyNormalizer, agyMessagesToEvents, lastAgyTurnText } from './normalizer.js'
 export { agyPaneIdle, parseAgyFooterProfile } from './runtimeProfile.js'
+export { agyConversationForPid, findAgyTranscript } from './session.js'

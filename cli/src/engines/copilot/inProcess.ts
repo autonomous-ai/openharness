@@ -4,3 +4,4 @@
  * its own: what the core calls is the engine's own, unchanged.
  */
 export { CopilotNormalizer, copilotHistoryTurnOpen, copilotMessagesToEvents, lastCopilotTurnText } from './normalizer.js'
+export { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from './session.js'

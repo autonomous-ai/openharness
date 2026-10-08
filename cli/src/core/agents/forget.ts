@@ -5,7 +5,7 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
-import { removeCursorPendingTasks } from '../../engines/cursor/pendingTasks.js'
+import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
@@ -84,7 +84,7 @@ export function createForgetSession({
     clearAgyIdleWatch(sessionId)
     cursorDiscovery.remove(sessionId)
     cursorSubagents.forget(sessionId)
-    void removeCursorPendingTasks(dataDir, sessionId)
+    void removePendingCursorTasks(dataDir, sessionId)
     runtimeProfiles.forget(sessionId)
     void watcher.removeSession(sessionId)
     stopHeartbeat(sessionId)

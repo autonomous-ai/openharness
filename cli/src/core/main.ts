@@ -4,7 +4,7 @@ import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
-import { inProcessScreen, preloadEngine } from '../engines/inProcess.js'
+import { engineNow, inProcessScreen, preloadEngine } from '../engines/inProcess.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
 import { createNativeControls } from './engines/nativeControls.js'
@@ -49,7 +49,7 @@ import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { ensureTmuxOnPath } from '../lib/tmuxOnPath.js'
 import { AUTH_DIR, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
-import { isTerminalEngine } from '../engines/types.js'
+import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
@@ -140,8 +140,9 @@ import { createLaunchRequests } from './agents/launches.js'
 import { createAgentList } from './agents/list.js'
 import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn } from './engines/hooks.js'
-import { createCursorTaskHooks } from './engines/cursorTasks.js'
-import { databaseHistory } from './transcripts/databaseHistory.js'
+import { createCursorDiscovery } from './engines/cursorDiscovery.js'
+import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
+import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
 import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
@@ -185,11 +186,7 @@ import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
 import { isInstalledCopy } from '../lib/installedCopy.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { type ActivityFrame } from '../lib/turnActivity.js'
-import { CursorTranscriptDiscovery } from '../engines/cursor/discovery.js'
-import { cursorDataDir } from '../engines/cursor/home.js'
-import { loadCursorPendingTasks } from '../engines/cursor/pendingTasks.js'
-import { opencodeMajorVersion } from '../engines/opencode/version.js'
-import { hermesDbForSession } from '../lib/hermesHome.js'
+import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
@@ -1013,7 +1010,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const emitSessionEvents = funnel.emit
   const announceTurnAborted = funnel.announceTurnAborted
-  const cursorDiscovery = new CursorTranscriptDiscovery(cursorDataDir(), (sessionId, transcriptPath) => {
+  const cursorDiscovery = createCursorDiscovery(cursorDataDir(), (sessionId, transcriptPath) => {
     const existing = registry.bySession(sessionId)
     if (!existing || existing.engine !== 'cursor' || existing.transcriptPath === transcriptPath) return
     const result = registry.register({
@@ -1062,7 +1059,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     terminalLabel: primaryTerminalLabel,
     dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
     devinHome: env.DEVIN_HOME,
-    hermesDb: (s) => hermesDbForSession(s),
+    hermesDb,
     concurrency: ATTACH_CONCURRENCY,
     relaunchMarks,
     // Built further down: told when an attach finds its last turn already over, never now.
@@ -1075,7 +1072,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
   const history = createHistory({ readerFor: engineReaders.forEngine, resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
     pages: new TranscriptPager(), dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
-    hermesDb: (s) => hermesDbForSession(s) })
+    hermesDb })
   backend.historyProvider = history.sessionGet
   backend.sessionsProvider = history.sessionsList
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
@@ -1150,7 +1147,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     readerFor: engineReaders.forEngine,
     bySession: (sessionId) => registry.bySession(sessionId),
     dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
-    hermesDb: (s) => hermesDbForSession(s),
+    hermesDb,
   })
   // Recaps: turn cards, notifications, cut by the recaps (services/recaps.ts) from the lifecycle the core tells (core/turns/recaps.ts).
   const recaps = createRecaps({
@@ -1896,11 +1893,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * cannot disagree about it.
    *
    * The other is which OpenCode is installed: v2's TUI exits 1 on v1's `-m` / `--agent`. Cached per
-   * installed file (`engines/opencode/version.ts`), so this costs a `stat` after the first read.
+   * installed file (`engines/opencode/version.ts`), so this costs a `stat` after the first read. Read for an
+   * OpenCode launch alone, by OpenCode's own code: every launch of OpenCode loads it before asking, and is refused
+   * without it (core/agents/create.ts, lib/launchOverrides.ts).
    */
-  const gridLaunchMachine = (): GridLaunchMachine => ({
+  const gridLaunchMachine = (engine: AgentEngine): GridLaunchMachine => ({
     hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR),
-    opencodeMajor: opencodeMajorVersion(),
+    opencodeMajor: engine === 'opencode' ? engineNow('opencode', 'an OpenCode launch was built')?.opencodeMajorVersion() ?? null : null,
   })
 
   /**
@@ -2065,7 +2064,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
   // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no
   // pending Cursor tasks this boot, not no daemon.
-  const pendingCursorTasks = await loadCursorPendingTasks(env.ADAPTER_DATA_DIR).catch((error) => {
+  const pendingCursorTasks = await loadPendingCursorTasks(env.ADAPTER_DATA_DIR).catch((error) => {
     console.warn(`[cursor] pending tasks skipped · ${error instanceof Error ? error.message : error}`)
     return []
   })

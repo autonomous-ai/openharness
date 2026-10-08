@@ -23,7 +23,7 @@ import { createCancelRequest } from '../core/turns/cancel.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
-import { hermesDbForSession } from '../lib/hermesHome.js'
+import { hermesDb } from '../core/transcripts/databaseHistory.js'
 import { registry } from '../lib/registry.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
@@ -38,7 +38,7 @@ export function bindHistory(socket: BackendSocket): void {
     stopped: () => stoppedAgents.list(),
     pages: new TranscriptPager(),
     dbs: { opencode: join(env.OPENCODE_DATA_DIR, 'opencode.db'), kilo: join(env.KILO_DATA_DIR, 'kilo.db'), devin: join(env.DEVIN_HOME, 'sessions.db') },
-    hermesDb: (s) => hermesDbForSession(s),
+    hermesDb,
   })
   socket.historyProvider = history.sessionGet
   socket.sessionsProvider = history.sessionsList

@@ -12,8 +12,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import type { BackendSocket } from '../../backendSocket.js'
-import { applyOpencodeSessionModel, parseOpencodeModelId } from '../../engines/opencode/sessionModel.js'
-import { isOpencodeV2, opencodeMajorVersion } from '../../engines/opencode/version.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { probeGridAssignment } from '../../lib/gridAssignment.js'
@@ -127,8 +126,12 @@ export function createAgentRetargeter({
     // sqlite3 (`applyOpencodeSessionModel`).
     const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
       && (!!grid || !!remembered?.includes('/'))
-    const opencodeMajor = session.engine === 'opencode' ? opencodeMajorVersion() : null
-    if (rewritesOpencodeSession && !isOpencodeV2(opencodeMajor) && !binaryOnPath('sqlite3')) {
+    // OpenCode's version and its session's model are OpenCode's own code, loaded for OpenCode alone
+    // (engines/inProcess.ts), as the launch overrides above loaded it: without it, the move is refused.
+    const opencode = session.engine === 'opencode' ? await loadEngine('opencode') : null
+    if (session.engine === 'opencode' && !opencode) return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
+    const opencodeMajor = opencode ? opencode.opencodeMajorVersion() : null
+    if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !binaryOnPath('sqlite3')) {
       return {
         ok: false,
         error: 'OPENCODE_SQLITE_MISSING',
@@ -200,10 +203,10 @@ export function createAgentRetargeter({
       // `Unrecognized flag: -m` and a dead pane), and ships its own writer: the service's
       // `session.switchModel`. `applyOpencodeSessionModel` picks per version, and on v2 every
       // failure refuses the move — with the live process still untouched.
-      if (rewritesOpencodeSession) {
-        const model = built.overrides.sessionModel ? parseOpencodeModelId(built.overrides.sessionModel) : null
+      if (rewritesOpencodeSession && opencode) {
+        const model = built.overrides.sessionModel ? opencode.parseOpencodeModelId(built.overrides.sessionModel) : null
         if (model) {
-          const written = await applyOpencodeSessionModel({
+          const written = await opencode.applyOpencodeSessionModel({
             opencodeMajor, dbPath: opencodeDb, sessionId: session.sessionId, model, cwd: session.cwd ?? undefined,
             // (A model of opencode's own is looked for in its catalogue; a grid's provider lives in
             // the pane's own config, which the service never reads.)
