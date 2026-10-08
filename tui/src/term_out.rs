@@ -272,13 +272,51 @@ pub fn ask_terminal() {
     let _ = out.flush();
 }
 
-/// The terminal's colours 1-7 as it answered OSC 4 (`#rrggbb`), where it did.
-static PALETTE: std::sync::RwLock<[Option<[u8; 3]>; 8]> = std::sync::RwLock::new([None; 8]);
+/// What hn draws with that the terminal answered or the look chose: one for the whole process —
+/// and in tests each test thread's own, as the fzf look is (theme.rs): tests run side by side, and
+/// each draws with the colours it set, not with what another set meanwhile.
+struct Kept<T: 'static> {
+    #[cfg(not(test))]
+    shared: std::sync::RwLock<T>,
+    #[cfg(test)]
+    local: &'static std::thread::LocalKey<std::cell::RefCell<T>>,
+}
+
+impl<T: Clone> Kept<T> {
+    fn get(&self) -> T {
+        #[cfg(not(test))]
+        { self.shared.read().unwrap_or_else(|e| e.into_inner()).clone() }
+        #[cfg(test)]
+        { self.local.with(|c| c.borrow().clone()) }
+    }
+
+    fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        #[cfg(not(test))]
+        { f(&mut self.shared.write().unwrap_or_else(|e| e.into_inner())) }
+        #[cfg(test)]
+        { self.local.with(|c| f(&mut c.borrow_mut())) }
+    }
+}
+
+/// A [Kept] named [$name] of type [$t], starting as [$init].
+macro_rules! kept {
+    ($name:ident, $local:ident, $t:ty, $init:expr) => {
+        #[cfg(test)]
+        thread_local! { static $local: std::cell::RefCell<$t> = const { std::cell::RefCell::new($init) }; }
+        #[cfg(not(test))]
+        static $name: Kept<$t> = Kept { shared: std::sync::RwLock::new($init) };
+        #[cfg(test)]
+        static $name: Kept<$t> = Kept { local: &$local };
+    };
+}
+
+// The terminal's colours 1-7 as it answered OSC 4 (`#rrggbb`), where it did.
+kept!(PALETTE, PALETTE_HERE, [Option<[u8; 3]>; 8], [None; 8]);
 
 /// Record an OSC 4 answer for colour [n] (1-7 are kept; the rest are not asked).
 pub fn set_palette_colour(n: u8, colour: Option<String>) {
     let Some((r, g, b)) = colour.as_deref().and_then(hex_rgb) else { return };
-    if (1..8).contains(&n) { if let Ok(mut p) = PALETTE.write() { p[n as usize] = Some([r, g, b]) } }
+    if (1..8).contains(&n) { PALETTE.update(|p| p[n as usize] = Some([r, g, b])) }
 }
 
 /// The accent the terminal's own theme gives, when it answered its colours and its background:
@@ -286,7 +324,7 @@ pub fn set_palette_colour(n: u8, colour: Option<String>) {
 pub fn native_accent() -> Option<[u8; 3]> {
     let (bg, _) = native_terminal_colours()?;
     let (r, g, b) = hex_rgb(&bg)?;
-    let p = PALETTE.read().ok()?;
+    let p = PALETTE.get();
     let colours: Vec<(usize, [u8; 3])> = (1..8).filter_map(|i| p[i].map(|c| (i, c))).collect();
     // (Most of them, or it is not the terminal's palette speaking.)
     if colours.len() < 5 { return None }
@@ -320,7 +358,7 @@ pub fn set_colours(n: u32) { COLOURS.store(n, std::sync::atomic::Ordering::Relax
 /// these are asked directly and answer reliably; the daemon uses them to paint agent panes.
 #[derive(Clone)]
 struct TerminalColours { bg: String, fg: String, foreground_reported: bool }
-static TERMINAL_FG_BG: std::sync::RwLock<Option<TerminalColours>> = std::sync::RwLock::new(None);
+kept!(TERMINAL_FG_BG, TERMINAL_FG_BG_HERE, Option<TerminalColours>, None);
 
 fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let h = hex.trim_start_matches('#');
@@ -340,20 +378,21 @@ fn companion_fg(bg: &str) -> String {
 /// A theme chosen in the settings (`@hn-theme`) stands in for them: hn's chrome, and the panes the
 /// daemon paints, take the theme's background and foreground.
 pub fn terminal_colours() -> Option<(String, String)> {
-    if let Some(theme) = THEME_COLOURS.read().ok().and_then(|g| g.clone()) { return Some(theme) }
-    TERMINAL_FG_BG.read().ok()?.as_ref().map(|c| (c.bg.clone(), c.fg.clone()))
+    if let Some(theme) = THEME_COLOURS.get() { return Some(theme) }
+    native_terminal_colours()
 }
 
 /// The terminal's own answer, whatever theme is chosen (the settings' "Terminal default").
 pub fn native_terminal_colours() -> Option<(String, String)> {
-    TERMINAL_FG_BG.read().ok()?.as_ref().map(|c| (c.bg.clone(), c.fg.clone()))
+    TERMINAL_FG_BG.get().map(|c| (c.bg, c.fg))
 }
 
-/// The chosen theme's (background, foreground) as `#rrggbb`; None: the terminal's own.
-static THEME_COLOURS: std::sync::RwLock<Option<(String, String)>> = std::sync::RwLock::new(None);
+// The chosen theme's (background, foreground) as `#rrggbb`; None: the terminal's own.
+kept!(THEME_COLOURS, THEME_COLOURS_HERE, Option<(String, String)>, None);
 
-/// Tests that set hn's colours (a theme, an accent) or read them back hold this, one at a time:
-/// the colours are one for the whole process, and tests run side by side.
+/// Tests that set hn's colours (a theme, an accent) or read them back held this, one at a time,
+/// when the colours were one for the whole test process; they are each test thread's own now
+/// ([Kept]), so it only orders those tests.
 #[cfg(test)]
 pub fn colours_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -361,26 +400,23 @@ pub fn colours_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Whether a theme's colours stand in for the terminal's now.
-pub fn theme_chosen() -> bool { THEME_COLOURS.read().ok().is_some_and(|g| g.is_some()) }
+pub fn theme_chosen() -> bool { THEME_COLOURS.get().is_some() }
 
 /// Draw with a theme's colours (or, None, the terminal's again). True when that changed them.
 pub fn set_theme_colours(colours: Option<(String, String)>) -> bool {
-    let Ok(mut g) = THEME_COLOURS.write() else { return false };
-    let changed = *g != colours;
-    *g = colours;
-    changed
+    THEME_COLOURS.update(|g| { let changed = *g != colours; *g = colours; changed })
 }
 
-/// The `[look]` accent (`@hn-accent`, a `#rrggbb`) to draw hn's chrome with, when the look names
-/// one. Kept separate from the terminal palette because an accent is a choice, not a terminal
-/// answer; `theme::accent()` consults it first and falls back to the derived teal.
-static ACCENT_OVERRIDE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+// The `[look]` accent (`@hn-accent`, a `#rrggbb`) to draw hn's chrome with, when the look names
+// one. Kept separate from the terminal palette because an accent is a choice, not a terminal
+// answer; `theme::accent()` consults it first and falls back to the derived teal.
+kept!(ACCENT_OVERRIDE, ACCENT_OVERRIDE_HERE, Option<String>, None);
 
 pub fn set_accent_override(hex: Option<String>) {
-    if let Ok(mut g) = ACCENT_OVERRIDE.write() { *g = hex.map(normalise_hex_short) }
+    ACCENT_OVERRIDE.update(|g| *g = hex.map(normalise_hex_short))
 }
 
-pub fn accent_override() -> Option<String> { ACCENT_OVERRIDE.read().ok()?.clone() }
+pub fn accent_override() -> Option<String> { ACCENT_OVERRIDE.get() }
 
 /// Accept `#rgb` too (shorthand) by expanding it to `#rrggbb`, the form hn parses.
 fn normalise_hex_short(hex: String) -> String {
@@ -405,9 +441,7 @@ mod accent_override_tests {
 /// Record an OSC 10/11 answer. A half left blank keeps the other (a terminal may answer bg only);
 /// a missing foreground is chosen for contrast on the background.
 pub fn set_terminal_colours(bg: Option<String>, fg: Option<String>) {
-    if let Ok(mut guard) = TERMINAL_FG_BG.write() {
-        *guard = updated_terminal_colours(guard.as_ref(), bg, fg);
-    }
+    TERMINAL_FG_BG.update(|kept| *kept = updated_terminal_colours(kept.as_ref(), bg, fg));
 }
 
 fn updated_terminal_colours(existing: Option<&TerminalColours>, bg: Option<String>, fg: Option<String>) -> Option<TerminalColours> {
