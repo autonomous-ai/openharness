@@ -3,7 +3,10 @@ import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
-import { adoptEngineHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, resetEngineHomes, sessionClaudeHome, sessionCodexHome } from './engineHomes.js'
+import {
+  adoptEngineHomes, adoptHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, movedHomes,
+  ownHomeOf, profileEnvironment, resetEngineHomes, sessionClaudeHome, sessionCodexHome, sessionFolderOf, sessionRoots,
+} from './engineHomes.js'
 
 // The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
@@ -104,6 +107,30 @@ describe('the homes the person moved', () => {
       shell.env = {}
       expect(sessionCodexHome({ transcriptPath: join(home, 'sessions', 'thread.jsonl') })).toBe(home)
     } finally { shell.env = {} }
+  })
+
+  // Each engine's session store declares its movable home (engines/sessionStoreContracts.ts): which variable moves
+  // it, the daemon's own, and the folder its sessions are in below it.
+  it('adopts and searches every engine\'s home by its declared session store', () => {
+    expect(ownHomeOf('claude')).toBe(dirname(env.CLAUDE_PROJECTS_DIR))
+    expect(ownHomeOf('codex')).toBe(env.CODEX_HOME)
+    const claude = join(root, 'claude-work'), codex = join(root, 'codex-work')
+    // The daemon's own homes, as declared, move nothing.
+    expect(adoptHomes({ CLAUDE_CONFIG_DIR: dirname(env.CLAUDE_PROJECTS_DIR), CODEX_HOME: env.CODEX_HOME })).toEqual({ claude: null, codex: null })
+    expect(adoptHomes({ CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codex })).toEqual({ claude, codex })
+    expect([movedHomes('claude'), movedHomes('codex'), movedHomes('pi'), movedHomes('toString')]).toEqual([[claude], [codex], [], []])
+    expect(sessionRoots('claude')).toEqual([env.CLAUDE_PROJECTS_DIR, join(claude, 'projects')])
+    // Claude Code's sessions follow no profile of an agent's own; Codex's are on that profile alone.
+    expect(sessionRoots('claude', '/profile')).toEqual(sessionRoots('claude'))
+    expect(sessionRoots('codex')).toEqual([join(env.CODEX_HOME, 'sessions'), join(codex, 'sessions')])
+    expect(sessionRoots('codex', '/profile')).toEqual([join('/profile', 'sessions')])
+    expect([sessionRoots('pi'), sessionRoots('opencode', '/profile')]).toEqual([[], []])
+    // The sessions folder a session's file is in, for the parent beside it.
+    expect(sessionFolderOf('codex', { transcriptPath: join(codex, 'archived_sessions', 'thread.jsonl') })).toBe(join(codex, 'sessions'))
+    expect(sessionFolderOf('codex', { profile: '/profile', transcriptPath: join(codex, 'sessions', 'thread.jsonl') })).toBe(join('/profile', 'sessions'))
+    // An agent launched on its own profile is given it by the variable that moves its engine's home.
+    expect([profileEnvironment('codex', '/profile'), profileEnvironment('claude', '/profile'), profileEnvironment('pi', '/profile')])
+      .toEqual([{ CODEX_HOME: '/profile' }, undefined, undefined])
   })
 
   it('Claude settings follow the bound home or current shell, with the settings default separate from folder trust', () => {

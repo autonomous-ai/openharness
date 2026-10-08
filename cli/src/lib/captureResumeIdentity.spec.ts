@@ -1,10 +1,10 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
-import { claudeProcessSession, findLiveSession, findResumedTranscript } from './sessionRepair.js'
+import { findLiveSession, findResumedTranscript, processSessionOf } from './sessionRepair.js'
 import { processRows, resumeSessionId } from './tmux.js'
 vi.mock('./registry.js', () => ({ validTranscriptPath: vi.fn(() => true), engineKeepsTranscriptFile: vi.fn(() => true) }))
-vi.mock('./sessionRepair.js', () => ({ claudeProcessSession: vi.fn(), findLiveSession: vi.fn(), findResumedTranscript: vi.fn() }))
+vi.mock('./sessionRepair.js', () => ({ processSessionOf: vi.fn(), findLiveSession: vi.fn(), findResumedTranscript: vi.fn() }))
 vi.mock('./tmux.js', () => ({ processRows: vi.fn(), resumeSessionId: vi.fn() }))
 let row: RegisteredSession
 beforeEach(() => {
@@ -15,7 +15,7 @@ beforeEach(() => {
   vi.mocked(validTranscriptPath).mockReturnValue(true)
   vi.mocked(engineKeepsTranscriptFile).mockReturnValue(true)
   vi.mocked(resumeSessionId).mockReturnValue(null)
-  vi.mocked(claudeProcessSession).mockResolvedValue(null)
+  vi.mocked(processSessionOf).mockResolvedValue(null)
   vi.mocked(findLiveSession).mockResolvedValue(null)
   vi.mocked(findResumedTranscript).mockResolvedValue(null)
 })
@@ -86,8 +86,9 @@ it.each(['claude', 'codex'] as const)('captures an explicit %s resume without gu
 })
 it('prefers current Claude native metadata to old resume argv', async () => {
   vi.mocked(resumeSessionId).mockReturnValue('old')
-  vi.mocked(claudeProcessSession).mockResolvedValue({ sessionId: 'current', transcriptPath: '/current' })
+  vi.mocked(processSessionOf).mockResolvedValue({ sessionId: 'current', transcriptPath: '/current' })
   expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'current' }); expect(findResumedTranscript).not.toHaveBeenCalled()
+  expect(processSessionOf).toHaveBeenCalledWith('claude', 77, '/work', Date.parse(row.processIdentity!.startMarker))
 })
 it('captures a unique fresh session before its first hook arrives', async () => {
   vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'new', transcriptPath: '/new' })

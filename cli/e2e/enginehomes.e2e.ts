@@ -312,7 +312,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
   // other engine's hooks are installed here, as for a person whose moved home has none of the daemon's yet.
   // The process repair binds it from what the engine leaves for that in the home it writes in: Claude Code's
   // process record (`<home>/sessions/<pid>.json`), the rollout Codex holds open. It looked in the default
-  // folders alone (sessionRepair.ts `claudeProcessSession`, `findLiveSession`), and the tile never bound.
+  // folders alone (sessionRepair.ts `processSessionOf`, `findLiveSession`), and the tile never bound.
   it.each([
     ['claude', 'CLAUDE_CONFIG_DIR', 'codex'],
     ['codex', 'CODEX_HOME', 'claude'],

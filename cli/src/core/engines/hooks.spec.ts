@@ -3,9 +3,7 @@ import * as hooks from '../../lib/hooks.js'
 import { engineHooks } from '../../engines/hooks.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
-import { dirname } from 'node:path'
-import { env } from '../../config/env.js'
-import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
+import { adoptHomes, movedHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
 import { loadEngine } from '../../engines/inProcess.js'
 
@@ -17,8 +15,8 @@ vi.mock('../../engines/hooks.js', async (real) => {
   } }
 })
 vi.mock('../../lib/engineHomes.js', () => ({
-  adoptEngineHomes: vi.fn(() => ({ claude: null, codex: null })),
-  movedEngineHomes: vi.fn(() => ({ claude: [], codex: [] })),
+  adoptHomes: vi.fn(() => ({ claude: null, codex: null })),
+  movedHomes: vi.fn(() => []),
 }))
 // The other engines' installers load through the loader; a test may make that load fail.
 const loading = vi.hoisted(() => ({ fail: false }))
@@ -342,7 +340,7 @@ describe('installing every engine\'s hooks', () => {
   })
 
   it('only the engines asked for (HOOK_INSTALL_ENGINES), the homes they moved included', async () => {
-    vi.mocked(movedEngineHomes).mockReturnValueOnce({ claude: ['/w/claude'], codex: ['/w/codex'] })
+    vi.mocked(movedHomes).mockReturnValueOnce(['/w/claude']).mockReturnValueOnce(['/w/codex'])
     await installEngineHooks(4242, { only: new Set(['codex']), environment: {} })
     expect(engineHooks.codex.install).toHaveBeenCalledWith(4242)
     expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/w/codex')
@@ -369,25 +367,26 @@ describe('installing every engine\'s hooks', () => {
 
   // lib/engineHomes.ts: with CLAUDE_CONFIG_DIR or CODEX_HOME in the person's profile, no agent ever bound.
   it('puts the hooks in every home adopted on an earlier boot, at every start', async () => {
-    vi.mocked(movedEngineHomes).mockReturnValueOnce({ claude: ['/w/claude'], codex: ['/w/codex'] })
+    vi.mocked(movedHomes).mockReturnValueOnce(['/w/claude']).mockReturnValueOnce(['/w/codex'])
     await installEngineHooks(4242, { environment: {} })
     expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/w/claude')
     expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/w/codex')
+    expect(vi.mocked(movedHomes).mock.calls).toEqual([['claude'], ['codex']])
   })
 
   it('adopts the homes its own environment moves, then the login shell\'s once that is read, and installs there', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const own = { CLAUDE_CONFIG_DIR: '/m/claude' }
     const shell = { CODEX_HOME: '/s/codex' }
-    vi.mocked(adoptEngineHomes)
+    vi.mocked(adoptHomes)
       .mockReturnValueOnce({ claude: '/m/claude', codex: null })
       .mockReturnValueOnce({ claude: null, codex: '/s/codex' })
     void installEngineHooks(4242, { environment: own, loginShell: Promise.resolve(shell) })
-    expect(adoptEngineHomes).toHaveBeenCalledWith(own, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), codexHome: env.CODEX_HOME })
+    expect(adoptHomes).toHaveBeenCalledWith(own)
     expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/m/claude')
     expect(log).toHaveBeenCalledWith('[hooks] engines keep their data elsewhere here: Claude Code in /m/claude')
     await Promise.resolve()
-    expect(adoptEngineHomes).toHaveBeenLastCalledWith(shell, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), codexHome: env.CODEX_HOME })
+    expect(adoptHomes).toHaveBeenLastCalledWith(shell)
     expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/s/codex')
     expect(log).toHaveBeenCalledWith('[hooks] engines keep their data elsewhere here: Codex in /s/codex')
   })
@@ -395,7 +394,7 @@ describe('installing every engine\'s hooks', () => {
   it('reads the daemon\'s own environment when none is given, and logs nothing when nothing moved', async () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     await installEngineHooks(4242)
-    expect(adoptEngineHomes).toHaveBeenCalledWith(process.env, expect.anything())
+    expect(adoptHomes).toHaveBeenCalledWith(process.env)
     expect(log).not.toHaveBeenCalled()
   })
 

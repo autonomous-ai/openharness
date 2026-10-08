@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { readCodexRolloutMeta } from '../codex/rollout.js'
+import { sessionMetaOf } from '../sessionFiles.js'
 import { hooks as codex } from '../codex/hookContract.js'
 import { isChildSession, knownTranscript } from './hookRules.js'
 
@@ -41,12 +41,13 @@ const FIRST_RECORDS: Array<[string, string]> = [
 ]
 
 describe('Codex\'s declared child rule', () => {
-  // `registry` still reads rollouts with readCodexRolloutMeta, at load, to repair a parent a child's hook
-  // overwrote: the rule evaluated on the hook path must say what that reader says about every first record.
-  it.each(FIRST_RECORDS)('agrees with the rollout reader on %s', (name, text) => {
+  // The registry reads a rollout's first record with Codex's declared session store (sessionMetaOf), at load, to
+  // repair a parent a child's hook overwrote: the rule evaluated on the hook path must say what that reader says
+  // about every first record.
+  it.each(FIRST_RECORDS)('agrees with the session store\'s first-record reader on %s', (name, text) => {
     const file = join(root, `${name.replace(/\W+/g, '-')}.jsonl`)
     writeFileSync(file, text)
-    expect(isChildSession(file, codex.children!)).toBe(readCodexRolloutMeta(file)?.isSubagent === true)
+    expect(isChildSession(file, codex.children!)).toBe(sessionMetaOf('codex', file)?.isSubagent === true)
   })
 
   it('finds the children it should', () => {
@@ -67,7 +68,7 @@ describe('Codex\'s declared child rule', () => {
     symlinkSync(join(root, 'nowhere.jsonl'), join(root, 'dangling.jsonl'))
     for (const file of [join(root, 'missing.jsonl'), join(root, 'folder.jsonl'), join(root, 'dangling.jsonl')]) {
       expect(isChildSession(file, codex.children!)).toBe(false)
-      expect(readCodexRolloutMeta(file)).toBeNull()
+      expect(sessionMetaOf('codex', file)).toBeNull()
     }
   })
 
