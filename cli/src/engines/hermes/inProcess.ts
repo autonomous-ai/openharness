@@ -9,3 +9,4 @@ export { HERMES_EFFORTS, hermesStatusModel, parseHermesConfig, parseHermesModels
 // The half of Hermes's homes that fills the registry's row: Hermes's own lookup, run only for Hermes.
 export { hermesDbForSession } from '../../lib/hermesHome.js'
 export { probeHermesHome } from './homeProbe.js'
+export { hermesProvider } from '../../lib/sessionSearch/externals/hermes.js'
