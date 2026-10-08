@@ -24,10 +24,12 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import type { FolderSetting } from '../engines/facets/hooks.js'
 import type { LaunchHome } from '../engines/facets/launch.js'
+import { sessionStoreContracts, sessionStoreOf, type SessionStoreEngine } from '../engines/sessionStoreContracts.js'
+import type { AgentEngine } from '../engines/types.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 
-const claudeHomes: string[] = []
-const codexHomes: string[] = []
+/** The homes each engine's person moved (its session store's `sessions.moved.variable`), by engine, as saved. */
+const movedByEngine = Object.fromEntries(Object.keys(sessionStoreContracts).map((engine) => [engine, [] as string[]])) as Record<SessionStoreEngine, string[]>
 let loadedStamp = ''
 
 const savedFile = (): string => join(env.ADAPTER_DATA_DIR, 'engine-homes.json')
@@ -40,14 +42,13 @@ function load(): void {
     const stamp = `${file}:${stat.ino}:${stat.mtimeMs}:${stat.size}`
     if (stamp === loadedStamp) return
     loadedStamp = stamp
-    const saved = JSON.parse(readFileSync(file, 'utf8')) as { claude?: unknown; codex?: unknown }
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
     const take = (list: unknown, into: string[]): void => {
       for (const home of Array.isArray(list) ? list : []) {
         if (typeof home === 'string' && isAbsolute(home) && !into.includes(home)) into.push(home)
       }
     }
-    take(saved.claude, claudeHomes)
-    take(saved.codex, codexHomes)
+    for (const [engine, homes] of Object.entries(movedByEngine)) take(saved[engine], homes)
   } catch { /* none adopted yet, or unreadable: the login shell's are adopted again once it is read */ }
 }
 
@@ -56,7 +57,7 @@ function save(): void {
   try {
     mkdirSync(dirname(file), { recursive: true })
     const draft = `${file}.${process.pid}.tmp`
-    writeFileSync(draft, JSON.stringify({ claude: claudeHomes, codex: codexHomes }) + '\n', { mode: 0o600 })
+    writeFileSync(draft, JSON.stringify(movedByEngine) + '\n', { mode: 0o600 })
     renameSync(draft, file)
   } catch { /* best effort: adopted again at the next start, once the login shell is read */ }
 }
@@ -69,49 +70,81 @@ export interface MovedHomes {
 
 /** Adopt the homes `environment` moves, beside the daemon's own (`defaults`), and say which are new. */
 export function adoptEngineHomes(environment: NodeJS.ProcessEnv, defaults: { claudeHome: string; codexHome: string }): MovedHomes {
+  const moved = adoptHomes(environment, { claude: defaults.claudeHome, codex: defaults.codexHome })
+  return { claude: moved.claude, codex: moved.codex }
+}
+
+/** The daemon's own home for the variable a person moves `engine`'s with (its session store's `sessions.moved`). */
+export function ownHomeOf(engine: SessionStoreEngine): string {
+  const { own, moved } = sessionStoreContracts[engine].sessions
+  return moved.ownHome === 'setting' ? env[own.setting] : dirname(env[own.setting])
+}
+
+/**
+ * Adopt the homes `environment` moves for every engine that declares a movable home, beside the daemon's own
+ * (`own`, by engine: `ownHomeOf` unless given), and say which are new, by engine.
+ */
+export function adoptHomes(environment: NodeJS.ProcessEnv, own: Partial<Record<SessionStoreEngine, string>> = {}): Record<SessionStoreEngine, string | null> {
   load()
-  const adopt = (value: string | undefined, own: string, known: string[]): string | null => {
+  const adopt = (value: string | undefined, home: string, known: string[]): string | null => {
     const dir = value?.trim()
     // A relative or `~` path is not a folder the engine resolves the same way from every directory.
     if (!dir || !isAbsolute(dir)) return null
-    const home = resolve(dir)
-    if (home === resolve(own) || known.includes(home)) return null
-    known.push(home)
-    return home
+    const moved = resolve(dir)
+    if (moved === resolve(home) || known.includes(moved)) return null
+    known.push(moved)
+    return moved
   }
-  const moved = {
-    claude: adopt(environment.CLAUDE_CONFIG_DIR, defaults.claudeHome, claudeHomes),
-    codex: adopt(environment.CODEX_HOME, defaults.codexHome, codexHomes),
-  }
-  if (moved.claude || moved.codex) save()
+  const moved = Object.fromEntries((Object.keys(movedByEngine) as SessionStoreEngine[]).map((engine) => [engine,
+    adopt(environment[sessionStoreContracts[engine].sessions.moved.variable], own[engine] ?? ownHomeOf(engine), movedByEngine[engine])])) as Record<SessionStoreEngine, string | null>
+  if (Object.values(moved).some(Boolean)) save()
   return moved
+}
+
+/** The homes the person moved `engine`'s to, adopted on this boot or an earlier one; none for an engine that
+ *  declares no movable home. */
+export function movedHomes(engine: AgentEngine | string): string[] {
+  load()
+  return Object.hasOwn(movedByEngine, engine) ? [...movedByEngine[engine as SessionStoreEngine]] : []
+}
+
+/**
+ * Every folder `engine`'s sessions may be in: the agent's own profile's alone, for an engine whose sessions follow
+ * one; else the daemon's own folder and each moved home's. Empty for an engine that declares no session store.
+ */
+export function sessionRoots(engine: AgentEngine | string, profile?: string | null): string[] {
+  const store = sessionStoreOf(engine)
+  if (!store) return []
+  const { own, moved, profile: followsProfile } = store.sessions
+  const below = (home: string): string => own.folder ? join(home, own.folder) : home
+  if (followsProfile && profile) return [below(profile)]
+  return [below(env[own.setting]), ...movedHomes(engine).map((home) => join(home, moved.folder))]
 }
 
 /** Every moved home known: adopted on this boot or an earlier one. */
 export function movedEngineHomes(): { claude: string[]; codex: string[] } {
-  load()
-  return { claude: [...claudeHomes], codex: [...codexHomes] }
+  return { claude: movedHomes('claude'), codex: movedHomes('codex') }
 }
 
-/** Every folder Claude Code's transcripts may be in: the daemon's own, then each moved home's. */
+/** Every folder Claude Code's transcripts may be in: `own`, then each moved home's. */
 export function claudeProjectsRoots(own: string): string[] {
-  load()
-  return [own, ...claudeHomes.map((home) => join(home, 'projects'))]
+  return [own, ...movedHomes('claude').map((home) => join(home, sessionStoreContracts.claude.sessions.moved.folder))]
 }
 
-/** Every Codex home whose rollouts are Codex's own: the daemon's, then each moved one. */
+/** Every Codex home whose rollouts are Codex's own: `own`, then each moved one. */
 export function codexHomeRoots(own: string): string[] {
-  load()
-  return [own, ...codexHomes]
+  return [own, ...movedHomes('codex')]
 }
 
-/** The homes a setting's moves are remembered in, by setting: CODEX_HOME's are adopted above. */
-const movedBySetting: Partial<Record<FolderSetting, string[]>> = { CODEX_HOME: codexHomes }
-
-/** Every home a daemon setting names: the daemon's own, then each one the person moved and Harness adopted. */
+/** Every home a daemon setting names: the daemon's own, then each one the person moved and Harness adopted (the
+ *  engines whose movable home is that setting's folder). */
 export function homeRoots(setting: FolderSetting): string[] {
   load()
-  return [env[setting], ...(movedBySetting[setting] ?? [])]
+  const moved = (Object.keys(movedByEngine) as SessionStoreEngine[]).filter((engine) => {
+    const { own, moved: movable } = sessionStoreContracts[engine].sessions
+    return own.setting === setting && movable.ownHome === 'setting'
+  })
+  return [env[setting], ...moved.flatMap((engine) => movedByEngine[engine])]
 }
 
 /**
@@ -150,12 +183,30 @@ export function launchHome(setting: FolderSetting, profile: string | null | unde
  * environment was unreadable. A bound transcript identifies its adopted home even in a service
  * without the core's shell cache. An explicit profile remains authoritative. */
 export function sessionCodexHome(session: { codexHome?: string | null; transcriptPath?: string | null }): string {
-  if (session.codexHome) return session.codexHome
-  const home = session.transcriptPath && codexHomeRoots(env.CODEX_HOME).find(root => {
+  return sessionHomeOf('codex', { profile: session.codexHome, transcriptPath: session.transcriptPath })
+}
+
+/**
+ * The home a session's file is in, for an engine whose movable home is its setting's folder (its session store's
+ * `sessions.moved.ownHome` is `setting`: Codex's): the agent's own profile, else the known home whose sessions
+ * (or archived sessions) hold the file, else the home a launch made now would use.
+ */
+export function sessionHomeOf(engine: SessionStoreEngine, session: { profile?: string | null; transcriptPath?: string | null }): string {
+  if (session.profile) return session.profile
+  const { own, archived } = sessionStoreContracts[engine].sessions
+  const folders = [own.folder, archived].filter((folder): folder is string => !!folder)
+  const home = session.transcriptPath && homeRoots(own.setting).find(root => {
     const path = relative(root, session.transcriptPath!)
-    return path.startsWith(`sessions${sep}`) || path.startsWith(`archived_sessions${sep}`)
+    return folders.some((folder) => path.startsWith(`${folder}${sep}`))
   })
-  return home || launchCodexHome(null)
+  return home || launchHome(own.setting, null)
+}
+
+/** The sessions folder of that home (`sessionHomeOf`): where a session beside the one in that file is. */
+export function sessionFolderOf(engine: SessionStoreEngine, session: { profile?: string | null; transcriptPath?: string | null }): string {
+  const { own } = sessionStoreContracts[engine].sessions
+  const home = sessionHomeOf(engine, session)
+  return own.folder ? join(home, own.folder) : home
 }
 
 /** Found by QA on a quiet machine: Claude's picker and effort read another login's settings.
@@ -184,9 +235,15 @@ export function launchHomeOf(home: LaunchHome, profile: string | null | undefine
   return 'setting' in home ? launchHome(home.setting, profile, environment) : movedHome(environment[home.variable]) || homedir()
 }
 
+/** The environment that runs an agent on its own profile `home`, for an engine whose sessions follow one (its
+ *  session store's `sessions.profile`): the variable that moves its home (`CODEX_HOME`). None for another engine. */
+export function profileEnvironment(engine: AgentEngine | string, home: string): Record<string, string> | undefined {
+  const sessions = sessionStoreOf(engine)?.sessions
+  return sessions?.profile ? { [sessions.moved.variable]: home } : undefined
+}
+
 /** Test seam: forget every home, and read the data folder's again on next use. */
 export function resetEngineHomes(): void {
-  claudeHomes.length = 0
-  codexHomes.length = 0
+  for (const homes of Object.values(movedByEngine)) homes.length = 0
   loadedStamp = ''
 }

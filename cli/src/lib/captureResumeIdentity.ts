@@ -8,7 +8,7 @@
  * including the four that keep theirs in a database rather than a file.
  */
 import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
-import { claudeProcessSession, findLiveSession, findResumedTranscript } from './sessionRepair.js'
+import { findLiveSession, findResumedTranscript, processSessionOf } from './sessionRepair.js'
 import { processRows, resumeSessionId } from './tmux.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import { isTerminalEngine } from '../engines/types.js'
@@ -33,8 +33,8 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
     && row.executable === expected.executable)
   if (!live) return session
   const explicit = resumeSessionId(session.engine, live.args)
-  const native = session.engine === 'claude'
-    ? await claudeProcessSession(expected.pid, session.cwd, Date.parse(expected.startMarker)) : null
+  // An engine whose process names its own session in a record (Claude Code's, removed at exit) is read now.
+  const native = await processSessionOf(session.engine, expected.pid, session.cwd, Date.parse(expected.startMarker))
   const found = native ?? (explicit
     ? { sessionId: explicit, transcriptPath: await findResumedTranscript(session.engine, explicit, options) }
     : await findLiveSession(session.engine, session.cwd, Date.parse(expected.startMarker), {

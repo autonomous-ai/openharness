@@ -7,7 +7,7 @@ declares what it needs as data on its launch contract (`Engine.launch`, `engines
 Shared mechanics in `engines/kit` read that data, and core runs them in line.
 
 (c) is too large to land as one change. It is split into five sub-batches, each green on its own. This
-document records (c1), (c2) and (c3), which are done, and plans the other two.
+document records (c1) to (c4), which are done, and plans the last.
 
 ## (c1) Launch argv and the pane script: done
 
@@ -245,14 +245,124 @@ reach no Claude Code or Codex file except the declared contracts and `rollout.ts
 `tmux.ts`, `terminalAgentDiscovery.ts`, `gridAssignment.ts`, `cwdRepair.ts`, the registry, the composition and both
 kit modules.
 
+## (c4) Registry load and session identity: done
+
+Where Claude Code and Codex keep their sessions is read as the registry loads, on the hook path, by session repair,
+by Stop's capture and by the handoff. A new facet, `SessionStoreContract` (`engines/facets/sessionStore.ts`),
+declares it. Each engine declares it in `engines/{claude,codex}/sessionStore.ts`, listed in
+`engines/sessionStoreContracts.ts`; Codex's reuses its launch contract's rollout layout and its hook contract's child
+rule. Two kit modules apply it: `kit/sessionRecords.ts` (a file found by its id, and its first record) and
+`kit/continuation.ts`. `engines/sessionFiles.ts` holds the file reads, which the registry calls without reaching
+session repair, and `engines/sessionStores.ts` is the one place callers take the finders from.
+
+| Was | Now |
+| --- | --- |
+| `engines/codex/rollout.ts` `readCodexRolloutMeta` and `resolveCodexRollout`, called by the registry and session repair | `first` (the record's type, where its id, folder, child marker and parent are, the read bound) and `byId` (`walk`: the suffix, the id's shape, the entries looked at). `sessionMetaOf` and `findSessionFileOf`. `rollout.ts` is a 20-line wrapper for Codex's own sub-agent reader. |
+| The registry's Codex child-rollout repair at load, with its `engine === 'codex'` check and log line | `repairsOverwrittenParent`, and the parent found in the same home (`sessionFolderOf`) or the row's profile. The log line names the engine by the contract's `label`, unchanged. |
+| The `claude` and `codex` rows of the registry's `TRANSCRIPT_ROOT` and `transcriptRoots` | `'store'`: the folders `engineHomes.sessionRoots` names. `setCodexHome` takes an engine whose sessions follow a profile (`sessions.profile`). |
+| The `claude` and `codex` cases of `lib/sessionRepair.ts` `findLiveSession` and `findResumedTranscript`, `readClaudeTranscriptMeta` | `scan` (`head`: the child folder and sidechain flag; `first`: the first record) and `byId` (`projects`: one folder below each sessions folder). One `storeSession` for both. |
+| `claudeProcessSession` and its record reader | `live.record` (the folder and suffix beside each sessions folder, the pid, start, folder and id fields). `processSessionOf`. |
+| `codexProcessSession` and `codexProcessFiles` | `live.open` (the session file's name, the launcher whose one native child holds it). `openFileSessionOf` and `processFilesOf`. |
+| `claudeContinuation`, and the `engine === 'claude'` check in `core/agents/bind.ts` | `continuation` (the marker's type and field, the next file's suffix, the tail and head bounds, the turn types). `continuationOf`. The registration's source and hook event are built from the engine and its `label`, unchanged. |
+| The `engine === 'claude'` checks in `lib/captureResumeIdentity.ts` and `lib/handoffDiscovery.ts` | `processSessionOf` for any engine (null without a record); the handoff asks the record for an engine that declares `live.record` |
+| `lib/engineHomes.ts`: the `claude` and `codex` arrays, `adoptEngineHomes`' two variables, the `archived_sessions` literal; `core/engines/hooks.ts`' adoption and its log line | `sessions` (the setting naming the daemon's own folder, the folder below it, the profile, the variable that moves the home and the folder below a moved one, the archive folder). `adoptHomes`, `movedHomes`, `sessionRoots`, `sessionHomeOf`, `ownHomeOf`. The former names are wrappers. The log line names the engine by `product`, unchanged. |
+| `{ CODEX_HOME: … }` at create (`core/agents/create.ts`) and relaunch (`lib/launchOverrides.ts`) | `profileEnvironment(engine, home)`: the variable that moves the home, for an engine whose sessions follow a profile |
+
+The kit's lookup by id (`findSessionFile`) moved from `kit/resumeRepair.ts` to `kit/sessionRecords.ts` unchanged,
+and the resume repair imports it.
+
+### The same answers
+
+**Golden record.** `engines/sessionStore.golden.spec.ts` was recorded in its own commit, from the former code through
+a composition (`engines/sessionStores.ts`), with throwaway homes under a temporary folder. It holds 226 cases:
+
+- **9 home states:** adopted, adopted again, the defaults, relative, `~` and padded paths, remembered across a
+  restart, and the homes a launch uses in four environments.
+- **18 transcript checks:** which paths the registry accepts for six engines, with and without a profile, missing
+  files allowed or not, through symlinks either way, and which engines keep a file.
+- **112 lookups:** a session found by its id (Claude's projects, Codex's rollouts, a profile, moved homes, ids of
+  the wrong shape), by a scan of the store (one, two or no candidates, a linked folder, a profile, born after the
+  process or not, a subagent refused by its folder or by its first flag, a moved home below a folder named
+  `subagents`), by a process's own record (UTC and local starts, wrong pid, folder, id or start, unreadable), by
+  the rollout a process holds open (a sub-agent's, two, the same twice, outside the sessions, another file shaped
+  like a session), and by the files behind npm's Node launcher.
+- **15 continuations:** with a turn, a background session's, the next file missing or a folder, large with and
+  without a turn, the marker not last, malformed.
+- **26 first records and lookups by id:** sub-agents with and without a parent, malformed records, a first line
+  past the 128 KiB bound, nested and dotted folders.
+- **30 registry loads:** a parent overwritten by its sub-agent (put back, or released when its own rollout is gone
+  or another parent's), profiles, moved homes, Claude rows inside and outside their projects, unbound rows. The
+  saved file and the log line are recorded too.
+- **16 captures and handoffs:** what Stop captures for each kind of row, and which finder the handoff asks for
+  each engine.
+
+Every case runs with `process.platform` pinned to darwin and to linux, and linux's are stored where they differ
+(none). The spec also passes with `TMPDIR=/tmp`; no recorded size depends on the temporary folder's length. It
+passes unchanged against the kit, and 24 of 25 one-line mutations fail it:
+
+- Claude's record fields and folder, child folder, sidechain flag, continuation type, tail, head and turns, moved
+  folder, own folder and file suffix;
+- Codex's archive folder, read bound, launcher, file name, parent and folder paths, own folder, profile, scan,
+  repair flag and label;
+- the kit's head-length check, and the archive folder in `sessionHomeOf`.
+
+The one that passes is the walk's entry limit off by one in `findSessionFile`, which moved unchanged. Pinning it
+would need a folder of 5,000 entries read in an order the filesystem chooses.
+
+### The registry's load time
+
+`registry.load()` was timed on one fixed registry: 2,000 rows (Claude Code in the daemon's projects and a moved
+home, Codex in its own home, a moved home and a profile, a Codex parent its sub-agent overwrote, Cursor and
+OpenCode), every transcript on disk. The first load migrates the legacy rows and saves them. Each run then timed
+40 loads of the saved file, as a daemon start reads it, after 3 warm-up loads. Twelve runs, six of each, alternated
+between the former code (the record commit) and this change on the same machine, on main.
+
+| | Median of run medians | Runs' medians | Runs' minimums |
+| --- | --- | --- | --- |
+| Before | 116.3 ms | 114.6 – 125.4 ms | 106.8 – 116.3 ms |
+| After | 115.4 ms | 112.9 – 119.9 ms | 105.3 – 112.3 ms |
+
+Every row stays bound. On the branch's earlier base, twenty runs (25 or 40 loads each) gave 116.8 ms before and
+120.6 ms after, with the same fastest loads. Either way the difference is within the runs' spread.
+
+Found while measuring, and unchanged here: the FIRST load of a registry whose rows all change (the migration of a
+legacy file) took 15.6 s for the same 2,000 rows. `save()` merges every changed row against every row on disk, so
+it is quadratic in the rows changed. A start with a few changed rows does not see it.
+
+### Core closure
+
+| | Lines | Files |
+| --- | --- | --- |
+| Before (the record commit, on main) | 71,654 | 386 |
+| After | 71,865 | 392 |
+
+**Left:** the Claude Code and Codex cases of `lib/sessionRepair.ts` (82 lines shorter), Codex's own reader in
+`engines/codex/rollout.ts` (49 lines shorter) and the walk in `kit/resumeRepair.ts` (25). **Came in:** the two
+stores (85 lines of data and comments), `sessionStoreContracts.ts` (23), `sessionFiles.ts` (41),
+`kit/sessionRecords.ts` (94), `kit/continuation.ts` (100), and the generic homes in `lib/engineHomes.ts` (57).
+
+`rollout.ts` is still in the core's process: the Codex transcript normalizer reaches it through its sub-agent
+reader, which (c5) takes up. The session-control modules no longer do. `architecture.spec.ts` drops `rollout.ts`
+from the declared files and adds a closure test:
+
+- **Strict:** the registry, the handoff, `engineHomes.ts`, `sessionFiles.ts`, the store list and both kit modules
+  reach no Claude Code or Codex file but the declared contracts. The store list reaches exactly the two stores and
+  what Codex's shares with its launch and hook contracts. The kit modules reach none at all.
+- **With one exception:** session repair, Stop's capture, the composition and `core/agents/bind.ts` reach the
+  readers of Claude Code's and Codex's transcripts only through Pi's session reader
+  (`lib/sessionSearch/externals/pi.ts`, through `lib/transcriptReader.ts`). Session repair names Pi's folders with
+  it. The test walks their closures without that one file, and fails once it is no longer reached, so the
+  exception is dropped with the change that takes it out.
+
+The launch builders' closure test now admits the session stores too, since `lib/engineHomes.ts` reads them.
+
 ## The plan for the rest of (c)
 
 The sub-batches are ordered by risk: pure functions first, then async writes, then the hot and synchronous
-paths. Each one records today's behavior in a golden spec first, in its own commit.
+paths. Each one records today's behavior in a golden spec first, in its own commit. One is left.
 
 | | Scope | Why it is in this place | Golden proof |
 | --- | --- | --- | --- |
-| **(c4) Registry load and session identity** | The registry's Codex child-rollout repair (`lib/registry.ts` with `engines/codex/rollout.ts`), `lib/sessionRepair.ts` (about 190 of 716 lines), `lib/captureResumeIdentity.ts`, `lib/handoffDiscovery.ts`, and the moved engine homes of `lib/engineHomes.ts` (with the `CODEX_HOME` env literal at create and relaunch), which the registry and session repair read. | Synchronous, at load before any worker exists, and on the hook path. A wrong answer loses bindings at every restart. The moved homes go with it, since the registry and session repair are what read them. | Recorded transcripts and pid records → binding, session id and repair, read with the same bounds. |
 | **(c5) Adoption readers and shared normalizers** | `lib/sessionSearch/externals/{claude,codex}.ts`, `lib/transcriptPages.ts`, `lib/transcriptReader.ts` and `lib/transcriptActivity.ts`. Also splitting the functions `engines/claude/normalize.ts` and `engines/codex/{normalizer,subagent}.ts` share with other engines into `engines/kit`. | The largest (1,000 to 2,000 lines) but async. Listing and paging sessions for adoption is not session control. Those readers may run in a worker, as long as adoption fails safe when it is down: refused with a reason, never a wrong session. | The adoption and paging specs, unchanged, plus a recorded corpus of transcripts → pages. |
 
 **Out of (c).** These stay as they are, as tables over every engine:
