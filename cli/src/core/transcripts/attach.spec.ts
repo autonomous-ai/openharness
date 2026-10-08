@@ -8,7 +8,7 @@ import type { TailHold } from '../../watcher/watcher.js'
 import { createAttach, type AttachDeps } from './attach.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { createSessionNormalizers } from './normalizers.js'
-import type { RelaunchMark } from './relaunch.js'
+import { createRelaunchMarks, type RelaunchMark } from './relaunch.js'
 import type { PreparedLive } from '../engines/liveSessions.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 
@@ -113,7 +113,7 @@ function setup(over: Partial<AttachDeps> = {}) {
 
 const made = (kind: string) => fakes.made.filter((entry) => entry.kind === kind).map((entry) => entry.instance)
 
-function remoteSetup(open = false) {
+function remoteSetup(open = false, over: Partial<AttachDeps> = {}) {
   const turn = { identity: 'worker:turn', turnOpen: open, continued: false }
   const handle = { engine: 'claude', turnOpen: open, snapshot: () => ({ ...turn }), closeTurn: vi.fn() }
   const candidate = { state: { handle }, page: { cursor: { offset: 20 }, lastStarted: open ? started() : null },
@@ -127,7 +127,7 @@ function remoteSetup(open = false) {
     prepare: vi.fn(async (_session, _options, observe, observePage) => { await observePage?.(frames); frames.forEach(observe); return candidate }),
     install: vi.fn(() => true), discard: vi.fn(), retry: vi.fn(),
   }
-  const p = setup({ remoteLive: remote, liveFor: vi.fn(() => { throw new Error('isolated parser must stay in its worker') }) })
+  const p = setup({ remoteLive: remote, liveFor: vi.fn(() => { throw new Error('isolated parser must stay in its worker') }), ...over })
   return { ...p, remote, candidate, handle }
 }
 
@@ -205,6 +205,43 @@ describe('attaching a session', () => {
     expect(p.remote.prepare).toHaveBeenCalledWith(s, { live: true, end: undefined }, expect.any(Function), undefined)
     expect(p.deps.watcher.hold).not.toHaveBeenCalled()
     expect(p.normalizers.liveParsers.get(s.sessionId)).toBe(p.handle)
+  })
+
+  it.each(['begin', 'prepare', 'config', 'commit', 'install'])('keeps the crash-resume boundary after a failed %s until an attach commits', async phase => {
+    let now = 0
+    const marks = createRelaunchMarks({ now: () => now, maxAgeMs: 1_000 })
+    const p = remoteSetup(true, { relaunchMarks: marks }), s = session('claude', '/fixture/transcript')
+    marks.note(s.sessionId, 20, true)
+    const unavailable = () => { throw new Error('ENGINE_STALE_REPLY') }
+    if (phase === 'begin') vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockImplementationOnce(unavailable)
+    if (phase === 'prepare') vi.mocked(p.remote.prepare).mockImplementationOnce(unavailable)
+    if (phase === 'config') vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...p.profile, config: async () => unavailable() })
+    if (phase === 'commit') vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...p.profile, commitWith: () => false })
+    if (phase === 'install') vi.mocked(p.remote.install).mockReturnValueOnce(false)
+    await p.attach.attachSession(s).catch(() => {})
+    expect(p.deps.emit).not.toHaveBeenCalled()
+    expect(marks.size).toBe(1)
+    // Worker availability cannot age a confirmed resume back into an interrupted live turn.
+    now = 10_000
+    await p.attach.attachSession(s, true)
+    expect(p.remote.prepare).toHaveBeenLastCalledWith(s, { live: false, end: 20 }, expect.any(Function), undefined)
+    expect(p.handle.closeTurn).toHaveBeenCalledExactlyOnceWith('abandoned')
+    expect(p.deps.emit).not.toHaveBeenCalled()
+    expect(marks.size).toBe(0)
+  })
+
+  it('closes the interrupted history before the resumed engine can deliver a new live turn', async () => {
+    const marks = createRelaunchMarks()
+    const p = remoteSetup(true, { relaunchMarks: marks }), s = session('claude', '/fixture/transcript')
+    marks.note(s.sessionId, 20, true)
+    vi.mocked(p.deps.watcher.addSession).mockImplementationOnce(async () => {
+      expect(p.handle.closeTurn).toHaveBeenCalledExactlyOnceWith('abandoned')
+      p.deps.emit(s.sessionId, [started('after the crash')])
+      p.handle.closeTurn.mockClear()
+    })
+    await p.attach.attachSession(s)
+    expect(p.deps.emit).toHaveBeenCalledExactlyOnceWith(s.sessionId, [started('after the crash')])
+    expect(p.handle.closeTurn).not.toHaveBeenCalled()
   })
 
   it.each([false, true])('retains a binding and retries a failed worker prepare, with an existing tail: %s', async held => {
