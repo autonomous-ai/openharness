@@ -3747,7 +3747,7 @@ mod theme_render_tests {
         let line = lines[at];
         assert!(line.contains("[ Stop ]") && line.find("[ Cancel ]") < line.find("[ Stop ]"), "{line}");
         assert!(!line.contains("esc cancel"), "the hint is not on the buttons' row: {line}");
-        assert!(lines[at + 1].contains("esc cancel"), "the hint is the box's last line:\n{s}");
+        assert!(!lines[at + 1].contains("esc cancel") && lines[at + 2].contains("esc cancel"), "a blank row, then the hint as the box's last line:\n{s}");
         let key = |app: &mut App, code| crate::input::modal_key(app, KeyEvent::new(code, KeyModifiers::NONE));
         key(&mut app, KeyCode::Right);
         assert!(matches!(app.modal, Some(Modal::Menu(_))), "moving keeps the menu");

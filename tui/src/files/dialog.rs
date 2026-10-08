@@ -67,15 +67,15 @@ enum Tool { Back, Forward, Columns, Icons, Path, Search }
 pub(super) enum DOut { None, Cancel, Open(PathBuf, bool) }
 
 /// Where a dialog's things are at a size: its sidebar, main area and bottom row.
-/// [bottom]: the buttons' row; [hint]: the line under it, the box's last — what was said, else
-/// the keys (as every dialog keeps its keys hint on its last line, never on the buttons' row).
+/// [bottom]: the buttons' row; [hint]: the box's last line, a blank row under the buttons — what
+/// was said, else the keys (as every dialog keeps its keys hint there, never on the buttons' row).
 #[derive(Clone, Copy, Debug)]
 struct Layout { side: Rect, main: Rect, bottom: u16, hint: u16 }
 
 fn layout(w: u16, h: u16) -> Layout {
     let side_w = SIDE_W.min(w / 4);
-    let body_h = h.saturating_sub(7);
-    Layout { side: Rect::new(1, 3, side_w, body_h), main: Rect::new(2 + side_w, 3, w.saturating_sub(3 + side_w), body_h), bottom: h.saturating_sub(3), hint: h.saturating_sub(2) }
+    let body_h = h.saturating_sub(8);
+    Layout { side: Rect::new(1, 3, side_w, body_h), main: Rect::new(2 + side_w, 3, w.saturating_sub(3 + side_w), body_h), bottom: h.saturating_sub(4), hint: h.saturating_sub(2) }
 }
 
 /// A history entry: the columns' folders and which one is active.
@@ -740,8 +740,8 @@ mod tests {
         assert!(t.contains("Favorites") && t.contains("Home") && t.contains("Locations") && t.contains("Computer"), "{t}");
         assert!(t.contains("[/] app") && t.contains("main.py") && t.contains("Python script") && t.contains("print('xin chào')"), "{t}");
         // The buttons' row, and under it — the box's last line — the keys.
-        assert!(lines[31].contains("[ Cancel ]") && lines[31].contains("[ Open ]") && !lines[31].contains("Enter open"), "{t}");
-        assert!(lines[32].contains("Enter open · Esc cancel"), "{t}");
+        assert!(lines[30].contains("[ Cancel ]") && lines[30].contains("[ Open ]") && !lines[30].contains("Enter open"), "{t}");
+        assert!(!lines[31].contains("Enter open") && lines[32].contains("Enter open · Esc cancel"), "a blank row, then the keys: {t}");
         // Open is chosen even unfocused; Tab to the buttons, Left chooses Cancel, Enter cancels.
         if !crate::theme::no_color() {
             let c = crate::settings::chrome();
@@ -749,8 +749,8 @@ mod tests {
             let mut buf = Buffer::empty(area);
             d.draw(&mut buf, area, &Look::default());
             let (cx, ox) = (d.buttons()[0].x, d.buttons()[1].x);
-            assert_eq!(buf[(ox + 2, 31)].bg, c.selected.bg.unwrap());
-            assert_ne!(buf[(cx + 2, 31)].bg, c.selected.bg.unwrap());
+            assert_eq!(buf[(ox + 2, 30)].bg, c.selected.bg.unwrap());
+            assert_ne!(buf[(cx + 2, 30)].bg, c.selected.bg.unwrap());
         }
         d.focus = Focus::Columns;
         d.key(k(KeyCode::Tab));
@@ -762,7 +762,7 @@ mod tests {
         assert_eq!(d.button, 1);
         // It fits a small window too.
         let small = text(&mut d, 90, 24);
-        assert!(small.lines().nth(21).unwrap().contains("[ Open ]") && small.contains("main.py"), "{small}");
+        assert!(small.lines().nth(20).unwrap().contains("[ Open ]") && small.contains("main.py"), "{small}");
     }
 
     #[test]

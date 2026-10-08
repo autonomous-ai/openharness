@@ -52,21 +52,21 @@ pub struct Parts { pub label: bool, pub input: bool, pub message: u16, pub hint:
 pub struct Areas { pub body: Rect, pub label: Option<Rect>, pub input: Option<Rect>, pub field: Option<Rect>, pub message: Option<Rect>, pub row: Rect, pub hint: Option<Rect> }
 
 /// The parts of a dialog drawn in [area] (its box), two columns in from each side: the body,
-/// then the label, the input box, the message, a blank row, the buttons' row and — always the
-/// last line — the keys hint.
+/// then the label, the input box, the message, a blank row, the buttons' row and — a blank row
+/// above it, always the last line — the keys hint.
 pub fn areas(area: Rect, parts: Parts) -> Areas {
     let optional = [(parts.label, 1), (parts.input, INPUT_ROWS), (parts.message > 0, parts.message)];
     let constraints = std::iter::once(Constraint::Fill(1))
         .chain(optional.iter().filter(|(on, _)| *on).map(|&(_, rows)| Constraint::Length(rows)))
         .chain([Constraint::Length(1), Constraint::Length(1)])   // a blank row, the buttons
-        .chain(parts.hint.then_some(Constraint::Length(1)));
+        .chain(parts.hint.then_some([Constraint::Length(1), Constraint::Length(1)]).into_iter().flatten());   // a blank row, the hint
     let rects = Layout::vertical(constraints).split(area.inner(Margin::new(2, 1)));
     let mut next = rects.iter().copied();
     let body = next.next().unwrap_or_default();
     let mut take = |on: bool| if on { next.next() } else { None };
     let (label, input, message) = (take(parts.label), take(parts.input), take(parts.message > 0));
     let (_blank, row) = (take(true), take(true).unwrap_or_default());
-    let hint = take(parts.hint);
+    let (_blank, hint) = (take(parts.hint), take(parts.hint));
     Areas { body, label, input, field: input.map(|r| r.inner(Margin::new(1, 1))), message, row, hint }
 }
 
@@ -132,7 +132,8 @@ impl<'a> Dialog<'a> {
     /// The rows the box needs.
     pub fn height(&self) -> u16 {
         let p = self.parts();
-        let optional = u16::from(p.label) + if p.input { INPUT_ROWS } else { 0 } + p.message + u16::from(p.hint);
+        // (The hint: a blank row and its line.)
+        let optional = u16::from(p.label) + if p.input { INPUT_ROWS } else { 0 } + p.message + 2 * u16::from(p.hint);
         (self.body.len().min(u16::MAX as usize / 2) as u16).saturating_add(optional + 2 + 2)
     }
 

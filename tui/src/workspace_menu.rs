@@ -62,7 +62,7 @@ pub fn dialog_parts(m: &Menu) -> crate::dialog::Parts {
 /// A confirmation's box (a `dialog::Dialog`): its notes, a blank row, the buttons' row and the
 /// keys hint's line inside the border. The drawing and the mouse both lay it out with
 /// `dialog::areas` and [dialog_parts].
-pub fn dialog_box(m: &Menu) -> Rect { Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 4 + u16::from(dialog_parts(m).hint)) }
+pub fn dialog_box(m: &Menu) -> Rect { Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 4 + 2 * u16::from(dialog_parts(m).hint)) }
 
 fn fit(menu: &mut Menu, size: (u16, u16)) -> bool {
     // A resize keeps the button the keys were on.
@@ -75,7 +75,7 @@ fn fit(menu: &mut Menu, size: (u16, u16)) -> bool {
     // either the rows or the columns run out; buttons that still do not fit are refused, never
     // overlapped.
     let mut buttons = layout.buttons.clone();
-    let extra = |b: &Option<Buttons>| b.as_ref().map_or(0, |b| 2 + u16::from(!b.row.hint.is_empty()));
+    let extra = |b: &Option<Buttons>| b.as_ref().map_or(0, |b| 2 + 2 * u16::from(!b.row.hint.is_empty()));
     if size.1 < actions as u16 + 2 + extra(&buttons) { if let Some(b) = &mut buttons { b.row.hint.clear() } }
     if size.0 < 12 || size.1 < actions as u16 + 2 + extra(&buttons) { return false }
     let choice = menu.choice.and_then(|at| menu.items.get(at)).and_then(|chosen| layout.items.iter().position(|i|
@@ -190,7 +190,7 @@ mod tests {
         assert!(open_buttons(&mut app, "Hi", vec![note("Stop?")], confirm(crate::buttons::KEYS), vec!["x".into(), "y".into()]));
         let Some(Modal::Menu(menu)) = &mut app.modal else { panic!("closed") };
         assert!(menu.width >= confirm(crate::buttons::KEYS).width(), "the box holds the hint's line and the buttons");
-        assert_eq!(dialog_box(menu).height, menu.items.len() as u16 + 5, "notes, a blank, the buttons, the hint: the last line");
+        assert_eq!(dialog_box(menu).height, menu.items.len() as u16 + 6, "notes, a blank, the buttons, a blank, the hint: the last line");
         assert_eq!(menu.items.len(), 1);
         menu.buttons.as_mut().unwrap().row.chosen = 1;
         app.size = (26, 20); resize(&mut app);   // 22 columns of room: buttons need 20, the hint 38
