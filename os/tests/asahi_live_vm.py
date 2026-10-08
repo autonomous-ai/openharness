@@ -213,6 +213,9 @@ def main():
         try:
             if vm:
                 vm.close()
+        except BaseException as error:
+            receipt.update(status='failed', cleanup_error=str(error))
+            raise
         finally:
             receipt.update(finished_at=time.time(), original_media_unchanged=digest(args.iso) == media['artifact']['sha256'],
                            original_payload_unchanged=digest(args.image) == media['media']['payload']['sha256'])

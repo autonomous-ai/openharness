@@ -12,7 +12,7 @@ def discard_passed_disks(output, receipt, *disks):
     try:
         # Require the durable result first. Validate the entire deletion set
         # before removing anything; input fixtures are outside this directory.
-        if json.loads(record.read_text()) != receipt:
+        if json.loads(record.read_text()) != json.loads(json.dumps(receipt)):
             raise ValueError('Write the matching passing receipt before cleanup')
         owned = []
         for path in dict.fromkeys(map(Path, disks)):

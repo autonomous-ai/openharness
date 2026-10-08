@@ -243,6 +243,8 @@ def main():
             receipt.update(status='failed', error='Original source image changed.')
         (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
         discard_passed_disks(output, receipt, disk)
+    if receipt['status'] != 'passed':
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':

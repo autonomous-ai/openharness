@@ -84,6 +84,9 @@ def main():
         try:
             if vm:
                 vm.close()
+        except BaseException as error:
+            receipt.update(status='failed', cleanup_error=str(error))
+            raise
         finally:
             receipt['finished_at'] = time.time()
             (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')

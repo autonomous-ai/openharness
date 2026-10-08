@@ -164,6 +164,9 @@ def main():
         try:
             if vm:
                 vm.close()
+        except BaseException as error:
+            receipt.update(status='failed', cleanup_error=str(error))
+            raise
         finally:
             receipt.update(finished_at=time.time(), original_source_unchanged=digest(source) == args.sha256)
             if not receipt['original_source_unchanged']:
