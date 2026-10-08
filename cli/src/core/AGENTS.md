@@ -37,8 +37,7 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   validates bounded replies, retains acknowledged cursors and owns binding/turn state. The explicit
   inline/older-master compatibility path is the only live parser or runtime profile implementation
   composition in core. Screen reads are bounded and fenced to the worker connection and session binding
-  ([screen boundary](../../../docs/design/2026-10-08-engine-screen.md)). Core keeps accepted profiles and control authority; native picker drivers
-  remain to migrate. See [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md).
+  ([screen boundary](../../../docs/design/2026-10-08-engine-screen.md)). Core keeps accepted profiles and control authority; native model drivers run in workers through [revocable control grants](../../../docs/design/2026-10-08-engine-model-control.md). See [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md).
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
   `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.
   `cardText.ts`: an engine's error, rewritten for a device's card.

@@ -1,3 +1,4 @@
+import { sessionBinding as identity } from './sessionBinding.js'
 import type { ScreenReading } from '../../engines/facets/screen.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { screenCapture } from '../../engines/worker/screenProtocol.js'
@@ -11,13 +12,6 @@ export interface ScreenDeps {
   transport: Pick<ScreenTransport, 'read'>
   resolve(id: string): RegisteredSession | undefined
   inline(engine: AgentEngine, capture: string | null): ScreenReading | undefined
-}
-
-/** Snapshot scalars: registry records may be edited in place while a worker answers. */
-function identity(session: RegisteredSession | undefined): string {
-  return session ? JSON.stringify([session.agentId, session.sessionId, session.engine, session.active,
-    session.registeredAt, session.boundAt, session.transcriptPath, session.tmuxPane,
-    session.primaryRuntimeKey, session.runtimes, session.processIdentity]) : ''
 }
 
 export function createScreens(deps: ScreenDeps) {
