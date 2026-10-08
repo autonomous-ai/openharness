@@ -88,7 +88,13 @@ def preferences(vm, result):
     # Chromium requires its visible native confirmation when removing another
     # extension, even if management.uninstall requests showConfirmDialog:false.
     # Remove is the dialog's default OK action; send real keyboard confirmation.
-    vm.command('hn-browser chrome://extensions/')
+    vm.command('hn-browser')
+    wait_installer_screen(vm, r'Harness_', 'browser-home-before-removal')
+    # Chromium ignores this internal URL as a normal startup argument. Navigate
+    # through the visible address bar as a user would.
+    vm.keys('ctrl', 'l')
+    vm.type_probe('chrome://extensions/')
+    vm.keys('ret')
     wait_installer_screen(vm, r'start\s+page', 'browser-home-extension-card')
     vm.click_word('browser-home-remove-action', 'Remove')
     confirmation = wait_installer_screen(vm, r'Cancel', 'browser-home-remove-confirm')
