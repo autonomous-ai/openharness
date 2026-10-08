@@ -254,7 +254,11 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(await history(c, agent)).toMatchObject({ error: 'ENGINE_UNAVAILABLE', retryable: true })
     const first = c.frames.length
     const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 60_000, 'queued turn after worker recovery')
-    c.send('message', { agentId: agent.id, content: 'worker-is-parked' })
+    // A person can still use the independent CLI while its worker is parked.
+    // Harness messages now require screen evidence and are withheld in an
+    // outage (covered above); type through this fixture's private terminal.
+    await d.tmux.run('send-keys', '-t', registered().tmuxPane, '-l', 'worker-is-parked')
+    await d.tmux.run('send-keys', '-t', registered().tmuxPane, 'Enter')
     await until('the independent CLI to finish writing its turn', () => {
       const file = registered().transcriptPath
       return file && readFileSync(file, 'utf8').split('\n').some(line => {
