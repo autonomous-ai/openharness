@@ -1,29 +1,15 @@
-import { existsSync } from 'node:fs'
-import { basename, join } from 'node:path'
-import { sid } from '../../lib/log.js'
-import type { LiveTurn } from '../facets/live.js'
-import type { EngineHooks, HookSession, HookStop, HookTurnContext } from '../facets/hooks.js'
-import { installSessionHooks } from './installHooks.js'
-
 /**
- * `claude --resume` from a folder other than the conversation's own: Claude Code announces a transcript
- * under the CURRENT cwd's project dir, then keeps writing the original file (measured: a resume of
- * 73f090ca from `cli/` announced `…-openharness-cli/73f090ca.jsonl`, and every later turn still landed
- * in `…-openharness/73f090ca.jsonl`). The announced file never appears, the hook is dropped, and the
- * resume is never confirmed — "Start failed" over a pane that is working. The row being resumed already
- * knows the real file; take it when it names this very conversation.
+ * What a Stop or StopFailure hook means for an engine whose contract says its Stop closes turns
+ * (facets/hooks.ts `stopClosesTurns`): Claude Code's. Turn mechanics only, on core's immutable turn
+ * snapshots and its atomic close (core/turns/turnHooks.ts), so it runs in core with no engine code. Moved
+ * from engines/claude/hooks.ts.
  */
-export function transcriptFor(body: HookSession, agent: HookSession | undefined): string | undefined {
-  const announced = body.transcriptPath ?? undefined
-  if (!announced || existsSync(announced)) return announced
-  const known = agent?.transcriptPath
-  if (!known || !body.sessionId || agent.sessionId !== body.sessionId) return announced
-  if (basename(known) !== `${body.sessionId}.jsonl` || !existsSync(known)) return announced
-  return known
-}
+import { sid } from '../../lib/log.js'
+import type { HookStop, HookTurnContext } from '../facets/hooks.js'
+import type { LiveTurn } from '../facets/live.js'
 
 /** Capture the arrival's turn before the first await: a drain can open the next turn. */
-async function onStop(
+export async function closeTurnOnStop(
   { turnState, closeTurn, latestPromptAt, drain, noteEngineStopped, emit, graceMs }: HookTurnContext,
   { sessionId, status, firedAt }: HookStop,
 ): Promise<void> {
@@ -60,11 +46,4 @@ async function onStop(
     console.log(`[turn] ${sid(sessionId)} force-closed by ${status === 'error' ? 'StopFailure' : 'Stop'} hook (after grace)`)
     emit(sessionId, [{ type: 'turn_ended', payload: {} }])
   }
-}
-
-export const hooks: EngineHooks = {
-  install: installSessionHooks,
-  installIn: (port, home) => installSessionHooks(port, join(home, 'settings.json')),
-  transcriptFor,
-  onStop,
 }
