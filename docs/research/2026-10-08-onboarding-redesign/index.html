@@ -447,8 +447,8 @@
     viewer for any session that writes a page or prints a local address. The pane, its layout and its toggle are the ones Store harnesses use now.</p>
 
   <h2>3. Arrival: someone who already uses Claude Code and Codex</h2>
-  <p class="lede">Their most recent sessions that are not running anywhere open by themselves. With both agents, tab 1 holds the most recent Claude Code session and the most recent Codex session side by side,
-    so the first thing they see is two agents at once; tab 2 holds the next 3, mixing both where they can. No strip or banner: the Claude Code and Codex limits stay in the footer, with a low one in amber.</p>
+  <p class="lede">Their most recent sessions that are not running anywhere open by themselves. Most recent means most recently active: the same order as ⌘P and the recent list on ⌘T, by each conversation's last activity. With both agents, tab 1 holds the most recently active Claude Code session and the most recently active Codex session side by side,
+    so the first thing they see is two agents at once; tab 2 holds the next 3 most recently active, mixing both where they can. No strip or banner: the Claude Code and Codex limits stay in the footer, with a low one in amber.</p>
   <div class="win">
     <div class="bar"><span class="dots"><i></i><i></i><i></i></span>
       <span class="tab on">harness-web</span><span class="tab">api-server</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
@@ -460,7 +460,7 @@
       <div class="status"><span>Harnesses 5</span><span>Machines 1</span><span>Models 0</span><span style="display:flex;align-items:center;gap:.5cqw"><img src="../../../desktop/assets/model-icons/claude.png" alt="" style="width:1.2cqw;height:1.2cqw">64%</span><span style="display:flex;align-items:center;gap:.5cqw;color:var(--amber)"><img src="../../../desktop/assets/engine-icons/codex.png" alt="" style="width:1.2cqw;height:1.2cqw">14%</span><span class="sp"></span><span>MacBook</span><span>harness-web</span></div>
     </div>
   </div>
-  <p class="cap"><b>Tab 1: one Claude Code and one Codex</b>, each that agent's most recent session. Typing in either picks the conversation up where it stopped.</p>
+  <p class="cap"><b>Tab 1: one Claude Code and one Codex</b>, each that agent's most recently active session. Typing in either picks the conversation up where it stopped.</p>
   <div class="win" style="margin-top:22px">
     <div class="bar"><span class="dots"><i></i><i></i><i></i></span>
       <span class="tab">harness-web</span><span class="tab on">api-server</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
@@ -474,11 +474,11 @@
     </div>
   </div>
   <p class="cap"><b>Tab 2: the next 3 sessions, both agents where possible</b>, one large and two stacked. Tabs take Harness's usual names.</p>
-  <p class="note"><b>Logic:</b> sessions are Claude Code and Codex conversations on this Mac from the last 30 days, newest first (the daemon's <code>session_search</code>, as the welcome page uses today).
+  <p class="note"><b>Logic:</b> sessions are Claude Code and Codex conversations on this Mac from the last 30 days, most recently active first: the same <code>lastActivityAt</code> order ⌘P and the ⌘T recents use (the daemon's <code>session_search</code>, as the welcome page reads it today).
     <b>Only sessions that are not running:</b> a conversation that is open right now in a terminal, an editor or another app is left alone, so bringing sessions into Harness never interrupts
     the person's work. Those stay in ⌘P, where they can be taken over on purpose.
-    <b>Both agents:</b> tab 1 = newest Claude Code + newest Codex. Tab 2 = the next 3 newest, swapping in the other agent's next session if all 3 would be the same agent.
-    <b>One agent:</b> that agent's 2 newest in tab 1, the next 3 in tab 2. <b>Fewer sessions:</b> tab 1 fills first; tab 2 exists only if something is left.
+    <b>Both agents:</b> tab 1 = the most recently active Claude Code session + the most recently active Codex session. Tab 2 = the next 3 most recently active, swapping in the other agent's next one if all 3 would be the same agent.
+    <b>One agent:</b> that agent's 2 most recently active in tab 1, the next 3 in tab 2. <b>Fewer sessions:</b> tab 1 fills first; tab 2 exists only if something is left.
     <b>Installed but no sessions yet:</b> one empty pane on that agent, focused.
     A pane shows its conversation at once, and its agent starts when the person types in it, so 5 panes do not start 5 agents. That "start on first keystroke" pane is the one new piece of plumbing here.</p>
 
@@ -546,7 +546,7 @@
     <b>Tour:</b> 5 slides: machines, agents, ⌘P, ⌘N, then sessions + the Harness phone app + the Harness device. Tagline "All your machines. All your agents. One command center." Harness opens by itself when setup finishes; no button.<br>
     <b>New users:</b> the Space Dodge game, preview beside it, a first change pre-filled and selected. OpenCode is downloaded only when there is no agent engine.<br>
     <b>Every web project:</b> the preview opens by itself when an agent writes a page or starts a local server; × hides it, ⇧⌘V shows it.<br>
-    <b>Existing users:</b> only sessions not running anywhere. Tab 1 = newest Claude Code + newest Codex; tab 2 = next 3, both agents where possible; one agent = its own recent sessions.
+    <b>Existing users:</b> only sessions not running anywhere. Tab 1 = most recently active Claude Code + most recently active Codex; tab 2 = the next 3 most recently active, both agents where possible (order = ⌘P / ⌘T recents, by last activity); one agent = its own recent sessions.
     A pane's agent starts on the first keystroke. No welcome strip.<br>
     <b>Pickers:</b> no status badges; agent installs get a friendly progress pane instead of installer text.<br>
     <b>Not changed:</b> the footer and everything outside onboarding. (Footers in these renders now match the app: usage on the left after Models.)<br>
