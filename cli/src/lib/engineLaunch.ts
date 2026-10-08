@@ -1016,10 +1016,24 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
   // Scope both npm env spellings to the installer subprocess. Do not rewrite .npmrc or install
   // into a different OS user's shared prefix, and do not tie the engine to a versioned Node folder.
   // Either way a subshell, run at the top level where a stop is resumed (STOP_PROOF_FUNCTIONS).
-  const installCommand = recipe.executable.npmGlobal
-    ? `(export npm_config_prefix=${shellSingleQuote(npmEnginePrefix())} NPM_CONFIG_PREFIX=${shellSingleQuote(npmEnginePrefix())}; eval ${shellSingleQuote(install)})`
-    : `(eval ${shellSingleQuote(install)})`
+  const run = (line: string) => recipe.executable.npmGlobal
+    ? `(export npm_config_prefix=${shellSingleQuote(npmEnginePrefix())} NPM_CONFIG_PREFIX=${shellSingleQuote(npmEnginePrefix())}; eval ${shellSingleQuote(line)})`
+    : `(eval ${shellSingleQuote(line)})`
+  const installCommand = run(install)
   const candidates = [names, paths].filter(Boolean).join(' ')
+  // `curl … | bash` exits 0 when curl itself fails (bash ran an empty script), so the fallback is
+  // decided by whether an executable exists afterwards, not by the first line's status.
+  const fallback = recipe.fallback ? [
+    'if [ -z "$harness_engine_bin" ]; then',
+    '  hash -r 2>/dev/null || true',
+    '  if ! harness_find_engine "$1"; then',
+    `    printf '\\n%s\\n' 'harness: that install did not finish; trying the npm package instead' 'harness: $ ${recipe.fallback.replace(/'/g, "'\\''")}' ''`,
+    '    harness_status=0',
+    `    ${run(recipe.fallback)} || harness_status=$?`,
+    '    harness_resume',
+    '  fi',
+    'fi',
+  ] : []
   return [
     'resolve_engine() {',
     '  candidate="$1"',
@@ -1063,6 +1077,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     'harness_status=0',
     `[ -n "$harness_engine_bin" ] || ${installCommand} || harness_status=$?`,
     'harness_resume',
+    ...fallback,
     'if [ -z "$harness_engine_bin" ]; then',
     `  if [ "$harness_status" -ne 0 ]; then printf '\\n%s\\n' 'harness: the install failed, so the agent was not started. The command is above; fix it and create the agent again.'; exit 1; fi`,
     '  hash -r 2>/dev/null || true',

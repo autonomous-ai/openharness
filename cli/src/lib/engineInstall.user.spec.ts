@@ -91,6 +91,36 @@ describe('engine installation for a fresh OS user', () => {
     await expect(commandAvailableInInteractiveShell(f.name, probe, f.recipe)).resolves.toBe(true)
   })
 
+  // OpenCode's installer downloads from GitHub Releases, which some networks cannot reach. A `curl |
+  // bash` whose curl fails still exits 0, so both a silent and a failing first line must fall back.
+  for (const [label, command] of [['exits 0 but installs nothing', 'true | sh'], ['fails', 'exit 7']]) {
+    it(`installs the npm fallback when the first installer ${label}`, () => {
+      const f = fixture()
+      const result = f.run(f.runtime('node-one'), { ...f.recipe, command, fallback: f.recipe.command })
+      expect(result.status, result.stdout + result.stderr).toBe(0)
+      expect(result.stdout).toContain('trying the npm package instead')
+      expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
+      expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(true)
+    })
+  }
+
+  it('reports the fallback failure as the install failure', () => {
+    const f = fixture()
+    const result = f.run(f.runtime('node-one'), { ...f.recipe, command: 'true', fallback: 'exit 9' })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toContain('trying the npm package instead')
+    expect(result.stdout).toContain('the install failed, so the agent was not started')
+    expect(result.stdout).not.toContain('ENGINE_READY:')
+  })
+
+  it('does not run the fallback when the first installer worked', () => {
+    const f = fixture()
+    const result = f.run(f.runtime('node-one'), { ...f.recipe, fallback: 'exit 9' })
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout).not.toContain('trying the npm package instead')
+    expect(result.stdout).toContain('ENGINE_READY:')
+  })
+
   it('keeps using an existing global engine instead of installing another copy', () => {
     const f = fixture()
     // This prefix is writable during setup only; the missing-engine test above owns EACCES.
