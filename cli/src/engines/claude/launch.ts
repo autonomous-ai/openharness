@@ -12,5 +12,5 @@ export const launch: EngineLaunch = {
   permissionModes, bypassPermission: permissionModes.auto,
   firstPromptArgs: [], resumeArgs: ['--resume'], forkArgs: { lead: ['--resume'], after: ['--fork-session'] },
   instructionFiles: ['CLAUDE.md'],
-  contextArgs: file => ['--append-system-prompt', `Read the harness context at ${JSON.stringify(file)} before working.`],
+  contextArgs: { args: ['--append-system-prompt', 'Read the harness context at {file} before working.'], quote: 'json' },
 }

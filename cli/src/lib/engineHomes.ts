@@ -22,6 +22,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'no
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
+import type { FolderSetting } from '../engines/facets/hooks.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 
 const claudeHomes: string[] = []
@@ -127,7 +128,12 @@ function movedHome(value: string | undefined): string | null {
  * Codex's trust prompt in a folder Harness had just made.
  */
 export function launchCodexHome(codexHome: string | null | undefined, environment: NodeJS.ProcessEnv = launchEnvironment()): string {
-  return codexHome || movedHome(environment.CODEX_HOME) || env.CODEX_HOME
+  return launchHome('CODEX_HOME', codexHome, environment)
+}
+
+/** The same, for the home any daemon setting names (an engine's launch contract declares which: engines/launches.ts). */
+export function launchHome(setting: FolderSetting, profile: string | null | undefined, environment: NodeJS.ProcessEnv = launchEnvironment()): string {
+  return profile || movedHome(environment[setting]) || env[setting]
 }
 
 /** Found by QA on a quiet machine: activity, close and Monitor looked at another server when the process's

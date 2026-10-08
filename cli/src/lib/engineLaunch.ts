@@ -5,7 +5,8 @@ import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
-import { launchField } from '../engines/launches.js'
+import { launchContract, launchField } from '../engines/launches.js'
+import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/version.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
@@ -15,8 +16,10 @@ import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
 import { RAISE_OPEN_FILES_SH } from './openFiles.js'
-import { ENGINE_EXIT_PANE_OPTION } from './tmux.js'
-import { CODEX_STARTUP_RETRY_PROBE } from './codexStartupRetry.js'
+import { ENGINE_EXIT_PANE_OPTION } from './engineExitOption.js'
+import { shellSingleQuote } from './shellQuote.js'
+
+export { shellSingleQuote }
 
 /**
  * Best-effort "skip permission prompts" flag per engine, confirmed against each vendor's own docs.
@@ -546,8 +549,9 @@ export function buildEngineLaunchArgv(
 ): string[] {
   if (isTerminalEngine(engine)) return buildTerminalLaunchArgv(opts, shell)
   const command = buildEngineCommandArgv(engine, opts)
+  // An engine whose declared startup runs in the script gets one even where the daemon has no login shell.
   const interactive = interactiveEngineShell(shell)
-    ?? (engine === 'codex' ? { path: posixRunner(), args: ['-c'], label: 'shell' } : null)
+    ?? (startupNeedsScript(launchContract(engine)) ? { path: posixRunner(), args: ['-c'], label: 'shell' } : null)
   if (!interactive) return command
   const enginePrelude = engineFallbackPrelude(engine, interactive.path, tmuxBinary)
   // The clear comes FIRST, before the install as well as before the engine. An installer is a child
@@ -655,7 +659,8 @@ export const ENGINE_INPUT_DRAIN_SH = '  if harness_tty=$(stty -g 2>/dev/null) &&
  *
  * A stop is not an exit: `harness_resume` continues a stopped engine, so only its real exit reaches
  * `harness_after` (`STOP_PROOF_FUNCTIONS`). The engine's run itself is `engineRunScript`'s, at the
- * script's top level; for Codex these also hold its startup probe and retry.
+ * script's top level. An engine's declared startup adds its own functions here: Codex's probe for its
+ * owned-process flag and its runs again after a failed startup (engines/kit/launchStartup.ts).
  */
 export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tmuxBinary: string | null): string {
   const loginArgs = basename(shellPath).toLowerCase() === 'zsh' ? ' -l' : ''
@@ -680,8 +685,7 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     + `  printf '\\n%s\\n' ${shellSingleQuote(`harness: ${command} exited ($harness_status). This pane is a shell now — run ${command} again, or stop the pane.`).replace('($harness_status)', `('"$harness_status"')`)}\n`
     + `  exec ${shellSingleQuote(shellPath)}${loginArgs}\n`
     + '}\n'
-    + (engine === 'codex' ? codexOwnedLaunchPrelude() : '')
-    + (codexRetries(engine, tmuxBinary) ? codexStartupRetryScript(tmuxBinary) : '')
+    + startupFunctions(engine, launchContract(engine), tmuxBinary, baseNode(process.execPath))
 }
 
 /**
@@ -776,119 +780,11 @@ const STOP_PROOF_FUNCTIONS = [
 /**
  * The engine's run, then `harness_after`, at the script's top level: the one place a stop is safe in
  * every shell (`STOP_PROOF_FUNCTIONS`). `$harness_engine_bin` is the engine and `"$@"` its arguments.
- *
- * `... || harness_status=$?` rather than `...; harness_status=$?`: a rc file that turned on `set -e`
- * would end the script on the engine's non-zero exit before the fallback ran (see RAISE_OPEN_FILES_SH).
- *
- * A Codex launch can end before its conversation opens and be run again (`codexStartupRetryScript`):
- * its runs are written out one after another, since no loop or function may hold the engine.
+ * An engine's declared startup decides how it is run: Codex's with its probed flag, and once more after a
+ * startup that never opened its conversation (engines/kit/launchStartup.ts).
  */
 function engineRunScript(engine: AgentEngine, tmuxBinary: string | null): string {
-  const run = `"$harness_engine_bin"${engine === 'codex' ? ' ${harness_codex_no_daemon:+--no-daemon}' : ''} "$@"`
-  if (!codexRetries(engine, tmuxBinary)) {
-    return [
-      ...(engine === 'codex' ? ['harness_codex_probe "$harness_engine_bin"'] : []),
-      'harness_status=0',
-      `${run} || harness_status=$?`,
-      'harness_resume',
-      'harness_after',
-    ].join('\n')
-  }
-  const attempt = [
-    'harness_codex_start "$harness_engine_bin"',
-    `[ "$harness_codex_go" != 1 ] || ${run} || harness_status=$?`,
-    'harness_resume',
-    'harness_codex_next',
-  ]
-  return [
-    'harness_codex_attempt=1',
-    'harness_codex_updated=0',
-    'harness_codex_go=1',
-    ...Array.from({ length: CODEX_STARTUP_RUNS }, () => attempt).flat(),
-    'harness_after',
-  ].join('\n')
-}
-
-/** Codex's runs at most: the first, one more after a startup update, two more after a timed-out
- *  account lookup (`codexStartupRetryScript`). */
-const CODEX_STARTUP_RUNS = 4
-
-/** Codex is run again after a failed startup only where the pane can be read: through the daemon's tmux. */
-function codexRetries(engine: AgentEngine, tmuxBinary: string | null): tmuxBinary is string {
-  return engine === 'codex' && !!tmuxBinary && isAbsolute(tmuxBinary)
-}
-
-/** Keep a successful startup update or transient account lookup failure in the original launch.
- * Only the final exit gets the pane's engine-exit marker. The short backoff also
- * keeps discovery from archiving the row between attempts. Never reparse "$@": it
- * includes the original prompt, images, model, permissions and resume/fork arguments.
- * Codex's updater runs before the conversation opens, so replay that exact launch
- * once, without choosing an unrelated conversation via `resume --last`.
- *
- * `harness_codex_start` readies a run and `harness_codex_next` decides whether another
- * follows; the runs are `engineRunScript`'s, at the top level. The probes and the backoff
- * run in command substitutions, out of a Ctrl+Z's reach (`STOP_PROOF_FUNCTIONS`).
- *
- * The probe is written once, as `harness_codex_check`: tmux refuses a command longer than
- * 16KiB, and the launch, first prompt and all, goes to it as one (`tmux new-session`). */
-function codexStartupRetryScript(tmuxBinary: string): string {
-  const probe = 'harness_codex_check'
-  const tmux = shellSingleQuote(tmuxBinary)
-  return 'harness_codex_check() {\n'
-    + `  ${shellSingleQuote(baseNode(process.execPath))} -e ${shellSingleQuote(CODEX_STARTUP_RETRY_PROBE)} "$@"\n`
-    + '}\n'
-    + 'harness_codex_start() {\n'
-    + '  [ "$harness_codex_go" = 1 ] || return 0\n'
-    + '  harness_codex_before=\n'
-    + `  if [ -n "\${TMUX_PANE:-}" ]; then harness_codex_before=$(${probe} before ${tmux} "$TMUX_PANE") || harness_codex_before=; fi\n`
-    + '  harness_codex_probe "$1"\n'
-    + '  harness_status=0\n'
-    + '}\n'
-    + 'harness_codex_next() {\n'
-    + '  [ "$harness_codex_go" = 1 ] || return 0\n'
-    + '  harness_codex_go=0\n'
-    + '  if [ "$harness_status" -eq 0 ] && [ "$harness_codex_updated" -eq 0 ] && [ -n "$harness_codex_before" ] &&\n'
-    + `    harness_codex_seen=$(${probe} after-update ${tmux} "$TMUX_PANE" "$harness_codex_before"); then\n`
-    + '    harness_codex_updated=1\n'
-    + `    printf '\\n%s\\n' 'harness: Codex updated. Continuing startup…'\n`
-    + '    harness_codex_go=1\n'
-    + '    return 0\n'
-    + '  fi\n'
-    + '  [ "$harness_status" -eq 1 ] && [ "$harness_codex_attempt" -lt 3 ] && [ -n "$harness_codex_before" ] || return 0\n'
-    + `  harness_codex_seen=$(${probe} after ${tmux} "$TMUX_PANE" "$harness_codex_before") || return 0\n`
-    + '  harness_codex_delay=$((harness_codex_attempt * 2))\n'
-    + '  harness_codex_attempt=$((harness_codex_attempt + 1))\n'
-    + '  harness_codex_cancelled=0\n'
-    + "  trap 'harness_codex_cancelled=1' INT\n"
-    + `  printf '\\n%s\\n' "harness: Codex account lookup timed out. Retrying startup ($harness_codex_attempt/3) in \${harness_codex_delay}s; Ctrl-C cancels."\n`
-    + '  harness_codex_seen=$(sleep "$harness_codex_delay") || harness_codex_cancelled=1\n'
-    + '  trap : INT\n'
-    + '  if [ "$harness_codex_cancelled" -eq 1 ]; then harness_status=130; return 0; fi\n'
-    + '  harness_codex_go=1\n'
-    + '}\n'
-}
-
-/** Codex 0.157+ otherwise puts the writer outside tmux in a shared server. Keep
- * Harness-owned launches process-owned so Close, hook attribution, provider env
- * and RAM accounting describe the same lifetime. Probe the binary AFTER any
- * install, in the exact pane shell; older versions simply omit the flag. The
- * probe is bounded and never changes the user's Codex configuration.
- *
- * It sets `harness_codex_no_daemon` for the run rather than rewriting "$@", so each
- * run of the retry probes its binary afresh (an update may have replaced it) without
- * adding the flag to the saved arguments again; and it runs in a command substitution,
- * out of a Ctrl+Z's reach (`STOP_PROOF_FUNCTIONS`). */
-function codexOwnedLaunchPrelude(): string {
-  const probe = `const {execFileSync}=require('node:child_process');try { const h=execFileSync(process.argv[1],['--help'],{timeout:5000,maxBuffer:1048576,encoding:'utf8',stdio:['ignore','pipe','pipe']});process.exit(/--no-daemon(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }`
-  return 'harness_codex_probe() {\n'
-    + '  harness_codex_mode=0\n'
-    + `  harness_codex_seen=$(${shellSingleQuote(baseNode(process.execPath))} -e ${shellSingleQuote(probe)} "$1") || harness_codex_mode=$?\n`
-    + '  case "$harness_codex_mode" in\n'
-    + '    0) harness_codex_no_daemon=1 ;;\n'
-    + '    64) harness_codex_no_daemon= ;;\n'
-    + `    *) printf '%s\\n' 'harness: could not verify Codex startup options. Please try opening this session again.' >&2; exit 1 ;;\n`
-    + '  esac\n'
-    + '}\n'
+  return startupRuns(engine, launchContract(engine), tmuxBinary)
 }
 
 /**
@@ -1040,10 +936,6 @@ function installFirstScript(install: string): string {
     'harness_engine_bin=$1',
     '',
   ].join('\n')
-}
-
-export function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`
 }
 
 /**

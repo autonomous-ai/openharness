@@ -95,8 +95,8 @@ export function createAgentForker({
       dshLabel = installed.manifest.name
     }
     // The row's own login, model and profile, as a restart and a resume relaunch it (launch.ts): a Codex
-    // agent moved back off a grid names its provider again (`-c model_provider=…`,
-    // engines/codex/ownLoginProvider.ts) and the model it had before the grid (`-m`), and a profile gets
+    // agent moved back off a grid names its provider again (`-c model_provider=…`, `ownProvider` in
+    // engines/codex/launch.ts) and the model it had before the grid (`-m`), and a profile gets
     // its hooks. A fork was launched without any of them, and came back on Codex's default model where a
     // restart of its source came back on the source's own (e2e/forks.e2e.ts). The harness and the named
     // agent are the fork's own (a new runtime, above and below), so they are not rebuilt here.

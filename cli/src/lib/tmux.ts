@@ -15,6 +15,7 @@ import {
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
+import { ENGINE_EXIT_PANE_OPTION } from './engineExitOption.js'
 import { psEnv } from './childLocale.js'
 import { processStartTicks } from './processLiveness.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
@@ -1253,13 +1254,7 @@ export async function setPaneStyle(pane: string, style: string): Promise<boolean
 }
 
 /** What tmux knows about a pane right now. See `agentCreateDiagnosis.ts` for why this is read. */
-/**
- * The pane option an engine's launch wrapper sets when the engine exits and the pane falls back to
- * a shell (engineLaunch.ts, `harness_after`): the engine's exit status. Empty/absent while the
- * wrapper is still running the engine — and for the whole life of the fallback shell after that,
- * once something reads it, so `respawn` clears it before every new launch in the same pane.
- */
-export const ENGINE_EXIT_PANE_OPTION = '@harness_engine_exit'
+export { ENGINE_EXIT_PANE_OPTION }
 
 export interface TmuxPaneState {
   dead: boolean

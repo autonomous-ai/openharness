@@ -7,7 +7,7 @@ import { PROCESS_ENGINES } from '../engines/types.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { buildLaunchOverrides } from '../lib/launchOverrides.js'
 import type { InstalledDsh } from './installed.js'
-import { HARNESS_ADAPTERS, HARNESS_BOOTSTRAP, codexEnvArgs, harnessAdapter } from './adapters.js'
+import { HARNESS_ADAPTERS, HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
 import { compatibleHarnessEngines } from './compatibility.js'
 import { forkRuntimeKey, harnessLaunchOrRefusal, harnessRuntimeDir, incompatibleHarnessEngine, migrateHarnessInstructions, prepareHarnessLaunch } from './runtime.js'
 
@@ -149,7 +149,7 @@ describe('session isolation and lifecycle', () => {
     expect(fork.env.HARNESS_PRIVATE_GRID).toBeUndefined()
     const fresh = prepareHarnessLaunch(pkg, ws, 'codex', 'fresh')
     expect(readFileSync(fresh.env.HARNESS_CONTEXT_FILE!, 'utf8')).toContain('# Updated instructions')
-    expect(fresh.args).toEqual(['--new-flag', ...codexEnvArgs(fresh.env)])
+    expect(fresh.args).toEqual(['--new-flag', ...HARNESS_ADAPTERS.codex.envArgs!(fresh.env)])
   })
 
   it('keeps older rows stable using their agent id and supports package renames', async () => {

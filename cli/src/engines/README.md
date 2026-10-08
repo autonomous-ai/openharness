@@ -19,10 +19,13 @@ launch contracts, history/last-turn readers and hook behavior behind `Engine` (`
 selects those engines; `launches.ts` and `hooks.ts` expose their respective facets without loading history
 readers. Hook transport, process binding and event delivery stay with core. Their hooks are declared data
 (`claude/hookContract.ts`, `codex/hookContract.ts`) that core applies in line with `kit/` mechanics, never in a
-worker ([hooks](../../../docs/design/2026-10-08-engine-hooks.md)). Claude Code and Codex history/last-turn reads,
+worker ([hooks](../../../docs/design/2026-10-08-engine-hooks.md)). So are their launch specifics (`claude/launch.ts`,
+`codex/launch.ts`): Codex's pane startup probe and retry, its own-login provider, and the harness context and env
+flags, applied by `kit/launchStartup.ts` and `kit/launchArgs.ts` ([launch](../../../docs/design/2026-10-08-engine-launch.md)). Claude Code and Codex history/last-turn reads,
 live transcript parsing, runtime profiles/catalogs, screen interpretation, submission readings, model-control drivers, question navigation and Codex's app-server connection run on demand in supervised workers;
 the other facets still run in core. Explicit inline mode and older masters retain inline implementations. See
 [hooks](../../../docs/design/2026-10-08-engine-hooks.md),
+[launch](../../../docs/design/2026-10-08-engine-launch.md),
 [question control](../../../docs/design/2026-10-08-engine-question-control.md),
 [submission](../../../docs/design/2026-10-08-engine-submission.md),
 [native control](../../../docs/design/2026-10-08-engine-native-control.md),
