@@ -20,6 +20,7 @@ import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
 import type { ScreenReader } from '../lib/screenReader.js'
+import type { SubmissionReader } from '../lib/submissionReader.js'
 import type { ScreenReading } from '../engines/facets/screen.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
 import type { TerminalControl } from './terminals/control.js'
@@ -28,6 +29,8 @@ type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Re
 
 export interface InputDeps {
   readScreen: ScreenReader
+  /** Claude Code's and Codex's reading of a prompt typed into their pane, from their worker (core/engines/submissions.ts). */
+  submission: SubmissionReader
   resolve: (id: string) => RegisteredSession | undefined
   byAgent: (agentId: string) => RegisteredSession | undefined
   terminal: Pick<TerminalControl, 'captureTerminal' | 'validateTerminal' | 'submitTerminalAction' | 'keyTerminalAction' | 'pinTerminalControl'>
@@ -114,6 +117,7 @@ export function sessionInputDeps(
   return {
     beforeSubmit: (id, text, tabId, deliveryId) => teams.prepare(id, text, tabId, deliveryId),
     readScreen: deps.readScreen,
+    submission: deps.submission,
     getSession: (id) => resolve(id),
     onDelivery: (event) => {
       device()?.delivery(event)
@@ -170,6 +174,7 @@ export function deviceInputDeps(
     inject: messageWriter(deps),
     sendKey: keyTerminalAction,
     capture: captureTerminal,
+    submission: deps.submission,
     // Whatever a message is not typed into, the Device's waits for it to close, rather than be refused.
     isAwaitingUser: async session => {
       const pane = await captureTerminal(session.agentId)

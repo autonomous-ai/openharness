@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { deviceErrorText } from '../cardText.js'
+import { inlineSubmission } from '../../testing/inlineSubmission.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createEventFunnel, funnelFor, outsideConsumers, type FunnelDeps } from './funnel.js'
 
@@ -28,6 +29,7 @@ function setup(engine = 'claude', over: Partial<FunnelDeps> = {}) {
     input: { onTurnStarted: vi.fn(log('input started')), onTurnEnded: vi.fn(log('input ended')) },
     teams: { started: vi.fn(log('teams started')) },
     deviceInput: { onTurnStarted: vi.fn(log('deviceInput started')), onTurnEnded: vi.fn(log('deviceInput ended')) },
+    submission: inlineSubmission,
     device: () => ({ turnStarted: vi.fn(log('device started')), turnEnded: vi.fn(log('device ended')), stream: vi.fn(log('device stream')) }),
     startHeartbeat: vi.fn(log('heartbeat')),
     questionWatcher: { start: vi.fn(log('questions start')), noteTurnStart: vi.fn(log('questions pre-turn')), stop: vi.fn(log('questions stop')) },

@@ -1,4 +1,5 @@
 import { readInlineScreen } from '../testing/inlineScreen.js'
+import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -40,6 +41,7 @@ function deps(over: Partial<InputDeps> = {}) {
   let pane: string | null = READY_PANE
   const base: InputDeps = {
     readScreen: readInlineScreen,
+    submission: inlineSubmission,
     resolve: (id) => agents.get(id),
     byAgent: (agentId) => agents.get(agentId),
     terminal: {

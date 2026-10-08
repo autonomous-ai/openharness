@@ -34,6 +34,8 @@ export interface EngineConfig {
   claudeModel?: string
   /** Pause model commands at a disposable file gate for worker failure tests. */
   modelControlGate?: boolean
+  /** Note every submitted prompt and hold a `!latestart` turn's start at a file gate (submission tests). */
+  submissionGate?: boolean
   codexModel?: string
   /** The test's throwaway root: the engine runs no hooks from settings outside it. */
   root: string
@@ -59,6 +61,8 @@ export interface DaemonOptions {
   claudeModel?: string
   /** Pause model commands at a disposable file gate for worker failure tests. */
   modelControlGate?: boolean
+  /** Note every submitted prompt and hold a `!latestart` turn's start at a file gate (submission tests). */
+  submissionGate?: boolean
   codexModel?: string
   /** Boot the core on its own (`__run`) instead of under harnessd's master (`__harnessd`). */
   noMaster?: boolean
@@ -215,6 +219,7 @@ export class IsolatedDaemon {
     const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel, modelControlGate: options.modelControlGate,
+      ...(options.submissionGate ? { submissionGate: true } : {}),
       root, hookLog: join(own, 'fake-engine-hooks.log'),
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
     }

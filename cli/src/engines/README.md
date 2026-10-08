@@ -18,9 +18,10 @@ that stream.
 launch contracts, history/last-turn readers and hook behavior behind `Engine` (`engine.ts`). `registry.ts`
 selects those engines; `launches.ts` and `hooks.ts` expose their respective facets without loading history
 readers. Hook transport, process binding and event delivery stay with core. Claude Code and Codex history/last-turn reads,
-live transcript parsing, runtime profiles/catalogs, screen interpretation, model-control drivers and question navigation run on demand in supervised workers;
+live transcript parsing, runtime profiles/catalogs, screen interpretation, submission readings, model-control drivers and question navigation run on demand in supervised workers;
 the other facets still run in core. Explicit inline mode and older masters retain inline implementations. See
 [question control](../../../docs/design/2026-10-08-engine-question-control.md),
+[submission](../../../docs/design/2026-10-08-engine-submission.md),
 [model control](../../../docs/design/2026-10-08-engine-model-control.md),
 [screen interpretation](../../../docs/design/2026-10-08-engine-screen.md),
 [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md) and the
@@ -415,7 +416,7 @@ Only needed for the capabilities your agent actually has. Skip what does not app
 
 | File | What to add |
 |---|---|
-| `lib/sessionInput.ts` | How text is submitted, and how long to wait before deciding the submit failed. Muse writes its `started` record as soon as it accepts a prompt, so 6 seconds is enough; a slower agent needs a longer window |
+| `lib/sessionInput.ts` | How text is submitted, and how long to wait before deciding the submit failed. Muse writes its `started` record as soon as it accepts a prompt, so 6 seconds is enough; a slower agent needs a longer window. Claude Code and Codex declare theirs in `<engine>/submissionPolicy.ts` and read their composer in `<engine>/submission.ts`, in their worker |
 | `lib/sessionRepair.ts` | Rebinding a pane to its session after a restart |
 | `lib/oneshot.ts` | Running a single prompt outside an interactive session |
 

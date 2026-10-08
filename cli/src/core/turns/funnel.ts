@@ -13,6 +13,7 @@
 import { correlateAgentEvent } from '../../lib/agentEvent.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isDeviceInputBoundary } from '../deviceInput.js'
+import type { SubmissionReader } from '../../lib/submissionReader.js'
 import type { WifiFeed } from '../wifi.js'
 import type { TurnRecaps } from './recaps.js'
 import { deviceErrorText } from '../cardText.js'
@@ -48,6 +49,8 @@ export interface FunnelDeps {
   input: Pick<SessionInputController, 'onTurnStarted' | 'onTurnEnded'>
   teams: Pick<SwarmPromptScopes, 'started'>
   deviceInput: Pick<AutonomousDeviceInput, 'onTurnStarted' | 'onTurnEnded'>
+  /** Which engines take a message typed mid-turn into their own queue (their declared submission policy). */
+  submission: Pick<SubmissionReader, 'policy'>
   device: () => Pick<WifiFeed, 'turnStarted' | 'turnEnded' | 'stream'> | undefined
   startHeartbeat: (sessionId: string) => void
   questionWatcher: Pick<QuestionWatcher, 'start' | 'noteTurnStart' | 'stop'>
@@ -94,7 +97,7 @@ export function outsideConsumers(options: {
 /** The funnel itself, over what it feeds. */
 export function funnelFor({
   bySession, tokenUsage, agentIdFor, turnActivity, isSubagentSession, clients, search, turnStartedAt, input, teams,
-  deviceInput, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(),
+  deviceInput, submission, device, startHeartbeat, questionWatcher, mirror, outside = outsideConsumers(),
 }: FunnelDeps) {
   return (sessionId: string, events: Events, opts?: EmitOptions): void => {
     if (!events.length || !bySession(sessionId)?.active) return
@@ -150,7 +153,7 @@ export function funnelFor({
             `${startedAt ? ` · ${Date.now() - startedAt}ms` : ''}`,
         )
         // Filter only the Device receipt view; shared normalizers, mirror, and local input stay unchanged.
-        if (!isDeviceInputBoundary(usageSession?.engine ?? '', events, eventIndex)) {
+        if (!isDeviceInputBoundary(submission.policy(usageSession?.engine ?? ''), events, eventIndex)) {
           outside('devices', () => device()?.turnEnded(agentId, event.payload.aborted === true))
           deviceInput.onTurnEnded(agentId)
         }

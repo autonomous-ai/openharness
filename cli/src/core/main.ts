@@ -6,6 +6,10 @@ import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
 import { legacyScreen } from '../lib/legacyScreen.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
+import { createSubmissions } from './engines/submissions.js'
+import { submissionPolicy } from '../engines/submissionPolicies.js'
+import { createSubmissionTransport } from './engines/submissionTransport.js'
+import { masterRunsEngineSubmission } from '../harnessd/services.js'
 /**
  * The core's entry: `harness __run`. `runForeground` is the composition root, which builds the core's
  * modules, starts the services through `serviceHost` and wires them to the socket
@@ -555,8 +559,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const isolatedModelControl = (engine: string): boolean => modelControlHosted && isolatedLive(engine)
   const screenHosted = masterRunsEngineScreen(process.env, process.ppid)
   const isolatedScreen = (engine: string): boolean => screenHosted && isolatedLive(engine)
+  const submissionHosted = masterRunsEngineSubmission(process.env, process.ppid)
+  const isolatedSubmission = (engine: string): boolean => submissionHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted || !modelControlHosted || !questionControlHosted || !submissionHosted
     ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
@@ -567,6 +573,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const screens = createScreens({ handles: isolatedScreen, transport: screenTransport, resolve: id => registry.resolve(id),
     inline: (engine, capture) => readerEngine(engine) ? capture === null ? undefined : inline?.screenFor(engine).inspect(capture) : legacyScreen(engine, capture) })
+  const submissionTransport = createSubmissionTransport({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
+  const submissions = createSubmissions({ policy: submissionPolicy, handles: isolatedSubmission, transport: submissionTransport, resolve: id => registry.resolve(id),
+    inline: engine => inline?.submissionFor(engine) })
   const runtimeProfiles = createRuntimeProfiles({
     legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
     handles: isolatedRuntime,
@@ -1049,6 +1060,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
     readScreen: screens.read,
+    submission: submissions,
     resolve: (id) => registry.resolve(id),
     byAgent: (agentId) => registry.byAgent(agentId),
     terminal: terminalControl,
@@ -1235,6 +1247,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       liveTransport.connected(service)
       runtimeTransport.connected(service)
       screenTransport.connected(service)
+      submissionTransport.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
@@ -1248,6 +1261,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       liveTransport.disconnected(service)
       runtimeTransport.disconnected(service)
       screenTransport.disconnected(service)
+      submissionTransport.disconnected(service)
       modelControls.disconnected(service)
       questionControls.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
@@ -1390,6 +1404,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     input,
     teams,
     deviceInput,
+    submission: submissions,
     device: () => wifiCore.feed,
     startHeartbeat,
     questionWatcher,
