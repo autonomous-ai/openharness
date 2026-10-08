@@ -630,7 +630,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
     final next = Semantics(
       liveRegion: _copyError != null,
       child: Text(
-        _copyError ?? 'Next: sign in and start a harness.',
+        _copyError ?? 'Next: start your first harness.',
         style: grid.AppType.body(
           color: _copyError == null
               ? AppColors.textSoft

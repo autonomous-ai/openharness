@@ -792,7 +792,14 @@ class AppNotifier extends ChangeNotifier {
           },
           lanBlocked: () async {
             try {
-              await AutonomousDeviceCli().discover();
+              final cli = AutonomousDeviceCli();
+              // Discovery is what raises macOS's "find devices on local networks… Autonomous robots"
+              // prompt. Everyone who reopened the app after its daemon outlived it saw that prompt on
+              // their second session, robots or not (fresh macOS VM, 2026-10-08). Without a paired
+              // robot nothing here needs the LAN, so it is not tested.
+              final paired = (await cli.list())['devices'];
+              if (paired is! List || paired.isEmpty) return null;
+              await cli.discover();
               return false;
             } on AutonomousDeviceCliException catch (error) {
               return error.localNetworkBlocked ? true : null;
