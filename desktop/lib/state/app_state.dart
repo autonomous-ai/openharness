@@ -844,6 +844,11 @@ class AppNotifier extends ChangeNotifier {
     foreground.value = state == null || state == AppLifecycleState.resumed;
     // Back in front: a viewer reads the device log again, and joins it if the boot never got in.
     if (foreground.value && !wasForeground) {
+      if (_notificationOfferDue) {
+        _notificationOfferDue = false;
+        unawaited(notificationOfferStoreForTest.set(true));
+        notificationOffer?.call();
+      }
       _refreshDeviceLogAfterReconnect();
       // ...and, hearing no machine at all, looks again for one: the person most likely just went to
       // their computer to sign it in.
@@ -10121,8 +10126,31 @@ class AppNotifier extends ChangeNotifier {
     // counts as not in front, for the reason [lifecycle] gives.
     if (lifecycle() != AppLifecycleState.resumed) {
       systemNotifications.post(alert);
+      _noteNotificationOffer(kind);
     }
   }
+
+  /// Called with the offer when the person is back in front of Harness: an
+  /// agent finished (or needs them) while they were away and nothing told
+  /// them, because notifications are off. The workspace shows it once.
+  void Function()? notificationOffer;
+  bool _notificationOfferDue = false;
+
+  @visibleForTesting
+  NotificationOfferStore notificationOfferStoreForTest = notificationOfferStore;
+
+  void _noteNotificationOffer(AlertKind kind) {
+    if (kind != AlertKind.done && kind != AlertKind.needsYou) return;
+    if (systemNotifications.store.value ||
+        !systemNotifications.supported ||
+        notificationOfferStoreForTest.value) {
+      return;
+    }
+    _notificationOfferDue = true;
+  }
+
+  /// Turns notifications on from the offer, asking the system's permission.
+  Future<void> acceptNotificationOffer() => systemNotifications.setEnabled(true);
 
   /// What clicking a banner does: show that agent, wherever it is.
   ///

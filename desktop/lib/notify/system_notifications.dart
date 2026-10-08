@@ -21,6 +21,19 @@ class DesktopNotificationStore extends OnOffPreference {
     : super('app_desktop_notifications');
 }
 
+/// Whether this computer has been offered notifications once already.
+///
+/// Notifications stay off until somebody wants them; the one moment they are
+/// offered is when an agent finished while the person was away from Harness
+/// and nothing told them. Asked once, whatever the answer: a second offer is a
+/// nag.
+class NotificationOfferStore extends OnOffPreference {
+  NotificationOfferStore({super.storage})
+    : super('app_notifications_offered');
+}
+
+final notificationOfferStore = NotificationOfferStore();
+
 /// What the operating system said about posting notifications.
 enum NotificationPermission {
   /// Nobody has asked yet, or the answer is not known.
