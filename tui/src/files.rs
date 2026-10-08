@@ -1075,7 +1075,7 @@ impl Files {
         let unfit = (self.prompt.is_some() && self.prompt_layout(g).is_none()) || (self.confirm.is_some() && self.confirm_layout(g).is_none());
         if unfit {
             (self.prompt, self.confirm) = (None, None);
-            self.message = Some("Make the terminal larger to answer this".into());
+            self.message = Some(crate::workspace_menu::TOO_SMALL_TO_ANSWER.into());
         }
     }
 

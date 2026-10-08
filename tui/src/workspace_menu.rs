@@ -44,11 +44,14 @@ pub fn open_buttons(app: &mut App, title: &str, notes: Vec<MenuItem>, row: crate
     let layout = Layout { items:notes.clone(), anchor:None, buttons:Some(buttons.clone()) };
     let mut menu = Menu { title:literal(title), items:notes, choice:None, x:0, y:0, width:0,
         stay_open:true, no_mouse:false, mouse:None, tree:None, complete:None, responsive:Some(Box::new(layout)), buttons:Some(buttons) };
-    if !fit(&mut menu, app.size) { app.say("Make the terminal larger to show this menu", crate::theme::WARN); return false }
+    if !fit(&mut menu, app.size) { app.say(TOO_SMALL_TO_ANSWER, crate::theme::WARN); return false }
     app.toast = None;
     app.modal = Some(Modal::Menu(menu));
     true
 }
+
+/// What a question too big for the terminal says, as every dialog says it.
+pub const TOO_SMALL_TO_ANSWER: &str = "Make the terminal larger to answer this";
 
 /// A confirmation's box (a `dialog::Dialog`): its notes, a blank row and the buttons' row inside
 /// the border. The drawing and the mouse both lay it out with `dialog::areas`.
@@ -86,8 +89,9 @@ pub fn resize(app: &mut App) {
             // A confirmation going away is a cancel: what it was asking about must not stay pending.
             let cancel = menu.buttons.as_ref().and_then(|b| b.actions.first().cloned());
             app.modal = None;
+            let asked = cancel.is_some();
             if let Some(command) = cancel { crate::commands::execute(app, &command) }
-            app.say("Make the terminal larger to show this menu", crate::theme::WARN);
+            app.say(if asked { TOO_SMALL_TO_ANSWER } else { "Make the terminal larger to show this menu" }, crate::theme::WARN);
         }
     }
 }

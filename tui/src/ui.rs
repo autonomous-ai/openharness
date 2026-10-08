@@ -397,7 +397,7 @@ fn draw_prompt(buf: &mut Buffer, app: &mut App) -> Option<Position> {
     let Some((r, d)) = prompt_dialog(app, p, &row, &c) else {
         app.modal = None;
         app.back_to_list = None;
-        app.say("Make the terminal larger to answer this", theme::WARN);
+        app.say(crate::workspace_menu::TOO_SMALL_TO_ANSWER, theme::WARN);
         return None;
     };
     crate::term_out::clear_extras(r);

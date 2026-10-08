@@ -26,7 +26,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::buttons::{self, Answer, Button};
-use crate::dialog::{self, Dialog, Input};
+use crate::dialog::{self, Dialog, Input, INPUT_W};
 use crate::fleet::{Reach, State};
 use crate::modal::{Modal, PickerKind};
 use crate::picker::{Picker, Row};
@@ -153,8 +153,6 @@ pub enum Ask {
 /// Where the dialog drew its buttons and its input, for clicks on this screen size.
 #[derive(Clone, Copy)]
 struct PromptActions { size: (u16, u16), accept: Rect, cancel: Rect, input: Option<Rect> }
-
-use crate::dialog::INPUT_W;
 
 pub struct Devices {
     /// `remote-password status --json` ({hasPassword, fingerprint, setAt}), or why it is unknown.
@@ -1478,7 +1476,7 @@ pub fn cancel_unfit(app: &mut App) {
     app.devices.ask = None;
     app.devices.prompt_actions.set(None);
     note(app, "Nothing changed");
-    app.say("Make the terminal larger to answer this", theme::WARN);
+    app.say(crate::workspace_menu::TOO_SMALL_TO_ANSWER, theme::WARN);
 }
 
 /// The dialog's title: what is being done, and to what.
