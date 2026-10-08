@@ -14,7 +14,7 @@ import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { CursorTaskHookQueue } from '../../engines/cursor/taskHookQueue.js'
 import type { TurnRecaps } from './recaps.js'
 import { sid } from '../../lib/log.js'
-import type { LiveEvent } from '../../lib/normalize.js'
+import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { SessionNormalizers } from '../transcripts/normalizers.js'
 

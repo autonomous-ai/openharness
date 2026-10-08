@@ -1,5 +1,5 @@
 import { loadEngine } from '../../engines/inProcess.js'
-import type { LiveEvent } from '../../lib/normalize.js'
+import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { SQLITE_BACKED_ENGINES } from '../../lib/sqliteRead.js'
 

@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
-import type { LiveEvent } from '../lib/normalize.js'
+import type { LiveEvent } from '../engines/kit/events.js'
 import { isMessageHold } from '../lib/messageHolds.js'
 import { enterWithheldReason, type TerminalActionResult } from '../lib/terminalTypes.js'
 import type { SubmissionReader } from '../lib/submissionReader.js'

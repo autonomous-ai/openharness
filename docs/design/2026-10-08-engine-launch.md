@@ -7,7 +7,7 @@ declares what it needs as data on its launch contract (`Engine.launch`, `engines
 Shared mechanics in `engines/kit` read that data, and core runs them in line.
 
 (c) is too large to land as one change. It is split into five sub-batches, each green on its own. This
-document records (c1) to (c4), which are done, and plans the last.
+document records all five, which are done.
 
 ## (c1) Launch argv and the pane script: done
 
@@ -356,14 +356,121 @@ from the declared files and adds a closure test:
 
 The launch builders' closure test now admits the session stores too, since `lib/engineHomes.ts` reads them.
 
-## The plan for the rest of (c)
+## (c5) Adoption, activity, pages and the normalizers: done
 
-The sub-batches are ordered by risk: pure functions first, then async writes, then the hot and synchronous
-paths. Each one records today's behavior in a golden spec first, in its own commit. One is left.
+What core reads of Claude Code's and Codex's conversations, besides binding them: which ones are on this machine
+and which process holds one (adoption: Cmd-P, opening one here, and stopping its owner first), an agent's latest
+activity, and a thread's pages and line count. Taking a conversation over stops a process, so adoption stays in
+core, declared: a new facet, `AdoptionContract` (`engines/facets/adoption.ts`), declared in
+`engines/{claude,codex}/adoption.ts`, which reuse their session stores' layout, process record, first record and
+archive, and applied by `engines/kit/adoption.ts`. The replays stay their readers', in their workers.
 
-| | Scope | Why it is in this place | Golden proof |
-| --- | --- | --- | --- |
-| **(c5) Adoption readers and shared normalizers** | `lib/sessionSearch/externals/{claude,codex}.ts`, `lib/transcriptPages.ts`, `lib/transcriptReader.ts` and `lib/transcriptActivity.ts`. Also splitting the functions `engines/claude/normalize.ts` and `engines/codex/{normalizer,subagent}.ts` share with other engines into `engines/kit`. | The largest (1,000 to 2,000 lines) but async. Listing and paging sessions for adoption is not session control. Those readers may run in a worker, as long as adoption fails safe when it is down: refused with a reason, never a wrong session. | The adoption and paging specs, unchanged, plus a recorded corpus of transcripts → pages. |
+| Was | Now |
+| --- | --- |
+| `lib/sessionSearch/externals/claude.ts`: projects scanned, heads read in widening windows for the first line naming `"entrypoint"`, sub-agents and programs left out; owners from `<home>/sessions/<pid>.json`, checked against the process table and their start; busy from the record's `status` | `files` (`projects`), `head` (windows, `marked`, the sidechain flag, id, folder, origin by `entrypoint`), `owners.records` (the store's record, `startedAt` and its slack) and `busy.record`. The file is a wrapper its spec still uses; core builds the provider from the declaration (`engines/adoptions.ts`). |
+| `lib/sessionSearch/externals/codex.ts`: rollouts walked four folders down in `sessions` and `archived_sessions`, the first line read in two windows, thread names from `session_index.jsonl`; owners from the rollouts `codex` holds open, a server's an app's; busy from the last turn event near the end | `files` (`walk`: prefix, suffix, depth, the store's folders), `head` (`first`, the store's first record, origin by `source` and `originator`), `titles`, `owners.open` (commands, the id in the name, servers by executable, arguments and subcommand) and `busy.tail`. A wrapper as above. |
+| `lib/transcriptActivity.ts`: the record types each of the two counts as work, by name | `activity` on the session store: the time field, the item paths, and the kinds of record, each field compared as text (`in`) or as it is (`is`), exactly as the former code compared it. |
+| `lib/transcriptPages.ts` `claude()` and `codex()`, with Claude Code's `claudePageLine` and Codex's `codexPageStart` and `windowCodexLines` imported | `page(path, rules, ask)`: the rules are the reader's (`ThreadPages`: a record's cursor, or a `<prefix>:<n>` line cursor). Claude Code's and Codex's readers hand theirs in (`engines/{claude,codex}/transcript.ts`). An unreadable file still answers as an empty one. |
+| `engines/kit/history.ts` `enrichSubagentStats` (Claude Code's background agents' totals, with its `SubagentStats`) | `engines/claude/subagentStats.ts`, which Claude Code's reader passes to `pagedHistory`. Codex's never needed it: its cards carry their totals. |
+| `core/transcripts/{history,lastTurn}.ts`: Claude Code's replay, window and recap as the fallback for an engine with no reader | An empty page and no recap, as for an engine whose code could not load. No engine reaches it: Claude Code and Codex always have a reader (`core/engines/readers.ts`), and a shell keeps no transcript (`registry.engineKeepsTranscriptFile`). Core reads no engine's lines itself. |
+| `lib/transcriptReader.ts` `forEachLine`, which four other engines' adoption readers stream lines with | `lib/transcriptLines.ts`, which `transcriptReader.ts` re-exports for search. Search's table of every engine's normalizer stays where it was, out of core. |
+| `core/**` imports of `lib/normalize.ts` | `engines/kit/events.ts`. `lib/normalize.ts` remains for the engines that write Claude Code's message format (Devin, Command Code). |
+
+The functions Claude Code's normalizer shares with other engines are that message format, and Codex's share
+nothing. Neither moved into `engines/kit`: moving them would only have relabelled 978 lines as core's. They leave
+the core instead, with what read them.
+
+### The same answers
+
+**Golden record.** `engines/transcriptReads.golden.spec.ts` was recorded in its own commit, from the former code. It
+reads the pager through `engines/transcripts.ts` `pageOf`, the call each reader makes, and everything else through
+the public entries: the providers `externals/index.ts` builds, `transcriptActivityAt`, the readers, and core's
+`session_get`, `sessions_list` and recap reader. It holds 210 cases:
+
+- **33 for adoption.** Each provider's scan in its own and moved homes, scanned again from what the first scan kept.
+  The heads cover widening windows, a pasted image, a first line past every window, and files still being written
+  and then written. They also cover what is left out: sub-agents, programs, relative folders, bad ids, Harness's
+  own folder, links and folders that are not files, archived rollouts, and thread names. Owners cover reused pids,
+  late and early starts within and past the slack, servers by executable, arguments and subcommand, and ids in
+  file names. Busy covers each record status and each turn event near and past the windows.
+- **71 for activity.** Each counted and uncounted record of both engines, a zone-less time (local time is pinned),
+  bad times, records that are not objects, values that read as counted ones, large last records, activity past
+  the bound, missing, empty and folder paths, other engines, and a file that grew.
+- **58 pages.** A 30-turn corpus per engine, followed cursor by cursor at three page sizes. It includes a turn too
+  long for a page (clipped), lines too long for any, CR endings and blank lines. Cursors cover a prompt, a tool
+  call, the huge line, quoted, empty, leading-zero, unsafe and out-of-range cursors, a missing file and a folder,
+  and a file that grew while its pager remembered cursors.
+- **48 for history.** Both readers on the recorded fixtures and on the corpora, with Claude Code's background
+  agents' totals joined from their files. Core's `session_get` (whole, latest, older, stale), `sessions_list` and
+  last turn for each.
+
+Every case runs on darwin and on linux (no differences), and it also passes with `TZ=UTC TMPDIR=/tmp`. It passes
+unchanged against the declarations and the kit. Of 41 one-line mutations, 38 fail it:
+
+- adoption: windows, marker, sidechain flag, id shape, folder, origins, the record's start field and slack, busy,
+  prefix, depth, archive, titles, commands, the id in a name, servers, the tail's windows, marker and events;
+- activity: each list, an item path, `is` against `in`, and each kind;
+- pages: the line cursor's prefix, and the unreadable file's answer;
+- the kit: a whole file is still being written, the first line is never a whole one, and Claude Code's agents' totals.
+
+The three that pass change nothing anyone can observe:
+
+- the size of Claude Code's first head window, while the last one is unchanged;
+- dropping a window's partial last line, which never parses;
+- skipping a file where a project folder should be, which lists nothing either way.
+
+### Time
+
+Each measure is the median of six runs of each side, alternated on the same machine, over fixed inputs built
+once per run. The normalizers' code did not change; they were timed because they run per line.
+
+| | Before (the record commit) | After |
+| --- | --- | --- |
+| Claude Code's normalizer, lines a millisecond (28,000 lines) | 591 (565 – 655) | 592 (550 – 605) |
+| Codex's normalizer, lines a millisecond (28,000 lines) | 1,072 (1,043 – 1,156) | 1,075 (1,038 – 1,131) |
+| A whole Claude Code thread, 50 lines a page | 168 ms (142 – 194) | 162 ms (148 – 171) |
+| A whole Codex thread, 50 lines a page | 995 ms (918 – 1,043) | 961 ms (909 – 1,036) |
+| Activity, one uncached tail read | 0.25 ms (0.24 – 0.28) | 0.25 ms (0.23 – 0.36) |
+| Adoption scan, 1,500 Claude Code conversations | 127 ms (110 – 142) | 128 ms (106 – 144) |
+| Adoption scan, 1,500 Codex rollouts | 308 ms (282 – 339) | 326 ms (307 – 343) |
+
+Every difference is within the runs' spread.
+
+### Core closure
+
+| | Lines | Files |
+| --- | --- | --- |
+| Before (the record commit, on main with (o4)) | 70,288 | 378 |
+| After | 66,955 | 370 |
+
+**Left, 3,801 lines in all:**
+
+- Codex's normalizer, sub-agent reader and rollout wrapper (1,062);
+- `lib/transcriptReader.ts` (257), and with it the six other engines' normalizers reached only through it (2,171);
+- the two adoption providers (267);
+- `kit/history.ts` (44).
+
+**Came in, 422 lines:** the kit's adoption (248), the two declarations and their composition (86), and the line
+streamer (88). The pager grew by 23 lines and the stores by 22, and `history.ts` lost 7.
+
+Claude Code's normalizer (978) and `lib/normalize.ts` remain, reached only through Devin's adoption reader. Devin
+replays its store with Claude Code's message format. `architecture.spec.ts` now treats the two engines' normalizers,
+readers, `lib/normalize.ts` and `lib/transcriptReader.ts` as edge files. It lists Claude Code's normalizer and
+`lib/normalize.ts` in `CORE_MAY_REACH` for (o5), and drops the six normalizer entries (o5) no longer needs. A new
+closure test checks adoption, activity, the pager, the line streamer, history, the last turn, the agent frame and
+`external.ts`: they reach none of the two engines' code but their declarations. The pager, the line streamer and
+the paged history know no engine at all. Session repair's exception for Pi's reader is gone: Pi's reader streams
+lines and loads no normalizer.
+
+### For (o5)
+
+- **`lib/transcriptReader.ts` is out of the core.** The adoption readers of Pi, Copilot, Muse and Grok stream lines
+  with `lib/transcriptLines.ts`, and search keeps its table.
+- **`externals/index.ts` builds Claude Code's and Codex's providers from their declarations** (`engines/adoptions.ts`),
+  statically: those stay. The other ten are (o5)'s to load lazily.
+- **Devin's reader is the last road to Claude Code's normalizer.** Making it lazy ends the two `CORE_MAY_REACH`
+  entries, which the ratchet then asks to remove.
+- **`external.ts` is unchanged.**
 
 **Out of (c).** These stay as they are, as tables over every engine:
 

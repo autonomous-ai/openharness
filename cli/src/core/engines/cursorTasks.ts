@@ -12,7 +12,7 @@ import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { CursorTaskHookQueue } from '../../engines/cursor/taskHookQueue.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import { engineNow } from '../../engines/inProcess.js'
-import type { LiveEvent } from '../../lib/normalize.js'
+import type { LiveEvent } from '../../engines/kit/events.js'
 import type { registry } from '../../lib/registry.js'
 import type { Watcher } from '../../watcher/watcher.js'
 
