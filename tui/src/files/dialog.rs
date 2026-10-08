@@ -67,13 +67,15 @@ enum Tool { Back, Forward, Columns, Icons, Path, Search }
 pub(super) enum DOut { None, Cancel, Open(PathBuf, bool) }
 
 /// Where a dialog's things are at a size: its sidebar, main area and bottom row.
+/// [bottom]: the buttons' row; [hint]: the line under it, the box's last — what was said, else
+/// the keys (as every dialog keeps its keys hint on its last line, never on the buttons' row).
 #[derive(Clone, Copy, Debug)]
-struct Layout { side: Rect, main: Rect, bottom: u16 }
+struct Layout { side: Rect, main: Rect, bottom: u16, hint: u16 }
 
 fn layout(w: u16, h: u16) -> Layout {
     let side_w = SIDE_W.min(w / 4);
-    let body_h = h.saturating_sub(6);
-    Layout { side: Rect::new(1, 3, side_w, body_h), main: Rect::new(2 + side_w, 3, w.saturating_sub(3 + side_w), body_h), bottom: h.saturating_sub(2) }
+    let body_h = h.saturating_sub(7);
+    Layout { side: Rect::new(1, 3, side_w, body_h), main: Rect::new(2 + side_w, 3, w.saturating_sub(3 + side_w), body_h), bottom: h.saturating_sub(3), hint: h.saturating_sub(2) }
 }
 
 /// A history entry: the columns' folders and which one is active.
@@ -438,7 +440,7 @@ impl Dialog {
     }
 
     /// Where Cancel and Open are.
-    fn buttons(&self) -> Vec<Rect> { self.row().areas(self.button_row()).1 }
+    fn buttons(&self) -> Vec<Rect> { self.row().areas(self.button_row()) }
 
     /// A click at (x, y), a [double] one opening what it is on.
     pub(super) fn click(&mut self, x: u16, y: u16, double: bool) -> DOut {
@@ -559,10 +561,10 @@ impl Dialog {
         self.draw_toolbar(buf, area, look);
         self.draw_sidebar(buf, area, l, look);
         match self.view { DView::Columns => self.draw_columns(buf, area, l, look), DView::Icons => self.draw_icons(buf, area, l, look) }
-        // The bottom row: what was said, else the keys; Cancel and Open.
-        let room = self.buttons()[0].x.saturating_sub(3);
+        // Cancel and Open; under them, the last line: what was said, else the keys.
+        let room = area.width.saturating_sub(4);
         let (text, st) = match &self.message { Some(m) => (m.clone(), look.warn), None => ("Enter open · Esc cancel · Tab sidebar/columns/buttons · / search".to_string(), look.muted) };
-        put(buf, ox + 2, oy + l.bottom, room, &fit(&text, room as usize), st);
+        put(buf, ox + 2, oy + l.hint, room, &fit(&text, room as usize), st);
         let row = self.button_row();
         self.row().view(&crate::settings::chrome()).render(Rect { x: ox + row.x, y: oy + row.y, ..row }, buf);
         if let Some((items, sel)) = &self.popup {
@@ -737,7 +739,9 @@ mod tests {
         assert!(lines[1].contains("◀ ▶") && lines[1].contains("Columns") && lines[1].contains("Icons") && lines[1].contains("app ▾") && lines[1].contains("⌕ Search"), "{}", lines[1]);
         assert!(t.contains("Favorites") && t.contains("Home") && t.contains("Locations") && t.contains("Computer"), "{t}");
         assert!(t.contains("[/] app") && t.contains("main.py") && t.contains("Python script") && t.contains("print('xin chào')"), "{t}");
-        assert!(lines[32].contains("[ Cancel ]") && lines[32].contains("[ Open ]"));
+        // The buttons' row, and under it — the box's last line — the keys.
+        assert!(lines[31].contains("[ Cancel ]") && lines[31].contains("[ Open ]") && !lines[31].contains("Enter open"), "{t}");
+        assert!(lines[32].contains("Enter open · Esc cancel"), "{t}");
         // Open is chosen even unfocused; Tab to the buttons, Left chooses Cancel, Enter cancels.
         if !crate::theme::no_color() {
             let c = crate::settings::chrome();
@@ -745,8 +749,8 @@ mod tests {
             let mut buf = Buffer::empty(area);
             d.draw(&mut buf, area, &Look::default());
             let (cx, ox) = (d.buttons()[0].x, d.buttons()[1].x);
-            assert_eq!(buf[(ox + 2, 32)].bg, c.selected.bg.unwrap());
-            assert_ne!(buf[(cx + 2, 32)].bg, c.selected.bg.unwrap());
+            assert_eq!(buf[(ox + 2, 31)].bg, c.selected.bg.unwrap());
+            assert_ne!(buf[(cx + 2, 31)].bg, c.selected.bg.unwrap());
         }
         d.focus = Focus::Columns;
         d.key(k(KeyCode::Tab));
@@ -758,7 +762,7 @@ mod tests {
         assert_eq!(d.button, 1);
         // It fits a small window too.
         let small = text(&mut d, 90, 24);
-        assert!(small.lines().nth(22).unwrap().contains("[ Open ]") && small.contains("main.py"), "{small}");
+        assert!(small.lines().nth(21).unwrap().contains("[ Open ]") && small.contains("main.py"), "{small}");
     }
 
     #[test]

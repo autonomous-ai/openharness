@@ -42,23 +42,21 @@ impl Row {
         self.buttons.iter().fold(gaps, |w, b| w.saturating_add(b.width()))
     }
 
-    /// Total columns the row needs (hint + buttons), for a dialog's width.
-    pub fn width(&self) -> u16 {
-        if self.hint.is_empty() { return self.buttons_width() }
-        self.buttons_width().saturating_add(GAP).saturating_add(cols(&self.hint))
+    /// The columns a dialog gives the row: the wider of its two lines — the buttons, and the hint
+    /// on the dialog's last line under them.
+    pub fn width(&self) -> u16 { self.buttons_width().max(cols(&self.hint)) }
+
+    /// Where each button goes on the one-row [area]: right-aligned, GAP apart. Drawing and clicks
+    /// both take them from here. Callers fit the dialog to `buttons_width()` first; a narrower
+    /// row shrinks the buttons rather than overlap them. (The hint is not on this row: the
+    /// dialog draws it on its last line, [Row::hint_line].)
+    pub fn areas(&self, area: Rect) -> Vec<Rect> {
+        Layout::horizontal(self.buttons.iter().map(|b| Constraint::Length(b.width())))
+            .flex(Flex::End).spacing(GAP).split(area).to_vec()
     }
 
-    /// Where the hint and each button go on the one-row [area]: the buttons right-aligned, GAP
-    /// apart; the hint at the left, only when it fits before them with a GAP (it gives way
-    /// first). Drawing and clicks both take them from here. Callers fit the dialog to
-    /// `buttons_width()` first; a narrower row shrinks the buttons rather than overlap them.
-    pub fn areas(&self, area: Rect) -> (Option<Rect>, Vec<Rect>) {
-        let buttons = Layout::horizontal(self.buttons.iter().map(|b| Constraint::Length(b.width())))
-            .flex(Flex::End).spacing(GAP).split(area).to_vec();
-        let [hint, _] = Layout::horizontal([Constraint::Length(cols(&self.hint)), Constraint::Fill(1)]).areas(area);
-        let hint = (!self.hint.is_empty() && area.width >= self.width()).then_some(hint);
-        (hint, buttons)
-    }
+    /// The hint as the dialog's last line, muted.
+    pub fn hint_line<'a>(&'a self, c: &Chrome) -> Line<'a> { Line::styled(self.hint.as_str(), c.muted) }
 
     /// The row as a ratatui widget in [c]'s colours: `row.view(&c).render(area, buf)`.
     pub fn view<'a>(&'a self, c: &'a Chrome) -> ButtonRow<'a> { ButtonRow { row: self, chrome: c } }
@@ -96,20 +94,19 @@ impl Row {
         }
     }
 
-    /// The button a click [at] chooses on a row drawn in [area]: none on the hint or a gap.
+    /// The button a click [at] chooses on a row drawn in [area]: none on a gap.
     pub fn click(&self, area: Rect, at: Position) -> Option<usize> {
-        self.areas(area).1.iter().position(|r| r.contains(at))
+        self.areas(area).iter().position(|r| r.contains(at))
     }
 }
 
-/// A [Row] drawn: each button a `Line` over its area — the chosen one in the panel's chosen row
-/// (`selected`), the others in its surface (`base`) — and the hint a muted `Line`.
+/// A [Row]'s buttons drawn: each a `Line` over its area — the chosen one in the panel's chosen
+/// row (`selected`), the others in its surface (`base`).
 pub struct ButtonRow<'a> { row: &'a Row, chrome: &'a Chrome }
 
 impl Widget for ButtonRow<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let (hint, buttons) = self.row.areas(area);
-        if let Some(hint) = hint { Line::styled(self.row.hint.as_str(), self.chrome.muted).render(hint, buf) }
+        let buttons = self.row.areas(area);
         for (i, (b, at)) in self.row.buttons.iter().zip(buttons).enumerate() {
             let style = if i == self.row.chosen { self.chrome.selected } else { self.chrome.base };
             Line::styled(format!("[ {} ]", b.label), style).render(at, buf);
@@ -131,13 +128,13 @@ mod tests {
     fn clicks(r: &Row, area: Rect, width: u16) -> Vec<Option<usize>> { (0..width).map(|x| r.click(area, Position::new(x, area.y))).collect() }
 
     /// The buttons' areas on a row ending at column 50.
-    fn at50(r: &Row) -> Vec<Rect> { r.areas(Rect::new(0, 3, 50, 1)).1 }
+    fn at50(r: &Row) -> Vec<Rect> { r.areas(Rect::new(0, 3, 50, 1)) }
 
     /// The row draws and answers clicks exactly as before it was a ratatui widget: every cell's
     /// symbol, colours and modifiers, for one, two and three buttons (and wide labels), each
-    /// chosen (and none, as the Machines panel's unfocused row), with the hint fitting and
-    /// dropped, from the narrowest row that fits the buttons to 120 columns, in a dark and a
-    /// light theme and NO_COLOR.
+    /// chosen (and none, as the Machines panel's unfocused row), from the narrowest row that fits
+    /// the buttons to 120 columns, in a dark and a light theme and NO_COLOR. (Its hint is the
+    /// dialog's last line now, never on the row: the old row is drawn with none.)
     #[test]
     fn the_widget_draws_and_clicks_as_the_old_row() {
         let b = |label: &str, key| Button { label: label.into(), key };
@@ -156,7 +153,7 @@ mod tests {
                         let area = Rect::new(3, 1, w, 1);
                         let screen = Rect::new(0, 0, w + 6, 3);
                         let (mut old, mut new) = (oracle::canvas(screen), oracle::canvas(screen));
-                        oracle::draw(&r, &mut old, area.x, area.right(), area.y, &c);
+                        oracle::draw(&Row { hint: String::new(), ..r.clone() }, &mut old, area.x, area.right(), area.y, &c);
                         drawn(&r, &mut new, area, &c);
                         assert_eq!(new, old, "{:?} chosen {chosen} at {w} columns", r.buttons);
                         let before: Vec<_> = (0..screen.width).map(|x| oracle::click(&r, x, area.right())).collect();
@@ -221,22 +218,23 @@ mod tests {
         assert!(buf[(x + 2, 3)].modifier.contains(Modifier::BOLD));
         let x0 = at50(&r)[0].x;
         assert_ne!(buf[(x0 + 2, 3)].bg, c.selected.bg.unwrap());
-        assert_eq!(buf[(0, 3)].fg, c.muted.fg.unwrap(), "the hint is muted");
+        assert_eq!(buf[(0, 3)].symbol(), " ", "no hint on the buttons' row: it is the dialog's last line");
+        assert_eq!(r.hint_line(&c).style, c.muted, "the hint is muted");
     }
 
     #[test]
-    fn the_hint_goes_first_and_the_buttons_never_overlap() {
+    fn the_buttons_never_overlap_and_the_hint_is_not_on_their_row() {
         let c = crate::settings::chrome();
         let r = row();
-        let right = r.buttons_width();   // no room for the hint
+        let right = r.buttons_width();
         let mut buf = Buffer::empty(Rect::new(0, 0, right, 1));
         r.view(&c).render(buf.area, &mut buf);
         let line: String = (0..right).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert_eq!(line, "[ Cancel ]  [ Stop ]");
-        assert_eq!(r.width(), r.buttons_width() + 2 + "s stop · esc cancel".chars().count() as u16);
+        assert_eq!(r.width(), r.buttons_width().max("s stop · esc cancel".chars().count() as u16), "the wider of the row and the hint's line");
         // narrower than the buttons: they shrink side by side, never overlap, never panic
-        let (hint, cells) = r.areas(Rect::new(0, 0, 5, 1));
-        assert_eq!((hint, cells.len()), (None, 2));
+        let cells = r.areas(Rect::new(0, 0, 5, 1));
+        assert_eq!(cells.len(), 2);
         assert!(cells[0].right() <= cells[1].x);
         let mut buf = Buffer::empty(Rect::new(0, 0, 5, 1));
         r.view(&c).render(buf.area, &mut buf);

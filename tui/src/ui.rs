@@ -3742,9 +3742,12 @@ mod theme_render_tests {
         assert!(crate::workspace_menu::open_buttons(&mut app, "Close Tab · zsh", vec![crate::workspace_menu::note("Stop? Saved history will remain.")],
             row, vec!["close-harness -x x".into(), "close-harness -y x".into()]));
         let s = screen(&mut app);
-        let line = s.lines().find(|l| l.contains("[ Cancel ]")).unwrap_or_else(|| panic!("no button row:\n{s}"));
+        let lines: Vec<&str> = s.lines().collect();
+        let at = lines.iter().position(|l| l.contains("[ Cancel ]")).unwrap_or_else(|| panic!("no button row:\n{s}"));
+        let line = lines[at];
         assert!(line.contains("[ Stop ]") && line.find("[ Cancel ]") < line.find("[ Stop ]"), "{line}");
-        assert!(line.contains("esc cancel"), "{line}");
+        assert!(!line.contains("esc cancel"), "the hint is not on the buttons' row: {line}");
+        assert!(lines[at + 1].contains("esc cancel"), "the hint is the box's last line:\n{s}");
         let key = |app: &mut App, code| crate::input::modal_key(app, KeyEvent::new(code, KeyModifiers::NONE));
         key(&mut app, KeyCode::Right);
         assert!(matches!(app.modal, Some(Modal::Menu(_))), "moving keeps the menu");
@@ -4031,11 +4034,13 @@ mod confirm_box_tests {
 
     /// The Close Tab box (and a failed stop's, and ones with wide or `#` titles) draws exactly as
     /// before it was a Block with a Paragraph and the row widget: every cell of an 80×24 and a
-    /// 40×12 screen, in each menu-border-lines, a dark and a light theme and NO_COLOR.
+    /// 40×12 screen, in each menu-border-lines, a dark and a light theme and NO_COLOR. (Rows with
+    /// no keys hint: the hint left the buttons' row for the box's last line on purpose, tested in
+    /// `a_confirmation_draws_its_buttons_on_one_row_and_keys_choose`.)
     #[test]
     fn the_confirmation_box_draws_as_the_old_one() {
         let b = |label: &str, key| Button { label: label.into(), key };
-        let stop = Row { buttons: vec![b("Cancel", None), b("Stop", Some('s'))], chosen: 0, hint: "s stop · esc cancel".into() };
+        let stop = Row { buttons: vec![b("Cancel", None), b("Stop", Some('s'))], chosen: 0, hint: String::new() };
         let back = Row { buttons: vec![b("Back", None)], chosen: 0, hint: String::new() };
         // (menu() and the direct draw each read hn's colours: no other test may change them between.)
         let _colours = crate::term_out::colours_lock();
@@ -4088,9 +4093,8 @@ mod prompt_dialog_tests {
     fn screen(app: &mut App) -> (String, Option<Position>) {
         let (w, h) = app.size;
         let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
-        let mut at = None;
         term.draw(|f| { draw(f, app); }).unwrap();
-        if let Ok(p) = term.backend_mut().get_cursor_position() { at = Some(p) }
+        let at = term.backend_mut().get_cursor_position().ok();
         let buf = term.backend().buffer().clone();
         ((0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n"), at)
     }
@@ -4177,7 +4181,7 @@ mod prompt_dialog_tests {
         typed(&mut app, "2");
         screen(&mut app);
         let (r, a) = prompt_layout(&app).expect("fits");
-        let buttons = { let p = open(&app).unwrap(); p.row().areas(a.row).1 };
+        let buttons = { let p = open(&app).unwrap(); p.row().areas(a.row) };
         press(&mut app, KeyCode::Tab);
         click(&mut app, Position::new(a.input.unwrap().x + 2, a.input.unwrap().y + 1));
         assert!(open(&app).is_some_and(|p| !p.buttons), "a click on the input gives it the keys");

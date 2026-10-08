@@ -324,12 +324,9 @@ pub fn pane_menu(app: &mut App, pane: u64, at: Option<(u16, u16)>) {
     let Some(tab) = app.tabs.iter().position(|t| t.panes().contains(&pane)) else { return };
     let Some(token) = capture(app, tab, Some(pane)) else { return };
     let item = |label: &str, key: &str, verb: &str| menu::item(label, key, format!("pane-control {token} {verb}"));
-    let close = app.panes.get(&pane).map(|p| {
-        let view_only = app.fleet.machine(&p.machine_id).is_some_and(|m| m.shared)
-            || app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a| a.status == "stopped" || a.dsh_id == "autonomous/harness-monitor");
-        if view_only { "Close pane" }
-        else if crate::session_close::managed_pane(app, pane) { "Stop Harness" } else { "Close terminal" }
-    }).unwrap_or("Close pane");
+    // (What the title's close button did, the last item: "Close pane" for every pane — a harness's
+    // stop is said in the question it asks, Stop Harness.)
+    let close = "Close pane";
     let mut model = item("Change model…", "m", "models");
     model.disabled = !crate::models::pane_supports(app, pane);
     let mut agent = item("Change agent…", "a", "agent");

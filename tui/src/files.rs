@@ -2250,7 +2250,7 @@ mod tests {
         press(&mut f, KeyCode::Delete);
         let (area, g) = (Rect::new(0, 0, 100, 30), geom(100, 30, f.view));
         let (r, row) = f.confirm_layout(g).expect("fits");
-        let (_, buttons) = f.confirm_row().areas(row);
+        let buttons = f.confirm_row().areas(row);
         let by = row.y;
         let screen = |f: &mut Files| { let mut buf = Buffer::empty(area); f.draw(&mut buf, area, &Look::default()); buf };
         let word = |buf: &Buffer, b: Rect| (b.x..b.right()).map(|x| buf[(x, by)].symbol()).collect::<String>();
@@ -2343,7 +2343,7 @@ mod tests {
         assert!(f.prompt.as_ref().is_some_and(|p| !p.buttons), "a click on the input gives it the keys");
         click(&mut f, Position::new(r.x + 1, r.y + 1));
         assert!(f.prompt.is_some(), "the dialog's own rule does nothing");
-        let (cancel, create) = { let (_, b) = f.prompt.as_ref().unwrap().row().areas(a.row); (b[0], b[1]) };
+        let (cancel, create) = { let b = f.prompt.as_ref().unwrap().row().areas(a.row); (b[0], b[1]) };
         click(&mut f, Position::new(create.x + 1, create.y));
         assert!(f.prompt.is_none() && s.0.join("m.md").is_file(), "Create");
         f.act(Act::NewFile, Target::Space(s.0.clone()));

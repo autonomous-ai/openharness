@@ -3636,8 +3636,8 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
         app.modal = Some(Modal::Menu(menu));
         return;
     }
-    // A confirmation's blank row and button row sit under its notes.
-    let count = menu.items.len() as u16 + if menu.buttons.is_some() { 2 } else { 0 };
+    // A confirmation's blank row, button row and hint line sit under its notes.
+    let count = if menu.buttons.is_some() { crate::workspace_menu::dialog_box(&menu).height.saturating_sub(2) } else { menu.items.len() as u16 };
     let (px, py, width) = (menu.x, menu.y, menu.width);
     if m.x < px || m.x > px + 4 + width || m.y < py + 1 || m.y > py + count {
         let close = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
@@ -3654,7 +3654,7 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
     let chosen = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
     if let Some(b) = &menu.buttons {
         // Only a button does anything: the notes, the blank row and the gaps and hint keep the dialog.
-        let row = crate::dialog::areas(crate::workspace_menu::dialog_box(&menu), crate::dialog::Parts::default()).row;
+        let row = crate::dialog::areas(crate::workspace_menu::dialog_box(&menu), crate::workspace_menu::dialog_parts(&menu)).row;
         let hit = if chosen { b.row.click(row, ratatui::layout::Position::new(m.x, m.y)) } else { None };
         if let Some(command) = hit.and_then(|i| b.actions.get(i)).cloned() { return commands::execute_in(app, &command, menu.mouse.clone()) }
         app.modal = Some(Modal::Menu(menu));
@@ -3800,7 +3800,7 @@ mod tests {
         ask(&mut app);
         let Some(Modal::Menu(m)) = &app.modal else { panic!("closed") };
         let y = m.y + 1 + m.items.len() as u16 + 1;
-        let (_, cells) = m.buttons.as_ref().unwrap().row.areas(ratatui::layout::Rect::new(m.x + 2, y, m.width, 1));
+        let cells = m.buttons.as_ref().unwrap().row.areas(ratatui::layout::Rect::new(m.x + 2, y, m.width, 1));
         let press = |x, y| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE };
         let gap = cells[0].right();
         handle(&mut app, CEvent::Mouse(press(gap, y)));

@@ -53,9 +53,16 @@ pub fn open_buttons(app: &mut App, title: &str, notes: Vec<MenuItem>, row: crate
 /// What a question too big for the terminal says, as every dialog says it.
 pub const TOO_SMALL_TO_ANSWER: &str = "Make the terminal larger to answer this";
 
-/// A confirmation's box (a `dialog::Dialog`): its notes, a blank row and the buttons' row inside
-/// the border. The drawing and the mouse both lay it out with `dialog::areas`.
-pub fn dialog_box(m: &Menu) -> Rect { Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 4) }
+/// A confirmation's parts as a `dialog::Dialog` lays them out: the keys hint's last line when its
+/// row kept one.
+pub fn dialog_parts(m: &Menu) -> crate::dialog::Parts {
+    crate::dialog::Parts { hint: m.buttons.as_ref().is_some_and(|b| !b.row.hint.is_empty()), ..Default::default() }
+}
+
+/// A confirmation's box (a `dialog::Dialog`): its notes, a blank row, the buttons' row and the
+/// keys hint's line inside the border. The drawing and the mouse both lay it out with
+/// `dialog::areas` and [dialog_parts].
+pub fn dialog_box(m: &Menu) -> Rect { Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 4 + u16::from(dialog_parts(m).hint)) }
 
 fn fit(menu: &mut Menu, size: (u16, u16)) -> bool {
     // A resize keeps the button the keys were on.
@@ -64,19 +71,22 @@ fn fit(menu: &mut Menu, size: (u16, u16)) -> bool {
     }
     let Some(layout) = &menu.responsive else { return true };
     let actions = layout.items.iter().filter(|i| !(i.disabled && i.command.is_empty() && !i.separator)).count();
-    // The blank line and the buttons' row.
-    let extra = if layout.buttons.is_some() { 2 } else { 0 };
-    if size.0 < 12 || size.1 < actions as u16 + 2 + extra { return false }
+    // The blank line, the buttons' row and the hint's line. The hint gives way first, where
+    // either the rows or the columns run out; buttons that still do not fit are refused, never
+    // overlapped.
+    let mut buttons = layout.buttons.clone();
+    let extra = |b: &Option<Buttons>| b.as_ref().map_or(0, |b| 2 + u16::from(!b.row.hint.is_empty()));
+    if size.1 < actions as u16 + 2 + extra(&buttons) { if let Some(b) = &mut buttons { b.row.hint.clear() } }
+    if size.0 < 12 || size.1 < actions as u16 + 2 + extra(&buttons) { return false }
     let choice = menu.choice.and_then(|at| menu.items.get(at)).and_then(|chosen| layout.items.iter().position(|i|
         !i.disabled && !i.separator && i.command == chosen.command && i.key == chosen.key));
     let width = layout.items.iter().map(|i| crate::draw::format_width(&i.label) as usize + if i.key.is_empty() { 0 } else { i.key.width() + 3 })
         .chain([crate::draw::format_width(&menu.title) as usize])
-        .chain(layout.buttons.iter().map(|b| b.row.width() as usize)).max().unwrap_or(1).min(size.0.saturating_sub(4) as usize) as u16;
-    let (items, choice) = wrap_notes(layout.items.clone(), choice, width as usize, size.1.saturating_sub(2 + extra) as usize);
-    let height = items.len() as u16 + 2 + extra;
-    // The hint gives way first; buttons that still do not fit are refused, never overlapped.
-    let buttons = layout.buttons.clone().map(|mut b| { if b.row.width() > width { b.row.hint.clear() } b });
+        .chain(buttons.iter().map(|b| b.row.width() as usize)).max().unwrap_or(1).min(size.0.saturating_sub(4) as usize) as u16;
+    if let Some(b) = &mut buttons { if b.row.width() > width { b.row.hint.clear() } }
     if buttons.as_ref().is_some_and(|b| b.row.buttons_width() > width) { return false }
+    let (items, choice) = wrap_notes(layout.items.clone(), choice, width as usize, size.1.saturating_sub(2 + extra(&buttons)) as usize);
+    let height = items.len() as u16 + 2 + extra(&buttons);
     let (x, y) = layout.anchor.unwrap_or(((size.0 - width - 4) / 2, (size.1 - height) / 2));
     menu.x = x.min(size.0 - width - 4); menu.y = y.min(size.1 - height);
     menu.width = width; menu.items = items; menu.choice = choice; menu.buttons = buttons;
@@ -177,15 +187,17 @@ mod tests {
     fn buttons_widen_the_box_drop_the_hint_first_and_never_overlap() {
         let (tx, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19799, tx, (100, 20));
-        assert!(open_buttons(&mut app, "Hi", vec![note("Stop?")], confirm("s stop · esc cancel"), vec!["x".into(), "y".into()]));
+        assert!(open_buttons(&mut app, "Hi", vec![note("Stop?")], confirm(crate::buttons::KEYS), vec!["x".into(), "y".into()]));
         let Some(Modal::Menu(menu)) = &mut app.modal else { panic!("closed") };
-        assert!(menu.width >= confirm("s stop · esc cancel").width(), "the box holds hint and buttons");
+        assert!(menu.width >= confirm(crate::buttons::KEYS).width(), "the box holds the hint's line and the buttons");
+        assert_eq!(dialog_box(menu).height, menu.items.len() as u16 + 5, "notes, a blank, the buttons, the hint: the last line");
         assert_eq!(menu.items.len(), 1);
         menu.buttons.as_mut().unwrap().row.chosen = 1;
-        app.size = (26, 20); resize(&mut app);   // 22 columns of room: buttons need 20, with the hint 41
+        app.size = (26, 20); resize(&mut app);   // 22 columns of room: buttons need 20, the hint 38
         let Some(Modal::Menu(menu)) = &app.modal else { panic!("closed") };
         let b = menu.buttons.as_ref().unwrap();
         assert!(b.row.hint.is_empty(), "the hint goes first");
+        assert_eq!(dialog_box(menu).height, menu.items.len() as u16 + 4, "no hint, no line for it");
         assert_eq!(b.row.chosen, 1, "a resize keeps the chosen button");
         assert!(menu.width >= b.row.buttons_width());
         app.size = (20, 20); resize(&mut app);   // 16 columns: the buttons cannot fit

@@ -719,7 +719,7 @@ mod tests {
         typing(&mut e, "y");
         e.key(k(KeyCode::Esc));
         let (_, row) = e.ask_layout();
-        let (_, buttons) = e.ask_row().areas(row);
+        let buttons = e.ask_row().areas(row);
         let by = row.y;
         let area = Rect::new(0, 0, 80, 24);
         let screen = |e: &mut Editor| { let mut buf = Buffer::empty(area); e.draw(&mut buf, area, &Look::default()); buf };

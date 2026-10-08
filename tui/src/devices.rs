@@ -1477,7 +1477,7 @@ fn ask_dialog(buf: &mut Buffer, app: &App, over: Rect, c: &Chrome) -> Option<Pos
     let area = d.place(over);
     d.render_over(over, area, buf);
     let a = d.areas(area);
-    let (_, cells) = row.areas(a.row);
+    let cells = row.areas(a.row);
     app.devices.prompt_actions.set(Some(PromptActions { size: app.size, accept: cells[1], cancel: cells[0], input: a.input }));
     d.cursor(area)
 }

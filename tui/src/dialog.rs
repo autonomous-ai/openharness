@@ -37,31 +37,37 @@ pub struct Dialog<'a> {
     pub row: &'a Row,
     pub border: border::Set<'a>,
     pub chrome: &'a Chrome,
+    /// The row's keys hint on the last line, under the buttons (the row has one, and there is
+    /// room: fitting drops it first).
+    pub hint: bool,
 }
 
 /// Which optional parts a dialog has (and how many lines its message is): its geometry depends on
 /// nothing else.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Parts { pub label: bool, pub input: bool, pub message: u16 }
+pub struct Parts { pub label: bool, pub input: bool, pub message: u16, pub hint: bool }
 
 /// Where each part of a dialog goes inside its box.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Areas { pub body: Rect, pub label: Option<Rect>, pub input: Option<Rect>, pub field: Option<Rect>, pub message: Option<Rect>, pub row: Rect }
+pub struct Areas { pub body: Rect, pub label: Option<Rect>, pub input: Option<Rect>, pub field: Option<Rect>, pub message: Option<Rect>, pub row: Rect, pub hint: Option<Rect> }
 
 /// The parts of a dialog drawn in [area] (its box), two columns in from each side: the body,
-/// then the label, the input box, the message, a blank row and the buttons' row.
+/// then the label, the input box, the message, a blank row, the buttons' row and — always the
+/// last line — the keys hint.
 pub fn areas(area: Rect, parts: Parts) -> Areas {
     let optional = [(parts.label, 1), (parts.input, INPUT_ROWS), (parts.message > 0, parts.message)];
     let constraints = std::iter::once(Constraint::Fill(1))
         .chain(optional.iter().filter(|(on, _)| *on).map(|&(_, rows)| Constraint::Length(rows)))
-        .chain([Constraint::Length(1), Constraint::Length(1)]);   // a blank row, the buttons
+        .chain([Constraint::Length(1), Constraint::Length(1)])   // a blank row, the buttons
+        .chain(parts.hint.then_some(Constraint::Length(1)));
     let rects = Layout::vertical(constraints).split(area.inner(Margin::new(2, 1)));
-    let row = rects.last().copied().unwrap_or_default();
     let mut next = rects.iter().copied();
     let body = next.next().unwrap_or_default();
     let mut take = |on: bool| if on { next.next() } else { None };
     let (label, input, message) = (take(parts.label), take(parts.input), take(parts.message > 0));
-    Areas { body, label, input, field: input.map(|r| r.inner(Margin::new(1, 1))), message, row }
+    let (_blank, row) = (take(true), take(true).unwrap_or_default());
+    let hint = take(parts.hint);
+    Areas { body, label, input, field: input.map(|r| r.inner(Margin::new(1, 1))), message, row, hint }
 }
 
 /// [text] as lines of at most [width] columns, broken between words, in [style].
@@ -104,12 +110,13 @@ impl Input<'_> {
 impl<'a> Dialog<'a> {
     /// A dialog titled [title] in [c]'s muted colour, with the default single-line border.
     pub fn new(title: &str, body: Vec<Line<'a>>, row: &'a Row, c: &'a Chrome) -> Dialog<'a> {
-        Dialog { title: Line::from(Span::styled(title.to_string(), c.muted)), body, input: None, message: Vec::new(), row, border: border::PLAIN, chrome: c }
+        Dialog { title: Line::from(Span::styled(title.to_string(), c.muted)), body, input: None, message: Vec::new(), row, border: border::PLAIN, chrome: c, hint: true }
     }
 
     pub fn parts(&self) -> Parts {
         let input = self.input.as_ref();
-        Parts { label: input.is_some_and(|i| !i.label.is_empty()), input: input.is_some(), message: self.message.len().min(u16::MAX as usize / 2) as u16 }
+        Parts { label: input.is_some_and(|i| !i.label.is_empty()), input: input.is_some(), message: self.message.len().min(u16::MAX as usize / 2) as u16,
+            hint: self.hint && !self.row.hint.is_empty() }
     }
 
     pub fn areas(&self, area: Rect) -> Areas { areas(area, self.parts()) }
@@ -125,14 +132,15 @@ impl<'a> Dialog<'a> {
     /// The rows the box needs.
     pub fn height(&self) -> u16 {
         let p = self.parts();
-        let optional = u16::from(p.label) + if p.input { INPUT_ROWS } else { 0 } + p.message;
+        let optional = u16::from(p.label) + if p.input { INPUT_ROWS } else { 0 } + p.message + u16::from(p.hint);
         (self.body.len().min(u16::MAX as usize / 2) as u16).saturating_add(optional + 2 + 2)
     }
 
-    /// Fitted into [rows]: the body's last lines go first (the last one kept ends in …), then the
-    /// message, then the label — and with an input, which is the question then, the body. False
-    /// when even the rest does not fit.
+    /// Fitted into [rows]: the keys hint goes first, then the body's last lines (the last one
+    /// kept ends in …), then the message, then the label — and with an input, which is the
+    /// question then, the body. False when even the rest does not fit.
     pub fn fit(&mut self, rows: u16) -> bool {
+        if self.height() > rows { self.hint = false }
         let others = self.height() as usize - self.body.len();
         let room = (rows as usize).saturating_sub(others).max(1);
         if self.body.len() > room {
@@ -199,6 +207,7 @@ impl Widget for &Dialog<'_> {
         }
         if let Some(r) = a.message { Paragraph::new(Text::from(self.message.clone())).render(r, buf) }
         self.row.view(c).render(a.row, buf);
+        if let Some(r) = a.hint { self.row.hint_line(c).render(r, buf) }
     }
 }
 
@@ -270,7 +279,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         (&d).render(area, &mut buf);
         let a = d.areas(area);
-        let connect = row.areas(a.row).1[1];
+        let connect = row.areas(a.row)[1];
         assert!(buf[(connect.x, connect.y)].modifier.contains(Modifier::REVERSED));
         assert!(buf[(a.message.unwrap().x, a.message.unwrap().y)].modifier.contains(Modifier::BOLD));
         assert_eq!(buf[(a.input.unwrap().x, a.input.unwrap().y)].modifier, Modifier::DIM, "the input without the keys is muted");
@@ -289,7 +298,7 @@ mod tests {
         assert_eq!((a.label, a.input, a.field), (Some(Rect::new(12, 9, 36, 1)), Some(Rect::new(12, 10, 36, 3)), Some(Rect::new(13, 11, 34, 1))));
         assert_eq!(a.message, Some(Rect::new(12, 13, 36, 1)));
         assert_eq!(a.row, Rect::new(12, 15, 36, 1), "a blank row above the buttons");
-        let connect = row.areas(a.row).1[1];
+        let connect = row.areas(a.row)[1];
         assert_eq!(row.click(a.row, Position::new(connect.x, connect.y)), Some(1));
         // A question with no input is notes, a blank row and the buttons — the Close Tab box.
         let plain = areas(area, Parts::default());
@@ -346,7 +355,7 @@ mod tests {
         let mut d = password(&row, &c, "", true);
         d.message = wrap("Passwords do not match, so nothing was changed.", 20, c.danger);
         assert_eq!(d.message.iter().map(|l| l.to_string()).collect::<Vec<_>>(), ["Passwords do not", "match, so nothing", "was changed."]);
-        assert_eq!(d.parts(), Parts { label: true, input: true, message: 3 });
+        assert_eq!(d.parts(), Parts { label: true, input: true, message: 3, hint: false });
         assert_eq!(d.areas(Rect::new(0, 0, 30, 20)).message.map(|r| r.height), Some(3));
         assert_eq!(d.height(), 1 + 1 + 3 + 3 + 4, "the body, the label, the input box, three message lines, two rules and two rows");
         assert!(d.fit(d.height() - 1));
