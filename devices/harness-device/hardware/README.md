@@ -15,26 +15,22 @@ Mechanical and electrical design files for the harness-device: a round USB compa
 ## Bill of Materials
 
 [`BOM.csv`](BOM.csv) lists every part needed to build one complete device — bought components and
-3D/laser-cut parts alike — each with a sourcing link or a pointer to the design file that makes it.
-This is the **full product BOM**; for just the PCB's own SMD components, see
-`pcb/production/BOM_Harness_1.75_AMOLED_PCB_Harness_1.75.xlsx` below.
+3D/laser-cut parts alike. This is the **full product BOM**; for just the PCB's own SMD components,
+see `pcb/production/BOM_Harness_1.75_AMOLED_PCB_Harness_1.75.xlsx` below.
 
-The live source is this [Google Sheet](https://docs.google.com/spreadsheets/d/1MMOfGeKkNdsgSDawAIyIZwCaAqGHyCPNr3bwAXBrkfU/edit?gid=0#gid=0) —
-`BOM.csv` is a snapshot of it; if the two disagree, treat the sheet as current and refresh the CSV.
-
-| # | Component | Qty | Source |
-|---|---|---|---|
-| 1 | Speaker, 2415 8Ω 1W (2-pin SH1.0 connector) | 1 | [AliExpress](https://www.aliexpress.us/item/3256813022741238.html) |
-| 2 | MX1.25 4-pin connector cable | 1 | [AliExpress](https://www.aliexpress.us/item/3256812670096395.html) |
-| 3 | 1.75″ 466×466 round AMOLED display (DXQ0175Y003AMT003) | 1 | [Alibaba](https://www.alibaba.com/product-detail/DXQ-1-75-Inch-466-466_1601834013691.html) |
-| 4 | USB Type-C female PCB connector | 1 | [AliExpress](https://www.aliexpress.us/item/3256809703885548.html) |
-| 5 | PCBA — Harness_1.75_AMOLED (main board, assembled) | 1 | [JLCPCB](https://jlcpcb.com/) — build from `pcb/` |
-| 6 | Solid round adhesive-backed rubber pad, 35 mm × 1.5 mm thick | 1 | [AliExpress](https://www.aliexpress.us/item/3256806493767498.html) |
-| 7 | M2×5 screw | 4 | [AliExpress](https://www.aliexpress.us/item/3256808488953951.html) |
-| 8 | Housing — 3D printed | 1 | `3d/step/Housing.step` |
-| 9 | Button — 3D printed | 1 | `3d/step/Button.step` |
-| 10 | USB clamp — 3D printed | 1 | `3d/step/USB_clamp.step` |
-| 11 | Iron base — laser-cut, 3 mm steel | 1 | `3d/step/Iron_base.step` |
+| # | Component | Qty |
+|---|---|---|
+| 1 | Speaker, 2415 8Ω 1W (2-pin SH1.0 connector) | 1 |
+| 2 | MX1.25 4-pin connector cable | 1 |
+| 3 | 1.75″ 466×466 round AMOLED display | 1 |
+| 4 | USB Type-C female PCB connector | 1 |
+| 5 | PCBA — Harness_1.75_AMOLED (main board, assembled) | 1 |
+| 6 | Solid round adhesive-backed rubber pad, 35 mm × 1.5 mm thick | 1 |
+| 7 | M2×5 screw | 4 |
+| 8 | Housing — 3D printed | 1 |
+| 9 | Button — 3D printed | 1 |
+| 10 | USB clamp — 3D printed | 1 |
+| 11 | Iron base — laser-cut, 3 mm steel | 1 |
 
 > The display module's silkscreen/BOM calls out a CST9217 touch controller, but the units actually
 > sourced under this listing carry a CST816S instead (same footprint/form factor, different

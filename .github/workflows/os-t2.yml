@@ -7,9 +7,6 @@ on:
         description: 'Reuse an exact T2 image built from this source for machine acceptance'
         required: false
         type: string
-  push:
-    branches: ['os-candidate/t2-*']
-    paths: ['os/**', '.github/workflows/os-t2.yml']
 
 permissions:
   contents: read

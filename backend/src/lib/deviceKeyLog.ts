@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client'
 import { prisma } from './prisma.js'
 import { pub, publishDeviceKeysChanged, publishDown } from './bus.js'
 import { logger } from '../utils/logger.js'
@@ -35,24 +36,91 @@ export type DeviceKeyChannel =
   | { kind: 'viewer'; harnessSessionId?: string }
 
 export async function readDeviceKeyLog(userId: string, since: number): Promise<{ acct: string; head: DevLogHead; entries: unknown[] }> {
-  const [rows, last] = await Promise.all([
+  const [rows, head] = await Promise.all([
     prisma.deviceKeyLogEntry.findMany({ where: { userId, seq: { gt: since } }, orderBy: { seq: 'asc' }, take: PAGE }),
-    prisma.deviceKeyLogEntry.findFirst({ where: { userId }, orderBy: { seq: 'desc' }, select: { seq: true, hash: true } }),
+    logHead(userId),
   ])
-  const head = last ?? emptyDevLogState(userId).head
-  return { acct: userId, head: { seq: head.seq, hash: head.hash }, entries: rows.map(r => JSON.parse(r.entry) as unknown) }
+  return { acct: userId, head, entries: rows.map(r => JSON.parse(r.entry) as unknown) }
 }
 
-/** The whole log, verified. It is small and read only when something is appended. */
-async function currentState(userId: string): Promise<{ state: DevLogState; sessions: Map<string, string> }> {
-  const rows = await prisma.deviceKeyLogEntry.findMany({ where: { userId }, orderBy: { seq: 'asc' } })
-  const { state } = applyDevLogEntries(emptyDevLogState(userId), rows.map(r => JSON.parse(r.entry) as unknown))
-  const sessions = new Map<string, string>()
-  for (const r of rows) {
-    const e = JSON.parse(r.entry) as DevLogEntry
-    if (r.sessionId && e.op === 'add') sessions.set(e.pub, r.sessionId)
+async function logHead(userId: string): Promise<DevLogHead> {
+  const last = await prisma.deviceKeyLogEntry.findFirst({ where: { userId }, orderBy: { seq: 'desc' }, select: { seq: true, hash: true } })
+  return last ? { seq: last.seq, hash: last.hash } : emptyDevLogState(userId).head
+}
+
+/** pub → the Harness session that added that key, for the active keys that carried one. */
+type Sessions = Map<string, string>
+
+/** Keep [sessions] in step with one more entry, and the session its row recorded. */
+function trackSession(sessions: Sessions, entry: DevLogEntry, sessionId: string | null | undefined): void {
+  if (entry.op === 'remove') sessions.delete(entry.pub)
+  else if (sessionId) sessions.set(entry.pub, sessionId)
+}
+
+/** [rows] verified on top of [base], every rule checked again; [sessions] follows them. */
+function replay(base: DevLogState, sessions: Sessions, rows: Array<{ entry: string; sessionId: string | null }>): DevLogState {
+  const entries = rows.map(r => JSON.parse(r.entry) as DevLogEntry)
+  const { state } = applyDevLogEntries(base, entries)
+  entries.forEach((e, i) => trackSession(sessions, e, rows[i].sessionId))
+  return state
+}
+
+/**
+ * The log as of its head, verified. Verifying it whole costs about a millisecond an entry, too much on
+ * every append once a log grows, so it starts from the snapshot (DeviceKeyLogState) and verifies only
+ * what came after it. The snapshot is checked against the real head each time, never trusted to be
+ * current — any pod may have appended since. One that does not fit the log is replayed over from the
+ * start. `hashes` holds only what was replayed: nothing here looks an older entry up.
+ */
+async function currentState(userId: string): Promise<{ state: DevLogState; sessions: Sessions }> {
+  const [snap, head] = await Promise.all([
+    prisma.deviceKeyLogState.findUnique({ where: { userId } }),
+    logHead(userId),
+  ])
+  if (snap) {
+    try {
+      const state: DevLogState = {
+        acct: userId, head: { seq: snap.seq, hash: snap.hash }, hashes: [],
+        active: snap.active as unknown as DevLogState['active'], removed: snap.removed as string[],
+      }
+      const sessions: Sessions = new Map(Object.entries(snap.sessions as Record<string, string>))
+      if (snap.seq === head.seq && snap.hash === head.hash) return { state, sessions }
+      if (snap.seq >= head.seq) throw new Error('snapshot is not on the way to the head')
+      const rows = await prisma.deviceKeyLogEntry.findMany({ where: { userId, seq: { gt: snap.seq } }, orderBy: { seq: 'asc' } })
+      const next = replay(state, sessions, rows)
+      await saveSnapshot(userId, next, sessions)
+      return { state: next, sessions }
+    } catch (err) {
+      logger.warn('device key log snapshot does not fit the log; replaying the whole log', { userId, seq: snap.seq, error: String(err) })
+    }
   }
+  const rows = await prisma.deviceKeyLogEntry.findMany({ where: { userId }, orderBy: { seq: 'asc' } })
+  const sessions: Sessions = new Map()
+  const state = replay(emptyDevLogState(userId), sessions, rows)
+  if (rows.length || snap) await saveSnapshot(userId, state, sessions, snap ?? undefined)
   return { state, sessions }
+}
+
+/**
+ * Keep the snapshot at [state]. It only moves forward, so a slower append cannot put an older one back
+ * — except over [replacing], a snapshot found not to fit the log, which is overwritten only if it is
+ * still the one that was read. Best effort: without it the next append replays from where it stands.
+ */
+async function saveSnapshot(userId: string, state: DevLogState, sessions: Sessions, replacing?: DevLogHead): Promise<void> {
+  const data = {
+    seq: state.head.seq, hash: state.head.hash, active: state.active as unknown as Prisma.InputJsonObject,
+    removed: state.removed, sessions: Object.fromEntries(sessions),
+  }
+  try {
+    const { count } = await prisma.deviceKeyLogState.updateMany({
+      where: replacing ? { userId, seq: replacing.seq, hash: replacing.hash } : { userId, seq: { lt: data.seq } },
+      data,
+    })
+    if (count === 0 && !replacing) await prisma.deviceKeyLogState.create({ data: { userId, ...data } })
+  } catch (err) {
+    // A unique violation is a snapshot already there, at this head or past it: nothing to save.
+    if (!isUniqueViolation(err)) logger.warn('device key log snapshot not saved', { userId, seq: data.seq, error: String(err) })
+  }
 }
 
 function channelAllows(entry: DevLogEntry, state: DevLogState, channel: DeviceKeyChannel): boolean {
@@ -87,23 +155,19 @@ export async function appendDeviceKey(userId: string, raw: unknown, channel: Dev
     throw err
   }
   const head = applied.state.head
+  // The Harness session that added this key (a phone signed in by QR, or a computer a phone signed
+  // in), so removing the key signs that session out too.
+  const sessionId = entry.op === 'add' ? channel.harnessSessionId ?? null : null
   try {
-    await prisma.deviceKeyLogEntry.create({
-      data: {
-        userId, seq: entry.seq, hash: head.hash, entry: JSON.stringify(entry),
-        // The Harness session that added this key (a phone signed in by QR, or a computer a phone
-        // signed in), so removing the key signs that session out too.
-        sessionId: entry.op === 'add' ? channel.harnessSessionId ?? null : null,
-      },
-    })
+    await prisma.deviceKeyLogEntry.create({ data: { userId, seq: entry.seq, hash: head.hash, entry: JSON.stringify(entry), sessionId } })
   } catch (err) {
     // Another device appended at this head first.
-    if (isUniqueViolation(err)) {
-      const { state: now } = await currentState(userId)
-      return { ok: false, status: 409, code: 'STALE_HEAD', head: now.head }
-    }
+    if (isUniqueViolation(err)) return { ok: false, status: 409, code: 'STALE_HEAD', head: await logHead(userId) }
     throw err
   }
+  const nextSessions = new Map(sessions)
+  trackSession(nextSessions, entry, sessionId)
+  await saveSnapshot(userId, applied.state, nextSessions)
   await publishDeviceKeysChanged(userId, head).catch(() => { /* best effort: devices also re-read on their own */ })
   touchDeviceKey(userId, entry.signer)
   for (const gone of applied.removed) await signOut(userId, gone.kind, gone.machineId, gone.pub, sessions.get(gone.pub))
@@ -139,6 +203,11 @@ async function signOut(userId: string, kind: string, machineId: string, pubKey: 
 // this is what "seen" means: the key opened an E2EE session (`e2e_hello` carries it in the clear, on
 // its way to a machine). Only a hint for that list — nothing trusts or distrusts a key by it — so a
 // client claiming someone else's key here can at most keep that one off the suggestion.
+//
+// `_since` (in the same hash, so it goes when the hash goes — a TTL, an eviction, a Redis that comes
+// back empty) is when this record began: a key with no time here is unused only if the record is
+// older than the question. Without it, a Redis that lost its data read as "no app used in months",
+// and a machine's sweep (cli deviceLogSyncer `sweepStale`) would have removed every old app key.
 
 const SEEN_TTL_SEC = 400 * 24 * 60 * 60
 /** One write per key per this long, per process: a phone opens a session per machine it shows. */
@@ -147,6 +216,7 @@ const SEEN_MEMORY_MAX = 10_000
 const seenWritten = new Map<string, number>()
 const seenKey = (userId: string): string => `devkeys:seen:${userId}`
 const PUB_RE = /^[A-Za-z0-9+/]{43}=$/
+const SINCE = '_since'
 
 export function touchDeviceKey(userId: string, pubKey: unknown, now = Date.now()): void {
   if (typeof pubKey !== 'string' || !PUB_RE.test(pubKey)) return
@@ -155,17 +225,24 @@ export function touchDeviceKey(userId: string, pubKey: unknown, now = Date.now()
   if (last !== undefined && now - last < SEEN_WRITE_EVERY_MS) return
   if (seenWritten.size >= SEEN_MEMORY_MAX) seenWritten.clear()
   seenWritten.set(memo, now)
-  void pub.multi().hset(seenKey(userId), pubKey, String(now)).expire(seenKey(userId), SEEN_TTL_SEC).exec()
+  void pub.multi().hsetnx(seenKey(userId), SINCE, String(now)).hset(seenKey(userId), pubKey, String(now))
+    .expire(seenKey(userId), SEEN_TTL_SEC).exec()
     .catch(() => { seenWritten.delete(memo) })
 }
 
-/** When each of the account's keys was last seen, by pub (ms). Empty when nothing was recorded. */
-export async function deviceKeysSeen(userId: string): Promise<Record<string, number>> {
+/**
+ * When each of the account's keys was last seen, by pub (ms), and since when that record runs (null when
+ * there is none). Throws when Redis cannot be read: "could not ask" must never read as "nothing seen".
+ */
+export async function deviceKeysSeen(userId: string): Promise<{ seen: Record<string, number>; since: number | null }> {
   const raw = await pub.hgetall(seenKey(userId))
-  const out: Record<string, number> = {}
+  const seen: Record<string, number> = {}
+  let since: number | null = null
   for (const [k, v] of Object.entries(raw ?? {})) {
     const n = Number(v)
-    if (PUB_RE.test(k) && Number.isSafeInteger(n) && n > 0) out[k] = n
+    if (!Number.isSafeInteger(n) || n <= 0) continue
+    if (k === SINCE) since = n
+    else if (PUB_RE.test(k)) seen[k] = n
   }
-  return out
+  return { seen, since }
 }

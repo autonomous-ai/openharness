@@ -188,6 +188,17 @@ class DurablePlan(unittest.TestCase):
                 target.save_plan(self.path, self.plan)
         self.assertEqual(target.load_plan(self.path), self.plan)
 
+    def test_filesystem_flush_failure_is_reported(self):
+        with patch.object(target.platform, 'system', return_value='Linux'), \
+                patch.object(target.ctypes, 'CDLL') as library, \
+                patch.object(target.ctypes, 'get_errno', return_value=5):
+            library.return_value.syncfs.return_value = -1
+            with self.assertRaises(OSError) as failure:
+                target.save_plan(self.path, self.plan)
+            self.assertEqual(failure.exception.errno, 5)
+        # Keep the published identity for a safe retry even if its flush failed.
+        self.assertEqual(target.load_plan(self.path), self.plan)
+
     def test_private_directory_and_exclusive_writer_required(self):
         self.root.chmod(0o755)
         with self.assertRaises(target.TargetError):

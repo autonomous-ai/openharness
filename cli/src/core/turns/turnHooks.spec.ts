@@ -1,9 +1,12 @@
+import type { LiveParser } from '../../engines/facets/live.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { removeCursorPendingTasks } from '../../engines/cursor/pendingTasks.js'
 import type { TurnState } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createSessionNormalizers } from '../transcripts/normalizers.js'
 import { createTurnHooks, STOP_HOOK_GRACE_MS, type TurnHookDeps } from './turnHooks.js'
+import { engineHooks } from '../../engines/hooks.js'
+import type { HookTurnContext } from '../../engines/facets/hooks.js'
 
 vi.mock('../../engines/cursor/pendingTasks.js', () => ({ removeCursorPendingTasks: vi.fn(async () => {}) }))
 
@@ -41,6 +44,21 @@ function setup(engine: string, over: Partial<TurnHookDeps> = {}) {
   return { deps, normalizers, hooks: createTurnHooks(deps) }
 }
 
+// Existing hook scenarios control transcript arrival without exposing mutable state through the port.
+let generation = 0
+function parserOf(state: TurnState): LiveParser {
+  const identity = ++generation
+  return {
+    engine: 'claude',
+    get turnOpen() { return state.turnOpen },
+    snapshot: () => ({ identity: `${identity}:${state.opened ?? 0}`, turnOpen: state.turnOpen, continued: state.continued === true }),
+    closeTurn: () => { state.turnOpen = false; state.pendingTools.clear() },
+    ingest: () => ({ events: [] }),
+    windowStart: () => {},
+  }
+}
+const setState = (run: ReturnType<typeof setup>, state: TurnState) => run.normalizers.liveParsers.set('s1', parserOf(state))
+
 const put = (map: Map<string, unknown>, state: unknown) => map.set('s1', state)
 
 describe('turn hooks', () => {
@@ -72,9 +90,53 @@ describe('turn hooks', () => {
     unknown.hooks.onTurnStop({ sessionId: 'nobody' })
     const pi = setup('pi')
     pi.hooks.onTurnStop({ sessionId: 's1' })
+    const codex = setup('codex')
+    codex.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
     await vi.runAllTimersAsync()
     expect(unknown.deps.drain).not.toHaveBeenCalled()
     expect(pi.deps.drain).not.toHaveBeenCalled()
+    expect(codex.deps.drain).not.toHaveBeenCalled()
+    expect(codex.deps.emit).not.toHaveBeenCalled()
+  })
+
+  it('contains a synchronous engine failure and still handles another engine', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(engineHooks.claude, 'onStop').mockImplementationOnce(() => { throw new Error('engine failed') })
+    expect(() => setup('claude').hooks.onTurnStop({ sessionId: 's1' })).not.toThrow()
+    const other = setup('commandcode')
+    const state = engineState()
+    put(other.normalizers.commandcodeNormalizers, state)
+    other.hooks.onTurnStop({ sessionId: 's1' })
+    await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
+    expect(other.deps.emit).toHaveBeenCalledWith('s1', END)
+    expect(error).toHaveBeenCalledWith('[hooks] claude stop hook failed:', 'engine failed')
+  })
+
+  it('refuses an engine closure for a replaced turn, changed engine or forgotten session', () => {
+    let context!: HookTurnContext
+    vi.spyOn(engineHooks.claude, 'onStop').mockImplementationOnce((value) => { context = value })
+    const row = { sessionId: 's1', engine: 'claude' } as RegisteredSession
+    const run = setup('claude', { resolve: (id) => id === 's1' ? row : undefined })
+    const state = { turnOpen: true, opened: 1, pendingTools: new Set() } as TurnState
+    setState(run, state)
+    run.hooks.onTurnStop({ sessionId: 's1' })
+    const first = context.turnState('s1')!
+    state.opened = 2
+    expect(context.closeTurn('s1', first.identity)).toBe(false)
+    expect(state.turnOpen).toBe(true)
+    row.engine = 'codex'
+    expect(context.turnState('s1')).toBeUndefined()
+    expect(context.closeTurn('s1', first.identity)).toBe(false)
+    row.engine = 'claude'
+    expect(context.closeTurn('s1', context.turnState('s1')!.identity)).toBe(true)
+    expect(state.turnOpen).toBe(false)
+    run.normalizers.forget('s1')
+    expect(context.turnState('s1')).toBeUndefined()
+    expect(context.closeTurn('s1', first.identity)).toBe(false)
+    // A parser whose registry binding disappeared cannot authorize a closure either.
+    run.normalizers.liveParsers.set('unbound', parserOf(state))
+    expect(context.turnState('unbound')).toBeUndefined()
+    expect(context.closeTurn('unbound', first.identity)).toBe(false)
   })
 
   describe('Claude Code', () => {
@@ -82,7 +144,7 @@ describe('turn hooks', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup('claude')
       const state = { turnOpen: true, pendingTools: new Map([['t', {}]]) } as unknown as TurnState
-      run.normalizers.turnStates.set('s1', state)
+      setState(run, state)
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
       await vi.advanceTimersByTimeAsync(0)
       expect(run.deps.mirror.noteEngineStopped).toHaveBeenCalledWith('s1')
@@ -108,7 +170,7 @@ describe('turn hooks', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup('claude')
       const state = { turnOpen: true, pendingTools: new Map(), continued: true } as unknown as TurnState
-      run.normalizers.turnStates.set('s1', state)
+      setState(run, state)
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
       expect(run.deps.mirror.noteEngineStopped).toHaveBeenCalledWith('s1')
@@ -134,7 +196,7 @@ describe('turn hooks', () => {
       const run = setup('claude')
       // The Stop's own turn closed already; the drain reads the next prompt's turn opening.
       const state = { turnOpen: false, opened: 1, pendingTools: new Map() } as unknown as TurnState
-      run.normalizers.turnStates.set('s1', state)
+      setState(run, state)
       vi.mocked(run.deps.drain).mockImplementationOnce(async () => { state.turnOpen = true; state.opened = 2 })
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
@@ -147,13 +209,13 @@ describe('turn hooks', () => {
       expect(state.turnOpen).toBe(true)
       expect(run.deps.emit).not.toHaveBeenCalled()
       // The engine's state started over meanwhile (the session attached again): not the turn the Stop found.
-      run.normalizers.turnStates.set('s1', { turnOpen: true, opened: 3, pendingTools: new Map() } as unknown as TurnState)
-      vi.mocked(run.deps.drain).mockImplementationOnce(async () => { run.normalizers.turnStates.set('s1', { ...state }) })
+      setState(run, { turnOpen: true, opened: 3, pendingTools: new Map() } as unknown as TurnState)
+      vi.mocked(run.deps.drain).mockImplementationOnce(async () => { setState(run, { ...state }) })
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
       expect(run.deps.emit).not.toHaveBeenCalled()
       // A StopFailure closes whatever is open.
-      run.normalizers.turnStates.set('s1', state)
+      setState(run, state)
       run.hooks.onTurnStop({ sessionId: 's1', status: 'error' })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS * 2)
       expect(state.turnOpen).toBe(false)
@@ -165,7 +227,7 @@ describe('turn hooks', () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup('claude')
       const state = { turnOpen: true, opened: 2, pendingTools: new Map() } as unknown as TurnState
-      run.normalizers.turnStates.set('s1', state)
+      setState(run, state)
       run.hooks.onPromptHook('s1', 2_000)
       // An older prompt hook, arriving late, does not move it back.
       run.hooks.onPromptHook('s1', 1_500)
@@ -191,7 +253,7 @@ describe('turn hooks', () => {
     it('says Stop for a clean stop', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup('claude')
-      run.normalizers.turnStates.set('s1', { turnOpen: true, pendingTools: new Map() } as unknown as TurnState)
+      setState(run, { turnOpen: true, pendingTools: new Map() } as unknown as TurnState)
       run.hooks.onTurnStop({ sessionId: 's1' })
       await vi.advanceTimersByTimeAsync(STOP_HOOK_GRACE_MS)
       expect(String(log.mock.calls[0][0])).toContain('force-closed by Stop hook')

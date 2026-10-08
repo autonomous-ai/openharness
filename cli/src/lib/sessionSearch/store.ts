@@ -13,7 +13,7 @@
 
 import { chmodSync, existsSync, rmSync } from 'node:fs'
 
-import { builtinSqlite } from '../sqliteRead.js'
+import { builtinSqlite } from '../sqliteBuiltin.js'
 import type { IndexedTurn } from './turns.js'
 
 // Rebuild schema 10's external-engine index with Codex app/editor context removed from asks.

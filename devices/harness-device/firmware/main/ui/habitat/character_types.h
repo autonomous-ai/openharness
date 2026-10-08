@@ -54,9 +54,10 @@ typedef struct {
      */
     bool asking;
     uint32_t clock_ms;
-    // Focus only: the clock_ms at which the newest unread notice arrived (0 = none). While the working scene shows,
-    // the pet's alert scene plays once from then (focus.c), and ui_habitat.c flies the dot up after it.
+    // Focus only: the clock_ms at which the newest unread notice arrived (0 = none), and how many are unread. While the
+    // working scene shows, the pet's alert bubble rings from then and stays, the count in it, until they are read.
     uint32_t notice_ms;
+    uint16_t notices;
     uint16_t ink, foreground, dim;
 } ht_character_face_t;
 

@@ -365,6 +365,11 @@ export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
  * would cost that four times.
  */
 export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
+  // New read-only workers have no older-core startup obligation: old cores read inline and never ask.
+  // Each holds at most four reads, a 128-entry pager and replies capped at 4 MiB. The heap limit
+  // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.
+  'engine-claude': { services: ['engine-claude'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
+  'engine-codex': { services: ['engine-codex'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },
   search: { services: ['search'], heapLimitMiB: 1_024, rssLimitMiB: 2_048 },
   // Its file watches on every harness's workspace; the viewer servers it starts are processes of their
   // own, outside this budget. The Store beside them: its installs run git and the harnesses' toolchains
@@ -374,8 +379,9 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // samples in ps's and ioreg's; what it holds is the agents the core sent it and one parsed sample.
   // The monitor parses up to 8 MB of ioreg output per Monitor poll on a Mac with a GPU, hence more
   // than workspaces alone had. The recaps hold each session's last three recaps, answers (8 KiB each at
-  // most) and asks, as the core did while they ran in it, and a few timers per open turn.
-  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps'], heapLimitMiB: 384, rssLimitMiB: 768 },
+  // most) and asks, as the core did while they ran in it, and a few timers per open turn. The window
+  // names hold at most 400 short names; their model runs in its own process (lib/oneshot.ts).
+  edge: { services: ['workspaces', 'usage', 'monitor', 'projects', 'handoff', 'recaps', 'windowNames', 'shell'], heapLimitMiB: 384, rssLimitMiB: 768 },
   // The orchestrator (services/orchestratorProcess.ts), an experiment: started only once it is on, for a
   // saved project or a request (core/api.ts `EXPERIMENTS`). Its projects' files and the frames of their
   // Directors; the agents it runs are the core's.
@@ -449,6 +455,8 @@ export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions
 
 /** How a master tells the core it starts which services it runs in their own processes. */
 export const SERVICE_PROCESSES_ENV = 'HARNESSD_SERVICE_PROCESSES'
+/** Version of the live engine methods hosted by this master, independent of reader-only hosts. */
+export const ENGINE_LIVE_ENV = 'HARNESSD_ENGINE_LIVE'
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
@@ -456,11 +464,17 @@ export const SERVICE_PROCESSES_ENV = 'HARNESSD_SERVICE_PROCESSES'
  * one this master finds back on disk after a rollback, reads the same answer for the services it knows
  * and runs none of them a second time.
  */
-export function serviceProcessesEnv(specs: readonly ServiceSpec[]): Record<string, string> {
+export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: number): Record<string, string> {
   // The services, not the processes: a core knows what it routes by service, and one from before the
   // edge host still finds the services it knows here (workspaces) and runs the rest itself.
   const names = specs.flatMap((spec) => spec.services).join(',')
-  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none' }
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1` }
+}
+
+/** An older master may inherit a newer master's environment after rollback. Trust only this parent. */
+export function masterRunsLiveEngines(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return env.HARNESSD_SUPERVISED === '1' && !!env.HARNESSD_SERVICE_TOKEN
+    && env[ENGINE_LIVE_ENV] === `${parentPid}:1`
 }
 
 /**

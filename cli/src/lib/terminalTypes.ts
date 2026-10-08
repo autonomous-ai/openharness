@@ -7,6 +7,14 @@ export interface ProcessIdentity {
   pid: number
   executable: string
   startMarker: string
+  /**
+   * Linux only: when the process started, in clock ticks since boot (`/proc/<pid>/stat` field 22).
+   * `startMarker` is `ps lstart`, which Linux derives from the boot time, and the boot time moves
+   * every time the wall clock is stepped: a Docker Desktop VM resynced after the Mac slept shifted
+   * every process's lstart by hours, and each agent got a new id for the same process (6 panes, 5
+   * times in 15 hours, machine-remote-1, 2026-10-07). The ticks never change for a process.
+   */
+  startTicks?: number
 }
 
 export interface TmuxRuntimeRef {

@@ -103,7 +103,7 @@ class SessionVM(VM):
         self.monitor('input-send-event', events=events)
         time.sleep(.12)
 
-    def frame(self, name, text, seconds=60, absent=()):
+    def frame(self, name, text, seconds=60, absent=(), fatal=()):
         from PIL import Image, ImageOps
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
@@ -126,6 +126,9 @@ class SessionVM(VM):
                     ['tesseract', str(ocr_frame), 'stdout', '--psm', '6'],
                     text=True, stderr=subprocess.DEVNULL, timeout=15)
             (self.folder / (name + '.txt')).write_text(output)
+            for error in fatal:
+                if frame_contains(output, error):
+                    raise RuntimeError('Visible failure screen: ' + error)
             if frame_contains(output, text, absent):
                 return
             time.sleep(1)

@@ -40,9 +40,11 @@ export async function requestJson<T>(
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: signal ?? AbortSignal.timeout(PROXY_BACKEND_TIMEOUT_MS),
   })
-  const json = (await res.json().catch(() => ({}))) as { success?: boolean; data?: T; error?: { message?: string } }
+  const json = (await res.json().catch(() => ({}))) as { success?: boolean; data?: T; error?: { message?: string; code?: string } }
   if (!res.ok || json.success === false) {
-    throw new Error(json.error?.message || `HTTP ${res.status}`)
+    // `status` and the backend's `code` ride along, for a caller that answers a refusal differently
+    // from a backend that is down.
+    throw Object.assign(new Error(json.error?.message || `HTTP ${res.status}`), { status: res.status, code: json.error?.code })
   }
   return json.data as T
 }

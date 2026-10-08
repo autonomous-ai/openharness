@@ -8,8 +8,9 @@ import {
   type DevLogEntry, type DevLogState,
 } from './deviceLog.js'
 import { DeviceLogStore } from './deviceLogStore.js'
-import { DeviceLogSyncer, devLogDivergence, type DeviceLogAppendAnswer, type DeviceLogFetched, type DeviceLogRebaseline } from './deviceLogSyncer.js'
+import { DeviceLogSyncer, devLogDivergence, type DeviceKeysSeen, type DeviceLogAppendAnswer, type DeviceLogFetched, type DeviceLogRebaseline } from './deviceLogSyncer.js'
 import { ADOPTED_SIGN_IN } from '../authSession.js'
+import { b64d, fingerprint } from './core.js'
 
 const b64 = (u: Uint8Array): string => Buffer.from(u).toString('base64')
 const key = (n: number) => { const priv = new Uint8Array(32).fill(n); return { priv, pub: b64(ed25519.getPublicKey(priv)) } }
@@ -72,6 +73,7 @@ class FakeBackend {
 function setup(opts: {
   known?: string[]; tombstoned?: string[]; blocked?: string[]; store?: DeviceLogStore; backend?: FakeBackend; signIn?: () => string | null; signInAt?: number | null
   isTrusted?: (pub: string) => boolean; signInAcct?: () => string | null; switchAccount?: (from: string, to: string) => void
+  now?: () => number; seen?: () => Promise<DeviceKeysSeen | null>; log?: (line: string) => void
 } = {}) {
   const backend = opts.backend ?? new FakeBackend()
   const store = opts.store ?? new DeviceLogStore(join(mkdtempSync(join(tmpdir(), 'devlog-')), 'devlog.json'))
@@ -107,7 +109,9 @@ function setup(opts: {
     resume: calls.resume,
     signedOut: calls.signedOut,
     changed: calls.changed,
-    now: () => 5_000,
+    ...(opts.seen ? { seen: opts.seen } : {}),
+    ...(opts.log ? { log: opts.log } : {}),
+    now: opts.now ?? (() => 5_000),
     sleep: async () => {},
   })
   return { backend, store, syncer, calls, trusted }
@@ -2029,5 +2033,214 @@ describe('DeviceLogSyncer — a review (rebaseline --yes)', () => {
       await t.syncer.rebaseline(true)
       expect(t.store.read().departed).toEqual([])
     })
+  })
+})
+
+/** Serve the log one entry per page, as a backend may. */
+function onePerPage(backend: FakeBackend): void {
+  const real = backend.fetch.getMockImplementation()!
+  backend.fetch.mockImplementation(async (since) => { const g = await real(since); return g && { ...g, entries: g.entries.slice(0, 1) } })
+}
+
+describe('DeviceLogSyncer — a log longer than a usual read', () => {
+  const many = (n: number) => Array.from({ length: n }, (_, i) => key(10 + i))
+
+  it('a first read goes past the usual page cap, so nothing on the account is announced', async () => {
+    const t = setup()
+    for (const k of many(25)) t.backend.add(k, 'viewer', '', 'app')
+    onePerPage(t.backend)
+    await t.syncer.refresh()
+    expect(t.store.read()).toMatchObject({ joinedSeq: 25, pending: [] })
+    expect(t.store.read().joining).toBeUndefined()
+    expect(t.syncer.list().baseline).toHaveLength(25)
+    expect(t.calls.announce).not.toHaveBeenCalled()
+    // Once joined, a read is back to the usual cap.
+    for (const k of many(50).slice(25)) t.backend.add(k, 'viewer', '', 'app')
+    t.backend.fetch.mockClear()
+    await t.syncer.refresh()
+    expect(t.backend.fetch).toHaveBeenCalledTimes(20)
+    expect(t.store.read().state?.head.seq).toBe(45)
+  })
+
+  it('a review reads a list longer than the usual page cap', async () => {
+    const t = setup()
+    t.backend.add(box2, 'machine', MID2, 'box2')
+    await t.syncer.register()
+    t.backend.lie = t.backend.entries.slice(0, 1)
+    await t.syncer.refresh()
+    expect(t.store.read().frozen).not.toBeNull()
+    t.backend.lie = null
+    for (const k of many(25)) t.backend.add(k, 'viewer', '', 'app')
+    onePerPage(t.backend)
+    const done = await t.syncer.rebaseline(true) as DeviceLogRebaseline
+    expect(done.head).toEqual(t.backend.state.head)
+    expect(t.store.read().frozen).toBeNull()
+    expect(t.store.read().state?.head.seq).toBe(27)
+  })
+})
+
+describe('DeviceLogSyncer.remove asked again from its own drop', () => {
+  it('appends one removal and answers ok to both asks', async () => {
+    // The trust group hands a dropped key straight back (`onDropped` → remove) before the first ask's
+    // first await: that second ask must join the first, not append a removal of its own.
+    const t = setup()
+    t.backend.add(phone, 'viewer', '', 'phone')
+    await t.syncer.register()
+    let again: Promise<unknown> | null = null
+    t.calls.drop.mockImplementation((pub: string) => { again ??= t.syncer.remove(pub) })
+    const first = await t.syncer.remove(phone.pub)
+    expect(first).toEqual({ ok: true })
+    expect(await again).toEqual({ ok: true })
+    expect(t.backend.entries.filter((e) => e.op === 'remove' && e.pub === phone.pub)).toHaveLength(1)
+  })
+})
+
+describe('DeviceLogSyncer — register refusals', () => {
+  it('keeps why the backend refused this machine\'s key, until a register gets through', async () => {
+    const t = setup()
+    t.backend.append.mockImplementationOnce(async () => ({ error: 'TOO_MANY' }))
+    await t.syncer.register()
+    expect(t.syncer.list().registerError).toBe('TOO_MANY')
+    await t.syncer.register()
+    expect(t.backend.state.active[me.pub]).toBeDefined()
+    expect(t.syncer.list().registerError).toBeUndefined()
+  })
+
+  it('a race (STALE_HEAD) is not a refusal', async () => {
+    const t = setup()
+    t.backend.append.mockImplementation(async () => ({ error: 'STALE_HEAD' }))
+    await t.syncer.register()
+    expect(t.syncer.list().registerError).toBeUndefined()
+  })
+})
+
+describe('DeviceLogSyncer.sweepStale', () => {
+  const DAY = 24 * 60 * 60_000
+  const NOW = 400 * DAY
+  /** Machine keys whose public key sorts before / after this machine's. */
+  const pool = Array.from({ length: 40 }, (_, i) => key(100 + i))
+  const smaller = pool.find((k) => k.pub < me.pub)!
+  const larger = pool.find((k) => k.pub > me.pub)!
+  let clock: number
+  let seen: Record<string, number> | null
+  /** Since when the backend's record of last uses runs (null: it does not say). */
+  let since: number | null
+  let lines: string[]
+  let t: ReturnType<typeof setup>
+  beforeEach(() => {
+    clock = NOW
+    seen = {}
+    since = 1_000
+    lines = []
+    t = setup({ now: () => clock, seen: async () => seen && { seen, since }, log: (l) => lines.push(l) })
+  })
+  const active = (pub: string): boolean => !!t.backend.state.active[pub]
+
+  it('removes only app keys added and last used over 180 days ago', async () => {
+    const stale = key(50), usedLately = key(51), young = key(52), suspended = key(53)
+    t.backend.add(larger, 'machine', MID2, 'old-box', 1_000)
+    t.backend.add(stale, 'viewer', '', 'old-browser', 1_000)
+    t.backend.add(usedLately, 'viewer', '', 'phone', 1_000)
+    t.backend.add(young, 'viewer', '', 'new-browser', NOW - 10 * DAY)
+    t.backend.add(suspended, 'viewer', '', 'forked', 1_000)
+    seen = { [usedLately.pub]: NOW - DAY, [larger.pub]: 1_000 }
+    await t.syncer.register()
+    t.store.write({ ...t.store.read(), suspended: [suspended.pub] })
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(false)
+    expect([usedLately, young, suspended, larger, me].every((k) => active(k.pub))).toBe(true)
+    expect(t.backend.entries.at(-1)).toMatchObject({ op: 'remove', pub: stale.pub, signer: me.pub })
+    expect(lines).toContain(`[devlog] removed unused device old-browser (${fingerprint(b64d(stale.pub))}), not used since 1970-01-01`)
+  })
+
+  it('a key last used over 180 days ago goes whatever the record says of the others', async () => {
+    const old = key(50)
+    t.backend.add(old, 'viewer', '', 'app', 1_000)
+    seen = { [old.pub]: 2_000 }
+    since = null
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(active(old.pub)).toBe(false)
+    expect(lines).toContain(`[devlog] removed unused device app (${fingerprint(b64d(old.pub))}), last used 1970-01-01`)
+  })
+
+  it('a key with no last use is unused only when the record has run since before the cutoff', async () => {
+    // A Redis that came back empty (restart, eviction) answers no last use for anyone: that is "not
+    // known", not "not used" — an app opened once a month must not be signed out by it.
+    const app = key(50)
+    t.backend.add(app, 'viewer', '', 'app', NOW - 200 * DAY)
+    seen = { [app.pub]: NOW - 100 * DAY }
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(true)
+    seen = {}
+    since = null // the record is gone, or a backend that does not say
+    clock += 7 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(true)
+    since = clock - 10 * DAY // the record started again 10 days ago
+    clock += 7 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(true)
+    since = NOW - 190 * DAY // it has run for longer than the cutoff, and never saw this key
+    clock += 7 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(active(app.pub)).toBe(false)
+  })
+
+  it('the machine with the smallest key goes first; the next takes over a day later', async () => {
+    // A machine before this one in key order (its turn first) that never sweeps — a build from before the
+    // sweep, seen on a rollout — must not keep stale keys on the account for good.
+    const stale = key(50)
+    t.backend.add(smaller, 'machine', MID2, 'other-box', 1_000)
+    t.backend.add(stale, 'viewer', '', 'old-browser', NOW - 180 * DAY - DAY / 2)
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(true) // stale for the first machine, not yet for the second
+    clock += DAY
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(false)
+  })
+
+  it('nothing while the log is frozen, or when last use cannot be asked', async () => {
+    const stale = key(50)
+    t.backend.add(stale, 'viewer', '', 'old-browser', 1_000)
+    await t.syncer.register()
+    seen = null
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(true)
+    t.store.write({ ...t.store.read(), frozen: { reason: 'fork', at: NOW, lastGoodHead: t.store.read().state!.head } })
+    seen = {}
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(true)
+    // Neither counted as a sweep: the next offer runs.
+    t.store.write({ ...t.store.read(), frozen: null })
+    await t.syncer.sweepStale()
+    expect(active(stale.pub)).toBe(false)
+  })
+
+  it('at most 20 per sweep, and one sweep per 6 hours', async () => {
+    const apps = pool.slice(0, 25)
+    for (const k of apps) t.backend.add(k, 'viewer', '', 'app', 1_000)
+    await t.syncer.register()
+    await t.syncer.sweepStale()
+    expect(apps.filter((k) => active(k.pub))).toHaveLength(5)
+    clock += 5 * 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(apps.filter((k) => active(k.pub))).toHaveLength(5)
+    clock += 60 * 60_000
+    await t.syncer.sweepStale()
+    expect(apps.filter((k) => active(k.pub))).toHaveLength(0)
+  })
+
+  it('stops at the first refusal', async () => {
+    const a = key(50), b = key(51)
+    t.backend.add(a, 'viewer', '', 'a', 1_000)
+    t.backend.add(b, 'viewer', '', 'b', 1_000)
+    await t.syncer.register()
+    t.backend.append.mockImplementationOnce(async () => ({ error: 'RATE_LIMITED' }))
+    await t.syncer.sweepStale()
+    expect(active(a.pub) && active(b.pub)).toBe(true)
+    expect(t.backend.append).toHaveBeenCalledTimes(2) // register + the refused removal
   })
 })

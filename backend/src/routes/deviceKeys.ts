@@ -1,10 +1,16 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
-import { appendDeviceKey, deviceKeysSeen, readDeviceKeyLog } from '../lib/deviceKeyLog.js'
+import { appendDeviceKey, deviceKeysSeen, readDeviceKeyLog, touchDeviceKey } from '../lib/deviceKeyLog.js'
 import { validateBody, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 
-const query = z.object({ since: z.coerce.number().int().min(0).default(0) })
+const query = z.object({
+  since: z.coerce.number().int().min(0).default(0),
+  // The reading device's own key: reading the log counts as the key being in use, so an app that is
+  // opened but never opens a session is not offered for removal. Anything else is ignored, not
+  // refused — the read must work the same with or without it.
+  self: z.string().optional().catch(undefined),
+})
 
 /** Appends per account per minute, per process — a viewer appends its key once per sign-in and a
  *  removal when someone asks. Generous for that; a loop cannot rebuild the log on every request. */
@@ -31,17 +37,20 @@ const body = z.object({ entry: z.record(z.string(), z.unknown()) }).strict()
 export async function deviceKeyRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: z.infer<typeof query> }>('/api/device-keys', { preHandler: validateQuery(query) }, async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
+    if (req.query.self !== undefined) touchDeviceKey(req.user!.sub, req.query.self)
     sendSuccess(reply, await readDeviceKeyLog(req.user!.sub, req.query.since))
   })
 
   // When each key last opened a session — a hint for the Devices list, which offers to remove apps not
-  // seen in a long while (a browser whose data was cleared never signs its own removal).
+  // seen in a long while (a browser whose data was cleared never signs its own removal) — and `since`,
+  // when that record began. A Redis that cannot be read is an error, never `{seen: {}}`: a machine's
+  // sweep read that empty answer as "no app used in months" and would remove every old app key.
   app.get('/api/device-keys/seen', async (req, reply) => {
     reply.header('Cache-Control', 'no-store')
     try {
-      sendSuccess(reply, { seen: await deviceKeysSeen(req.user!.sub) })
+      sendSuccess(reply, await deviceKeysSeen(req.user!.sub))
     } catch {
-      sendSuccess(reply, { seen: {} })
+      sendError(reply, 'When your devices were last used cannot be read right now.', 'SEEN_UNAVAILABLE', 503)
     }
   })
 

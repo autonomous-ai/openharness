@@ -1279,6 +1279,8 @@ fn table(app: &App, name: &str, window: usize, pane_id: Option<u64>) -> Option<V
         // The name in whole words within 20 columns, … after what is cut: a harness is named for its
         // task, and the window list has room for a few words of each.
         "window_short_name" => tab.map(|t| short_name(&t.name, 20)).unwrap_or_default(),
+        // Named by auto rename now (autoname.rs): its repo and its work.
+        "window_auto_named" => (tab.is_some() && crate::autoname::named(app, window)).then_some("1").unwrap_or("0").into(),
         "window_flags" => flags(app, window).replacen('#', "##", 1),
         "window_raw_flags" => flags(app, window),
         "window_active" => (window == app.active).then_some("1").unwrap_or("0").into(),

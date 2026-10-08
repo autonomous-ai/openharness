@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::{app::App, draw::RangeKind, theme, workspace_menu as menu};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action { New, Menu, Account, Header(u64), PaneMenu(u64), Agent(u64), Model(u64), Close(u64) }
+pub enum Action { New, Menu, Account, Header(u64), PaneMenu(u64), Close(u64) }
 
 #[derive(Default)]
 pub struct State {
@@ -39,22 +39,8 @@ pub fn register(app: &App, rect: Rect, action: Action) {
 pub fn title_reserve(app: &App, window: usize, pane: u64, width: u16) -> u16 {
     let tab = app.tabs.get(window).map(|t| t.id.as_str()).unwrap_or("");
     if !enabled(app) || !app.mouse || width < 20 || app.options.has_window_override("pane-border-format", tab, pane) { return 0 }
-    6 + identity_labels(app, pane, width).iter().map(|(label, _)| label.width() as u16 + 2).sum::<u16>()
-}
-
-fn identity_labels(app: &App, pane: u64, width: u16) -> Vec<(String, Action)> {
-    let mut labels = Vec::new();
-    let mut available = width.saturating_sub(30);
-    if crate::agent_switch::pane_supports(app, pane) {
-        let label = crate::agent_switch::pane_label(app, pane);
-        let size = label.width() as u16 + 2;
-        if size <= available { available -= size; labels.push((label, Action::Agent(pane))); }
-    }
-    if crate::models::pane_supports(app, pane) {
-        let label = crate::models::pane_label(app, pane);
-        if label.width() as u16 + 2 <= available { labels.push((label, Action::Model(pane))); }
-    }
-    labels
+    // (No agent or model label: the … menu changes both.)
+    6
 }
 
 /// Return the title's remaining space. The controls never add a row or resize a terminal.
@@ -64,13 +50,6 @@ pub fn title(buf: &mut Buffer, app: &App, pane: u64, rect: Rect, style: Style) -
     register(app, rect, Action::Header(pane));
     let quiet = style.remove_modifier(Modifier::BOLD | Modifier::DIM).fg(theme::paint(theme::pane_palette().muted));
     let x = rect.right() - 6;
-    let mut start = rect.right() - reserve;
-    for (label, action) in identity_labels(app, pane, rect.width) {
-        let size = label.width() as u16 + 2;
-        buf.set_stringn(start, rect.y, format!(" {label} "), size as usize, quiet);
-        register(app, Rect::new(start, rect.y, size, 1), action);
-        start += size;
-    }
     buf.set_stringn(x, rect.y, " …  × ", 6, quiet);
     register(app, Rect::new(x, rect.y, 3, 1), Action::PaneMenu(pane));
     register(app, Rect::new(x + 3, rect.y, 3, 1), Action::Close(pane));
@@ -119,8 +98,6 @@ pub fn activate(app: &mut App, action: Action, at: Option<(u16, u16)>) {
         Action::Account => crate::account::open(app),
         Action::Header(pane) => { select_pane(app, pane); }
         Action::PaneMenu(pane) => pane_menu(app, pane, at),
-        Action::Agent(pane) => if select_pane(app, pane) { crate::agent_switch::open(app, pane); },
-        Action::Model(pane) => if crate::models::pane_supports(app, pane) && select_pane(app, pane) { crate::input::run(app, "models"); },
         Action::Close(pane) => crate::session_close::pane(app, pane),
     }
 }
@@ -162,7 +139,7 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     let at = Some((mouse.column, mouse.row.saturating_add(1)));
     // A title is a border in line layouts and a pane's first row in boxed layouts.
     // Either explicit binding takes precedence over the added header controls.
-    let places: &[&str] = if matches!(action, Some(Action::Header(_) | Action::PaneMenu(_) | Action::Agent(_) | Action::Model(_) | Action::Close(_))) { &["Border", "Pane"] } else { &["Status"] };
+    let places: &[&str] = if matches!(action, Some(Action::Header(_) | Action::PaneMenu(_) | Action::Close(_))) { &["Border", "Pane"] } else { &["Status"] };
     if let MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right)) = mouse.kind {
         let defaults = crate::keys::Keymap::tmux_defaults();
         for place in places {
@@ -183,7 +160,7 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
             return true;
         },
         MouseEventKind::Down(MouseButton::Right) => {
-            let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p) | Action::Agent(p) | Action::Model(p) | Action::Close(p)) => Some(p), _ => None };
+            let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p) | Action::Close(p)) => Some(p), _ => None };
             if let Some(pane) = pane { begin_press(app, MouseButton::Right); pane_menu(app, pane, at); return true; }
             let tab = crate::bar::hit_at(app, mouse.column, mouse.row).and_then(|hit| match hit { crate::bar::Hit::Window(i) => Some(i), _ => None }).or_else(|| {
                 let top = if app.status_top { 0 } else { app.size.1.saturating_sub(app.status_lines()) };
@@ -426,8 +403,8 @@ mod tests {
             click(&mut app, MouseButton::Left, body.x + 4, body.y + 4);
             match control {
                 "header" => {
-                    let agent = hit(&app, Action::Agent(1));
-                    click(&mut app, MouseButton::Left, agent.x + 1, agent.y);
+                    let menu = hit(&app, Action::PaneMenu(1));
+                    click(&mut app, MouseButton::Left, menu.x + 1, menu.y);
                 }
                 "dialog" => {
                     crate::account::open(&mut app); render(&mut app);
@@ -561,24 +538,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn plain_agent_and_model_labels_open_the_captured_panes_picker() {
+    async fn the_pane_title_names_no_agent_or_model_and_its_menu_changes_both() {
         let mut app = app(120);
         app.fleet.agents.get_mut(&("local".into(), "a1".into())).unwrap().model = "runtime-v1:a1:codex:gpt-6-astra@max".into();
         let buf = render(&mut app);
-        let model = hit(&app, Action::Model(1));
-        let text: String = (model.x..model.right()).map(|x| buf[(x, model.y)].symbol()).collect();
-        assert!(text.contains("GPT-6 Astra"), "{text}");
-        click(&mut app, MouseButton::Left, model.x + 1, model.y);
+        let menu = hit(&app, Action::PaneMenu(1));
+        let title: String = (0..buf.area.width).map(|x| buf[(x, menu.y)].symbol()).collect();
+        assert!(!title.contains("GPT-6 Astra") && !title.contains("Codex"), "{title}");
+        pane_menu(&mut app, 1, None);
+        let token = app.controls.target.as_ref().unwrap().token.clone();
+        run(&mut app, &token, "models");
         assert!(matches!(app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Models, .. })));
         assert_eq!(crate::models::target(&app).unwrap().agent, "a1");
         app.modal = None;
-        render(&mut app);
-        let agent = hit(&app, Action::Agent(1));
-        click(&mut app, MouseButton::Left, agent.x + 1, agent.y);
+        pane_menu(&mut app, 1, None);
+        let token = app.controls.target.as_ref().unwrap().token.clone();
+        run(&mut app, &token, "agent");
         assert!(matches!(app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::AgentSwitch, .. })));
         app.modal = None;
         app.size.0 = 32; app.fit_panes(); render(&mut app);
-        assert!(app.controls.hits.borrow().iter().all(|(_, a)| !matches!(a, Action::Agent(_) | Action::Model(_))));
         assert!(app.controls.hits.borrow().iter().any(|(_, a)| *a == Action::PaneMenu(1)), "narrow panes retain the menu");
     }
 

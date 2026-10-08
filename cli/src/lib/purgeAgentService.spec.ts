@@ -7,7 +7,7 @@ import { registry, type RegisteredSession } from './registry.js'
 import { StoppedAgentStore } from './stoppedAgents.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { PurgeAgentService, inspectNativeHistory, eraseNativeHistory, sessionDataBytes, type PurgeRequest } from './purgeAgentService.js'
-import { builtinSqlite } from './sqliteRead.js'
+import { builtinSqlite } from './sqliteBuiltin.js'
 import type { StopAgentOptions } from './stopAgentService.js'
 import * as worktrees from './worktreeDeletion.js'
 

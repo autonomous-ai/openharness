@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""Select coarse CI suites from a complete Git diff and verify their final results.
+"""Select fast CI suites from a complete Git diff and verify their final results.
 
-PRs test their exact head; merge groups test their exact combined candidate.
-Manual scopes retain their existing meaning. Native/engine/hardware acceptance
-selected during review remains additional to these automatic checks.
+A PR runs the unit suite of each component it changes, and nothing else. Merge
+groups run only the plan and process checks: the PR run already covered the code.
+Checks outside PR CI are listed in docs/validation-and-release.md#what-pr-ci-does-not-run.
 """
 import argparse
-import fnmatch
 import json
 import os
 from pathlib import Path
@@ -15,27 +14,20 @@ import subprocess
 
 
 CORE = {"cli", "desktop", "tui", "backend", "companions"}
-EXTRA = {"website", "experience", "authoring", "home-assistant", "desktop-logging",
-         "os", "provider", "firmware", "mobile", "daemons"}
+EXTRA = {"website", "os", "provider", "firmware", "mobile", "daemons"}
 SUITES = CORE | EXTRA
 JOBS = {
-    "cli": {"serial-native", "process-images-native", "cli-contracts", "cli-coverage-gates", "cli-tests", "typecheck-test"},
-    "desktop": {"desktop-tests", "desktop-test-summary"},
+    "cli": {"cli-typecheck", "cli-tests"},
+    "desktop": {"desktop-tests"},
     "tui": {"tui-test"}, "backend": {"backend-desk"}, "companions": {"companion-subsystems"},
     **{name: {name + "-checks"} for name in EXTRA},
 }
 MANUAL = {"full": CORE, "all": SUITES, "process": set(), **{name: {name} for name in SUITES}}
-AUTHORING = {"generative-art", "music-studio", "creative-direction", "voxel-worlds",
-             "drone-pilot", "game-master", "lab-bench", "data-studio"}
-LOGGING = ["desktop/lib/logging/*", "desktop/test/app_log_test.dart", "desktop/test/buffered_log_test.dart",
-           "desktop/test/crash_log_test.dart", "desktop/test/dial_log_tail_test.dart", "desktop/test/log_*_test.dart",
-           "desktop/test/export_logs_dialog_test.dart", "desktop/test/cli_transcript_test.dart", "desktop/tool/log_append_probe.dart"]
-HUB_CONTRACT = {"backend/src/lib/communityContract.ts", "backend/src/lib/communityAccess.ts"}
-SPECIAL_WORKFLOWS = {"website-checks.yml": "website", "experience-checks.yml": "experience",
-                     "authoring-browser-checks.yml": "authoring", "home-assistant-checks.yml": "home-assistant",
-                     "desktop-logging-checks.yml": "desktop-logging"}
-ROOT_DOCS = {"AGENTS.md", "CHANGELOG.md", "CLAUDE.md", "CONTEXT.md", "CONTRIBUTING.md", "HANDOFF.md",
-             "LICENSE", "README.md", "SECURITY.md", "claude_research.md"}
+# Each component's own directory selects its suite. Everything else (docs, workflows,
+# scripts, store, fixtures) is covered by the plan's actionlint and process checks.
+COMPONENTS = {"cli": "cli", "tests": "cli", "desktop": "desktop", "tui": "tui", "backend": "backend",
+              "companions": "companions", "website": "website", "os": "os", "provider": "provider",
+              "devices": "firmware", "mobile": "mobile", "daemons": "daemons"}
 
 
 def git(root, *args):
@@ -49,63 +41,14 @@ def sha(value):
 
 
 def select(paths):
-    selected, reasons, unknown = set(), {}, []
+    selected, reasons = set(), {}
     for path in paths:
         if not isinstance(path, str) or not path or path.startswith("/") or ".." in path.split("/"):
             raise ValueError("invalid changed path")
-        scopes = set()
-        root = path.split("/", 1)[0]
-        if path in ROOT_DOCS or (root == "docs" and not path.startswith("docs/images/")):
-            pass
-        elif root in {".github", "scripts"} or path in {"Makefile", ".gitattributes", ".gitignore", ".gitmodules"}:
-            # Keep existing source-input contracts conservative. Workflow/helper
-            # changes invalidate all core suites until narrower contracts exist.
-            scopes |= CORE
-            if path in {".github/workflows/ci.yml", "scripts/ci-plan.py"}:
-                scopes |= SUITES  # The shared planner/job graph controls every component.
-            workflow = path.removeprefix(".github/workflows/")
-            if workflow in SPECIAL_WORKFLOWS:
-                scopes.add(SPECIAL_WORKFLOWS[workflow])
-            if workflow.startswith("os-") or workflow == "os.yml":
-                scopes.add("os")
-        elif root == "cli":
-            scopes |= CORE  # Desktop/TUI/companions consume CLI inputs.
-            scopes.add("mobile")  # Phone protocol contracts read the CLI's frame definitions.
-        elif root == "desktop":
-            scopes.add("desktop")
-            if path.startswith("desktop/assets/engine-icons/"):
-                scopes.add("experience")
-            if any(fnmatch.fnmatchcase(path, pattern) for pattern in LOGGING):
-                scopes.add("desktop-logging")
-        elif root in {"tui", "backend", "companions", "website", "os", "provider"}:
-            scopes.add(root)
-            if path in HUB_CONTRACT:
-                scopes |= {"website", "desktop"}  # Their copies of the Hub's rules are tested against it.
-        elif root == "devices":
-            scopes |= {"firmware", "cli", "desktop"}
-        elif root == "mobile":
-            scopes.add("mobile")
-            if path == "mobile/pubspec.lock":
-                scopes.add("desktop")
-        elif root in {"tests", "daemons"}:
-            scopes |= CORE | {"mobile", "daemons"}
-        elif root == "store":
-            scopes |= {"desktop", "experience"}
-            if (path.startswith(("store/tools/", "store/viewers/web-viewer/"))
-                    or any(path.startswith(f"store/agents/{name}/") for name in AUTHORING)):
-                scopes.add("authoring")
-            if path.startswith("store/agents/home-assistant/") or path in {"store/tools/runtimes.sh", "store/tools/sync-runtimes.mjs"}:
-                scopes.add("home-assistant")
-        elif path.startswith("docs/images/"):
-            scopes.add("desktop")
-        elif root in {"artifacts", "output", "work"}:
-            scopes |= CORE
-        else:
-            unknown.append(path)
+        suite = COMPONENTS.get(path.split("/", 1)[0])
+        scopes = {suite} if suite else set()
         selected |= scopes
         reasons[path] = sorted(scopes)
-    if unknown:
-        raise ValueError("register CI coverage for these paths before merging: " + ", ".join(unknown))
     return selected, reasons
 
 
@@ -138,6 +81,8 @@ def make_plan(root, event_name, event, scope="full", source=None):
         changed = subprocess.check_output(["git", "diff", "--no-renames", "--name-only", "-z", base, head], cwd=root, timeout=120)
         paths = sorted(p.decode() for p in changed.split(b"\0") if p)
         suites, reasons = select(paths)
+        if event_name == "merge_group":
+            suites = set()  # The PR run tested these changes; releases test the rest.
     else:
         if scope not in MANUAL:
             raise ValueError("invalid manual CI scope")

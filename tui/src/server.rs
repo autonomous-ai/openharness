@@ -265,6 +265,9 @@ pub fn join(app: &mut App) {
         app.server_synced = Some(mine);
     } else {
         take(app);
+        // A server started by an older build keeps the status bar's formats as that build derived
+        // them; this one derives its own (tmux.conf's own formats are left alone).
+        if app.rederive_window_status() { app.server_dirty = true; publish(app) }
     }
 }
 

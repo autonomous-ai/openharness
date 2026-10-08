@@ -20,6 +20,8 @@ import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
 import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
 import { answerAccountQuery } from './accountQueries.js'
+import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
+import type { GatewayMachines } from './api.js'
 import { LANE_OFF } from './api.js'
 import type {
   BackendNotice, GatewayEvents, LocalWindows, GatewayOps, GatewayPort, GatewayRefusal, GatewayStatus, HttpAnswer, LaneSeal,
@@ -41,6 +43,8 @@ export interface GatewayLinkDeps {
   tokens: { accessToken(opts?: { force?: boolean; failedToken?: string }): Promise<string> }
   /** A read of the backend's REST API under the account's session (the core's proxy). */
   backend(method: 'GET', path: string): Promise<HttpAnswer>
+  /** The last machine list reported by the gateway, for the models service's presence labels. */
+  machines?(state: GatewayMachines): void
   /** Ask the master for the gateway's process (harnessd/coreLink.ts `want`): it runs on demand (core/gatewayWake.ts). */
   want?(): void
   /** How long what waits for the gateway's first start waits (core/serviceLinks.ts `ON_DEMAND_START_MS`). */
@@ -103,9 +107,11 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   let localClients: LocalWindows = { desktop: 0, tui: 0 }
   let wifiService = false
   let reachable: string[] | null = null
+  let machines: GatewayMachines | null = null
   /** The remote clients the gateway registered, to forget each when it goes. */
   const clients = new Set<string>()
   const windows = new Map<string, Window>()
+  const localRequests = new Map<string, { fail(): void; finish(): void }>()
   let droppedSaidAt = -Infinity
   let droppedUnsaid = 0
 
@@ -130,10 +136,34 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     asked = true
     deps.want?.()
   }
-  /** What waits for the first start gives up when it has not come in time: a session to open is closed, to be
-   *  tried again; an E2EE request is left to the window's own deadline. */
+  const localKey = (connId: string, type: unknown, requestId: unknown): string | null =>
+    requestId === undefined ? null : JSON.stringify([connId, type, requestId])
+  const refuseLocal = (connId: string, frame: Record<string, unknown>): void => {
+    const requestId = record(frame.payload).requestId
+    if (requestId !== undefined) events.toLocal(connId, {
+      type: `${frame.type}_result`, payload: { requestId, error: 'SERVICE_UNAVAILABLE', service: 'gateway', retryable: true },
+    })
+  }
+  /** Chaos testing killed the gateway between a local request and its reply. The core must answer for a
+   *  lost link, including in-flight requests; the window's longer deadline is not a service fallback.
+   *  Bound both the wait and the number held, and never replay a pairing or revocation after a restart. */
+  const forwardLocal = (connId: string, frame: Record<string, unknown>): void => {
+    const key = localKey(connId, `${frame.type}_result`, record(frame.payload).requestId)
+    if (key !== null) {
+      if (localRequests.has(key)) return
+      if (localRequests.size >= OWED_MAX) { refuseLocal(connId, frame); return }
+      const finish = (): void => { clearTimeout(timer); localRequests.delete(key) }
+      const fail = (): void => { finish(); refuseLocal(connId, frame) }
+      const timer = setTimeout(fail, frame.type === 'phone_pair' || frame.type === 'device_e2ee_pair' ? PAIR_WAIT_MS : LANE_WAIT_MS)
+      timer.unref?.()
+      localRequests.set(key, { fail, finish })
+    }
+    if (!send('localFrame', { connId, frame }) && key !== null) localRequests.get(key)!.fail()
+  }
+  /** What waits for the first start gives up explicitly: no late pairing or window open after refusal. */
   const giveUp = (item: Record<string, unknown>): void => {
     if (item.kind === 'windowOpen') closeWindow(text(item.id), WINDOW_GATEWAY_GONE, 'the relay did not start')
+    else refuseLocal(text(item.connId), record(item.frame))
   }
   const owe = (kind: string, payload: Record<string, unknown>): void => {
     owed.push({ ...payload, kind })
@@ -164,7 +194,7 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     observer: (connId, type, payload) => up && linkUp && send('observer', { connId, type, payload }),
     windowOpened: (surface) => { send('windowOpened', { surface }) },
     localClients: (windows) => { localClients = windows; send('localClients', { windows }) },
-    local: async (connId, frame) => { if (up || seen) send('localFrame', { connId, frame }); else owe('localFrame', { connId, frame }) },
+    local: async (connId, frame) => { if (up || seen) forwardLocal(connId, frame); else owe('localFrame', { connId, frame }) },
     device: (connId, type, payload) => reachableClient(connId) && send('device', { connId, type, payload }),
     deviceClient: (connId, identity) => { send('deviceClient', { connId, identity }) },
     stop: async () => { send('stop') },
@@ -210,6 +240,32 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
 
   const ops: GatewayOps = {
+    backend: (method, path, body) => http(GATEWAY_CALLS.backend, { method, path, ...(body === undefined ? {} : { body }) }, 25_000),
+    machines: async (fallback = false) => {
+      const state = deps.start()
+      const requestedOwner = text(record(state.account).machineId)
+      if (!requestedOwner) {
+        const body = guestMachineList(text(state.computerId), text(state.machineName), text(state.hostname))
+        deps.machines?.({ owner: null, body, fetchedAt: now() })
+        return { status: 200, body }
+      }
+      const answer = await http(GATEWAY_CALLS.machines, { fallback }, 25_000)
+      const currentOwner = text(record(deps.start().account).machineId)
+      if (requestedOwner !== currentOwner) return { status: 409, body: { success: false, error: { code: 'ACCOUNT_CHANGED', message: 'The account changed. Refresh and try again.' } } }
+      if (answer.status === 401 || answer.status === 403) machines = null
+      const owner = currentOwner
+      // A crashed gateway costs the network, not the app's last known roster. Never cross accounts or
+      // hide a real sign-out with rows cached for an earlier session.
+      if (fallback && answer.status >= 500 && owner && machines?.owner === owner && machines.body) {
+        return { status: 200, body: withStaleMarker(machines.body, machines.fetchedAt) }
+      }
+      return answer
+    },
+    mintGridName: async () => {
+      const answer = await deps.call(GATEWAY_CALLS.mintGridName, {}, 15_000)
+      if (typeof answer.error === 'string') throw new Error(answer.error)
+      return typeof answer.name === 'string' ? answer.name : null
+    },
     status: async (): Promise<GatewayStatus> => {
       // Never started, it has no pairing under way and nothing to say; `/api/status` is asked far too often to
       // start it for.
@@ -248,7 +304,13 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     },
     wifiService: (on) => { wifiService = on; if (on) need(); send('wifiService', { on }) },
     revokeIdentity: (identity) => { send('revokeIdentity', { identity }) },
-    account: (next) => { send('account', { account: next }) },
+    account: (next) => {
+      if (machines && machines.owner !== next.machineId) {
+        machines = null
+        deps.machines?.({ owner: next.machineId, body: null, fetchedAt: now() })
+      }
+      send('account', { account: next })
+    },
     reachable: (machineIds) => { reachable = machineIds; send('reachable', { machineIds }) },
     lane: laneOps,
     observerKey: {
@@ -319,9 +381,13 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       case 'observer':
         void events.observer(connId, text(payload.type), record(payload.payload))
         return
-      case 'toLocal':
-        events.toLocal(connId, record(payload.frame))
+      case 'toLocal': {
+        const frame = record(payload.frame)
+        const key = localKey(connId, frame.type, record(frame.payload).requestId)
+        if (key !== null) localRequests.get(key)?.finish()
+        events.toLocal(connId, frame)
         return
+      }
       case 'status':
         linkUp = payload.connected === true
         events.status(linkUp)
@@ -341,6 +407,15 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       case 'notice':
         events.notice(record(payload.notice) as unknown as BackendNotice)
         return
+      case 'machines': {
+        const owner = text(payload.owner) || null
+        if (owner !== (text(record(deps.start().account).machineId) || null)) return
+        const body = payload.body && typeof payload.body === 'object' && !Array.isArray(payload.body) ? record(payload.body) : null
+        machines = { owner, body,
+          fetchedAt: typeof payload.fetchedAt === 'number' && Number.isFinite(payload.fetchedAt) && Math.abs(payload.fetchedAt) <= 8.64e15 ? payload.fetchedAt : now() }
+        deps.machines?.(machines)
+        return
+      }
       case 'revoked':
         events.revoked()
         return
@@ -421,11 +496,15 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
       // Then what waited for its first start, in the order it came.
       if (owedTimer) clearTimeout(owedTimer)
       owedTimer = null
-      for (const { kind, ...payload } of owed.splice(0)) send(text(kind), payload)
+      for (const { kind, ...payload } of owed.splice(0)) {
+        if (kind === 'localFrame') forwardLocal(text(payload.connId), record(payload.frame))
+        else send(text(kind), payload)
+      }
     },
     /** The gateway's process went: the relay with it, as far as everything in the core is concerned. */
     disconnected(): void {
       up = false
+      for (const request of localRequests.values()) request.fail()
       for (const id of [...windows.keys()]) closeWindow(id, WINDOW_GATEWAY_GONE, 'the relay restarted')
       // Each remote client's connection ended with it: what it had open here goes (its terminals, its
       // viewers, the Wi-Fi device service's hold on it).

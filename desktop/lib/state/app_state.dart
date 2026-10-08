@@ -103,6 +103,8 @@ import 'search_when.dart';
 import 'session_content_search.dart';
 import 'session_preview.dart';
 import 'session_tail.dart';
+import 'window_names.dart';
+import '../shared/theme/appearance_prefs_store.dart';
 import '../usage/models_menu_controller.dart';
 import '../usage/remote_usage.dart';
 import '../usage/usage_accounts.dart';
@@ -116,6 +118,7 @@ import '../notify/system_notifications.dart' as notify_system;
 import 'account_devices.dart';
 import '../viewer/device_log.dart' show DevLogHead;
 import '../viewer/device_log_sync.dart';
+import '../e2ee/bytes.dart' show b64e;
 import '../viewer/device_history.dart' show DeviceLogHistory;
 
 enum AppStatus {
@@ -662,6 +665,23 @@ class AppNotifier extends ChangeNotifier {
 
   /// Words from the dial, for whoever can put a palette on screen.
   Stream<SpokenTaskRequest> get spokenTasks => _spokenTasks.stream;
+
+  final StreamController<void> _deviceWindowRequests =
+      StreamController<void>.broadcast();
+
+  /// Explicit gestures at this computer's device that need its window visible.
+  /// Automatic question displays and status updates never request activation.
+  Stream<void> get deviceWindowRequests => _deviceWindowRequests.stream;
+
+  void _requestDeviceWindow(MachineState source) {
+    if (!_disposed &&
+        viewer == null &&
+        source.usesLocalTransport &&
+        !source.machine.isShared) {
+      _deviceWindowRequests.add(null);
+    }
+  }
+
   final StreamController<void> _modelsRequests =
       StreamController<void>.broadcast();
 
@@ -2955,6 +2975,8 @@ class AppNotifier extends ChangeNotifier {
     this.agentUnread.addListener(_announceUnreadToDial);
     experimentalFeatures.addListener(_devicesExperimentChanged);
     addListener(_syncDeviceHosts);
+    _autoRenameTabs = appearancePrefsStore.value.autoRenameTabs;
+    appearancePrefsStore.addListener(_autoRenameChanged);
   }
 
   /// Through the local CLI in a desktop build; straight to the backend, signed, in a viewer.
@@ -6865,6 +6887,17 @@ class AppNotifier extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// The backend refused this device a place on the account: it has too many devices (`TOO_MANY`).
+  /// A machine asking for its password says so, beside [deviceListNeedsReview].
+  bool get deviceListTooMany => _deviceListTooMany;
+  bool _deviceListTooMany = false;
+
+  @visibleForTesting
+  set deviceListTooManyForTest(bool tooMany) {
+    _deviceListTooMany = tooMany;
+    notifyListeners();
+  }
+
   /// Everything this window said about the account's devices belongs to the account that is leaving
   /// (logout and a runtime sign-out both): the banners, the unsaved dismissals, and any read still in
   /// flight, which must not write the old account's listing under the next one.
@@ -6878,6 +6911,7 @@ class AppNotifier extends ChangeNotifier {
     _dismissedDevices.clear();
     _baselineSeenLocally = false;
     _deviceListFrozen = false;
+    _deviceListTooMany = false;
     _pendingBootReadDone = false;
     _pendingSyncGeneration++;
   }
@@ -6900,7 +6934,11 @@ class AppNotifier extends ChangeNotifier {
     if (services == null) return;
     final log = _deviceLog = ViewerDeviceLog(
       keys: services.keys,
-      fetch: (since) => api.deviceKeys(since),
+      // This app's own key rides each read, so the backend counts it as used (not as abandoned).
+      fetch: (since) async => api.deviceKeys(
+        since,
+        self: await services.keys.identity().then<String?>((i) => b64e(i.pub), onError: (Object _) => null),
+      ),
       append: (entry) => api.appendDeviceKey(entry),
       label: _deviceLabel,
       onAnnounce: (m) => _whenSignedIn(() {
@@ -7017,9 +7055,11 @@ class AppNotifier extends ChangeNotifier {
       var daemon = false;
       var legacyDaemon = false;
       var frozen = false;
+      String? registerError;
       if (_deviceLog case final log?) {
         final listing = await log.list();
         frozen = listing.frozen != null;
+        registerError = listing.registerError;
         pending = listing.pending;
         departed = listing.departed;
         known = [for (final r in listing.members) NewDeviceNotice.fromMember(r.member, suspended: r.suspended)];
@@ -7035,6 +7075,7 @@ class AppNotifier extends ChangeNotifier {
         pending = devices?.pending ?? const [];
         departed = DeviceLogDeparted.listFromJson(raw['departed']);
         conflict = devices?.conflict;
+        registerError = devices?.registerError;
         known = [
           for (final d in devices?.devices ?? const <AccountDevice>[])
             NewDeviceNotice(
@@ -7053,8 +7094,10 @@ class AppNotifier extends ChangeNotifier {
       if (_disposed || generation != _pendingSyncGeneration || status == AppStatus.unauthenticated) return;
       _pendingBootReadDone = true;
       if (legacyDaemon) return;
-      var changed = frozen != _deviceListFrozen;
+      final tooMany = registerError == 'TOO_MANY';
+      var changed = frozen != _deviceListFrozen || tooMany != _deviceListTooMany;
       _deviceListFrozen = frozen;
+      _deviceListTooMany = tooMany;
       // Oldest first: the band names the first, and "(+n more)" the rest.
       final order = {for (var i = 0; i < pending.length; i++) pending[i]: i};
       final next = [
@@ -10175,6 +10218,51 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// Names for tabs from their machines' daemons, asked only while
+  /// [autoRenameTabs] is on (see `workspaceTabNames`).
+  late final windowNames = WindowNames(
+    ask: (machineId, agentIds) => _conn(machineId).request(
+      'window_name',
+      payload: {'agentIds': agentIds},
+      timeout: const Duration(seconds: 10),
+    ),
+    onChanged: () {
+      if (!_disposed) notifyListeners();
+    },
+  );
+
+  /// Settings ▸ Appearance ▸ Auto rename.
+  bool get autoRenameTabs => _autoRenameTabs;
+  bool _autoRenameTabs = false;
+
+  void _autoRenameChanged() {
+    final enabled = appearancePrefsStore.value.autoRenameTabs;
+    if (enabled == _autoRenameTabs) return;
+    _autoRenameTabs = enabled;
+    // Every tab label switches between the daemon's name and the voted one.
+    if (!_disposed) notifyListeners();
+  }
+
+  /// The daemon's name for one tab's [request], or null to keep the voted
+  /// label. Only this computer's own daemon is asked: a relayed machine's
+  /// request would cross the relay unsealed, since `window_name` is not in the
+  /// e2ee lists (cli/src/lib/e2ee/core.ts) yet. A machine that is offline or
+  /// shared view-only is not asked either: its silence would read as an
+  /// older daemon and quiet it for long.
+  String? windowNameFor(WindowNameRequest request) {
+    final machine = machineStates[request.machineId];
+    return windowNames.nameFor(
+      request,
+      reachable:
+          machine != null &&
+          machine.isLocalMachine &&
+          !machine.machine.isShared &&
+          !machine.needsLink &&
+          machine.nodeOnline != false &&
+          machine.connectionStatus == ConnectionStatus.connected,
+    );
+  }
+
   Future<MachineUsage?> _readMachineUsage(MachineState machine) async {
     try {
       final reply = await _conn(machine.machine.machineId)
@@ -10753,7 +10841,9 @@ class AppNotifier extends ChangeNotifier {
           !models.sections.any(
             (section) =>
                 section.name == choices['gridName'] &&
-                section.models.any((model) => model.id == choices['gridModel']),
+                section.harnessModels.any(
+                  (model) => model.id == choices['gridModel'],
+                ),
           )) {
         return creation._complete(
           'The selected model is unavailable. Refresh models or use your subscription.',
@@ -15598,6 +15688,9 @@ class AppNotifier extends ChangeNotifier {
           'up' => 2,
           _ => 1,
         };
+        // A finger going down is the gesture; moves and the inertial tail
+        // must not keep asking macOS for focus after the person switches away.
+        if (phase == 0) _requestDeviceWindow(machine);
         activeTerminal?.scroll(
           phase,
           (payload['dy'] as num?)?.round() ?? 0,
@@ -15645,6 +15738,7 @@ class AppNotifier extends ChangeNotifier {
         if (agentId is String && agentId.isNotEmpty) {
           final targetMachineId = _dialFocusMachine(payload, agentId);
           if (targetMachineId != null) {
+            _requestDeviceWindow(machine);
             unawaited(selectAgentFromDial(targetMachineId, agentId));
           }
         }
@@ -15681,6 +15775,9 @@ class AppNotifier extends ChangeNotifier {
         // line follow from that — nothing is answered to the dial directly.
         final swarmId = payload['swarmId'];
         if (swarmId is String && swarmId.isNotEmpty) {
+          if (swarms.any((swarm) => swarm.id == swarmId)) {
+            _requestDeviceWindow(machine);
+          }
           _fromDevice(() => selectSwarm(swarmId));
         }
         break;
@@ -15693,6 +15790,7 @@ class AppNotifier extends ChangeNotifier {
         if (forkId is String && forkId.isNotEmpty) {
           final targetMachineId = _dialFocusMachine(payload, forkId);
           if (targetMachineId != null) {
+            _requestDeviceWindow(machine);
             unawaited(
               _fromDevice(
                 () => placeFork(
@@ -15838,6 +15936,7 @@ class AppNotifier extends ChangeNotifier {
         if (openId is String && openId.isNotEmpty) {
           final targetMachineId = _dialFocusMachine(payload, openId);
           if (targetMachineId != null) {
+            if (payload['reason'] != 'question') _requestDeviceWindow(machine);
             unawaited(
               openAgentFromDial(
                 targetMachineId,
@@ -16276,6 +16375,8 @@ class AppNotifier extends ChangeNotifier {
     }
     grid.AppTheme.palette.removeListener(_announceTerminalThemeEverywhere);
     terminalThemeStore.removeListener(_announceTerminalThemeEverywhere);
+    appearancePrefsStore.removeListener(_autoRenameChanged);
+    windowNames.dispose();
     _localGitProjects.dispose();
     sessionPreviews.dispose();
     agentPulse.dispose();
@@ -16310,6 +16411,7 @@ class AppNotifier extends ChangeNotifier {
       swarm.panes.clear();
     }
     unawaited(_spokenTasks.close());
+    unawaited(_deviceWindowRequests.close());
     unawaited(_zooPushes.close());
     unawaited(_daemonFrames.close());
     unawaited(_modelsRequests.close());
