@@ -50,6 +50,7 @@ vendor binaries, so their real login screens appear.
 |-----|-------|---------|-------------|------|----------|-------------|-------|
 | A1 | desktop 1.2.59, CLI release | A | yes (OpenCode free model) | ~80 s machine + forced picker | blocker: "OpenCode is unavailable. Choose an agent." | restored; Local Network prompt | **~69** |
 | A2 | branch (fa64b0e15), CLI release | A | yes | box ready ≤ 45 s, result 39 s after Enter (~85 s) | none | restored, no prompt; "Untitled Pane" (fixed in f8ca37071) | **~92** |
+| A3 | branch (916f244d7 + Git fixes), branch CLI | A | yes | box ≤ 45 s on first open; OpenCode installed in the background 8.6 s after the daemon; result 29 s after Enter, 54 s after opening (incl. ~20 s typing) | none | restored, no prompt; second harness in the same project ran in 14 s after the Git fixes | **~97** |
 | B1 | branch, CLI release | B, Claude Code 2.1.294 installed, not signed in | no | — | default still OpenCode; picker shows no install state; Claude Code exited at start ("Unable to connect to Anthropic services", transient network) and its pane vanished: user back on an empty box with a stray "Terminal harness" | — | **~20** |
 
 ## Findings
@@ -87,6 +88,17 @@ vendor binaries, so their real login screens appear.
    `agent_deleted` (cli/src/lib/retainExitedSession.ts, compute `releaseEngine` before sending) and
    have the desktop move the panes onto it instead of closing (reuse the agent-switch repoint in
    app_state.dart; the attach must wait for the successor's `agent_synced`).
+
+### A3 — bare Mac, background install, second session
+
+10. **Second session blocked on a Mac without the Command Line Tools.** A new harness in the first
+    project (the box's default) failed with "Could not check Git on <Mac>. Check the connection and
+    Harness CLI, then retry." `/usr/bin/git` is Apple's installer stub and exits 1, which both the
+    desktop's own reader and the daemon's took for "git unavailable". Fixed: a folder with no `.git`
+    in it or above it is not a Git project, decided without running git (daemon 4th fix below, desktop
+    after it). The misleading "main" branch chip went with it.
+11. Background install works: OpenCode 8.6 s, Claude Code 13.3 s, Codex 20.3 s, Pi 11.3 s, one at a
+    time, all done about a minute after opening; the first harness never installed in its pane.
 
 ## Next
 
