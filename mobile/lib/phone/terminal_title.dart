@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'package:harness_mobile/shared/theme/app_theme.dart';
+
 import 'tty.dart';
 import 'tty_controls.dart';
 
@@ -19,6 +21,10 @@ import 'tty_controls.dart';
 /// you — is the one word that opens it from here. The paired daemon, when there is one, sits at the
 /// right end ([daemon]): a tap on it opens its own sheet, not the menu.
 ///
+/// ⚠️ **One state word, by the owner's call (2026-10-08): the machine being away ([away]).** The
+/// terminal cannot say that one — what is on screen is the last thing the machine sent, and it reads
+/// as live. It was said on the line above the mic first, and moved up here, at the right end.
+///
 /// It floats over the terminal's top rows only while the output is followed at its end, and slides
 /// away while the history is read back (see `TerminalChromeScroll`) — so it can afford three rows.
 class TerminalTitle extends StatelessWidget {
@@ -32,6 +38,7 @@ class TerminalTitle extends StatelessWidget {
     this.asking,
     this.onHold,
     this.daemon,
+    this.away = false,
     this.sample = false,
   });
 
@@ -60,6 +67,12 @@ class TerminalTitle extends StatelessWidget {
   /// room — outside the signed-in shell or with daemons off.
   final Widget? daemon;
 
+  /// The harness's machine is away (`phoneMachineAway`) and the screen under the title is the last
+  /// one it sent: `computer asleep` at the right end, under [asking] when there is one (see
+  /// [_notes]). Two words and no more, by the owner's call (2026-10-08) — `reconnects when back`
+  /// under it went. Not a button of its own — the page comes back by itself.
+  final bool away;
+
   /// Four terminal rows: three lines of text and half a row of air above and below.
   static double heightOf(Tty tty) => 4 * tty.row;
 
@@ -73,6 +86,74 @@ class TerminalTitle extends StatelessWidget {
     return characters.length <= 30
         ? branch
         : '${characters.take(14)}…${characters.skip(characters.length - 14)}';
+  }
+
+  /// The words at the right end — [asking], then [away] — one under another from the name's row
+  /// down, as the names on the left are.
+  ///
+  /// ⚠️ **Stacked, not side by side, and under one width.** Side by side the two added up, and with
+  /// the daemon chip beside them they took the whole row: the harness's own name, the title, was cut
+  /// to nothing. Stacked they share the 170pt `asking` always had, so the name keeps the room it
+  /// had before the machine's word existed.
+  ///
+  /// With [asking] the whole stack is its button — a tap opens Find, which is also the way off an
+  /// agent whose machine is away. Without it the words are the title's, like the rest of it.
+  Widget? _notes(Tty tty, double height) {
+    final asking = this.asking;
+    if (asking == null && !away) return null;
+    Text note(String text, Color color, {Key? key}) => Text(
+      text,
+      key: key,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: tty.style(color: color, size: TtySize.meta),
+    );
+    final words = ConstrainedBox(
+      constraints: BoxConstraints(
+        minHeight: height,
+        minWidth: asking == null ? 0 : 44,
+        maxWidth: 170,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.only(left: 12),
+        child: Align(
+          alignment: Alignment.topRight,
+          widthFactor: 1,
+          child: Padding(
+            padding: EdgeInsets.only(top: tty.row * 0.6),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                if (asking != null) note(asking, tty.yellow),
+                // The app's warning amber, not the terminal's red: a machine asleep is something
+                // to know, not an error — and the 16 ANSI colours have no orange.
+                if (away)
+                  note(
+                    'computer asleep',
+                    AppPalette.warn,
+                    key: const ValueKey('terminal-title-away'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (asking == null) return words;
+    return Semantics(
+      button: true,
+      label: ['$asking — open Find', if (away) 'computer asleep'].join('. '),
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onFind();
+        },
+        child: words,
+      ),
+    );
   }
 
   @override
@@ -164,45 +245,7 @@ class TerminalTitle extends StatelessWidget {
                         size: TtySize.meta,
                       ),
                     ),
-                  if (asking case final asking?)
-                    Semantics(
-                      button: true,
-                      label: '$asking — open Find',
-                      excludeSemantics: true,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () {
-                          HapticFeedback.selectionClick();
-                          onFind();
-                        },
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            minHeight: height,
-                            minWidth: 44,
-                            maxWidth: 170,
-                          ),
-                          child: Padding(
-                            padding: const EdgeInsets.only(left: 12),
-                            child: Align(
-                              alignment: Alignment.topRight,
-                              widthFactor: 1,
-                              child: Padding(
-                                padding: EdgeInsets.only(top: tty.row * 0.6),
-                                child: Text(
-                                  asking,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: tty.style(
-                                    color: tty.yellow,
-                                    size: TtySize.meta,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
+                  ?_notes(tty, height),
                   ?daemon,
                 ],
               ),

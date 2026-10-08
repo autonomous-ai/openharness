@@ -363,7 +363,9 @@ class _AgentHomeState extends State<AgentHome> {
     }
     return switch (phoneMachineStatusOf(machine)) {
       PhoneMachineStatus.needsPassword => false,
-      PhoneMachineStatus.offline => _accountSaysOnline(machine.machine.status),
+      PhoneMachineStatus.offline => phoneAccountSaysOnline(
+        machine.machine.status,
+      ),
       PhoneMachineStatus.connecting => true,
       PhoneMachineStatus.ready => switch (machine.agentLoadStatus) {
         AgentLoadStatus.loaded || AgentLoadStatus.needsLink => false,
@@ -404,13 +406,6 @@ class _AgentHomeState extends State<AgentHome> {
     });
     return true;
   }
-
-  /// The machine list's own word on whether the machine is up — the REST status, not the socket.
-  static bool _accountSaysOnline(String? status) =>
-      switch (status?.trim().toLowerCase()) {
-        'running' || 'online' || 'connected' || 'ready' => true,
-        _ => false,
-      };
 
   /// Whether the screen is currently holding out for the remembered agent — see [_target]. Read by
   /// build so the wait draws as "Connecting…", never as the empty state.
@@ -741,7 +736,8 @@ class _AgentHomeState extends State<AgentHome> {
   ///
   /// Held with no deadline, on purpose. The terminal on screen already says its machine is offline
   /// or reconnecting and reattaches by itself when it answers, and Find leaves it at any time — a
-  /// screen that swaps to another agent on its own, under somebody reading, is the bug.
+  /// screen that swaps to another agent on its own, under somebody reading, is the bug. Except with
+  /// every machine away, when there is no other agent to swap to: [_dropPagerIfEveryMachineAway].
   AgentEntry? _awayEntryFor(({String machineId, String agentId}) agent) {
     final machine = widget.notifier.stateOf(agent.machineId);
     if (machine == null || phoneMachineListsAgents(machine)) return null;
@@ -781,6 +777,7 @@ class _AgentHomeState extends State<AgentHome> {
       final entries = visibleAgents(agentIndex(widget.notifier));
       _openNewAgentIfUnlockedMachineIsEmpty(entries);
       _dropPagerIfShownAgentWasDeleted(entries);
+      _dropPagerIfEveryMachineAway();
       // ⚠️ `_readingLast` holds the screen back so the record gets to name the agent before the
       // fallback does — but only while the screen is still willing to wait at all. Past
       // [_loadingTimeout] a read that has not returned is not going to, and going on to pick an
@@ -1006,6 +1003,46 @@ class _AgentHomeState extends State<AgentHome> {
     // and then [_target] falls back to the first agent.
     _showing = next;
     _pagerGeneration++;
+  }
+
+  /// Every machine asleep: the pager goes, and the screen falls to the machines list.
+  ///
+  /// ⚠️ **The one exception to [_awayEntryFor]'s hold, and why it can be one.** That hold keeps the
+  /// agent on screen through its machine going away, so the screen never swaps to ANOTHER machine's
+  /// agent under somebody reading. With every machine away there is no other agent to swap to and
+  /// nothing on its way: held, the phone sat on the terminal of a computer that was off — a
+  /// skeleton, or its last screen — for as long as it stayed off (owner, 2026-10-08: it should go
+  /// back to the machines screen). That list is what [build] shows when no machine can host
+  /// anything, and it says which one is asleep and what to do about it.
+  ///
+  /// [_showing] is KEPT, and it is what brings the agent back: when its machine answers again,
+  /// [_target] finds it, and a pager is built around it and attached, exactly as on a launch.
+  ///
+  /// Away as [phoneMachineAway] means it — the account agrees — so a socket dropping for the
+  /// seconds of a redial never takes the terminal down.
+  void _dropPagerIfEveryMachineAway() {
+    if (_neighboursFor == null || !_everyMachineAway()) return;
+    _neighboursFor = null;
+    _neighbours = null;
+    _pagerGeneration++;
+  }
+
+  /// Whether no machine on the account answers or is on its way: each one asleep, or locked for a
+  /// password nothing here enters by itself. False before the account's machines are known — that
+  /// is a launch, not an answer.
+  bool _everyMachineAway() {
+    final notifier = widget.notifier;
+    final machines = filterableMachines(notifier);
+    return machines.isNotEmpty &&
+        machines.every(
+          (machine) => switch (phoneMachineStatusOf(machine)) {
+            PhoneMachineStatus.ready || PhoneMachineStatus.connecting => false,
+            // A phone just signed in has every machine locked until the device key log vouches for
+            // it, a few seconds later — see [AppNotifier.deviceTrustSettling].
+            PhoneMachineStatus.needsPassword => !notifier.deviceTrustSettling,
+            PhoneMachineStatus.offline => phoneMachineAway(machine),
+          },
+        );
   }
 
   /// The first agent after [deleted] in the pager's own order — wrapping past the end, as the pager

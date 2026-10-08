@@ -210,6 +210,7 @@ typedef _PageFacts = ({
   AgentLoadStatus? agentLoadStatus,
   bool machinePresent,
   PhoneMachineStatus? machineStatus,
+  bool machineAway,
   bool imagePaste,
   String? machineName,
   String? asking,
@@ -728,6 +729,8 @@ class _TerminalPageState extends State<TerminalPage>
       agentLoadStatus: machine?.agentLoadStatus,
       machinePresent: machine != null,
       machineStatus: machine == null ? null : phoneMachineStatusOf(machine),
+      // Not implied by `machineStatus`: the account's record moves it too — see [phoneMachineAway].
+      machineAway: machine != null && phoneMachineAway(machine),
       imagePaste: machine?.terminalImagePasteAvailable ?? false,
       machineName: machine?.machine.displayName,
       // ⚠️ The title's `api-fix asking` is drawn from here too. Left out, a harness elsewhere
@@ -1813,6 +1816,12 @@ class _TerminalPageState extends State<TerminalPage>
         machine.agentLoadStatus == AgentLoadStatus.loaded;
     // Captured while the agent is still listed, for the sentence above.
     if (agent != null) _cachedAgentName = agent.displayName;
+    final machineAway = machine != null && phoneMachineAway(machine);
+    // What stands in for a terminal with nothing to show yet: the skeleton promises a keyframe on
+    // its way, which a machine that is away is not sending — see [_MachineAway].
+    final placeholder = machineAway
+        ? _MachineAway(name: machine.machine.displayName)
+        : _Attaching(key: _skeletonKey);
     // Read-only either way — the terminal was never this pane's (a watcher) or was taken from it.
     // `_AgentGone` owns the page when the agent itself is missing, so this stays out of its way.
     final blocked =
@@ -2020,7 +2029,7 @@ class _TerminalPageState extends State<TerminalPage>
                                                       _pickAnotherAgent,
                                                 )
                                               : pane == null || session == null
-                                              ? _Attaching(key: _skeletonKey)
+                                              ? placeholder
                                               : TerminalPanel(
                                                   tabId: widget
                                                       .notifier
@@ -2157,10 +2166,14 @@ class _TerminalPageState extends State<TerminalPage>
                                   // any other page, and nothing here needs to know the
                                   // difference. The header says who has it and offers
                                   // "Take control"; the body is the terminal.
+                                  //
+                                  // ⚠️ **Not while its machine is away.** The skeleton
+                                  // then promised a keyframe nothing was sending: a
+                                  // computer just restarted left the phone on it for close
+                                  // to 90 seconds, read as a launch that hung. [_MachineAway]
+                                  // covers the panel the same way and says why.
                                   if (session != null && !session.hasScreen)
-                                    Positioned.fill(
-                                      child: _Attaching(key: _skeletonKey),
-                                    ),
+                                    Positioned.fill(child: placeholder),
                                   // The mic and Search, floating in the
                                   // terminal's bottom-right corner — see
                                   // [TerminalActionColumn].
@@ -2266,6 +2279,10 @@ class _TerminalPageState extends State<TerminalPage>
                               daemon: const DaemonChip(
                                 margin: EdgeInsets.only(left: 12),
                               ),
+                              // Only over a screen: with none, [_MachineAway] says it
+                              // in the terminal's place, and saying it twice is noise.
+                              away:
+                                  machineAway && (session?.hasScreen ?? false),
                               onTap: () {
                                 if (agent == null) return;
                                 _showActions(
@@ -2826,6 +2843,62 @@ class _AgentGone extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// The terminal's body while its machine is away — offline, and the account agrees (see
+/// [phoneMachineAway]) — with no screen of it to show.
+///
+/// ⚠️ **In the skeleton's place, because the skeleton would be a lie.** [_Attaching] promises a
+/// keyframe on its way; a machine that is away sends none until Harness runs there again, and a
+/// computer just restarted held the phone on that promise for close to 90 seconds with nothing on
+/// screen saying why. This says what the machines list says of it, and that the page comes back by
+/// itself: the machine's return already reattaches the agent on screen.
+///
+/// Drawn as the chrome is (see `tty.dart`): the terminal's own ground and face, no icon. Opaque, as
+/// it lies over an empty panel, and it lets taps through to that panel, as the skeleton does.
+class _MachineAway extends StatelessWidget {
+  const _MachineAway({required this.name});
+
+  /// The machine as the account names it.
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return IgnorePointer(
+      child: ColoredBox(
+        color: tty.ground,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Semantics(
+              liveRegion: true,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    '$name is asleep',
+                    textAlign: TextAlign.center,
+                    style: tty.style(
+                      size: TtySize.row,
+                      weight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'turn it on, or run harness start there'
+                    ' · this opens by itself when it’s back',
+                    textAlign: TextAlign.center,
+                    style: tty.style(size: TtySize.meta, color: tty.faint),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// The terminal's body while its first keyframe is still crossing the network.
