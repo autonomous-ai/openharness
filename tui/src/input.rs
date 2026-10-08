@@ -3885,15 +3885,16 @@ mod tests {
         assert!(picker.rows.iter().any(|r| r.lead.iter().any(|s| s.content.as_ref() == "✓ ")), "the current option is marked");
     }
 
-    /// The main loop takes `redraw_all` once per pass (`std::mem::take`): focus-in, a resize and
-    /// focus-in again in one pass leave a single request, so one repaint.
+    /// Focus-in and a resize each ask the main loop for a full repaint: `redraw_all`, one flag the
+    /// loop takes once per pass, so requests in one pass are one repaint.
     #[test]
-    fn repaint_requests_in_one_pass_are_one_request() {
+    fn focus_in_and_a_resize_ask_for_a_repaint() {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19789, sink, (100, 30));
-        app.redraw_all = false;
-        for event in [CEvent::FocusGained, CEvent::Resize(100, 30), CEvent::FocusGained] { handle(&mut app, event) }
-        assert!(std::mem::take(&mut app.redraw_all), "the requests are owed");
-        assert!(!std::mem::take(&mut app.redraw_all), "and are one: nothing is left for a second repaint");
+        for event in [CEvent::FocusGained, CEvent::Resize(100, 30)] {
+            app.redraw_all = false;
+            handle(&mut app, event.clone());
+            assert!(app.redraw_all, "{event:?}");
+        }
     }
 }

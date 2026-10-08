@@ -1038,19 +1038,26 @@ mod tests {
 
     #[test]
     fn an_idle_frame_writes_nothing_after_a_frame_with_cells() {
+        // As ratatui calls the backend for a frame: draw, place the cursor, flush. A frame with
+        // nothing changed writes nothing, not even a cursor move.
         let mut a = Cell::default();
         a.set_char('a');
+        let at = Position::new(1, 0);
         let (mut one, mut two) = (Vec::new(), Vec::new());
         let mut backend = TmuxBackend::with_sync(&mut one);
         backend.draw(std::iter::once((0u16, 0u16, &a))).unwrap();
+        backend.set_cursor_position(at).unwrap();
         Backend::flush(&mut backend).unwrap();
         drop(backend);
         let mut backend = TmuxBackend::with_sync(&mut two);
         backend.draw(std::iter::once((0u16, 0u16, &a))).unwrap();
+        backend.set_cursor_position(at).unwrap();
+        Backend::flush(&mut backend).unwrap();
         backend.draw(std::iter::empty()).unwrap();
+        backend.set_cursor_position(at).unwrap();
         Backend::flush(&mut backend).unwrap();
         drop(backend);
-        assert_eq!(one, two);
+        assert_eq!(String::from_utf8_lossy(&one), String::from_utf8_lossy(&two));
     }
 
     #[test]
