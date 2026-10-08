@@ -666,12 +666,16 @@ pub fn list_from(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, det
     let n = r.height as usize;
     if n == 0 { picker.row_at = row_at; return }
     if picker.visible.is_empty() {
-        // (A list says what its emptiness means — "no harnesses yet" — where it can. A query only
-        // hides it when there were rows to filter: a list with none — a composer's request that
-        // failed, a directory it could not read — still says why while a query is typed.)
+        // (A list says what its emptiness means — "no harnesses yet" — where it can.)
+        let mut empty = if picker.empty.is_empty() || !picker.query.is_empty() { "Nothing matches".to_string() } else { picker.empty.clone() };
         let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
-        let empty = if picker.empty.is_empty() || (!picker.query.is_empty() && total > 0) { "Nothing matches".to_string() } else { picker.empty.clone() };
-        put(buf, r.x + 2, if bottom_up { r.bottom() - 1 } else { r.y }, r.width.saturating_sub(2), &empty, c.muted);
+        if picker.shell_panel && total == 0 {
+            // The shell composer's list with no rows at all reads as its fzf frame's: blank while it
+            // loads (a failure being retried is said in the rule), else why — a failed request, a
+            // directory it could not read — under a query too.
+            if picker.busy.is_some() { empty.clear() } else if !picker.empty.is_empty() { empty = picker.empty.clone() }
+        }
+        if !empty.is_empty() { put(buf, r.x + 2, if bottom_up { r.bottom() - 1 } else { r.y }, r.width.saturating_sub(2), &empty, c.muted); }
         picker.row_at = row_at;
         return;
     }
@@ -1461,5 +1465,25 @@ mod tests {
         p.query = "ga".into();
         p.refilter();
         assert_eq!(list_lines(&p), p.visible.len(), "while typing: the matches, untitled");
+    }
+
+    /// Only the shell composer keeps its empty message under a query: the command panel's lists
+    /// (Projects, Models …) with no rows still say "Nothing matches" once something is typed.
+    #[test]
+    fn an_empty_list_under_a_query_says_nothing_matches_except_in_the_shell_composer() {
+        let draw = |p: &mut Picker| { let mut buf = Buffer::empty(Rect::new(0, 0, 40, 4)); list(&mut buf, p, Rect::new(0, 0, 40, 4), &chrome_with(true), false); text(&buf) };
+        for empty in ["No projects yet.", "Loading its models…"] {
+            let mut p = Picker::new("", "");
+            p.empty = empty.into();
+            assert!(draw(&mut p).contains(empty), "{empty}");
+            p.query = "foo".into();
+            p.refilter();
+            let shown = draw(&mut p);
+            assert!(shown.contains("Nothing matches") && !shown.contains(empty), "{empty}: {shown}");
+            p.shell_panel = true;
+            assert!(draw(&mut p).contains(empty), "the composer says why: {empty}");
+            p.busy = Some("loading".into());
+            assert_eq!(draw(&mut p).trim(), "", "a loading composer's list is blank");
+        }
     }
 }

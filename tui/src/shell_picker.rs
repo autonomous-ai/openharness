@@ -1135,6 +1135,8 @@ mod tests {
                 paint_list(&mut buf,area,&mut picker,loading,Some(message),vec![],false);
                 assert_eq!(theme::needs_animation_frame(),spins,"{panel} {failures}");
                 assert!(text(&buf).contains(message),"{panel} {query:?} {failures}: the message is not shown");
+                // While it retries, the list under the message is blank, as the fzf frame's is.
+                assert!(!text(&buf).contains("Nothing matches"),"{panel} {query:?} {failures}");
                 assert!(picker.flash.is_none() && picker.empty==empty,"the message is not left on the picker");
             }
         }
