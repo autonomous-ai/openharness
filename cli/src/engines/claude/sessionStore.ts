@@ -36,4 +36,12 @@ export const sessionStore: SessionStoreContract = {
    * never a turn, so a continuation counts only once a turn is in it (or the file is too long to be those lines).
    */
   continuation: { type: 'continued-in', field: 'continuedInSessionId', suffix: '.jsonl', tailBytes: 4 * 1024, turns: ['user', 'assistant'], headBytes: 256 * 1024 },
+  /** A prompt, an answer, and the system records a turn ends with: a title, a file snapshot or a mode is not work. */
+  activity: {
+    at: 'timestamp',
+    records: [
+      { type: 'user' }, { type: 'assistant' },
+      { type: 'system', fields: { subtype: { in: ['turn_duration', 'stop_hook_summary', 'compact_boundary'] } } },
+    ],
+  },
 }

@@ -55,4 +55,23 @@ export interface SessionStoreContract {
   continuation?: { type: string; field: string; suffix: string; tailBytes: number; turns: readonly string[]; headBytes: number }
   /** A parent's binding, overwritten by its delegated session's hook, is put back as the registry loads. */
   repairsOverwrittenParent?: boolean
+  /**
+   * What counts as conversation activity in a transcript, for an agent's frame (lib/transcriptActivity.ts): a
+   * record whose `at` field is a time, of one of `records`' kinds. Metadata rewritten when an idle session is
+   * discovered or resumed never counts. A kind names the record's `type`, and may require fields of the record,
+   * or of its item (the first object at one of `item`'s paths), to be one of the values listed: `in` compares a
+   * field as text, `is` as it is.
+   */
+  activity?: {
+    at: string
+    item?: readonly (readonly string[])[]
+    records: readonly ActivityRecord[]
+  }
+}
+
+export type ActivityMatch = { in: readonly string[] } | { is: readonly string[] }
+export interface ActivityRecord {
+  type: string
+  fields?: Readonly<Record<string, ActivityMatch>>
+  item?: Readonly<Record<string, ActivityMatch>>
 }

@@ -10,7 +10,7 @@
  * `mirror` keeps the calls the rest of the core made into the commander mirror when it ran here, so the
  * funnel, the heartbeats, cancel, fork, binding and purge each say what happened in their own words.
  */
-import type { LiveEvent } from '../../lib/normalize.js'
+import type { LiveEvent } from '../../engines/kit/events.js'
 import { lastFullText, recentAsks, recentRecaps, type RecentRecap, type SessionRecaps } from '../../lib/recapReads.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TurnActivity } from '../../lib/turnActivity.js'

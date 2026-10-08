@@ -119,7 +119,7 @@ About 220 lines would leave, and with them core's only native child process and 
 4. **(c) Launch, discovery and resume.** The largest. It has the most synchronous call sites (registry
    load, discovery tables, argv). It is split by risk into (c1) launch argv and the pane script (done),
    (c2) launch preparation (trust writes and the resume repair, done), (c3) discovery and process matching (done),
-   (c4) registry load and session identity (done), and (c5) adoption readers and the shared normalizers
+   (c4) registry load and session identity (done), and (c5) adoption readers and the shared normalizers (done)
    ([engine launch](2026-10-08-engine-launch.md)). Session control stays worker-free throughout, as in (b).
 
 This puts (d) before (b) and (c), unlike the order the owner listed. The reason: async work that is

@@ -15,7 +15,7 @@ import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js
 import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
-import type { LiveEvent } from '../lib/normalize.js'
+import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'

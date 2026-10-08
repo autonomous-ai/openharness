@@ -8,6 +8,7 @@ import { claude, claudeScenario, codex, codexScenario } from '../testing/transcr
 import { claudePageLine, windowRawLines } from './normalize.js'
 import { tailFile } from './transcriptTail.js'
 import { LineIndex, pageBefore, TranscriptPager, type HistoryPage, type OpenFile } from './transcriptPages.js'
+import { pageOf } from '../engines/transcripts.js'
 
 let dir: string
 let files = 0
@@ -31,7 +32,7 @@ async function pageThrough(engine: Engine, file: string, limit: number): Promise
   let before: string | undefined
   for (let pages = 1; ; pages++) {
     const old = window(engine, lines, { limit, before })
-    const now = await pager[engine](file, { limit, before })
+    const now = await pageOf(pager, engine, file, { limit, before })
     expect(asOld(now), `${engine} page ${pages}, limit ${limit}, before ${before}`).toEqual(old)
     expect(now.clipped).toBe(false)
     if (!old.hasMore || old.staleCursor || old.oldestCursor === null) return pages
@@ -74,13 +75,13 @@ describe('history pages equal the windows cut from the whole file', { timeout: F
       const lines = await tailFile(file, Infinity)
       const pager = new TranscriptPager()
       for (const before of ['nothing-like-it', 'codex:x', `codex:${lines.length + 1}`, 'codex:99999999999999999999']) {
-        expect(asOld(await pager[engine](file, { limit: 5, before }))).toEqual(window(engine, lines, { limit: 5, before }))
+        expect(asOld(await pageOf(pager, engine, file, { limit: 5, before }))).toEqual(window(engine, lines, { limit: 5, before }))
       }
     })
 
     it('gives every line, oldest first, when asked for no page at all', async () => {
       const file = fresh(records.join('\n') + '\n')
-      const page = await new TranscriptPager()[engine](file, {})
+      const page = await pageOf(new TranscriptPager(), engine, file, {})
       expect(page.lines).toEqual(await tailFile(file, Infinity))
       expect(page.hasMore).toBe(false)
     })
@@ -90,17 +91,17 @@ describe('history pages equal the windows cut from the whole file', { timeout: F
     const pager = new TranscriptPager()
     const missing = join(dir, 'gone.jsonl')
     for (const before of [undefined, 'u1']) {
-      expect(asOld(await pager.claude(missing, { limit: 5, before }))).toEqual(windowRawLines([], { limit: 5, before }))
+      expect(asOld(await pageOf(pager, 'claude', missing, { limit: 5, before }))).toEqual(windowRawLines([], { limit: 5, before }))
     }
     for (const before of [undefined, 'codex:0', 'codex:1']) {
-      expect(asOld(await pager.codex(missing, { limit: 5, before }))).toEqual(windowCodexLines([], { limit: 5, before }))
+      expect(asOld(await pageOf(pager, 'codex', missing, { limit: 5, before }))).toEqual(windowCodexLines([], { limit: 5, before }))
     }
     expect(await pager.lineCount(missing)).toBe(0)
     const locked = fresh(claudeScenario().join('\n') + '\n')
     chmodSync(locked, 0o000)
     try {
-      expect(asOld(await pager.claude(locked, { limit: 5 }))).toEqual(windowRawLines([], { limit: 5 }))
-      expect((await pager.claude(locked, { limit: 5, before: 'u1' })).staleCursor).toBe(true)
+      expect(asOld(await pageOf(pager, 'claude', locked, { limit: 5 }))).toEqual(windowRawLines([], { limit: 5 }))
+      expect((await pageOf(pager, 'claude', locked, { limit: 5, before: 'u1' })).staleCursor).toBe(true)
       expect(await pageBefore(locked, 100, 5, { startsPage: () => true })).toEqual({ lines: [], count: 0, start: 0, hasMore: false, clipped: false })
     } finally { chmodSync(locked, 0o600) }
   })
@@ -112,11 +113,11 @@ describe('history pages equal the windows cut from the whole file', { timeout: F
     const lines = await tailFile(file, Infinity)
     const pager = new TranscriptPager()
     // Paging back from the second line leaves only the first, which has no id of its own.
-    expect(asOld(await pager.claude(file, { limit: 5, before: first }))).toEqual(windowRawLines(lines, { limit: 5, before: first }))
+    expect(asOld(await pageOf(pager, 'claude', file, { limit: 5, before: first }))).toEqual(windowRawLines(lines, { limit: 5, before: first }))
     const top = claudePageLine(records[0]).cursor
     expect(top).toBeNull()
     const withId = fresh(records.slice(1).join('\n') + '\n')
-    const page = await pager.claude(withId, { limit: 5, before: first })
+    const page = await pageOf(pager, 'claude', withId, { limit: 5, before: first })
     expect(asOld(page)).toEqual(windowRawLines(await tailFile(withId, Infinity), { limit: 5, before: first }))
     expect(page.oldestCursor).toBe(first)
   })
@@ -128,7 +129,7 @@ describe('a Claude cursor', () => {
     const records = [claude.user('one'), twice, claude.user('two'), twice, claude.user('three')]
     const file = fresh(records.join('\n') + '\n')
     const before = claudePageLine(twice).cursor!
-    const page = await new TranscriptPager().claude(file, { limit: 1, before })
+    const page = await pageOf(new TranscriptPager(), 'claude', file, { limit: 1, before })
     expect(page.lines).toEqual([records[2]])
     expect(windowRawLines(await tailFile(file, Infinity), { limit: 1, before }).window).toEqual([records[0]])
   })
@@ -137,16 +138,16 @@ describe('a Claude cursor', () => {
     const records = claudeScenario()
     const file = fresh(records.join('\n') + '\n')
     const pager = new TranscriptPager()
-    const first = await pager.claude(file, { limit: 3 })
-    const again = await pager.claude(file, { limit: 3, before: first.oldestCursor! })
-    expect(again).toEqual(await new TranscriptPager().claude(file, { limit: 3, before: first.oldestCursor! }))
+    const first = await pageOf(pager, 'claude', file, { limit: 3 })
+    const again = await pageOf(pager, 'claude', file, { limit: 3, before: first.oldestCursor! })
+    expect(again).toEqual(await pageOf(new TranscriptPager(), 'claude', file, { limit: 3, before: first.oldestCursor! }))
     // Rewritten so the byte remembered for that cursor now starts another line.
     writeFileSync(file, [claude.user('a new first line, longer than before'), ...records].join('\n') + '\n')
-    expect(await pager.claude(file, { limit: 3, before: first.oldestCursor! }))
-      .toEqual(await new TranscriptPager().claude(file, { limit: 3, before: first.oldestCursor! }))
+    expect(await pageOf(pager, 'claude', file, { limit: 3, before: first.oldestCursor! }))
+      .toEqual(await pageOf(new TranscriptPager(), 'claude', file, { limit: 3, before: first.oldestCursor! }))
     // And when the file shrank past it.
     writeFileSync(file, records.slice(0, 2).join('\n') + '\n')
-    expect((await pager.claude(file, { limit: 3, before: first.oldestCursor! })).staleCursor).toBe(true)
+    expect((await pageOf(pager, 'claude', file, { limit: 3, before: first.oldestCursor! })).staleCursor).toBe(true)
   })
 
   it('is matched as a whole id, and an id with characters JSON may escape is read the slow way', async () => {
@@ -155,9 +156,9 @@ describe('a Claude cursor', () => {
     const file = fresh(records.join('\n') + '\n')
     const lines = await tailFile(file, Infinity)
     const pager = new TranscriptPager()
-    expect(asOld(await pager.claude(file, { limit: 1, before: odd }))).toEqual(windowRawLines(lines, { limit: 1, before: odd }))
+    expect(asOld(await pageOf(pager, 'claude', file, { limit: 1, before: odd }))).toEqual(windowRawLines(lines, { limit: 1, before: odd }))
     const prefix = claudePageLine(records[2]).cursor!.slice(0, -1)
-    expect((await pager.claude(file, { limit: 1, before: prefix })).staleCursor).toBe(true)
+    expect((await pageOf(pager, 'claude', file, { limit: 1, before: prefix })).staleCursor).toBe(true)
   })
 
   it('remembers a bounded number of cursors and files', async () => {
@@ -165,9 +166,9 @@ describe('a Claude cursor', () => {
     const records = Array.from({ length: 80 }, (_, i) => claude.user(`prompt ${i}`))
     const file = fresh(records.join('\n') + '\n')
     let before: string | undefined
-    for (let i = 0; i < 70; i++) before = (await pager.claude(file, { limit: 1, before })).oldestCursor!
-    for (let i = 0; i < 3; i++) await pager.claude(fresh(records.join('\n') + '\n'), { limit: 1 })
-    expect(await pager.claude(file, { limit: 1, before })).toEqual(await new TranscriptPager().claude(file, { limit: 1, before }))
+    for (let i = 0; i < 70; i++) before = (await pageOf(pager, 'claude', file, { limit: 1, before })).oldestCursor!
+    for (let i = 0; i < 3; i++) await pageOf(pager, 'claude', fresh(records.join('\n') + '\n'), { limit: 1 })
+    expect(await pageOf(pager, 'claude', file, { limit: 1, before })).toEqual(await pageOf(new TranscriptPager(), 'claude', file, { limit: 1, before }))
   })
 })
 
@@ -218,7 +219,7 @@ describe('a page held to its size', () => {
     let before: string | undefined
     let endIndex = records.length
     for (;;) {
-      const page = await pager.codex(file, { limit: 4, before })
+      const page = await pageOf(pager, 'codex', file, { limit: 4, before })
       seen.unshift(...page.lines)
       const start = Number(page.oldestCursor!.slice('codex:'.length))
       expect(start).toBeLessThan(endIndex)
@@ -383,17 +384,17 @@ describe('LineIndex', { timeout: FILE_WORK_TIMEOUT_MS }, () => {
     expect(gone.count()).toBe(0)
     const pager = new TranscriptPager()
     expect(await pager.lineCount(dir)).toBe(0)
-    expect(asOld(await pager.codex(dir, { limit: 2 }))).toEqual(windowCodexLines([], { limit: 2 }))
-    expect(asOld(await pager.codex(dir, { limit: 2, before: 'codex:3' }))).toEqual(windowCodexLines([], { limit: 2, before: 'codex:3' }))
-    expect(asOld(await pager.codex(dir, {}))).toEqual(windowCodexLines([], { limit: Infinity }))
+    expect(asOld(await pageOf(pager, 'codex', dir, { limit: 2 }))).toEqual(windowCodexLines([], { limit: 2 }))
+    expect(asOld(await pageOf(pager, 'codex', dir, { limit: 2, before: 'codex:3' }))).toEqual(windowCodexLines([], { limit: 2, before: 'codex:3' }))
+    expect(asOld(await pageOf(pager, 'codex', dir, {}))).toEqual(windowCodexLines([], { limit: Infinity }))
   })
 })
 
 describe('the pager', () => {
   it('says a page is stale when the file shrank under its walk', async () => {
     const pager = new TranscriptPager({ walk: async () => false })
-    expect((await pager.claude(fresh(claudeScenario().join('\n') + '\n'), { limit: 2 })).staleCursor).toBe(true)
-    expect((await pager.codex(fresh(codexScenario().join('\n') + '\n'), { limit: 2 })).staleCursor).toBe(true)
+    expect((await pageOf(pager, 'claude', fresh(claudeScenario().join('\n') + '\n'), { limit: 2 })).staleCursor).toBe(true)
+    expect((await pageOf(pager, 'codex', fresh(codexScenario().join('\n') + '\n'), { limit: 2 })).staleCursor).toBe(true)
   })
 
   it('keeps a bounded number of indexes', async () => {
@@ -407,14 +408,14 @@ describe('the pager', () => {
     const records = [claude.user('one'), claude.assistant([claude.text('a')], 'end_turn'), claude.user('two, still being written')]
     const file = fresh(records.join('\n'))
     const pager = new TranscriptPager()
-    const first = await pager.claude(file, { limit: 1 })
+    const first = await pageOf(pager, 'claude', file, { limit: 1 })
     expect(first.lines).toEqual([records[2]])
     appendFileSync(file, '\n' + claude.user('three'))
     const lines = await tailFile(file, Infinity)
-    expect(asOld(await pager.claude(file, { limit: 1, before: first.oldestCursor! }))).toEqual(windowRawLines(lines, { limit: 1, before: first.oldestCursor! }))
+    expect(asOld(await pageOf(pager, 'claude', file, { limit: 1, before: first.oldestCursor! }))).toEqual(windowRawLines(lines, { limit: 1, before: first.oldestCursor! }))
     const unended = fresh(records.join('\n'))
-    const page = await pager.claude(unended, { limit: 1 })
-    expect(asOld(await pager.claude(unended, { limit: 1, before: page.oldestCursor! })))
+    const page = await pageOf(pager, 'claude', unended, { limit: 1 })
+    expect(asOld(await pageOf(pager, 'claude', unended, { limit: 1, before: page.oldestCursor! })))
       .toEqual(windowRawLines(await tailFile(unended, Infinity), { limit: 1, before: page.oldestCursor! }))
   })
 })

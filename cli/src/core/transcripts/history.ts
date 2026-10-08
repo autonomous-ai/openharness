@@ -17,11 +17,10 @@ import { stat } from 'node:fs/promises'
 import type { EngineTranscript } from '../../engines/facets/transcript.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 import { transcriptReadIdentity } from './readIdentity.js'
-import { enrichSubagentStats } from '../../engines/kit/history.js'
 import { isOtherEngine, loadEngine, type InProcessModules, type OtherEngine } from '../../engines/inProcess.js'
 import { sid } from '../../lib/log.js'
 import { lastActivityAt } from '../../lib/agentFrame.js'
-import { messagesToEvents, windowRawLines, type SessionEvent } from '../../lib/normalize.js'
+import type { SessionEvent } from '../../engines/kit/events.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TranscriptPager } from '../../lib/transcriptPages.js'
 import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
@@ -33,7 +32,7 @@ export interface HistoryDeps {
    *  and one a restart, a move or a restore had to leave for a new one. */
   stopped: () => readonly RegisteredSession[]
   /** Line counts, and the explicit inline compatibility path's pages. Isolated readers own their indexes. */
-  pages: Pick<TranscriptPager, 'claude' | 'codex' | 'lineCount'>
+  pages: Pick<TranscriptPager, 'page' | 'lineCount'>
   readerFor: (engine: string) => EngineTranscript | undefined
   /** The database engines' stores. */
   dbs: { opencode: string; kilo: string; devin: string }
@@ -176,8 +175,10 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
     const st = await stat(s.transcriptPath).catch(() => null)
     const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
     // The other file engines' replays and windows are their own code, loaded in this process: one that could
-    // not load shows an empty conversation.
-    const other = isOtherEngine(s.engine) ? await loadEngine(s.engine) : undefined
+    // not load shows an empty conversation, and so does an engine with no reader and no code of its own here.
+    // Claude Code and Codex always have a reader (core/engines/readers.ts), and a shell keeps no transcript
+    // (registry.engineKeepsTranscriptFile), so none reaches this: their replays are their readers', never core's.
+    const other = isOtherEngine(s.engine) ? await loadEngine(s.engine) : null
     if (other === null) return { ...emptyPage(s, sessionId), timestamp }
     const engine = <Name extends OtherEngine>(name: Name): InProcessModules[Name] => other as InProcessModules[Name]
 
@@ -196,10 +197,7 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
               ? wholeHistoryPage(engine('copilot').copilotMessagesToEvents(lines), false).events
             : s.engine === 'pi'
             ? engine('pi').piMessagesToEvents(lines)
-            : s.engine === 'commandcode'
-              ? engine('commandcode').commandcodeMessagesToEvents(lines)
-              : messagesToEvents(lines)
-      if (s.engine !== 'cursor' && s.engine !== 'pi' && s.engine !== 'commandcode' && s.engine !== 'muse' && s.engine !== 'amp' && s.engine !== 'grok' && s.engine !== 'agy' && s.engine !== 'copilot') await enrichSubagentStats(fullEvents, s.transcriptPath)
+            : engine('commandcode').commandcodeMessagesToEvents(lines)
       return {
         id: sessionId,
         title: projectDisplayName(s),
@@ -244,9 +242,7 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
         ? engine('cursor').windowCursorLines(lines, { limit, before })
         : s.engine === 'pi'
           ? engine('pi').windowPiLines(lines, { limit, before })
-          : s.engine === 'commandcode'
-            ? engine('commandcode').windowCommandCodeLines(lines, { limit, before })
-            : windowRawLines(lines, { limit, before })
+          : engine('commandcode').windowCommandCodeLines(lines, { limit, before })
     if (w.staleCursor) {
       return { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true, ...truncated }
     }
@@ -260,11 +256,8 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
           )
         : s.engine === 'pi'
           ? engine('pi').piMessagesToEvents(w.window)
-          : s.engine === 'commandcode'
-            ? engine('commandcode').commandcodeMessagesToEvents(w.window)
-            : messagesToEvents(w.window)
+          : engine('commandcode').commandcodeMessagesToEvents(w.window)
     // muse and amp are answered above and never reach here, so both are absent by design.
-    if (s.engine !== 'cursor' && s.engine !== 'pi' && s.engine !== 'commandcode') await enrichSubagentStats(events, s.transcriptPath)
     // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
     if (before && events[events.length - 1]?.type === 'done') events.pop()
     return {

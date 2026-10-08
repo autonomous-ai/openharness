@@ -10,7 +10,7 @@
 import type { EngineTranscript } from '../../engines/facets/transcript.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 import { transcriptReadIdentity } from './readIdentity.js'
-import { lastTurnTextFromRawLines, type LastTurnText } from '../../lib/normalize.js'
+import type { LastTurnText } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { tailFileCapped } from '../../lib/transcriptTail.js'
 import { loadEngine } from '../../engines/inProcess.js'
@@ -58,6 +58,8 @@ export function createLastTurnReader({ bySession, dbs, hermesDb, readerFor }: La
     if (s.engine === 'copilot') return (await loadEngine('copilot'))?.lastCopilotTurnText(lines) ?? null
     if (s.engine === 'pi') return (await loadEngine('pi'))?.lastPiTurnText(lines) ?? null
     if (s.engine === 'commandcode') return (await loadEngine('commandcode'))?.lastCommandCodeTurnText(lines) ?? null
-    return lastTurnTextFromRawLines(lines)
+    // No reader and no code of its own here: Claude Code and Codex always have a reader, and a shell keeps no
+    // transcript, so no engine reaches this. Their recaps are their readers', never core's.
+    return null
   }
 }

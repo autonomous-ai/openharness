@@ -1,7 +1,7 @@
 /** The core's reader port: bounded calls, no reader implementation and no fallback after a failure. */
 import type { EngineTranscript, TranscriptSession } from '../../engines/facets/transcript.js'
 import type { HistoryAnswer, HistoryAsk } from '../../engines/facets/transcript.js'
-import type { LastTurnText } from '../../lib/normalize.js'
+import type { LastTurnText } from '../../engines/kit/events.js'
 import {
   EngineReadError, historyAnswer, lastTurnAnswer, readerEngine, READER_ERRORS, READER_HISTORY,
   READER_IN_FLIGHT, READER_LAST_TURN, READER_SERVICES, READER_VERSION, READER_WAIT_MS,
