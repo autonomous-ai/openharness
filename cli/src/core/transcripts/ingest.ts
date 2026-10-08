@@ -53,7 +53,7 @@ export function createIngest({
   // audiences: web (send, ServerEvents) and device (mirror.ingest → curated commander_event cards).
   /** One transcript line through its engine's normalizer. The events, not yet emitted — the two
    *  callers below differ only in what they know about the line's age. */
-  const observeLine = (evt: Pick<LineEvent, 'sessionId' | 'engine' | 'text'>): RegisteredSession | null => {
+  const observeLine = (evt: Pick<LineEvent, 'sessionId' | 'engine' | 'text'>, profileAccepted = false): RegisteredSession | null => {
     if (!has(evt.sessionId)) return null // scope to terminal-registered sessions
     const session = bySession(evt.sessionId)
     if (!session || session.engine !== evt.engine) return null
@@ -64,7 +64,7 @@ export function createIngest({
         service.observeTranscript(session.agentId, evt.sessionId, session.engine, evt.text)
       }
     })
-    sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
+    if (!profileAccepted) sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
     return session
   }
   const ingestLine = (evt: LineEvent): ReturnType<CursorNormalizer['ingest']> | null => {
@@ -165,8 +165,8 @@ export function createIngest({
       }
     })
   }
-  const acceptFrame = (sessionId: string, engine: RegisteredSession['engine'], frame: LiveFrame): void => {
-    if (!observeLine({ sessionId, engine, text: frame.raw })) return
+  const acceptFrame = (sessionId: string, engine: RegisteredSession['engine'], frame: LiveFrame, profileAccepted = false): void => {
+    if (!observeLine({ sessionId, engine, text: frame.raw }, profileAccepted)) return
     if (frame.failure !== undefined) announceTurnAborted(sessionId, engine, frame.failure)
     emit(sessionId, frame.events, { replay: frame.replay })
   }

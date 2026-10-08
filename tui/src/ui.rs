@@ -218,7 +218,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // (The settings panel is not one: it floats over the panes, as the New Harness form does.)
     let full_screen = matches!(&app.modal, Some(Modal::Picker { kind, .. }) if theme::fzf_opts().height.is_none() && !crate::settings::is_panel(kind));
     if !full_screen {
-        if app.tab().home || app.tab().root.is_none() { cursor = empty_window(buf, app, body); themed_home(buf, body); }
+        let opening = app.tab().opening.clone().filter(|_| !app.tab().home && app.tab().root.is_none() && app.shell_inputs.contains_key(&app.tab().id));
+        if let Some(what) = opening { opening_window(buf, body, &what); themed_home(buf, body); }
+        else if app.tab().home || app.tab().root.is_none() { cursor = empty_window(buf, app, body); themed_home(buf, body); }
         else { cursor = window(buf, app, body) }
     }
     // Panes in clock mode: the time over each (its cursor hidden).
@@ -638,6 +640,13 @@ pub(crate) const WORDMARK: [&str; 2] = ["█ █ ▄▀█ █▀█ █▄ █ 
 fn empty_window(buf: &mut Buffer, app: &mut App, area: Rect) -> Option<Position> {
     if crate::input::os_home(app) { os_welcome(buf, app, area); None }
     else { crate::new_harness::draw_welcome(buf, app, area) }
+}
+
+/// A command's window while its terminal starts: a quiet line, nothing to choose.
+fn opening_window(buf: &mut Buffer, area: Rect, what: &str) {
+    let line = Line::styled(if what.is_empty() { "Opening…".to_string() } else { format!("Opening {what}…") }, fg(theme::MUTED));
+    let x = area.x + area.width.saturating_sub(line.width() as u16) / 2;
+    buf.set_line(x, area.y + area.height / 2, &line, area.width.saturating_sub(x - area.x));
 }
 
 fn os_welcome(buf: &mut Buffer, app: &App, area: Rect) {
@@ -3001,6 +3010,23 @@ mod theme_render_tests {
         term.draw(|f| draw(f, app)).unwrap();
         let buf = term.backend().buffer().clone();
         (0..42).map(|y| (0..150).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    /// A command's window (Super+u's Updates) says what is opening while its terminal starts,
+    /// not the New Harness form; with nothing on its way, an empty window is the form again.
+    #[test]
+    fn a_command_window_says_what_it_opens_while_its_terminal_starts() {
+        let mut app = app();
+        app.tab_mut().name = "Updates".into();
+        app.tab_mut().opening = Some("Updates".into());
+        let id = app.tab().id.clone();
+        app.shell_inputs.insert(id.clone(), Default::default());
+        let s = screen(&mut app);
+        assert!(s.contains("Opening Updates…"), "{s}");
+        assert!(!s.contains("What task should"), "no New Harness form while the command starts:\n{s}");
+        // The terminal never came (the request failed): back to what an empty window shows.
+        app.shell_inputs.remove(&id);
+        assert!(!screen(&mut app).contains("Opening Updates…"));
     }
 
     /// `theme` opens the settings panel over the window (not fzf's full-screen list), and a key

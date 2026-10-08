@@ -45,7 +45,8 @@ def file_list(root):
         name = '/' + str(path.relative_to(root))
         if path.is_dir() and not path.is_symlink():
             if name in ['/usr/lib/harness', '/usr/lib/harness-os', '/usr/lib/harness-opencode',
-                        '/usr/share/licenses/harness-os', '/usr/share/licenses/harness-opencode'] or name.startswith('/usr/share/harness-os'):
+                        '/usr/share/licenses/harness-os', '/usr/share/licenses/harness-opencode',
+                        '/usr/share/licenses/harness-os-connections'] or name.startswith(('/usr/share/harness-os', '/usr/lib/harness-os/connections')):
                 lines.append('%dir ' + name)
         else:
             lines.append(('%license ' if name.startswith('/usr/share/licenses/') else '') + name)

@@ -457,6 +457,8 @@ export function serviceOptions(env: NodeJS.ProcessEnv): ServiceSupervisorOptions
 export const SERVICE_PROCESSES_ENV = 'HARNESSD_SERVICE_PROCESSES'
 /** Version of the live engine methods hosted by this master, independent of reader-only hosts. */
 export const ENGINE_LIVE_ENV = 'HARNESSD_ENGINE_LIVE'
+/** Runtime profile methods, negotiated independently from live transcript parsing. */
+export const ENGINE_RUNTIME_ENV = 'HARNESSD_ENGINE_RUNTIME'
 
 /**
  * What a master puts in its core's environment about the services it runs in their own processes: the
@@ -468,13 +470,18 @@ export function serviceProcessesEnv(specs: readonly ServiceSpec[], masterPid: nu
   // The services, not the processes: a core knows what it routes by service, and one from before the
   // edge host still finds the services it knows here (workspaces) and runs the rest itself.
   const names = specs.flatMap((spec) => spec.services).join(',')
-  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1` }
+  return { [SERVICE_PROCESSES_ENV]: names, HARNESSD_SERVICES: names || 'none', [ENGINE_LIVE_ENV]: `${masterPid}:1`, [ENGINE_RUNTIME_ENV]: `${masterPid}:1` }
 }
 
 /** An older master may inherit a newer master's environment after rollback. Trust only this parent. */
 export function masterRunsLiveEngines(env: NodeJS.ProcessEnv, parentPid: number): boolean {
   return env.HARNESSD_SUPERVISED === '1' && !!env.HARNESSD_SERVICE_TOKEN
     && env[ENGINE_LIVE_ENV] === `${parentPid}:1`
+}
+
+export function masterRunsEngineRuntime(env: NodeJS.ProcessEnv, parentPid: number): boolean {
+  return env.HARNESSD_SUPERVISED === '1' && !!env.HARNESSD_SERVICE_TOKEN
+    && env[ENGINE_RUNTIME_ENV] === `${parentPid}:1`
 }
 
 /**

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import type { ServiceRequests } from '../../core/api.js'
-import type { RegisteredSession } from '../../lib/registry.js'
-import type { RuntimeField } from '../../lib/runtimeProfile.js'
+import type { RuntimeField } from '../facets/runtime.js'
 import type { EngineLive } from '../facets/live.js'
+import { transcriptFields } from '../kit/runtime.js'
 import { record, READER_REPLY_BYTES, type ReaderEngine } from './protocol.js'
 import { LiveStreams } from './liveStreams.js'
 import {
@@ -15,6 +15,10 @@ import {
 const loadLive = {
   claude: async () => (await import('../claude/live.js')).live,
   codex: async () => (await import('../codex/live.js')).live,
+}
+const loadRuntime = {
+  claude: async () => (await import('../claude/runtimeProfile.js')).runtime,
+  codex: async () => (await import('../codex/runtimeProfile.js')).runtime,
 }
 const path = (value: unknown): value is string => typeof value === 'string' && value.length <= 32_768
   && !value.includes('\0') && isAbsolute(value)
@@ -72,11 +76,13 @@ export function engineLiveRequests(engine: ReaderEngine, deps: LiveRequestDeps =
   let streams: Promise<LiveStreams> | null = null
   const get = (): Promise<LiveStreams> => streams ??= (async () => {
     const adapter = await (deps.load ?? loadLive[engine])()
-    // The runtime-profile facet is the next boundary: reuse its exact field probe during this
-    // migration rather than introducing a second, disagreeing interpretation of model metadata.
-    const profiles = deps.fields ? null : new (await import('../../lib/runtimeProfile.js')).RuntimeProfileManager()
-    const fields = deps.fields ?? ((session: LiveSession, raw: string) => profiles!.transcriptFields(session as RegisteredSession, raw))
-    return new LiveStreams(adapter, fields)
+    const runtime = deps.fields ? undefined : await loadRuntime[engine]()
+    const fields = deps.fields ?? ((session: LiveSession, raw: string) => transcriptFields(runtime, session, raw))
+    return new LiveStreams(adapter, fields, runtime ? (line) => {
+      let value: unknown
+      try { value = JSON.parse(line) } catch { return null }
+      return record(value) ? runtime.decode(value) : null
+    } : undefined)
   })().catch((error) => { streams = null; throw error })
   const forget = async (token: string): Promise<void> => {
     const old = replies.get(token)

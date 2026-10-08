@@ -1129,6 +1129,9 @@ def main():
             result['checks'].append('Harness unlock screen renders, masks input, accepts a retry after a wrong password, and unlocks after the deliberate 100-second wait')
         result['installed_keyboard_readiness'] = check_graphical_keyboard(vm, 'installed')
         result['checks'].append('Installed graphical hn accepts physical-keyboard shell input, returns output and returns home after closing the pane')
+        from connections_vm import exercise as check_connections
+        result['connections'] = check_connections(vm)
+        result['checks'].append('Installed Connections opens in the browser and shares local credentials between command processes without device registration')
         if config['encrypt']:
             installed = json.loads(vm.read_file('/var/lib/harness-os/install.json'))
             budget = installed['pbkdf_memory_limit_kib']

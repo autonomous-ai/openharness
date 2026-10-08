@@ -14,6 +14,7 @@
  */
 export { engineTranscriptFor } from '../engines/transcripts.js'
 export { liveFor } from '../engines/live.js'
+export { runtimeFor } from '../engines/runtime.js'
 export { startGateway } from '../gateway/start.js'
 export { startCommandBar } from './commandBar.js'
 export { startDevices } from './devices.js'

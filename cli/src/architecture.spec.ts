@@ -145,6 +145,7 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 const EDGE: RegExp[] = [
   // The pilot reader implementations and their host are never loaded by supervised core.
   /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
+  /^engines\/(runtime|(claude|codex)\/runtimeProfile)\.ts$/, /^lib\/runtimeProfile\.ts$/,
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Envelope|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
@@ -204,6 +205,14 @@ describe('the daemon\'s shape', () => {
     expect(wrong, 'Inject the live facet; do not construct or edit an engine parser in core.').toEqual([])
     for (const entry of ['lib/attachTranscript.ts', 'engines/kit/events.ts', 'engines/kit/transcriptFold.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
+    }
+  })
+
+  it('runtime profile authority and wire values load contracts without vendor profile implementations', () => {
+    for (const entry of ['core/engines/runtimeSessions.ts', 'core/engines/runtimeProfiles.ts',
+      'core/engines/runtimeTransport.ts', 'lib/runtimeProfileWire.ts', 'lib/runtimeProfileManager.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
+      expect(closureOf(entry).has('lib/runtimeProfile.ts'), entry).toBe(false)
     }
   })
 
