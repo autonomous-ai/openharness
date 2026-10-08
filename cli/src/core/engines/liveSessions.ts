@@ -38,6 +38,8 @@ export interface LiveSessionDeps {
   transport: LiveTransport
   bySession(id: string): RegisteredSession | undefined
   frame(session: RegisteredSession, frame: LiveFrame): void
+  /** Reduce side evidence before acknowledging the page; the returned commit must be synchronous. */
+  prepareFrames?(session: RegisteredSession, frames: readonly LiveFrame[]): Promise<() => boolean>
   reattach(session: RegisteredSession): Promise<unknown>
   watch(path: string): void
   unwatch(path: string): void
@@ -151,18 +153,24 @@ export function createLiveSessions(deps: LiveSessionDeps) {
           throw error
         }
         if (!valid(state) || states.get(id) !== state || state.epoch !== epoch) return
+        const session = deps.bySession(id)!
+        if (deps.prepareFrames) {
+          const commit = await deps.prepareFrames(session, page.frames)
+          if (!valid(state) || states.get(id) !== state || state.epoch !== epoch) return
+          if (!commit()) throw new EngineLiveError('ENGINE_STALE_REPLY')
+        }
         state.ask.cursor = page.cursor
         errors.delete(id)
-        const session = deps.bySession(id)!
         for (const frame of page.frames) {
           try { deps.frame(session, frame) } catch (error) { report(id, error) }
         }
         more = page.more
       }
     })()
-    try { await tail.running } finally {
+    let failed = false
+    try { await tail.running } catch (error) { failed = true; tail.dirty = true; throw error } finally {
       tail.running = null
-      if (tail.dirty) schedule(id)
+      if (tail.dirty) schedule(id, failed ? 1_000 : 40)
     }
   }
   const removeSession = async (id: string): Promise<void> => {
@@ -182,7 +190,8 @@ export function createLiveSessions(deps: LiveSessionDeps) {
   return {
     handles: deps.handles,
     current(session: RegisteredSession): boolean { return states.get(session.sessionId)?.identity === transcriptReadIdentity(session) },
-    async prepare(session: RegisteredSession, options: { live: boolean; end?: number }, observe: (frame: LiveFrame) => void): Promise<PreparedLive> {
+    async prepare(session: RegisteredSession, options: { live: boolean; end?: number }, observe: (frame: LiveFrame) => void,
+      observePage?: (frames: readonly LiveFrame[]) => Promise<void>): Promise<PreparedLive> {
       // A retry has no original attach flags. Keep first-turn delivery intent until activation;
       // otherwise a failed first prepare turns the user's completed first response into silent history.
       if (options.live) firstLive.set(session.sessionId, transcriptReadIdentity(session))
@@ -194,6 +203,10 @@ export function createLiveSessions(deps: LiveSessionDeps) {
         for (;;) {
           const page = await pull(state.ask)
           if (!valid(state)) throw new EngineLiveError('ENGINE_STALE_REPLY')
+          if (observePage) {
+            await observePage(page.frames)
+            if (!valid(state)) throw new EngineLiveError('ENGINE_STALE_REPLY')
+          }
           state.ask.cursor = page.cursor; records += page.records; content ||= page.content
           for (const frame of page.frames) observe(frame)
           if (page.prepared) return { state, parent, parentEpoch, moves, page, records, content }

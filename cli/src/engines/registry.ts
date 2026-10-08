@@ -5,11 +5,13 @@ import { transcript as claudeTranscript } from './claude/transcript.js'
 import { transcript as codexTranscript } from './codex/transcript.js'
 import { live as claudeLive } from './claude/live.js'
 import { live as codexLive } from './codex/live.js'
+import { runtime as claudeRuntime } from './claude/runtimeProfile.js'
+import { runtime as codexRuntime } from './codex/runtimeProfile.js'
 
 /** Only the migrated engines. Others keep their existing handlers until their own small batch. */
 const engines = {
-  claude: { name: 'claude', launch: engineLaunches.claude, transcript: claudeTranscript, hooks: engineHooks.claude, live: claudeLive },
-  codex: { name: 'codex', launch: engineLaunches.codex, transcript: codexTranscript, hooks: engineHooks.codex, live: codexLive },
+  claude: { name: 'claude', launch: engineLaunches.claude, transcript: claudeTranscript, hooks: engineHooks.claude, live: claudeLive, runtime: claudeRuntime },
+  codex: { name: 'codex', launch: engineLaunches.codex, transcript: codexTranscript, hooks: engineHooks.codex, live: codexLive, runtime: codexRuntime },
 } satisfies Record<string, Engine>
 type MigratedEngine = keyof typeof engines
 export function engineFor(name: string | null | undefined): Engine | undefined {

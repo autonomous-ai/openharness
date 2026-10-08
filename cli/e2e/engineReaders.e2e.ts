@@ -1,5 +1,5 @@
 /** Private daemon/home/tmux; real supervised reader processes and the engines' recorded wire format. */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -7,7 +7,7 @@ import { IsolatedDaemon, until } from './harness/daemon.js'
 import { alive, harnessdProcesses } from './harness/endurance.js'
 
 type Engine = 'claude' | 'codex'
-type Agent = { id: string; sessionId: string; engine: Engine; processIdentity: unknown }
+type Agent = { id: string; sessionId: string; engine: Engine; processIdentity: unknown; selectedModel: string | null }
 const rows = async (client: LocalClient) => (await client.request('agents_list', {})).agents as Agent[]
 const history = (client: LocalClient, agent: Agent) => client.request('session_get', { sessionId: agent.id, limit: 10 }, 15_000)
 
@@ -41,12 +41,25 @@ describe('Claude Code and Codex readers in their own processes', () => {
   const readerPid = (d: IsolatedDaemon, engine: Engine) => harnessdProcesses(d).get(`engine-${engine}`)
   const linked = (d: IsolatedDaemon, engine: Engine) => d.log().split(`[services] engine-${engine} connected`).length - 1
 
+  it.each(['claude', 'codex'] as const)('%s keeps native runtime profiles in explicit inline mode', async engine => {
+    const { d, c } = await fresh({ HARNESSD_SERVICES: 'none' })
+    const agent = await create(d, c, engine)
+    await turn(c, agent, `inline-profile-${engine}`)
+    const selected = await until('the inline runtime profile', async () => (await rows(c)).find(row => row.id === agent.id)?.selectedModel || null)
+    expect(selected.startsWith(`runtime-v1:${agent.id}:${engine}:`)).toBe(true)
+    const catalog = await c.request('models_list', { agentId: agent.id }, 15_000)
+    expect(catalog.error, JSON.stringify(catalog)).toBeUndefined()
+    expect(catalog.models.some((option: { id: string }) => option.id === selected)).toBe(true)
+    expect(readerPid(d, engine)).toBeUndefined()
+    expect(d.coresStarted()).toBe(1)
+  })
+
   it('starts no reader for an empty core, reads pages and recap text on demand, and keeps private requests off the client router', async () => {
     const { d, c } = await fresh()
     expect(readerPid(d, 'claude')).toBeUndefined()
     expect(readerPid(d, 'codex')).toBeUndefined()
     for (const type of ['engine_history_page', 'engine_last_turn', 'engine_live_capabilities', 'engine_live_prepare',
-      'engine_live_read', 'engine_live_part', 'engine_live_close', 'engine_live_forget']) {
+      'engine_live_read', 'engine_live_part', 'engine_live_close', 'engine_live_forget', 'engine_runtime_capabilities', 'engine_runtime_read']) {
       const answer = await c.request(type, { version: 1, session: { transcriptPath: '/etc/passwd' } })
       expect(answer.error).toBe('UNSUPPORTED')
     }
@@ -63,6 +76,40 @@ describe('Claude Code and Codex readers in their own processes', () => {
       expect(readerPid(d, engine)).toBe(pid)
     }
     expect(d.coresStarted()).toBe(1)
+  })
+
+  it.each(['claude', 'codex'] as const)('%s retains its accepted profile while its worker is frozen and applies pending evidence after recovery', async engine => {
+    const { d, c } = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '60000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
+    const agent = await create(d, c, engine)
+    await turn(c, agent, `profile-before-${engine}`)
+    const before = await until('an accepted runtime profile', async () => (await rows(c)).find(row => row.id === agent.id)?.selectedModel || null)
+    const catalog = await c.request('models_list', { agentId: agent.id }, 15_000)
+    expect(catalog.error, JSON.stringify(catalog)).toBeUndefined()
+    expect(catalog.models.length).toBeGreaterThan(0)
+    const core = d.corePid(), pid = readerPid(d, engine)!
+    const registry = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8'))
+    const bound = registry.find((row: any) => row.agentId === agent.id)
+    const evidence = engine === 'claude'
+      ? { type: 'system', content: 'Set model to Sonnet\nSet effort level to high' }
+      : { type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-6-luna', reasoning_effort: 'high' } } }
+    process.kill(pid, 'SIGSTOP')
+    try {
+      appendFileSync(bound.transcriptPath, JSON.stringify(evidence) + '\n')
+      const started = Date.now()
+      const unavailable = await c.request('models_list', { agentId: agent.id }, 15_000)
+      expect(unavailable.error).toBe('INTERNAL')
+      expect(Date.now() - started).toBeLessThan(10_000)
+      expect((await rows(c)).find(row => row.id === agent.id)?.selectedModel).toBe(before)
+      expect(d.corePid()).toBe(core)
+    } finally { process.kill(pid, 'SIGCONT') }
+    const expected = `runtime-v1:${agent.id}:${engine}:${engine === 'claude' ? 'sonnet' : 'gpt-6-luna'}@high`
+    await until('pending profile evidence after worker recovery', async () => (await rows(c)).find(row => row.id === agent.id)?.selectedModel === expected || null, 30_000, 100)
+    const recovered = await c.request('models_list', { agentId: agent.id }, 15_000)
+    expect(recovered.error, JSON.stringify(recovered)).toBeUndefined()
+    expect(recovered.models.some((option: { id: string }) => option.id === expected)).toBe(true)
+    expect(d.corePid()).toBe(core)
+    expect(d.coresStarted()).toBe(1)
+    expect(alive(bound.processIdentity.pid)).toBe(true)
   })
 
   it('contains a killed or frozen reader, bounds failed reads, and recovers without restarting core or either CLI', async () => {

@@ -61,6 +61,11 @@ describe('ingesting a transcript line', () => {
       .toBeLessThan(vi.mocked(p.deps.emit).mock.invocationCallOrder[1])
     expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: false })
     expect(p.normalizers.hasState('s1')).toBe(false)
+    vi.mocked(p.deps.runtimeProfiles.ingest).mockClear()
+    p.ingest.acceptFrame('s1', 'claude', frame, true)
+    expect(p.deps.runtimeProfiles.ingest).not.toHaveBeenCalled()
+    expect(p.deps.tokenUsage.changed).toHaveBeenCalledWith(p.sessions.get('s1'))
+    expect(p.deps.emit).toHaveBeenLastCalledWith('s1', frame.events, { replay: true })
   })
 
   it('takes lines only for a registered session of the engine that wrote them', () => {

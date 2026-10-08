@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_SERVICE_OPTIONS, ENGINE_LIVE_ENV, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, UPDATER_HOST, masterRunsLiveEngines, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  DEFAULT_SERVICE_OPTIONS, ENGINE_LIVE_ENV, ENGINE_RUNTIME_ENV, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, UPDATER_HOST, masterRunsLiveEngines, masterRunsEngineRuntime, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
   type ServiceSpec, type ServiceSupervisorOptions,
 } from './services.js'
 import type { CoreHandle } from './supervisor.js'
@@ -472,15 +472,15 @@ describe('which services the core leaves to its master', () => {
 
   it('is what the master says it runs, told in a form a core from before the list reads too', () => {
     const specs = serviceSpecs({ HARNESSD_SERVICES: 'search,workspaces' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(specs, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,workspaces', HARNESSD_SERVICES: 'search,workspaces', [ENGINE_LIVE_ENV]: '42:1' })
+    expect(serviceProcessesEnv(specs, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,workspaces', HARNESSD_SERVICES: 'search,workspaces', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1' })
     // A process named as one of its services is named whole: the viewers' process runs the Store beside them.
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'viewers' }, SERVICE_HOSTS), 42)).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'viewers,store' })
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'store' }, SERVICE_HOSTS), 42)).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'store' })
     // By service, not by process: a core from before the edge host routes the services it knows of it.
     const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(hosted, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell', [ENGINE_LIVE_ENV]: '42:1' })
+    expect(serviceProcessesEnv(hosted, 42)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted, 42) }, known)]).toEqual(['workspaces'])
-    expect(serviceProcessesEnv([], 42)).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none', [ENGINE_LIVE_ENV]: '42:1' })
+    expect(serviceProcessesEnv([], 42)).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none', [ENGINE_LIVE_ENV]: '42:1', [ENGINE_RUNTIME_ENV]: '42:1' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs, 42) }, known)]).toEqual(['search', 'workspaces'])
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv([], 42) }, known)]).toEqual([])
     // What the master says wins over whatever HARNESSD_SERVICES the core inherited; names it does not know are its own.
@@ -503,6 +503,18 @@ describe('which services the core leaves to its master', () => {
     expect(masterRunsLiveEngines({ ...env, [ENGINE_LIVE_ENV]: '42:2' }, 42)).toBe(false)
     expect(masterRunsLiveEngines({ ...env, HARNESSD_SUPERVISED: undefined }, 42)).toBe(false)
     expect(masterRunsLiveEngines({ ...env, HARNESSD_SERVICE_TOKEN: undefined }, 42)).toBe(false)
+  })
+
+  it('accepts runtime profile support only from the actual supervising parent, independently of live support', () => {
+    const env = { ...supervised, ...serviceProcessesEnv([], 42) }
+    expect(masterRunsEngineRuntime(env, 42)).toBe(true)
+    expect(masterRunsEngineRuntime(env, 43)).toBe(false)
+    expect(masterRunsEngineRuntime(supervised, 42)).toBe(false)
+    expect(masterRunsEngineRuntime({ ...env, [ENGINE_RUNTIME_ENV]: '1' }, 42)).toBe(false)
+    expect(masterRunsEngineRuntime({ ...env, [ENGINE_RUNTIME_ENV]: '42:2' }, 42)).toBe(false)
+    expect(masterRunsEngineRuntime({ ...env, HARNESSD_SUPERVISED: undefined }, 42)).toBe(false)
+    expect(masterRunsEngineRuntime({ ...env, HARNESSD_SERVICE_TOKEN: undefined }, 42)).toBe(false)
+    expect(masterRunsLiveEngines({ ...env, [ENGINE_RUNTIME_ENV]: undefined }, 42)).toBe(true)
   })
 
   it('is none without a master, or without the token its services would connect with', () => {
