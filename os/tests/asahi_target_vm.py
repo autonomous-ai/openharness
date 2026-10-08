@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native Asahi partition-preparation test on a fresh, owned sparse VM disk."""
 import argparse
+from vm_artifacts import discard_passed_disks
 import json
 from pathlib import Path
 import platform
@@ -83,9 +84,13 @@ def main():
         try:
             if vm:
                 vm.close()
+        except BaseException as error:
+            receipt.update(status='failed', cleanup_error=str(error))
+            raise
         finally:
             receipt['finished_at'] = time.time()
             (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+            discard_passed_disks(output, receipt, maintenance, disk)
     if receipt['status'] != 'passed':
         raise SystemExit(1)
 

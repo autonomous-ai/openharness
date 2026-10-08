@@ -5,6 +5,7 @@ This native Apple Silicon-host VM checks the image, not physical Apple hardware.
 It never opens a host disk and never modifies the declared source image.
 """
 import argparse
+from vm_artifacts import discard_passed_disks
 import json
 from pathlib import Path
 import platform
@@ -238,7 +239,12 @@ def main():
             vm.close()
         receipt['finished_at'] = time.time()
         receipt['source_unchanged'] = digest(source) == args.sha256
+        if not receipt['source_unchanged']:
+            receipt.update(status='failed', error='Original source image changed.')
         (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+        discard_passed_disks(output, receipt, disk)
+    if receipt['status'] != 'passed':
+        raise SystemExit(1)
 
 
 if __name__ == '__main__':
