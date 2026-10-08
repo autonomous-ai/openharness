@@ -743,6 +743,57 @@ void main() {
     expect(fixture.connection.requests('agent_create').single['engine'], 'opencode');
   });
 
+  // Someone who installed Harness to run the Claude Code or Codex they already
+  // pay for opened on OpenCode's free model.
+  group('with nothing remembered, the box opens on the agent the person uses', () {
+    Map<String, dynamic> probe({bool claudeIn = true, int claudeAt = 2, int codexAt = 1}) => {
+      'engines': [
+        {'engine': 'opencode', 'installed': false, 'installable': true},
+        {'engine': 'claude', 'installed': true, 'signedIn': claudeIn, 'lastUsedAt': claudeAt},
+        {'engine': 'codex', 'installed': true, 'signedIn': true, 'lastUsedAt': codexAt},
+      ],
+    };
+    Future<NewHarnessController> open(_Fixture fixture) async {
+      final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
+      addTearDown(box.dispose);
+      await _settle();
+      return box;
+    }
+
+    test('the one used most recently when both are signed in', () async {
+      final fixture = _Fixture();
+      fixture.connection.replies['engines_probe'] = (_) => probe();
+      expect((await open(fixture)).engine, 'claude');
+      final codexLater = _Fixture();
+      codexLater.connection.replies['engines_probe'] = (_) => probe(codexAt: 3);
+      expect((await open(codexLater)).engine, 'codex');
+    });
+
+    test('only a signed-in one', () async {
+      final fixture = _Fixture();
+      fixture.connection.replies['engines_probe'] = (_) => probe(claudeIn: false, claudeAt: 9);
+      expect((await open(fixture)).engine, 'codex');
+    });
+
+    test('a remembered choice still wins', () async {
+      final fixture = _Fixture();
+      fixture.connection.replies['engines_probe'] = (_) => probe();
+      await fixture.app.agentPreference.select('opencode');
+      expect((await open(fixture)).engine, 'opencode');
+    });
+
+    test('the product default when no agent is signed in', () async {
+      final fixture = _Fixture();
+      fixture.connection.replies['engines_probe'] = (_) => {
+        'engines': [
+          {'engine': 'claude', 'installed': true, 'signedIn': false},
+          {'engine': 'codex', 'installed': false, 'installable': true},
+        ],
+      };
+      expect((await open(fixture)).engine, 'opencode');
+    });
+  });
+
   test('a remembered agent that is no longer installed still asks for a replacement', () async {
     final fixture = _Fixture();
     fixture.connection.replies['engines_probe'] = (_) => {

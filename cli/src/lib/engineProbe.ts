@@ -34,6 +34,7 @@ import { ENGINES, type AgentEngine } from '../engines/types.js'
 import { engineBin, enginePathOverride } from './engineBin.js'
 import { commandAvailableInInteractiveShell } from './engineLaunch.js'
 import { engineInstallRecipe } from './engineInstall.js'
+import { engineAccount } from './engineAccount.js'
 
 /** One engine's answer for one machine. */
 export interface EngineAvailability {
@@ -44,6 +45,10 @@ export interface EngineAvailability {
   readonly command: string | null
   /** Whether Harness can apply the official recipe without overriding a custom launch path. */
   readonly installable: boolean
+  /** Claude Code and Codex, when installed: is a credential there (engineAccount.ts). */
+  readonly signedIn?: boolean | null
+  /** Claude Code and Codex, when installed: the engine's latest session activity, ms. */
+  readonly lastUsedAt?: number | null
 }
 
 /**
@@ -106,11 +111,16 @@ export async function probeEngines(
           installed = false
         }
       }
+      // Lets the New Harness box open on the agent this person already uses (engineAccount.ts).
+      const account = installed && (engine === 'claude' || engine === 'codex')
+        ? await engineAccount(engine).catch(() => null)
+        : null
       results[index] = {
         engine,
         installed,
         command,
         installable: !installed && command !== null && recipe !== undefined,
+        ...(account ? { signedIn: account.signedIn, lastUsedAt: account.lastUsedAt } : {}),
       }
     }
   }

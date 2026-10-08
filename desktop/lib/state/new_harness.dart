@@ -527,7 +527,11 @@ class NewHarnessController extends ChangeNotifier {
     );
     // What the machine has is asked when the box opens, as the form does: an
     // engine installed in a terminal a minute ago is otherwise still "missing".
-    unawaited(app.probeEngines(_machineId, force: true));
+    unawaited(
+      app
+          .probeEngines(_machineId, force: true)
+          .then((_) => _adoptAccountAgent()),
+    );
     final initialMachine = _machineId;
     unawaited(
       app.probeDsh(initialMachine, force: true).then((_) {
@@ -649,11 +653,62 @@ class NewHarnessController extends ChangeNotifier {
       _engineRemembered = requested == null;
       return remembered;
     }
+    // Nothing remembered: the agent this person already uses, when the
+    // machine says it is installed and signed in, before the product default.
+    // Everyone opened on OpenCode's free model, including people who
+    // installed Harness to run the Claude Code or Codex they pay for.
+    if (_harnessId == null) {
+      final account = _accountAgent();
+      if (account != null && allowed.contains(account)) return account;
+    }
     final preferred = allowed.contains(defaultHarnessEngine)
         ? defaultHarnessEngine
         : selectedHarness?.engine;
     if (preferred != null && allowed.contains(preferred)) return preferred;
     return allowed.first;
+  }
+
+  /// Claude Code or Codex, installed and signed in on the chosen machine; the
+  /// one used most recently when both are. Null until the machine has said.
+  String? _accountAgent() {
+    final engines = _machine?.engines;
+    if (engines == null || !engines.loaded) return null;
+    String? best;
+    var bestAt = -1;
+    for (final id in const ['claude', 'codex']) {
+      final engine = engines[id];
+      if (engine == null || !engine.installed || engine.signedIn != true) {
+        continue;
+      }
+      final at = engine.lastUsedAt ?? 0;
+      if (best == null || at > bestAt) {
+        best = id;
+        bestAt = at;
+      }
+    }
+    return best;
+  }
+
+  /// The machine's engines answered after the box opened. While the person
+  /// has not chosen and nothing was remembered, open on the agent they use.
+  void _adoptAccountAgent() {
+    if (_disposed ||
+        locked ||
+        _selectionTouched ||
+        _initialAgentExplicit ||
+        _engineRemembered ||
+        _harnessId != null) {
+      return;
+    }
+    final next = _initialEngine(null);
+    if (next == _engine) return;
+    _engine = next;
+    _restorePermissionMode();
+    if (_project.generated != null) {
+      _project = _generatedProject();
+      unawaited(_refreshGeneratedProject());
+    }
+    _refresh();
   }
 
   String _machineId;
