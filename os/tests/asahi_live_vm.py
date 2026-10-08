@@ -5,6 +5,7 @@ Only fresh regular test disks are writable. QEMU supplies a firmware device-tree
 ESP identity; it does not emulate Apple's boot policy or physical hardware.
 """
 import argparse
+from vm_artifacts import discard_passed_disks
 import json
 from pathlib import Path
 import platform
@@ -218,6 +219,7 @@ def main():
             if not receipt['original_media_unchanged'] or not receipt['original_payload_unchanged']:
                 receipt.update(status='failed', error='An original input image changed.')
             (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+            discard_passed_disks(output, receipt, maintenance, disk)
 
 
 if __name__ == '__main__':
