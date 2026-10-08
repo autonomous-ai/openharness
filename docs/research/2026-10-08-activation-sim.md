@@ -51,6 +51,9 @@ vendor binaries, so their real login screens appear.
 | A1 | desktop 1.2.59, CLI release | A | yes (OpenCode free model) | ~80 s machine + forced picker | blocker: "OpenCode is unavailable. Choose an agent." | restored; Local Network prompt | **~69** |
 | A2 | branch (fa64b0e15), CLI release | A | yes | box ready ≤ 45 s, result 39 s after Enter (~85 s) | none | restored, no prompt; "Untitled Pane" (fixed in f8ca37071) | **~92** |
 | A3 | branch (916f244d7 + Git fixes), branch CLI | A | yes | box ≤ 45 s on first open; OpenCode installed in the background 8.6 s after the daemon; result 29 s after Enter, 54 s after opening (incl. ~20 s typing) | none | restored, no prompt; second harness in the same project ran in 14 s after the Git fixes | **~97** |
+| B2 | branch, CLI 9.0.2 preinstalled | B, signed in (fake) | yes | box opens on Claude Code; first message answered at once (fake) | none | second harness "Untitled Pane" (fixed e71fb2644) | — |
+| B3 | branch, CLI 9.0.2 preinstalled | B, not signed in, Anthropic blocked | no (network) | — | error now stays in the pane; recovery via the header's Change agent | — | — |
+| D1 | branch, CLI 9.0.2 preinstalled | D, both signed in (fake), Codex last | yes | box opens on Codex; answered within 12 s of Enter | none | — | — |
 | B1 | branch, CLI release | B, Claude Code 2.1.294 installed, not signed in | no | — | default still OpenCode; picker shows no install state; Claude Code exited at start ("Unable to connect to Anthropic services", transient network) and its pane vanished: user back on an empty box with a stray "Terminal harness" | — | **~20** |
 
 ## Findings
@@ -99,6 +102,26 @@ vendor binaries, so their real login screens appear.
     after it). The misleading "main" branch chip went with it.
 11. Background install works: OpenCode 8.6 s, Claude Code 13.3 s, Codex 20.3 s, Pi 11.3 s, one at a
     time, all done about a minute after opening; the first harness never installed in its pane.
+
+### B2 — Claude Code installed and signed in (fake engine; CLI preinstalled)
+
+12. The box now opens on Claude Code (b989c2760); the picker marks Claude Code Installed, Codex
+    Needs sign-in (the background install added it), OpenCode Installed, the rest Installs on start
+    (69c98f770, 8002fcbd5 — the composer's dropdown is a different widget from the form's list).
+13. A second harness in the existing project read "Untitled Pane": only generated projects named
+    their agent. A first message now names it wherever it starts (e71fb2644).
+
+### B3 — Claude Code installed, not signed in, Anthropic unreachable
+
+14. The box keeps OpenCode (Claude Code is not signed in) and marks Claude Code Needs sign-in.
+15. Picking Claude Code anyway: it exits with "Unable to connect to Anthropic services". The pane now
+    stays, with that message and "claude exited (1). This pane is a shell now" (fc88462b5). The
+    pane header's agent name opens Change agent; OpenCode there starts in the same folder. The
+    first task is not carried to it (Claude Code never took it) — still to do.
+
+### D1 — Claude Code and Codex, both signed in, Codex used last (fake engines)
+
+16. The box opens on Codex; the first task reached it and the pane is named after it.
 
 ## Next
 
