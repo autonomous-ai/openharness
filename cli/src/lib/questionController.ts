@@ -43,7 +43,8 @@ export function shapeQuestions(questions: unknown): ShapedQuestion[] {
   })
 }
 
-function rowKeys(engine: AgentEngine, row: QuestionRow): string[] {
+/** The keys that answer `row` of a dialog `engine` drew; exported for the golden that pins them (engines/otherScreens.golden.spec.ts). */
+export function rowKeys(engine: AgentEngine, row: QuestionRow): string[] {
   if (engine === 'amp') return ampSelectionKeys(row)
   // Kilo's rows sit side by side, so its walk is horizontal — see engines/kilo/askQuestion.ts.
   if (engine === 'kilo') return kiloSelectionKeys(row)
