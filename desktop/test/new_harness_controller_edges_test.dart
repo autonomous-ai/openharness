@@ -703,6 +703,44 @@ void main() {
     },
   );
 
+  // A fresh Mac has none of the agents. The product default installs in its
+  // pane on Create; asking for a replacement stopped every first harness.
+  test('a fresh computer starts the default agent, which installs on Create', () async {
+    final fixture = _Fixture();
+    fixture.connection.replies['engines_probe'] = (_) => {
+      'engines': [
+        {'engine': 'opencode', 'installed': false, 'installable': true},
+        {'engine': 'claude', 'installed': false, 'installable': true},
+        {'engine': 'codex', 'installed': false, 'installable': true},
+      ],
+    };
+    final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
+    addTearDown(box.dispose);
+    await _settle();
+    expect(box.engine, 'opencode');
+    expect(fixture.app.stateOf('m')!.engines['opencode']!.installed, isFalse);
+    expect(box.requiredChoice, isNull);
+    box.task = 'Make a small web page';
+    expect(await box.create(), NewHarnessOutcome.created);
+    expect(fixture.connection.requests('agent_create').single['engine'], 'opencode');
+  });
+
+  test('a remembered agent that is no longer installed still asks for a replacement', () async {
+    final fixture = _Fixture();
+    fixture.connection.replies['engines_probe'] = (_) => {
+      'engines': [
+        {'engine': 'claude', 'installed': false, 'installable': true},
+        {'engine': 'codex', 'installed': true},
+      ],
+    };
+    await fixture.app.agentPreference.select('claude');
+    final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
+    addTearDown(box.dispose);
+    await _settle();
+    expect(box.engine, 'claude');
+    expect(box.requiredChoice?.message, 'Claude Code is unavailable. Choose an agent.');
+  });
+
   test('a harness removed during the launch probe requires an explicit replacement', () async {
     final fixture = _Fixture();
     final box = fixture.box(harnessId: 'autonomous/blender');

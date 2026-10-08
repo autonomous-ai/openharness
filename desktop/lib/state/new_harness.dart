@@ -622,7 +622,15 @@ class NewHarnessController extends ChangeNotifier {
       ? [for (final engine in allEngines) engine.id, kTerminalEngine]
       : selectedHarness?.supportedEngines ??
             [knownHarnessBase[canonicalHarnessId(_harnessId!)] ?? 'claude'];
+  /// Whether [_engine] is this person's own earlier choice rather than the
+  /// product default. Only a remembered agent that is gone asks for a
+  /// replacement: the default is installed in its pane on Create, and asking a
+  /// brand-new user to replace it stopped every first harness on a fresh Mac
+  /// (2026-10-08, "OpenCode is unavailable. Choose an agent.").
+  bool _engineRemembered = false;
+
   String _initialEngine(String? requested) {
+    _engineRemembered = false;
     final allowed = compatibleEngines;
     final remembered =
         requested ??
@@ -638,6 +646,7 @@ class NewHarnessController extends ChangeNotifier {
             !_desktopChoices ||
             allowed.contains(remembered) ||
             _harnessId == app.agentPreference.successfulLaunch?.harnessId)) {
+      _engineRemembered = requested == null;
       return remembered;
     }
     final preferred = allowed.contains(defaultHarnessEngine)
@@ -1332,6 +1341,7 @@ class NewHarnessController extends ChangeNotifier {
     }
     if (!compatibleEngines.contains(_engine) ||
         (_rememberedAgent &&
+            _engineRemembered &&
             !_selectionTouched &&
             machine.engines[_engine]?.installed == false)) {
       return (
