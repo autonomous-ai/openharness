@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createForgetSession, type ForgetDeps } from './forget.js'
+import { createRelaunchMarks } from '../transcripts/relaunch.js'
 
 // Cursor's queued Tasks are cleared through the core's own door to them (core/engines/cursorTasks.ts).
 vi.mock('../engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
@@ -60,6 +61,15 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
 
 describe('forgetting a session', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.mocked(removePendingCursorTasks).mockClear() })
+
+  it('drops a crash-resume boundary when the conversation is stopped or unbound', () => {
+    const { deps } = setup()
+    const marks = createRelaunchMarks()
+    marks.note('s1', 20, true)
+    marks.read('s1')
+    createForgetSession({ ...deps, relaunchMarks: marks })('a1', { keepAgent: true })
+    expect(marks.size).toBe(0)
+  })
 
   it('releases a session and keeps its agent: everything per-session goes, the agent and its tiles stay', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})

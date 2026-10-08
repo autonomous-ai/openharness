@@ -103,6 +103,29 @@ describe('what the machine does to the daemon', () => {
     client.close()
   })
 
+  it.each(['claude', 'codex'] as const)('%s: the engine dies mid-turn while its shell survives: resume never reopens the interrupted turn', async engine => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `engine-crash-${engine}`)
+    client.send('message', { agentId: agent.id, content: '!slow 8000' })
+    await client.next(isTurn('turn_started', agent.id), 30_000, 'turn_started')
+    const working = await until('the isolated engine to read as working', async () => {
+      const now = await row(client, agent.id)
+      return now?.activity?.state === 'working' && now.processIdentity?.pid ? now : null
+    }, 15_000, 250)
+    // This PID came from the disposable daemon's private pane, never the owner's daemon or client.
+    expect(working.cwd).toBe(join(d.projectsDir, `engine-crash-${engine}`))
+    const killedAt = client.frames.length
+    process.kill(working.processIdentity.pid, 'SIGKILL')
+    await until('the engine to be retained as stopped', async () => down(await row(client, agent.id)) || null, 45_000, 500)
+    expect(await d.tmux.run('display-message', '-p', '-t', working.tmuxPane, '#{pane_dead}')).toBe('0')
+    await reopen(client, agent, 'back after the engine died mid-turn')
+    expect(client.frames.slice(killedAt).filter(isTurn('turn_started', agent.id)).map(frame => frame.payload?.userMessage))
+      .toEqual(['back after the engine died mid-turn'])
+    expect(d.coresStarted()).toBe(1)
+    client.close()
+  })
+
   it('the machine restarts while the daemon is down: every agent comes back on its own, with its conversation', async () => {
     const d = await fresh()
     let client = await LocalClient.connect(d)
