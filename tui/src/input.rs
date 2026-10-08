@@ -3588,7 +3588,8 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
     let chosen = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
     if let Some(b) = &menu.buttons {
         // Only a button does anything: the notes, the blank row and the gaps and hint keep the dialog.
-        let hit = if chosen { b.row.click(m.x, m.y, px + 2 + width, py + count) } else { None };
+        let [_, row] = crate::workspace_menu::dialog_rows(crate::workspace_menu::dialog_box(&menu));
+        let hit = if chosen { b.row.click(row, ratatui::layout::Position::new(m.x, m.y)) } else { None };
         if let Some(command) = hit.and_then(|i| b.actions.get(i)).cloned() { return commands::execute_in(app, &command, menu.mouse.clone()) }
         app.modal = Some(Modal::Menu(menu));
         return;
@@ -3709,16 +3710,16 @@ mod tests {
         };
         ask(&mut app);
         let Some(Modal::Menu(m)) = &app.modal else { panic!("closed") };
-        let (right, y) = (m.x + 2 + m.width, m.y + 1 + m.items.len() as u16 + 1);
-        let cells = m.buttons.as_ref().unwrap().row.cells(right);
+        let y = m.y + 1 + m.items.len() as u16 + 1;
+        let (_, cells) = m.buttons.as_ref().unwrap().row.areas(ratatui::layout::Rect::new(m.x + 2, y, m.width, 1));
         let press = |x, y| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE };
-        let gap = cells[0].1 + cells[0].2;
+        let gap = cells[0].right();
         handle(&mut app, CEvent::Mouse(press(gap, y)));
         assert!(matches!(app.modal, Some(Modal::Menu(_))), "the gap between the buttons keeps the dialog");
         assert!(app.options.get("@clicked", "", None).is_none());
-        handle(&mut app, CEvent::Mouse(press(cells[1].1 + 2, y - 1)));
+        handle(&mut app, CEvent::Mouse(press(cells[1].x + 2, y - 1)));
         assert!(matches!(app.modal, Some(Modal::Menu(_))), "the blank row above the buttons does nothing");
-        handle(&mut app, CEvent::Mouse(press(cells[1].1 + 2, y)));
+        handle(&mut app, CEvent::Mouse(press(cells[1].x + 2, y)));
         assert!(app.modal.is_none());
         assert_eq!(app.options.get("@clicked", "", None).as_deref(), Some("stop"));
 

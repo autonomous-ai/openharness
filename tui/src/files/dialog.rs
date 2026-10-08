@@ -9,8 +9,9 @@ use std::time::SystemTime;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
+use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use super::{art, editor, file_style, fit, frame, home, icon, list, name_of, ops, put, shorten, tile, Entry, Look, TILE_H, TILE_W};
@@ -430,12 +431,14 @@ impl Dialog {
         c.selected().filter(|e| !e.dir).map(|e| (c.dir.join(&e.name), e))
     }
 
-    /// The buttons at the right of the bottom row: Cancel, Open.
-    fn buttons(&self) -> [(u16, u16, &'static str); 2] {
-        const LABELS: [&str; 2] = ["[ Cancel ]", "[ Open ]"];
-        let cells = self.row().cells(self.size.0.saturating_sub(2));
-        [0, 1].map(|i| { let (_, x, w) = cells[i]; (x, x + w, LABELS[i]) })
+    /// The bottom row's buttons (Cancel, Open) at its right, inside the frame: for drawing and
+    /// clicks alike.
+    fn button_row(&self) -> Rect {
+        Rect::new(0, layout(self.size.0, self.size.1).bottom, self.size.0.saturating_sub(2), 1)
     }
+
+    /// Where Cancel and Open are.
+    fn buttons(&self) -> Vec<Rect> { self.row().areas(self.button_row()).1 }
 
     /// A click at (x, y), a [double] one opening what it is on.
     pub(super) fn click(&mut self, x: u16, y: u16, double: bool) -> DOut {
@@ -460,7 +463,7 @@ impl Dialog {
             return DOut::None;
         }
         if y == l.bottom {
-            match self.buttons().iter().position(|(a, z, _)| x >= *a && x < *z) { Some(0) => return DOut::Cancel, Some(_) => return self.open(self.target()), None => {} }
+            match self.row().click(self.button_row(), Position::new(x, y)) { Some(0) => return DOut::Cancel, Some(_) => return self.open(self.target()), None => {} }
             return DOut::None;
         }
         if contains(l.side, x, y) {
@@ -557,11 +560,11 @@ impl Dialog {
         self.draw_sidebar(buf, area, l, look);
         match self.view { DView::Columns => self.draw_columns(buf, area, l, look), DView::Icons => self.draw_icons(buf, area, l, look) }
         // The bottom row: what was said, else the keys; Cancel and Open.
-        let buttons = self.buttons();
-        let room = buttons[0].0.saturating_sub(3);
+        let room = self.buttons()[0].x.saturating_sub(3);
         let (text, st) = match &self.message { Some(m) => (m.clone(), look.warn), None => ("Enter open · Esc cancel · Tab sidebar/columns/buttons · / search".to_string(), look.muted) };
         put(buf, ox + 2, oy + l.bottom, room, &fit(&text, room as usize), st);
-        self.row().draw(buf, ox, ox + self.size.0.saturating_sub(2), oy + l.bottom, &crate::settings::chrome());
+        let row = self.button_row();
+        self.row().view(&crate::settings::chrome()).render(Rect { x: ox + row.x, y: oy + row.y, ..row }, buf);
         if let Some((items, sel)) = &self.popup {
             let (px, py, pw) = self.popup_at();
             let r = Rect::new(ox + px, oy + py, pw, items.len() as u16 + 2).intersection(area);
@@ -741,7 +744,7 @@ mod tests {
             let area = Rect::new(0, 0, 130, 34);
             let mut buf = Buffer::empty(area);
             d.draw(&mut buf, area, &Look::default());
-            let [(cx, ..), (ox, ..)] = d.buttons();
+            let (cx, ox) = (d.buttons()[0].x, d.buttons()[1].x);
             assert_eq!(buf[(ox + 2, 32)].bg, c.selected.bg.unwrap());
             assert_ne!(buf[(cx + 2, 32)].bg, c.selected.bg.unwrap());
         }
@@ -814,7 +817,7 @@ mod tests {
         d.key(k(KeyCode::Right));
         assert_eq!(d.key(k(KeyCode::Enter)), DOut::Open(s.0.join("me/app/main.py"), false));
         let mut e = s.dialog();
-        let (ox, ..) = e.buttons()[1];
+        let ox = e.buttons()[1].x;
         assert_eq!(e.click(ox + 1, layout(130, 34).bottom, false), DOut::Open(s.0.join("me"), true));
         // Recent: the latest first, once each, those still there.
         let recent = load_recent(&s.0.join("state/open-recent.json"));

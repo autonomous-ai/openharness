@@ -280,8 +280,11 @@ fn rebind(app: &mut App, command: &str, title: &str, own: bool, chord: crate::ke
 /// its surface, muted and accent text, and the backdrop laid over the panes behind it.
 pub struct Chrome { pub base: Style, pub muted: Style, pub accent: Style, pub backdrop: Style, pub selected: Style }
 
-pub fn chrome() -> Chrome {
-    if theme::no_color() {
+pub fn chrome() -> Chrome { chrome_with(theme::no_color()) }
+
+/// [chrome] with NO_COLOR decided by the caller, not by the environment.
+pub fn chrome_with(no_color: bool) -> Chrome {
+    if no_color {
         let base = Style::default();
         return Chrome { base, muted: base.add_modifier(Modifier::DIM), accent: base.add_modifier(Modifier::BOLD), backdrop: base.add_modifier(Modifier::DIM), selected: base.add_modifier(Modifier::REVERSED) };
     }

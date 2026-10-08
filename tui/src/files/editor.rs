@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
+use ratatui::widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -447,8 +448,8 @@ impl Editor {
     /// A click (or a drag, [drag]) at (x, y): the cursor there; a drag selects from where it went down.
     pub(super) fn click(&mut self, x: u16, y: u16, drag: bool) {
         if let Some(focus) = self.asking {
-            let (_, buttons, by) = self.ask_layout();
-            if let Some(b) = buttons.iter().position(|(a, z, _)| y == by && x >= *a && x < *z) { let _ = self.answer(b); } else { self.asking = Some(focus) }
+            let (_, row) = self.ask_layout();
+            if let Some(b) = self.ask_row().click(row, Position::new(x, y)) { let _ = self.answer(b); } else { self.asking = Some(focus) }
             return;
         }
         let (_, r) = self.text_area();
@@ -533,25 +534,20 @@ impl Editor {
         let st = if self.message.is_some() && self.bar.is_none() { look.accent } else { look.muted };
         put(buf, ox + 1, sy, w.saturating_sub(2), &super::fit(&status, w.saturating_sub(2) as usize), st);
         if self.asking.is_some() {
-            let (r, _, by) = self.ask_layout();
+            let (r, row) = self.ask_layout();
             let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height).intersection(area);
             frame(buf, r, look.warn);
             put(buf, r.x + 2, r.y + 1, r.width.saturating_sub(4), &format!("Save changes to '{}'?", name_of(&self.path)), look.text);
-            self.ask_row().draw(buf, r.x, (r.x + r.width).saturating_sub(2), oy + by, &crate::settings::chrome());
+            self.ask_row().view(&crate::settings::chrome()).render(Rect { x: ox + row.x, y: oy + row.y, ..row }, buf);
         }
     }
 
-    /// The "Save changes?" box in the middle, its buttons' columns and words, and their row.
-    fn ask_layout(&self) -> (Rect, [(u16, u16, &'static str); 3], u16) {
-        const LABELS: [&str; 3] = ["[ Don't save ]", "[ Cancel ]", "[ Save ]"];
-        let row = self.ask_row();
+    /// The "Save changes?" box in the middle, and its buttons' row (for drawing and clicks alike).
+    fn ask_layout(&self) -> (Rect, Rect) {
         let q = format!("Save changes to '{}'?", name_of(&self.path)).width() as u16 + 4;
-        let w = q.max(row.buttons_width() + 4).min(self.size.0);
+        let w = q.max(self.ask_row().buttons_width() + 4).min(self.size.0);
         let r = Rect::new(self.size.0.saturating_sub(w) / 2, self.size.1.saturating_sub(5) / 2, w, 5);
-        let by = r.y + 3;
-        let cells = row.cells((r.x + r.width).saturating_sub(2));
-        let buttons = [0, 1, 2].map(|i| { let (_, x, w) = cells[i]; (x, x + w, LABELS[i]) });
-        (r, buttons, by)
+        (r, Rect::new(r.x + 2, r.y + 3, r.width.saturating_sub(4), 1))
     }
 }
 
@@ -715,10 +711,15 @@ mod tests {
         let mut e = Editor::open(&p, "b.txt".into()).unwrap();
         typing(&mut e, "y");
         e.key(k(KeyCode::Esc));
-        let (_, buttons, by) = e.ask_layout();
-        assert_eq!(buttons.map(|b| b.2), ["[ Don't save ]", "[ Cancel ]", "[ Save ]"]);
+        let (_, row) = e.ask_layout();
+        let (_, buttons) = e.ask_row().areas(row);
+        let by = row.y;
         let area = Rect::new(0, 0, 80, 24);
-        let bg = |e: &mut Editor, b: usize| { let mut buf = Buffer::empty(area); e.draw(&mut buf, area, &Look::default()); buf[(buttons[b].0 + 2, by)].bg };
+        let screen = |e: &mut Editor| { let mut buf = Buffer::empty(area); e.draw(&mut buf, area, &Look::default()); buf };
+        let shown = screen(&mut e);
+        let words: Vec<String> = buttons.iter().map(|b| (b.x..b.right()).map(|x| shown[(x, by)].symbol()).collect()).collect();
+        assert_eq!(words, ["[ Don't save ]", "[ Cancel ]", "[ Save ]"]);
+        let bg = |e: &mut Editor, b: usize| screen(e)[(buttons[b].x + 2, by)].bg;
         if !crate::theme::no_color() {
             let c = crate::settings::chrome();
             assert_eq!(bg(&mut e, 2), c.selected.bg.unwrap());

@@ -20,8 +20,9 @@ use std::time::SystemTime;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::Widget;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, At, Placement};
@@ -862,8 +863,8 @@ impl Files {
 
     fn click_at(&mut self, x: u16, y: u16, double: bool, g: Geom) -> Outcome {
         if self.confirm.is_some() {
-            let (_, _, buttons, by) = self.confirm_layout(g);
-            if let Some(b) = buttons.iter().position(|(a, z, _)| y == by && x >= *a && x < *z) { if b == 1 { self.confirmed() } else { self.confirm = None } }
+            let (.., row) = self.confirm_layout(g);
+            if let Some(b) = self.confirm_row().click(row, Position::new(x, y)) { if b == 1 { self.confirmed() } else { self.confirm = None } }
             return Outcome::None;
         }
         if self.prompt.is_some() {
@@ -1190,18 +1191,17 @@ impl Files {
             put(buf, r.x + 2, r.y + 2, r.width.saturating_sub(4), "Enter OK · Esc cancel", look.muted);
         }
         if self.confirm.is_some() {
-            let (r, lines, buttons, by) = self.confirm_layout(g);
+            let (r, lines, row) = self.confirm_layout(g);
             let r = at(r);
             frame(buf, r, look.warn);
             for (k, line) in lines.iter().enumerate() { put(buf, r.x + 2, r.y + 1 + k as u16, r.width.saturating_sub(4), line, look.text); }
-            let right = buttons.last().map_or(0, |b| b.1);
-            self.confirm_row().draw(buf, area.x, area.x + right, area.y + by, &crate::settings::chrome());
+            self.confirm_row().view(&crate::settings::chrome()).render(at(row), buf);
         }
     }
 
-    /// The confirmation's box (in the middle of the view), its lines, its buttons' columns and
-    /// words, and their row.
-    fn confirm_layout(&self, g: Geom) -> ConfirmLayout {
+    /// The confirmation's box (in the middle of the view), its lines, and its buttons' row (for
+    /// drawing and clicks alike).
+    fn confirm_layout(&self, g: Geom) -> (Rect, [String; 2], Rect) {
         let lines = match self.confirm.as_ref().map(|c| &c.doom) {
             Some(Doom::Trash(p)) => [format!("Delete '{}'?", fit(&name_of(p), 40)), "It goes to the Trash.".to_string()],
             Some(Doom::Purge(p, why)) => [format!("'{}' can't go to the Trash: {why}.", fit(&name_of(p), 30)), "Delete it permanently? This can't be undone.".to_string()],
@@ -1212,15 +1212,9 @@ impl Files {
         let w = need.min(g.size.0);
         let h = 6u16.min(g.size.1);
         let r = Rect::new(g.size.0.saturating_sub(w) / 2, g.size.1.saturating_sub(h) / 2, w, h);
-        let by = r.y + 4;
-        let cells = row.cells((r.x + r.width).saturating_sub(2));
-        let buttons = [0, 1].map(|i| { let (_, x, w) = cells[i]; (x, x + w, format!("[ {} ]", row.buttons[i].label)) });
-        (r, lines, buttons, by)
+        (r, lines, Rect::new(r.x + 2, r.y + 4, r.width.saturating_sub(4), 1))
     }
 }
-
-/// The confirmation's box, its two lines, its buttons (columns and words) and their row.
-type ConfirmLayout = (Rect, [String; 2], [(u16, u16, String); 2], u16);
 
 /// The menu's box: as wide as its longest item and key.
 fn menu_box(m: &Menu) -> Rect {
@@ -2189,11 +2183,15 @@ mod tests {
         let mut f = files(&s);
         press(&mut f, KeyCode::Delete);
         let (area, g) = (Rect::new(0, 0, 100, 30), geom(100, 30, f.view));
-        let (_, _, buttons, by) = f.confirm_layout(g);
-        let labels: Vec<&str> = buttons.iter().map(|b| b.2.as_str()).collect();
-        assert_eq!(labels, ["[ Cancel ]", "[ Delete ]"]);
-        assert!(buttons[0].1 + 2 <= buttons[1].0, "two columns apart");
-        let bg = |f: &mut Files, b: usize| { let mut buf = Buffer::empty(area); f.draw(&mut buf, area, &Look::default()); buf[(buttons[b].0 + 2, by)].bg };
+        let (_, _, row) = f.confirm_layout(g);
+        let (_, buttons) = f.confirm_row().areas(row);
+        let by = row.y;
+        let screen = |f: &mut Files| { let mut buf = Buffer::empty(area); f.draw(&mut buf, area, &Look::default()); buf };
+        let word = |buf: &Buffer, b: Rect| (b.x..b.right()).map(|x| buf[(x, by)].symbol()).collect::<String>();
+        let shown = screen(&mut f);
+        assert_eq!([word(&shown, buttons[0]), word(&shown, buttons[1])], ["[ Cancel ]", "[ Delete ]"]);
+        assert!(buttons[0].right() + 2 <= buttons[1].x, "two columns apart");
+        let bg = |f: &mut Files, b: usize| screen(f)[(buttons[b].x + 2, by)].bg;
         let c = crate::settings::chrome();
         if !crate::theme::no_color() {
             assert_eq!(bg(&mut f, 0), c.selected.bg.unwrap());
@@ -2202,9 +2200,9 @@ mod tests {
             assert_eq!(bg(&mut f, 1), c.selected.bg.unwrap());
         }
         // A click on Cancel closes; between the buttons nothing runs.
-        f.click_at(buttons[0].1 + 1, by, false, g);
+        f.click_at(buttons[0].right() + 1, by, false, g);
         assert!(f.confirm.is_some());
-        f.click_at(buttons[0].0 + 1, by, false, g);
+        f.click_at(buttons[0].x + 1, by, false, g);
         assert!(f.confirm.is_none() && s.0.join("x.txt").exists());
     }
 

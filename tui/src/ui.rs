@@ -10,7 +10,9 @@ use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::symbols::border;
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Block, Clear, Paragraph, Widget};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -303,18 +305,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// dim when disabled — its key right-aligned as (k); '' a rule across, joined to the sides.
 fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     let opt = |name: &str, default: &str| Some(app.style_spec(name, app.active, app.focused())).filter(|s| !s.is_empty()).unwrap_or_else(|| default.to_string());
+    let lines = opt("menu-border-lines", "single");
+    // A menu with buttons is a dialog: its box takes the command panel's surface so the box and
+    // its buttons match; the vertical menus keep menu-style.
+    if let Some(b) = &m.buttons {
+        let c = crate::settings::chrome();
+        return Confirmation { menu: m, row: &b.row, lines: &lines, chrome: &c }.render(crate::workspace_menu::dialog_box(m), buf);
+    }
     let base = Style::default();
     // tmux's menu_set_style keeps colours, clearing attributes for each menu pair.
     let plain = |mut st: Style| { st.add_modifier = Modifier::empty(); st.sub_modifier = Modifier::empty(); st };
     let style = plain(crate::draw::style_over(&opt("menu-style", "default"), base));
     let selected = plain(crate::draw::style_over(&opt("menu-selected-style", "bg=yellow,fg=black"), base));
     let border = plain(crate::draw::style_over(&opt("menu-border-style", "default"), style));
-    let lines = opt("menu-border-lines", "single");
     let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(&lines);
-    // A menu with buttons is a dialog: its box takes the command panel's surface so the box and
-    // its buttons match; the vertical menus keep menu-style.
-    let (style, border) = if m.buttons.is_some() { let c = crate::settings::chrome(); (c.base, c.muted) } else { (style, border) };
-    let (w, h) = (m.width + 4, m.items.len() as u16 + 2 + if m.buttons.is_some() { 2 } else { 0 });
+    let (w, h) = (m.width + 4, m.items.len() as u16 + 2);
     let (x0, y0) = (m.x, m.y);
     crate::term_out::clear_extras(Rect::new(x0, y0, w, h));
     let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
@@ -340,13 +345,40 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
         // screen_write_menu: the row padded first, then a disabled item's words drawn dim.
         let pad = if m.choice == Some(i) && !it.disabled { selected } else { style };
         for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", pad) }
-        let st = if it.disabled && m.buttons.is_none() { style.add_modifier(Modifier::DIM) } else { pad };
-        let text = if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) };
-        draw_at(buf, x0 + 2, y, &text, st, m.width);
+        let st = if it.disabled { style.add_modifier(Modifier::DIM) } else { pad };
+        draw_at(buf, x0 + 2, y, &menu_text(it), st, m.width);
     }
-    // (The blank row above the buttons is already painted by the fill.)
-    if let Some(b) = &m.buttons {
-        b.row.draw(buf, x0 + 2, x0 + 2 + m.width, y0 + 1 + m.items.len() as u16 + 1, &crate::settings::chrome());
+}
+
+/// An item's words, its key right-aligned as (k).
+fn menu_text(it: &crate::modal::MenuItem) -> String {
+    if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) }
+}
+
+/// A confirmation (a menu with buttons: Close Tab, Stop Harness): `Clear`, then a `Block` in the
+/// command panel's surface with menu-border-lines in its muted colour, the title over the top
+/// border from its third column as tmux's, the notes a `Paragraph`, a blank row and the
+/// buttons' row. Its notes are never chosen or dimmed: the buttons have the keys and the mouse.
+struct Confirmation<'a> { menu: &'a crate::modal::Menu, row: &'a crate::buttons::Row, lines: &'a str, chrome: &'a crate::settings::Chrome }
+
+impl Widget for Confirmation<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let (m, c) = (self.menu, self.chrome);
+        let (tl, tr, bl, br, hz, vt, ..) = box_set(self.lines);
+        let set = border::Set { top_left: tl, top_right: tr, bottom_left: bl, bottom_right: br, vertical_left: vt, vertical_right: vt, horizontal_top: hz, horizontal_bottom: hz };
+        let mut block = Block::bordered().border_set(set).border_style(c.muted).style(c.base);
+        if !m.title.is_empty() {
+            // A Block's title starts next to the corner, tmux's a column later: one more of the rule first.
+            let title = crate::draw::format_line(&m.title, c.muted, m.width, (hz, c.muted));
+            block = block.title(Line::from_iter(std::iter::once(Span::styled(hz, c.muted)).chain(title.spans)));
+        }
+        crate::term_out::clear_extras(area);
+        Clear.render(area, buf);
+        block.render(area, buf);
+        let [notes, row] = crate::workspace_menu::dialog_rows(area);
+        let text = Text::from_iter(m.items.iter().map(|it| crate::draw::format_line(&menu_text(it), c.base, notes.width, (" ", c.base))));
+        Paragraph::new(text).render(notes, buf);
+        self.row.view(c).render(row, buf);
     }
 }
 
@@ -3444,6 +3476,123 @@ mod which_key_tests {
                 let mut any = false;
                 for y in area.y..area.y + area.height { for x in area.x..area.x + area.width { if buf[(x, y)].style().bg == Some(surface) { any = true } } }
                 assert!(any, "the shortcut box should draw on the themed pane surface ({w}x{h})");
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod confirm_box_tests {
+    use super::*;
+    use crate::app::App;
+    use crate::buttons::{oracle as row_oracle, Button, Row};
+    use crate::modal::Menu;
+    use crate::settings::Chrome;
+
+    /// The confirmation box as it was drawn by hand, cell by cell (menu() with buttons), before it
+    /// was a ratatui Block: what it must still look like.
+    fn old_confirm(buf: &mut Buffer, m: &Menu, lines: &str, c: &Chrome) {
+        let (tl, tr, bl, br, hz, vt, lj, rj) = box_set(lines);
+        let (style, border) = (c.base, c.muted);
+        let (w, h) = (m.width + 4, m.items.len() as u16 + 2 + 2);
+        let (x0, y0) = (m.x, m.y);
+        let put = |buf: &mut Buffer, x: u16, y: u16, s: &str, st: Style| { if let Some(c) = buf.cell_mut((x, y)) { c.set_symbol(s); c.set_style(st); } };
+        for y in y0..y0 + h { for x in x0..x0 + w { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(style); } } }
+        let (x1, y1) = (x0 + w - 1, y0 + h - 1);
+        for x in x0 + 1..x1 { put(buf, x, y0, hz, border); put(buf, x, y1, hz, border) }
+        for y in y0 + 1..y1 { put(buf, x0, y, vt, border); put(buf, x1, y, vt, border) }
+        put(buf, x0, y0, tl, border); put(buf, x1, y0, tr, border); put(buf, x0, y1, bl, border); put(buf, x1, y1, br, border);
+        let draw_at = |buf: &mut Buffer, x: u16, y: u16, text: &str, st: Style, avail: u16| {
+            for (i, cell) in crate::draw::format_draw_over(text, st, avail).into_iter().enumerate() {
+                if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((x + i as u16, y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
+            }
+        };
+        if !m.title.is_empty() { draw_at(buf, x0 + 2, y0, &m.title, border, w.saturating_sub(4)) }
+        for (i, it) in m.items.iter().enumerate() {
+            let y = y0 + 1 + i as u16;
+            if it.separator {
+                put(buf, x0, y, lj, border);
+                for x in x0 + 1..x1 { put(buf, x, y, hz, border) }
+                put(buf, x1, y, rj, border);
+                continue;
+            }
+            // (A confirmation's notes are never chosen: its buttons have the keys and the mouse.)
+            for x in x0 + 1..x0 + 1 + m.width + 2 { put(buf, x, y, " ", style) }
+            let text = if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) };
+            draw_at(buf, x0 + 2, y, &text, style, m.width);
+        }
+        let b = m.buttons.as_ref().unwrap();
+        row_oracle::draw(&b.row, buf, x0 + 2, x0 + 2 + m.width, y0 + 1 + m.items.len() as u16 + 1, c);
+    }
+
+    /// The box as drawn now.
+    fn drawn(buf: &mut Buffer, m: &Menu, lines: &str, c: &Chrome) {
+        let row = &m.buttons.as_ref().unwrap().row;
+        Confirmation { menu: m, row, lines, chrome: c }.render(crate::workspace_menu::dialog_box(m), buf)
+    }
+
+    /// What a terminal shows: a cell hidden behind a wide character is never sent (ratatui's diff
+    /// and term_out's rows both skip it), so it is blanked here. (The only difference a wide
+    /// title makes: the Block's title `Span` resets that cell, the old loop wrote a styled blank.)
+    fn shown(mut buf: Buffer) -> Buffer {
+        let a = buf.area;
+        for y in a.top()..a.bottom() {
+            let mut x = a.left();
+            while x < a.right() {
+                let w = buf[(x, y)].symbol().width().max(1) as u16;
+                for hidden in x + 1..(x + w).min(a.right()) { buf[(hidden, y)].reset() }
+                x += w;
+            }
+        }
+        buf
+    }
+
+    fn dialog(size: (u16, u16), lines: &str, title: &str, notes: &[&str], row: Row) -> (App, Menu) {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, size);
+        let g = crate::options::SetFlags { global: true, ..Default::default() };
+        app.options.set("menu-border-lines", Some(lines), &g, "", 0).unwrap();
+        let actions = row.buttons.iter().map(|b| format!("set -g @clicked {}", b.label)).collect();
+        let notes = notes.iter().map(|n| crate::workspace_menu::note(n)).collect();
+        assert!(crate::workspace_menu::open_buttons(&mut app, title, notes, row, actions), "{title} at {size:?}");
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("no dialog") };
+        let m = m.clone();
+        assert_eq!(m.choice, None, "a confirmation's notes are never chosen");
+        (app, m)
+    }
+
+    /// The Close Tab box (and a failed stop's, and ones with wide or `#` titles) draws exactly as
+    /// before it was a Block with a Paragraph and the row widget: every cell of an 80×24 and a
+    /// 40×12 screen, in each menu-border-lines, a dark and a light theme and NO_COLOR.
+    #[test]
+    fn the_confirmation_box_draws_as_the_old_one() {
+        let b = |label: &str, key| Button { label: label.into(), key };
+        let stop = Row { buttons: vec![b("Cancel", None), b("Stop", Some('s'))], chosen: 0, hint: "s stop · esc cancel".into() };
+        let back = Row { buttons: vec![b("Back", None)], chosen: 0, hint: String::new() };
+        let cases: [(&str, Vec<&str>, Row, bool); 4] = [
+            ("Close Tab · zsh", vec!["Working · zsh", "The terminal and its running commands will end."], stop.clone(), true),
+            ("Stop Harness · build", vec!["1 stopped. The session or connection changed. Check it before trying again."], back, true),
+            ("Close Tab · #1 ## (x)", vec!["Idle · #1"], Row { chosen: 1, ..stop.clone() }, true),
+            ("关闭标签 · 终端", vec!["正在运行 · 终端", "终端及其命令将结束。"], stop, false),   // see `shown`
+        ];
+        for c in row_oracle::chromes() {
+            for size in [(80, 24), (40, 12)] {
+                for lines in ["single", "double", "heavy", "simple", "rounded", "padded", "none"] {
+                    for (title, notes, row, exact) in &cases {
+                        let (app, m) = dialog(size, lines, title, notes, row.clone());
+                        let screen = Rect::new(0, 0, size.0, size.1);
+                        let (mut old, mut new) = (row_oracle::canvas(screen), row_oracle::canvas(screen));
+                        old_confirm(&mut old, &m, lines, &c);
+                        drawn(&mut new, &m, lines, &c);
+                        if *exact { assert_eq!(new, old, "{title} at {size:?} in {lines}") }
+                        else { assert_eq!(shown(new), shown(old), "{title} at {size:?} in {lines}") }
+                        // menu() draws a menu with buttons as this box, in menu-border-lines.
+                        let (mut routed, mut direct) = (row_oracle::canvas(screen), row_oracle::canvas(screen));
+                        menu(&mut routed, &app, &m);
+                        drawn(&mut direct, &m, lines, &crate::settings::chrome());
+                        assert_eq!(routed, direct, "{title} at {size:?} in {lines}");
+                    }
+                }
             }
         }
     }

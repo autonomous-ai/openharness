@@ -3,6 +3,7 @@
 
 use crate::app::App;
 use crate::modal::{Menu, MenuItem, Modal};
+use ratatui::layout::{Constraint, Margin, Rect};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A confirmation's button row and the command each button runs; button 0 is the way out, so
@@ -47,6 +48,17 @@ pub fn open_buttons(app: &mut App, title: &str, notes: Vec<MenuItem>, row: crate
     app.toast = None;
     app.modal = Some(Modal::Menu(menu));
     true
+}
+
+/// A confirmation's box: its notes, a blank row and the buttons' row inside the border.
+pub fn dialog_box(m: &Menu) -> Rect { Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 4) }
+
+/// Inside a confirmation's box [area], two columns in from each side: its notes' rows, then
+/// (after a blank row) its buttons' row. The drawing and the mouse both take them from here.
+pub fn dialog_rows(area: Rect) -> [Rect; 2] {
+    let [notes, _blank, row] = ratatui::layout::Layout::vertical([Constraint::Fill(1), Constraint::Length(1), Constraint::Length(1)])
+        .areas(area.inner(Margin::new(2, 1)));
+    [notes, row]
 }
 
 fn fit(menu: &mut Menu, size: (u16, u16)) -> bool {

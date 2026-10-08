@@ -19,6 +19,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::Widget;
 use serde_json::{json, Value};
 use unicode_width::UnicodeWidthStr;
 
@@ -1420,15 +1421,14 @@ fn query_line(buf: &mut Buffer, app: &App, picker: &Picker, x: u16, y: u16, righ
 /// Mouse actions occupy the existing footer only while a prompt needs an answer.
 fn prompt_actions(buf: &mut Buffer, app: &App, x: u16, y: u16, w: u16, c: &Chrome) {
     let confirm = matches!(app.devices.ask, Some(Ask::Confirm { .. }));
-    // A narrow panel says Next for Continue; the keys hint goes first (`Row::draw`), never a button.
+    // A narrow panel says Next for Continue; the keys hint goes first (`Row::areas`), never a button.
     let mut row = prompt_row(app, confirm, w < 24);   // 24: the width of `[ Cancel ]  [ Continue ]`
     if w < row.buttons_width() { return }
     row.chosen = if app.devices.prompt_focus.get() { row.chosen } else { usize::MAX };
-    let right = x + w;
-    row.draw(buf, x, right, y, c);
-    let cells = row.cells(right);
-    let rect = |i: usize| Rect::new(cells[i].1, y, cells[i].2, 1);
-    app.devices.prompt_actions.set(Some(PromptActions { size: app.size, accept: rect(1), cancel: rect(0) }));
+    let area = Rect::new(x, y, w, 1);
+    row.view(c).render(area, buf);
+    let (_, cells) = row.areas(area);
+    app.devices.prompt_actions.set(Some(PromptActions { size: app.size, accept: cells[1], cancel: cells[0] }));
 }
 
 /// `[ Cancel ]  [ Yes ]`, or `[ Cancel ]  [ Continue ]` for a typed line, with the chosen button

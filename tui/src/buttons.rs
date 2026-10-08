@@ -1,10 +1,16 @@
 //! The row of buttons every dialog ends with: `[ Cancel ]  [ Stop ]`, the way out first and the
 //! action last, right-aligned, with a muted keys hint at the left. Colours are the command panel's
-//! (`settings::chrome()`): the chosen button is its chosen row, the others its panel.
+//! (`settings::chrome()`): the chosen button is its chosen row, the others its panel. It draws as
+//! a ratatui widget (`row.view(&chrome)`), its geometry from one `Layout` that clicks share.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
+use ratatui::text::Line;
+use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
+
+use crate::settings::Chrome;
 
 /// Columns between two buttons, and between the hint and the first button.
 const GAP: u16 = 2;
@@ -37,39 +43,20 @@ impl Row {
         self.buttons_width().saturating_add(GAP).saturating_add(cols(&self.hint))
     }
 
-    /// Each button's columns on a row whose right edge is [right]: (index, x, width). The row
-    /// must be at least `buttons_width()` wide (callers fit the dialog to it first), or cells overlap.
-    pub fn cells(&self, right: u16) -> Vec<(usize, u16, u16)> {
-        let mut x = right;
-        let mut out: Vec<_> = self.buttons.iter().enumerate().rev().map(|(i, b)| {
-            let w = b.width();
-            x = x.saturating_sub(w);
-            let cell = (i, x, w);
-            x = x.saturating_sub(GAP);
-            cell
-        }).collect();
-        out.reverse();
-        out
+    /// Where the hint and each button go on the one-row [area]: the buttons right-aligned, GAP
+    /// apart; the hint at the left, only when it fits before them with a GAP (it gives way
+    /// first). Drawing and clicks both take them from here. Callers fit the dialog to
+    /// `buttons_width()` first; a narrower row shrinks the buttons rather than overlap them.
+    pub fn areas(&self, area: Rect) -> (Option<Rect>, Vec<Rect>) {
+        let buttons = Layout::horizontal(self.buttons.iter().map(|b| Constraint::Length(b.width())))
+            .flex(Flex::End).spacing(GAP).split(area).to_vec();
+        let [hint, _] = Layout::horizontal([Constraint::Length(cols(&self.hint)), Constraint::Fill(1)]).areas(area);
+        let hint = (!self.hint.is_empty() && area.width >= self.width()).then_some(hint);
+        (hint, buttons)
     }
 
-    /// Draws the hint at [left] and the buttons right-aligned to [right] on row [y]. As for
-    /// `cells`, `right - left` must be at least `buttons_width()`.
-    pub fn draw(&self, buf: &mut Buffer, left: u16, right: u16, y: u16, c: &crate::settings::Chrome) {
-        let cells = self.cells(right);
-        if let Some(&(_, first, _)) = cells.first() {
-            let hint = cols(&self.hint);
-            if hint > 0 && u32::from(left) + u32::from(hint) + u32::from(GAP) <= u32::from(first) {
-                crate::settings::put(buf, left, y, hint, &self.hint, c.muted);
-            }
-        }
-        for (i, x, w) in cells {
-            let style = if i == self.chosen { c.selected } else { c.base };
-            for dx in 0..w {
-                if let Some(cell) = buf.cell_mut((x + dx, y)) { cell.set_style(style); }
-            }
-            crate::settings::put(buf, x, y, w, &format!("[ {} ]", self.buttons[i].label), style);
-        }
-    }
+    /// The row as a ratatui widget in [c]'s colours: `row.view(&c).render(area, buf)`.
+    pub fn view<'a>(&'a self, c: &'a Chrome) -> ButtonRow<'a> { ButtonRow { row: self, chrome: c } }
 
     /// A key: ← → Tab BackTab h l move (wrapping; h / l only when no button owns that letter, and
     /// only without Ctrl/Alt); Enter chooses the chosen button; Esc, Ctrl-C, Ctrl-G cancel;
@@ -103,24 +90,81 @@ impl Row {
         }
     }
 
-    /// A click at (x, y) on a row drawn at [y_row] with right edge [right].
-    pub fn click(&self, x: u16, y: u16, right: u16, y_row: u16) -> Option<usize> {
-        if y != y_row { return None }
-        self.cells(right).into_iter().find(|&(_, cx, w)| x >= cx && x - cx < w).map(|(i, ..)| i)
+    /// The button a click [at] chooses on a row drawn in [area]: none on the hint or a gap.
+    pub fn click(&self, area: Rect, at: Position) -> Option<usize> {
+        self.areas(area).1.iter().position(|r| r.contains(at))
+    }
+}
+
+/// A [Row] drawn: each button a `Line` over its area — the chosen one in the panel's chosen row
+/// (`selected`), the others in its surface (`base`) — and the hint a muted `Line`.
+pub struct ButtonRow<'a> { row: &'a Row, chrome: &'a Chrome }
+
+impl Widget for ButtonRow<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let (hint, buttons) = self.row.areas(area);
+        if let Some(hint) = hint { Line::styled(self.row.hint.as_str(), self.chrome.muted).render(hint, buf) }
+        for (i, (b, at)) in self.row.buttons.iter().zip(buttons).enumerate() {
+            let style = if i == self.row.chosen { self.chrome.selected } else { self.chrome.base };
+            Line::styled(format!("[ {} ]", b.label), style).render(at, buf);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{layout::Rect, style::Modifier};
+    use ratatui::style::Modifier;
 
     fn row() -> Row { Row { buttons: vec![Button { label: "Cancel".into(), key: None }, Button { label: "Stop".into(), key: Some('s') }], chosen: 0, hint: "s stop · esc cancel".into() } }
 
+    /// The row as drawn now, at [area] (one row).
+    fn drawn(r: &Row, buf: &mut Buffer, area: Rect, c: &Chrome) { r.view(c).render(area, buf) }
+
+    /// Which button a click on each column of [area]'s row would choose, now.
+    fn clicks(r: &Row, area: Rect, width: u16) -> Vec<Option<usize>> { (0..width).map(|x| r.click(area, Position::new(x, area.y))).collect() }
+
+    /// The buttons' areas on a row ending at column 50.
+    fn at50(r: &Row) -> Vec<Rect> { r.areas(Rect::new(0, 3, 50, 1)).1 }
+
+    /// The row draws and answers clicks exactly as before it was a ratatui widget: every cell's
+    /// symbol, colours and modifiers, for one, two and three buttons (and wide labels), each
+    /// chosen (and none, as the Machines panel's unfocused row), with the hint fitting and
+    /// dropped, from the narrowest row that fits the buttons to 120 columns, in a dark and a
+    /// light theme and NO_COLOR.
+    #[test]
+    fn the_widget_draws_and_clicks_as_the_old_row() {
+        let b = |label: &str, key| Button { label: label.into(), key };
+        let rows = [
+            row(),
+            Row { buttons: vec![b("Don't save", None), b("Cancel", None), b("Save", None)], chosen: 2, hint: String::new() },
+            Row { buttons: vec![b("Cancel", Some('n')), b("Continue", Some('y'))], chosen: 1, hint: "tab buttons".into() },
+            Row { buttons: vec![b("Back", None)], chosen: 0, hint: String::new() },
+            Row { buttons: vec![b("取消", None), b("保存", None)], chosen: 0, hint: "回车 保存".into() },   // wide characters
+        ];
+        for c in oracle::chromes() {
+            for mut r in rows.clone() {
+                for chosen in (0..r.buttons.len()).chain([usize::MAX]) {
+                    r.chosen = chosen;
+                    for w in r.buttons_width()..=120 {
+                        let area = Rect::new(3, 1, w, 1);
+                        let screen = Rect::new(0, 0, w + 6, 3);
+                        let (mut old, mut new) = (oracle::canvas(screen), oracle::canvas(screen));
+                        oracle::draw(&r, &mut old, area.x, area.right(), area.y, &c);
+                        drawn(&r, &mut new, area, &c);
+                        assert_eq!(new, old, "{:?} chosen {chosen} at {w} columns", r.buttons);
+                        let before: Vec<_> = (0..screen.width).map(|x| oracle::click(&r, x, area.right())).collect();
+                        assert_eq!(clicks(&r, area, screen.width), before, "{:?} at {w} columns", r.buttons);
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn buttons_sit_right_aligned_two_columns_apart() {
-        let cells = row().cells(50);
-        assert_eq!(cells, vec![(0, 50 - 8 - 2 - 10, 10), (1, 50 - 8, 8)]);   // "[ Cancel ]" 10, "[ Stop ]" 8
+        let cells = at50(&row());
+        assert_eq!(cells, vec![Rect::new(50 - 8 - 2 - 10, 3, 10, 1), Rect::new(50 - 8, 3, 8, 1)]);   // "[ Cancel ]" 10, "[ Stop ]" 8
     }
 
     #[test]
@@ -154,16 +198,16 @@ mod tests {
     fn the_chosen_button_is_the_panels_chosen_row() {
         if crate::theme::no_color() { return }   // NO_COLOR: `selected` is REVERSED, with no bg to compare
         let c = crate::settings::chrome();
-        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 1));
+        let mut buf = Buffer::empty(Rect::new(0, 3, 50, 1));
         let mut r = row(); r.chosen = 1;
-        r.draw(&mut buf, 0, 50, 0, &c);
-        let (_, x, _) = r.cells(50)[1];
-        assert_eq!(buf[(x, 0)].symbol(), "[");
-        assert_eq!(buf[(x + 2, 0)].bg, c.selected.bg.unwrap());
-        assert!(buf[(x + 2, 0)].modifier.contains(Modifier::BOLD));
-        let (_, x0, _) = r.cells(50)[0];
-        assert_ne!(buf[(x0 + 2, 0)].bg, c.selected.bg.unwrap());
-        assert_eq!(buf[(0, 0)].fg, c.muted.fg.unwrap(), "the hint is muted");
+        r.view(&c).render(buf.area, &mut buf);
+        let x = at50(&r)[1].x;
+        assert_eq!(buf[(x, 3)].symbol(), "[");
+        assert_eq!(buf[(x + 2, 3)].bg, c.selected.bg.unwrap());
+        assert!(buf[(x + 2, 3)].modifier.contains(Modifier::BOLD));
+        let x0 = at50(&r)[0].x;
+        assert_ne!(buf[(x0 + 2, 3)].bg, c.selected.bg.unwrap());
+        assert_eq!(buf[(0, 3)].fg, c.muted.fg.unwrap(), "the hint is muted");
     }
 
     #[test]
@@ -172,22 +216,83 @@ mod tests {
         let r = row();
         let right = r.buttons_width();   // no room for the hint
         let mut buf = Buffer::empty(Rect::new(0, 0, right, 1));
-        r.draw(&mut buf, 0, right, 0, &c);
+        r.view(&c).render(buf.area, &mut buf);
         let line: String = (0..right).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert_eq!(line, "[ Cancel ]  [ Stop ]");
         assert_eq!(r.width(), r.buttons_width() + 2 + "s stop · esc cancel".chars().count() as u16);
-        // narrower than the buttons: saturates, never panics
-        assert_eq!(r.cells(5).len(), 2);
+        // narrower than the buttons: they shrink side by side, never overlap, never panic
+        let (hint, cells) = r.areas(Rect::new(0, 0, 5, 1));
+        assert_eq!((hint, cells.len()), (None, 2));
+        assert!(cells[0].right() <= cells[1].x);
         let mut buf = Buffer::empty(Rect::new(0, 0, 5, 1));
-        r.draw(&mut buf, 0, 5, 0, &c);
+        r.view(&c).render(buf.area, &mut buf);
     }
 
     #[test]
     fn a_click_on_a_button_chooses_it_and_between_them_nothing() {
-        let r = row(); let cells = r.cells(50);
-        assert_eq!(r.click(cells[1].1 + 1, 3, 50, 3), Some(1));
-        assert_eq!(r.click(cells[0].1 + cells[0].2, 3, 50, 3), None, "the gap");
-        assert_eq!(r.click(0, 3, 50, 3), None, "the hint");
-        assert_eq!(r.click(cells[1].1 + 1, 2, 50, 3), None, "another row");
+        let (r, area) = (row(), Rect::new(0, 3, 50, 1));
+        let cells = at50(&r);
+        assert_eq!(r.click(area, Position::new(cells[1].x + 1, 3)), Some(1));
+        assert_eq!(r.click(area, Position::new(cells[0].right(), 3)), None, "the gap");
+        assert_eq!(r.click(area, Position::new(0, 3)), None, "the hint");
+        assert_eq!(r.click(area, Position::new(cells[1].x + 1, 2)), None, "another row");
+    }
+}
+
+/// The row as it was drawn by hand, cell by cell, before it was a ratatui widget: what the
+/// widget must still look like, cell for cell.
+#[cfg(test)]
+pub(crate) mod oracle {
+    use super::{Row, GAP, cols};
+    use crate::settings::Chrome;
+    use ratatui::{buffer::Buffer, layout::Rect, style::{Color, Modifier, Style}};
+
+    /// A dark theme, a light one and NO_COLOR.
+    pub(crate) fn chromes() -> [Chrome; 3] {
+        let of = |bg, fg| crate::settings::chrome_for(crate::theme::pane_palette_of(bg, fg));
+        [of([28, 31, 36], [220, 225, 231]), of([250, 250, 250], [40, 40, 40]), crate::settings::chrome_with(true)]
+    }
+
+    /// A screen with something on it already, so a cell left alone or painted over shows.
+    pub(crate) fn canvas(area: Rect) -> Buffer {
+        let mut buf = Buffer::empty(area);
+        let st = Style::default().fg(Color::Red).bg(Color::Blue).add_modifier(Modifier::ITALIC);
+        for (i, cell) in buf.content.iter_mut().enumerate() { cell.set_symbol(if i % 2 == 0 { "." } else { "x" }).set_style(st); }
+        buf
+    }
+
+    pub(crate) fn cells(r: &Row, right: u16) -> Vec<(usize, u16, u16)> {
+        let mut x = right;
+        let mut out: Vec<_> = r.buttons.iter().enumerate().rev().map(|(i, b)| {
+            let w = b.width();
+            x = x.saturating_sub(w);
+            let cell = (i, x, w);
+            x = x.saturating_sub(GAP);
+            cell
+        }).collect();
+        out.reverse();
+        out
+    }
+
+    pub(crate) fn draw(r: &Row, buf: &mut Buffer, left: u16, right: u16, y: u16, c: &Chrome) {
+        let cells = cells(r, right);
+        if let Some(&(_, first, _)) = cells.first() {
+            let hint = cols(&r.hint);
+            if hint > 0 && u32::from(left) + u32::from(hint) + u32::from(GAP) <= u32::from(first) {
+                crate::settings::put(buf, left, y, hint, &r.hint, c.muted);
+            }
+        }
+        for (i, x, w) in cells {
+            let style = if i == r.chosen { c.selected } else { c.base };
+            for dx in 0..w {
+                if let Some(cell) = buf.cell_mut((x + dx, y)) { cell.set_style(style); }
+            }
+            crate::settings::put(buf, x, y, w, &format!("[ {} ]", r.buttons[i].label), style);
+        }
+    }
+
+    /// The button at column [x] of a row whose right edge is [right].
+    pub(crate) fn click(r: &Row, x: u16, right: u16) -> Option<usize> {
+        cells(r, right).into_iter().find(|&(_, cx, w)| x >= cx && x - cx < w).map(|(i, ..)| i)
     }
 }
