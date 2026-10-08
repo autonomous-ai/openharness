@@ -40,8 +40,9 @@ import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { machineNames } from './machineNames.js'
 import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
-import { claudeProjectsRoots, codexHomeRoots, sessionCodexHome } from './engineHomes.js'
-import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
+import { sessionFolderOf, sessionRoots } from './engineHomes.js'
+import { findSessionFileOf, sessionMetaOf } from '../engines/sessionFiles.js'
+import { isSessionStoreEngine, sessionStoreContracts, sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import { admitHook } from '../engines/hooks.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
@@ -751,6 +752,138 @@ function withIntended(
   return row
 }
 
+/**
+ * The rows a merge holds, found by what they share: the process's pid, the conversation, each pane. A
+ * row another row claims leaves the merge; these are the only rows that can be claimed, so a save looks
+ * them up instead of comparing a changed row with every row. Comparing every pair is what made the first
+ * start on a fully legacy registry (every row changed) quadratic: 20.7 s for 2,000 rows and 122 s for
+ * 5,000 on the core's event loop; 0.32 s and 0.74 s looked up, the saved file byte for byte the same
+ * (measured 2026-10-08).
+ */
+class MergeIdentities {
+  /** A row's place in the merge's Map order, which the claims follow: a claim can carry a binding over. */
+  private readonly order = new Map<string, number>()
+  private nextOrder = 0
+  private readonly strict = new Map<string, RegisteredSession>()
+  private readonly holders = new Map<string, Set<string>>()
+
+  constructor(rows: ReadonlyMap<string, Record<string, unknown>>) {
+    for (const [id, row] of rows) this.put(id, row)
+  }
+
+  private static keys(row: RegisteredSession): string[] {
+    return [
+      ...(row.processIdentity ? [`p:${row.processIdentity.pid}`] : []),
+      ...(row.sessionId ? [`s:${row.sessionId}`] : []),
+      ...row.runtimes.map((runtime) => `r:${terminalRouteKey(runtime)}`),
+    ]
+  }
+
+  /** Follows `merged.set`: a row already in the merge keeps its place, a new one goes last. */
+  put(id: string, value: Record<string, unknown>): void {
+    this.remove(id, true)
+    if (!this.order.has(id)) this.order.set(id, this.nextOrder++)
+    // A row that is not a valid v2 row claims nothing and is claimed by nothing, as before. Parsed once
+    // here rather than once per pair: what a claim reads of it, its identity and binding, is the row's own.
+    const row = strictPersistedRow(value)
+    if (!row) return
+    this.strict.set(id, row)
+    for (const key of MergeIdentities.keys(row)) {
+      const holders = this.holders.get(key)
+      if (holders) holders.add(id)
+      else this.holders.set(key, new Set([id]))
+    }
+  }
+
+  /** Follows `merged.delete`. */
+  remove(id: string, keepPlace = false): void {
+    const row = this.strict.get(id)
+    if (row) {
+      this.strict.delete(id)
+      for (const key of MergeIdentities.keys(row)) this.holders.get(key)?.delete(id)
+    }
+    if (!keepPlace) this.order.delete(id)
+  }
+
+  /** Every other valid row with the pid, the conversation or a pane, in the merge's order. */
+  sharing(id: string, pid: number | undefined, sessionId: string, routes: ReadonlySet<string>): Array<[string, RegisteredSession]> {
+    const keys = [
+      ...(pid !== undefined ? [`p:${pid}`] : []),
+      ...(sessionId ? [`s:${sessionId}`] : []),
+      ...[...routes].map((route) => `r:${route}`),
+    ]
+    const ids = new Set<string>()
+    for (const key of keys) for (const holder of this.holders.get(key) ?? []) if (holder !== id) ids.add(holder)
+    return [...ids]
+      .sort((a, b) => this.order.get(a)! - this.order.get(b)!)
+      .map((holder) => [holder, this.strict.get(holder)!])
+  }
+}
+
+/**
+ * What a save writes: the file's rows as `latest` has them, with this view's changes merged in. A row this
+ * view saved and has since dropped leaves; a changed row is merged three ways against what this view last
+ * saved; and a changed row claims its process, conversation and panes from every other row, which leaves.
+ * The result's order is the file's, with new rows last.
+ */
+export function mergedForSave(
+  latest: ReadonlyMap<string, Record<string, unknown>>,
+  currentRows: ReadonlyMap<string, Record<string, unknown>>,
+  baselines: ReadonlyMap<string, string>,
+  intents: ReadonlyMap<string, ReadonlySet<string>>,
+): Map<string, Record<string, unknown>> {
+  const merged = new Map(latest)
+  for (const baselineId of baselines.keys()) {
+    if (!currentRows.has(baselineId)) merged.delete(baselineId)
+  }
+  // Built on the first changed row, as the scan it replaces first read the rows then: a save with no
+  // changed row reads none of them.
+  let identities: MergeIdentities | null = null
+  for (const [agentId, current] of currentRows) {
+    const baseline = baselines.get(agentId)
+    const intended = intents.get(agentId)
+    // An intent on a row this view otherwise left alone never brings back a row another process
+    // removed: that agent is gone, and its close plan with it.
+    if (baseline === rowFingerprint(current) && (!intended || !latest.has(agentId))) continue
+    let candidate = latest.has(agentId)
+      ? threeWayRow(baseline, current, latest.get(agentId)!)
+      : current
+    if (intended) candidate = withIntended(candidate, current, intended)
+    const process = strictPersistedRow(candidate)?.processIdentity
+    const engine = candidate.engine
+    const sessionId = typeof candidate.sessionId === 'string' ? candidate.sessionId : ''
+    const routes = new Set(normalizedRuntimes(candidate.runtimes, candidate.tmuxPane).map(terminalRouteKey))
+    identities ??= new MergeIdentities(merged)
+    for (const [otherId, otherRow] of identities.sharing(agentId, process?.pid, sessionId, routes)) {
+      const sameProcess = otherRow.engine === engine && sameProcessIdentity(process, otherRow.processIdentity)
+      const sameSession = !!sessionId && otherRow.sessionId === sessionId
+      const sameRoute = otherRow.runtimes.some((runtime) => routes.has(terminalRouteKey(runtime)))
+      // Sharing a pid is not yet the same process: the engine and the start must match too.
+      if (!sameProcess && !sameSession && !sameRoute) continue
+      // A daemon-down hook may bind a session while startup discovery is opening the same process.
+      // Preserve that binding, then let the scanner-owned agent id/runtime state win deterministically.
+      if (sameProcess && !candidate.sessionId && otherRow.sessionId) {
+        candidate = {
+          ...candidate,
+          sessionId: otherRow.sessionId,
+          boundAt: otherRow.boundAt,
+          transcriptPath: otherRow.transcriptPath,
+          source: otherRow.source,
+          lastHookAt: otherRow.lastHookAt,
+        }
+      }
+      merged.delete(otherId)
+      identities.remove(otherId)
+    }
+    merged.set(agentId, candidate)
+    identities.put(agentId, candidate)
+  }
+  return merged
+}
+
+/** The merge's helpers, for its spec, which checks it against the scan of every pair it replaced. */
+export const saveMergeHelpers = { threeWayRow, withIntended, normalizedRuntimes, rowFingerprint }
+
 function selectedRuntimeKey(runtimes: readonly TerminalRuntimeRef[], requested: unknown): string {
   const keys = new Set(runtimes.map(terminalRouteKey))
   return typeof requested === 'string' && keys.has(requested)
@@ -772,20 +905,20 @@ function isWithin(root: string, file: string): boolean {
  * replaces so "this engine has no transcript" is a fact a caller can ASK for — Pause and Resume both
  * need it, and both used to demand a file every engine was assumed to have.
  */
-const TRANSCRIPT_ROOT: Readonly<Record<AgentEngine, ((codexHome?: string) => string) | null>> = {
+const TRANSCRIPT_ROOT: Readonly<Record<AgentEngine, (() => string) | 'store' | null>> = {
   // Amp's root is OURS, not Amp's: the transcript is written by the adapter's own plugin because Amp
   // keeps no conversation on disk (see installAmpPlugin).
   amp: () => env.AMP_SESSIONS_DIR,
   muse: () => join(env.MUSE_HOME, 'sessions'),
-  // The specific agent's own CODEX_HOME profile, when it has one — see RegisteredSession.codexHome.
-  codex: codexHome => join(codexHome || env.CODEX_HOME, 'sessions'),
+  // Declared by the engine's session store (engines/sessionStoreContracts.ts): the folders `transcriptRoots` names.
+  codex: 'store',
   grok: () => join(env.GROK_HOME, 'sessions'),
   agy: () => join(env.AGY_HOME, 'brain'),
   copilot: () => join(env.COPILOT_HOME, 'session-state'),
   cursor: () => join(cursorDataDir(), 'projects'),
   pi: () => join(env.PI_HOME, 'agent', 'sessions'),
   commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
-  claude: () => env.CLAUDE_PROJECTS_DIR,
+  claude: 'store',
   opencode: null,
   kilo: null,
   hermes: null,
@@ -801,14 +934,12 @@ export function engineKeepsTranscriptFile(engine: AgentEngine): boolean {
 }
 
 /**
- * The folders an engine's transcripts may be in: its own, and for Claude Code and Codex each home the
- * person moved in their shell profile (lib/engineHomes.ts). An agent's own CODEX_HOME profile is its
- * only one.
+ * The folders an engine's transcripts may be in: its own, and for an engine with a declared session store each
+ * home the person moved in their shell profile (lib/engineHomes.ts). An agent's own profile (its CODEX_HOME) is
+ * its only one, for an engine whose sessions follow one.
  */
-function transcriptRoots(engine: AgentEngine, rootFor: (codexHome?: string) => string, codexHome?: string): string[] {
-  if (engine === 'claude') return claudeProjectsRoots(rootFor())
-  if (engine === 'codex' && !codexHome) return codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions'))
-  return [rootFor(codexHome)]
+function transcriptRoots(engine: AgentEngine, root: (() => string) | 'store', codexHome?: string): string[] {
+  return root === 'store' ? sessionRoots(engine, codexHome) : [root()]
 }
 
 export function validTranscriptPath(engine: AgentEngine, filePath: string, codexHome?: string, allowMissing = false): boolean {
@@ -1014,21 +1145,25 @@ class Registry {
         const rawCodexHome = raw?.codexHome ?? undefined
         const rawGridLaunch = normalizedGridLaunch(raw?.gridLaunch)
         const rawScmLaunch = parseScmLaunchRecord((raw as { scmLaunch?: unknown })?.scmLaunch)
-        let repairedCodexTranscript = false
-        if (engine === 'codex' && transcriptPath) {
-          const meta = readCodexRolloutMeta(transcriptPath)
+        // A sub-agent's hooks run from its parent's pane, and an older daemon let them overwrite the parent's
+        // binding with the child's file: put the parent's own back, found by its id in the same home (or its
+        // profile), else release the binding. Declared by the engine's session store (`repairsOverwrittenParent`)
+        // and read with the kit, in core.
+        let repairedParentTranscript = false
+        if (isSessionStoreEngine(engine) && sessionStoreContracts[engine].repairsOverwrittenParent && transcriptPath) {
+          const meta = sessionMetaOf(engine, transcriptPath)
           if (meta?.isSubagent) {
             const repaired = meta.parentThreadId === rawSessionId
-              ? resolveCodexRollout(rawSessionId, join(sessionCodexHome({ codexHome: rawCodexHome, transcriptPath }), 'sessions'))
+              ? findSessionFileOf(engine, rawSessionId, sessionFolderOf(engine, { profile: rawCodexHome, transcriptPath }))
               : null
-            if (!repaired || !validTranscriptPath('codex', repaired, rawCodexHome) || readCodexRolloutMeta(repaired)?.isSubagent) {
+            if (!repaired || !validTranscriptPath(engine, repaired, rawCodexHome) || sessionMetaOf(engine, repaired)?.isSubagent) {
               changed = true
               bound = false
               transcriptPath = null
             } else {
-              console.log(`[registry] repaired Codex parent ${rawSessionId.slice(0, 8)} transcript after child hook overwrite`)
+              console.log(`[registry] repaired ${sessionStoreContracts[engine].label} parent ${rawSessionId.slice(0, 8)} transcript after child hook overwrite`)
               transcriptPath = repaired
-              repairedCodexTranscript = true
+              repairedParentTranscript = true
               changed = true
             }
           }
@@ -1090,7 +1225,7 @@ class Registry {
           defaultName: normalizedDefaultName(raw.defaultName),
           title: titleDisplayName(typeof raw.title === 'string' ? raw.title : null),
           sessionId: bound ? rawSessionId : '',
-          projectDir: !repairedCodexTranscript && typeof raw.projectDir === 'string' && raw.projectDir
+          projectDir: !repairedParentTranscript && typeof raw.projectDir === 'string' && raw.projectDir
             ? raw.projectDir
             : transcriptPath
               ? basename(dirname(transcriptPath))
@@ -1993,9 +2128,11 @@ class Registry {
     return true
   }
 
+  /** Fill in the profile a row did not know (its CODEX_HOME), for an engine whose sessions follow one (its session
+   *  store's `sessions.profile`). Never overwrites. */
   setCodexHome(agentId: string, codexHome: string): boolean {
     const session = this.agents.get(agentId)
-    if (!session || session.engine !== 'codex' || session.codexHome) return false
+    if (!session || !sessionStoreOf(session.engine)?.sessions.profile || session.codexHome) return false
     session.codexHome = codexHome
     session.touchedAt = Date.now()
     this.save()
@@ -2232,49 +2369,7 @@ class Registry {
           if (id) latest.set(id, value as Record<string, unknown>)
         }
 
-        const merged = new Map(latest)
-        for (const baselineId of this.persistedBaseline.keys()) {
-          if (!currentRows.has(baselineId)) merged.delete(baselineId)
-        }
-        for (const [agentId, current] of currentRows) {
-          const baseline = this.persistedBaseline.get(agentId)
-          const intended = this.intended.get(agentId)
-          // An intent on a row this view otherwise left alone never brings back a row another process
-          // removed: that agent is gone, and its close plan with it.
-          if (baseline === rowFingerprint(current) && (!intended || !latest.has(agentId))) continue
-          let candidate = latest.has(agentId)
-            ? threeWayRow(baseline, current, latest.get(agentId)!)
-            : current
-          if (intended) candidate = withIntended(candidate, current, intended)
-          const process = strictPersistedRow(candidate)?.processIdentity
-          const engine = candidate.engine
-          const sessionId = typeof candidate.sessionId === 'string' ? candidate.sessionId : ''
-          const routes = new Set(normalizedRuntimes(candidate.runtimes, candidate.tmuxPane).map(terminalRouteKey))
-          for (const [otherId, other] of [...merged]) {
-            if (otherId === agentId) continue
-            const otherRow = strictPersistedRow(other)
-            if (!otherRow) continue
-            const sameProcess = otherRow.engine === engine && sameProcessIdentity(process, otherRow.processIdentity)
-            const sameSession = !!sessionId && otherRow.sessionId === sessionId
-            const sameRoute = otherRow.runtimes.some((runtime) => routes.has(terminalRouteKey(runtime)))
-            if (!sameProcess && !sameSession && !sameRoute) continue
-            // A daemon-down hook may bind a session while startup discovery is opening the same process.
-            // Preserve that binding, then let the scanner-owned agent id/runtime state win deterministically.
-            if (sameProcess && !candidate.sessionId && otherRow.sessionId) {
-              candidate = {
-                ...candidate,
-                sessionId: otherRow.sessionId,
-                boundAt: otherRow.boundAt,
-                transcriptPath: otherRow.transcriptPath,
-                source: otherRow.source,
-                lastHookAt: otherRow.lastHookAt,
-              }
-            }
-            merged.delete(otherId)
-          }
-          merged.set(agentId, candidate)
-        }
-
+        const merged = mergedForSave(latest, currentRows, this.persistedBaseline, this.intended)
         const rows = validatedRows([...merged.values()])
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
         const serialized = rows.map(persistedRow)

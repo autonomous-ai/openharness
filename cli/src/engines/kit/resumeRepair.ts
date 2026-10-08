@@ -1,45 +1,20 @@
 /**
  * A stopped conversation's history made resumable, as the engine's launch contract declares it
- * (facets/launch.ts `ResumeRepairContract`), and the lookup of a history by its session's id. Moved from
- * engines/codex/portableHistory.ts and the lookup of engines/codex/rollout.ts, whose every write and refusal
- * this reproduces (engines/launchPrep.golden.spec.ts). A resume is session control: this runs in core, with
- * no worker.
+ * (facets/launch.ts `ResumeRepairContract`). Moved from engines/codex/portableHistory.ts, whose every write and
+ * refusal this reproduces (engines/launchPrep.golden.spec.ts). A history is found by its session's id with the
+ * kit's lookup (kit/sessionRecords.ts), which the session store uses too. A resume is session control: this runs
+ * in core, with no worker.
  */
 import { createHash, randomUUID } from 'node:crypto'
-import { closeSync, constants, existsSync, fsyncSync, fstatSync, lstatSync, openSync, readdirSync, readSync, realpathSync, renameSync, rmSync, writeSync, type Stats } from 'node:fs'
+import { closeSync, constants, fsyncSync, fstatSync, lstatSync, openSync, readSync, realpathSync, renameSync, rmSync, writeSync, type Stats } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import type { ResumeRepairContract } from '../facets/launch.js'
+import { findSessionFile } from './sessionRecords.js'
 
 type JsonObject = Record<string, unknown>
-type Sessions = ResumeRepairContract['sessions']
 
 function object(value: unknown): value is JsonObject {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
-
-/**
- * Find one history by its session's id without scanning unbounded history: a file ending in the declared
- * suffix whose name holds the id, under `root`, looking at no more than the declared number of entries.
- */
-export function findSessionFile(id: string, root: string, sessions: Pick<Sessions, 'suffix' | 'id' | 'walk'>): string | null {
-  if (!sessions.id.test(id) || !existsSync(root)) return null
-  const stack = [root]
-  let visited = 0
-  while (stack.length && visited < sessions.walk) {
-    const dir = stack.pop()!
-    let names: string[]
-    try { names = readdirSync(dir) } catch { continue }
-    for (const name of names) {
-      if (++visited > sessions.walk) break
-      const full = join(dir, name)
-      if (name.endsWith(sessions.suffix)) {
-        if (name.includes(id)) return full
-      } else if (!name.includes('.')) {
-        stack.push(full)
-      }
-    }
-  }
-  return null
 }
 
 /**

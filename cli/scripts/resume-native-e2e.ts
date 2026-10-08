@@ -57,7 +57,7 @@ const { AgentRestartCoordinator } = await import('../src/lib/restartAgent.js')
 const { resolvePaneEngineProcess, checkSessionRuntime, lookupPaneEngineProcess, tmuxPaneProcessTree } = await import('../src/lib/tmux.js')
 const { probeTerminalAgents } = await import('../src/lib/terminalAgentDiscovery.js')
 const { captureResumeIdentity } = await import('../src/lib/captureResumeIdentity.js')
-const { claudeProcessSession } = await import('../src/lib/sessionRepair.js')
+const { processSessionOf } = await import('../src/lib/sessionRepair.js')
 const { checkPidRuntime } = await import('../src/lib/deleteAgentFallback.js')
 const { startHookServer } = await import('../src/hookServer.js')
 const { BackendSocket } = await import('../src/backendSocket.js')
@@ -285,7 +285,7 @@ try {
     assert.equal(unbound.sessionId, '')
     assert.equal((await captureResumeIdentity(unbound)).sessionId, sessionId)
     if (engine === 'claude') {
-      assert.equal((await claudeProcessSession(unbound.processIdentity!.pid, cwd,
+      assert.equal((await processSessionOf('claude', unbound.processIdentity!.pid, cwd,
         Date.parse(unbound.processIdentity!.startMarker)))?.sessionId, sessionId,
       'Claude native process metadata identifies the conversation before Stop')
     }

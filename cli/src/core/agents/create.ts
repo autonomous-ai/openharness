@@ -30,6 +30,7 @@ import {
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, type GridLaunchMachine, type GridWebSearchStatus } from '../../lib/gridLaunch.js'
+import { profileEnvironment } from '../../lib/engineHomes.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { engineHooks } from '../../engines/hooks.js'
@@ -291,7 +292,8 @@ export function createAgentCreator({
     // a freshly-minted pane id, and that collision clears on its own on the very next pane.
     prepareApiTools(cwd, engine)
     // Mutually exclusive with a grid (backendSocket.ts refuses the two together): a chosen Codex
-    // profile becomes the new session's CODEX_HOME, the same `-e` mechanism a grid's own env rides.
+    // profile becomes the new session's CODEX_HOME (its session store's variable, lib/engineHomes.ts
+    // `profileEnvironment`), the same `-e` mechanism a grid's own env rides.
     const result = await createAndRegisterPane({
       tmuxBackend,
       registry,
@@ -299,7 +301,7 @@ export function createAgentCreator({
       cwd,
       sessionLabel: label,
       argv,
-      env: freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? { CODEX_HOME: codexHome } : undefined), dshEnv),
+      env: freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
         scmLaunchEnv(scmLaunchRecord)), !!grid || !!resumeSessionId,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
