@@ -68,6 +68,7 @@ pub fn title_reserve(app: &App, window: usize, pane: u64, width: u16) -> u16 {
 }
 
 /// Return the title's remaining space. The controls never add a row or resize a terminal.
+/// (A pane narrower than 20 columns has no controls, so no grip either: it is not dragged.)
 pub fn title(buf: &mut Buffer, app: &App, pane: u64, rect: Rect, style: Style) -> Rect {
     let reserve = title_reserve(app, app.active, pane, rect.width);
     if reserve == 0 { return rect }
@@ -588,6 +589,42 @@ pub(crate) mod tests {
             send(&mut app, MouseEventKind::Up(MouseButton::Left), wobble.0, wobble.1);
             assert_eq!((app.tabs[0].panes(), app.tab().root.as_ref().unwrap().to_tmux()), (order, layout), "dx={dx}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_right_button_or_modifier_held_drag_on_a_grip_is_never_a_pane_drag() {
+        for (button, modifiers) in [(MouseButton::Right, KeyModifiers::NONE), (MouseButton::Left, KeyModifiers::ALT), (MouseButton::Left, KeyModifiers::CONTROL)] {
+            let mut app = app(120);
+            app.tabs.truncate(1);
+            app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+            app.fit_panes(); render(&mut app);
+            let (g, order) = (grip(&app, 1), app.tabs[0].panes());
+            let r2 = app.rects.iter().find(|(id, _)| *id == 2).unwrap().1;
+            let (cx, cy) = (r2.x + r2.width / 2, r2.y + r2.height / 2);
+            for (kind, x, y) in [(MouseEventKind::Down(button), g.x + 1, g.y), (MouseEventKind::Drag(button), g.x + 1, g.y + 3),
+                (MouseEventKind::Drag(button), cx, cy), (MouseEventKind::Up(button), cx, cy)] {
+                crate::input::handle(&mut app, Event::Mouse(MouseEvent { kind, column: x, row: y, modifiers }));
+                assert!(!live(&app), "{button:?} {modifiers:?}");
+            }
+            assert_eq!(app.tabs[0].panes(), order, "{button:?} {modifiers:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_held_pane_that_is_gone_is_let_go() {
+        let mut app = app(100);                       // window 1: pane 1; window 2: pane 2
+        render(&mut app);
+        let g = grip(&app, 1);
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), g.x + 1, g.y + 3);
+        assert!(live(&app));
+        // its window empties mid-drag: the release may never reach the header press
+        app.close_pane(1);
+        render(&mut app);
+        assert!(app.controls.grab.is_none(), "the next frame lets go of a pane that is gone");
+        app.controls.grab = Some(Grab::live_for_test(1, crate::pane_drag::Drop::Swap(2)));
+        crate::pane_drag::follow(&mut app, 5, 5);
+        assert!(app.controls.grab.is_none(), "so does the next move");
     }
 
     #[tokio::test]

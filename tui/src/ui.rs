@@ -189,6 +189,7 @@ fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static s
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     crate::workspace_controls::begin_frame(app);
+    crate::pane_drag::let_go_if_gone(app);
     theme::begin_animation_frame(app.options.animations());
     app.renumber();
     // automatic-rename as of this frame: a pane that went into a mode ([tmux]) or out of one is

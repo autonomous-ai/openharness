@@ -69,10 +69,19 @@ pub fn zone(app: &App, drop: &Drop) -> Option<Rect> {
 
 /// The held pane follows the pointer: a drag once it moved 2 cells from the press, a click until then.
 pub fn follow(app: &mut App, x: u16, y: u16) {
+    let_go_if_gone(app);
     let Some(grab) = &app.controls.grab else { return };
     let (pane, live) = (grab.pane, grab.moved(x, y));
     let drop = if live { drop_target(app, pane, x, y) } else { Drop::Nothing };
     if let Some(grab) = &mut app.controls.grab { grab.live = live; grab.drop = drop; }
+}
+
+/// A held pane closed (or its window emptied) mid-drag is let go: its release may never reach
+/// the header press (a welcome screen in its place takes it).
+pub fn let_go_if_gone(app: &mut App) {
+    let Some(pane) = app.controls.grab.as_ref().map(|g| g.pane) else { return };
+    if app.panes.contains_key(&pane) && app.tabs.iter().any(|t| t.panes().contains(&pane)) { return }
+    cancel(app);
 }
 
 /// What the zone says, in a few words.
@@ -93,10 +102,11 @@ fn hint(app: &App, drop: &Drop) -> Option<String> {
 pub struct DropZone<'a> { hint: Option<&'a str>, tint: Style }
 
 impl<'a> DropZone<'a> {
-    /// [reverse] is the cue for NO_COLOR, which paints no colour at all.
+    /// [reverse] is the cue for NO_COLOR, which paints no colour at all. (Underlined too: NO_COLOR's
+    /// status bar is reversed already, so a tab reversed again would show nothing.)
     pub fn new(hint: Option<&'a str>, bg: Color, fg: Color, reverse: bool) -> Self {
         let tint = Style::new().bg(bg).fg(fg);
-        DropZone { hint, tint: if reverse { tint.add_modifier(Modifier::REVERSED) } else { tint } }
+        DropZone { hint, tint: if reverse { tint.add_modifier(Modifier::REVERSED | Modifier::UNDERLINED) } else { tint } }
     }
 }
 
@@ -209,6 +219,16 @@ mod tests {
         let r3 = rect(&row, 3);
         assert_eq!(drop_target(&row, 1, r3.x + 1, r3.y + r3.height / 2), Drop::Beside(3, Side::Left));
         assert_eq!(drop_target(&row, 2, r3.x + 1, r3.y + r3.height / 2), Drop::Nothing);
+    }
+
+    #[test]
+    fn under_no_color_the_zone_shows_on_an_already_reversed_cell() {
+        // NO_COLOR draws the status bar reversed: reversing a tab's cells again would show nothing.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
+        buf.set_string(0, 0, "1:work", Style::new().add_modifier(Modifier::REVERSED));
+        let before = buf.clone();
+        DropZone::new(Some("to work"), Color::Reset, Color::Reset, true).render(Rect::new(0, 0, 6, 1), &mut buf);
+        for x in 0..6 { assert_ne!(look(&buf, x, 0), look(&before, x, 0), "cell {x} of the tab shows the zone"); }
     }
 
     #[tokio::test]
@@ -341,13 +361,14 @@ mod tests {
         assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
     }
 
-    /// The cell loops the zone was first drawn with, kept to prove the widget draws the same cells.
+    /// The cell loops the zone was first drawn with, kept to prove the widget draws the same cells
+    /// (their NO_COLOR cue since underlined as well, as the widget's is).
     fn oracle_shade(buf: &mut Buffer, zone: Rect, text: Option<&str>, bg: Color, fg: Color, reverse: bool) {
         let zone = zone.intersection(buf.area);
         for pos in zone.positions() {
             let Some(cell) = buf.cell_mut(pos) else { continue };
             cell.set_bg(bg).set_fg(fg);
-            if reverse { cell.modifier.insert(Modifier::REVERSED) }
+            if reverse { cell.modifier.insert(Modifier::REVERSED | Modifier::UNDERLINED) }
         }
         let Some(text) = text else { return };
         let width = UnicodeWidthStr::width(text) as u16;
