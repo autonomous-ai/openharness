@@ -1,12 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { engineAccount } from './engineAccount.js'
+import { engineAccount, readLoginShellEnv } from './engineAccount.js'
 
 const roots: string[] = []
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 
 function home() {
   const root = mkdtempSync(join(tmpdir(), 'harness-engine-account-'))
@@ -102,5 +102,16 @@ describe('engineAccount', () => {
     writeFileSync(join(root, 'claude-dir', '.credentials.json'), '{}')
     expect((await engineAccount('claude', { home: root, env: { CLAUDE_CONFIG_DIR: join(root, 'claude-dir') }, platform: 'linux' })).signedIn).toBe(true)
     expect(await engineAccount('opencode', { home: root, ...linux })).toEqual({ signedIn: null, lastUsedAt: null })
+  })
+
+  // A daemon the app started never sees what the person exports in ~/.zshrc.
+  it('reads which credentials the login shell sets, and the folders, never a credential value', async () => {
+    const root = home()
+    writeFileSync(join(root, '.zshrc'), `export ANTHROPIC_API_KEY=sk-secret-value\nexport CODEX_HOME="${root}/codex home"\n`)
+    vi.stubEnv('HOME', root)
+    vi.stubEnv('ZDOTDIR', root)
+    vi.stubEnv('SHELL', '/bin/zsh')
+    const env = await readLoginShellEnv()
+    expect(env).toEqual({ ANTHROPIC_API_KEY: '1', CODEX_HOME: `${root}/codex home` })
   })
 })

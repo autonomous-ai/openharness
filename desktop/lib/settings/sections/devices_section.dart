@@ -25,8 +25,13 @@ class DevicesSection extends StatefulWidget {
     this.cli,
     this.dial,
     this.onDeviceSettings,
+    this.onLocalNetworkBlocked,
     this.showCompanion = false,
   });
+
+  /// Discovery found the local network refused: the app restarts a daemon it
+  /// did not launch so it gets the app's permission (AppNotifier.localNetworkBlocked).
+  final Future<void> Function()? onLocalNetworkBlocked;
   final bool showCompanion;
   final AutonomousDeviceCli? cli;
 
@@ -103,6 +108,14 @@ class _DevicesSectionState extends State<DevicesSection> {
       return await _cli.discover();
     } on AutonomousDeviceCliException catch (error) {
       if (!error.localNetworkBlocked) rethrow;
+      if (widget.onLocalNetworkBlocked case final restart?) {
+        await restart();
+        try {
+          return await _cli.discover();
+        } on AutonomousDeviceCliException catch (again) {
+          if (!again.localNetworkBlocked) rethrow;
+        }
+      }
       return {'devices': const [], 'localNetworkBlocked': true};
     }
   }

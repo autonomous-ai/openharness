@@ -11,6 +11,7 @@
  * steps is the part worth testing — the archive must exist before a client is told to look for it,
  * and the ending must reach the client before the frame that is behind a filesystem await.
  */
+import { statSync } from 'node:fs'
 import type { RegisteredSession } from './registry.js'
 
 export interface RetainExitedSessionDeps {
@@ -34,6 +35,13 @@ export interface RetainExitedSessionDeps {
   warn(message: string, error: unknown): void
   /** Injected for tests; Date.now otherwise. */
   now?: () => number
+  /** Whether the engine wrote any conversation; the transcript on disk otherwise. */
+  hadConversation?: (entry: RegisteredSession) => boolean
+}
+
+function wroteTranscript(entry: RegisteredSession): boolean {
+  if (!entry.transcriptPath) return false
+  try { return statSync(entry.transcriptPath).size > 0 } catch { return false }
 }
 
 /** How soon after it appeared an engine's exit counts as a failed start rather than an ending. */
@@ -66,7 +74,10 @@ export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
     // above. The shell is released first (synchronous), so the frame still goes out before anything
     // awaited.
     const terminal = paneAlive ? deps.registry.releaseEngine(entry.agentId, true) : null
+    // A failed start: soon after it appeared, and before it wrote any conversation. Time alone
+    // also caught a person who ran one quick task and typed /exit (review of #1047).
     const early = (deps.now?.() ?? Date.now()) - entry.registeredAt < EARLY_EXIT_MS
+      && !(deps.hadConversation ?? wroteTranscript)(entry)
     deps.send({ type: 'agent_deleted', payload: { agentId: entry.agentId, retained: true, ...(terminal && early ? { successor: terminal.agentId } : {}) } })
     if (!paneAlive) deps.registry.removeAgent(entry.agentId)
     deps.syncRecapPool()

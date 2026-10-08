@@ -60,13 +60,16 @@ describe('retainExitedSession', () => {
   // Only a failed start hands its tiles to the shell: there the engine's last screen is the only
   // place that says why it stopped. A later exit keeps closing its views (#262).
   it('an engine that exits soon after it appeared names the shell that keeps its pane', () => {
-    const h = harness({ now: () => 1_000 + 30_000 })
+    const quickExit = harness({ now: () => 1_000 + 30_000, hadConversation: () => true })
+    quickExit.retain(row({ registeredAt: 1_000 }), true)
+    expect(quickExit.frames, 'a quick /exit after real work closes as before').toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
+    const h = harness({ now: () => 1_000 + 30_000, hadConversation: () => false })
     h.retain(row({ registeredAt: 1_000 }), true)
     expect(h.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true, successor: 'agent-shell' } }])
-    const late = harness({ now: () => 1_000 + EARLY_EXIT_MS })
+    const late = harness({ now: () => 1_000 + EARLY_EXIT_MS, hadConversation: () => false })
     late.retain(row({ registeredAt: 1_000 }), true)
     expect(late.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
-    const dead = harness({ now: () => 1_000 })
+    const dead = harness({ now: () => 1_000, hadConversation: () => false })
     dead.retain(row({ registeredAt: 1_000 }), false)
     expect(dead.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
   })

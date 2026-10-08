@@ -799,7 +799,10 @@ class AppNotifier extends ChangeNotifier {
               // their second session, robots or not (fresh macOS VM, 2026-10-08). Without a paired
               // robot nothing here needs the LAN, so it is not tested.
               final paired = (await cli.list())['devices'];
-              if (paired is! List || paired.isEmpty) return null;
+              if (!_localNetworkWanted &&
+                  (paired is! List || paired.isEmpty)) {
+                return null;
+              }
               await cli.discover();
               return false;
             } on AutonomousDeviceCliException catch (error) {
@@ -4207,6 +4210,12 @@ class AppNotifier extends ChangeNotifier {
     bool quiet = false,
   }) async {
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
+    final installsHarness =
+        install &&
+        mode != EnvironmentSetupMode.manual &&
+        (resumeFrom ?? environmentReadiness).plan.any(
+          (item) => item.step == EnvironmentStep.harness,
+        );
     final result = await provisioner.ensureReady(
       onProgress: (value) {
         if (quiet &&
@@ -4237,6 +4246,7 @@ class AppNotifier extends ChangeNotifier {
       mode: mode,
     );
     environmentReadiness = result;
+    if (installsHarness && result.isReady) _harnessInstalledThisLaunch = true;
     return result;
   }
 
@@ -4952,12 +4962,37 @@ class AppNotifier extends ChangeNotifier {
   bool _agentsInstallStarted = false;
 
   /// A new user's first harness waited for its agent to install in the pane (OpenCode ~15 s, longer
-  /// for Claude Code and Codex). Once this computer's daemon is up, the CLI installs whichever of
-  /// the default agents are missing, in the background and OpenCode first
+  /// for Claude Code and Codex). On the run that installed Harness, once this computer's daemon is
+  /// up, the CLI installs whichever of the default agents are missing, in the background and
+  /// OpenCode first
   /// (`harness engines install-missing`); a harness started meanwhile waits for that install rather
   /// than running its own. Once per launch. An older CLI without the command answers an error,
   /// which is only logged.
+  /// Settings › Devices could not see the local network. Without a paired
+  /// robot the daemon-owner check never tests the LAN (it is what raises the
+  /// macOS prompt), so a daemon started from a terminal would stay refused it
+  /// and the first robot could never be found. Asked here, by the person
+  /// looking for one, the check runs again with the LAN test.
+  bool _localNetworkWanted = false;
+
+  Future<void> localNetworkBlocked() async {
+    _localNetworkWanted = true;
+    final guard = _daemonOwner;
+    if (guard == null) return;
+    final probe = await _discovery.ensureRunning();
+    final pid = probe.pid;
+    if (probe.ready && pid != null) await guard.recheck(pid);
+  }
+
+  /// This launch installed Harness on this computer: a new user's first run.
+  bool _harnessInstalledThisLaunch = false;
+
   void _installMissingAgents() {
+    // Only on the run that installed Harness here, which is a new user's first
+    // and never a "Manual setup" (that installs nothing unattended). An
+    // existing user who updates the app is not given four agents they never
+    // asked for, nor one they removed long ago.
+    if (!_harnessInstalledThisLaunch) return;
     if (_agentsInstallStarted || kUnderTest || viewer != null) return;
     _agentsInstallStarted = true;
     unawaited(() async {
@@ -9529,6 +9564,21 @@ class AppNotifier extends ChangeNotifier {
         .where((p) => p.machineId == machineId && p.agentId == agentId)
         .toList();
     if (terminals.isEmpty) return;
+    // As a Change agent does: a tab whose only agent was the one that ended
+    // gets a fresh desk identity, so a peer that prunes that agent (an older
+    // window ignores `successor`) cannot close the tab now showing the shell.
+    final replacedTabs = _desk.enabled
+        ? swarms.where((swarm) {
+            final agents = swarm.panes.where((pane) => pane.agentId != null);
+            return _deskTracks(swarm) &&
+                isDeskId(swarm.id) &&
+                agents.isNotEmpty &&
+                agents.every(
+                  (pane) =>
+                      pane.machineId == machineId && pane.agentId == agentId,
+                );
+          }).toList()
+        : <Swarm>[];
     for (final pane in terminals) {
       await _detachSession(pane, sendClose: false);
       if (allPanes.contains(pane) && pane.agentId == agentId) {
@@ -9538,6 +9588,15 @@ class AppNotifier extends ChangeNotifier {
     for (final swarm in swarms) {
       if (swarm.titleMachineId == machineId && swarm.titleAgentId == agentId) {
         swarm.titleAgentId = successor;
+      }
+    }
+    for (final swarm in replacedTabs) {
+      if (!swarms.contains(swarm)) continue;
+      final previousId = swarm.id;
+      swarm.id = newDeskId();
+      if (_activeSwarmId == previousId) _activeSwarmId = swarm.id;
+      for (final entry in _draftSwarmReturns.entries.toList()) {
+        if (entry.value == previousId) _draftSwarmReturns[entry.key] = swarm.id;
       }
     }
     _persistLayout();

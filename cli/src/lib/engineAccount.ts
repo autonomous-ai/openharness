@@ -49,16 +49,44 @@ function keychainHas(service: string): Promise<boolean> {
   })
 }
 
-/** The newest mtime among `dir`'s subfolders (one level), or null. */
+/** The newest mtime among `dir`'s subfolders (one level), or null. Stat'ed together: a heavy
+ *  Claude Code user has thousands of project folders. */
 async function newestChild(dir: string): Promise<number | null> {
-  let newest: number | null = null
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const at = await mtime(join(dir, entry.name))
-    if (at !== null && (newest === null || at > newest)) newest = at
-  }
-  return newest
+  const entries = (await readdir(dir, { withFileTypes: true }).catch(() => [])).filter(entry => entry.isDirectory())
+  const times = await Promise.all(entries.map(entry => mtime(join(dir, entry.name))))
+  return times.reduce<number | null>((newest, at) => at !== null && (newest === null || at > newest) ? at : newest, null)
+}
+
+/** Credentials and config folders a person sets in their shell profile (`~/.zshrc`), which a daemon
+ *  started by the app or launchd never sees in its own environment. Only whether each credential is
+ *  set is read; the two folder variables are read for their paths. */
+const SHELL_NAMES = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK',
+  'CLAUDE_CODE_USE_VERTEX', 'OPENAI_API_KEY'] as const
+const SHELL_PATHS = ['CLAUDE_CONFIG_DIR', 'CODEX_HOME'] as const
+
+export function readLoginShellEnv(): Promise<NodeJS.ProcessEnv> {
+  const shell = process.env.SHELL || '/bin/zsh'
+  const script = SHELL_NAMES.map(name => `[ -n "\${${name}:-}" ] && printf '%s=1\\n' ${name}`).join('; ')
+    + '; ' + SHELL_PATHS.map(name => `[ -n "\${${name}:-}" ] && printf '%s=%s\\n' ${name} "\$${name}"`).join('; ')
+    + '; :'
+  return new Promise(resolve => {
+    execFile(shell, ['-ilc', script], { timeout: 5000, maxBuffer: 64 * 1024 }, (_error, stdout) => {
+      const env: NodeJS.ProcessEnv = {}
+      for (const line of String(stdout ?? '').split('\n')) {
+        const eq = line.indexOf('=')
+        const name = line.slice(0, eq)
+        if (eq > 0 && ([...SHELL_NAMES, ...SHELL_PATHS] as readonly string[]).includes(name)) env[name] = line.slice(eq + 1)
+      }
+      resolve(env)
+    })
+  })
+}
+
+let shellEnvCache: { at: number, env: Promise<NodeJS.ProcessEnv> } | null = null
+/** One login shell a minute at most: the New Harness box probes engines every time it opens. */
+function loginShellEnv(): Promise<NodeJS.ProcessEnv> {
+  if (!shellEnvCache || Date.now() - shellEnvCache.at > 60_000) shellEnvCache = { at: Date.now(), env: readLoginShellEnv() }
+  return shellEnvCache.env
 }
 
 /** Codex's newest `sessions/YYYY/MM/DD` folder's mtime: the names sort as dates. */
@@ -81,7 +109,7 @@ const CLAUDE_ENV = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OA
 /** Claude Code and Codex only; every other engine answers unknown. */
 export async function engineAccount(engine: AgentEngine, deps: EngineAccountDeps = {}): Promise<EngineAccount> {
   const home = deps.home ?? homedir()
-  const env = deps.env ?? process.env
+  const env = deps.env ?? { ...await loginShellEnv(), ...process.env }
   const platform = deps.platform ?? process.platform
   if (engine === 'claude') {
     const custom = env.CLAUDE_CONFIG_DIR
