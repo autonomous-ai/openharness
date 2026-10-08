@@ -31,6 +31,7 @@ enum Phase {
     Confirm(String),
     Completing,
     Committed,
+    SigningOut,
     Failed(String),
 }
 
@@ -64,7 +65,32 @@ fn visible(app: &App) -> bool { matches!(app.modal, Some(Modal::Picker { kind: P
 
 pub(crate) fn identity_changed(app: &mut App) {
     app.account.checked = None; app.account.checking = false;
-    if app.account.driver.is_none() { app.account.status = Status::Unknown; app.account.phase = Phase::Ready; }
+    // `harness logout` restarts the daemon before it exits; the sign-out finishes when it does.
+    if app.account.driver.is_none() && app.account.phase != Phase::SigningOut { app.account.status = Status::Unknown; app.account.phase = Phase::Ready; }
+}
+
+/// Sign out asks first, Cancel chosen, so an Enter that was meant for something else signs
+/// nothing out. Signed out, there is nothing to ask: the account page offers sign-in.
+/// [from_account]: Cancel goes back to the account page it was asked from.
+pub fn ask_sign_out(app: &mut App, from_account: bool) {
+    if app.account.driver.is_some() || app.account.phase == Phase::SigningOut || !matches!(app.account.status, Status::SignedIn { .. }) {
+        if !visible(app) { open(app); }
+        return;
+    }
+    use crate::workspace_menu as menu;
+    let mut notes = vec![menu::note("Sign out of your Harness account on this computer?")];
+    if let Status::SignedIn { email: Some(email), .. } = &app.account.status { notes.push(menu::note(&format!("You are signed in as {email}."))); }
+    notes.push(menu::note("Harnesses on this computer keep running."));
+    let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
+    let row = crate::buttons::Row { buttons: vec![button("Cancel"), button("Sign out")], chosen: 0, hint: crate::buttons::KEYS.into() };
+    let cancel = if from_account { "account" } else { "" };
+    menu::open_buttons(app, "Sign out", notes, row, vec![cancel.into(), "signout -y".into()]);
+}
+
+/// The confirmed Sign out: on the account page, where its progress and any error show.
+pub fn sign_out_confirmed(app: &mut App) {
+    open(app);
+    sign_out(app);
 }
 
 pub fn refresh(app: &mut App, force: bool) {
@@ -141,11 +167,13 @@ pub fn fill(app: &App, picker: &mut Picker) {
         Phase::Committed => {
             rows.push(Row::new("account:wait", "Signed in · connecting this computer…"));
         }
+        Phase::SigningOut => rows.push(Row::new("account:wait", "Signing out…")),
         Phase::Ready | Phase::Failed(_) => match &app.account.status {
             Status::SignedIn { .. } => {
                 rows.push(Row::new("account:machines", "Connect a machine"));
                 rows.push(Row::new("account:phone", "Add your phone"));
                 rows.push(Row::new("account:models", "Models on your machines"));
+                rows.push(Row::new("account:signout", "Sign out"));
             }
             _ => {
                 rows.push(Row::new("account:google", "Continue with Google"));
@@ -159,7 +187,7 @@ pub fn fill(app: &App, picker: &mut Picker) {
     // across sign-in phases; set_rows still preserves the selected action by ID.
     picker.rows.clear();
     picker.set_rows(rows);
-    picker.busy = matches!(app.account.phase, Phase::Starting | Phase::Completing | Phase::Committed).then(|| "waiting".into());
+    picker.busy = matches!(app.account.phase, Phase::Starting | Phase::Completing | Phase::Committed | Phase::SigningOut).then(|| "waiting".into());
 }
 
 fn refill(app: &mut App) {
@@ -198,6 +226,7 @@ pub fn preview(app: &App, _: &str) -> Vec<Line<'static>> {
         }
         Phase::Failed(message) => lines.push(Line::raw(message.clone())),
         Phase::Starting => lines.push(Line::raw(app.account.waiting.clone().unwrap_or_else(|| "Opening sign-in…".into()))),
+        Phase::SigningOut => lines.push(Line::raw(SIGNING_OUT)),
         _ => {}
     }
     lines
@@ -252,20 +281,27 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, picker: &mut Picker) -> Opt
         Phase::Starting => vec![Line::raw(app.account.waiting.clone().unwrap_or_else(|| "Opening sign-in…".into()))],
         Phase::Completing => vec![Line::raw("Finishing sign-in. You can return to your workspace.")],
         Phase::Committed => vec![Line::raw("Signed in. Connecting this computer…")],
+        Phase::SigningOut => vec![Line::raw(SIGNING_OUT)],
     };
     if needs_room { lines.extend([Line::raw(""), Line::raw("Enlarge the terminal to scan, or copy the phone sign-in link.")]); }
     // Actions always remain reachable, including in a short terminal. The explanation uses
     // the remaining rows and wraps; wheel/arrow navigation still works in a one-row list.
     let compact = r.height < 14;
-    let bottom = r.bottom().saturating_sub(if compact { 2 } else { 3 });
-    let count = picker.rows.len().min(bottom.saturating_sub(r.y + if compact { 3 } else { 4 }) as usize).max(1) as u16;
+    // Tight: the actions do not fit beside the explanation, so they take its rows and the
+    // bottom padding instead.
+    let tight = compact && picker.rows.len() as u16 > r.height.saturating_sub(5);
+    let hint_y = r.bottom().saturating_sub(if tight { 1 } else { 2 });
+    let bottom = r.bottom().saturating_sub(if tight { 1 } else if compact { 2 } else { 3 });
+    let count = picker.rows.len().min(bottom.saturating_sub(r.y + if tight { 2 } else if compact { 3 } else { 4 }) as usize).max(1) as u16;
     let list_top = bottom.saturating_sub(count);
     let description_top = r.y + if compact { 2 } else { 3 };
-    Paragraph::new(lines).style(c.muted).wrap(Wrap { trim: false })
-        .render(Rect::new(x, description_top, width, list_top.saturating_sub(description_top + if compact { 0 } else { 1 })), buf);
+    if !tight {
+        Paragraph::new(lines).style(c.muted).wrap(Wrap { trim: false })
+            .render(Rect::new(x, description_top, width, list_top.saturating_sub(description_top + if compact { 0 } else { 1 })), buf);
+    }
     settings::list(buf, picker, Rect::new(x, list_top, width, count), &c, false);
     let hint = if picker.query.is_empty() { if compact { "↑↓ choose · Enter · Esc back".into() } else { "↑↓ choose   enter open   esc back".into() } } else { format!("Filter: {}", picker.query) };
-    put(buf, x, r.bottom() - 2, width, &hint, c.muted);
+    put(buf, x, hint_y, width, &hint, c.muted);
     None
 }
 
@@ -281,6 +317,7 @@ pub fn choose(app: &mut App, mut picker: Picker, id: &str) {
     app.modal = Some(Modal::Picker { kind: PickerKind::Account, picker });
     match action {
         "google" | "apple" | "qr" => start(app, action),
+        "signout" => ask_sign_out(app, true),
         "cancel" | "deny" => { cancel(app); refill(app); }
         "confirm" => {
             if matches!(app.account.phase, Phase::Confirm(_)) {
@@ -325,13 +362,59 @@ fn start(app: &mut App, method: &str) {
     #[cfg(not(test))]
     {
         let sink = app.sink.clone();
-        let exe = std::env::var("HARNESS_CLI").unwrap_or_else(|_| "harness".into());
-        let script: Vec<String> = std::env::var("HARNESS_CLI_ARGS").ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-        let mut command = tokio::process::Command::new(exe);
-        command.args(script).args(args);
+        let mut command = cli();
+        command.args(args);
         tokio::spawn(drive(command, generation, sink, receive));
     }
     let _ = generation;
+}
+
+const SIGNING_OUT: &str = "Signing out. Harnesses on this computer keep running.";
+
+#[cfg(not(test))]
+fn cli() -> tokio::process::Command {
+    let exe = std::env::var("HARNESS_CLI").unwrap_or_else(|_| "harness".into());
+    let script: Vec<String> = std::env::var("HARNESS_CLI_ARGS").ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let mut command = tokio::process::Command::new(exe);
+    command.args(script);
+    command
+}
+
+/// Sign out as the desktop app does: `harness logout` clears the sign-in and brings this
+/// computer's daemon back signed out, so the harnesses here stay on screen.
+fn sign_out(app: &mut App) {
+    if app.account.driver.is_some() || app.account.phase == Phase::SigningOut || !matches!(app.account.status, Status::SignedIn { .. }) { return }
+    app.account.generation += 1;
+    let generation = app.account.generation;
+    app.account.phase = Phase::SigningOut;
+    refill(app);
+    #[cfg(test)]
+    app.account.started.push(vec!["logout".into()]);
+    #[cfg(not(test))]
+    {
+        use std::process::Stdio;
+        let mut command = cli();
+        // Not piped: the daemon it restarts inherits these, and would hold a pipe open forever.
+        command.arg("logout").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true);
+        app.spawn(async move {
+            tokio::time::timeout(Duration::from_secs(60), command.status()).await.is_ok_and(|s| s.is_ok_and(|s| s.success()))
+        }, move |app, ok| signed_out(app, generation, ok));
+    }
+    let _ = generation;
+}
+
+fn signed_out(app: &mut App, generation: u64, ok: bool) {
+    if generation != app.account.generation || app.account.phase != Phase::SigningOut { return }
+    if ok {
+        app.account.status = Status::SignedOut;
+        app.account.phase = Phase::Ready;
+        reconnect(app);
+        refresh(app, true);
+    } else {
+        app.account.phase = Phase::Failed("Could not sign out. Try again.".into());
+        refresh(app, true);
+    }
+    refill(app);
 }
 
 fn valid_url(url: &str) -> bool {
@@ -543,7 +626,7 @@ mod tests {
             app.account.status = if signed_in { Status::SignedIn { email:Some("dev@example.test".into()), offline:false } } else { Status::SignedOut };
             crate::input::picker(&mut app, PickerKind::Account, "Your Harness account", "");
             let (text, _) = render(&mut app, 40, 12);
-            for label in if signed_in { vec!["Connect a machine", "Add your phone", "Models on your machines", "Back to workspace"] }
+            for label in if signed_in { vec!["Connect a machine", "Add your phone", "Models on your machines", "Sign out", "Back to workspace"] }
                 else { vec!["Continue with Google", "Continue with Apple", "Sign in with your phone", "Keep using locally"] } {
                 assert!(text.contains(label), "{label}\n{text}");
             }
@@ -551,6 +634,69 @@ mod tests {
             let Some(Modal::Picker { picker, .. }) = &app.modal else { panic!() };
             assert!(picker.list_area.get().height >= 4);
         }
+    }
+
+    #[test]
+    fn sign_out_runs_the_cli_once_and_ends_signed_out_on_this_computer() {
+        let mut app = app();
+        app.devices.runner = Some(Box::new(|_| None));
+        let asking = |app: &App| matches!(&app.modal, Some(Modal::Menu(m)) if m.title == "Sign out" && m.buttons.is_some());
+        // Signed out, the command panel's Sign out asks nothing and runs nothing: the account page offers sign-in.
+        crate::input::run(&mut app, "signout");
+        assert!(visible(&app) && !asking(&app));
+        assert_eq!(app.account.started, Vec::<Vec<String>>::new());
+        app.modal = None;
+        app.account.status = Status::SignedIn { email: Some("dev@example.test".into()), offline: false };
+        open(&mut app);
+        let (text, _) = render(&mut app, 80, 24);
+        assert!(text.contains("Sign out"), "{text}");
+        // Enter on the row asks first, Cancel chosen: a second Enter goes back to the account page.
+        select(&mut app, "account:signout");
+        assert!(asking(&app));
+        let (text, _) = render(&mut app, 80, 24);
+        for expected in ["Sign out of your Harness account on this computer?", "dev@example.test", "keep running", "Cancel"] { assert!(text.contains(expected), "missing {expected}:\n{text}"); }
+        key(&mut app, KeyCode::Enter);
+        assert!(visible(&app), "Cancel returns to the account page");
+        assert_eq!(app.account.started, Vec::<Vec<String>>::new());
+        // From the command panel, Esc just closes the question.
+        crate::input::run(&mut app, "signout");
+        assert!(asking(&app));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none());
+        assert!(app.toast.is_none(), "{:?}", app.toast);
+        assert_eq!(app.account.started, Vec::<Vec<String>>::new());
+        // → to Sign out, then Enter.
+        open(&mut app);
+        select(&mut app, "account:signout");
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.account.started, vec![vec!["logout"]]);
+        assert!(visible(&app), "progress shows on the account page");
+        let (text, _) = render(&mut app, 80, 24);
+        assert!(text.contains("Signing out") && text.contains("keep running"), "{text}");
+        // The daemon restarting signed out is part of the sign-out, not the end of it.
+        identity_changed(&mut app);
+        assert_eq!(app.account.phase, Phase::SigningOut);
+        crate::input::run(&mut app, "signout");
+        assert!(!asking(&app));
+        crate::commands::execute(&mut app, "signout -y");
+        assert_eq!(app.account.started.len(), 1, "one sign-out at a time");
+
+        let generation = app.account.generation;
+        signed_out(&mut app, generation, false);
+        assert_eq!(app.account.phase, Phase::Failed("Could not sign out. Try again.".into()));
+        let (text, _) = render(&mut app, 80, 24);
+        assert!(text.contains("Could not sign out") && text.contains("Sign out"), "{text}");
+
+        crate::commands::execute(&mut app, "logout -y");
+        assert_eq!(app.account.started.len(), 2);
+        let generation = app.account.generation;
+        signed_out(&mut app, generation - 1, true);
+        assert_eq!(app.account.phase, Phase::SigningOut, "a stale result is ignored");
+        signed_out(&mut app, generation, true);
+        assert_eq!((app.account.status.clone(), app.account.phase.clone()), (Status::SignedOut, Phase::Ready));
+        let (text, _) = render(&mut app, 80, 24);
+        assert!(text.contains("Continue with Google") && !text.contains("Sign out"), "{text}");
     }
 
     #[test]

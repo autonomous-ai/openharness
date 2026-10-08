@@ -2,45 +2,125 @@
 _hn_request() (
     exec 4<>/dev/tty
     [ -t 4 ] || { printf '%s\n' 'Run this command at an interactive Harness prompt.' >&2; exit 1; }
+    # Ctrl-C cancels at any moment; before the request has an id there is
+    # nothing to cancel yet.
+    _hn_id='' _hn_stop='' _hn_drawn=''
+    # The progress line's rows go before anything else is said, so the screen
+    # shows only the prompt (and any message) again, on the row it started from.
+    _hn_erase() {
+        [ -z "$_hn_drawn" ] || printf '\r\033[2K\033[1A\033[2K\033[1A' >&4
+        _hn_drawn=''
+    }
+    _hn_cancel() {
+        [ -z "$_hn_id" ] || printf '\033]633;hn;%s;%s;cancel;\007' "$_HN_CONTEXT" "$_hn_id" >&4
+        _hn_erase
+        [ "$1" != 130 ] || printf '%s\n' 'Cancelled.' >&2
+        exit "$1"
+    }
+    # A helper that Ctrl-C stopped (zsh only notes the signal) failed because the
+    # user cancelled: say so, not that the request failed.
+    _hn_fail() {
+        [ -z "$_hn_stop" ] || _hn_cancel "$_hn_stop"
+        _hn_erase
+        [ -z "${1-}" ] || printf '%s\n' "$1" >&2
+        exit 1
+    }
+    # zsh runs a trap inside its signal handler, even halfway through a builtin's
+    # write. Exiting from there forks the EXIT trap's rm while the write holds the
+    # stdio lock; the child waits on that lock forever and the shell freezes. So
+    # zsh only notes the signal and the loop cancels; its read returns at once.
+    # Bash acts in the trap: its read would wait out the timeout, and 3.2's takes
+    # whole seconds only, so noting the signal could keep Ctrl-C waiting a second.
+    # Bash 4.3+ runs the trap between commands. Older bash (macOS's 3.2) runs it
+    # from the signal handler, but only while read waits, reading byte by byte
+    # with read(2): no write is in progress there. Only a Ctrl-C that lands just
+    # as an arriving reply grows read's buffer could meet a busy allocator, a
+    # window of microseconds once per reply.
+    if [ -n "${ZSH_VERSION-}" ]; then
+        trap '_hn_stop=130' INT; trap '_hn_stop=143' TERM HUP
+    else
+        trap '_hn_cancel 130' INT; trap '_hn_cancel 143' TERM HUP
+    fi
+    _hn_who=''
+    case "$1" in
+        host-inline)
+            _hn_who=${2-}; _hn_who=${_hn_who//[[:cntrl:]]/}
+            case "$_hn_who" in
+                -|local) _hn_who='This computer'; _hn_what='Opening a shell on this computer…' ;;
+                *) _hn_what="Opening a shell on ${_hn_who:-the computer}…" ;;
+            esac ;;
+        model-inline) _hn_what='Switching model…' ;;
+        session-inline) _hn_what='Opening session…' ;;
+        *) _hn_what='' ;;
+    esac
+    # Drawn first, before any helper process starts, so a silent computer never
+    # looks like a frozen shell, even on a busy machine. With wrapping off, a long
+    # name in a narrow pane still takes one row.
+    if [ -n "$_hn_what" ]; then
+        printf '\n\033[?7l%s Ctrl-C to cancel\033[?7h\r\n' "$_hn_what" >&4
+        _hn_drawn=1
+    fi
+    [ -z "$_hn_stop" ] || _hn_cancel "$_hn_stop"   # cancelled already: start no helper
     # zsh subshells inherit the same RANDOM state. Use fresh OS randomness so
     # successive commands cannot accidentally reuse a completed request id.
     _hn_nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \r\n')
-    [ "${#_hn_nonce}" = 32 ] || { printf '%s\n' 'Could not create a shell request.' >&2; exit 1; }
+    [ "${#_hn_nonce}" = 32 ] || _hn_fail 'Could not create a shell request.'
     _hn_id="$$-$_hn_nonce"
     _hn_dir="$HOME/.harness/shell-requests/$_HN_CONTEXT"
     umask 077
-    mkdir -p -- "$_hn_dir" || exit 1
+    mkdir -p -- "$_hn_dir" || _hn_fail
     _hn_fifo="$_hn_dir/$_hn_id"
-    mkfifo -- "$_hn_fifo" || exit 1
+    mkfifo -- "$_hn_fifo" || _hn_fail
     trap 'rm -f -- "$_hn_fifo"; rmdir -- "$_hn_dir" 2>/dev/null || true' EXIT
-    trap 'printf "\\033]633;hn;%s;%s;cancel;\\007" "$_HN_CONTEXT" "$_hn_id" >&4; exit 130' INT
-    trap 'printf "\\033]633;hn;%s;%s;cancel;\\007" "$_HN_CONTEXT" "$_hn_id" >&4; exit 143' TERM HUP
-    exec 3<>"$_hn_fifo" || exit 1
+    exec 3<>"$_hn_fifo" || _hn_fail
     _hn_query=$(printf '%s' "${2-}" | base64 | tr -d '\r\n')
     # A freshly reattached stream may miss its first output event. Retry the same
     # request id; the client deduplicates it and never repeats the action.
     _hn_attempt=0
-    _hn_attempts=120
-    [ "$1" != picker-ready ] || _hn_attempts=5
-    while [ "$_hn_attempt" -lt "$_hn_attempts" ]; do
+    # Called from a line-editor widget, a request says what it waits for and gives
+    # up after the TUI's own budget for that action (the TUI drops it 5 s later).
+    case "$1" in
+        host-inline) _hn_attempts=100 ;;
+        session-inline) _hn_attempts=180 ;;
+        model-inline) _hn_attempts=60 ;;
+        picker-ready) _hn_attempts=5 ;;
+        *) _hn_attempts=120 ;;
+    esac
+    # The reply to this request ends it with the TUI's code and data.
+    _hn_answer() {
+        case "$_hn_reply" in "HN:$_hn_id:"*) ;; *) return 1 ;; esac
+        _hn_reply=${_hn_reply#"HN:$_hn_id:"}
+        _hn_code=${_hn_reply%%:*}
+        _hn_data=${_hn_reply#*:}
+        _hn_erase
+        if [ "$_hn_code" = 0 ]; then
+            printf '%s' "$_hn_data" | base64 -d
+            exit 0
+        fi
+        [ -z "$_hn_data" ] || { printf '%s' "$_hn_data" | base64 -d >&2; printf '\n' >&2; }
+        exit 1
+    }
+    while [ -z "$_hn_stop" ] && [ "$_hn_attempt" -lt "$_hn_attempts" ]; do
         _hn_attempt=$((_hn_attempt + 1))
         printf '\033]633;hn;%s;%s;%s;%s\007' "$_HN_CONTEXT" "$_hn_id" "$1" "$_hn_query" >&4
+        [ -z "$_hn_stop" ] || break
         IFS= read -r -t 1 _hn_reply <&3 || continue
-        case "$_hn_reply" in
-            "HN:$_hn_id:"*)
-                _hn_reply=${_hn_reply#"HN:$_hn_id:"}
-                _hn_code=${_hn_reply%%:*}
-                _hn_data=${_hn_reply#*:}
-                if [ "$_hn_code" = 0 ]; then
-                    printf '%s' "$_hn_data" | base64 -d
-                    exit 0
-                fi
-                [ -z "$_hn_data" ] || { printf '%s' "$_hn_data" | base64 -d >&2; printf '\n' >&2; }
-                exit 1
-                ;;
-        esac
+        _hn_answer || :
     done
-    printf '%s\n' 'Harness did not answer. Your shell is still available; try again.' >&2
+    [ -z "$_hn_stop" ] || _hn_cancel "$_hn_stop"
+    # Given up: the TUI drops the request. An answer it sent before it saw that
+    # is already on its way, so take one last look before saying none came.
+    # Bash 3.2's read -t takes whole seconds only.
+    printf '\033]633;hn;%s;%s;cancel;\007' "$_HN_CONTEXT" "$_hn_id" >&4
+    if [ -n "${ZSH_VERSION-}" ] || [ "${BASH_VERSINFO[0]}" -ge 4 ]; then _hn_last=0.5; else _hn_last=1; fi
+    IFS= read -r -t "$_hn_last" _hn_reply <&3 && _hn_answer
+    [ -z "$_hn_stop" ] || _hn_cancel "$_hn_stop"
+    _hn_erase
+    case "$1" in
+        *-inline)
+            printf '%s did not answer. Your line is unchanged; try again.\n' "${_hn_who:-Harness}" >&2 ;;
+        *) printf '%s\n' 'Harness did not answer. Your shell is still available; try again.' >&2 ;;
+    esac
     exit 1
 )
 _hn_pick() {
@@ -200,7 +280,7 @@ _hn_choose() {
     esac
 }
 _hn_picker_widget() {
-    local _hn_message _hn_choice _hn_rest _hn_cursor _hn_line _hn_kind _hn_value _hn_nl='
+    local _hn_message _hn_choice _hn_rest _hn_cursor _hn_line _hn_kind _hn_value _hn_saved_int _hn_nl='
 '
     if [ -n "${ZSH_VERSION-}" ]; then
         _hn_choice=$(_HN_PICKER_WIDGET=1 _hn_pick compose "$BUFFER" "$CURSOR" "$@") || { zle reset-prompt; return 0; }
@@ -230,10 +310,18 @@ _hn_picker_widget() {
         fi
         return 0
     fi
+    # Ctrl-C reaches this shell too. _hn_request cancels its own request; the
+    # widget must not abort with it, or zsh throws the line away.
+    # zsh's localtraps puts the user's INT trap back (localoptions keeps the
+    # option itself to this widget); bash needs it saved by hand.
+    if [ -n "${ZSH_VERSION-}" ]; then setopt localoptions localtraps; trap ':' INT; else _hn_saved_int=$(trap -p INT); trap '' INT; fi
     case "$_hn_kind" in
         host|model) _hn_message=$(_hn_request "$_hn_kind-inline" "$_hn_value" 2>&1) || : ;;
         sessions) _hn_message=$(_hn_request session-inline "$_hn_value" 2>&1) || : ;;
     esac
+    if [ -n "${BASH_VERSION-}" ]; then
+        if [ -n "$_hn_saved_int" ]; then eval "$_hn_saved_int"; else trap - INT; fi
+    fi
     if [ -n "$_hn_message" ]; then
         if [ -n "${ZSH_VERSION-}" ]; then
             # The finder moved the physical cursor while ZLE retained its own

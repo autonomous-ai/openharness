@@ -93,9 +93,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("devices", "devices", "Manage computer connections"),
     ("hardware-devices", "hardware-devices", "Manage physical Harness devices on your computers"),
     ("account", "login", "Optional sign-in and your Harness account"),
+    ("signout", "logout", "Sign out of your Harness account, after asking (-y: without); harnesses on this computer keep running"),
     ("appearance", "appearance", "Choose the TUI appearance"),
     ("pane-menu", "pane-menu", "Actions for a pane (-t target)"),
     ("window-menu", "window-menu", "Actions for a window (-t target)"),
+    ("machine-menu", "machine-menu", "Actions for a machine: machine-menu <new-harness|new-terminal|open|connect|machine> <machine>"),
     ("pane-control", "pane-control", "Run an action from a captured pane or window menu"),
     ("new-terminal", "newt", "A shell on this pane's machine"),
     ("choose-command", "choosec", "Every command and setting by name (C-b Enter)"),
@@ -3481,7 +3483,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let from = (starting as usize).min(n - 1);
                 (0..n).map(|k| (from + k) % n).find(|k| !items[*k].disabled && !items[*k].separator)
             };
-            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None, complete: None, responsive: None }));
+            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None, complete: None, responsive: None, buttons: None }));
             app.wait_cli = app.capture.is_some();
         }
         "customize-mode" => {
@@ -3537,6 +3539,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "workspace-menu" => crate::workspace_controls::command(app, &words[1..]),
         "workspace-sync" => crate::agent_switch::retry_sync(app),
         "account" => crate::account::open(app),
+        "signout" => if flag(words, "-y") { crate::account::sign_out_confirmed(app) } else { crate::account::ask_sign_out(app, false) },
         "change-agent" => {
             if let Some((_, p)) = target_pane(app, words) { crate::agent_switch::open(app, p); }
             else { app.error("can't find pane"); }
@@ -3550,6 +3553,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if opt(words, "-t").is_some() && target.is_none() { app.error("can't find window"); }
             else { crate::workspace_controls::tab_menu(app, target.unwrap_or(app.active), None); }
         }
+        "machine-menu" => crate::machine_menu::command(app, &words[1..]),
         "pane-control" => {
             let args = positional(words);
             if args.len() == 2 { crate::workspace_controls::run(app, &args[0], &args[1]); }
