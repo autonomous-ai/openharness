@@ -1493,7 +1493,14 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
             let editing = c.kind.editing();
             match key.code {
                 KeyCode::Enter => choose(app, &mut form),
-                KeyCode::Tab | KeyCode::BackTab => form.child_active = false,
+                KeyCode::Tab | KeyCode::BackTab => {
+                    form.child_active = false;
+                    // (Opened from the task by `@ : %`: nothing stays open behind it.)
+                    if form.focus == Field::Task {
+                        form.child = None;
+                        form.trail.clear();
+                    }
+                }
                 KeyCode::Char('l') if ctrl && matches!(c.kind, Choice::Folder(_)) => {
                     let path = if let Choice::Folder(path) = &c.kind {
                         path.clone()
@@ -2000,6 +2007,12 @@ mod tests {
         // (Under NO_COLOR the chosen row has no band, only a modifier.)
         assert_eq!(buf[(form.child_area.x + 3, y)].bg, c.selected.bg.unwrap_or(ratatui::style::Color::Reset), "the chosen row on the panel's band");
         assert!(buf[(form.child_area.x + 3, y)].modifier.contains(c.selected.add_modifier));
+        // A chooser's error: in the dropdown, not again in the form's footer.
+        form.error = "That machine is not connected".into();
+        let mut buf = Buffer::empty(body);
+        draw(&mut buf, body, &mut form);
+        let text: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert_eq!(text.matches("That machine is not connected").count(), 1, "{text}");
     }
 
     #[test]
@@ -2009,8 +2022,9 @@ mod tests {
         picker.busy = Some("Loading folders…".into());
         let area = Rect::new(0, 0, 50, 6);
         let mut buf = Buffer::empty(area);
-        let dropdown = view::Dropdown { editing: false, error: "That machine is not connected", chrome: crate::settings::chrome_with(true) };
-        dropdown.render(area, &mut buf, &mut picker);
+        let mut dropdown = view::Dropdown { editing: false, error: "That machine is not connected", chrome: crate::settings::chrome_with(true), cursor: None };
+        (&mut dropdown).render(area, &mut buf, &mut picker);
+        assert_eq!(dropdown.cursor, Some(Position::new(3, 0)), "the text cursor where the query starts");
         let row = |y| (0..50).map(|x| buf[(x, y)].symbol()).collect::<String>();
         assert!(row(0).starts_with(" › Search folders"), "{}", row(0));
         assert!(row(1).starts_with(" 0/0 ─") && row(1).trim_end().ends_with("Loading folders…"), "{}", row(1));
@@ -2044,6 +2058,11 @@ mod tests {
         assert_eq!(form.child_area.y, form.task_area.bottom());
         app.modal = Some(Modal::NewHarness(form));
         press(&mut app, KeyCode::Esc);
+        // Tab leaves it as Esc does: no chooser left behind the task.
+        press(&mut app, KeyCode::Char('@'));
+        press(&mut app, KeyCode::Tab);
+        let f = form_of(&app);
+        assert_eq!((f.focus, f.child.is_none(), f.child_active), (Field::Task, true, false));
         for ch in "a@b".chars() { press(&mut app, KeyCode::Char(ch)); }
         assert!(form_of(&app).child.is_none());
         assert_eq!(form_of(&app).draft.task, "fix the login a@b", "inside a word it is a letter");

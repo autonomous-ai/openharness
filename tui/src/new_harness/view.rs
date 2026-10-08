@@ -85,7 +85,9 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
     let mut task_cursor = None;
     let fields_y = y + if spacious { if page { 4 } else { 3 } } else if form_h >= 9 { 2 } else { 1 };
     let live_error = task::error(&form.draft.what.engine, &form.draft.task);
-    let message = if form.error.is_empty() { live_error.as_deref().unwrap_or("") } else { &form.error };
+    // (While a chooser is dropped down its error is in it, in place of its keys: not twice.)
+    let dropped = form.child.is_some() && form.child_active;
+    let message = if form.error.is_empty() || dropped { live_error.as_deref().unwrap_or("") } else { &form.error };
     let errors = error_lines(message, form_w.saturating_sub(4) as usize);
     let footer_h = if message.is_empty() { 2 } else { errors.len().max(2) as u16 }
         .min(r.bottom().saturating_sub(fields_y + 1 + u16::from(spacious)).max(1));
@@ -204,15 +206,7 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
 /// it count too) and the keys line, at most 12 — a path or a name being typed, the query and keys.
 fn wanted(c: &Child) -> u16 {
     if c.kind.editing() { return 2 }
-    let p = &c.picker;
-    let (mut lines, mut last) = (0, None);
-    for (i, _) in &p.visible {
-        let group = p.rows[*i].group.as_deref().filter(|_| p.query.is_empty());
-        if group.is_some() && group != last { lines += 1 + usize::from(lines > 0) }
-        last = group;
-        lines += 1;
-    }
-    (3 + lines.max(1)).min(12) as u16
+    (3 + crate::settings::list_lines(&c.picker)).min(12) as u16
 }
 
 /// Where an entered chooser drops down: at (x, y), [width] wide, as tall as it wants down to
@@ -224,14 +218,16 @@ pub(super) fn dropdown(c: &Child, x: u16, y: u16, width: u16, bottom: u16) -> Op
 
 /// An entered chooser, dropped down: on the panel's surface, the command panel's query line,
 /// count rule, rows and keys line, as the shell composer draws them (the chooser's error in place
-/// of its keys). A path or a name being typed has no list: its query and keys only.
+/// of its keys). A path or a name being typed has no list: its query and keys only. Rendered by
+/// reference, it leaves the query's text cursor in [cursor].
 pub(super) struct Dropdown<'a> {
     pub editing: bool,
     pub error: &'a str,
     pub chrome: crate::settings::Chrome,
+    pub cursor: Option<Position>,
 }
 
-impl StatefulWidget for Dropdown<'_> {
+impl StatefulWidget for &mut Dropdown<'_> {
     type State = Picker;
     fn render(self, area: Rect, buf: &mut Buffer, picker: &mut Picker) {
         use ratatui::layout::{Constraint::{Fill, Length}, Layout};
@@ -249,7 +245,8 @@ impl StatefulWidget for Dropdown<'_> {
         // The query, rule, keys and rows are the command panel's own helpers, so the three
         // read as one list (and its rows report where they are drawn, for the mouse).
         let ghost = picker.placeholder.clone();
-        crate::settings::query_line(buf, picker, rows[0].x, rows[0].y, rows[0].width, &ghost, c);
+        let (at, _) = crate::settings::query_line(buf, picker, rows[0].x, rows[0].y, rows[0].width, &ghost, c);
+        self.cursor = Some(at);
         let keys = rows[rows.len() - 1];
         if keys.height > 0 {
             if self.error.is_empty() {
@@ -277,10 +274,7 @@ impl StatefulWidget for Dropdown<'_> {
 pub(super) fn draw_child(buf: &mut Buffer, r: Rect, form: &mut Form) -> Option<Position> {
     let Some(c) = &mut form.child else { return None };
     form.child_area = r;
-    let dropdown = Dropdown { editing: c.kind.editing(), error: &form.error, chrome: crate::settings::chrome() };
-    dropdown.render(r, buf, &mut c.picker);
-    // The text cursor in the query, where the query line put it.
-    let (y, x) = c.picker.prompt_at.get();
-    let before: String = c.picker.query.chars().take(c.picker.qcursor).collect();
-    form.child_active.then_some(Position::new((x + before.width() as u16).min(r.right().saturating_sub(1)), y))
+    let mut dropdown = Dropdown { editing: c.kind.editing(), error: &form.error, chrome: crate::settings::chrome(), cursor: None };
+    (&mut dropdown).render(r, buf, &mut c.picker);
+    dropdown.cursor.filter(|_| form.child_active)
 }

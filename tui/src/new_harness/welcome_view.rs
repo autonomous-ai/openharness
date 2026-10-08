@@ -128,7 +128,9 @@ pub(super) fn draw(buf: &mut Buffer, app: &App, body: Rect, form: &mut Form) -> 
     let chips_y = y;
     y += settings_h;
     let live_error = task::error(&form.draft.what.engine, &form.draft.task);
-    let error = if form.error.is_empty() { live_error.as_deref().unwrap_or("") } else { &form.error };
+    // (While a chooser is dropped down its error is in it, in place of its keys: not twice.)
+    let dropped = form.child.is_some() && form.child_active;
+    let error = if form.error.is_empty() || dropped { live_error.as_deref().unwrap_or("") } else { &form.error };
     let footer_y = rect.bottom() - 1;
     let recent_bottom = footer_y.saturating_sub(section_gap);
     let latest_heading_y = recent_bottom.saturating_sub(2);

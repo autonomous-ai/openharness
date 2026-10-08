@@ -380,16 +380,28 @@ pub fn whole_parts(ghost: &str, w: u16) -> String {
 }
 
 /// `› query` (or the ghost, muted, when empty) at [x, y], [w] wide. Returns the text cursor and the
-/// columns the query or ghost took (the launcher puts its tabs after it).
+/// columns the query or ghost took (the launcher puts its tabs after it). A query wider than the
+/// line scrolls: it is shown from [Picker::xoffset], moved only as far as keeps the cursor in view,
+/// so moving the cursor moves the cursor, not the text (fzf's way; a click maps through it too).
 pub fn query_line(buf: &mut Buffer, picker: &Picker, x: u16, y: u16, w: u16, ghost: &str, c: &Chrome) -> (Position, u16) {
     put(buf, x, y, 2, "›", c.accent);
     let room = w.saturating_sub(2);
-    let ghost = whole_parts(ghost, room);
-    let shown = if picker.query.is_empty() { (ghost.as_str(), c.muted) } else { (picker.query.as_str(), c.base) };
-    let used = put(buf, x + 2, y, room, shown.0, shown.1);
     picker.prompt_at.set((y, x + 2));
-    let before: String = picker.query.chars().take(picker.qcursor).collect();
-    (Position::new((x + 2 + before.width() as u16).min(x + w), y), used)
+    if picker.query.is_empty() {
+        picker.xoffset.set(0);
+        return (Position::new((x + 2).min(x + w), y), put(buf, x + 2, y, room, &whole_parts(ghost, room), c.muted));
+    }
+    let chars: Vec<char> = picker.query.chars().collect();
+    let at = picker.qcursor.min(chars.len());
+    let width = |s: &[char]| s.iter().map(|ch| ch.width().unwrap_or(0)).sum::<usize>();
+    // (The cursor's own cell is in the room too: what is before it takes at most room - 1.)
+    let mut from = if width(&chars) < room as usize { 0 } else { picker.xoffset.get().min(at) };
+    while from < at && width(&chars[from..at]) >= room as usize { from += 1 }
+    picker.xoffset.set(from);
+    let text = ratatui::text::Line::from(ratatui::text::Span::styled(chars[from..].iter().collect::<String>(), c.base));
+    let used = (text.width() as u16).min(room);
+    ratatui::widgets::Widget::render(&text, Rect::new(x + 2, y, room, 1), buf);
+    (Position::new((x + 2 + width(&chars[from..at]) as u16).min(x + w), y), used)
 }
 
 /// `shown/total ───…` (and ` (marked)` after the total when [marked] is Some) in muted across [w].
@@ -623,6 +635,26 @@ pub fn section_title(section: &str) -> &'static str {
     }
 }
 
+/// Whether [list_from] titles the groups: not while typing, when the best matches come first,
+/// untitled — as opencode's search reads. (A launcher's scope character alone — `:` — is no
+/// search yet: its list keeps its headings.)
+fn grouped(picker: &Picker) -> bool {
+    picker.query.is_empty() || (picker.prefixed && crate::picker::scope_of(&picker.query).is_some() && picker.query.trim().chars().count() == 1)
+}
+
+/// The lines [list] draws for [picker]'s rows, top-down: each row, a heading where the group
+/// changes and a blank line before every heading but the first (at least one: the empty notice).
+pub fn list_lines(picker: &Picker) -> usize {
+    let (grouped, mut lines, mut last) = (grouped(picker), 0, None);
+    for (i, _) in &picker.visible {
+        let group = picker.rows[*i].group.as_deref().filter(|_| grouped);
+        if group.is_some() && group != last { lines += 1 + usize::from(lines > 0) }
+        last = group;
+        lines += 1;
+    }
+    lines.max(1)
+}
+
 /// The rows, top-down, the cursor's row marked as the New Harness chooser marks its own.
 pub fn list(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, details: bool) { list_from(buf, picker, r, c, details, false) }
 
@@ -645,9 +677,7 @@ pub fn list_from(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, det
     let mut lines: Vec<Option<usize>> = Vec::new();
     let mut titles: Vec<(usize, String)> = Vec::new();
     let mut last: Option<&str> = None;
-    // (While typing, the best matches come first, untitled — as opencode's search reads.)
-    // (A launcher's scope character alone — `:` — is no search yet: its list keeps its headings.)
-    let grouped = picker.query.is_empty() || (picker.prefixed && crate::picker::scope_of(&picker.query).is_some() && picker.query.trim().chars().count() == 1);
+    let grouped = grouped(picker);
     if !bottom_up {
         for vi in 0..picker.visible.len() {
             let group = picker.rows[picker.visible[vi].0].group.as_deref().filter(|_| grouped);
@@ -1391,5 +1421,42 @@ mod tests {
         query_line(&mut buf, &p, 0, 0, 20, "@ computer   : project   % model", &c);
         let line: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         assert!(line.contains("@ computer") && !line.contains("proj") && !line.contains('…'), "{line}");
+    }
+
+    #[test]
+    fn a_long_query_scrolls_to_keep_its_cursor_in_view() {
+        let c = chrome_with(true);
+        let mut p = Picker::new("", "");
+        p.query = "/home/dev/harnesses/worktrees/autonomous-harness/hn-007/tui/src".into();
+        p.qcursor = p.query.chars().count();
+        let draw = |p: &Picker| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+            let (at, _) = query_line(&mut buf, p, 0, 0, 40, "", &c);
+            (at, (0..40).map(|x| buf[(x, 0)].symbol().to_string()).collect::<String>())
+        };
+        let (at, line) = draw(&p);
+        assert!(line.trim_end().ends_with("hn-007/tui/src"), "the last typed text: {line}");
+        assert_eq!(at.x as usize, line.trim_end().width(), "the cursor right after it: {line}");
+        assert!(at.x < 40);
+        p.qcursor = 0;
+        let (at, line) = draw(&p);
+        assert!(line.starts_with("› /home/dev/harnesses"), "home shows the start: {line}");
+        assert_eq!(at, Position::new(2, 0));
+    }
+
+    #[test]
+    fn list_lines_counts_what_list_draws() {
+        let mut p = Picker::new("", "");
+        use crate::picker::Row;
+        p.set_rows(vec![Row::new("a", "alpha").group("One"), Row::new("b", "beta").group("One"), Row::new("c", "gamma").group("Two")]);
+        // One, alpha, beta, (blank), Two, gamma
+        assert_eq!(list_lines(&p), 6);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 10));
+        list(&mut buf, &mut p, Rect::new(0, 0, 30, 10), &chrome_with(true), false);
+        let drawn = (0..10).rposition(|y| (0..30).any(|x| buf[(x, y)].symbol() != " ")).unwrap() + 1;
+        assert_eq!(list_lines(&p), drawn);
+        p.query = "ga".into();
+        p.refilter();
+        assert_eq!(list_lines(&p), p.visible.len(), "while typing: the matches, untitled");
     }
 }

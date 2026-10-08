@@ -196,7 +196,10 @@ try:
     assert create_count() == before, 'searching projects across machines only changes the draft'
     print('PASS New Harness: short local machine name and remote folders after a large local history', flush=True)
     # Moving over a field drops nothing down; entering it drops its chooser under it, in the form.
-    keys('Down', 'Tab'); assert 'Search agents' not in screen(), 'arrowing over a field shows no chooser'
+    keys('Down', 'Tab')
+    # (Wait for the redraw that moved the pointer to Agent before reading what it shows.)
+    wait(lambda: re.search(r'›\s+(Agent|Harness)\s', form_screen()), 'Tab reaches Agent')
+    assert 'Search agents' not in screen(), 'arrowing over a field shows no chooser'
     keys('Right'); shows('Search agents and harnesses')
     assert 'Search agents and harnesses' in form_screen(), 'the chooser drops down inside the form'
     assert field_position('Task') == anchor, 'entering a chooser keeps the form visible'
