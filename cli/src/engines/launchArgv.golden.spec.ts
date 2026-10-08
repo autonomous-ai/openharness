@@ -33,6 +33,7 @@ import { env } from '../config/env.js'
 import { harnessAdapter, HARNESS_ADAPTERS } from '../dsh/adapters.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { baseNode } from '../harnessd/baseNode.js'
+import { setHarnessCliCommand } from '../lib/cliEntry.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import {
   buildEngineCommandArgv, buildEngineLaunchArgv, PERMISSION_MODES, supportsFirstPrompt, type LaunchCommandOptions,
@@ -233,6 +234,9 @@ beforeAll(() => {
   saved.CODEX_HOME = env.CODEX_HOME
   env.ADAPTER_DATA_DIR = dataDir
   env.CODEX_HOME = join(homedir(), '.codex')
+  // A launch that installs its agent if missing runs this CLI by path (lib/cliEntry.ts): a fixed one here,
+  // whatever installed copy the machine running the suite has.
+  setHarnessCliCommand([baseNode(process.execPath), '/opt/harness/cli/cli.js'])
   for (const name of ENGINE_PATHS) { savedEnv[`config:${name}`] = config[name]; config[name] = undefined }
   for (const name of PROCESS_VARS) { savedEnv[name] = process.env[name]; delete process.env[name] }
   // A zsh user with a startup file of their own: the plain launch. The new-user guard has its own shape below.

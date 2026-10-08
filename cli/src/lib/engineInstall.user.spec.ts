@@ -6,6 +6,10 @@ import { join } from 'node:path'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell, shellSingleQuote } from './engineLaunch.js'
 import type { EngineInstallRecipe } from './engineInstall.js'
+import { useSourceCli } from '../testing/sourceCli.js'
+
+// The pane installs a missing agent with this CLI (`harness agents install`), run from the sources here.
+useSourceCli()
 
 // Use real npm against a local package, with networking and lifecycle scripts disabled.
 // Fake npm missed the fresh-account EACCES failure in a shared Homebrew prefix.

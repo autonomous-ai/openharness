@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
@@ -7,11 +7,13 @@ import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
 import { launchContract, launchField } from '../engines/launches.js'
 import { startupFunctions, startupNeedsScript, startupRuns } from '../engines/kit/launchStartup.js'
-import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
+import { isTerminalEngine, type AgentEngine, type ProcessEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/version.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { engineBin } from './engineBin.js'
-import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
+import { ENGINE_INSTALL, engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
+import { AGENT_INSTALL_BUSY_EXIT } from './agentInstall.js'
+import { harnessCliCommand } from './cliEntry.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
@@ -1008,37 +1010,23 @@ export function shellAgentArgv(binary: string, args: string[], recipe: EngineIns
  * which previously made this very pane print `command not found` after a successful install. The
  * source-owned candidate paths below bridge that one-shell gap without sourcing arbitrary profile
  * files a second time. npm installs also get their active global prefix as a fallback.
+ *
+ * The install itself is one command, `harness agents install <agent> --pane` (agentInstall.ts), run by
+ * the daemon's own Node and CLI build (cliEntry.ts): it waits for any other install on this machine to
+ * finish (one lock for all of them, which the background install the desktop starts on a first run
+ * holds too), looks for the agent again, runs the recipe and its fallback, and stops the installer if
+ * the person presses Ctrl-C. Kept out of the script on purpose: a lock written twice, once in shell
+ * and once in Node, disagreed with itself across three reviews, and the script is what tmux is handed
+ * in one command, under its 16 KiB limit when it goes on the command line.
+ *
+ * The command runs at the script's top level, where a stop is resumed (STOP_PROOF_FUNCTIONS). Its
+ * exit says what happened: 0 installed, 130 stopped by the person, 75 another install outlasted the
+ * wait; it has already said why for the last two.
  */
 function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string): string {
-  const install = recipe.command
   const names = recipe.executable.names.map(shellSingleQuote).join(' ')
   const paths = engineInstallPaths(recipe).map(shellSingleQuote).join(' ')
-  // Scope both npm env spellings to the installer subprocess. Do not rewrite .npmrc or install
-  // into a different OS user's shared prefix, and do not tie the engine to a versioned Node folder.
-  // Either way a subshell, run at the top level where a stop is resumed (STOP_PROOF_FUNCTIONS).
-  const run = (line: string) => recipe.executable.npmGlobal
-    ? `(export npm_config_prefix=${shellSingleQuote(npmEnginePrefix())} NPM_CONFIG_PREFIX=${shellSingleQuote(npmEnginePrefix())}; eval ${shellSingleQuote(line)})`
-    : `(eval ${shellSingleQuote(line)})`
-  const installCommand = run(install)
   const candidates = [names, paths].filter(Boolean).join(' ')
-  // `curl … | bash` exits 0 when curl itself fails (bash ran an empty script), so the fallback is
-  // decided by whether an executable exists afterwards, not by the first line's status.
-  // Decided first, then run as a top-level command like the first install line: a Ctrl+Z inside a
-  // compound `if` makes zsh drop the rest of it (STOP_PROOF_FUNCTIONS). An install the person ended
-  // with Ctrl-C (130) is not followed by another one.
-  const fallback = recipe.fallback ? [
-    'harness_try_fallback=0',
-    'if [ -z "$harness_engine_bin" ] && [ "$harness_status" -ne 130 ]; then',
-    '  hash -r 2>/dev/null || true',
-    '  if ! harness_find_engine "$1"; then',
-    '    harness_try_fallback=1',
-    '    harness_status=0',
-    `    printf '\\n%s\\n' 'harness: that install did not finish; trying the npm package instead' 'harness: $ ${recipe.fallback.replace(/'/g, "'\\''")}' ''`,
-    '  fi',
-    'fi',
-    `[ "$harness_try_fallback" -eq 0 ] || ${run(recipe.fallback)} || harness_status=$?`,
-    'harness_resume',
-  ] : []
   return [
     'resolve_engine() {',
     '  candidate="$1"',
@@ -1069,21 +1057,12 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     // A previously installed npm launcher also needs Node. Resolve the runtime before executing
     // it, not just before installing it; fresh users often have no system node on PATH.
     npmRuntimePrelude(recipe, runtimeNode),
-    'if ! harness_find_engine "$1"; then',
-    ...(recipe.executable.npmGlobal ? [
-      '  if ! command -v npm >/dev/null 2>&1; then',
-      `    printf '%s\\n' 'harness: npm is unavailable and the managed Node.js/npm runtime could not be used.'`,
-      '    exit 1',
-      '  fi',
-    ] : []),
-    `  printf '%s\\n' 'harness: engine is missing — installing it in this terminal' 'harness: $ ${install.replace(/'/g, "'\\''")}' ''`,
-    ...(recipe.executable.npmGlobal ? [`  printf '%s\\n' ${shellSingleQuote(`harness: installing for this user in ${npmEnginePrefix()}`)}`] : []),
-    'fi',
+    'harness_find_engine "$1" || :',
     'harness_status=0',
-    `[ -n "$harness_engine_bin" ] || ${installCommand} || harness_status=$?`,
+    `[ -n "$harness_engine_bin" ] || ${agentInstallCommand(recipe)} || harness_status=$?`,
     'harness_resume',
-    ...fallback,
     'if [ -z "$harness_engine_bin" ]; then',
+    `  if [ "$harness_status" -eq 130 ] || [ "$harness_status" -eq ${AGENT_INSTALL_BUSY_EXIT} ]; then exit 1; fi`,
     `  if [ "$harness_status" -ne 0 ]; then printf '\\n%s\\n' 'harness: the install failed, so the agent was not started. The command is above; fix it and create the agent again.'; exit 1; fi`,
     '  hash -r 2>/dev/null || true',
     `  if ! harness_find_engine "$1"; then printf '\\n%s\\n' 'harness: the install completed, but its executable could not be found. Check the installer output and PATH above.'; exit 1; fi`,
@@ -1091,6 +1070,93 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     '',
   ].filter(Boolean).join('\n') + '\n'
 }
+
+/**
+ * `harness agents install <agent> --pane` as the pane runs it: by the daemon's own Node and CLI build,
+ * with the launch command (`$1`) to look for first. An agent's own recipe is named by the agent; any
+ * other (a test's fixture) travels whole, as JSON.
+ */
+function agentInstallCommand(recipe: EngineInstallRecipe): string {
+  const official = (Object.keys(ENGINE_INSTALL) as ProcessEngine[])
+    .find((engine) => JSON.stringify(ENGINE_INSTALL[engine]) === JSON.stringify(recipe))
+  const label = official ?? (basename(recipe.executable.names[0] ?? '') || 'agent')
+  return [
+    ...harnessCliCommand().map(shellSingleQuote),
+    'agents', 'install', shellSingleQuote(label), '--pane', '"--command=$1"',
+    ...(official ? [] : [shellSingleQuote(`--recipe=${JSON.stringify(recipe)}`)]),
+  ].join(' ')
+}
+
+/**
+ * Looks for [command], or [recipe]'s executable, the way a pane would: in the person's login shell,
+ * rc files and all (`interactiveEngineShell`), at the recipe's install paths and under npm's own
+ * global prefix. For the background install (agentInstallMissing.ts), whose own PATH is the desktop
+ * app's. Bounded, as nothing else in the background is: stdin closed, a process group of its own, and
+ * SIGKILL to that group after [timeoutMs], since an interactive zsh ignores the SIGTERM a plain
+ * timeout sends and an rc file that waits on something would hold the run for good. Also returns the
+ * PATH that shell had, for the install's own environment.
+ */
+export async function resolveEngineInLoginShell(
+  command: string,
+  recipe: EngineInstallRecipe,
+  opts: { shell?: string; timeoutMs?: number } = {},
+): Promise<{ path: string | null; PATH: string | null }> {
+  const interactive = interactiveEngineShell(opts.shell)
+  if (!interactive) return { path: null, PATH: null }
+  const names = recipe.executable.names.map(shellSingleQuote).join(' ')
+  const candidates = [names, engineInstallPaths(recipe).map(shellSingleQuote).join(' ')].filter(Boolean).join(' ')
+  const script = [
+    'harness_found=',
+    `for candidate in "$1" ${candidates}; do`,
+    '  case "$candidate" in */*) resolved="$candidate" ;; *) resolved="$(command -v "$candidate" 2>/dev/null)" || resolved= ;; esac',
+    '  if [ -n "$resolved" ] && [ -f "$resolved" ] && [ -x "$resolved" ]; then harness_found=$resolved; break; fi',
+    'done',
+    ...(recipe.executable.npmGlobal ? [
+      'if [ -z "$harness_found" ]; then',
+      '  npm_prefix="$(npm prefix -g 2>/dev/null)" || npm_prefix=',
+      `  for bin in ${names}; do if [ -n "$npm_prefix" ] && [ -f "$npm_prefix/bin/$bin" ] && [ -x "$npm_prefix/bin/$bin" ]; then harness_found="$npm_prefix/bin/$bin"; break; fi; done`,
+      'fi',
+    ] : []),
+    `printf '%s%s\\n' ${shellSingleQuote(RESOLVE_MARKS.path)} "$harness_found" ${shellSingleQuote(RESOLVE_MARKS.PATH)} "$PATH"`,
+  ].join('\n')
+  let argv: string[]
+  try {
+    argv = engineShellArgv(interactive, [script, 'harness-agent-resolve', command])
+  } catch {
+    return { path: null, PATH: null }
+  }
+  return await new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>
+    try {
+      child = spawn(argv[0], argv.slice(1), { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch {
+      resolve({ path: null, PATH: null })
+      return
+    }
+    let out = ''
+    child.stdout?.on('data', (chunk: Buffer) => { out += chunk.toString('utf8') })
+    const timer = setTimeout(() => {
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* gone */ }
+    }, opts.timeoutMs ?? 10_000)
+    const done = (): void => {
+      clearTimeout(timer)
+      child.stdout?.destroy()
+      // Its rc files may have left something running in its group: not this probe's to keep.
+      try { process.kill(-child.pid!, 'SIGKILL') } catch { /* gone */ }
+      const read = (mark: string): string | null => {
+        const line = out.split('\n').reverse().find((text) => text.startsWith(mark))
+        const value = line?.slice(mark.length) ?? ''
+        return value || null
+      }
+      resolve({ path: read(RESOLVE_MARKS.path), PATH: read(RESOLVE_MARKS.PATH) })
+    }
+    child.once('error', done)
+    child.once('exit', done)
+  })
+}
+
+/** The lines `resolveEngineInLoginShell`'s script ends on, after whatever an rc file prints. */
+const RESOLVE_MARKS = { path: 'harness-agent-path:', PATH: 'harness-agent-PATH:' } as const
 
 function availabilityScript(recipe: EngineInstallRecipe | undefined): string {
   const names = recipe?.executable.names.map(shellSingleQuote).join(' ') ?? ''

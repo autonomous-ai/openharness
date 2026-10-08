@@ -47,6 +47,7 @@ import { engineInstallRecipe, type EngineInstallRecipe } from './engineInstall.j
 import { MIN_OPEN_FILES, RAISE_OPEN_FILES_SH } from './openFiles.js'
 import { DSH_SESSION_ENV, harnessEnvToClear } from '../dsh/launch.js'
 import { launchScriptOf } from '../testing/launchScript.js'
+import { useSourceCli } from '../testing/sourceCli.js'
 import { buildGridEngineLaunch, gridConflictingEnvToClear } from './gridLaunch.js'
 import { TmuxBackend } from './tmuxBackend.js'
 
@@ -57,6 +58,9 @@ import { TmuxBackend } from './tmuxBackend.js'
 // 36 (six workers), 11 cases here hit it, one of them on a single probe; under 8 busy and 8 spawning loops
 // the four-probe case took 4.9 s. Room for four probes at their limit, and a margin.
 vi.setConfig({ testTimeout: 30_000 })
+// An agent missing from a pane is installed by this CLI (`harness agents install`), run from the sources here.
+useSourceCli()
+const PROCESS_ENGINES_FOR_SIZE = ENGINES.filter((engine) => engine !== 'terminal')
 
 // The launch script names the `grid` the daemon resolved, and a developer's own HARNESS_GRID_BIN
 // would resolve to THEIR grid. The suite's runtime dir is already a throwaway (vitest.setup.ts), so
@@ -1359,6 +1363,30 @@ describe('buildEngineLaunchArgv with installFirst', () => {
   })
 })
 
+describe('the size of a launch that installs its agent if missing', () => {
+  // tmux takes a launch as one command, and refuses one past 16 KiB ("command too long", tmux 3.7c).
+  // Without a data folder for its one-time file the script goes on the command line, beside a first
+  // prompt of up to 2,000 characters (6,000 bytes). The install part is one command of this CLI
+  // (agentInstall.ts): an earlier design wrote its lock into every script, about 10 KB of shell.
+  it.each(PROCESS_ENGINES_FOR_SIZE)('%s: the install adds under 3 KiB, and the whole inline script stays under 10 KiB', (engine) => {
+    const saved = env.ADAPTER_DATA_DIR
+    env.ADAPTER_DATA_DIR = '/dev/null/no-data-folder'
+    try {
+      const create = (installIfMissing?: EngineInstallRecipe): string => launchScriptOf(buildEngineLaunchArgv(engine, {
+        installIfMissing, bypassPermission: true, cwd: '/work/project', harnessNode: true,
+        extraArgs: ['-c', 'model_providers.grid.base_url="https://grid.example/relay/v1"', '-m', 'gpt-5'],
+        clearEnv: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], waitForPid: { pid: 4242, name: 'Codex' },
+      }, '/bin/zsh', '/opt/node/bin/node', '/opt/grid/bin/grid', '/opt/homebrew/bin/tmux'))
+      const withInstall = create(engineInstallRecipe(engine))
+      expect(withInstall).toContain(' agents install ')
+      expect(Buffer.byteLength(withInstall) - Buffer.byteLength(create())).toBeLessThan(3 * 1024)
+      expect(Buffer.byteLength(withInstall)).toBeLessThan(10 * 1024)
+    } finally {
+      env.ADAPTER_DATA_DIR = saved
+    }
+  })
+})
+
 describe('buildEngineLaunchArgv with installIfMissing', () => {
   const recipe = (
     command: string,
@@ -1431,8 +1459,19 @@ if [ "$1" = prefix ]; then exit 0; fi
   })
 
   it('does not add the npm bootstrap to non-npm installers', () => {
-    expect(launchScriptOf(['-c', script(recipe('true'))])).toContain('engine is missing')
-    expect(launchScriptOf(['-c', script(recipe('true'))])).not.toContain('managed Node.js/npm')
+    expect(launchScriptOf(['-c', script(recipe('true'))])).toContain(' agents install ')
+    expect(launchScriptOf(['-c', script(recipe('true'))])).not.toContain('harness_node_bin')
+    expect(launchScriptOf(['-c', script(recipe('true', { names: ['x'], npmGlobal: true }))])).toContain('harness_node_bin')
+  })
+
+  it('installs through one command of this CLI, not the recipe in the script', () => {
+    // The lock, the recipe and its fallback are the CLI's (agentInstall.ts): the script only names the agent.
+    const own = launchScriptOf(buildEngineLaunchArgv('opencode', { installIfMissing: engineInstallRecipe('opencode') }, '/bin/sh', '/opt/node/bin/node', 'grid', null))
+    expect(own).toMatch(/ agents install 'opencode' --pane "--command=\$1" \|\| harness_status=\$\?$/m)
+    expect(own).not.toContain('opencode.ai/install')
+    expect(own).not.toContain('--recipe=')
+    // A recipe that is not the agent's own travels whole.
+    expect(launchScriptOf(['-c', script(recipe('true'))])).toContain(`'--recipe=${JSON.stringify(recipe('true'))}'`)
   })
 })
 
