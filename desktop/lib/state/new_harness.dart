@@ -464,7 +464,12 @@ class NewHarnessController extends ChangeNotifier {
         : _autoProject
         ? _generatedProject()
         : const NewHarnessProject.fresh();
-    if (task != null) this.task = task;
+    if (task != null) {
+      this.task = task;
+      // A task handed in (typed while the computer was being prepared, say)
+      // names the suggested project as one typed here does.
+      _followTask();
+    }
     _worktree = draft?.worktree;
     _recoveredWorktreePreference = draft?.worktreePreference;
     _branchRef = draft?.branchRef;
@@ -527,11 +532,10 @@ class NewHarnessController extends ChangeNotifier {
     );
     // What the machine has is asked when the box opens, as the form does: an
     // engine installed in a terminal a minute ago is otherwise still "missing".
-    unawaited(
-      app
-          .probeEngines(_machineId, force: true)
-          .then((_) => _adoptAccountAgent()),
-    );
+    enginesProbed = app
+        .probeEngines(_machineId, force: true)
+        .then((_) => _adoptAccountAgent());
+    unawaited(enginesProbed);
     final initialMachine = _machineId;
     unawaited(
       app.probeDsh(initialMachine, force: true).then((_) {
@@ -634,6 +638,10 @@ class NewHarnessController extends ChangeNotifier {
             (_harnessId == null || _harnessId == app.agentPreference.harness
                 ? app.agentPreference.value
                 : null);
+
+  /// Done once the chosen machine has said which agents it has and the box
+  /// has opened on the one this person uses (see [_adoptAccountAgent]).
+  late final Future<void> enginesProbed;
 
   /// Whether [_engine] is this person's own earlier choice rather than the
   /// product default. Only a remembered agent that is gone asks for a

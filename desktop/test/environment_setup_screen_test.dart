@@ -138,6 +138,7 @@ void _expectReadableText(WidgetTester tester, Finder finder) {
 }
 
 void main() {
+  _setupTaskFieldMain();
   for (final brightness in Brightness.values) {
     testWidgets(
       'setup details and recovery text have readable contrast in ${brightness.name}',
@@ -530,4 +531,41 @@ void main() {
       app.dispose();
     },
   );
+}
+
+// A new user waited on "Preparing this computer" before they could type.
+void _setupTaskFieldMain() {
+  testWidgets('the setup screen takes a first task, and Return queues it', (
+    tester,
+  ) async {
+    final app = AppNotifier(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: null,
+    );
+    addTearDown(app.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListenableBuilder(
+            listenable: app,
+            builder: (_, _) => SetupTaskField(notifier: app),
+          ),
+        ),
+      ),
+    );
+    final field = find.byKey(const ValueKey('setup-first-task'));
+    await tester.enterText(field, 'make a small web page');
+    expect(app.setupTask, 'make a small web page');
+    expect(app.setupTaskQueued, isFalse);
+    expect(find.text('Press Return to start it as soon as setup finishes.'),
+        findsOneWidget);
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pump();
+    expect(app.setupTaskQueued, isTrue);
+    expect(find.text('Starts as soon as this computer is ready.'),
+        findsOneWidget);
+    expect(app.takeSetupTask(), (task: 'make a small web page', start: true));
+    expect(app.takeSetupTask(), isNull);
+  });
 }
