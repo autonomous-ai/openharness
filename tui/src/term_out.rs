@@ -35,6 +35,10 @@ pub struct TmuxBackend<W: Write> {
     last_cells: usize,
     /// The terminal's size as a test gives it (else the terminal is asked).
     size_known: Option<Size>,
+    /// The rows written cell by cell (or owed) since the last settle rewrite, and the rows that
+    /// rewrite writes whole in the next frame.
+    touched: std::collections::BTreeSet<u16>,
+    rewrite: std::collections::BTreeSet<u16>,
 }
 
 /// Whether a frame is wrapped in synchronized output (?2026): yes, unless `HARNESS_TUI_SYNC=off`
@@ -178,16 +182,23 @@ impl<W: Write> TmuxBackend<W> {
         Self { sync_ok, ..Self::with_sync(writer) }
     }
 
-    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None, last_cells: 0, size_known: None } }
+    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None, last_cells: 0, size_known: None, touched: Default::default(), rewrite: Default::default() } }
 
     fn screen_size(&self) -> Option<Size> { self.size_known.or_else(|| self.inner.size().ok()) }
 
-    /// The next `clear()` does not erase the screen: every row is written again, each erased and
-    /// rewritten in the same write, so a stale cell goes but the screen is never seen blank.
+    /// The next `clear()` does not erase the screen: every row is written again, its text and then
+    /// the rest of it erased, so a stale cell goes but the screen is never seen blank.
     pub fn soft_clear_next(&mut self) { self.soft = true }
 
     /// The cells the last frame wrote.
     pub fn last_cells(&self) -> usize { self.last_cells }
+
+    /// Rows the next settle rewrite writes too (where an overlay was).
+    pub fn owe_rows(&mut self, rows: impl IntoIterator<Item = u16>) { self.touched.extend(rows) }
+
+    /// The settle rewrite: the next frame writes whole every row touched since the last one (and
+    /// nothing when none was: an idle hn stays silent).
+    pub fn settle_next(&mut self) { let touched = std::mem::take(&mut self.touched); self.rewrite.extend(touched) }
 
     /// Opens the frame's synchronized update (once); `flush` closes it. A clear belongs inside it,
     /// so the terminal shows the erase and the redraw together, never the blank between them.
@@ -572,8 +583,9 @@ impl<W: Write> Backend for TmuxBackend<W> {
         self.extra_shadow = extras;
         // Nothing changed: nothing written.
         let all = std::mem::take(&mut self.force_whole);
+        let rewrite = std::mem::take(&mut self.rewrite);
         self.last_cells = cells.len();
-        if cells.is_empty() && !all { return Ok(()) }
+        if cells.is_empty() && !all && rewrite.is_empty() { return Ok(()) }
         // An input method or the terminal itself may have moved the cursor since the last frame:
         // the first cell of a frame that writes is placed by a CUP, never assumed.
         self.cursor_at = None;
@@ -583,12 +595,16 @@ impl<W: Write> Backend for TmuxBackend<W> {
         let touched: std::collections::BTreeSet<u16> = cells.iter().map(|c| c.1).collect();
         let was: std::collections::HashSet<u16> = touched.iter().copied().filter(|y| self.row_risky(*y)).collect();
         for (x, y, c) in &cells { self.remember(*x, *y, c) }
-        let mut whole: std::collections::BTreeSet<u16> = touched.into_iter().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
-        // A soft clear: every row of the screen (the terminal's height; else the rows known).
+        let mut whole: std::collections::BTreeSet<u16> = touched.iter().copied().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
+        // A soft clear: every row of the screen (the terminal's height; else the rows known). A
+        // settle rewrite: the rows touched since the last one.
         if all {
             let rows = self.screen_size().map(|s| s.height as usize).unwrap_or(self.shadow.len()).max(self.shadow.len());
             whole.extend((0..rows).map(|y| y as u16));
         }
+        whole.extend(rewrite);
+        // The rows written cell by cell are the next settle rewrite's.
+        self.touched.extend(touched.into_iter().filter(|y| !whole.contains(y)));
         // A single-cell update fits in the writer's one buffered flush; synchronizing it
         // adds sixteen bytes to an ordinary one-byte echo without hiding any redraw.
         if cells.len() > 1 || !whole.is_empty() { self.begin_sync()? }
@@ -652,15 +668,18 @@ impl<W: Write> Backend for TmuxBackend<W> {
         self.cursor_at = Some(p);
         self.inner.set_cursor_position(p)
     }
-    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.extra_shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
+    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.extra_shadow.clear(); self.touched.clear(); self.rewrite.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
         if matches!(clear_type, ClearType::All) {
             // Hard or soft, the draw that follows is the same update; `flush` closes it.
             self.begin_sync()?;
             self.shadow.clear();
             self.extra_shadow.clear();
+            // Every row is written again: no settle rewrite is owed for what came before.
+            self.touched.clear();
+            self.rewrite.clear();
             // A soft clear forgets what was written but erases nothing: the draw that follows writes
-            // every row, each erased and rewritten at once, so the screen is never seen blank.
+            // every row, each its text and then the rest erased, so the screen is never seen blank.
             if std::mem::take(&mut self.soft) { self.cursor_at = None; self.force_whole = true; return Ok(()) }
         }
         self.inner.clear_region(clear_type)
@@ -814,6 +833,66 @@ mod tests {
         assert!(last.contains("\x1b[1;1Hgo⚡\x1b[1;5H xow\x1b[K"), "the cell after ⚡ placed by hn, the erase after the text: {last:?}");
         // A row that ends on a risky symbol: the erase starts where hn counts the row's end.
         assert!(last.contains("\x1b[2;1Hxb⚡\x1b[2;5H\x1b[K"), "{last:?}");
+    }
+
+    #[test]
+    fn a_settle_rewrite_writes_only_the_rows_touched_since_the_last_one() {
+        use alacritty_terminal::index::{Column, Line};
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(10, 4));
+        text_at(&mut backend, 0, "ab");
+        text_at(&mut backend, 2, "cd");
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // Nothing touched since: the next one writes nothing (an idle hn stays silent).
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        let settle = &s[s.rfind("\x1b[?2026h").unwrap()..];
+        assert_eq!(settle, "\x1b[?2026h\x1b[1;1Hab\x1b[K\x1b[3;1Hcd\x1b[K\x1b[?2026l", "rows 1 and 3, not the screen: {s:?}");
+        // A cell the terminal kept wrongly on a touched row is gone after it.
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 10, 4);
+        pane.feed(b"\x1b[1;6HX");
+        pane.feed(&written);
+        assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, ' ');
+    }
+
+    #[test]
+    fn a_settle_rewrite_takes_the_rows_an_overlay_left_and_none_a_repaint_wrote() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(10, 4));
+        for y in 0..3 { text_at(&mut backend, y, "xy") }
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // One row changes, and an overlay that covered row 2 is gone.
+        text_at(&mut backend, 0, "ab");
+        backend.owe_rows(1..2);
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // A row changes, then a repaint writes every row: nothing is owed after it.
+        text_at(&mut backend, 2, "cd");
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        let (mut a, mut b) = (Cell::default(), Cell::default());
+        a.set_char('a'); b.set_char('b');
+        backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        let frames: Vec<&str> = s.split("\x1b[?2026h").collect();
+        let second = frames.iter().find(|f| f.starts_with("\x1b[1;1Hab\x1b[K")).unwrap_or_else(|| panic!("{s:?}"));
+        assert!(second.starts_with("\x1b[1;1Hab\x1b[K\x1b[2;1Hxy\x1b[K\x1b[?2026l"), "the changed row and the overlay's, not row 3: {s:?}");
+        assert!(frames.last().unwrap().contains("\x1b[4;1H\x1b[K"), "the repaint is the last frame written: {s:?}");
     }
 
     #[test]

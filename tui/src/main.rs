@@ -599,13 +599,12 @@ async fn run(config: config::Config) -> io::Result<()> {
         // Welcome forms also need connection and catalog updates, including drafts in
         // background windows. Refill leaves unrelated overlays alone.
         if refill { input::refill(&mut app) }
-        // A scroll that has rested: every row of the screen written again, once — row by row over
-        // what is there, not after erasing it, so it never flashes.
+        // A scroll, a burst or a closed overlay that has rested: the rows written since the last
+        // settle are written again, once — each its text over what is there, so none flashes.
         let settle = app::scroll_settle_in(app.scrolled_at, Instant::now()) == Some(Duration::ZERO);
-        if settle { app.scrolled_at = None }
+        if settle { app.scrolled_at = None; term.backend_mut().settle_next(); need_draw = true }
         // Two requests in one pass (or one that waited for the frame budget) are one repaint.
         if std::mem::take(&mut app.redraw_all) { repaint_due = true; need_draw = true; }
-        else if settle { repaint_due = true; need_draw = true; }
         if need_draw && last_draw.elapsed() >= frame_budget {
             // A changed size is cleared by `draw`'s own resize, inside the frame's update; a clear
             // here would be a second erase, and a soft one would leave text outside the new rows.
@@ -627,10 +626,11 @@ async fn run(config: config::Config) -> io::Result<()> {
             let done = term.draw(|frame| ui::draw(frame, &mut app))?;
             if let Some(v) = verifier.as_mut() { v.check(done.buffer) }
             drawn_size = term.size()?;
-            // A burst of cell updates, or an overlay gone or smaller, owes one soft rewrite once the
-            // screen rests. The rewrite itself writes every cell, so it counts none: it owes no second.
-            let cells = if repainting { 0 } else { term.backend().last_cells() };
-            app.scrolled_at = app::settle_due(overlay_before, app.overlay_drawn, cells, app.scrolled_at, Instant::now());
+            // A burst of cell updates, or an overlay gone or smaller, owes one rewrite of its rows
+            // once the screen rests; a repaint wrote every row, so it owes none.
+            let (due, left) = app::settle_after_frame(repainting, overlay_before, app.overlay_drawn, term.backend().last_cells(), app.scrolled_at, Instant::now());
+            app.scrolled_at = due;
+            if let Some(r) = left { term.backend_mut().owe_rows(r.y..r.bottom()) }
             overlay_before = app.overlay_drawn;
             // The focused program's cursor shape (vim's block and bar), passed through as tmux does.
             let shape = app.focused().filter(|_| app.modal.is_none()).and_then(|f| app.panes.get(&f)).map(|p| p.cursor_style()).unwrap_or(cursor::SetCursorStyle::DefaultUserShape);

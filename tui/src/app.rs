@@ -116,6 +116,15 @@ pub fn settle_due(overlay_before: Option<Rect>, overlay_now: Option<Rect>, cells
     if uncovered || cells > SETTLE_CELLS { Some(now) } else { owed_since }
 }
 
+/// What a drawn frame leaves the settle rewrite: when it is owed from ([settle_due]), and the rect
+/// of an overlay gone or no longer covering where it was — its rows are written again then too.
+/// A repaint frame wrote every row: it owes nothing more (what was owed stays as it was).
+pub fn settle_after_frame(repainting: bool, overlay_before: Option<Rect>, overlay_now: Option<Rect>, cells: usize, owed_since: Option<Instant>, now: Instant) -> (Option<Instant>, Option<Rect>) {
+    if repainting { return (owed_since, None) }
+    let left = overlay_before.filter(|b| overlay_now.is_none_or(|n| n.intersection(*b) != *b));
+    (settle_due(overlay_before, overlay_now, cells, owed_since, now), left)
+}
+
 pub fn use_order() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -6577,6 +6586,20 @@ mod scroll_settle_tests {
         let earlier = t0 - Duration::from_millis(100);
         assert_eq!(settle_due(big, None, 10, Some(earlier), t0), Some(t0), "a new burst pushes it later");
         assert_eq!(settle_due(None, None, 3, Some(earlier), t0), Some(earlier), "a quiet frame leaves what is owed as it was");
+    }
+
+    #[test]
+    fn a_repaint_frame_owes_no_settle_and_an_overlay_that_left_owes_its_rows() {
+        let t0 = Instant::now();
+        let earlier = t0 - Duration::from_millis(100);
+        let big = Some(Rect::new(10, 5, 40, 12));
+        // A repaint that also closed a panel (close_popup, Settings) wrote every row already.
+        assert_eq!(settle_after_frame(true, big, None, 0, None, t0), (None, None), "no second rewrite owed");
+        assert_eq!(settle_after_frame(true, big, None, 0, Some(earlier), t0), (Some(earlier), None), "what was owed stays as it was");
+        assert_eq!(settle_after_frame(false, big, None, 10, None, t0), (Some(t0), big), "a panel closed: its rows are owed");
+        assert_eq!(settle_after_frame(false, big, Some(Rect::new(10, 5, 40, 4)), 10, None, t0), (Some(t0), big), "it shrank");
+        assert_eq!(settle_after_frame(false, big, big, 10, None, t0), (None, None), "still open, as it was");
+        assert_eq!(settle_after_frame(false, None, None, SETTLE_CELLS + 1, None, t0), (Some(t0), None), "a burst: its own rows only");
     }
 }
 

@@ -97,7 +97,7 @@ def clock():
 RAW = BASE / 'raw.bin'
 SYNC = re.compile(rb'\x1b\[\?2026([hl])')
 CLEAR, ERASE_ROW = b'\x1b[2J', b'\x1b[2K'
-ROW_START = re.compile(rb'\x1b\[(\d+);1H')
+ROW_START, CUP = re.compile(rb'\x1b\[(\d+);1H'), re.compile(rb'\x1b\[(\d+);(\d+)H')
 
 
 def mark():
@@ -137,6 +137,26 @@ def updates(data):
 def row_starts(update):
     """The rows (1-based) [update] writes from their first column."""
     return {int(m[1]) for m in ROW_START.finditer(update)}
+
+
+def cup_rows(data):
+    """The rows (1-based) [data] places the cursor on: every row a frame writes a cell in."""
+    return {int(m[1]) for m in CUP.finditer(data)}
+
+
+def settle_rewrite(data, rows, label):
+    """[data] is a change, then its settle rewrite (the last update): the rows the change touched,
+    each written from its first column — never the whole screen, never a hard clear."""
+    found = updates(data)
+    assert len(found) >= 2, f'{label}: no settle rewrite after the change ({len(found)} updates)'
+    settle = found[-1]
+    rewritten = row_starts(settle)
+    touched = cup_rows(data[:data.rfind(b'\x1b[?2026h')])
+    assert rewritten, f'{label}: the settle rewrite wrote no row'
+    assert rewritten <= touched, f'{label}: rows {sorted(rewritten - touched)} rewritten that the change did not touch'
+    assert len(rewritten) < rows, f'{label}: the whole screen was rewritten'
+    assert not hard_clears(data) and not soft_repaints(data, rows), f'{label}: repainted'
+    return sorted(rewritten)
 
 
 def soft_repaints(data, rows):
@@ -339,20 +359,21 @@ try:
     one_soft(burst(lambda: keys('C-l'), soft), 'Ctrl-L')
 
     # (Two requests in one loop pass giving one repaint is decided inside hn's loop, which the
-    # input thread's timing keeps a terminal from reproducing: the unit test
-    # `repaint_requests_in_one_pass_are_one_request` covers it.)
+    # input thread's timing keeps a terminal from reproducing: `redraw_all` is one flag the loop
+    # takes once per pass, and each check above asserts one update per request.)
     print('PASS repaint: focus-in and Ctrl-L repaint softly, once each', flush=True)
 
-    # Closing the command panel: one soft settle rewrite, within 400 ms of the key (plus what
-    # delivering a key costs, measured here), not at once, and never again by itself.
+    # Closing the command panel: one settle rewrite of the rows it touched, within 400 ms of the
+    # key (plus what delivering a key costs, measured here), not at once, and never again by itself.
     started_at = time.monotonic()
     for _ in range(3): outer('display-message', '-p', 'x')
     overhead = (time.monotonic() - started_at) / 3 + .05 # a tmux call, and wait()'s poll step
-    data, took = burst_after(lambda: keys('Escape'), soft)
-    assert len(soft_repaints(data, rows)) == 1 and not hard_clears(data), 'command panel close: not one soft repaint'
+    data, took = burst_after(lambda: keys('Escape'), lambda d: len(updates(d)) >= 2)
+    rewritten = settle_rewrite(data, rows, 'command panel close')
+    assert len(updates(data)) == 2, f'command panel close: {len(updates(data))} updates, not the close and one settle'
     assert .1 <= took <= .4 + overhead, f'the settle rewrite came {took:.3f}s after the key (overhead allowed {overhead:.3f})'
     assert 'Commands' not in screen()
-    print(f'PASS repaint: the command panel closes with one soft settle rewrite ({took:.2f}s), then silence', flush=True)
+    print(f'PASS repaint: the command panel closes with one settle rewrite of {len(rewritten)} rows ({took:.2f}s), then silence', flush=True)
 
     # New Harness: opening and typing do not repaint; closing settles once.
     hn('workspace-menu', 'new-harness')
@@ -360,10 +381,18 @@ try:
     settled()
     no_repaint(burst(lambda: keys('-l', 'repaint check text')), 'typing in New Harness')
     no_repaint(burst(lambda: keys(*['BSpace'] * 20)), '20 backspaces')
-    data = burst(lambda: keys('Escape'), soft)
-    assert len(soft_repaints(data, rows)) == 1 and not hard_clears(data), 'New Harness close: not one soft repaint'
+    data = burst(lambda: keys('Escape'), lambda d: len(updates(d)) >= 2)
+    settle_rewrite(data, rows, 'New Harness close')
     assert 'New Harness' not in screen()
     print('PASS repaint: New Harness open, typing and 20 backspaces, close', flush=True)
+
+    # Streaming output: lines the mock echoes back scroll the pane, a burst of cells written one by
+    # one; once it rests, only the rows it wrote are rewritten — not the whole screen.
+    text = ''.join(f'REPAINT_STREAM {i:02d} ' + 'x' * 60 + '\r' for i in range(40))
+    data = burst(lambda: keys('-l', text), lambda d: len(updates(d)) >= 2)
+    rewritten = settle_rewrite(data, rows, 'streaming output')
+    assert 'REPAINT_STREAM 39' in screen()
+    print(f'PASS repaint: streaming output settles with a rewrite of the {len(rewritten)} rows it wrote', flush=True)
 
     # A real size change hard-clears, inside its update.
     for width, height in [(100, 30), (120, 32)]:
