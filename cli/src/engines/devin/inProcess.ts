@@ -6,3 +6,4 @@
 export { DevinReader, readDevinMessages } from './reader.js'
 export { devinMessagesToEvents, lastDevinTurnText, windowDevinMessages } from './normalizer.js'
 export { DEVIN_EFFORTS, devinFooterModel, devinModelCommandResult, parseDevinModelsOutput } from './runtimeProfile.js'
+export { devinProvider } from '../../lib/sessionSearch/externals/devin.js'

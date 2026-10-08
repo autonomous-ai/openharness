@@ -1,10 +1,18 @@
 import { join } from 'node:path'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { env } from '../../../config/env.js'
+import { loadEngine } from '../../../engines/inProcess.js'
+import { scanMemo } from './support.js'
 import { externalPaths, externalProviders } from './index.js'
-import { EXTERNAL_ENGINES } from './types.js'
+import { EXTERNAL_ENGINES, type ProcessView } from './types.js'
+
+// The other engines' readers are their own code, loaded on first use; a test may say one could not be.
+vi.mock('../../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 
 describe('where each engine keeps its conversations', () => {
   it("follows each engine's own overrides before Harness's defaults", () => {
@@ -41,5 +49,34 @@ describe('where each engine keeps its conversations', () => {
     const engines = externalProviders(externalPaths({ PI_CODING_AGENT_SESSION_DIR: '/pi/moved' })).map((provider) => provider.engine)
     expect([...engines].sort()).toEqual([...EXTERNAL_ENGINES].sort())
     expect(externalProviders().length).toBe(EXTERNAL_ENGINES.length)
+  })
+})
+
+describe('the other engines\' readers, loaded on first use', () => {
+  const none: ProcessView = { list: async () => [], openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
+  const missing = '/nonexistent/adoption-root'
+  const paths = () => externalPaths({ CURSOR_CONFIG_DIR: missing, CURSOR_DATA_DIR: missing, OPENCODE_DB: `${missing}/opencode.db`, KILO_DB: `${missing}/kilo.db`, PI_CODING_AGENT_DIR: missing })
+
+  it('loads nothing until a scan or a question needs a reader, and each engine\'s own code once', async () => {
+    vi.mocked(loadEngine).mockClear()
+    const providers = externalProviders(paths())
+    expect(loadEngine).not.toHaveBeenCalled()
+    const cursor = providers.find((provider) => provider.engine === 'cursor')!
+    await cursor.scan(scanMemo({ excluded: [] }).context())
+    await cursor.owners!(none)
+    await cursor.busy!({ pid: 1, record: '' })
+    expect(vi.mocked(loadEngine).mock.calls).toEqual([['cursor']])
+    // Kilo's reader is OpenCode's, loaded with Kilo's code; Claude Code's and Codex's are declared, and load nothing.
+    vi.mocked(loadEngine).mockClear()
+    for (const engine of ['kilo', 'claude', 'codex']) await providers.find((provider) => provider.engine === engine)!.owners!(none)
+    expect(vi.mocked(loadEngine).mock.calls).toEqual([['kilo']])
+  })
+
+  it('lists nothing and holds nothing open for an engine whose code could not be loaded', async () => {
+    vi.mocked(loadEngine).mockResolvedValueOnce(null)
+    const devin = externalProviders(paths()).find((provider) => provider.engine === 'devin')!
+    expect(await devin.scan(scanMemo({ excluded: [] }).context())).toEqual([])
+    expect(await devin.owners!(none)).toEqual([])
+    expect(await devin.busy!({ pid: 1, record: '' })).toBeNull()
   })
 })

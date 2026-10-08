@@ -1,25 +1,20 @@
 /**
  * Every engine's discovery, pointed at where that engine keeps its conversations on this machine.
  * Each path follows the engine's own rules (its env overrides first), not Harness's defaults alone.
+ *
+ * Claude Code's and Codex's are declared and built here. The other engines' readers are their own code, loaded in
+ * this process on the first scan or question that needs them (engines/inProcess.ts;
+ * docs/design/2026-10-08-other-engines-out-of-core.md, (o5)).
  */
 
 import { isAbsolute, join } from 'node:path'
 
-import { cursorConfigDir, cursorDataDir } from '../../../engines/cursor/home.js'
+import { cursorConfigDir, cursorDataDir } from '../../../engines/cursor/contract.js'
 import { env } from '../../../config/env.js'
 import { adoptionProviderOf } from '../../../engines/adoptions.js'
+import { loadEngine, type InProcessModules, type OtherEngine } from '../../../engines/inProcess.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../../engineHomes.js'
-import { agyProvider } from './agy.js'
-import { commandcodeProvider } from './commandcode.js'
-import { copilotProvider } from './copilot.js'
-import { cursorProvider } from './cursor.js'
-import { devinProvider } from './devin.js'
-import { grokProvider } from './grok.js'
-import { hermesProvider } from './hermes.js'
-import { museProvider } from './muse.js'
-import { opencodeProvider } from './opencode.js'
-import { piProvider } from './pi.js'
-import type { ExternalProvider } from './types.js'
+import type { ExternalEngine, ExternalProvider } from './types.js'
 
 export interface ExternalPaths {
   claudeProjectsDir: string
@@ -69,6 +64,24 @@ export function externalPaths(vars: NodeJS.ProcessEnv = process.env): ExternalPa
   }
 }
 
+/**
+ * An engine's reader, built from its own code the first time a scan or a question needs it, then kept: what it
+ * remembers between scans (the files it read, which session is where) stays its own. An engine whose code could not
+ * be loaded lists nothing and holds nothing open, as an engine with no store does; its failure is logged once, by
+ * the loader.
+ */
+function loaded<Name extends OtherEngine>(engine: ExternalEngine, name: Name, build: (code: InProcessModules[Name]) => ExternalProvider): ExternalProvider {
+  let provider: Promise<ExternalProvider | null> | null = null
+  const reader = (): Promise<ExternalProvider | null> => provider ??= loadEngine(name).then((code) => code && build(code))
+  return {
+    engine,
+    scan: async (ctx) => await (await reader())?.scan(ctx) ?? [],
+    owners: async (view) => await (await reader())?.owners?.(view) ?? [],
+    // No answer reads as none, as for an engine whose store cannot say (external.ts `OpenSessions.busy`).
+    busy: async (owner) => await (await reader())?.busy?.(owner) ?? null,
+  }
+}
+
 /** One provider per engine that keeps its conversations on this machine's disk. */
 export function externalProviders(paths: ExternalPaths = externalPaths()): ExternalProvider[] {
   return [
@@ -78,16 +91,16 @@ export function externalProviders(paths: ExternalPaths = externalPaths()): Exter
     // folder, its process records beside each; Codex's from each home.
     adoptionProviderOf('claude', { roots: () => claudeProjectsRoots(paths.claudeProjectsDir) }),
     adoptionProviderOf('codex', { roots: () => codexHomeRoots(paths.codexHome) }),
-    cursorProvider({ configDir: paths.cursorConfigDir, dataDir: paths.cursorDataDir }),
-    grokProvider({ home: paths.grokHome }),
-    copilotProvider({ home: paths.copilotHome }),
-    opencodeProvider({ engine: 'opencode', dbPath: paths.opencodeDb }),
-    opencodeProvider({ engine: 'kilo', dbPath: paths.kiloDb }),
-    hermesProvider({ root: paths.hermesRoot }),
-    devinProvider({ home: paths.devinHome }),
-    piProvider({ agentDir: paths.piAgentDir, ...(paths.piSessionDir ? { sessionDir: paths.piSessionDir } : {}) }),
-    commandcodeProvider({ home: paths.commandcodeHome }),
-    museProvider({ home: paths.museHome }),
-    agyProvider({ home: paths.agyHome }),
+    loaded('cursor', 'cursor', (code) => code.cursorProvider({ configDir: paths.cursorConfigDir, dataDir: paths.cursorDataDir })),
+    loaded('grok', 'grok', (code) => code.grokProvider({ home: paths.grokHome })),
+    loaded('copilot', 'copilot', (code) => code.copilotProvider({ home: paths.copilotHome })),
+    loaded('opencode', 'opencode', (code) => code.opencodeProvider({ engine: 'opencode', dbPath: paths.opencodeDb })),
+    loaded('kilo', 'kilo', (code) => code.opencodeProvider({ engine: 'kilo', dbPath: paths.kiloDb })),
+    loaded('hermes', 'hermes', (code) => code.hermesProvider({ root: paths.hermesRoot })),
+    loaded('devin', 'devin', (code) => code.devinProvider({ home: paths.devinHome })),
+    loaded('pi', 'pi', (code) => code.piProvider({ agentDir: paths.piAgentDir, ...(paths.piSessionDir ? { sessionDir: paths.piSessionDir } : {}) })),
+    loaded('commandcode', 'commandcode', (code) => code.commandcodeProvider({ home: paths.commandcodeHome })),
+    loaded('muse', 'muse', (code) => code.museProvider({ home: paths.museHome })),
+    loaded('agy', 'agy', (code) => code.agyProvider({ home: paths.agyHome })),
   ]
 }
