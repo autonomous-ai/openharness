@@ -223,6 +223,20 @@ restored every harness with no prompt.
     and later frames were clean. Seen only in the VM's paravirtualized GPU with the debug (Impeller)
     build; not reproduced on hardware. Worth checking on a real Apple Silicon Mac with the release build.
 
+### Time to the first result, measured
+
+26. Persona A on a fresh VM with every activation PR combined, #1047's `install.sh` served in place
+    of the CDN's (a VM-only `curl` wrapper) and #1067 downloading OpenCode beside setup: **44–46 s
+    from opening the app to the first file** (was 67 s on today's CDN installer; ~85 s on the
+    release, run A2). Where the 46 s go: CLI install ~10 s, `harness start` 3–6 s, engine probe 1 s,
+    the first pane ready in 0.13 s (OpenCode already in place), **OpenCode's own first start 12 s**
+    (its database, a 5 MB model list, and an install of `@opencode-ai/plugin` into
+    `~/.config/opencode` for Harness's TUI plugin), then the turn ~5 s. `opencode models`,
+    `debug config` and `agent list` do none of that first-start work, and `opencode serve` creates
+    the database and model list but not the plugin install, so pre-warming it would lean on OpenCode
+    internals; not done. The screenshots of the whole flow are in
+    `docs/research/2026-10-08-onboarding-flow/index.html`.
+
 ## Next
 
 - Merge #1047, then #1052 (rebased on main) and #1061; release desktop and CLI.
