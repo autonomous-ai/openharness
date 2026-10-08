@@ -39,10 +39,16 @@ export interface RetainExitedSessionDeps {
   hadConversation?: (entry: RegisteredSession) => boolean
 }
 
+/** Engines that write a transcript file once a conversation starts, so no file means none started. */
+const KEEPS_TRANSCRIPT = new Set(['claude', 'codex'])
+
 function wroteTranscript(entry: RegisteredSession): boolean {
   // An engine that keeps no transcript file (OpenCode, the default) cannot show it wrote nothing,
-  // so its exit is an ending as before, not a failed start.
-  if (!entry.transcriptPath) return true
+  // so its exit is an ending as before, not a failed start. Claude Code and Codex do keep one, and
+  // one that failed before writing it has no path at all: Claude Code that could not reach Anthropic
+  // right after Harness installed it closed its pane and tab with no message (fresh macOS VM,
+  // 2026-10-08, after #1047's handover, which this case slipped past).
+  if (!entry.transcriptPath) return !KEEPS_TRANSCRIPT.has(entry.engine)
   try { return statSync(entry.transcriptPath).size > 0 } catch { return false }
 }
 

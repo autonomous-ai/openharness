@@ -70,8 +70,13 @@ describe('retainExitedSession', () => {
     late.retain(row({ registeredAt: 1_000 }), true)
     expect(late.frames).toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
     const noTranscript = harness({ now: () => 1_000 + 30_000 })
-    noTranscript.retain(row({ registeredAt: 1_000, transcriptPath: null }), true)
-    expect(noTranscript.frames, 'no transcript file to judge by: an ending').toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
+    noTranscript.retain(row({ registeredAt: 1_000, engine: 'opencode', transcriptPath: null }), true)
+    expect(noTranscript.frames, 'an engine that keeps no transcript: an ending').toEqual([{ type: 'agent_deleted', payload: { agentId: 'agent-a', retained: true } }])
+    for (const engine of ['claude', 'codex'] as const) {
+      const neverWrote = harness({ now: () => 1_000 + 30_000 })
+      neverWrote.retain(row({ registeredAt: 1_000, engine, transcriptPath: null }), true)
+      expect(neverWrote.frames[0]!.payload.successor, `${engine} that failed before writing a transcript`).toBe('agent-shell')
+    }
     const unwritten = harness({ now: () => 1_000 + 30_000 })
     unwritten.retain(row({ registeredAt: 1_000, transcriptPath: '/nonexistent/never-written.jsonl' }), true)
     expect(unwritten.frames[0]!.payload.successor).toBe('agent-shell')
