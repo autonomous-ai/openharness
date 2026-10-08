@@ -798,7 +798,8 @@ class AppNotifier extends ChangeNotifier {
               // their second session, robots or not (fresh macOS VM, 2026-10-08). Without a paired
               // robot nothing here needs the LAN, so it is not tested.
               final paired = (await cli.list())['devices'];
-              if (!_localNetworkWanted && (paired is! List || paired.isEmpty)) {
+              if (!_localNetworkWanted &&
+                  (paired is! List || paired.isEmpty)) {
                 return null;
               }
               await cli.discover();
@@ -6624,7 +6625,8 @@ class AppNotifier extends ChangeNotifier {
   /// screen stay — as a missed `machines_changed` push would. For a screen
   /// waiting on a computer this window has no connection to hear that push
   /// through: an account with none connected yet (the browser's connect page).
-  Future<void> rereadMachines() => _rereadMachinesInBackground(pushed: false);
+  Future<void> rereadMachines() =>
+      _rereadMachinesInBackground(pushed: false);
 
   Future<void> _rereadMachinesInBackground({required bool pushed}) async {
     if (_disposed || status != AppStatus.authenticated) return;
@@ -6741,8 +6743,7 @@ class AppNotifier extends ChangeNotifier {
     });
     try {
       await _pool?.closeMachine(machineId);
-      if (machineStates[machineId] case final current?)
-        _connectMachine(current);
+      if (machineStates[machineId] case final current?) _connectMachine(current);
       settle();
       return await done.future;
     } finally {
@@ -9531,10 +9532,6 @@ class AppNotifier extends ChangeNotifier {
   /// their task again (fresh macOS VM, 2026-10-08).
   final _firstMessages = <(String, String), String>{};
 
-  /// Whether a first message is waiting for this agent to start (its pane says so while it installs).
-  bool hasFirstMessage(String machineId, String agentId) =>
-      _firstMessages.containsKey((machineId, agentId));
-
   @visibleForTesting
   void rememberFirstMessageForTest(
     String machineId,
@@ -10153,8 +10150,7 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Turns notifications on from the offer, asking the system's permission.
-  Future<void> acceptNotificationOffer() =>
-      systemNotifications.setEnabled(true);
+  Future<void> acceptNotificationOffer() => systemNotifications.setEnabled(true);
 
   /// What clicking a banner does: show that agent, wherever it is.
   ///
@@ -11412,8 +11408,7 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
-    if (choices['prompt'] case final String prompt
-        when prompt.trim().isNotEmpty) {
+    if (choices['prompt'] case final String prompt when prompt.trim().isNotEmpty) {
       _firstMessages[(machineId, agent.id)] = prompt;
     }
     _upsertAgent(machine, agent);
