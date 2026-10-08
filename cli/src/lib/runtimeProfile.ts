@@ -3,7 +3,6 @@ import { join } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { env } from '../config/env.js'
-import { sessionClaudeHome, sessionCodexHome } from './engineHomes.js'
 import { parseMuseSettings } from '../engines/muse/runtimeProfile.js'
 import { parseAmpSession } from '../engines/amp/runtimeProfile.js'
 import type { AgentEngine } from '../engines/types.js'
@@ -47,35 +46,14 @@ import {
 } from '../engines/pi/runtimeProfile.js'
 import { parseGrokFooterProfile } from '../engines/grok/runtimeProfile.js'
 import { parseAgyFooterProfile } from '../engines/agy/runtimeProfile.js'
-import { parseCodexCatalog, type CodexCatalogModel } from '../engines/codex/modelPicker.js'
-
-export interface RuntimeProfile {
-  id: string
-  sessionId: string
-  engine: AgentEngine
-  model: string
-  effort: string
-}
-
-export interface RuntimeModelOption {
-  id: string
-  displayName: string
-}
-
-export interface RuntimeState {
-  model: string | null
-  effort: string | null
-  mode: 'default' | 'plan' | 'unknown'
-  cliVersion: string | null
-  observedAt: number | null
-}
-
-/** The runtime axes a transcript record can set — see `RuntimeProfileManager.transcriptFields`. */
-export type RuntimeField = 'model' | 'effort' | 'mode'
-
-/** The session `transcriptFields` reads as — never a real one, so no model-switch control applies.
- *  No engine session id is empty or starts with NUL. */
-const FIELD_PROBE = '\u0000transcript-fields'
+import type { CodexCatalogModel } from '../engines/codex/modelPicker.js'
+import { codexCatalog } from '../engines/codex/runtimeProfile.js'
+export { codexEffortAllowed } from '../engines/codex/runtimeProfile.js'
+import { runtimeFor } from '../engines/runtime.js'
+import type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl } from '../engines/facets/runtime.js'
+export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } from '../engines/facets/runtime.js'
+import { addOption, currentPaneUi, effortLabel, encodeRuntimeProfile, parseVersion, readJson, record, runtimeModelLabel, stripAnsi, text, transcriptFields, versionAtLeast } from '../engines/kit/runtime.js'
+export { encodeRuntimeProfile, runtimeModelLabel } from '../engines/kit/runtime.js'
 
 const blankState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
 
@@ -108,41 +86,17 @@ interface CursorCatalogEntry {
   modelLabel: string
 }
 
-interface RuntimeControl {
-  target: RuntimeProfile
-  before: string | null
-  modelConfirmed: boolean
-  effortConfirmed: boolean
-}
-
 interface StateWaiter {
   check: () => boolean
   resolve: (matched: boolean) => void
   timer: NodeJS.Timeout
 }
 
-interface CodexCacheModel {
-  slug?: unknown
-  display_name?: unknown
-  visibility?: unknown
-  supported_reasoning_levels?: Array<{ effort?: unknown }>
-}
-
-interface CodexCache {
-  models?: CodexCacheModel[]
-}
-
 const PROFILE_RE = /^runtime-v1:([^:]+):(claude|codex|cursor|commandcode|pi|devin|opencode|hermes|muse|amp|kilo|grok|agy|copilot):([^@]+)@([a-z0-9_-]+)$/i
-/**
- * `persistent` came with Codex 0.160 (`ReasoningEffort::Persistent`, "Continue working until put to
- * sleep"): without it here a thread on it read as no effort at all, so its chip showed nothing and a
- * switch to it could never be confirmed.
- */
-const CODEX_EFFORTS = new Set(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent'])
-const CLAUDE_EFFORTS = new Set(['auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultracode'])
 const CURSOR_EFFORTS = new Set(['auto', 'none', 'low', 'medium', 'high', 'xhigh', 'max'])
+/** Wire parsing accepts all known effort labels; each engine owns its support policy. */
 const EFFORTS = new Set([
-  ...CODEX_EFFORTS, ...CLAUDE_EFFORTS, ...CURSOR_EFFORTS, ...PI_EFFORTS, ...DEVIN_EFFORTS,
+  'auto', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'persistent', 'ultracode', ...CURSOR_EFFORTS, ...PI_EFFORTS, ...DEVIN_EFFORTS,
   ...COMMANDCODE_EFFORTS, ...HERMES_EFFORTS,
 ])
 /**
@@ -173,12 +127,7 @@ const HERMES_CONTROL_UNVERSIONED = true
  * arbitrary — bounding here keeps the rows we DO send meaningful (see devinModels).
  */
 const CATALOG_LIMIT = 96
-const BASIC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
-const CLAUDE_ALIASES = ['default', 'opus', 'fable', 'sonnet', 'haiku'] as const
 const CHANGE_DEBOUNCE_MS = 120
-const CLAUDE_ULTRACODE_MIN_VERSION: [number, number, number] = [2, 1, 209]
-/** The first Codex whose `/model` picker was driven by hand (see supportsNativeRuntimeControl). */
-const CODEX_CONTROL_MIN_VERSION: [number, number, number] = [0, 144, 0]
 const CURSOR_CONTROLLED_BUILD = '2026.07.20-8cc9c0b'
 const CURSOR_CATALOG_TTL_MS = 5 * 60_000
 /** Shared TTL for the stdout catalogs (devin, pi) — same rationale as the cursor one. */
@@ -194,10 +143,6 @@ function decode(value: string): string | null {
   } catch {
     return null
   }
-}
-
-export function encodeRuntimeProfile(profile: Omit<RuntimeProfile, 'id'>): string {
-  return `runtime-v1:${encodeURIComponent(profile.sessionId)}:${profile.engine}:${encodeURIComponent(profile.model)}@${profile.effort}`
 }
 
 export function parseRuntimeProfile(value: unknown): RuntimeProfile | null {
@@ -217,100 +162,8 @@ export function parseRuntimeProfile(value: unknown): RuntimeProfile | null {
   }
 }
 
-function record(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
-}
-
-function text(value: unknown): string {
-  return typeof value === 'string' ? value : ''
-}
-
-function stripAnsi(value: string): string {
-  return value.replace(/\u001b\[[0-9;:]*[A-Za-z]/g, '')
-}
-
-function flattenContent(value: unknown): string {
-  if (typeof value === 'string') return value
-  if (!Array.isArray(value)) return ''
-  return value.map((item) => {
-    if (typeof item === 'string') return item
-    const obj = record(item)
-    return text(obj?.text) || text(obj?.content)
-  }).filter(Boolean).join('\n')
-}
-
-function confirmsClaudeAutoEffort(content: string): boolean {
-  return [
-    /\b(?:set|reset)\b.{0,40}\b(?:effort level|effort)\b.{0,40}\b(?:auto|model default)\b/i,
-    /\b(?:effort level|effort)\b.{0,40}\b(?:set|reset)\b.{0,40}\b(?:auto|model default)\b/i,
-    /\busing\b.{0,40}\bauto\b.{0,40}\beffort\b/i,
-  ].some((pattern) => pattern.test(content))
-}
-
-function parseVersion(value: string | null): [number, number, number] | null {
-  const match = /(?:^|\D)(\d+)\.(\d+)\.(\d+)(?:\D|$)/.exec(value ?? '')
-  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
-}
-
-function versionAtLeast(value: string | null, wanted: [number, number, number]): boolean {
-  const parsed = parseVersion(value)
-  if (!parsed) return false
-  for (let i = 0; i < wanted.length; i++) {
-    if (parsed[i] !== wanted[i]) return parsed[i] > wanted[i]
-  }
-  return true
-}
-
 export function supportsNativeRuntimeControl(session: RegisteredSession): boolean {
-  // A gateway agent (`ori claude`, `ori codex`) is DISPLAY-ONLY (owner, 2026-08-17). Its CLI runs with
-  // gateway model discovery, so the picker holds the user's OpenRouter catalog rather than the native
-  // aliases this controller knows how to type — and a `/model opus` typed into that pane would be a
-  // guess. The chip still names what it is running; nothing offers to change it.
-  if (session.gateway) return false
-  // Switching is Claude and Codex only (owner, 2026-07-31); everything else is view-only, so it never gets
-  // here with anything to apply. This is the second gate rather than the only one — modelsForSession
-  // already returns an empty catalogue for those engines — because a stale profile id from an older device
-  // would otherwise still drive a CLI the owner took off the switchable list.
-  if (session.engine === 'claude') return versionAtLeast(session.cliVersion, [2, 1, 153])
-  if (session.engine !== 'codex') return false
-  // Open upward, like Claude Code's. It allowed exactly 0.144 and 0.145, the two releases whose picker
-  // was driven by hand, so every Codex kept up to date (0.160 on 2026-10-05) could not be switched at
-  // all. The controller now reads the picker by what it says rather than by release: rows by slug or
-  // catalog display name, the rows read again before a digit, and nothing pressed when the row is not
-  // found exactly (engines/codex/modelPicker.ts).
-  return versionAtLeast(session.cliVersion, CODEX_CONTROL_MIN_VERSION)
-}
-
-/**
- * Whether Codex can be asked for this effort on this model. `listed` is what Codex's own catalog
- * (`models_cache.json`) gives the model, or null when the catalog cannot be read or does not have it.
- *
- * Max and Ultra follow the catalog: Codex offers them in its picker exactly where the catalog lists them
- * (model_popups.rs), and 0.160's lists them for gpt-6-astra, gpt-6.1-sol and gpt-6-sol, which the slug
- * list below left out of reach (owner, 2026-10-05). The slug list is what was known from 0.145, kept for
- * when there is no catalog to ask.
- */
-export function codexEffortAllowed(model: string, effort: string, listed: readonly string[] | null = null): boolean {
-  if (!CODEX_EFFORTS.has(effort)) return false
-  if (effort !== 'max' && effort !== 'ultra') return true
-  if (listed) return listed.includes(effort)
-  return /^gpt-5\.6(?:-|$)/i.test(model) || model.toLowerCase() === 'codex-auto-review'
-}
-
-function titlePart(value: string): string {
-  if (/^gpt$/i.test(value)) return 'GPT'
-  if (/^xhigh$/i.test(value)) return 'XHigh'
-  return value.charAt(0).toUpperCase() + value.slice(1)
-}
-
-export function runtimeModelLabel(model: string): string {
-  const alias = /^(default|best|fable|opus|sonnet|haiku)(\[1m\])?$/i.exec(model)
-  if (alias) return `${titlePart(alias[1].toLowerCase())}${alias[2] ?? ''}`
-  return model.split(/[-_]/).filter(Boolean).map(titlePart).join(' ')
-}
-
-function effortLabel(effort: string): string {
-  return effort === 'xhigh' ? 'XHigh' : titlePart(effort)
+  return !session.gateway && (runtimeFor(session.engine)?.supportsControl(session) ?? false)
 }
 
 function cursorEffortFromId(rawId: string): { effort: string | null; modelKey: string } {
@@ -500,93 +353,9 @@ function cursorSyntheticTarget(
   }
 }
 
-function normalizeClaudeDisplay(value: string): string | null {
-  const cleaned = value
-    .replace(/\u001b\[[0-9;]*m/g, '')
-    .replace(/\s+\(default\).*$/i, '')
-    .replace(/\s+and saved.*$/i, '')
-    .replace(/\s+for (?:the )?current session.*$/i, '')
-    .trim()
-  if (!cleaned) return null
-  const alias = /^(default|best|fable|opus|sonnet|haiku)(\[1m\])?$/i.exec(cleaned)
-  if (alias) return `${alias[1].toLowerCase()}${alias[2]?.toLowerCase() ?? ''}`
-  const family = /^(Fable|Opus|Sonnet|Haiku)\s+(\d+(?:\.\d+)*)(?:\s+\(1M context\))?/i.exec(cleaned)
-  if (family) return `claude-${family[1].toLowerCase()}-${family[2].replace(/\./g, '-')}${/1M context/i.test(cleaned) ? '[1m]' : ''}`
-  if (/^claude-[a-z0-9._:-]+(?:\[1m\])?$/i.test(cleaned)) return cleaned.toLowerCase()
-  return null
-}
-
-function claudeAliasForModel(model: string): string | null {
-  const normalized = model.toLowerCase()
-  if ((CLAUDE_ALIASES as readonly string[]).includes(normalized)) return normalized
-  return /^claude-(opus|fable|sonnet|haiku)(?:-|$)/.exec(normalized)?.[1] ?? null
-}
-
-function claudeEfforts(model: string, cliVersion: string | null = null): string[] {
-  // `[1m]` marks the 1M-context variant, not a different model — strip it so `claude-opus-5[1m]` gets
-  // the same efforts as `claude-opus-5` (otherwise a 1M model looked effort-less and a /model switch
-  // reset the observed effort to `auto`). The version match is open-ended (4.7/4.8, then 5+) so a new
-  // release like Opus 5 works without a code change.
-  const normalized = model.toLowerCase().replace(/\[1m\]$/, '')
-  let efforts: string[] = []
-  if (/^claude-(?:opus|fable|sonnet)-(?:4-[78]|[5-9]|\d{2,})(?:-|$)/.test(normalized)) efforts = [...BASIC_EFFORTS]
-  else if (/^claude-(?:opus|sonnet)-4-6(?:-|$)/.test(normalized)) efforts = ['low', 'medium', 'high', 'max']
-  else if (/^(?:fable|opus|sonnet)$/.test(normalized)) efforts = [...BASIC_EFFORTS]
-  if (efforts.length > 0 && versionAtLeast(cliVersion, CLAUDE_ULTRACODE_MIN_VERSION)) efforts.push('ultracode')
-  return efforts
-}
-
-function availableModelMatches(model: string, allowed: string[]): boolean {
-  if (model === 'default') return true
-  if (allowed.length === 0) return true
-  const lower = model.toLowerCase()
-  const family = lower.replace(/\[1m\]$/, '')
-  const wantsLongContext = lower.endsWith('[1m]')
-  return allowed.some((item) => {
-    const candidate = item.toLowerCase()
-    const sameFamily = candidate.includes(`-${family}-`) || candidate.endsWith(`-${family}`)
-    const contextMatches = wantsLongContext === /(?:\[1m\]|1m.context)/i.test(candidate)
-    return lower === candidate || lower.startsWith(`${candidate}-`) || lower.startsWith(`${candidate}[`) || (sameFamily && contextMatches)
-  })
-}
-
-function currentPaneUi(paneText: string): string {
-  const lines = paneText.split('\n')
-  const promptIndex = lines.findLastIndex((line) => {
-    const marker = line.search(/[›❯→]/u)
-    return marker >= 0 && !/^\s*\d+\.\s/.test(line.slice(marker + 1))
-  })
-  return (promptIndex >= 0 ? lines.slice(promptIndex) : lines).join('\n')
-}
-
-async function readJson(file: string): Promise<Record<string, unknown> | null> {
-  try { return record(JSON.parse(await readFile(file, 'utf8'))) } catch { return null }
-}
-
 /** Raw file text, or '' when it cannot be read — hermes' config is YAML, not JSON. */
 async function readText(file: string): Promise<string> {
   try { return await readFile(file, 'utf8') } catch { return '' }
-}
-
-function claudeSettingsFiles(session: RegisteredSession): string[] {
-  const root = sessionClaudeHome(session)
-  const files = [join(root, 'settings.json')]
-  if (session.cwd) {
-    files.push(join(session.cwd, '.claude', 'settings.json'))
-    files.push(join(session.cwd, '.claude', 'settings.local.json'))
-  }
-  return files
-}
-
-async function claudeAvailableModels(session: RegisteredSession): Promise<string[]> {
-  const merged: string[] = []
-  for (const file of claudeSettingsFiles(session)) {
-    const config = await readJson(file)
-    const values = config?.availableModels
-    if (!Array.isArray(values)) continue
-    for (const value of values) if (typeof value === 'string' && !merged.includes(value)) merged.push(value)
-  }
-  return merged
 }
 
 /** Command Code ids are "vendor/name"; everything we store and show uses the name alone. */
@@ -616,46 +385,7 @@ async function commandcodeConfiguredEffort(model: string | null): Promise<{ effo
   return { effort: 'auto', defaultModel }
 }
 
-async function claudeConfiguredEffort(session: RegisteredSession): Promise<string> {
-  let configured: string | null = null
-  for (const file of claudeSettingsFiles(session)) {
-    const config = await readJson(file)
-    const raw = text(config?.effortLevel) || text(config?.effort)
-    const normalized = raw.toLowerCase() === 'default' ? 'auto' : raw.toLowerCase()
-    if (CLAUDE_EFFORTS.has(normalized)) configured = normalized
-  }
-  return configured ?? 'auto'
-}
-
 /** The first-run banner names the model before Claude writes a conversation transcript. */
-function claudeStartupBanner(pane: string): { model: string; effort?: string } | null {
-  const lines = pane.split('\n')
-  const start = lines.findLastIndex(line => /\bClaude Code v\d+\.\d+/.test(line))
-  if (start < 0) return null
-  const banner = lines.slice(start, start + 4).join('\n')
-  const match = /\b(Fable|Opus|Sonnet|Haiku)\s+(\d+(?:\.\d+)*)(\s+\(1M context\))?(?:\s+with\s+(low|medium|high|xhigh|max|ultracode)\s+effort)?\s*·\s*Claude\s+(?:Max|Pro|Team|Enterprise)\b/i.exec(banner)
-  if (!match) return null
-  return {
-    model: `claude-${match[1].toLowerCase()}-${match[2].replace(/\./g, '-')}${match[3] ? '[1m]' : ''}`,
-    ...(match[4] ? { effort: match[4].toLowerCase() } : {}),
-  }
-}
-
-function addOption(
-  output: RuntimeModelOption[],
-  seen: Set<string>,
-  session: RegisteredSession,
-  model: string,
-  effort: string,
-  modelLabel = runtimeModelLabel(model),
-): void {
-  // The id inside a `runtime-v1:` string is what the web/device echoes back on a pick, so it is the
-  // AGENT id — the public one — not the engine session that happens to be bound right now.
-  const id = encodeRuntimeProfile({ sessionId: session.agentId, engine: session.engine, model, effort })
-  if (seen.has(id)) return
-  seen.add(id)
-  output.push({ id, displayName: `${modelLabel} / ${effortLabel(effort)}` })
-}
 
 export class RuntimeProfileManager {
   private readonly states = new Map<string, RuntimeState>()
@@ -745,19 +475,7 @@ export class RuntimeProfileManager {
    * a wrong value.
    */
   transcriptFields(session: RegisteredSession, rawLine: string): RuntimeField[] {
-    if (session.engine !== 'claude' && session.engine !== 'codex') return []
-    let raw: Record<string, unknown> | null
-    try { raw = record(JSON.parse(rawLine)) } catch { return [] }
-    if (!raw) return []
-    const probe: RegisteredSession = { ...session, sessionId: FIELD_PROBE }
-    const state = blankState()
-    if (session.engine === 'codex') this.ingestCodex(probe, raw, state)
-    else this.ingestClaude(probe, raw, state)
-    const fields: RuntimeField[] = []
-    if (state.model !== null) fields.push('model')
-    if (state.effort !== null) fields.push('effort')
-    if (state.mode !== 'unknown') fields.push('mode')
-    return fields
+    return transcriptFields(runtimeFor(session.engine), session, rawLine)
   }
 
   async ingestConfig(session: RegisteredSession, silent = false): Promise<boolean> {
@@ -840,7 +558,7 @@ export class RuntimeProfileManager {
       // own model is what a fresh session starts on, so the chip names it instead of falling back to Auto.
       if (!state.model && config.defaultModel) state.model = config.defaultModel
     } else {
-      state.effort = await claudeConfiguredEffort(session)
+      state.effort = await runtimeFor('claude')!.configuredEffort!(session)
     }
     state.observedAt = Date.now()
     const after = this.selectedModel(session)
@@ -857,15 +575,7 @@ export class RuntimeProfileManager {
     paneText = stripAnsi(paneText)
     const currentUi = currentPaneUi(paneText)
     if (session.engine === 'codex') {
-      const matches = [...paneText.matchAll(/\b(gpt-[a-z0-9][a-z0-9._-]*)\s+(low|medium|high|xhigh|max|ultra|persistent|default)\s*[·│]/gi)]
-      const latest = matches[matches.length - 1]
-      if (latest) {
-        state.model = latest[1].toLowerCase()
-        state.effort = latest[2].toLowerCase() === 'default' ? 'auto' : latest[2].toLowerCase()
-        state.observedAt = Date.now()
-      }
-      if (/\bplan mode\b/i.test(currentUi)) state.mode = 'plan'
-      else if (/\b(?:default|work) mode\b/i.test(currentUi)) state.mode = 'default'
+      runtimeFor('codex')!.pane({ session, state, control: this.controls.get(session.sessionId) }, paneText)
     } else if (session.engine === 'cursor') {
       if (/Available models|Models matching|— Edit Parameters|Type to filter.*Tab to edit|Esc to go back/i.test(currentUi)) return false
       const footerLines = currentUi.split('\n')
@@ -996,27 +706,7 @@ export class RuntimeProfileManager {
         state.observedAt = Date.now()
       }
     } else {
-      const banner = !state.model ? claudeStartupBanner(paneText) : null
-      if (banner) {
-        state.model = banner.model
-        if (banner.effort) state.effort = banner.effort
-        state.observedAt = Date.now()
-      }
-      const header = /(Fable|Opus|Sonnet|Haiku)\s+(\d+(?:\.\d+)*)(\s+\(1M context\))?\s+with\s+(low|medium|high|xhigh|max|ultracode)\s+effort/gi
-      const matches = [...paneText.matchAll(header)]
-      const latest = matches[matches.length - 1]
-      if (latest) {
-        state.model = `claude-${latest[1].toLowerCase()}-${latest[2].replace(/\./g, '-')}${latest[3] ? '[1m]' : ''}`
-        state.effort = latest[4].toLowerCase()
-        state.observedAt = Date.now()
-      }
-      const footer = paneText.split('\n').slice(-8).join('\n')
-      if (/─+\s*ultracode\s*─+/i.test(footer)) {
-        state.effort = 'ultracode'
-        state.observedAt = Date.now()
-      }
-      if (/\bplan mode on\b/i.test(currentUi)) state.mode = 'plan'
-      else if (/\b(?:auto|default) mode on\b/i.test(currentUi)) state.mode = 'default'
+      runtimeFor('claude')!.pane({ session, state, control: this.controls.get(session.sessionId) }, paneText)
     }
     const after = this.selectedModel(session)
     this.wake(session.sessionId)
@@ -1037,8 +727,10 @@ export class RuntimeProfileManager {
     if (this.unbound(session.sessionId)) return null
     const state = this.states.get(session.sessionId)
     if (!state?.model) return null
-    const model = session.engine === 'claude' ? claudeAliasForModel(state.model) ?? state.model : state.model
-    const effort = state.effort ?? (session.engine === 'claude' && claudeEfforts(model).length === 0 ? 'auto' : null)
+    const adapter = runtimeFor(session.engine)
+    if (adapter) return adapter.selectedModel(session, state)
+    const model = state.model
+    const effort = state.effort
     if (!effort) return null
     return encodeRuntimeProfile({
       sessionId: session.agentId,
@@ -1214,29 +906,7 @@ export class RuntimeProfileManager {
   }
 
   private ingestCodex(session: RegisteredSession, raw: Record<string, unknown>, state = this.state(session.sessionId)): void {
-    const payload = record(raw.payload)
-    const cliVersion = raw.type === 'session_meta' ? text(payload?.cli_version) : ''
-    if (parseVersion(cliVersion)) {
-      session.cliVersion = cliVersion
-      state.cliVersion = cliVersion
-    }
-    let source: Record<string, unknown> | null = null
-    if (raw.type === 'event_msg' && payload?.type === 'thread_settings_applied') source = record(payload.thread_settings)
-    else if (raw.type === 'turn_context') source = payload
-    if (!source) return
-    const model = text(source.model)
-    const effort = text(source.reasoning_effort) || text(source.effort)
-    const collaboration = record(source.collaboration_mode)
-    const mode = text(collaboration?.mode)
-    if (model) state.model = model
-    if (CODEX_EFFORTS.has(effort.toLowerCase())) state.effort = effort.toLowerCase()
-    if (mode === 'plan' || mode === 'default') state.mode = mode
-    if (model || effort || mode) state.observedAt = Date.now()
-    const control = this.controls.get(session.sessionId)
-    if (control && state.model === control.target.model) {
-      control.modelConfirmed = true
-      if (control.target.effort === 'auto' || state.effort === control.target.effort) control.effortConfirmed = true
-    }
+    runtimeFor('codex')!.transcript({ session, state, control: this.controls.get(session.sessionId) }, raw)
   }
 
   private ingestCursor(session: RegisteredSession, raw: Record<string, unknown>): void {
@@ -1263,38 +933,7 @@ export class RuntimeProfileManager {
   }
 
   private ingestClaude(session: RegisteredSession, raw: Record<string, unknown>, state = this.state(session.sessionId)): void {
-    const cliVersion = text(raw.version)
-    if (parseVersion(cliVersion)) {
-      session.cliVersion = cliVersion
-      state.cliVersion = cliVersion
-    }
-    const message = record(raw.message)
-    const assistantModel = raw.type === 'assistant' ? text(message?.model) : ''
-    // Claude uses this marker for local errors such as exhausted quota.
-    // It is not a model change; keep the last real observation.
-    if (assistantModel && assistantModel !== '<synthetic>') {
-      state.model = assistantModel
-      state.observedAt = Date.now()
-    }
-    const content = `${flattenContent(message?.content)}\n${flattenContent(raw.content)}`
-    const control = this.controls.get(session.sessionId)
-    const modelMatch = /Set model to\s+(.+?)(?:\n|$)/i.exec(content)
-    if (modelMatch) {
-      const nextModel = control?.target.model ?? normalizeClaudeDisplay(modelMatch[1]) ?? state.model
-      state.model = nextModel
-      if (!control && nextModel && state.effort && !claudeEfforts(nextModel, session.cliVersion).includes(state.effort)) {
-        state.effort = 'auto'
-      }
-      state.observedAt = Date.now()
-      if (control) control.modelConfirmed = true
-    }
-    const effortMatch = /Set effort level to\s+(low|medium|high|xhigh|max|ultracode)/i.exec(content)
-    const effortAuto = confirmsClaudeAutoEffort(content)
-    if (effortMatch || effortAuto) {
-      state.effort = effortMatch?.[1].toLowerCase() ?? 'auto'
-      state.observedAt = Date.now()
-      if (control) control.effortConfirmed = control.target.effort === 'auto' || state.effort === control.target.effort
-    }
+    runtimeFor('claude')!.transcript({ session, state, control: this.controls.get(session.sessionId) }, raw)
   }
 
   private ingestGrok(session: RegisteredSession, raw: Record<string, unknown>): void {
@@ -1308,71 +947,26 @@ export class RuntimeProfileManager {
     state.observedAt = Date.now()
   }
 
-  private async claudeModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
-    const output: RuntimeModelOption[] = []
-    const seen = new Set<string>()
-    const allowed = await claudeAvailableModels(session)
-    for (const model of CLAUDE_ALIASES) {
-      if (model === 'fable' && !versionAtLeast(session.cliVersion, [2, 1, 170])) continue
-      if (!availableModelMatches(model, allowed)) continue
-      addOption(output, seen, session, model, 'auto')
-      for (const effort of claudeEfforts(model, session.cliVersion)) addOption(output, seen, session, model, effort)
-    }
-    const state = this.states.get(session.sessionId)
-    if (state?.model) {
-      const model = claudeAliasForModel(state.model) ?? state.model
-      addOption(output, seen, session, model, 'auto')
-      for (const effort of claudeEfforts(model, session.cliVersion)) addOption(output, seen, session, model, effort)
-      if (state.effort) addOption(output, seen, session, model, state.effort)
-    }
-    return output
+  private claudeModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
+    return runtimeFor('claude')!.models(session, this.states.get(session.sessionId))
   }
 
   /**
    * The catalog Codex builds its own `/model` picker from, read fresh: what the controller matches the
    * picker's rows against (engines/codex/modelPicker.ts). Empty when there is no cache to read.
    */
-  async codexCatalog(session: RegisteredSession): Promise<CodexCatalogModel[]> {
-    return parseCodexCatalog(await this.readCodexCache(session))
+  codexCatalog(session: RegisteredSession): Promise<CodexCatalogModel[]> {
+    return codexCatalog(session)
   }
 
   /**
    * Found by QA on a quiet machine: the picker read the daemon's login instead of the agent's.
    * Use the bound conversation's home, or the launch shell's, with an explicit Codex profile first.
    */
-  private async readCodexCache(session: RegisteredSession): Promise<CodexCache> {
-    try {
-      const cache: unknown = JSON.parse(await readFile(join(sessionCodexHome(session), 'models_cache.json'), 'utf8'))
-      return record(cache) ?? {}
-    } catch {
-      return {}
-    }
-  }
 
-  private async codexModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
-    const output: RuntimeModelOption[] = []
-    const seen = new Set<string>()
-    const cache = await this.readCodexCache(session)
-    const catalog = parseCodexCatalog(cache)
-    for (const item of Array.isArray(cache.models) ? cache.models : []) {
-      const model = text(item.slug)
-      if (!model || item.visibility === 'hide') continue
-      const label = text(item.display_name) || runtimeModelLabel(model)
-      addOption(output, seen, session, model, 'auto', label)
-      const listed = catalog.find((entry) => entry.slug === model)?.efforts ?? []
-      for (const effort of listed) {
-        if (effort !== 'auto' && codexEffortAllowed(model, effort, listed)) addOption(output, seen, session, model, effort, label)
-      }
-    }
-    const state = this.states.get(session.sessionId)
-    if (state?.model) {
-      addOption(output, seen, session, state.model, 'auto')
-      const listed = catalog.find((entry) => entry.slug === state.model)?.efforts ?? null
-      if (state.effort && codexEffortAllowed(state.model, state.effort, listed)) {
-        addOption(output, seen, session, state.model, state.effort)
-      }
-    }
-    return output
+
+  private codexModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
+    return runtimeFor('codex')!.models(session, this.states.get(session.sessionId))
   }
 
   /** Command Code stamps the model on every assistant line as the full gateway id

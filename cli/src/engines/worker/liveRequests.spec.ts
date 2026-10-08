@@ -8,6 +8,8 @@ import type { LivePage, LiveSession } from './liveProtocol.js'
 import { LIVE_CAPABILITIES, LIVE_CLOSE, LIVE_FORGET, LIVE_PART, LIVE_PREPARE, LIVE_READ, LIVE_WAIT_MS } from './liveProtocol.js'
 import { engineLiveRequests, type LiveRequestDeps } from './liveRequests.js'
 
+vi.mock('../../lib/runtimeProfile.js', () => { throw new Error('Engine workers must not load the monolithic runtime profile manager') })
+
 const dirs: string[] = []
 const who = { owner: true, local: true }
 const prompt = (engine: string, text: string) => JSON.stringify(engine === 'claude'
@@ -37,6 +39,15 @@ async function setup(engine: 'claude' | 'codex' = 'claude', lines = '', limits?:
 afterEach(async () => { vi.useRealTimers(); vi.restoreAllMocks(); await Promise.all(dirs.splice(0).map(dir => rm(dir, { recursive: true, force: true }))) })
 
 describe('engine live checkpoints', () => {
+  it('emits compact profile evidence without loading the shared runtime manager', async () => {
+    const raw = JSON.stringify({ type: 'assistant', version: '2.1.209', message: { role: 'assistant', model: 'claude-opus-5',
+      content: [{ type: 'text', text: 'x'.repeat(2_000_000) }], stop_reason: 'end_turn' } }) + '\n'
+    const t = await setup('claude', raw)
+    const page = await t.page()
+    const evidence = page.frames.find(frame => frame.runtime?.model === 'claude-opus-5')?.runtime
+    expect(evidence).toMatchObject({ model: 'claude-opus-5', version: '2.1.209' })
+    expect(JSON.stringify(evidence).length).toBeLessThan(200)
+  })
   it.each(['claude', 'codex'] as const)('%s preserves thinking identities and cross-turn state across a restart', async engine => {
     const thinking = (text: string) => JSON.stringify(engine === 'claude'
       ? { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: text }] } }

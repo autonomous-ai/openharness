@@ -1,6 +1,6 @@
 import type { AttachRules } from '../../lib/attachTranscript.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { RuntimeField } from '../../lib/runtimeProfile.js'
+import type { RuntimeField } from './runtime.js'
 import type { LiveEvent } from '../kit/events.js'
 
 /** A value, not an engine's mutable parser state. Identity changes with both parser and turn. */

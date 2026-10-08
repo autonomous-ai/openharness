@@ -3,6 +3,8 @@ import type { LiveEvent } from '../kit/events.js'
 import type { LiveTurn } from '../facets/live.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { record, sessionEvent } from './protocol.js'
+import type { RuntimeRecord } from '../facets/runtime.js'
+import { runtimeRecord } from './runtimeProtocol.js'
 
 export const LIVE_VERSION = 1
 export const LIVE_CAPABILITIES = 'engine_live_capabilities'
@@ -47,6 +49,8 @@ export interface LiveCursor {
 }
 export interface LiveFrame {
   raw: string
+  /** Compact, engine-private profile evidence; core forwards it without interpreting vendor fields. */
+  runtime?: RuntimeRecord | null
   /** Profile metadata can begin before the turn's parser window. */
   profile: boolean
   observe: boolean
@@ -109,6 +113,7 @@ export function livePage(value: unknown): value is LivePage {
     && (value.lastStarted === null || (liveEvent(value.lastStarted) && value.lastStarted.type === 'turn_started'))
     && value.frames.every(f => record(f) && typeof f.raw === 'string' && typeof f.profile === 'boolean'
       && typeof f.observe === 'boolean' && typeof f.replay === 'boolean' && liveTurn(f.turn)
+      && (f.runtime === undefined || f.runtime === null || runtimeRecord(f.runtime))
       && (f.failure === undefined || typeof f.failure === 'string') && Array.isArray(f.events) && f.events.every(liveEvent))
 }
 

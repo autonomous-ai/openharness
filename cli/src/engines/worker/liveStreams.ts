@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises'
 import type { EngineLive, LiveParser, LiveTurn } from '../facets/live.js'
 import type { LiveEvent } from '../kit/events.js'
 import { isWholeRecord, locateAttachSpan, type AttachSpan } from '../../lib/attachTranscript.js'
-import type { RuntimeField } from '../../lib/runtimeProfile.js'
+import type { RuntimeField, RuntimeRecord } from '../facets/runtime.js'
 import { streamRecords } from '../../lib/transcriptTail.js'
 import { sameStamp, stampAt } from './liveFiles.js'
 import { LIVE_HISTORY_BYTES, LIVE_PAGE_BYTES, type LiveCursor, type LiveFrame, type LivePage, type LiveSession, type LivePull } from './liveProtocol.js'
@@ -27,7 +27,12 @@ function changed(): never { throw new Error('ENGINE_TRANSCRIPT_CHANGED') }
 
 export class LiveStreams {
   private readonly streams = new Map<string, Stream>()
-  constructor(private readonly adapter: EngineLive, private readonly fields: (session: LiveSession, raw: string) => readonly RuntimeField[]) {}
+  constructor(private readonly adapter: EngineLive, private readonly fields: (session: LiveSession, raw: string) => readonly RuntimeField[],
+    private readonly runtime?: (raw: string) => RuntimeRecord | null) {}
+
+  private frame(frame: LiveFrame): LiveFrame {
+    return this.runtime ? { ...frame, runtime: this.runtime(frame.raw) } : frame
+  }
 
   forget(token: string): void { this.streams.delete(token) }
 
@@ -129,7 +134,7 @@ export class LiveStreams {
     let records = 0
     if (preparing && stream.head && stream.span.head !== null) {
       const raw = stream.span.head
-      frames.push({ raw, profile: true, observe: false, events: [], replay: false, turn: { ...stream.turn } })
+      frames.push(this.frame({ raw, profile: true, observe: false, events: [], replay: false, turn: { ...stream.turn } }))
       bytes += Buffer.byteLength(raw)
     }
     stream.head = false
@@ -139,11 +144,12 @@ export class LiveStreams {
       const result = fold ? this.ingest(stream, ask.token, raw, offset) : { events: [] }
       if (fold) records++
       const events = preparing && !ask.replay ? [] : result.events
-      frames.push({ raw, profile: true, observe: fold, events, replay: offset < (ask.cursor?.historyUntil ?? 0), turn: { ...stream.turn },
+      const frame = this.frame({ raw, profile: true, observe: fold, events, replay: offset < (ask.cursor?.historyUntil ?? 0), turn: { ...stream.turn },
         ...(!preparing && result.failure !== undefined ? { failure: result.failure } : {}) })
+      frames.push(frame)
       // Account for normalized output as well as raw input. A large record occupies its own page;
       // the reply transport fragments it and enforces the independent hard result bound.
-      bytes += Buffer.byteLength(raw) + Buffer.byteLength(JSON.stringify(events))
+      bytes += Buffer.byteLength(raw) + Buffer.byteLength(JSON.stringify(events)) + Buffer.byteLength(JSON.stringify(frame.runtime ?? null))
       return stopped = bytes >= LIVE_PAGE_BYTES
     }, preparing || ask.cursor?.completeUntil != null ? isWholeRecord : () => false) : { next: start, partial: false, records: 0 }
     if (!read) changed()
