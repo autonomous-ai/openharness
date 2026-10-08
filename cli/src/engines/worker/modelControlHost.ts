@@ -1,13 +1,13 @@
 import type { ModelControlHost } from '../facets/modelControl.js'
 import { RuntimeProfileControlError } from '../facets/modelControl.js'
 import type { RuntimeCatalogModel } from '../facets/runtime.js'
-import { modelControlAnswer, modelControlSize, MODEL_CONTROL_VERSION, type ModelControlAction } from './modelControlProtocol.js'
+import { modelControlAnswer, modelControlEnvelope, type ModelControlAction } from './modelControlProtocol.js'
 
 /** Shared by worker and explicit inline mode. Each call still passes through core's grant broker. */
 export function createModelControlHost(ask: (action: ModelControlAction) => Promise<Record<string, unknown>>): ModelControlHost {
   const call = async (action: ModelControlAction) => {
     const reply = await ask(action)
-    if (!modelControlSize(reply) || reply.version !== MODEL_CONTROL_VERSION || reply.error !== undefined || !modelControlAnswer(action, reply.value)) {
+    if (!modelControlEnvelope(reply, ['value', 'error']) || reply.error !== undefined || !modelControlAnswer(action, reply.value)) {
       throw new RuntimeProfileControlError('BUSY')
     }
     return reply.value

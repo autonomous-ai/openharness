@@ -1,6 +1,6 @@
 import type { CoreConnection } from '../../services/process.js'
 import { engineModelControlRequests } from './modelControlRequests.js'
-/** One engine's read-only adapter, hosted by the master's existing service supervisor. */
+/** One engine's facets, hosted by the master's existing service supervisor. */
 import { isAbsolute } from 'node:path'
 import type { ServiceRequests } from '../../core/api.js'
 import { TranscriptPager } from '../../lib/transcriptPages.js'

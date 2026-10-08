@@ -240,6 +240,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         expect(metrics!.memory.rssMax).toBeGreaterThan(0)
         expect(metrics!.eventLoop.delaySamples).toBeGreaterThan(0)
         if (turning) for (const count of turns) expect(count).toBeGreaterThan(0)
+        if (controlling) for (const agent of saved.slice(0, active)) expect(controlLatencies[agent.engine].length).toBeGreaterThan(0)
         latencies.sort((a, b) => a - b)
         readLatencies.sort((a, b) => a - b)
         report.phases.push({ ...metrics!, readers: readerMetrics,

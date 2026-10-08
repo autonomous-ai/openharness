@@ -25,12 +25,12 @@ function setup(engine: 'claude' | 'codex' = 'claude', isolated = true, connected
   const asks: Record<string, unknown>[] = []
   const deps = {
     handles: () => isolated, inline: vi.fn(() => native as EngineModelControl | undefined), resolve: () => session,
-    call: vi.fn(async (_service: string, method: string, payload: Record<string, unknown>, _ms: number) => {
+    call: vi.fn(async (_service: string, method: string, payload: Record<string, unknown>, _ms: number): Promise<Record<string, unknown>> => {
       if (payload.token) token = payload.token as string
       asks.push(payload)
       if (!connected) { controls.connected(service); connected = true }
       // The real link adds requestId. Keep that metadata in this fixture.
-      return requests[method]({ ...payload, requestId: 'core-request' }, { owner: true, local: true })
+      return { ...await requests[method]({ ...payload, requestId: 'core-request' }, { owner: true, local: true }), requestId: 'routed-reply' }
     }),
     catalog: vi.fn(async () => catalog), capture: vi.fn(async () => 'screen' as string | null),
     text: vi.fn(async (_id: string, _text: string, allowed: () => boolean) => allowed()),
@@ -128,6 +128,15 @@ describe('model-control authority', () => {
     await expect(s.port().validate(s.check)).rejects.toMatchObject({ code: 'BUSY' })
     expect(s.native.validate).not.toHaveBeenCalled()
     expect(s.deps.inline).not.toHaveBeenCalled()
+  })
+
+  it.each(['capability', 'validation', 'apply'] as const)('rejects unexpected fields in a worker %s reply', async phase => {
+    const s = setup(), p = s.port()
+    if (phase !== 'capability') await p.validate(s.check)
+    s.deps.call.mockResolvedValueOnce({ version: 1, ...(phase === 'capability' ? { modelControl: 1, engine: 'claude' } : { ok: true }), terminal: '%9' })
+    await expect(phase === 'apply' ? p.apply(s.input) : p.validate(s.check)).rejects.toMatchObject({ code: 'BUSY' })
+    expect(s.deps.inline).not.toHaveBeenCalled()
+    expect(s.deps.key).not.toHaveBeenCalled()
   })
 
   it('fences in-place rebinding during catalog reads and before any request starts', async () => {
@@ -262,5 +271,18 @@ describe('model-control authority', () => {
       expect(await s.request({ kind: 'key', key: 'Enter' })).toEqual(denied)
     })
     await expect(s.port().apply(s.input)).rejects.toMatchObject({ code: 'BUSY' })
+  })
+
+  it('bounds the aggregate catalog reply even when every entry fits, then revokes the grant', async () => {
+    const s = setup()
+    s.deps.catalog.mockResolvedValueOnce(Array.from({ length: 512 }, (_, i) => ({
+      ...catalog[0], slug: `model-${i}`, displayName: 'x'.repeat(2000), efforts: ['high', 'x'.repeat(2000)],
+    })))
+    s.native.apply = vi.fn(async () => {
+      expect(await s.request({ kind: 'catalog' })).toEqual(denied)
+      expect(await s.request({ kind: 'key', key: 'Enter' })).toEqual(denied)
+    })
+    await expect(s.port().apply(s.input)).rejects.toMatchObject({ code: 'BUSY' })
+    expect(s.deps.key).not.toHaveBeenCalled()
   })
 })

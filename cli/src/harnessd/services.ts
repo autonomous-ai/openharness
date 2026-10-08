@@ -365,7 +365,7 @@ export type ServiceHostSpec = Omit<ServiceSpec, 'name'>
  * would cost that four times.
  */
 export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
-  // New read-only workers have no older-core startup obligation: old cores read inline and never ask.
+  // Engine workers have no older-core startup obligation: old cores run these facets inline and never ask.
   // Each holds at most four reads, a 128-entry pager and replies capped at 4 MiB. The heap limit
   // contains transient parsing; RSS additionally bounds file buffers outside V8's heap.
   'engine-claude': { services: ['engine-claude'], heapLimitMiB: 512, rssLimitMiB: 1_024, onDemand: true, askedSince: 0 },

@@ -16,7 +16,7 @@ const asker = { owner: true, local: true }
 const apply = { version: 1, input, token: 'a'.repeat(64), requestId: 'core-route' }
 function setup() {
   const control: EngineModelControl = { validate: vi.fn(async () => {}), apply: vi.fn(async () => {}) }
-  const deps = { load: vi.fn(async () => control), recycle: vi.fn(), query: vi.fn(async () => ({ version: 1, value: true } as Record<string, unknown>)) }
+  const deps = { load: vi.fn(async () => control), recycle: vi.fn(), query: vi.fn(async () => ({ version: 1, value: true, requestId: 'core-reply' } as Record<string, unknown>)) }
   const requests = engineModelControlRequests('claude', deps)
   return { requests, control, deps }
 }
@@ -97,7 +97,8 @@ describe('private model-control worker', () => {
   })
 
   it('refuses malformed or denied host answers, including false effort confirmation', async () => {
-    for (const reply of [{ version: 2, value: true }, { version: 1, error: 'BUSY', value: true }, { version: 1, value: 1 }, { version: 1, value: 'x'.repeat(1024 * 1024) }]) {
+    for (const reply of [{ version: 2, value: true }, { version: 1, error: 'BUSY', value: true }, { version: 1, value: 1 },
+      { version: 1, value: true, terminal: '%9' }, { version: 1, value: true, requestId: 1 }, { version: 1, value: 'x'.repeat(1024 * 1024) }]) {
       await expect(createModelControlHost(async () => reply).key('Enter')).rejects.toMatchObject({ code: 'BUSY' })
     }
     await expect(createModelControlHost(async () => ({ version: 1, value: false })).confirmEffort('high')).rejects.toMatchObject({ code: 'BUSY' })

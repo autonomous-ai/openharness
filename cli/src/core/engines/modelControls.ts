@@ -4,7 +4,7 @@ import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../
 import type { RuntimeCatalogModel, RuntimeProfile } from '../../engines/facets/runtime.js'
 import { readerEngine, READER_SERVICES } from '../../engines/worker/protocol.js'
 import { createModelControlHost } from '../../engines/worker/modelControlHost.js'
-import { modelControlAction, modelControlAnswer, modelControlCheck, modelControlEnvelope, modelControlInput,
+import { modelControlAction, modelControlAnswer, modelControlCheck, modelControlEnvelope, modelControlInput, modelControlSize,
   MODEL_CONTROL_APPLY, MODEL_CONTROL_CAPABILITIES, MODEL_CONTROL_CHECK_MS, MODEL_CONTROL_ERRORS, MODEL_CONTROL_HOST,
   MODEL_CONTROL_IN_FLIGHT, MODEL_CONTROL_QUERIES, MODEL_CONTROL_QUERY_MS, MODEL_CONTROL_VALIDATE,
   MODEL_CONTROL_VERSION, MODEL_CONTROL_WAIT_MS, MODEL_CONTROL_WRITES } from '../../engines/worker/modelControlProtocol.js'
@@ -69,8 +69,9 @@ export function createModelControls(deps: ModelControlsDeps) {
           deps.confirmEffort(session.sessionId, action.effort)
           return true
         })(), MODEL_CONTROL_QUERY_MS)
-        if (!allowed() || !modelControlAnswer(action, value)) { grants.delete(payload.token); return denied }
-        return { version: MODEL_CONTROL_VERSION, value }
+        const reply = { version: MODEL_CONTROL_VERSION, value }
+        if (!allowed() || !modelControlAnswer(action, value) || !modelControlSize(reply)) { grants.delete(payload.token); return denied }
+        return reply
       } catch { grants.delete(payload.token); return denied }
       finally { grant.pending = false }
     })()
@@ -93,7 +94,7 @@ export function createModelControls(deps: ModelControlsDeps) {
       const allowed = () => active && performance.now() < deadline && current()
       const call = async (method: string, payload: Record<string, unknown>) => {
         const reply = await deps.call(service, method, { version: MODEL_CONTROL_VERSION, ...payload }, Math.max(1, Math.ceil(deadline - performance.now())))
-        if (!allowed() || reply.version !== MODEL_CONTROL_VERSION) fail()
+        if (!allowed() || !modelControlEnvelope(reply, ['ok', 'error'])) fail()
         if (reply.error !== undefined) throw new RuntimeProfileControlError(MODEL_CONTROL_ERRORS.includes(reply.error as RuntimeProfileErrorCode) ? reply.error as RuntimeProfileErrorCode : 'BUSY')
         if (reply.ok !== true) fail()
       }
@@ -103,7 +104,7 @@ export function createModelControls(deps: ModelControlsDeps) {
             // Allow only the first startup connection. A replacement cannot resume an old UI intent.
             if (state.generation !== generation && (state.connected || state.generation !== generation - 1)) fail()
             const reply = await deps.call(service, MODEL_CONTROL_CAPABILITIES, { version: MODEL_CONTROL_VERSION }, ms)
-            if (!allowed() || reply.version !== MODEL_CONTROL_VERSION || reply.modelControl !== MODEL_CONTROL_VERSION || reply.engine !== engine) fail()
+            if (!allowed() || !modelControlEnvelope(reply, ['modelControl', 'engine']) || reply.modelControl !== MODEL_CONTROL_VERSION || reply.engine !== engine) fail()
             state.capable = true
           }
           if (!allowed()) fail()
