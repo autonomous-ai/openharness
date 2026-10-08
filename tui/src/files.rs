@@ -23,7 +23,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
-use ratatui::widgets::Widget;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, At, Placement};
@@ -1228,14 +1227,14 @@ impl Files {
             let (row, c, value) = (p.row(), crate::settings::chrome(), p.text.iter().collect::<String>());
             if let Some((r, d)) = self.prompt_dialog(g, p, &value, &row, &c, look.border) {
                 let r = at(r);
-                (&d).render(r, buf);
+                d.render_over(area, r, buf);
                 // (A pane has no terminal cursor to put in the box: the caret is a reversed cell.)
                 if let Some(caret) = d.cursor(r) { buf.set_style(Rect::new(caret.x, caret.y, 1, 1), Style::new().add_modifier(Modifier::REVERSED)) }
             }
         }
         if self.confirm.is_some() {
             let (row, c) = (self.confirm_row(), crate::settings::chrome());
-            if let Some((r, d)) = self.confirm_dialog(g, &row, &c, look.border) { (&d).render(at(r), buf) }
+            if let Some((r, d)) = self.confirm_dialog(g, &row, &c, look.border) { d.render_over(area, at(r), buf) }
         }
     }
 

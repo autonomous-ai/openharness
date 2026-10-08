@@ -85,7 +85,7 @@ def changes(read, seconds=1.3):
 
 
 def spinner():
-    match = re.search(r'REPAINT_ANIM=([⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏])', screen())
+    match = re.search(r'REPAINT_ANIM=([⠋⠙⠸⢰⣠⣄⡆⠇])', screen())
     return match[1] if match else None
 
 

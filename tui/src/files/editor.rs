@@ -10,7 +10,6 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -536,7 +535,7 @@ impl Editor {
         if self.asking.is_some() {
             let (row, c) = (self.ask_row(), crate::settings::chrome());
             let (r, d) = self.ask_dialog(&row, &c, look.border);
-            (&d).render(Rect::new(ox + r.x, oy + r.y, r.width, r.height).intersection(area), buf);
+            d.render_over(area, Rect::new(ox + r.x, oy + r.y, r.width, r.height).intersection(area), buf);
         }
     }
 

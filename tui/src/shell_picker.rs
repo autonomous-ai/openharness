@@ -231,7 +231,7 @@ fn paint_list(next:&mut Buffer,area:Rect,picker:&mut Picker,loading:bool,failure
 /// long enough to notice (an instant local launch draws nothing), and one row
 /// that fits the pane, since a wrapped line would add a row at every frame.
 fn wait_line(elapsed:Duration,waiting:&str,cols:u16)->Option<String> {
-    const FRAMES:[&str;10]=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+    const FRAMES:[&str;8]=crate::theme::SPINNER;
     if elapsed<Duration::from_millis(150) {return None}
     let who=match clean(waiting).as_str() {"local"|"-"=>"this computer".to_string(),name=>name.to_string()};
     let line=format!("{} Starting on {who}… Ctrl-C to cancel",FRAMES[(elapsed.as_millis()/100) as usize%FRAMES.len()]);
@@ -1185,7 +1185,7 @@ mod tests {
         use unicode_width::UnicodeWidthStr;
         let at=Duration::from_millis;
         assert_eq!(wait_line(at(100),"Office",80),None,"an instant launch draws nothing");
-        assert_eq!(wait_line(at(200),"Office",80).as_deref(),Some("⠹ Starting on Office… Ctrl-C to cancel"));
+        assert_eq!(wait_line(at(200),"Office",80).as_deref(),Some(format!("{} Starting on Office… Ctrl-C to cancel", crate::theme::SPINNER[2]).as_str()));
         for name in ["local","-"] {assert!(wait_line(at(200),name,80).unwrap().contains("Starting on this computer…"),"{name}");}
         // A long (CJK) name in a narrow pane stays on one row: a wrapped line
         // would add a row at every frame, and the final erase clears only one.

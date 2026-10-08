@@ -12,8 +12,9 @@ use crate::{app::App, draw::RangeKind, theme, workspace_menu as menu};
 pub enum Action { New, Menu, Account, Header(u64), PaneMenu(u64) }
 
 /// The menu's glyph — at a pane's title, in the status line and the side bar: three dots up and
-/// down, a braille cell as big as the spinner's dots (`…` and `⋮` are thin).
-pub const MENU_GLYPH: &str = "⠇";
+/// down, centred in the cell, drawn bold so it does not read thin. (A braille `⠇` is as big as the
+/// spinner's dots but sits in the cell's top three of four rows.)
+pub const MENU_GLYPH: &str = "⋮";
 /// The pane title's control: the glyph with a blank each side. (No close button: the menu has
 /// Close / Stop Harness.)
 const MENU_COLS: u16 = 3;
@@ -83,7 +84,7 @@ pub fn title(buf: &mut Buffer, app: &App, pane: u64, rect: Rect, style: Style) -
     app.controls.grips.borrow_mut().push((Rect::new(rect.x, rect.y, rect.width - reserve, 1), pane));
     let quiet = style.remove_modifier(Modifier::BOLD | Modifier::DIM).fg(theme::paint(theme::pane_palette().muted));
     let menu = Rect::new(rect.right() - reserve, rect.y, reserve, 1);
-    Span::styled(format!(" {MENU_GLYPH} "), quiet).render(menu, buf);
+    Span::styled(format!(" {MENU_GLYPH} "), quiet.add_modifier(Modifier::BOLD)).render(menu, buf);
     register(app, menu, Action::PaneMenu(pane));
     Rect::new(rect.x, rect.y, rect.width - reserve, rect.height)
 }
@@ -115,7 +116,7 @@ pub fn status(app: &App) -> String {
     if app.account.status == crate::account::Status::SignedOut {
         parts.push("#[range=user|hn-account]Sign in#[norange]".to_string());
     }
-    parts.extend(["#[range=user|hn-new]+#[norange]".to_string(), format!("#[range=user|hn-menu]{MENU_GLYPH}#[norange]")]);
+    parts.extend(["#[range=user|hn-new]+#[norange]".to_string(), format!("#[range=user|hn-menu]#[bold]{MENU_GLYPH}#[nobold]#[norange]")]);
     parts.join("  ")
 }
 
@@ -129,6 +130,7 @@ pub fn side_actions(buf: &mut Buffer, app: &App, rect: Rect, style: Style, accou
     let mut x = rect.right() - total;
     for (label, action) in items {
         let width = label.width() as u16;
+        let style = if label == MENU_GLYPH { style.add_modifier(Modifier::BOLD) } else { style };
         buf.set_stringn(x, rect.y, label, width as usize, style);
         register(app, Rect::new(x, rect.y, width, 1), action);
         x += width + 2;

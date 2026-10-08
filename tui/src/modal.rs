@@ -240,12 +240,13 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("find", "Find in pane…", "⌥⇧F", "search this pane's history", "Panes"),
     // (Not "keyboard": `keyb` is Keybinds.)
     ("copy-mode", "Copy mode", "⌥V", "move over the pane's text, select and copy", "Panes"),
-    ("machines", "Machines", "⌥M", "", "Machines"),
+    // (The machines and what runs on each; Connect machines… is where one is linked, its password
+    // asked — the one way in: a separate "Connect a computer…" only went there.)
+    ("machines", "List machines", "⌥M", "your machines and the harnesses on each", "Machines"),
     ("store", "Harness store", "⌥S", "", "Machines"),
     // ── machines & devices ──
-    ("connect-machine", "Connect a computer…", "", "a computer not linked yet, with its remote password", "Machines"),
+    ("devices", "Connect machines…", "", "link a machine, this computer's password, your machines and links", "Machines"),
     ("add-phone", "Add phone…", "", "a QR code your phone scans to sign in and pair", "Machines"),
-    ("devices", "Machines…", "", "this computer's password, your machines, links, add a machine", "Machines"),
     ("hardware-devices", "Devices…", "", "Harness hardware, brightness, sound and voice language", "Machines"),
     // (hn itself: how it looks, its keys, and closing it.)
     ("theme", "Appearance…", "", "theme, status bar, borders, focus, layout — settings", "Settings & help"),

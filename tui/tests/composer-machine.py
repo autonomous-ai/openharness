@@ -260,7 +260,7 @@ def check(shell):
             end = time.monotonic() + 2
             while time.monotonic() < end:
                 s.pump()
-            glyphs = set(re.findall('[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]', s.data.decode('utf-8', 'ignore')))
+            glyphs = set(re.findall('[⠋⠙⠸⢰⣠⣄⡆⠇]', s.data.decode('utf-8', 'ignore')))
             if len(glyphs) < 2:
                 problems.append(('the spinner did not turn', glyphs, s.data[-500:]))
             s.send('\x1b'); s.wait(lambda: s.count() == n + 1, 'cancel slow folders')

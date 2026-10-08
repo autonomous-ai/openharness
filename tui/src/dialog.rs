@@ -164,6 +164,13 @@ impl<'a> Dialog<'a> {
         let (col, offset) = input.caret(field.width);
         Some(Position::new(field.x + col - offset, field.y))
     }
+
+    /// The box at [area] as an overlay on [over]: what it is over dimmed first, with the command
+    /// panel's backdrop, so the question stands apart and is not read as text drawn over text.
+    pub fn render_over(&self, over: Rect, area: Rect, buf: &mut Buffer) {
+        crate::settings::backdrop(buf, over, self.chrome.backdrop);
+        Widget::render(self, area, buf);
+    }
 }
 
 /// `Clear`, then a `Block` in the command panel's surface with its border in the muted colour

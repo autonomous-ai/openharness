@@ -339,7 +339,9 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     // its buttons match; the vertical menus keep menu-style.
     if let Some(b) = &m.buttons {
         let c = crate::settings::chrome();
-        return (&confirmation(m, &b.row, &lines, &c)).render(crate::workspace_menu::dialog_box(m), buf);
+        // (An overlay: the window behind it dimmed, as every question is asked.)
+        let over = app.body();
+        return confirmation(m, &b.row, &lines, &c).render_over(over, crate::workspace_menu::dialog_box(m), buf);
     }
     let base = Style::default();
     // tmux's menu_set_style keeps colours, clearing attributes for each menu pair.
@@ -425,7 +427,7 @@ fn draw_prompt(buf: &mut Buffer, app: &mut App) -> Option<Position> {
         return None;
     };
     crate::term_out::clear_extras(r);
-    (&d).render(r, buf);
+    d.render_over(app.body(), r, buf);
     d.cursor(r)
 }
 
@@ -1590,10 +1592,10 @@ fn fzf_in_frame(buf: &mut Buffer, frame: FzfFrame, picker: &mut Picker, kind: &P
     // spins in the spinner's pair where fzf's does, and gives an info prefix that pair too.
     let (info_style, sep_style, spin_style) = (pal.info.style(), pal.separator.style(), pal.spinner.style());
     let reading = picker.busy.is_some() || matches!(kind, PickerKind::Open { .. }) && search_busy;
-    // fzf's makeSpinner (ASCII under --no-unicode).
-    const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    // hn's spinner, as everywhere else (fzf's makeSpinner keeps to a cell's top rows); ASCII under
+    // --no-unicode, as fzf's.
     const ASCII_SPINNER: [&str; 8] = ["-", "\\", "|", "/", "-", "\\", "|", "/"];
-    let frames: &[&str] = if theme::fzf().unicode { &SPINNER } else { &ASCII_SPINNER };
+    let frames: &[&str] = if theme::fzf().unicode { &theme::SPINNER } else { &ASCII_SPINNER };
     let spinner = frames[if reading { theme::animation_frame() % frames.len() } else { 0 }];
     let w = ia.width as i32;
     let put = |pbuf: &mut Buffer, x: i32, y: u16, s: &str, st: Style| { if x >= 0 && x < w && !s.is_empty() { pbuf.set_stringn(ia.x + x as u16, y, s, (w - x) as usize, st); } };
@@ -4054,9 +4056,11 @@ mod confirm_box_tests {
                         drawn(&mut new, &m, lines, &c);
                         if *exact { assert_eq!(new, old, "{title} at {size:?} in {lines}") }
                         else { assert_eq!(shown(new), shown(old), "{title} at {size:?} in {lines}") }
-                        // menu() draws a menu with buttons as this box, in menu-border-lines.
+                        // menu() draws a menu with buttons as this box, in menu-border-lines, as an
+                        // overlay: the window behind it dimmed with the panel's backdrop.
                         let (mut routed, mut direct) = (row_oracle::canvas(screen), row_oracle::canvas(screen));
                         menu(&mut routed, &app, &m);
+                        crate::settings::backdrop(&mut direct, app.body(), crate::settings::chrome().backdrop);
                         drawn(&mut direct, &m, lines, &crate::settings::chrome());
                         assert_eq!(routed, direct, "{title} at {size:?} in {lines}");
                     }

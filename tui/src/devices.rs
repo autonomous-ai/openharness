@@ -20,7 +20,6 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Widget;
 use serde_json::{json, Value};
 use unicode_width::UnicodeWidthStr;
 
@@ -1476,7 +1475,7 @@ fn ask_dialog(buf: &mut Buffer, app: &App, over: Rect, c: &Chrome) -> Option<Pos
     }
     if !d.fit(over.height) { app.devices.unfit.set(true); return None }
     let area = d.place(over);
-    (&d).render(area, buf);
+    d.render_over(over, area, buf);
     let a = d.areas(area);
     let (_, cells) = row.areas(a.row);
     app.devices.prompt_actions.set(Some(PromptActions { size: app.size, accept: cells[1], cancel: cells[0], input: a.input }));
@@ -1744,14 +1743,16 @@ mod tests {
     }
 
     #[test]
-    fn the_commands_panel_lists_the_three_views_under_machines() {
+    fn the_commands_panel_lists_connect_machines_and_add_phone_under_machines() {
         let app = app((150, 42));
         let rows = crate::modal::command_rows(&app);
-        for view in View::ALL {
-            let row = rows.iter().find(|r| r.id == format!("cmd:{}", view.id())).unwrap_or_else(|| panic!("{} missing", view.id()));
-            assert_eq!(row.group.as_deref(), Some("Machines"));
-            assert!(crate::input::is_command(view.id()));
+        // (Connect a computer… only went to Connect machines…: one way in. Its command still runs.)
+        for (id, label) in [("devices", "Connect machines…"), ("add-phone", "Add phone…"), ("machines", "List machines")] {
+            let row = rows.iter().find(|r| r.id == format!("cmd:{id}")).unwrap_or_else(|| panic!("{id} missing"));
+            assert_eq!((row.label.as_str(), row.group.as_deref()), (label, Some("Machines")));
         }
+        assert!(!rows.iter().any(|r| r.id == "cmd:connect-machine"), "no second way to the same view");
+        for view in View::ALL { assert!(crate::input::is_command(view.id())) }
     }
 
     #[test]

@@ -183,18 +183,18 @@ def painted_workspace(alpha, beta):
                for name, (x, y, w) in positions)
 
 
-MENU = '⠇'
+MENU = '⋮'
 
 
 def pane_menu_item(item, row):
-    """The first pane's menu (⠇) in title row [row], then [item]: the agent and the model change there."""
+    """The first pane's menu (⋮) in title row [row], then [item]: the agent and the model change there."""
     click_text(MENU, row=row)
     shown(item)
     click_text(item)
 
 
 def close_from_menu(row, occurrence=0):
-    """A pane's menu (⠇) in title row [row], then its close item (x): Stop Harness or Close. The
+    """A pane's menu (⋮) in title row [row], then its close item (x): Stop Harness or Close. The
     title has no close button."""
     click_text(MENU, occurrence=occurrence, row=row)
     shown('Move to new tab')

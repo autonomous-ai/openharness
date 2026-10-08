@@ -1352,11 +1352,14 @@ pub fn animation_frame() -> usize {
     (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() / 100).unwrap_or(0)) as usize
 }
 
+/// hn's spinner, everywhere one turns (working dots, connecting cards, a list loading, a launch
+/// waiting): three dots chasing round all four rows of a braille cell, so it turns about the
+/// cell's middle. (fzf's ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ keep to the top three rows: it sat high in the cell.)
+pub const SPINNER: [&str; 8] = ["⠋", "⠙", "⠸", "⢰", "⣠", "⣄", "⡆", "⠇"];
+
 /// A spinner frame for things in motion (working dots, connecting cards).
 pub fn spinner(_tick: u64) -> &'static str {
-    // fzf's frames, in its order.
-    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    FRAMES[animation_frame() % FRAMES.len()]
+    SPINNER[animation_frame() % SPINNER.len()]
 }
 
 #[cfg(test)]

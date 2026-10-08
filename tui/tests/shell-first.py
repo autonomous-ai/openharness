@@ -313,9 +313,9 @@ try:
     if os.environ.get('HN_SHELL_TEST_GUI')=='1':
         def click_text(text):
             lines=screen().splitlines()
-            for y,line in ([(len(lines)-1,lines[-1])] if text in ('+','⠇') else enumerate(lines)):
+            for y,line in ([(len(lines)-1,lines[-1])] if text in ('+','⋮') else enumerate(lines)):
                 if text in line:
-                    x=line.index('  '+text+'  ')+2 if text in ('+','⠇') else line.index(text)
+                    x=line.index('  '+text+'  ')+2 if text in ('+','⋮') else line.index(text)
                     tm('send-keys','-t','test','-l',f'\x1b[<0;{x+1};{y+1}M\x1b[<0;{x+1};{y+1}m')
                     return
             raise AssertionError(('missing clickable text',text,screen()))
@@ -324,10 +324,10 @@ try:
         wait(lambda:'New Harness' in screen() and 'Task' in screen(),'footer + opens GUI composer')
         assert pane_count()==1 and hn('display-message','-p','#{window_id}').strip()==original_window
         keys('Escape');wait(prompt_ready,'GUI composer cancels back to original shell')
-        click_text('⠇');wait(lambda:'New Harness' in screen() and 'New Tab' in screen(),'workspace mouse menu')
+        click_text('⋮');wait(lambda:'New Harness' in screen() and 'New Tab' in screen(),'workspace mouse menu')
         click_text('New Harness');wait(lambda:'Task' in screen(),'menu New Harness opens GUI')
         keys('Escape');wait(prompt_ready,'menu composer cancels')
-        click_text('⠇');wait(lambda:'New Tab' in screen(),'workspace menu reopened')
+        click_text('⋮');wait(lambda:'New Tab' in screen(),'workspace menu reopened')
         click_text('New Tab');wait(lambda:'New Harness' in screen() and 'Task' in screen() and 'machines connected' in screen(),'mouse New Tab opens welcome composer')
         gui_window=hn('display-message','-p','#{window_id}').strip()
         assert gui_window!=original_window
