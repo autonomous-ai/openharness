@@ -73,7 +73,7 @@ vi.mock('../../engines/cursor/subagent.js', async (real) => ({ ...await real<obj
 vi.mock('../../engines/cursor/home.js', async (real) => ({ ...await real<object>(), cursorConfigDir: vi.fn(() => '/cursor/config'), cursorDataDir: vi.fn(() => '/cursor/data') }))
 vi.mock('../../engines/codex/normalizer.js', async (real) => ({ ...await real<object>(), codexMessagesToEvents: vi.fn((lines: unknown[]) => fake.replay('codex')(lines)) }))
 vi.mock('../../engines/codex/subagent.js', async (real) => ({ ...await real<object>(), codexSubagentResolverFor: vi.fn(() => fake.resolver) }))
-vi.mock('../../lib/normalize.js', async (real) => ({ ...await real<object>(), messagesToEvents: vi.fn(fake.replay('claude')), windowRawLines: vi.fn(fake.windowOf('raw')) }))
+vi.mock('../../engines/claude/normalize.js', async (real) => ({ ...await real<object>(), messagesToEvents: vi.fn(fake.replay('claude')), windowRawLines: vi.fn(fake.windowOf('raw')) }))
 vi.mock('../../lib/agentFrame.js', async (real) => ({ ...await real<object>(), lastActivityAt: vi.fn(async () => Date.parse('2026-10-05T08:45:00.000Z')) }))
 vi.mock('../../lib/transcriptTail.js', async (real) => {
   const actual = await real<typeof import('../../lib/transcriptTail.js')>()

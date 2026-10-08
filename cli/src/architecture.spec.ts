@@ -197,6 +197,16 @@ describe('the daemon\'s shape', () => {
     expect(wrong, 'The core calls services only through CorePorts, and is handed the socket\'s pieces as dependencies (src/core/AGENTS.md).').toEqual([])
   })
 
+  it('live transcript coordination depends on engine contracts, with neutral folding mechanics', () => {
+    const owners = new Set(['core/transcripts/attach.ts', 'core/transcripts/ingest.ts', 'core/transcripts/normalizers.ts'])
+    const wrong = importsIn('core').filter(({ file, from, typeOnly }) => owners.has(file) && !typeOnly
+      && (/engines\/(claude|codex)\//.test(from) || /lib\/normalize\.js$/.test(from) || /engines\/live\.js$/.test(from)))
+    expect(wrong, 'Inject the live facet; do not construct or edit an engine parser in core.').toEqual([])
+    for (const entry of ['lib/attachTranscript.ts', 'engines/kit/events.ts', 'engines/kit/transcriptFold.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
+    }
+  })
+
   it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
     // It speaks to the core through GatewayPort and GatewayEvents alone, so that it can run in a process of
     // its own (step 10, R2) without taking any of the core with it.

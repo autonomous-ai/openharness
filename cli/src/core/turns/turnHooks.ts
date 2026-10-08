@@ -47,7 +47,7 @@ export function createTurnHooks({
   resolve, normalizers, emit, drain, onCursorTaskStart, cursorTaskHooks, cursorSubagents, announceTurnAborted,
   armAgyIdleWatch, clearAgyIdleWatch, mirror, dataDir,
 }: TurnHookDeps) {
-  const { turnStates, commandcodeNormalizers, cursorNormalizers, devinReaders, copilotNormalizers, agyNormalizers, grokNormalizers } = normalizers
+  const { liveParsers, commandcodeNormalizers, cursorNormalizers, devinReaders, copilotNormalizers, agyNormalizers, grokNormalizers } = normalizers
   // Command Code's PreToolUse — the one live "a turn is running" signal this engine has. Without it the
   // adapter only learned of a turn from Stop, and emitted turn_started+turn_ended in the same
   // millisecond, so the device tile jumped from idle straight to the recap with no working state.
@@ -68,7 +68,16 @@ export function createTurnHooks({
     if (promptFiredAt.size > PROMPT_HOOKS_KEPT) promptFiredAt.delete(promptFiredAt.keys().next().value!)
   }
   const hookTurns: HookTurnContext = {
-    turnState: (sessionId) => turnStates.get(sessionId),
+    turnState: (sessionId) => {
+      const parser = liveParsers.get(sessionId)
+      return parser && parser.engine === resolve(sessionId)?.engine ? parser.snapshot() : undefined
+    },
+    closeTurn: (sessionId, identity) => {
+      const parser = liveParsers.get(sessionId)
+      if (!parser || parser.engine !== resolve(sessionId)?.engine || parser.snapshot().identity !== identity) return false
+      parser.closeTurn('hook')
+      return true
+    },
     latestPromptAt: (sessionId) => promptFiredAt.get(sessionId),
     drain,
     noteEngineStopped: (sessionId) => mirror.noteEngineStopped(sessionId),

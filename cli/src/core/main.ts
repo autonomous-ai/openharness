@@ -25,6 +25,7 @@ import { registry, projectDisplayName, validTranscriptPath, type RegisteredSessi
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
 import { engineHooks as engineHookFacets } from '../engines/hooks.js'
+import { liveFor } from '../engines/live.js'
 import { DAEMON_LOG_FILE, PID_FILE, daemonPort, isAlive, readPid, LEGACY_LOG_FILE, MACHINE_NAME_FILE, tildify, computerId, thisDeviceLabel } from '../lib/daemonState.js'
 import { clearSafeModeMarker, safeModeDisposition, safeModeStatusBody, SafeModeRequest, writeSafeModeMarker } from '../lib/daemonSafeMode.js'
 import { awakeTimeout } from '../lib/sleepAware.js'
@@ -955,6 +956,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
   const attach = createAttach({
+    liveFor,
     terminalGone: terminalControl.terminalGone,
     normalizers,
     watcher,
@@ -1751,6 +1753,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Each transcript line, through its engine's normalizer, into the funnel (core/transcripts/ingest.ts).
   const ingest = createIngest({
+    liveFor,
     has: (sessionId) => registry.has(sessionId),
     bySession: (sessionId) => registry.bySession(sessionId),
     tokenUsage: agentTokenUsage,
