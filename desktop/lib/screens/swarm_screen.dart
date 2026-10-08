@@ -6325,11 +6325,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
         machine.connectionStatus == ConnectionStatus.connected,
   );
 
-  bool get _browserMachineSetupReady =>
+  /// The inventory has answered, and answered for now: loaded, not loading,
+  /// not stale, no error. What the account HAS, independent of what is open.
+  bool get _machineInventorySettled =>
       app.machineInventoryLoaded &&
       !app.machinesLoading &&
       !app.machinesAreStale &&
-      app.machineListError == null &&
+      app.machineListError == null;
+
+  bool get _browserMachineSetupReady =>
+      _machineInventorySettled &&
       !app.machineStates.values.any(
         (machine) =>
             !machine.machine.isShared &&
@@ -6345,8 +6350,48 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _search == null &&
       _routeIsCurrent;
 
+  /// No computer of the account's is connected, and none is on its way: the
+  /// inventory has answered, and every one is missing, offline or waiting to
+  /// be linked — what the host's [WorkspaceChrome.firstMachine] is for.
+  bool get _needsFirstConnection =>
+      _machineInventorySettled &&
+      !_hasConnectedBrowserMachine &&
+      !app.machineStates.values.any(
+        (machine) =>
+            !machine.machine.isShared &&
+            !machine.needsLink &&
+            machine.nodeOnline != false &&
+            (machine.connectionStatus == ConnectionStatus.connecting ||
+                machine.connectionStatus == ConnectionStatus.reconnecting),
+      );
+
+  /// The host's connect-a-computer page over the whole workspace — tabs synced
+  /// from the account's desk would otherwise show panes for computers this
+  /// browser cannot reach yet. Null when not needed, and for a host without one.
+  Widget? _firstConnection(BuildContext context) {
+    final page = widget.chrome?.firstMachine;
+    if (page == null || !_needsFirstConnection) return null;
+    return ColoredBox(
+      color: grid.AppPalette.swarmTabBar,
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: page(context),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _maybeInitialBrowserMachines() {
     if (_browserMachineSetupHandled) return;
+    // A host with a connect page never covers it with the machine picker.
+    if (widget.chrome?.firstMachine != null) {
+      _browserMachineSetupHandled = true;
+      return;
+    }
     if (_hasConnectedBrowserMachine) {
       _browserMachineSetupHandled = true;
       return;
@@ -7200,6 +7245,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           ),
                                         ),
                                       ),
+                                      if (_firstConnection(context)
+                                          case final connect?)
+                                        Positioned.fill(child: connect),
                                     ],
                                   ),
                                 ),

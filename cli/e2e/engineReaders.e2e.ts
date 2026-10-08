@@ -59,7 +59,7 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(readerPid(d, 'claude')).toBeUndefined()
     expect(readerPid(d, 'codex')).toBeUndefined()
     for (const type of ['engine_history_page', 'engine_last_turn', 'engine_live_capabilities', 'engine_live_prepare',
-      'engine_live_read', 'engine_live_part', 'engine_live_close', 'engine_live_forget', 'engine_runtime_capabilities', 'engine_runtime_read']) {
+      'engine_live_read', 'engine_live_part', 'engine_live_close', 'engine_live_forget', 'engine_runtime_capabilities', 'engine_runtime_read', 'engine_screen_capabilities', 'engine_screen_read']) {
       const answer = await c.request(type, { version: 1, session: { transcriptPath: '/etc/passwd' } })
       expect(answer.error).toBe('UNSUPPORTED')
     }
@@ -110,6 +110,43 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(d.corePid()).toBe(core)
     expect(d.coresStarted()).toBe(1)
     expect(alive(bound.processIdentity.pid)).toBe(true)
+  })
+
+  it.each(['claude', 'codex'] as const)('%s refuses terminal writes and retains its question while its screen worker is frozen', async engine => {
+    const { d, c } = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '60000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
+    const agent = await create(d, c, engine)
+    const asked = c.next(frame => frame.type === 'commander_question' && frame.agentId === agent.id, 30_000, 'permission question')
+    c.send('message', { agentId: agent.id, content: '!permit printf screen-worker' })
+    const question = (await asked).payload!
+    const shaped = question.questions[0]
+    const bound = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')).find((row: any) => row.agentId === agent.id)
+    const pid = readerPid(d, engine)!, core = d.corePid(), from = c.frames.length
+    const answer = async () => {
+      const result = c.next(frame => frame.type === 'question_response_result' && frame.payload?.requestId === question.requestId, 10_000, 'answer result')
+      c.send('question_response', { agentId: agent.id, requestId: question.requestId, answers: { [shaped.q]: shaped.options[2] } })
+      return (await result).payload!
+    }
+    process.kill(pid, 'SIGSTOP')
+    try {
+      const started = Date.now()
+      expect((await answer()).error).toBe('ANSWER_FAILED')
+      expect(Date.now() - started).toBeLessThan(5_000)
+      const refused = c.next(frame => frame.type === 'error' && frame.agentId === agent.id, 25_000, 'unreadable-screen refusal')
+      c.send('message', { agentId: agent.id, content: 'must-not-enter-the-permission' })
+      expect((await refused).payload?.message).toContain('screen could not be read')
+      const pane = await d.capture(bound.tmuxPane)
+      expect(pane).not.toContain('must-not-enter-the-permission')
+      expect(pane).not.toContain('did not run printf screen-worker')
+      expect(c.frames.slice(from).filter(frame => frame.type === 'commander_question_close' && frame.agentId === agent.id)).toHaveLength(0)
+      expect((await rows(c)).some(row => row.id === agent.id)).toBe(true)
+      expect(d.corePid()).toBe(core)
+    } finally { process.kill(pid, 'SIGCONT') }
+    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 30_000, 'declined permission')
+    expect((await answer()).error).toBeUndefined()
+    await ended
+    await turn(c, agent, `screen-recovered-${engine}`)
+    expect(alive(bound.processIdentity.pid)).toBe(true)
+    expect(d.coresStarted()).toBe(1)
   })
 
   it('contains a killed or frozen reader, bounds failed reads, and recovers without restarting core or either CLI', async () => {
@@ -217,7 +254,11 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(await history(c, agent)).toMatchObject({ error: 'ENGINE_UNAVAILABLE', retryable: true })
     const first = c.frames.length
     const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 60_000, 'queued turn after worker recovery')
-    c.send('message', { agentId: agent.id, content: 'worker-is-parked' })
+    // A person can still use the independent CLI while its worker is parked.
+    // Harness messages now require screen evidence and are withheld in an
+    // outage (covered above); type through this fixture's private terminal.
+    await d.tmux.run('send-keys', '-t', registered().tmuxPane, '-l', 'worker-is-parked')
+    await d.tmux.run('send-keys', '-t', registered().tmuxPane, 'Enter')
     await until('the independent CLI to finish writing its turn', () => {
       const file = registered().transcriptPath
       return file && readFileSync(file, 'utf8').split('\n').some(line => {

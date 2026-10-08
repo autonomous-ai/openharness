@@ -1,3 +1,5 @@
+import { readInlineScreen } from '../../testing/inlineScreen.js'
+import { screenFor } from '../../engines/screens.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/closeAgentService.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
@@ -17,6 +19,7 @@ const row = (over: Partial<RegisteredSession> = {}) =>
 
 function setup(over: Partial<ClosingDeps> = {}, advertised: RegisteredSession[] = []) {
   const deps: ClosingDeps = {
+    readScreen: readInlineScreen,
     registry: { advertised: vi.fn(() => advertised) } as unknown as ClosingDeps['registry'],
     cleanupTabs: { refresh: vi.fn(async () => {}), isHidden: vi.fn(() => true), assertHidden: vi.fn(async () => {}) },
     watcher: { pollSession: vi.fn(async () => {}) } as unknown as ClosingDeps['watcher'],
@@ -53,7 +56,7 @@ describe('closing agents no window shows', () => {
       expect(deps.captureTerminal).toHaveBeenCalledWith('a1', 80)
       expect(deps.sessionTurnState).toHaveBeenCalledWith('s1')
       expect(deps.openQuestions.has).toHaveBeenCalledWith('s1')
-      expect(inspectCloseActivity).toHaveBeenCalledWith(row(), 'screen', false, false)
+      expect(inspectCloseActivity).toHaveBeenCalledWith(row(), screenFor('claude').inspect('screen'), false, false)
     })
 
     it('with no session yet, has no lines to read', async () => {

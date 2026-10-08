@@ -58,6 +58,9 @@ class _Recorder implements SystemNotifier {
   bool get supported => isSupported;
 
   @override
+  String get deniedAdvice => 'Allow it where the recorder says.';
+
+  @override
   bool get clickOpensAgent => true;
 
   @override
@@ -728,7 +731,13 @@ void main() {
       await pump(tester, system);
       await tester.tap(find.byKey(const Key('settings-desktop-notifications')));
       await tester.pumpAndSettle();
-      expect(find.textContaining('System Settings'), findsOneWidget);
+      // The platform's own advice: System Settings on a Mac, the site's
+      // settings in a browser.
+      expect(
+        find.textContaining('Allow it where the recorder says.'),
+        findsOneWidget,
+      );
+      expect(MacSystemNotifier().deniedAdvice, contains('System Settings'));
     });
 
     testWidgets('no row where there is no notifier to switch', (tester) async {

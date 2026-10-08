@@ -1,12 +1,12 @@
 'use client';
-import { useState } from 'react';
 import Link from 'next/link';
-import { Heart, MessageCircle, Search, X } from 'lucide-react';
+import { Heart, MessageCircle } from 'lucide-react';
 import { starterHarnesses } from '@/lib/community/starters';
 import type { HarnessSummary } from '@/lib/community/types';
 import { Header, SignIn } from './Header';
 import { HarnessTags } from './HarnessTags';
 import { useFeed, type Stats } from './useFeed';
+import { useFeedSearch } from './useFeedSearch';
 import styles from '../community.module.css';
 
 /** One harness in the grid: its cover, introduction, tags, likes and comments. */
@@ -24,19 +24,19 @@ function FeedCard({ item, stats, onLike }: { item: HarnessSummary; stats?: Stats
   </article>;
 }
 
+/** Starters are the website's own, so they are matched here; publications are matched by the server. */
 const matches = (item: HarnessSummary, query: string) => `${item.title} ${item.description} ${item.authorName} ${item.category} ${item.engine} ${item.harnessName || ''}`.toLowerCase().includes(query.toLowerCase());
 
-export default function Feed({ following = false, mine = false }: { following?: boolean; mine?: boolean }) {
-  const { posts, follows, stats, cursor, error, likeError, signedOut, busy, more, load, like } = useFeed({ following, mine });
-  const [query, setQuery] = useState(''), [search, setSearch] = useState(false);
+export default function Feed({ following = false, mine = false, initialQuery = '' }: { following?: boolean; mine?: boolean; initialQuery?: string }) {
+  const search = useFeedSearch(initialQuery), query = search.term;
+  const { posts, follows, stats, cursor, error, likeError, signedOut, busy, more, load, like } = useFeed({ following, mine, query });
   // Starters follow the last page: drawn sooner, every page loaded while scrolling would land above
   // them. A search or a failed page shows them at once: there is nothing to scroll past.
   const starters = mine || (cursor && !query && !error) ? [] : following ? starterHarnesses.filter(item => follows.includes(item.authorId)) : starterHarnesses;
-  const visible = [...posts, ...starters].filter(item => matches(item, query));
-  return <><Header following={following} mine={mine} onSearch={() => { setSearch(value => !value); setQuery(''); }} />
+  const visible = [...posts, ...starters.filter(item => matches(item, query))];
+  return <><Header tab={mine ? 'yours' : following ? 'following' : 'explore'} search={{ value: search.query, onChange: search.setQuery, onClear: search.clear }} />
     <main className={`${styles.wrap} ${styles.feed}`}>
       {mine && <div className={styles.feedIntro}><h1>Your harnesses</h1><p>See what people like, join the conversation, and share your next version.</p></div>}
-      {search && <div className={styles.search}><Search size={17} /><input autoFocus type="search" aria-label="Search harnesses" placeholder="Find a harness, creator, or idea" value={query} onChange={event => setQuery(event.target.value)} /><button className={styles.icon} aria-label="Close search" onClick={() => { setSearch(false); setQuery(''); }}><X /></button></div>}
       {error && <p className={styles.notice} role="status">{error}<button onClick={() => void load()}>Retry</button></p>}
       {likeError && <p className={styles.notice} role="status">{likeError}</p>}
       {signedOut && <SignIn action={following ? 'see creators you follow' : 'join the Hub'} />}

@@ -1,2 +1,4 @@
+import { searchFromParams } from '@/lib/community/search';
 import Feed from './components/Feed';
-export default function ExplorePage() { return <Feed />; }
+type Props = { searchParams: Promise<{ q?: string | string[] }> };
+export default async function ExplorePage({ searchParams }: Props) { return <Feed initialQuery={await searchFromParams(searchParams)} />; }

@@ -36,6 +36,7 @@
     "bonjour-service": "^1.4.4",
     "chokidar": "^4.0.0",
     "dotenv": "^17.2.3",
+    "pngjs": "^7.0.0",
     "qrcode-generator": "^2.0.4",
     "werift": "0.24.4",
     "ws": "^8.18.0",
@@ -43,6 +44,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.14.10",
+    "@types/pngjs": "^6.0.5",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "4.1.10",
     "esbuild": "^0.27.2",
