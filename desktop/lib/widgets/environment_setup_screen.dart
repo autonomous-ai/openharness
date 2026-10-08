@@ -210,8 +210,8 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
           count == 0
               ? 'Your tools are ready. Verify them to continue.'
               : count == 1
-              ? 'Install this tool, then sign in to start your first harness.'
-              : 'Install these $countLabel, then sign in to start your first harness.',
+              ? 'Install this tool, then start your first harness.'
+              : 'Install these $countLabel, then start your first harness.',
         ),
         Row(
           children: [
@@ -307,7 +307,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       _heading(
         'Setup complete',
         'This computer is ready',
-        'Every required command passed. Continue to Harness sign-in.',
+        'Every required command passed. Continue to your workspace.',
       ),
       _checkList(state),
     ],
@@ -578,7 +578,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
             ? widget.notifier.retryEnvironmentSetup
             : widget.notifier.startEnvironmentSetup;
       case EnvironmentSetupPhase.ready:
-        label = 'Continue to sign in';
+        label = 'Continue';
         action = widget.notifier.continueAfterEnvironmentSetup;
       case EnvironmentSetupPhase.waitingForTerminal:
         label = 'Recheck now';
