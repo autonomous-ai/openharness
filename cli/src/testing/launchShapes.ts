@@ -2,12 +2,16 @@
  * The core's launch paths, wired as core/main.ts wires them, over a machine a spec chooses: create, every relaunch
  * (restart, resume, restore and fork share `relaunchOverrides`), retarget's check before it touches a pane and the
  * line it logs after, the socket's saved-API target, the variables a pane leaving a grid has cleared, and the
- * engines a model picker may offer a grid model to. For engines/launchShapes.golden.spec.ts, which pins what each
- * launch shape starts with and writes. The composition, not the spec, follows where each part of a launch is built
+ * engines a model picker may offer a grid model to; and a fork, and a harness package's (DSH) part of each launch. For
+ * engines/launchShapes.golden.spec.ts and engines/dshLaunchShapes.golden.spec.ts, which pin what each launch shape
+ * starts with and writes. The composition, not the spec, follows where each part of a launch is built
  * (docs/design/2026-10-08-launch-port.md).
  */
 import { createLaunchHelpers, gridLaunchThrough } from '../core/agents/launch.js'
 import { createAgentCreator, type CreateAgentDeps } from '../core/agents/create.js'
+import { createAgentForker, type ForkAgentDeps } from '../core/agents/fork.js'
+import { installedDsh } from '../dsh/installed.js'
+import { prepareHarnessLaunch } from '../dsh/runtime.js'
 import { gridLaunchAnswerIn } from '../core/modelsLink.js'
 import { ApiConnections } from '../lib/apiConnections.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
@@ -29,13 +33,18 @@ export interface LaunchWorld {
   readCodexConfig: (path: string) => string | null
   /** What a launch records on its row once built. */
   setGridLaunch: (agentId: string, record: unknown) => void
+  /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
+  gridName?: () => string | null
 }
 
 /** What `create` needs besides the launch: the spec's stubs for the pane, the registry and the rest. */
 export type CreateRest = Omit<CreateAgentDeps, 'gridLaunchMachine' | 'prepareApiTools' | 'buildGridLaunch'>
+/** What `fork` needs besides the launch. */
+export type ForkRest = Omit<ForkAgentDeps, 'prepareApiTools' | 'relaunchOverrides' | 'gridName'>
 
 export function launchShapes(world: LaunchWorld) {
   const savedApis = new ApiConnections(world.dataDir)
+  const gridName = world.gridName ?? (() => null)
   const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
     if (!cwd) return
     try { prepareApiInstructions(savedApis, cwd, engine) }
@@ -63,6 +72,15 @@ export function launchShapes(world: LaunchWorld) {
     tmuxSupportsSessionEnv: world.tmuxSupportsSessionEnv,
     installCodexHooks: () => {},
     readCodexConfig: world.readCodexConfig,
+    // A harness package's part of a relaunch, as core/main.ts wires it.
+    dshLaunch: (id, workspace, engine, runtimeKey) => {
+      const installed = installedDsh(id)
+      if (!installed) {
+        console.warn(`[dsh] ${id} is not installed on this machine · cannot restore its harness context`)
+        return null
+      }
+      return prepareHarnessLaunch(installed, workspace, engine, runtimeKey, { privateGrid: gridName() }, null)
+    },
   }
   const helpers = createLaunchHelpers({
     prepareApiTools, launchOverridesDeps,
@@ -71,6 +89,7 @@ export function launchShapes(world: LaunchWorld) {
   return {
     create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools }),
     relaunch: (session: RegisteredSession, source?: LaunchSource) => helpers.relaunchOverrides(session, source),
+    fork: (rest: ForkRest) => createAgentForker({ ...rest, prepareApiTools, relaunchOverrides: helpers.relaunchOverrides, gridName }),
     validate: (engine: AgentEngine, source: LaunchSource) => validateLaunchOverrides(launchOverridesDeps, engine, source),
     /** The line retarget logs once a move onto a grid succeeded. */
     retargetLine: (engine: AgentEngine, overrides: LaunchOverrides): string | null => overrides.gridLaunchRecord
