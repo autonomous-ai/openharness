@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { PROCESS_ENGINES, type AgentEngine } from './types.js'
 import { baseNode } from '../harnessd/baseNode.js'
+import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { GridLaunchOverride } from '../lib/gridLaunchWire.js'
 
@@ -75,7 +76,9 @@ const M1 = { hermesSystemManaged: false, opencodeMajor: 2 }
 /** The machine's own parts of a text, as placeholders: the spec's folders, this node. */
 const placeheld = (text: string): string => {
   const node = baseNode(process.execPath)
+  const tmux = resolveBinaryOnPath('tmux') ?? 'tmux'
   return text.split(`'${node}'`).join("'<daemon-node>'").split(`'${dirname(node)}'`).join("'<daemon-node-dir>'")
+    .split(`'${tmux}'`).join("'<tmux>'")
     .split(root).join('<root>')
     .replace(/\/launch\/[0-9a-f-]{36}\.sh/g, '/launch/<script>.sh')
 }
