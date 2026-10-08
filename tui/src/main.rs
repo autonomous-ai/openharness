@@ -42,6 +42,7 @@ mod desk_layout;
 mod local;
 mod modal;
 mod buttons;
+mod dialog;
 mod workspace_menu;
 mod workspace_controls;
 mod workspace_events;

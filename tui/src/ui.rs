@@ -11,8 +11,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
-use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Clear, Paragraph, Widget};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Widget;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -310,7 +310,7 @@ fn menu(buf: &mut Buffer, app: &App, m: &crate::modal::Menu) {
     // its buttons match; the vertical menus keep menu-style.
     if let Some(b) = &m.buttons {
         let c = crate::settings::chrome();
-        return Confirmation { menu: m, row: &b.row, lines: &lines, chrome: &c }.render(crate::workspace_menu::dialog_box(m), buf);
+        return (&confirmation(m, &b.row, &lines, &c)).render(crate::workspace_menu::dialog_box(m), buf);
     }
     let base = Style::default();
     // tmux's menu_set_style keeps colours, clearing attributes for each menu pair.
@@ -355,31 +355,20 @@ fn menu_text(it: &crate::modal::MenuItem) -> String {
     if it.key.is_empty() { it.label.clone() } else { format!("{}#[default] #[align=right]({})", it.label, it.key) }
 }
 
-/// A confirmation (a menu with buttons: Close Tab, Stop Harness): `Clear`, then a `Block` in the
-/// command panel's surface with menu-border-lines in its muted colour, the title over the top
-/// border from its third column as tmux's, the notes a `Paragraph`, a blank row and the
-/// buttons' row. Its notes are never chosen or dimmed: the buttons have the keys and the mouse.
-struct Confirmation<'a> { menu: &'a crate::modal::Menu, row: &'a crate::buttons::Row, lines: &'a str, chrome: &'a crate::settings::Chrome }
+/// menu-border-lines as a ratatui border set, for the dialogs drawn as `Block`s.
+pub fn dialog_border(lines: &str) -> border::Set<'static> {
+    let (tl, tr, bl, br, hz, vt, ..) = box_set(lines);
+    border::Set { top_left: tl, top_right: tr, bottom_left: bl, bottom_right: br, vertical_left: vt, vertical_right: vt, horizontal_top: hz, horizontal_bottom: hz }
+}
 
-impl Widget for Confirmation<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let (m, c) = (self.menu, self.chrome);
-        let (tl, tr, bl, br, hz, vt, ..) = box_set(self.lines);
-        let set = border::Set { top_left: tl, top_right: tr, bottom_left: bl, bottom_right: br, vertical_left: vt, vertical_right: vt, horizontal_top: hz, horizontal_bottom: hz };
-        let mut block = Block::bordered().border_set(set).border_style(c.muted).style(c.base);
-        if !m.title.is_empty() {
-            // A Block's title starts next to the corner, tmux's a column later: one more of the rule first.
-            let title = crate::draw::format_line(&m.title, c.muted, m.width, (hz, c.muted));
-            block = block.title(Line::from_iter(std::iter::once(Span::styled(hz, c.muted)).chain(title.spans)));
-        }
-        crate::term_out::clear_extras(area);
-        Clear.render(area, buf);
-        block.render(area, buf);
-        let [notes, row] = crate::workspace_menu::dialog_rows(area);
-        let text = Text::from_iter(m.items.iter().map(|it| crate::draw::format_line(&menu_text(it), c.base, notes.width, (" ", c.base))));
-        Paragraph::new(text).render(notes, buf);
-        self.row.view(c).render(row, buf);
-    }
+/// A confirmation (a menu with buttons: Close Tab, Stop Harness) as the shared `Dialog`: in
+/// menu-border-lines, its tmux-format title and notes as `Line`s. Its notes are never chosen or
+/// dimmed: the buttons have the keys and the mouse.
+fn confirmation<'a>(m: &crate::modal::Menu, row: &'a crate::buttons::Row, lines: &str, c: &'a crate::settings::Chrome) -> crate::dialog::Dialog<'a> {
+    let border = dialog_border(lines);
+    let title = if m.title.is_empty() { Line::default() } else { crate::draw::format_line(&m.title, c.muted, m.width, (border.horizontal_top, c.muted)) };
+    let body = m.items.iter().map(|it| crate::draw::format_line(&menu_text(it), c.base, m.width, (" ", c.base))).collect();
+    crate::dialog::Dialog { title, border, ..crate::dialog::Dialog::new("", body, row, c) }
 }
 
 /// A pause after the prefix: every key that can come next, from the live table (your binds too),
@@ -3525,10 +3514,10 @@ mod confirm_box_tests {
         row_oracle::draw(&b.row, buf, x0 + 2, x0 + 2 + m.width, y0 + 1 + m.items.len() as u16 + 1, c);
     }
 
-    /// The box as drawn now.
+    /// The box as drawn now: the shared Dialog.
     fn drawn(buf: &mut Buffer, m: &Menu, lines: &str, c: &Chrome) {
         let row = &m.buttons.as_ref().unwrap().row;
-        Confirmation { menu: m, row, lines, chrome: c }.render(crate::workspace_menu::dialog_box(m), buf)
+        (&confirmation(m, row, lines, c)).render(crate::workspace_menu::dialog_box(m), buf)
     }
 
     /// What a terminal shows: a cell hidden behind a wide character is never sent (ratatui's diff

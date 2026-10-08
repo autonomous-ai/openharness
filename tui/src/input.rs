@@ -3588,7 +3588,7 @@ pub fn menu_mouse(app: &mut App, m: &crate::mouse::Event) {
     let chosen = if !menu.stay_open { is_release(m.b) } else { !is_release(m.b) && !is_wheel(m.b) && !is_drag(m.b) };
     if let Some(b) = &menu.buttons {
         // Only a button does anything: the notes, the blank row and the gaps and hint keep the dialog.
-        let [_, row] = crate::workspace_menu::dialog_rows(crate::workspace_menu::dialog_box(&menu));
+        let row = crate::dialog::areas(crate::workspace_menu::dialog_box(&menu), crate::dialog::Parts::default()).row;
         let hit = if chosen { b.row.click(row, ratatui::layout::Position::new(m.x, m.y)) } else { None };
         if let Some(command) = hit.and_then(|i| b.actions.get(i)).cloned() { return commands::execute_in(app, &command, menu.mouse.clone()) }
         app.modal = Some(Modal::Menu(menu));

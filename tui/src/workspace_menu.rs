@@ -3,7 +3,7 @@
 
 use crate::app::App;
 use crate::modal::{Menu, MenuItem, Modal};
-use ratatui::layout::{Constraint, Margin, Rect};
+use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A confirmation's button row and the command each button runs; button 0 is the way out, so
@@ -50,16 +50,9 @@ pub fn open_buttons(app: &mut App, title: &str, notes: Vec<MenuItem>, row: crate
     true
 }
 
-/// A confirmation's box: its notes, a blank row and the buttons' row inside the border.
+/// A confirmation's box (a `dialog::Dialog`): its notes, a blank row and the buttons' row inside
+/// the border. The drawing and the mouse both lay it out with `dialog::areas`.
 pub fn dialog_box(m: &Menu) -> Rect { Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 4) }
-
-/// Inside a confirmation's box [area], two columns in from each side: its notes' rows, then
-/// (after a blank row) its buttons' row. The drawing and the mouse both take them from here.
-pub fn dialog_rows(area: Rect) -> [Rect; 2] {
-    let [notes, _blank, row] = ratatui::layout::Layout::vertical([Constraint::Fill(1), Constraint::Length(1), Constraint::Length(1)])
-        .areas(area.inner(Margin::new(2, 1)));
-    [notes, row]
-}
 
 fn fit(menu: &mut Menu, size: (u16, u16)) -> bool {
     // A resize keeps the button the keys were on.
@@ -119,7 +112,7 @@ fn wrap_notes(items: Vec<MenuItem>, choice: Option<usize>, width: usize, height:
     (rows, selected)
 }
 
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1); let mut lines = Vec::new(); let mut line = String::new(); let mut used = 0;
     for word in text.split_whitespace() {
         if !line.is_empty() && used + 1 + word.width() > width { lines.push(std::mem::take(&mut line)); used = 0; }

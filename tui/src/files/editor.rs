@@ -14,7 +14,7 @@ use ratatui::widgets::Widget;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::{frame, name_of, put, Look};
+use super::{name_of, put, Look};
 use crate::keys::Chord;
 
 /// The largest file opened here.
@@ -534,20 +534,25 @@ impl Editor {
         let st = if self.message.is_some() && self.bar.is_none() { look.accent } else { look.muted };
         put(buf, ox + 1, sy, w.saturating_sub(2), &super::fit(&status, w.saturating_sub(2) as usize), st);
         if self.asking.is_some() {
-            let (r, row) = self.ask_layout();
-            let r = Rect::new(ox + r.x, oy + r.y, r.width, r.height).intersection(area);
-            frame(buf, r, look.warn);
-            put(buf, r.x + 2, r.y + 1, r.width.saturating_sub(4), &format!("Save changes to '{}'?", name_of(&self.path)), look.text);
-            self.ask_row().view(&crate::settings::chrome()).render(Rect { x: ox + row.x, y: oy + row.y, ..row }, buf);
+            let (row, c) = (self.ask_row(), crate::settings::chrome());
+            let (r, d) = self.ask_dialog(&row, &c);
+            (&d).render(Rect::new(ox + r.x, oy + r.y, r.width, r.height).intersection(area), buf);
         }
     }
 
-    /// The "Save changes?" box in the middle, and its buttons' row (for drawing and clicks alike).
+    /// "Save changes?" as the shared dialog, in the middle of the editor.
+    fn ask_dialog<'a>(&self, row: &'a crate::buttons::Row, c: &'a crate::settings::Chrome) -> (Rect, crate::dialog::Dialog<'a>) {
+        let name = name_of(&self.path);
+        let question = ratatui::text::Line::from(format!("Save changes to '{name}'?"));
+        let d = crate::dialog::Dialog::new(&format!("Save Changes · {}", super::fit(&name, 30)), vec![question], row, c);
+        (d.place(Rect::new(0, 0, self.size.0, self.size.1)), d)
+    }
+
+    /// The "Save changes?" box and its buttons' row (for drawing and clicks alike).
     fn ask_layout(&self) -> (Rect, Rect) {
-        let q = format!("Save changes to '{}'?", name_of(&self.path)).width() as u16 + 4;
-        let w = q.max(self.ask_row().buttons_width() + 4).min(self.size.0);
-        let r = Rect::new(self.size.0.saturating_sub(w) / 2, self.size.1.saturating_sub(5) / 2, w, 5);
-        (r, Rect::new(r.x + 2, r.y + 3, r.width.saturating_sub(4), 1))
+        let (row, c) = (self.ask_row(), crate::settings::chrome());
+        let (r, d) = self.ask_dialog(&row, &c);
+        (r, d.areas(r).row)
     }
 }
 
@@ -719,6 +724,11 @@ mod tests {
         let shown = screen(&mut e);
         let words: Vec<String> = buttons.iter().map(|b| (b.x..b.right()).map(|x| shown[(x, by)].symbol()).collect()).collect();
         assert_eq!(words, ["[ Don't save ]", "[ Cancel ]", "[ Save ]"]);
+        // The shared dialog: its title in the top rule, the question inside, the panel's surface.
+        let (r, _) = e.ask_layout();
+        let line = |y: u16| (r.x..r.right()).map(|x| shown[(x, y)].symbol()).collect::<String>();
+        assert!(line(r.y).starts_with("┌─Save Changes · b.txt") && line(r.y + 1).starts_with("│ Save changes to 'b.txt'?"), "{}\n{}", line(r.y), line(r.y + 1));
+        assert_eq!(shown[(r.x + 1, r.y + 1)].bg, crate::settings::chrome().base.bg.unwrap_or(ratatui::style::Color::Reset));
         let bg = |e: &mut Editor, b: usize| screen(e)[(buttons[b].x + 2, by)].bg;
         if !crate::theme::no_color() {
             let c = crate::settings::chrome();

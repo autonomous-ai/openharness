@@ -27,6 +27,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, At, Placement};
 use crate::buttons::{Answer, Button, Row as ButtonRow};
+use crate::dialog::Dialog;
+use ratatui::text::Line;
 use crate::keys::{self, Chord, MouseKind};
 use crate::layout::Dir;
 use crate::theme;
@@ -1191,28 +1193,29 @@ impl Files {
             put(buf, r.x + 2, r.y + 2, r.width.saturating_sub(4), "Enter OK · Esc cancel", look.muted);
         }
         if self.confirm.is_some() {
-            let (r, lines, row) = self.confirm_layout(g);
-            let r = at(r);
-            frame(buf, r, look.warn);
-            for (k, line) in lines.iter().enumerate() { put(buf, r.x + 2, r.y + 1 + k as u16, r.width.saturating_sub(4), line, look.text); }
-            self.confirm_row().view(&crate::settings::chrome()).render(at(row), buf);
+            let (row, c) = (self.confirm_row(), crate::settings::chrome());
+            let (r, d) = self.confirm_dialog(g, &row, &c);
+            (&d).render(at(r), buf);
         }
     }
 
-    /// The confirmation's box (in the middle of the view), its lines, and its buttons' row (for
-    /// drawing and clicks alike).
-    fn confirm_layout(&self, g: Geom) -> (Rect, [String; 2], Rect) {
-        let lines = match self.confirm.as_ref().map(|c| &c.doom) {
-            Some(Doom::Trash(p)) => [format!("Delete '{}'?", fit(&name_of(p), 40)), "It goes to the Trash.".to_string()],
-            Some(Doom::Purge(p, why)) => [format!("'{}' can't go to the Trash: {why}.", fit(&name_of(p), 30)), "Delete it permanently? This can't be undone.".to_string()],
-            None => [String::new(), String::new()],
+    /// The confirmation as the shared dialog, in the middle of the view: titled with what goes,
+    /// its two lines, and its buttons.
+    fn confirm_dialog<'a>(&self, g: Geom, row: &'a ButtonRow, c: &'a crate::settings::Chrome) -> (Rect, Dialog<'a>) {
+        let (title, lines) = match self.confirm.as_ref().map(|c| &c.doom) {
+            Some(Doom::Trash(p)) => (format!("Delete · {}", fit(&name_of(p), 30)), [format!("Delete '{}'?", fit(&name_of(p), 40)), "It goes to the Trash.".to_string()]),
+            Some(Doom::Purge(p, why)) => (format!("Delete Permanently · {}", fit(&name_of(p), 30)), [format!("'{}' can't go to the Trash: {why}.", fit(&name_of(p), 30)), "Delete it permanently? This can't be undone.".to_string()]),
+            None => (String::new(), [String::new(), String::new()]),
         };
-        let row = self.confirm_row();
-        let need = lines.iter().map(|l| l.width()).max().unwrap_or(0).max(row.buttons_width() as usize) as u16 + 4;
-        let w = need.min(g.size.0);
-        let h = 6u16.min(g.size.1);
-        let r = Rect::new(g.size.0.saturating_sub(w) / 2, g.size.1.saturating_sub(h) / 2, w, h);
-        (r, lines, Rect::new(r.x + 2, r.y + 4, r.width.saturating_sub(4), 1))
+        let d = Dialog::new(&title, lines.into_iter().map(Line::from).collect(), row, c);
+        (d.place(Rect::new(0, 0, g.size.0, g.size.1)), d)
+    }
+
+    /// The confirmation's box and its buttons' row (for drawing and clicks alike).
+    fn confirm_layout(&self, g: Geom) -> (Rect, Rect) {
+        let (row, c) = (self.confirm_row(), crate::settings::chrome());
+        let (r, d) = self.confirm_dialog(g, &row, &c);
+        (r, d.areas(r).row)
     }
 }
 
@@ -2183,13 +2186,19 @@ mod tests {
         let mut f = files(&s);
         press(&mut f, KeyCode::Delete);
         let (area, g) = (Rect::new(0, 0, 100, 30), geom(100, 30, f.view));
-        let (_, _, row) = f.confirm_layout(g);
+        let (r, row) = f.confirm_layout(g);
         let (_, buttons) = f.confirm_row().areas(row);
         let by = row.y;
         let screen = |f: &mut Files| { let mut buf = Buffer::empty(area); f.draw(&mut buf, area, &Look::default()); buf };
         let word = |buf: &Buffer, b: Rect| (b.x..b.right()).map(|x| buf[(x, by)].symbol()).collect::<String>();
         let shown = screen(&mut f);
         assert_eq!([word(&shown, buttons[0]), word(&shown, buttons[1])], ["[ Cancel ]", "[ Delete ]"]);
+        // The shared dialog: its title in the top rule, the question inside, the panel's surface.
+        let text = contents(&shown);
+        assert!(text.contains("┌─Delete · x.txt") && text.contains("│ Delete 'x.txt'?") && text.contains("│ It goes to the Trash."), "{text}");
+        let c = crate::settings::chrome();
+        let q = (r.x + 1, r.y + 1);
+        assert_eq!((shown[(r.x, r.y + 1)].symbol(), shown[q].bg), ("│", c.base.bg.unwrap_or(ratatui::style::Color::Reset)), "{text}");
         assert!(buttons[0].right() + 2 <= buttons[1].x, "two columns apart");
         let bg = |f: &mut Files, b: usize| screen(f)[(buttons[b].x + 2, by)].bg;
         let c = crate::settings::chrome();
