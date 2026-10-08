@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync
 import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { claudeContinuation } from './sessionRepair.js'
+import { continuationOf } from '../engines/sessionFiles.js'
+
+const claudeContinuation = (path: string) => continuationOf('claude', path)
 
 /**
  * Repair binds a live launcher back to a session the daemon lost track of. The danger is not failing to
@@ -500,7 +502,7 @@ describe('session repair — Codex profiles', () => {
 
 describe('session repair — a Codex process names its own rollout', () => {
   it('reads the native child of the npm launcher, never another launcher or a nested tool', async () => {
-    const { codexProcessFiles } = await import('./sessionRepair.js')
+    const { processFilesOf } = await import('./sessionRepair.js')
     const own = '/tmp/profile/sessions/rollout-own.jsonl'
     const sibling = '/tmp/profile/sessions/rollout-sibling.jsonl'
     const files = vi.fn(async (pid: number) => pid === 43 ? [own] : pid === 50 ? [sibling] : ['/dev/null'])
@@ -510,21 +512,21 @@ describe('session repair — a Codex process names its own rollout', () => {
       { pid: 50, parentPid: 1, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
       { pid: 51, parentPid: 43, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
     ]
-    await expect(codexProcessFiles(42, files, async () => rows)).resolves.toEqual(['/dev/null', own])
+    await expect(processFilesOf('codex', 42, files, async () => rows)).resolves.toEqual(['/dev/null', own])
     expect(files.mock.calls.map(([pid]) => pid)).toEqual([42, 43])
     // macOS's comm column can truncate the full Node path; argv still names the executable.
-    await expect(codexProcessFiles(42, files, async () => rows.map(row => row.pid === 42
+    await expect(processFilesOf('codex', 42, files, async () => rows.map(row => row.pid === 42
       ? { ...row, executable: '/Users/demo/.ha', args: '/Users/demo/.harness/node/bin/node /tmp/bin/codex' } : row)))
       .resolves.toEqual(['/dev/null', own])
-    await expect(codexProcessFiles(42, files, async () => null)).resolves.toEqual(['/dev/null'])
-    await expect(codexProcessFiles(42, files, async () => [])).resolves.toEqual(['/dev/null'])
-    await expect(codexProcessFiles(42, files, async () => rows.filter(row => row.pid !== 43))).resolves.toEqual(['/dev/null'])
-    await expect(codexProcessFiles(42, files, async () => [...rows, { ...rows[1], pid: 44 }])).resolves.toEqual(['/dev/null'])
+    await expect(processFilesOf('codex', 42, files, async () => null)).resolves.toEqual(['/dev/null'])
+    await expect(processFilesOf('codex', 42, files, async () => [])).resolves.toEqual(['/dev/null'])
+    await expect(processFilesOf('codex', 42, files, async () => rows.filter(row => row.pid !== 43))).resolves.toEqual(['/dev/null'])
+    await expect(processFilesOf('codex', 42, files, async () => [...rows, { ...rows[1], pid: 44 }])).resolves.toEqual(['/dev/null'])
     // A native process owns its file directly. No walk into the tools it launched.
     const table = vi.fn(async () => rows)
-    await expect(codexProcessFiles(43, files, table)).resolves.toEqual([own])
+    await expect(processFilesOf('codex', 43, files, table)).resolves.toEqual([own])
     expect(table).not.toHaveBeenCalled()
-    await expect(codexProcessFiles(51, files, table)).resolves.toEqual(['/dev/null'])
+    await expect(processFilesOf('codex', 51, files, table)).resolves.toEqual(['/dev/null'])
   })
 
   it('does not give a starting process the only sibling rollout before its own file opens', async () => {
@@ -532,10 +534,10 @@ describe('session repair — a Codex process names its own rollout', () => {
     const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000009'
     writeCodexRollout(profile, sibling, CWD, Date.now())
     vi.resetModules()
-    const { codexProcessSession, findLiveSession } = await import('./sessionRepair.js')
+    const { openFileSessionOf, findLiveSession } = await import('./sessionRepair.js')
     // October 6 full E2E: two Codex processes start together, but only one has written
     // its rollout yet. This process holds neither: a directory match is not ownership.
-    await expect(codexProcessSession(process.pid, join(profile, 'sessions'), CWD)).resolves.toBeNull()
+    await expect(openFileSessionOf('codex', process.pid, join(profile, 'sessions'), CWD)).resolves.toBeNull()
     await expect(findLiveSession('codex', CWD, Date.now() - 1_000,
       { codexHome: profile, bornOnly: true, pid: process.pid })).resolves.toBeNull()
   })
@@ -548,17 +550,17 @@ describe('session repair — a Codex process names its own rollout', () => {
     const siblingFile = writeCodexRollout(profile, sibling, CWD, STARTED_AT + 2_000)
     const elsewhere = writeCodexRollout(tempRoot(), 'a1b2c3d4-1111-4a4a-8a8a-000000000005', CWD, STARTED_AT)
     vi.resetModules()
-    const { codexProcessSession, findLiveSession } = await import('./sessionRepair.js')
+    const { openFileSessionOf, findLiveSession } = await import('./sessionRepair.js')
     const sessions = join(profile, 'sessions')
     // Two born in the folder since the process started: guessing would wire a tile to a sibling.
     await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true })).resolves.toBeNull()
     // The process holds one of them open, beside files that are not rollouts or not this profile's.
     const held = async () => [forkFile, '/dev/null', join(profile, 'notes.jsonl'), elsewhere]
-    await expect(codexProcessSession(42, sessions, CWD, held)).resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+    await expect(openFileSessionOf('codex', 42, sessions, CWD, held)).resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
     // Two held, or one for another folder: nothing, rather than a guess.
-    await expect(codexProcessSession(42, sessions, CWD, async () => [forkFile, siblingFile])).resolves.toBeNull()
-    await expect(codexProcessSession(42, sessions, '/Users/demo/elsewhere', held)).resolves.toBeNull()
-    await expect(codexProcessSession(42, sessions, CWD, async () => [])).resolves.toBeNull()
+    await expect(openFileSessionOf('codex', 42, sessions, CWD, async () => [forkFile, siblingFile])).resolves.toBeNull()
+    await expect(openFileSessionOf('codex', 42, sessions, '/Users/demo/elsewhere', held)).resolves.toBeNull()
+    await expect(openFileSessionOf('codex', 42, sessions, CWD, async () => [])).resolves.toBeNull()
   })
 
   it('reads a live process\'s open files, and binds the repair to the rollout it holds', async () => {
@@ -608,9 +610,9 @@ describe('session repair — homes the person moved', () => {
     writeTranscript(join(claudeHome, 'projects'), 'project', id, CWD, STARTED_AT + 5_000)
     mkdirSync(join(claudeHome, 'sessions'))
     writeFileSync(join(claudeHome, 'sessions', '77.json'), JSON.stringify({ pid: 77, cwd: CWD, sessionId: id, procStart: new Date(STARTED_AT).toUTCString() }))
-    const { claudeProcessSession, findLiveSession } = await moved(claudeHome, tempRoot())
+    const { processSessionOf, findLiveSession } = await moved(claudeHome, tempRoot())
     const transcriptPath = join(claudeHome, 'projects', 'project', `${id}.jsonl`)
-    await expect(claudeProcessSession(77, CWD, STARTED_AT)).resolves.toEqual({ sessionId: id, transcriptPath })
+    await expect(processSessionOf('claude', 77, CWD, STARTED_AT)).resolves.toEqual({ sessionId: id, transcriptPath })
     // And by the folder scan, when there is no process record to read.
     await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath })
   })
@@ -629,17 +631,17 @@ describe('session repair — homes the person moved', () => {
     const codexHome = tempRoot()
     const id = 'a1b2c3d4-1111-4a4a-8a8a-000000000101'
     const file = writeCodexRollout(codexHome, id, CWD, STARTED_AT + 5_000)
-    const { codexProcessSession, findLiveSession } = await moved(tempRoot(), codexHome)
+    const { openFileSessionOf, findLiveSession } = await moved(tempRoot(), codexHome)
     await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath: file })
     const roots = [join(process.env.CODEX_HOME!, 'sessions'), join(codexHome, 'sessions')]
-    await expect(codexProcessSession(42, roots, CWD, async () => [file])).resolves.toEqual({ sessionId: id, transcriptPath: realpathSync(file) })
+    await expect(openFileSessionOf('codex', 42, roots, CWD, async () => [file])).resolves.toEqual({ sessionId: id, transcriptPath: realpathSync(file) })
     // One conversation in each home for this folder: two agents, and no guess.
     writeCodexRollout(process.env.CODEX_HOME!, 'a1b2c3d4-1111-4a4a-8a8a-000000000102', CWD, STARTED_AT + 6_000)
     await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toBeNull()
   })
 })
 
-describe('claudeContinuation', () => {
+describe('a Claude Code conversation continued in another file (continuationOf)', () => {
   it('follows a continued-in marker to the new session file', async () => {
     const dir = tempRoot()
     const oldPath = join(dir, 'old-session.jsonl')
@@ -822,7 +824,7 @@ it.each(['local', 'utc'])('recovers an old Claude process in a busy project from
 })
 it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'different start', 'missing start', 'different cwd', 'missing cwd', 'missing id', 'invalid id', 'missing history'])('refuses stale/invalid Claude native metadata: %s', async mode => {
   const home = tempRoot(); const root = join(home, 'projects'); mkdirSync(root)
-  const { claudeProcessSession } = await load(root)
+  const { processSessionOf } = await load(root)
   const record: Record<string, unknown> = { pid: 77, cwd: CWD, sessionId: '11111111-2222-4333-8444-555555555555', procStart: new Date(STARTED_AT).toUTCString() }
   if (mode === 'different pid') record.pid = 78
   if (mode === 'different start') record.procStart = new Date(STARTED_AT + 1000).toUTCString()
@@ -833,7 +835,7 @@ it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'd
   if (mode === 'invalid id') record.sessionId = '../escape'
   mkdirSync(join(home, 'sessions'))
   if (mode !== 'missing file') writeFileSync(join(home, 'sessions', '77.json'), mode === 'bad json' ? '{' : JSON.stringify(record))
-  expect(await claudeProcessSession(mode === 'bad pid' ? -1 : 77, CWD, mode === 'bad start' ? NaN : STARTED_AT)).toBeNull()
+  expect(await processSessionOf('claude', mode === 'bad pid' ? -1 : 77, CWD, mode === 'bad start' ? NaN : STARTED_AT)).toBeNull()
 })
 
 /**

@@ -40,8 +40,9 @@ import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { machineNames } from './machineNames.js'
 import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
-import { claudeProjectsRoots, codexHomeRoots, sessionCodexHome } from './engineHomes.js'
-import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
+import { sessionFolderOf, sessionRoots } from './engineHomes.js'
+import { findSessionFileOf, sessionMetaOf } from '../engines/sessionFiles.js'
+import { isSessionStoreEngine, sessionStoreContracts, sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import { admitHook } from '../engines/hooks.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
@@ -904,20 +905,20 @@ function isWithin(root: string, file: string): boolean {
  * replaces so "this engine has no transcript" is a fact a caller can ASK for — Pause and Resume both
  * need it, and both used to demand a file every engine was assumed to have.
  */
-const TRANSCRIPT_ROOT: Readonly<Record<AgentEngine, ((codexHome?: string) => string) | null>> = {
+const TRANSCRIPT_ROOT: Readonly<Record<AgentEngine, (() => string) | 'store' | null>> = {
   // Amp's root is OURS, not Amp's: the transcript is written by the adapter's own plugin because Amp
   // keeps no conversation on disk (see installAmpPlugin).
   amp: () => env.AMP_SESSIONS_DIR,
   muse: () => join(env.MUSE_HOME, 'sessions'),
-  // The specific agent's own CODEX_HOME profile, when it has one — see RegisteredSession.codexHome.
-  codex: codexHome => join(codexHome || env.CODEX_HOME, 'sessions'),
+  // Declared by the engine's session store (engines/sessionStoreContracts.ts): the folders `transcriptRoots` names.
+  codex: 'store',
   grok: () => join(env.GROK_HOME, 'sessions'),
   agy: () => join(env.AGY_HOME, 'brain'),
   copilot: () => join(env.COPILOT_HOME, 'session-state'),
   cursor: () => join(cursorDataDir(), 'projects'),
   pi: () => join(env.PI_HOME, 'agent', 'sessions'),
   commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
-  claude: () => env.CLAUDE_PROJECTS_DIR,
+  claude: 'store',
   opencode: null,
   kilo: null,
   hermes: null,
@@ -933,14 +934,12 @@ export function engineKeepsTranscriptFile(engine: AgentEngine): boolean {
 }
 
 /**
- * The folders an engine's transcripts may be in: its own, and for Claude Code and Codex each home the
- * person moved in their shell profile (lib/engineHomes.ts). An agent's own CODEX_HOME profile is its
- * only one.
+ * The folders an engine's transcripts may be in: its own, and for an engine with a declared session store each
+ * home the person moved in their shell profile (lib/engineHomes.ts). An agent's own profile (its CODEX_HOME) is
+ * its only one, for an engine whose sessions follow one.
  */
-function transcriptRoots(engine: AgentEngine, rootFor: (codexHome?: string) => string, codexHome?: string): string[] {
-  if (engine === 'claude') return claudeProjectsRoots(rootFor())
-  if (engine === 'codex' && !codexHome) return codexHomeRoots(env.CODEX_HOME).map((home) => join(home, 'sessions'))
-  return [rootFor(codexHome)]
+function transcriptRoots(engine: AgentEngine, root: (() => string) | 'store', codexHome?: string): string[] {
+  return root === 'store' ? sessionRoots(engine, codexHome) : [root()]
 }
 
 export function validTranscriptPath(engine: AgentEngine, filePath: string, codexHome?: string, allowMissing = false): boolean {
@@ -1146,21 +1145,25 @@ class Registry {
         const rawCodexHome = raw?.codexHome ?? undefined
         const rawGridLaunch = normalizedGridLaunch(raw?.gridLaunch)
         const rawScmLaunch = parseScmLaunchRecord((raw as { scmLaunch?: unknown })?.scmLaunch)
-        let repairedCodexTranscript = false
-        if (engine === 'codex' && transcriptPath) {
-          const meta = readCodexRolloutMeta(transcriptPath)
+        // A sub-agent's hooks run from its parent's pane, and an older daemon let them overwrite the parent's
+        // binding with the child's file: put the parent's own back, found by its id in the same home (or its
+        // profile), else release the binding. Declared by the engine's session store (`repairsOverwrittenParent`)
+        // and read with the kit, in core.
+        let repairedParentTranscript = false
+        if (isSessionStoreEngine(engine) && sessionStoreContracts[engine].repairsOverwrittenParent && transcriptPath) {
+          const meta = sessionMetaOf(engine, transcriptPath)
           if (meta?.isSubagent) {
             const repaired = meta.parentThreadId === rawSessionId
-              ? resolveCodexRollout(rawSessionId, join(sessionCodexHome({ codexHome: rawCodexHome, transcriptPath }), 'sessions'))
+              ? findSessionFileOf(engine, rawSessionId, sessionFolderOf(engine, { profile: rawCodexHome, transcriptPath }))
               : null
-            if (!repaired || !validTranscriptPath('codex', repaired, rawCodexHome) || readCodexRolloutMeta(repaired)?.isSubagent) {
+            if (!repaired || !validTranscriptPath(engine, repaired, rawCodexHome) || sessionMetaOf(engine, repaired)?.isSubagent) {
               changed = true
               bound = false
               transcriptPath = null
             } else {
-              console.log(`[registry] repaired Codex parent ${rawSessionId.slice(0, 8)} transcript after child hook overwrite`)
+              console.log(`[registry] repaired ${sessionStoreContracts[engine].label} parent ${rawSessionId.slice(0, 8)} transcript after child hook overwrite`)
               transcriptPath = repaired
-              repairedCodexTranscript = true
+              repairedParentTranscript = true
               changed = true
             }
           }
@@ -1222,7 +1225,7 @@ class Registry {
           defaultName: normalizedDefaultName(raw.defaultName),
           title: titleDisplayName(typeof raw.title === 'string' ? raw.title : null),
           sessionId: bound ? rawSessionId : '',
-          projectDir: !repairedCodexTranscript && typeof raw.projectDir === 'string' && raw.projectDir
+          projectDir: !repairedParentTranscript && typeof raw.projectDir === 'string' && raw.projectDir
             ? raw.projectDir
             : transcriptPath
               ? basename(dirname(transcriptPath))
@@ -2125,9 +2128,11 @@ class Registry {
     return true
   }
 
+  /** Fill in the profile a row did not know (its CODEX_HOME), for an engine whose sessions follow one (its session
+   *  store's `sessions.profile`). Never overwrites. */
   setCodexHome(agentId: string, codexHome: string): boolean {
     const session = this.agents.get(agentId)
-    if (!session || session.engine !== 'codex' || session.codexHome) return false
+    if (!session || !sessionStoreOf(session.engine)?.sessions.profile || session.codexHome) return false
     session.codexHome = codexHome
     session.touchedAt = Date.now()
     this.save()

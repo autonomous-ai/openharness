@@ -1,8 +1,9 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import type { RegisteredSession } from './registry.js'
+import { loadEngine, OTHER_ENGINES } from '../engines/inProcess.js'
 import {
   codexEffortAllowed,
   encodeRuntimeProfile,
@@ -29,6 +30,10 @@ function session(engine: RegisteredSession['engine']): RegisteredSession {
     registeredAt: 1, touchedAt: 1, lastHookAt: 1, lastTranscriptAt: 1,
   }
 }
+
+// The other engines' profile readers load as one of their sessions enters the registry (engines/inProcess.ts
+// `preloadEngine`): before any pane of theirs is read, as here.
+beforeAll(async () => { for (const engine of OTHER_ENGINES) await loadEngine(engine) })
 
 describe('RuntimeProfileManager', () => {
   it('keeps agents that have not bound a session yet out of one another state', () => {

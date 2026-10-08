@@ -1,13 +1,20 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { runtime as claudeRuntime } from '../engines/claude/runtimeProfile.js'
 import type { RegisteredSession } from './registry.js'
 import { LegacyRuntimeProfileManager } from './runtimeProfileManager.js'
 import { RuntimeProfileManager } from './runtimeProfile.js'
 import { parseRuntimeProfile } from './runtimeProfileWire.js'
+import { engineNow, loadEngine, OTHER_ENGINES } from '../engines/inProcess.js'
+
+// A test may say an engine's code could not be loaded.
+vi.mock('../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../engines/inProcess.js')>()
+  return { ...actual, engineNow: vi.fn(actual.engineNow), loadEngine: vi.fn(actual.loadEngine) }
+})
 
 const fixture = (name: string): string => readFileSync(join(import.meta.dirname, '__fixtures__', name), 'utf8')
 const session = (engine: RegisteredSession['engine']): RegisteredSession => ({
@@ -15,6 +22,32 @@ const session = (engine: RegisteredSession['engine']): RegisteredSession => ({
   cwd: '/tmp', transcriptPath: '/tmp/profile-recording.jsonl',
 } as RegisteredSession)
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+// The other engines' profile readers load as one of their sessions enters the registry (engines/inProcess.ts
+// `preloadEngine`): before any pane of theirs is read, as here.
+beforeAll(async () => { for (const engine of OTHER_ENGINES) await loadEngine(engine) })
+
+describe('another engine whose code could not be loaded', () => {
+  it('reads nothing of its panes, config files or catalog, and leaves its chips as they were', async () => {
+    const manager = new LegacyRuntimeProfileManager(() => undefined)
+    vi.mocked(engineNow).mockReturnValue(null)
+    vi.mocked(loadEngine).mockResolvedValue(null as never)
+    try {
+      for (const engine of ['devin', 'hermes', 'commandcode', 'opencode', 'kilo', 'pi', 'grok', 'agy'] as const) {
+        const agent = { ...session(engine), sessionId: `${engine}-s` }
+        expect(manager.ingestPane(agent, 'any pane', true), engine).toBe(false)
+        expect(manager.getState(agent.sessionId), engine).toMatchObject({ model: null, effort: null })
+      }
+      for (const engine of ['hermes', 'muse', 'amp'] as const) {
+        expect(await manager.ingestConfig({ ...session(engine), sessionId: `${engine}-c` }, true), engine).toBe(false)
+      }
+      expect(await manager.opencodeCatalog()).toEqual([])
+      expect(await manager.kiloCatalog()).toEqual([])
+    } finally {
+      vi.mocked(engineNow).mockReset()
+      vi.mocked(loadEngine).mockReset()
+    }
+  })
+})
 
 describe('runtime profiles without the pilot implementations', () => {
   it.each([

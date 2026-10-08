@@ -85,7 +85,7 @@ function wire(sessions: RegisteredSession[], over: Partial<HandoffDeps> = {}, fa
     mirror: { recentAsks: () => [], lastFullText: () => undefined, recent: () => [] },
     databaseHistory: () => undefined,
     findLiveSession: async () => null,
-    claudeProcessSession: async () => null,
+    processSession: async () => null,
     isRecentlyDeleted: () => false,
     findResumedTranscript: async () => null,
     validTranscriptPath: (_engine, path) => existsSync(path),
@@ -283,7 +283,7 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
   it('W1: a legacy fork switched at once gets its parent\'s conversation up to the fork', async () => {
     const findLiveSession = vi.fn(async () => null)
     const claudeProcessSession = vi.fn(async () => null)
-    wire([parent(), fork()], {}, { findLiveSession, claudeProcessSession })
+    wire([parent(), fork()], {}, { findLiveSession, processSession: claudeProcessSession })
     ask('r1', 'fork-1')
     expect(await reply('r1')).toEqual({ requestId: 'r1', agentId: 'fork-1', file: `.harness/handoff/fork-1-${CHANGE}.md`, gitRepo: false, cwd: ws, degraded: ['git'] })
     expect(md()).toContain('Fix the login bug')
@@ -318,11 +318,11 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
   it('W4: an unbound agent that is not a fork is handed the session the daemon found for it', async () => {
     const found = parentFile('found.jsonl', 'later ask')
     const claudeProcessSession = vi.fn(async () => ({ sessionId: 'sx', transcriptPath: found }))
-    wire([unbound('fork-1')], {}, { claudeProcessSession })
+    wire([unbound('fork-1')], {}, { processSession: claudeProcessSession })
     ask('r1', 'fork-1')
     expect((await reply('r1')).file).toBe(`.harness/handoff/fork-1-${CHANGE}.md`)
     expect(claudeProcessSession).toHaveBeenCalledTimes(1)
-    expect(claudeProcessSession).toHaveBeenCalledWith(4242, ws, Date.parse('Fri Oct  2 16:58:26 2026'))
+    expect(claudeProcessSession).toHaveBeenCalledWith('claude', 4242, ws, Date.parse('Fri Oct  2 16:58:26 2026'))
     expect(md()).toContain('Fix the login bug')
   })
   // Verifier additions (unit-INT-a3-r1): discovery refusals through the real provider and socket.
@@ -330,7 +330,7 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
   it('W5: a discovered session another agent holds is never handed over', async () => {
     const other = session({ agentId: 'other-1', sessionId: 'sx', transcriptPath: parentFile('other.jsonl', 'OTHER ask') })
     const claudeProcessSession = vi.fn(async () => ({ sessionId: 'sx', transcriptPath: other.transcriptPath! }))
-    wire([unbound('new-1'), other], {}, { claudeProcessSession })
+    wire([unbound('new-1'), other], {}, { processSession: claudeProcessSession })
     ask('r1', 'new-1')
     expect(await reply('r1')).toEqual(nothing('new-1'))
     expect(claudeProcessSession).toHaveBeenCalledTimes(1)
@@ -342,7 +342,7 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
     mkdirSync(dir, { recursive: true })
     const sub = join(dir, 'agent-a.jsonl')
     writeFileSync(sub, readFileSync(parentFile('sub-seed.jsonl', 'SUBAGENT ask')))
-    wire([unbound('new-1')], {}, { claudeProcessSession: async () => ({ sessionId: 'agent-a', transcriptPath: sub }) })
+    wire([unbound('new-1')], {}, { processSession: async () => ({ sessionId: 'agent-a', transcriptPath: sub }) })
     ask('r1', 'new-1')
     expect(await reply('r1')).toEqual(nothing('new-1'))
     expect(existsSync(join(ws, '.harness'))).toBe(false)
@@ -350,7 +350,7 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
 
   it('W7: a fork whose record is malformed is neither discovered nor inherited', async () => {
     const claudeProcessSession = vi.fn(async () => ({ sessionId: 'sx', transcriptPath: parentFile('found.jsonl', 'later ask') }))
-    wire([parent(), fork({ forkedFrom: 'parent-1', processIdentity: { pid: 4242, executable: 'claude', startMarker: 'Fri Oct  2 16:58:26 2026' } })], {}, { claudeProcessSession })
+    wire([parent(), fork({ forkedFrom: 'parent-1', processIdentity: { pid: 4242, executable: 'claude', startMarker: 'Fri Oct  2 16:58:26 2026' } })], {}, { processSession: claudeProcessSession })
     ask('r1', 'fork-1')
     expect(await reply('r1')).toEqual(nothing('fork-1'))
     expect(claudeProcessSession).not.toHaveBeenCalled()
@@ -358,7 +358,7 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
 
   it('W8: a discovery that never answers does not hold the reply, and a later change reuses the search still running', async () => {
     const claudeProcessSession = vi.fn(() => new Promise<null>(() => {}))
-    wire([unbound('new-1')], { discoverMs: 50 }, { claudeProcessSession })
+    wire([unbound('new-1')], { discoverMs: 50 }, { processSession: claudeProcessSession })
     ask('r1', 'new-1')
     expect(await reply('r1')).toEqual(nothing('new-1'))
     ask('r2', 'new-1', OTHER)
@@ -370,7 +370,7 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
   it('W9: a discovered session is never handed over while one stopped record cannot be read (ownership fails closed)', async () => {
     const claudeProcessSession = vi.fn(async () => ({ sessionId: 'sx', transcriptPath: parentFile('found.jsonl', 'later ask') }))
     const stopped = { ids: () => ['ok-1', 'bad-1'], get: (id: string) => { if (id === 'bad-1') throw new Error('Could not read the saved stopped harness.'); return { agentId: id, sessionId: 'other' } as unknown as RegisteredSession } }
-    wire([unbound('new-1')], {}, { claudeProcessSession, stopped })
+    wire([unbound('new-1')], {}, { processSession: claudeProcessSession, stopped })
     ask('r1', 'new-1')
     expect(await reply('r1')).toEqual(nothing('new-1'))
     expect(claudeProcessSession).toHaveBeenCalledTimes(1)
@@ -378,7 +378,7 @@ describe('agent_handoff_prepare, socket + real provider: a fork that has not ans
 
   it('W10: a Claude pane with no process identity is not searched for at all', async () => {
     const claudeProcessSession = vi.fn(async () => ({ sessionId: 'sx', transcriptPath: parentFile('found.jsonl', 'later ask') }))
-    wire([unbound('new-1', { processIdentity: null })], {}, { claudeProcessSession })
+    wire([unbound('new-1', { processIdentity: null })], {}, { processSession: claudeProcessSession })
     ask('r1', 'new-1')
     expect(await reply('r1')).toEqual(nothing('new-1'))
     expect(claudeProcessSession).not.toHaveBeenCalled()

@@ -58,7 +58,8 @@ import { HERMES_SYSTEM_MANAGED_DIR } from '../lib/gridWebMcp.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { tmuxSupportsSessionEnv } from '../lib/tmuxVersion.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
-import { claudeProcessSession, findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
+import { findLiveSession, findResumedTranscript } from '../lib/sessionRepair.js'
+import { processSessionOf } from '../engines/sessionStores.js'
 import { handoffProviderDeps } from '../lib/handoffDiscovery.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
@@ -1178,7 +1179,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     mirror,
     databaseHistory,
     findLiveSession,
-    claudeProcessSession,
+    processSession: processSessionOf,
     isRecentlyDeleted,
     findResumedTranscript,
     validTranscriptPath,
