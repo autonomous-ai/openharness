@@ -63,6 +63,14 @@ const worktrees = (path: string) => git(path, ['worktree', 'list', '--porcelain'
 const real = (path: string) => realpath(path).catch(() => normalize(path))
 const isDirectory = (path: string) => stat(path).then(info => info.isDirectory(), () => false)
 
+/** Whether `path` or a folder above it holds `.git`: a directory, or the file a linked worktree has. */
+async function insideGitCheckout(path: string): Promise<boolean> {
+  for (let dir = path; ; dir = dirname(dir)) {
+    if (await stat(join(dir, '.git')).then(() => true, () => false)) return true
+    if (dirname(dir) === dir) return false
+  }
+}
+
 /** The main checkout, when `root` is one of its linked worktrees. */
 async function mainCheckout(root: string, trees: Worktree[]): Promise<string | null> {
   if (trees.length < 2 || !trees[0]!.usable) return null
@@ -114,6 +122,12 @@ export async function readGitProject(requested: string, options: { refresh?: boo
   try { path = await realpath(requested) } catch { return { isGit: false, branches: [] } }
   // Same word and same roots as projectPreview's fence, so the two read alike.
   if (!(await withinRoots(path, [homedir(), ...(options.knownRoots ?? [])]))) return { error: 'FORBIDDEN' }
+  // A folder with no `.git` in it or above it is not a Git project, and saying so needs no git. On a
+  // Mac without the Command Line Tools, `/usr/bin/git` is Apple's installer stub: it exits 1 (not
+  // git's 128), so every new harness in an existing folder failed with "Could not check Git" on a
+  // fresh Mac (macOS VM, 2026-10-08). GIT_DIR and friends are cleared for `git` below, so this is the
+  // same discovery git itself would make.
+  if (!(await insideGitCheckout(path))) return { isGit: false, branches: [] }
   let root: string
   try { root = await git(path, ['rev-parse', '--show-toplevel']) }
   catch (error) {
