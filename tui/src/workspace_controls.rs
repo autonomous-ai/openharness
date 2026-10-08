@@ -455,12 +455,13 @@ pub(crate) mod tests {
         send(&mut app, MouseEventKind::Up(MouseButton::Left), cx, cy);
         assert!(app.redraw_all, "the release repaints the screen once");
         assert_eq!(app.tabs[0].panes(), vec![2, 1], "the drop swapped them");
-        // the same swap run as a command, never dragged: the frame it draws, with no zone
+        assert_eq!(app.tabs[0].focus, Some(1), "the held pane keeps the focus");
+        // the same drop, never dragged: the frame it draws, with no zone
         let mut swapped = self::app(120);
         swapped.tabs.truncate(1);
         swapped.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
         swapped.fit_panes();
-        crate::commands::execute(&mut swapped, "swap-pane -s %0 -t %1");
+        crate::pane_drag::release(&mut swapped, 1, crate::pane_drag::Drop::Swap(2));
         assert_eq!(render(&mut app), render(&mut swapped), "the frame after the release has no zone");
     }
 

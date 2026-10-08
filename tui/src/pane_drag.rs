@@ -118,13 +118,14 @@ pub fn draw(buf: &mut Buffer, app: &App) {
 
 /// What releasing pane [src] over [drop] does: tmux's own swap-pane / join-pane, so the layout
 /// reaches the desk and every other client as those commands' does. Another client may have
-/// moved or closed either pane while it was dragged: then nothing happens.
+/// moved or closed either pane while it was dragged: then nothing happens. The held pane keeps
+/// the focus wherever it lands (join-pane focuses it; after swap-pane it is selected again).
 pub fn release(app: &mut App, src: u64, drop: Drop) {
     let home = |app: &App, id: u64| if app.panes.contains_key(&id) { app.tabs.iter().position(|t| t.panes().contains(&id)) } else { None };
     let Some(from) = home(app, src) else { return };
     let tag = crate::pane::tag;
     let command = match drop {
-        Drop::Swap(dst) if dst != src && home(app, dst).is_some() => format!("swap-pane -s {} -t {}", tag(src), tag(dst)),
+        Drop::Swap(dst) if dst != src && home(app, dst).is_some() => format!("swap-pane -s {0} -t {1} ; select-pane -t {0}", tag(src), tag(dst)),
         Drop::Beside(dst, side) if dst != src && home(app, dst).is_some() => {
             let flags = match side { Side::Left => "-h -b", Side::Right => "-h", Side::Top => "-v -b", Side::Bottom => "-v" };
             format!("join-pane {flags} -s {} -t {}", tag(src), tag(dst))
@@ -325,19 +326,28 @@ mod tests {
     #[tokio::test]
     async fn dropping_runs_swap_and_join_and_publishes_the_layout() {
         let mut app = three(120);
+        assert_eq!(app.tabs[0].focus, Some(1));
         release(&mut app, 1, Drop::Swap(3));
         assert_eq!(app.tabs[0].panes(), vec![3, 2, 1]);
+        assert_eq!(app.tabs[0].focus, Some(1), "the held pane keeps the focus, not the one it displaced");
         assert!(app.desk_layouts.contains(&app.tabs[0].id), "queued for the desk");
         app.desk_layouts.clear();
         release(&mut app, 3, Drop::Beside(1, Side::Bottom));
         let layout = app.tabs[0].root.as_ref().unwrap().to_tmux();
         assert_eq!(layout.matches('[').count(), 1, "1 and 3 are stacked: {layout}");
         assert_eq!(app.tabs[0].panes(), vec![2, 1, 3]);
+        assert_eq!(app.tabs[0].focus, Some(3));
         assert!(app.desk_layouts.contains(&app.tabs[0].id));
         // -b puts it before: on the left of 2
+        app.tabs[0].set_active(1);
         release(&mut app, 3, Drop::Beside(2, Side::Left));
         assert_eq!(app.tabs[0].panes(), vec![3, 2, 1]);
         assert_eq!(app.tabs[0].root.as_ref().unwrap().to_tmux().matches('[').count(), 0, "a row again");
+        assert_eq!(app.tabs[0].focus, Some(3));
+        // a pane that was not the focused one is focused once dropped
+        release(&mut app, 2, Drop::Swap(1));
+        assert_eq!(app.tabs[0].panes(), vec![3, 1, 2]);
+        assert_eq!(app.tabs[0].focus, Some(2));
     }
 
     #[tokio::test]
@@ -348,6 +358,27 @@ mod tests {
         let tab = app.tabs.iter().find(|t| t.id == other).unwrap();
         assert!(tab.panes().contains(&1) && tab.panes().contains(&2));
         assert_eq!(app.tabs.len(), 1, "a window left with no pane closes, as join-pane does");
+        assert_eq!((app.tab().id.clone(), app.tab().focus), (other, Some(1)), "the view follows the held pane");
+    }
+
+    #[tokio::test]
+    async fn a_tab_drop_publishes_both_windows_and_follows_the_pane() {
+        // window 1: panes 1 | 3; window 2: pane 2; both on the desk
+        let mut app = app(100);
+        let mut pane = crate::pane::Pane::new(3, "local", "a3", 100, 30);
+        pane.phase = crate::pane::Phase::Live;
+        app.panes.insert(3, pane);
+        app.tabs[0].root.as_mut().unwrap().split(1, 3, Dir::Horizontal);
+        app.session_desk = true;
+        for tab in &mut app.tabs { tab.on_desk = true }
+        app.fit_panes();
+        let (left, other) = (app.tabs[0].id.clone(), app.tabs[1].id.clone());
+        assert_eq!((app.active, app.tab().focus), (0, Some(1)));
+        release(&mut app, 3, Drop::Tab(other.clone()));
+        assert_eq!(app.tabs[0].panes(), vec![1]);
+        assert_eq!(app.tabs[1].panes(), vec![2, 3]);
+        assert!(app.desk_layouts.contains(&left) && app.desk_layouts.contains(&other), "{:?}", app.desk_layouts);
+        assert_eq!((app.active, app.tab().focus), (1, Some(3)), "the view follows the held pane into its window");
     }
 
     #[tokio::test]

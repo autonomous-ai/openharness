@@ -452,10 +452,13 @@ def pane_drag_journey(alpha, beta):
     x, y, w, h = box(beta)
     drag(held(alpha, 'Alpha task'), (x + w // 2, y + h // 2))
     wait(lambda: ids() == [beta, alpha], 'dropping on the middle of Beta swaps the two panes')
+    assert value('#{pane_active}', alpha) == '1', 'the held pane keeps the focus after a swap'
+    hn('select-pane', '-t', beta)
     x, y, w, h = box(beta)
     drag(held(alpha, 'Alpha task'), (x + w // 2, y + h - 2))
     wait(lambda: box(alpha)[0] == box(beta)[0] and box(alpha)[1] > box(beta)[1],
          "dropping on Beta's bottom quarter puts Alpha below it")
+    assert value('#{pane_active}', alpha) == '1', 'the held pane is focused where it lands'
     print('PASS workspace: dropping a pane by its name swaps it or puts it beside another', flush=True)
 
     # A tab: Beta in a window of its own is dropped on this window's name in the status bar.
@@ -477,6 +480,8 @@ def pane_drag_journey(alpha, beta):
     wait(lambda: beta in ids('-t', f':{number}'), f'dropping on the tab moves Beta into window {number}')
     wait(lambda: 'Dragged' not in hn('list-windows', '-F', '#{window_name}').splitlines(),
          'the window Beta left, with no pane, closes')
+    assert value('#{window_index}') == number and value('#{pane_active}', beta) == '1', \
+        'the view follows the held pane into its window, focused there'
     assert ids('-t', f':{number}') == [alpha, beta], ids('-t', f':{number}')
     assert len(api()['inputs']) == before, ('a pane drag must not reach the terminal program', api()['inputs'][before:])
     hn('select-layout', original)
