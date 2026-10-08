@@ -438,6 +438,21 @@
     </div>
   </div>
 
+  <h2>Checked: can it be built (2026-10-08)</h2>
+  <p class="note" style="font-size:15px;line-height:1.7">
+    <b>Bundled OpenCode session (screen 2): yes.</b> In a fresh macOS VM, <code>opencode export</code> produced a 33 KB JSON of a real
+    game session. <code>opencode import</code> in a brand-new home under a different folder made it the only session there, and
+    <code>opencode --session &lt;id&gt;</code> opened with the whole conversation on screen. Two things for the build: rewrite the
+    folder paths in the JSON to the person's own folder before importing, and hand-curate the transcript. The one OpenCode
+    made ran <code>python3</code>, which on a fresh Mac raises Apple's developer-tools dialog.<br>
+    <b>Game preview pane: yes, with modest work.</b> The app already has web panes (WKWebView, <code>web_pane_panel.dart</code>)
+    for harness viewers; a local <code>index.html</code> needs a URL the pane can load.<br>
+    <b>Recent sessions and counts (screen 3): yes.</b> The daemon's <code>session_search</code>, asked with a time and no words,
+    returns recent Claude Code and Codex sessions with engine, folder, title and last activity. The app's welcome page already
+    reads it (<code>welcome_sessions.dart</code>). The limits come from the usage controller behind the Models menu.<br>
+    <b>Opening panes without starting 9 agents:</b> needs a "show the conversation, start the agent on first keystroke" pane,
+    which does not exist yet. It is the largest piece of new work here. Until it exists, the cap could be 2 live panes per tab.</p>
+
   <h2>For you to decide</h2>
   <p class="note" style="font-size:15px;line-height:1.7">
     1. <b>When setup finishes mid-tour:</b> open Harness by itself at the end of the current slide (proposed), or wait for Open Harness?<br>
