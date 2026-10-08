@@ -42,6 +42,8 @@ export function createQuestionControls(deps: QuestionControlsDeps) {
       if (!grant || grant.service !== service) return denied
       if (!grant.allowed() || grant.pending || ++grant.writes > QUESTION_CONTROL_WRITES
         || (action.kind === 'text' && action.text !== grant.text)) { grants.delete(payload.token); return denied }
+      // The approved text goes in once: typed a second time it would be a different answer from the one approved.
+      if (action.kind === 'text') grant.text = undefined
       grant.pending = true
       try {
         const value = await boundedControl(action.kind === 'text'

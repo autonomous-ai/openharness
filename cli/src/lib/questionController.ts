@@ -200,10 +200,18 @@ export class AskQuestionController {
     // The ids the watcher could have announced this dialog under: the session it was remembered for, and
     // the session as the registry knows it now.
     const owners = [...new Set([remembered, session?.sessionId].filter((id): id is string => !!id))]
-    const native = session ? this.deps.questionControlFor(session) : undefined
-    const reviewed = payload.expectedQuestions ? structuredClone(payload) : undefined
     this.driving.add(terminalTarget)
     try {
+      // Inside the protected region: the lease is held from here, and a control port or a reviewed snapshot
+      // that throws must still release it rather than leave the terminal busy with nothing typed.
+      let native: QuestionControlSession | undefined, reviewed: QuestionAnswerPayload | undefined
+      try {
+        native = session ? this.deps.questionControlFor(session) : undefined
+        reviewed = payload.expectedQuestions ? structuredClone(payload) : undefined
+      } catch (error) {
+        console.warn(`[question] ${sessionId.slice(0, 8)} answer dropped · ${(error as Error).message}`)
+        return failed('The answer could not be prepared. Nothing was typed.')
+      }
       const result = await this.drive(terminalTarget, answers, this.deps.getSession(sessionId)?.engine ?? 'claude', payload.allowPermissions !== false, { requestId, owners }, reviewed, native)
       this.pending.delete(requestId)
       const outcome = result.ok ? 'submitted' : result.error === 'STALE_QUESTION' ? 'refused · STALE_QUESTION, nothing typed' : 'FAILED'

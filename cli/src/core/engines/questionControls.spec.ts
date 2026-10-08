@@ -119,6 +119,19 @@ describe('question-control authority', () => {
     expect(s.deps.text).not.toHaveBeenCalled()
   })
 
+  it('enters the approved text once: the same text again is refused and revokes the step', async () => {
+    const s = setup()
+    s.native.apply = vi.fn(async () => {
+      expect(await s.request({ kind: 'key', key: '2' })).toEqual({ version: 1, value: true })
+      expect(await s.request({ kind: 'text', text: 'My answer' })).toEqual({ version: 1, value: true })
+      expect(await s.request({ kind: 'text', text: 'My answer' })).toEqual(denied)
+      expect(await s.request({ kind: 'key', key: 'Enter' })).toEqual(denied)
+      return true
+    })
+    expect(await s.port().apply({ kind: 'text', row, text: 'My answer' })).toBe(false)
+    expect(s.deps.text).toHaveBeenCalledOnce()
+  })
+
   it('limits a granted step and revokes it after excess keys', async () => {
     const s = setup()
     s.native.apply = vi.fn(async () => {
