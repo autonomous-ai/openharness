@@ -58,7 +58,9 @@ def exercise(vm, result):
     vm.command('sudo -n nmcli networking off')
     try:
         vm.command('hn-browser')
-        wait_installer_screen(vm, r'Connect accounts', 'browser-home-offline', timeout=45)
+        # The small subtitle can be split into separate OCR regions at the VM's
+        # resolution. The visible action label is distinct and read consistently.
+        wait_installer_screen(vm, r'Connections', 'browser-home-offline', timeout=45)
         vm.command('! pgrep -u "$(id -u)" -f ' + shlex.quote(r'^/usr/lib/chromium/chromium .*--headless'))
         vm.command('test ! -S "/run/user/$(id -u)/harness-browser-start/ready"')
         vm.command('! pgrep -u "$(id -u)" -f ' + shlex.quote(HELPER))
@@ -66,18 +68,18 @@ def exercise(vm, result):
         vm.click_word('browser-home-mouse', 'Connections')
         wait_installer_screen(vm, r'Connect once', 'browser-home-connections', timeout=30)
         vm.keys('alt', 'left')
-        wait_installer_screen(vm, r'Connect accounts', 'browser-home-back')
+        wait_installer_screen(vm, r'Connections', 'browser-home-back')
         helper_stopped(vm)
         # Browser Back restores the focused button. Enter must work as well as a click.
         vm.keys('ret')
         wait_installer_screen(vm, r'Connect once', 'browser-home-keyboard-reopen', timeout=30)
         result['checks'].append('Mouse click and keyboard Enter open authenticated Connections; Back and helper expiry recover without a stale bookmark')
         vm.keys('ctrl', 't')
-        wait_installer_screen(vm, r'Connect accounts', 'browser-home-new-tab')
+        wait_installer_screen(vm, r'Connections', 'browser-home-new-tab')
         close_browser(vm)
         helper_stopped(vm)
         vm.command('hn-browser')
-        wait_installer_screen(vm, r'Connect accounts', 'browser-home-restart')
+        wait_installer_screen(vm, r'Connections', 'browser-home-restart')
         close_browser(vm)
         result['checks'].append('New Tab and the next browser launch keep the start page without an install or permission prompt')
     except BaseException:
@@ -94,7 +96,7 @@ print(json.dumps(out))'''
         vm.keys('ctrl', 'l')
         vm.type_probe('chrome://extensions')
         vm.keys('ret')
-        wait_installer_screen(vm, r'Extensions', 'home-extensions-diagnostic')
+        wait_installer_screen(vm, r'Harness start page', 'home-extensions-diagnostic')
         vm.keys('ctrl', 't')
         vm.screenshot('home-second-tab-diagnostic')
         raise
