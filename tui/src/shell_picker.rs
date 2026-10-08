@@ -822,19 +822,9 @@ mod tests {
     #[test]
     fn a_replys_look_does_not_bring_colours_back_under_no_color() {
         let _l=crate::term_out::colours_lock();
-        struct Env(Option<std::ffi::OsString>);
-        impl Drop for Env {
-            fn drop(&mut self) {
-                // SAFETY: tests that set the environment's colours hold the colour lock.
-                unsafe { match self.0.take() { Some(v)=>std::env::set_var("NO_COLOR",v), None=>std::env::remove_var("NO_COLOR") } }
-                reset_look();
-            }
-        }
-        let _env=Env(std::env::var_os("NO_COLOR"));
-        // SAFETY: as above.
-        unsafe { std::env::set_var("NO_COLOR","1"); }
         apply_look(&look("#ffffff","#111111","#ff0000","fzf"));
-        let chrome=crate::settings::chrome();
+        let chrome=crate::settings::chrome_with(true);
+        reset_look();
         assert_eq!(chrome.base,ratatui::style::Style::default());
         assert_eq!(chrome.accent,ratatui::style::Style::default().add_modifier(Modifier::BOLD));
         assert_eq!(chrome.selected,ratatui::style::Style::default().add_modifier(Modifier::REVERSED));
@@ -987,9 +977,15 @@ mod tests {
         assert!(row(1).starts_with(" 2/2 ─"),"{}",row(1));
         assert!(row(5).contains("↑↓ move") && row(5).contains("esc back"),"{}",row(5));
         let sel=(0..60).find(|x|buf[(*x,2)].symbol()=="g").unwrap();
-        assert_eq!(buf[(sel,2)].bg,c.selected.bg.unwrap(),"the chosen row on the panel's lifted band");
-        assert!(buf[(sel,2)].modifier.contains(Modifier::BOLD));
-        assert_ne!(buf[(sel,3)].bg,c.selected.bg.unwrap());
+        // (Under NO_COLOR the chosen row has no band, only a modifier.)
+        assert_eq!(buf[(sel,2)].bg,c.selected.bg.unwrap_or(Color::Reset),"the chosen row on the panel's lifted band");
+        assert!(buf[(sel,2)].modifier.contains(c.selected.add_modifier));
+        if let Some(bg)=c.selected.bg {
+            assert!(buf[(sel,2)].modifier.contains(Modifier::BOLD));
+            assert_ne!(buf[(sel,3)].bg,bg);
+        } else {
+            assert!(!buf[(sel,3)].modifier.contains(c.selected.add_modifier));
+        }
     }
     #[test]
     fn the_ghost_shows_whole_scopes_and_the_panel_survives_tiny_areas() {
