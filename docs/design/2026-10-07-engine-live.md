@@ -21,10 +21,12 @@ A file line for a database engine cannot create a Claude parser for that engine.
 The old plain-terminal fallback remains explicit in the temporary live lookup;
 it does not acquire end-first attach rules.
 
-**This increment still runs live parsers in core's process.** `engines/live.ts`
+**The interface-only increment ran live parsers in core's process.** The following
+[live worker increment](2026-10-07-engine-streams.md) moves supervised parsing
+across the process boundary and records its remaining validation. `engines/live.ts`
 is temporary composition while the live transport is built. `lib/normalize.ts`
 is a compatibility export used by consumers still being migrated. The existing
-supervised workers still isolate history and last-turn reads only.
+supervised workers initially isolated history and last-turn reads only.
 
 ## Preserved requirements
 

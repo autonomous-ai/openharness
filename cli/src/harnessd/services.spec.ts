@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  DEFAULT_SERVICE_OPTIONS, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, UPDATER_HOST, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
+  DEFAULT_SERVICE_OPTIONS, ENGINE_LIVE_ENV, KNOWN_SERVICES, SERVICE_HOSTS, SERVICE_PROCESSES_ENV, ServiceSupervisor, UPDATER_HOST, serviceOptions, serviceProcessesEnv, serviceSpecs, servicesTheMasterRuns,
   type ServiceSpec, type ServiceSupervisorOptions,
 } from './services.js'
 import type { CoreHandle } from './supervisor.js'
@@ -472,15 +472,15 @@ describe('which services the core leaves to its master', () => {
 
   it('is what the master says it runs, told in a form a core from before the list reads too', () => {
     const specs = serviceSpecs({ HARNESSD_SERVICES: 'search,workspaces' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(specs)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,workspaces', HARNESSD_SERVICES: 'search,workspaces' })
+    expect(serviceProcessesEnv(specs)).toEqual({ [SERVICE_PROCESSES_ENV]: 'search,workspaces', HARNESSD_SERVICES: 'search,workspaces', [ENGINE_LIVE_ENV]: '1' })
     // A process named as one of its services is named whole: the viewers' process runs the Store beside them.
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'viewers' }, SERVICE_HOSTS))).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'viewers,store' })
     expect(serviceProcessesEnv(serviceSpecs({ HARNESSD_SERVICES: 'store' }, SERVICE_HOSTS))).toMatchObject({ [SERVICE_PROCESSES_ENV]: 'store' })
     // By service, not by process: a core from before the edge host routes the services it knows of it.
     const hosted = serviceSpecs({ HARNESSD_SERVICES: 'edge' }, SERVICE_HOSTS)
-    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell' })
+    expect(serviceProcessesEnv(hosted)).toEqual({ [SERVICE_PROCESSES_ENV]: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell', HARNESSD_SERVICES: 'workspaces,usage,monitor,projects,handoff,recaps,windowNames,shell', [ENGINE_LIVE_ENV]: '1' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(hosted) }, known)]).toEqual(['workspaces'])
-    expect(serviceProcessesEnv([])).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none' })
+    expect(serviceProcessesEnv([])).toEqual({ [SERVICE_PROCESSES_ENV]: '', HARNESSD_SERVICES: 'none', [ENGINE_LIVE_ENV]: '1' })
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv(specs) }, known)]).toEqual(['search', 'workspaces'])
     expect([...servicesTheMasterRuns({ ...supervised, ...serviceProcessesEnv([]) }, known)]).toEqual([])
     // What the master says wins over whatever HARNESSD_SERVICES the core inherited; names it does not know are its own.

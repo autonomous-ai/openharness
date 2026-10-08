@@ -117,13 +117,38 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(d.coresStarted()).toBe(1)
   })
 
-  it('parks a crashing reader, returns an explicit failure, and leaves the agent working', async () => {
-    const { d, c } = await fresh({ HARNESSD_TEST_FAULTS: 'engine-codex.crash', HARNESSD_SERVICE_PARK_CRASHES: '3' })
+  it('parks a crashing engine worker while the CLI continues, then delivers its queued turn once after recovery', async () => {
+    const { d, c } = await fresh({ HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_PARK_RETRY_MS: '20000' })
     const agent = await create(d, c, 'codex')
-    await history(c, agent)
+    await turn(c, agent, 'before parking')
+    const corePid = d.corePid()
+    const registered = () => JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')).find((row: any) => row.agentId === agent.id)
+    const identity = registered().processIdentity
+    for (let index = 0; index < 3; index++) {
+      const before = readerPid(d, 'codex')!
+      process.kill(before, 'SIGKILL')
+      if (index < 2) await until('replacement worker', () => {
+        const pid = readerPid(d, 'codex')
+        return pid && pid !== before && alive(pid) ? pid : null
+      }, 15_000, 100)
+    }
     await until('reader parked', () => d.log().includes('service engine-codex ended 3 times') || null, 60_000, 200)
     expect(await history(c, agent)).toMatchObject({ error: 'ENGINE_UNAVAILABLE', retryable: true })
-    await turn(c, agent, 'reader-is-parked')
+    const first = c.frames.length
+    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'queued turn after worker recovery')
+    c.send('message', { agentId: agent.id, content: 'worker-is-parked' })
+    await until('the independent CLI to finish writing its turn', () => {
+      const file = registered().transcriptPath
+      return file && readFileSync(file, 'utf8').split('\n').some(line => {
+        try { const row = JSON.parse(line); return row.payload?.type === 'task_complete' && row.payload?.last_agent_message?.includes('worker-is-parked') } catch { return false }
+      }) || null
+    }, 30_000, 100)
+    await ended
+    expect(c.frames.slice(first).filter(frame => frame.type === 'turn_started' && frame.agentId === agent.id)).toHaveLength(1)
+    expect(c.frames.slice(first).filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.id)).toHaveLength(1)
+    expect(registered().processIdentity).toEqual(identity)
+    expect(alive(identity.pid)).toBe(true)
+    expect(d.corePid()).toBe(corePid)
     expect(d.coresStarted()).toBe(1)
   })
 })
