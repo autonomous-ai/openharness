@@ -4,9 +4,9 @@ import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView } from '../engines/facets/screen.js'
 export type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView, FoundDialog } from '../engines/facets/screen.js'
-import { ampSelectionKeys } from '../engines/amp/askQuestion.js'
-import { kiloSelectionKeys } from '../engines/kilo/askQuestion.js'
-import { isApprovalDialog } from '../engines/kit/questionPane.js'
+import { contract as amp } from '../engines/amp/contract.js'
+import { contract as kilo } from '../engines/kilo/contract.js'
+import { isApprovalDialog, walkKeys } from '../engines/kit/questionPane.js'
 function multiSubmitKey(engine: AgentEngine): string { return engine === 'devin' ? 'Enter' : 'Tab' }
 const STEP_MS = 350          // let the TUI repaint between keystrokes
 const TEXT_MS = 250
@@ -43,16 +43,19 @@ export function shapeQuestions(questions: unknown): ShapedQuestion[] {
   })
 }
 
+/**
+ * The engines whose every dialog numbers nothing, by how a row is reached: declared (engines/<name>/contract.ts),
+ * so that answering one loads none of their code (docs/design/2026-10-08-other-engines-out-of-core.md).
+ */
+const WALKS: Partial<Record<AgentEngine, NonNullable<QuestionRow['walk']>>> = { amp: amp.questionWalk, kilo: kilo.questionWalk }
+
 /** The keys that answer `row` of a dialog `engine` drew; exported for the golden that pins them (engines/otherScreens.golden.spec.ts). */
 export function rowKeys(engine: AgentEngine, row: QuestionRow): string[] {
-  if (engine === 'amp') return ampSelectionKeys(row)
-  // Kilo's rows sit side by side, so its walk is horizontal — see engines/kilo/askQuestion.ts.
-  if (engine === 'kilo') return kiloSelectionKeys(row)
-  // Same dialog, different engine: opencode numbers its ask dialog but not its permission prompt, so the
-  // ROW says how it is reached and a per-engine rule would break one of the two.
-  if (row.walk === 'right') return kiloSelectionKeys(row)
-  if (row.walk === 'down') return ampSelectionKeys(row)
-  return [row.number]
+  // Amp's rows are stacked and Kilo's sit side by side (engines/{amp,kilo}/askQuestion.ts). For any other engine
+  // the ROW says how it is reached: opencode numbers its ask dialog but not its permission prompt, so a
+  // per-engine rule would break one of the two.
+  const walk = WALKS[engine] ?? row.walk
+  return walk === 'right' || walk === 'down' ? walkKeys(walk, row) : [row.number]
 }
 
 export function matchRow(rows: QuestionRow[], answer: string): QuestionRow | null {

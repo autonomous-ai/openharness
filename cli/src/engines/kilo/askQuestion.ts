@@ -38,6 +38,8 @@
 
 import type { FoundDialog, PaneView, QuestionRow } from '../../lib/askQuestion.js'
 import { earlierDialogEnd } from '../../lib/dialogEnd.js'
+import { walkKeys } from '../kit/questionPane.js'
+import { contract } from './contract.js'
 
 /** `enter confirm` is the stable half of the footer; `⇆ select` is dropped first on a narrow pane. */
 const FOOTER_RE = /enter\s+confirm/i
@@ -72,12 +74,11 @@ function labelsFrom(line: string): string[] {
 /**
  * The keystrokes that select one row: walk right to it, then commit.
  *
- * Returned as a list because `sendKey` sends exactly one tmux key name per call.
+ * The walk is the kit's, and Kilo declares its direction (contract.ts), so that answering its dialog loads
+ * none of this file.
  */
 export function kiloSelectionKeys(row: QuestionRow): string[] {
-  const index = Number(row.number)
-  const steps = Number.isFinite(index) && index > 0 ? index : 0
-  return [...Array(steps).fill('Right'), 'Enter']
+  return walkKeys(contract.questionWalk, row)
 }
 
 export function parseKiloQuestionPane(capture: string): PaneView {

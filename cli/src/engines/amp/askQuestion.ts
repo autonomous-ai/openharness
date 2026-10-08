@@ -36,6 +36,8 @@
 
 import type { PaneView, QuestionRow } from '../../lib/askQuestion.js'
 import { earlierDialogEnd } from '../../lib/dialogEnd.js'
+import { walkKeys } from '../kit/questionPane.js'
+import { contract } from './contract.js'
 
 /** The dialog's own footer. `Enter select` is the stable half; a narrow pane truncates from the end. */
 const FOOTER_RE = /enter select|↑\/↓\/j\/k move/i
@@ -68,13 +70,11 @@ function unbox(line: string): string {
 /**
  * The keystrokes that select one row: walk down to it, then commit.
  *
- * Amp's list always opens on the first row, so the walk is the row's index. Returned as a list because
- * `sendKey` sends exactly one tmux key name per call.
+ * Amp's list always opens on the first row, so the walk is the row's index. The walk is the kit's, and Amp
+ * declares its direction (contract.ts), so that answering its dialog loads none of this file.
  */
 export function ampSelectionKeys(row: QuestionRow): string[] {
-  const index = Number(row.number)
-  const steps = Number.isFinite(index) && index > 0 ? index : 0
-  return [...Array(steps).fill('Down'), 'Enter']
+  return walkKeys(contract.questionWalk, row)
 }
 
 export function parseAmpQuestionPane(capture: string): PaneView {

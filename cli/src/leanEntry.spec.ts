@@ -87,6 +87,15 @@ describe('the lean bundle a release carries', () => {
     }
   })
 
+  it('leaves the other engines\' pane readers out of the core until one of their sessions needs them', () => {
+    // engines/inProcess.ts imports them (docs/design/2026-10-08-other-engines-out-of-core.md): a file of the
+    // core's own, which Node reads only then. The string is lib/questionPane.ts's alone.
+    const marker = 'Native screen reader must be injected'
+    expect([...files.keys()].filter((name) => name.startsWith('core-legacyScreen-'))).toHaveLength(1)
+    expect([...files].some(([name, code]) => name.startsWith('core-') && code.includes(marker))).toBe(true)
+    expect([...loads('core')].filter((name) => files.get(name)!.includes(marker))).toEqual([])
+  })
+
   it('gives the core its own code and none of the CLI\'s commands, which parsing cli.js cost it', () => {
     const core = loads('core')
     const text = [...core].map((name) => files.get(name)!).join('\n')

@@ -19,13 +19,13 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createScreens } from '../core/engines/screens.js'
 import type { QuestionRow, ScreenReading } from './facets/screen.js'
 import type { AgentEngine } from './types.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { rowKeys } from '../lib/questionController.js'
-import { legacyScreen } from '../lib/legacyScreen.js'
+import { engineLoaded, inProcessScreen } from './inProcess.js'
 import * as takeoverScreens from '../lib/__fixtures__/takeoverScreens.js'
 import * as rewindPickers from '../lib/__fixtures__/rewindPickers.js'
 
@@ -102,12 +102,12 @@ function specInputs(): Array<{ id: string; text: string }> {
 const sessionOf = (engine: AgentEngine) => ({ agentId: `golden-${engine}`, sessionId: `golden-${engine}-session`, engine, active: true,
   registeredAt: 1, boundAt: 1, transcriptPath: null, runtimes: [], processIdentity: null }) as unknown as RegisteredSession
 
-/** The core's pane read, as core/main.ts wires it for an engine whose screen no worker reads. */
+/** The core's pane read, as core/main.ts wires it for an engine whose screen no worker reads: through the loader. */
 const screens = createScreens({
   handles: () => false,
   transport: { read: async () => { throw new Error('these engines have no worker') } },
   resolve: (agentId) => sessionOf(agentId.replace(/^golden-/, '') as AgentEngine),
-  inline: (engine, capture) => legacyScreen(engine, capture),
+  inline: (engine, capture) => inProcessScreen(engine, capture),
 })
 
 type Readings = Pick<Golden, 'readings' | 'screens' | 'keys'>
@@ -152,7 +152,18 @@ async function pairs(): Promise<Record<string, string>> {
 }
 
 describe('the other engines\' screens, read through the core', () => {
+  // Pinned, so that nothing of the host can reach a reading unnoticed: recorded on macOS, CI runs Linux, and
+  // the previous batch's golden failed there on a platform-dependent string. GOLDEN_PLATFORM checks another.
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  beforeAll(() => {
+    Object.defineProperty(process, 'platform', { ...platform, value: process.env.GOLDEN_PLATFORM ?? 'linux' })
+    for (const [name, value] of Object.entries({ HOME: '/home/golden', TMPDIR: '/tmp/golden', TZ: 'UTC', LANG: 'C', LC_ALL: 'C', COLUMNS: '80' })) vi.stubEnv(name, value)
+  })
+  afterAll(() => { Object.defineProperty(process, 'platform', platform); vi.unstubAllEnvs() })
+
   it('reads every capture as main did, for every engine, and answers each row with the same keys', async () => {
+    // Nothing has loaded their readers yet: the reads below load them, through the loader, as the core does.
+    expect(engineLoaded('screens')).toBeUndefined()
     if (RECORD) {
       const unique = new Map<string, { id: string; text: string; spec: boolean }>()
       for (const input of [...fixtureInputs().map((one) => ({ ...one, spec: false })), ...specInputs().map((one) => ({ ...one, spec: true }))]) {
@@ -181,6 +192,7 @@ describe('the other engines\' screens, read through the core', () => {
     })
     expect(inputs.length).toBeGreaterThan(100)
     const now = await record([{ id: NO_CAPTURE, text: null }, ...inputs])
+    expect(engineLoaded('screens')).toHaveProperty('legacyScreen')
     for (const id of [NO_CAPTURE, ...golden.inputs.map((input) => input.id)]) {
       const readings = (screens: Record<string, string>, table: Record<string, ScreenReading | null>) =>
         Object.fromEntries(Object.entries(screens).map(([engine, hash]) => [engine, table[hash]]))

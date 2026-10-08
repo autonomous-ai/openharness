@@ -217,6 +217,42 @@ describe('harnessd\'s master and services lean', () => {
     await agentWorks(off, 'claude')
   })
 
+  it('runs Claude Code and Codex on with the other engines\' pane readers gone from the bundle, and says so once', async () => {
+    // A file of the core's that cannot load costs the engines whose code is in it, never the core: the loader
+    // catches it once and their panes read as unreadable (engines/inProcess.ts). Here the file the twelve
+    // engines' pane readers load from is gone, and an Amp agent's session, entering the registry, asks for it.
+    const lean = readLeanBundle(readFileSync(bundle))!
+    const files = Object.fromEntries([...lean.files].map(([name, code]) => [name, code.toString('utf8')]))
+    const screens = Object.keys(files).filter((name) => name.startsWith('core-legacyScreen-'))
+    expect(screens).toHaveLength(1)
+    delete files[screens[0]!]
+    const without = join(scratch, 'without-screens', 'cli.js')
+    mkdirSync(dirname(without), { recursive: true })
+    writeFileSync(without, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
+    // Amp, as far as the daemon can tell: a program that answers its probes and then waits.
+    const amp = join(scratch, 'without-screens', 'amp')
+    writeFileSync(amp, '#!/bin/sh\ncase "$*" in *--version*|*--help*) echo 0.0.0; exit 0;; esac\necho "amp stand-in"\nexec sleep 600\n', { mode: 0o755 })
+    const d = await fresh({ AMP_PATH: amp }, without)
+    // The core runs from the lean bundle that lacks them, and nothing asked for them as it started.
+    expect(coreCommand(d)).toMatch(new RegExp(` ${escape(join(d.dataDir, 'lean'))}/[0-9a-f]{16}/${escape(LEAN_CORE_ENTRY)} __run$`))
+    const unavailable = (): number => d.log().match(/\[engine screens\] unavailable · /g)?.length ?? 0
+    expect(unavailable()).toBe(0)
+    const client = await LocalClient.connect(d)
+    try {
+      const cwd = join(d.projectsDir, 'lean-amp')
+      mkdirSync(cwd, { recursive: true })
+      const created = await client.request('agent_create', { engine: 'amp', cwd }, 90_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      await until('the loader to say the readers are unavailable', () => unavailable() > 0 || null, 30_000, 200)
+      expect(d.log()).toMatch(/\[engine screens\] unavailable · .*core-legacyScreen-/)
+    } finally { client.close() }
+    await agentWorks(d, 'claude')
+    await agentWorks(d, 'codex')
+    // Said once, for the life of the core, however often the Amp pane was looked at meanwhile.
+    expect(unavailable()).toBe(1)
+    expect(d.coresStarted()).toBe(1)
+  })
+
   it('never hands the daemon a lean bundle that cannot start a master: everything runs from cli.js', async () => {
     const broken = join(scratch, 'broken', 'cli.js')
     mkdirSync(join(scratch, 'broken'), { recursive: true })

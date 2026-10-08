@@ -25,6 +25,12 @@ describe('core screen evidence', () => {
     expect(t.inline).toHaveBeenCalledWith('claude', capture)
     t.inline.mockReturnValueOnce(undefined as never)
     expect(await t.screen.read(t.row, capture)).toBeNull()
+    // The other engines' readers load in the core's process on first use (engines/inProcess.ts): awaited, and
+    // unreadable when they could not load.
+    t.inline.mockReturnValueOnce(Promise.resolve(t.answer) as never)
+    expect(await t.screen.read(t.row, capture)).toEqual(t.answer)
+    t.inline.mockReturnValueOnce(Promise.resolve(undefined) as never)
+    expect(await t.screen.read(t.row, capture)).toBeNull()
   })
   it('refuses missing, oversized or foreign captures before consulting an adapter', async () => {
     const t = setup()
@@ -48,6 +54,15 @@ describe('core screen evidence', () => {
     t.remote.mockImplementation(() => new Promise(resolve => { finish = resolve }))
     const read = t.screen.read(t.row, capture)
     Object.assign(t.row, { [field]: field === 'active' ? false : field === 'processIdentity' ? { pid: 20 } : field === 'runtimes' ? [{ paneId: 'new' }] : 'changed' })
+    finish(t.answer)
+    expect(await read).toBeNull()
+  })
+  it('discards an in-process reading that finished loading after the session changed', async () => {
+    const t = setup(); t.handles.mockReturnValue(false)
+    let finish!: (value: typeof t.answer) => void
+    t.inline.mockImplementation((() => new Promise(resolve => { finish = resolve })) as never)
+    const read = t.screen.read(t.row, capture)
+    Object.assign(t.row, { sessionId: 'changed' })
     finish(t.answer)
     expect(await read).toBeNull()
   })

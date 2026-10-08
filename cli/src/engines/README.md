@@ -35,6 +35,13 @@ external plugin API. When extending a migrated facet, put engine behavior in its
 mechanics in `kit/`. See the [migration design](../../../docs/design/2026-10-05-engine-interface.md)
 for the remaining work.
 
+**The other twelve engines' code leaves the core's static imports** in sub-batches
+([plan](../../../docs/design/2026-10-08-other-engines-out-of-core.md)). The core loads it in its own process
+only once one of their sessions enters the registry, through `inProcess.ts`, the one file that `import()`s it;
+a module that cannot load costs those engines alone, logged once. What the core needs of them before that is
+data they declare in `<name>/contract.ts`, which imports nothing of their code. `src/architecture.spec.ts`
+lists the files of theirs the core still reaches, and the list only shrinks.
+
 **Launchers are not engines.** A wrapper that configures an environment and then hands the pane to a
 vendor CLI — `ori claude`, an `env`-prefixed alias, a shell function — produces an agent of the
 *wrapped* engine, with that engine's name, icon and normalizer. Discovery reads through the wrapper
