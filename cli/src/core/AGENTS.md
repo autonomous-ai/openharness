@@ -37,7 +37,7 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
   validates bounded replies, retains acknowledged cursors and owns binding/turn state. The explicit
   inline/older-master compatibility path is the only live parser or runtime profile implementation
   composition in core. Screen reads are bounded and fenced to the worker connection and session binding
-  ([screen boundary](../../../docs/design/2026-10-08-engine-screen.md)). Core keeps accepted profiles and control authority; native model drivers run in workers through [revocable control grants](../../../docs/design/2026-10-08-engine-model-control.md), and so does question navigation ([question control](../../../docs/design/2026-10-08-engine-question-control.md)). See [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md).
+  ([screen boundary](../../../docs/design/2026-10-08-engine-screen.md)). Core keeps accepted profiles and control authority; native model drivers run in workers through [revocable control grants](../../../docs/design/2026-10-08-engine-model-control.md), and so does question navigation ([question control](../../../docs/design/2026-10-08-engine-question-control.md)). Whether a typed prompt was taken is read there too: core keeps the writer, every Enter and the verdict ([submission](../../../docs/design/2026-10-08-engine-submission.md)). See [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md).
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer. Core matches an answer to the
   question on screen and holds the lease; Claude Code's and Codex's keys for each approved step come from their engine
   worker through a revocable grant (`engines/questionControls.ts`).

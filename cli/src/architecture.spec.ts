@@ -143,9 +143,13 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
-  /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl)\.ts$/,
+  /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission)\.ts$/,
   /^lib\/(askQuestion|runtimeProfileController|composerScreen|teamWriteHold|messageHold|terminalActivity|codexTurnRecovery)\.ts$/,
-  /^engines\/(screens|modelControls|questionControls)\.ts$/,
+  /^engines\/(screens|modelControls|questionControls|submissions)\.ts$/,
+  // Claude Code's and Codex's reading of their composer: shared by the two, loaded only by their workers.
+  /^engines\/kit\/nativeSubmission\.ts$/,
+  // A worker's request handlers, the submission readers' among them, run in the engine's own process.
+  /^engines\/worker\/\w+Requests\.ts$/,
   // The pilot reader implementations and their host are never loaded by supervised core.
   /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
   /^engines\/(runtime|(claude|codex)\/runtimeProfile)\.ts$/, /^lib\/runtimeProfile\.ts$/,
@@ -219,8 +223,9 @@ describe('the daemon\'s shape', () => {
     }
   })
 
-  it('screen transport and input authority do not load native screen implementations', () => {
-    for (const entry of ['core/input.ts', 'core/questions.ts', 'core/engines/screens.ts', 'core/engines/screenTransport.ts']) {
+  it('screen and submission transports and input authority do not load native screen or submission readers', () => {
+    for (const entry of ['core/input.ts', 'core/questions.ts', 'core/engines/screens.ts', 'core/engines/screenTransport.ts',
+      'core/deviceInput.ts', 'lib/sessionInput.ts', 'core/engines/submissions.ts', 'core/engines/submissionTransport.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
     }
   })

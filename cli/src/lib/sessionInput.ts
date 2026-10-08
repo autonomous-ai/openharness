@@ -1,5 +1,8 @@
 import type { ScreenReader } from './screenReader.js'
+import type { SubmissionReader } from './submissionReader.js'
 import { createHash } from 'crypto'
+import { composerHolds, composerShown, normalizedTerminalText, visibleTerminal } from '../engines/kit/submission.js'
+import { launchBound } from '../core/engines/sessionBinding.js'
 import type { RegisteredSession } from './registry.js'
 import { sid } from './log.js'
 import { isMessageHold, messageHoldText, messageWithheldText, passingHold, type MessageHold } from './messageHolds.js'
@@ -8,8 +11,9 @@ import { enterWithheldReason, TERMINAL_LEASE_REFUSED, type TerminalActionResult 
 const MAX_QUEUE_ITEMS = 8
 const MAX_QUEUE_BYTES = 24 * 1024
 const ITEM_TTL_MS = 5 * 60_000
+// The window for an engine that declares none of its own (engines/submissionPolicies.ts declares Claude
+// Code's and Codex's, with the reasons).
 const SUBMIT_VERIFY_MS = 1_500
-const CLAUDE_SUBMIT_VERIFY_MS = 3_000
 // OpenCode's accept signal is the reader's DB poll (~1s) surfacing a new user row → turn_started, so
 // give it a slightly longer window than the file-based engines before a retry-Enter.
 const OPENCODE_SUBMIT_VERIFY_MS = 2_500
@@ -59,14 +63,6 @@ const LEASE_RETRY_MS = 250
 // Re-observe briefly while a submitted prompt awaits a transcript event. Reaching this limit is not
 // evidence of rejection: Claude can hold an accepted follow-up while background agents finish.
 const SUBMIT_MAX_OBSERVES = 5
-// Engines whose own TUI queues a message typed while a turn is running, and runs it when the turn ends.
-// For these the daemon types immediately — the follow-up appears in the pane the moment it is spoken,
-// and the TUI's queue is the one the user can see and edit. Every other engine gets this file's FIFO,
-// pasted only once the pane is idle. Codex joined claude here on 2026-09-15 (owner: a voice command
-// spoken while a Codex task ran sat invisible until the task ended); Codex has queued composer input
-// since 0.36, and the retry path below already knows a prompt that left the composer without a
-// turn_started is "queued by the TUI as a follow-up", not lost.
-const TYPES_WHILE_BUSY: ReadonlySet<string> = new Set(['claude', 'codex'])
 
 export interface SessionInputDelivery {
   deliveryId: string
@@ -107,6 +103,9 @@ interface InputState {
 
 export interface SessionInputDeps {
   readScreen: ScreenReader
+  /** The reading of a typed prompt by the engines whose worker reads it (Claude Code, Codex): the pane after
+   *  the paste, and a turn's prompt as recorded. Every verdict and every Enter stays here. */
+  submission: SubmissionReader
   /** A team-only preflight at the actual write boundary. A reason proves no paste occurred. */
   beforeTeamWrite?: (session: RegisteredSession) => Promise<string | null>
   onDelivery?: (event: SessionInputDelivery) => void
@@ -157,9 +156,30 @@ export class SessionInputController {
 
   constructor(private readonly deps: SessionInputDeps) {}
 
+  /**
+   * An engine whose own TUI queues a message typed while a turn is running, and runs it when the turn ends,
+   * says so in its submission policy (`typesWhileBusy`: Claude Code and Codex). For those the daemon types
+   * immediately — the follow-up appears in the pane the moment it is spoken, and the TUI's queue is the one
+   * the user can see and edit. Every other engine gets this file's FIFO, pasted only once the pane is idle.
+   */
+  private typesWhileBusy(engine: string): boolean {
+    return this.deps.submission.policy(engine)?.typesWhileBusy === true
+  }
+
   /** Controller dependencies take the stable agent id, never a backend route. */
   private controlSession(id: string): RegisteredSession | undefined {
     return this.deps.getSession(id)
+  }
+
+  /**
+   * The record the checks after a paste read the pane under. A message sent while its engine starts is
+   * typed before the engine's first hook binds the conversation, and its turn can start after the verify
+   * window: read as typed, the fenced readings refuse it and the message is reported unconfirmed. The
+   * record as it now stands is taken when it is that launch, bound since (core/engines/sessionBinding.ts
+   * `launchBound`); a rebind, a rotation, another pane or another process is read as typed, and fails closed.
+   */
+  private readingSession(session: RegisteredSession): RegisteredSession {
+    return launchBound(session, this.controlSession(session.agentId))
   }
 
   /**
@@ -251,7 +271,7 @@ export class SessionInputController {
     this.dropExpired(sessionId, state)
     if (state.controlLocked
       || (deliveryId && (state.deliveryId || state.dispatching || state.turnOpen || state.awaitingFingerprint || state.settling))
-      || (!TYPES_WHILE_BUSY.has(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
+      || (!this.typesWhileBusy(session.engine) && (state.turnOpen || state.awaitingFingerprint || state.settling))) {
       console.log(`[inject] ${sid(sessionId)} queued · engine=${session.engine} · depth=${state.queue.length + 1}`)
       this.enqueue(sessionId, state, content, deliveryId, tabId)
       return
@@ -305,17 +325,28 @@ export class SessionInputController {
 
   onTurnStarted(sessionId: string, userMessage: string): void {
     const state = this.state(sessionId)
-    // Claude 2.1.283 records bracketed pastes inside an envelope with matching
-    // opening/closing IDs. Compare its exact payload, never a substring of a
-    // different prompt or text outside the envelope. Other engines remain exact.
-    const pasted = this.controlSession(sessionId)?.engine === 'claude'
-      ? /^\s*<pasted_content id="([a-f0-9]+)">\r?\n([\s\S]*)\r?\n<\/pasted_content id="\1">\s*$/.exec(userMessage)
-      : null
-    const observedFingerprint = fingerprint(pasted?.[2] ?? userMessage)
+    const session = this.controlSession(sessionId)
+    // An exact echo of the typed prompt needs no reading. Anything else is, for an engine whose worker
+    // reads its submissions, that engine's to unwrap (Claude Code 2.1.283 records a bracketed paste inside
+    // an envelope of its own), and is settled once it has; every other engine's record is compared whole.
+    const observedFingerprint = fingerprint(userMessage)
+    const engineReads = !!session && !!this.deps.submission.policy(session.engine)
     if (state.deliveryId && state.writing) state.observedStart = userMessage
-    else if (state.deliveryId && state.deliveryFingerprint) this.finishDelivery(sessionId, state,
-      state.deliveryFingerprint === observedFingerprint ? 'started' : 'unknown',
-      state.deliveryFingerprint === observedFingerprint ? undefined : 'prompt_mismatch')
+    else if (state.deliveryId && state.deliveryFingerprint) {
+      const expected = state.deliveryFingerprint
+      if (expected === observedFingerprint || !engineReads) {
+        this.finishDelivery(sessionId, state, expected === observedFingerprint ? 'started' : 'unknown',
+          expected === observedFingerprint ? undefined : 'prompt_mismatch')
+      } else {
+        // Taken off the pane's state now, as a settled delivery is, so a write that follows never waits on
+        // the reading; only what is said of this delivery waits for it.
+        const deliveryId = state.deliveryId
+        state.deliveryId = undefined
+        state.deliveryFingerprint = undefined
+        void this.echoes(session, userMessage, expected).then(started => this.delivery(sessionId, deliveryId,
+          started ? 'started' : 'unknown', started ? undefined : 'prompt_mismatch'))
+      }
+    }
     if (state.settleTimer) clearTimeout(state.settleTimer)
     state.settleTimer = null
     state.settling = false
@@ -327,8 +358,12 @@ export class SessionInputController {
     // confirmed started.
     void this.clearCursorEcho(sessionId, userMessage)
     if (state.awaitingFingerprint) {
-      const matched = state.awaitingFingerprint === observedFingerprint
-      if (!matched) console.warn(`[inject] ${sessionId.slice(0, 8)} observed a different terminal prompt while awaiting submit`)
+      const warn = () => console.warn(`[inject] ${sessionId.slice(0, 8)} observed a different terminal prompt while awaiting submit`)
+      const expected = state.awaitingFingerprint
+      if (expected !== observedFingerprint) {
+        if (engineReads) void this.echoes(session, userMessage, expected).then(matched => { if (!matched) warn() })
+        else warn()
+      }
       state.awaitingFingerprint = null
       state.awaitingContent = null
       state.retries = 0
@@ -337,6 +372,15 @@ export class SessionInputController {
       if (state.timer) clearTimeout(state.timer)
       state.timer = null
     }
+  }
+
+  /**
+   * Whether a turn's prompt, as the engine recorded it, is the prompt typed: the part of the record the
+   * engine says is the typed text, compared exactly. No reading is no match.
+   */
+  private async echoes(session: RegisteredSession, recorded: string, expected: string): Promise<boolean> {
+    const span = await this.deps.submission.echo(session, recorded).catch(() => null)
+    return !!span && fingerprint(recorded.slice(span.start, span.end)) === expected
   }
 
   /**
@@ -608,9 +652,7 @@ export class SessionInputController {
       const retry = this.retrySubmit(sessionId, session, state)
       if (state.deliveryId) void retry.catch(() => this.failAmbiguousSubmission(sessionId, state))
       else void retry
-    }, session.engine === 'claude'
-      ? CLAUDE_SUBMIT_VERIFY_MS
-      : session.engine === 'opencode'
+    }, this.deps.submission.policy(session.engine)?.verifyMs ?? (session.engine === 'opencode'
         ? OPENCODE_SUBMIT_VERIFY_MS
         : session.engine === 'pi'
           ? PI_SUBMIT_VERIFY_MS
@@ -632,7 +674,7 @@ export class SessionInputController {
                           ? AGY_SUBMIT_VERIFY_MS
                           : session.engine === 'copilot'
                             ? COPILOT_SUBMIT_VERIFY_MS
-                      : SUBMIT_VERIFY_MS)
+                      : SUBMIT_VERIFY_MS))
   }
 
   private async retrySubmit(sessionId: string, session: RegisteredSession, state: InputState): Promise<void> {
@@ -683,7 +725,8 @@ export class SessionInputController {
         return
       }
     } else {
-      // claude/codex/commandcode: verify against the terminal before pressing Enter again or declaring failure.
+      // Claude Code and Codex (their worker reads the pane) and Command Code: verify against the terminal
+      // before pressing Enter again or declaring failure.
       const capture = await this.deps.capture?.(session.agentId)
       if (!state.awaitingFingerprint || state.turnOpen) return
       if (await this.dialogOverComposer(sessionId, session, state, capture)) return
@@ -702,35 +745,23 @@ export class SessionInputController {
         state.ambiguousDispatch = false
         return
       }
-      if (capture && !terminalComposerContains(capture, state.awaitingContent ?? '')) {
-        // Submitted, or queued by the TUI as a follow-up while busy. A real turn_started will confirm
-        // and clear this; keep observing (bounded) WITHOUT pressing Enter — a second Enter could
-        // double-submit a queued follow-up — and WITHOUT a spurious error.
-        if (state.observes < SUBMIT_MAX_OBSERVES) {
-          state.observes++
-          console.log(`[inject] ${sid(sessionId)} accepted (queued/submitted) · engine=${session.engine} · observe=${state.observes}/${SUBMIT_MAX_OBSERVES}`)
-          this.armSubmitCheck(sessionId, session, state)
-          return
-        }
-        // An ambiguous dispatch with no visible draft still may have run. It can never justify Enter.
-        if (state.ambiguousDispatch) {
+      if (capture) {
+        // The engine's own reading for Claude Code and Codex, from their worker; the core's for the others.
+        const prompt = state.awaitingContent ?? ''
+        const reading = this.deps.submission.policy(session.engine)
+          ? await this.deps.submission.read(this.readingSession(session), capture, prompt).catch(() => null)
+          : { draft: composerHolds(capture, prompt), composer: composerShown(capture) }
+        if (this.states.get(sessionId) !== state || !state.awaitingFingerprint || state.turnOpen) return
+        // No reading is no evidence (the engine's worker down, or the agent rebound while it read): never
+        // an Enter on it, and never a claim the message was or was not taken, as for an unreadable screen.
+        if (!reading) {
           this.failAmbiguousSubmission(sessionId, state)
           return
         }
-        if (state.deliveryId || !/^\s*[›❯→]/mu.test(visibleTerminal(capture))) {
-          // A receipt promises a correlated turn, which the pane alone cannot prove. Report unknown,
-          // also when no composer is visible. Never retry Enter into a dialog or a new human draft.
-          this.failAmbiguousSubmission(sessionId, state)
+        if (!reading.draft) {
+          this.leftComposer(sessionId, session, state, reading.composer)
           return
         }
-        // The paste succeeded and our text left the composer. Stop polling without claiming that the
-        // agent started or failed. Its real turn event can arrive much later; pressing Enter again can
-        // submit somebody else's draft. This was the false "Claude didn't start" on a queued voice turn.
-        console.log(`[inject] ${sid(sessionId)} submit left composer; awaiting agent turn · engine=${session.engine}`)
-        state.awaitingFingerprint = null
-        state.awaitingContent = null
-        state.observes = 0
-        return
       }
       // capture === null (dep missing / unreadable) → fall through to today's blind retry/error so a
       // real delivery failure is never hidden.
@@ -771,6 +802,38 @@ export class SessionInputController {
   }
 
   /**
+   * Our text left the composer: submitted, or queued by the TUI as a follow-up while busy. A real
+   * turn_started will confirm and clear this; keep observing (bounded) WITHOUT pressing Enter — a second
+   * Enter could double-submit a queued follow-up — and WITHOUT a spurious error.
+   */
+  private leftComposer(sessionId: string, session: RegisteredSession, state: InputState, composer: boolean): void {
+    if (state.observes < SUBMIT_MAX_OBSERVES) {
+      state.observes++
+      console.log(`[inject] ${sid(sessionId)} accepted (queued/submitted) · engine=${session.engine} · observe=${state.observes}/${SUBMIT_MAX_OBSERVES}`)
+      this.armSubmitCheck(sessionId, session, state)
+      return
+    }
+    // An ambiguous dispatch with no visible draft still may have run. It can never justify Enter.
+    if (state.ambiguousDispatch) {
+      this.failAmbiguousSubmission(sessionId, state)
+      return
+    }
+    if (state.deliveryId || !composer) {
+      // A receipt promises a correlated turn, which the pane alone cannot prove. Report unknown,
+      // also when no composer is visible. Never retry Enter into a dialog or a new human draft.
+      this.failAmbiguousSubmission(sessionId, state)
+      return
+    }
+    // The paste succeeded and our text left the composer. Stop polling without claiming that the
+    // agent started or failed. Its real turn event can arrive much later; pressing Enter again can
+    // submit somebody else's draft. This was the false "Claude didn't start" on a queued voice turn.
+    console.log(`[inject] ${sid(sessionId)} submit left composer; awaiting agent turn · engine=${session.engine}`)
+    state.awaitingFingerprint = null
+    state.awaitingContent = null
+    state.observes = 0
+  }
+
+  /**
    * A dialog, a menu or a view over the composer, settled without an Enter. The prompt line the retry
    * reads is then the transcript's echo of this very message, not a draft, and an Enter answers the
    * dialog: on a permission prompt, "1. Yes", a command nobody approved. A prompt or a question the
@@ -779,7 +842,7 @@ export class SessionInputController {
    */
   private async dialogOverComposer(sessionId: string, session: RegisteredSession, state: InputState, capture: string | null | undefined): Promise<boolean> {
     if (capture === undefined) return false
-    const screen = await this.deps.readScreen(session, capture)
+    const screen = await this.deps.readScreen(this.readingSession(session), capture)
     if (this.states.get(sessionId) !== state || state.turnOpen || !state.awaitingFingerprint) return true
     const hold = screen ? screen.messageHold : 'screen_unreadable'
     if (!hold) return false
@@ -837,31 +900,6 @@ export class SessionInputController {
     state.queue = state.queue.filter((item) => item.expiresAt > now)
     if (expiredLocalInput) this.deps.onError(sessionId, 'A queued message expired before the agent became available.')
   }
-}
-
-function visibleTerminal(value: string): string {
-  return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-}
-
-function normalizedTerminalText(value: string): string {
-  return visibleTerminal(value).replace(/\s+/g, ' ').trim()
-}
-
-// Composer region = from the last prompt-marker line to the end (mirrors runtimeProfile.currentPaneUi,
-// kept local so sessionInput stays decoupled). Marker set covers claude ❯, codex ›, cursor →.
-function composerRegion(capture: string): string {
-  const lines = visibleTerminal(capture).split('\n')
-  const idx = lines.findLastIndex((line) => {
-    const marker = line.search(/[›❯→]/u)
-    return marker >= 0 && !/^\s*\d+\.\s/.test(line.slice(marker + 1))
-  })
-  return (idx >= 0 ? lines.slice(idx) : lines).join('\n') // no marker → whole pane (safe fallback)
-}
-
-/** True while the injected prompt is still sitting un-submitted in the terminal composer. */
-function terminalComposerContains(capture: string, content: string): boolean {
-  const expected = normalizedTerminalText(content)
-  return !!expected && normalizedTerminalText(composerRegion(capture)).includes(expected)
 }
 
 function cursorComposerContains(capture: string, content: string): boolean {

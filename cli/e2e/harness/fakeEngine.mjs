@@ -32,7 +32,10 @@
 // scrollback mode, `!search` searching its prompt history, as ctrl+r does, `!config` (Claude Code) in its
 // settings and `!center` (Codex) in its agent command center, screens the daemon has no name for,
 // `!permitnext <command>` keeps its turn open and asks permission to run the command the moment a
-// message is pasted, before its Enter (a request arriving mid-turn), `!exit` ends the process.
+// message is pasted, before its Enter (a request arriving mid-turn), `!latestart` (with `submissionGate` in
+// the config) takes the prompt off the composer and holds its turn's start, the prompt hook and the record,
+// until the test's release file exists, as a CLI does whose hooks or first record are slow, `!exit` ends the
+// process.
 // Everything else is echoed as the answer. Codex's `/model` is not a prompt: it opens 0.160's model
 // picker over the `models_cache.json` in its CODEX_HOME, and a choice in it is applied to the turns
 // that follow (see `openModelPicker`).
@@ -1193,6 +1196,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await runHooks('SessionStart', { source: 'clear' })
       return
     }
+    if (config.submissionGate && /^!latestart\b/.test(prompt)) {
+      // Taken off the composer (above), its turn not started: the daemon's check of the submission finds
+      // the composer clear and no turn yet, and keeps looking, until the test releases it.
+      const release = join(config.root, 'submitted-prompts.release')
+      while (!existsSync(release)) await new Promise((resolve) => setTimeout(resolve, 20))
+    }
     runningTool = null
     if (open) await finish('(interrupted by a new prompt)')
     // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
@@ -1668,6 +1677,8 @@ export async function run(engine, config = {}, { native = false } = {}) {
           })
           return
         }
+        // What the test counts: every Enter that sent the composer's text, an empty one included.
+        if (config.submissionGate) appendFileSync(join(config.root, 'submitted-prompts'), `${JSON.stringify(line)}\n`)
         queue = queue.then(() => handle(line))
       } else if (part) {
         buffer += part
