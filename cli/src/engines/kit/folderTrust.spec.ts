@@ -2,7 +2,17 @@ import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } from './claudeTrust.js'
+import { launchClaudeConfigDir, launchCodexHome } from '../../lib/engineHomes.js'
+import { launch as claude } from '../claude/launch.js'
+import { launch as codex } from '../codex/launch.js'
+import { recordTrustIn, trustsIn } from './folderTrust.js'
+
+// The former lib/claudeTrust.spec.ts, its cases unchanged, against the two engines' declared trust (`trust` in
+// claude/launch.ts and codex/launch.ts) applied by the kit, in the homes the former functions read.
+const preTrustClaudeProject = (cwd: string, home = launchClaudeConfigDir()) => recordTrustIn(claude.trust!, join(home, claude.trust!.file), cwd)
+const claudeTrusts = (path: string, home = launchClaudeConfigDir()) => trustsIn(claude.trust!, join(home, claude.trust!.file), path)
+const codexTrusts = (path: string, codexHome?: string | null) => trustsIn(codex.trust!, join(launchCodexHome(codexHome), codex.trust!.file), path)
+const preTrustCodexProject = (cwd: string, codexHome?: string | null) => recordTrustIn(codex.trust!, join(launchCodexHome(codexHome), codex.trust!.file), cwd)
 
 describe('preTrustClaudeProject', () => {
   it('records trust for a new folder the way Claude Code does, keeping everything else', () => {

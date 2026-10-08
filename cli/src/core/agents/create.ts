@@ -20,7 +20,6 @@ import { harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import { isTerminalEngine } from '../../engines/types.js'
 import { engineLabel } from '../../lib/agentNames.js'
-import { preTrustClaudeProject, preTrustCodexProject } from '../../lib/claudeTrust.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
@@ -34,6 +33,7 @@ import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, t
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { engineHooks } from '../../engines/hooks.js'
+import { folderTrust } from '../../engines/launchPrep.js'
 import { installOpencodePlugin } from '../../lib/hooks.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -174,12 +174,11 @@ export function createAgentCreator({
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
         // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
         // need not ask. Laid into a folder that already held something — a clone, the person's own repo —
-        // it proves nothing about the rest, so trust stays the person's call (lib/claudeTrust.ts).
+        // it proves nothing about the rest, so trust stays the person's call (engines/kit/folderTrust.ts).
         if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
           try {
-            if (engine === 'claude') preTrustClaudeProject(cwd)
-            // In the agent's own profile when it has one: that config.toml is the one it reads.
-            if (engine === 'codex') preTrustCodexProject(cwd, codexHome)
+            // In the agent's own profile when it has one: that config.toml is the one a Codex agent reads.
+            folderTrust(engine, codexHome)?.record(cwd)
           } catch (error) { console.warn(`[dsh] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
         }
       } catch (error) {

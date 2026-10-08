@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { prepareCodexResume } from '../../engines/codex/portableHistory.js'
+import { prepareResume } from '../../engines/launchPrep.js'
 import { ApiConnectionError, type ApiConnections } from '../../lib/apiConnections.js'
 import { refreshApiLaunch } from '../../lib/apiModels.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
@@ -7,7 +7,7 @@ import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps } 
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchHelpers, type LaunchHelperDeps } from './launch.js'
 
-vi.mock('../../engines/codex/portableHistory.js', () => ({ prepareCodexResume: vi.fn(() => ({ repairedItems: 0 })) }))
+vi.mock('../../engines/launchPrep.js', async (real) => ({ ...await real<object>(), prepareResume: vi.fn(() => ({ repairedItems: 0 })) }))
 vi.mock('../../lib/apiModels.js', async (real) => ({ ...await real<object>(), refreshApiLaunch: vi.fn((_apis: unknown, launch: object) => ({ ...launch, refreshed: true })) }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), dropPermissionFlagIfUnsupported: vi.fn() }))
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), buildLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
@@ -83,13 +83,15 @@ describe('relaunch helpers', () => {
   it('repairs a Codex rollout for resume and moves the tail to its new length', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, helpers } = setup()
-    helpers.prepareSessionResume(session())
+    // Only Codex declares a repair, and the log line names what it repaired in its words.
+    const codex = session({ engine: 'codex' })
+    helpers.prepareSessionResume(codex)
     expect(deps.setTail).not.toHaveBeenCalled()
-    vi.mocked(prepareCodexResume).mockReturnValueOnce({ repairedItems: 3, repairedBytes: 1_234, backupPath: '/b/rollout.bak' } as never)
-    helpers.prepareSessionResume(session())
+    vi.mocked(prepareResume).mockReturnValueOnce({ repairedItems: 3, repairedBytes: 1_234, backupPath: '/b/rollout.bak' } as never)
+    helpers.prepareSessionResume(codex)
     expect(deps.setTail).toHaveBeenCalledWith('s1', 1_234)
-    vi.mocked(prepareCodexResume).mockReturnValueOnce({ repairedItems: 1, backupPath: '/b/rollout.bak' } as never)
-    helpers.prepareSessionResume(session())
+    vi.mocked(prepareResume).mockReturnValueOnce({ repairedItems: 1, backupPath: '/b/rollout.bak' } as never)
+    helpers.prepareSessionResume(codex)
     expect(deps.setTail).toHaveBeenCalledTimes(1)
     expect(log.mock.calls.map(([line]) => String(line))).toEqual([
       '[resume] repaired 3 Codex reasoning items · backup: /b/rollout.bak',

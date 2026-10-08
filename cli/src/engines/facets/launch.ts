@@ -88,6 +88,57 @@ export interface StartupContract {
   retry?: StartupRetry
 }
 
+/**
+ * Where an engine keeps its own settings for a launch made now. `setting`: the folder a daemon setting names,
+ * unless the person's shell moves it, unless the agent has a profile of its own (Codex's CODEX_HOME).
+ * `variable`: the folder a variable the person's shell sets names, else their home folder (Claude Code's
+ * CLAUDE_CONFIG_DIR). Resolved by lib/engineHomes.ts `launchHomeOf`.
+ */
+export type LaunchHome = { setting: FolderSetting } | { variable: string; otherwise: 'home' }
+
+/**
+ * An engine's answer to "do you trust this folder?", which it asks the first time it opens one, kept in `file`
+ * in its home. Harness records it only for a folder it made empty itself (the callers decide), never removes
+ * anything, and leaves a file it cannot safely extend as it is. Applied by kit/folderTrust.ts.
+ */
+export type TrustContract = { home: LaunchHome; file: string } & (
+  /**
+   * A JSON object whose `projects` map a folder to its entry, trusted where `accepted` is true. A trusted
+   * folder's trust covers every folder below it. A new entry starts as `entry`.
+   */
+  | { format: 'json'; projects: string; accepted: string; entry: Readonly<Record<string, unknown>> }
+  /** A TOML table per folder, `[<table>."<folder>"]`, trusted where its `key` is `value`. Exact folders only. */
+  | { format: 'toml'; table: string; key: string; value: string }
+)
+
+/**
+ * Making a stopped conversation's history resumable before the engine is launched on it again. Applied by
+ * kit/resumeRepair.ts, after the engine has stopped and before the tail moves and the engine starts.
+ */
+export interface ResumeRepairContract {
+  /**
+   * Where histories are: `folder` in the engine's home (the agent's profile, else every home the person moved
+   * and the daemon's). One is a file ending in `suffix` whose name holds the session's id, at any depth; only
+   * names with no `.` are folders worth entering, and at most `walk` entries are looked at. An id `id` refuses
+   * is never looked for.
+   */
+  sessions: { home: { setting: FolderSetting }; folder: string; suffix: string; id: RegExp; walk: number }
+  /** The first record names the session: its `type`, and the field that holds the id. */
+  first: { type: string; id: readonly string[] }
+  /** The records whose items the engine replays: the item at `at`, or each item of the list there. */
+  items: ReadonlyArray<{ type: string; at: readonly string[]; list?: boolean }>
+  /**
+   * What is repaired in each item. `portable-reasoning`: the relay's portable_reasoning_item contract (a
+   * plaintext reasoning item keeps no vendor id, and its text is its summary).
+   */
+  repair: 'portable-reasoning'
+  /** The private files beside the history, by suffix: the backup of what it was, and the one being written. */
+  backup: string
+  temporary: string
+  /** How the person, and the daemon's log, name the history file, the history and what was repaired. */
+  names: { file: string; history: string; items: string }
+}
+
 /** Literal argv contracts copied from the existing launch paths. No engine version behavior changes. */
 export interface EngineLaunch {
   permissionModes: Readonly<Record<string, readonly string[]>>
@@ -101,4 +152,10 @@ export interface EngineLaunch {
   sharedServer?: SharedServerContract
   ownProvider?: OwnProviderContract
   startup?: StartupContract
+  /** The instruction file Harness writes its own notes into (a harness's bootstrap, the saved APIs); else AGENTS.md. */
+  instructionFile?: string
+  /** The line, in that file, that has the engine read `file` too (Claude Code's `@AGENTS.md` import). */
+  instructionImport?: { file: string; line: string }
+  trust?: TrustContract
+  resumeRepair?: ResumeRepairContract
 }

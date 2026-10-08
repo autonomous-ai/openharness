@@ -150,6 +150,8 @@ const EDGE: RegExp[] = [
   // Their launch specifics are declared data too (launch.ts): Codex's startup probe and retry and its own-login
   // provider are the kit's, in core, and never a worker's (docs/design/2026-10-08-engine-launch.md).
   /^engines\/codex\/ownLoginProvider\.ts$/, /^lib\/codexStartupRetry\.ts$/,
+  // So is their launch preparation: folder trust and the resume repair are declared, and the kit applies them.
+  /^engines\/codex\/portableHistory\.ts$/, /^lib\/claudeTrust\.ts$/,
   /^lib\/(askQuestion|runtimeProfileController|composerScreen|teamWriteHold|messageHold|terminalActivity|codexTurnRecovery)\.ts$/,
   /^engines\/(screens|modelControls|questionControls|submissions|nativeControls)\.ts$/,
   // Claude Code's and Codex's reading of their composer: shared by the two, loaded only by their workers.
@@ -250,7 +252,8 @@ describe('the daemon\'s shape', () => {
     const contracts = new Set(['engines/claude/launch.ts', 'engines/codex/launch.ts'])
     // The builders: the argv and its script, a relaunch's overrides, a harness's flags.
     for (const entry of ['lib/engineLaunch.ts', 'lib/launchOverrides.ts', 'engines/launches.ts', 'engines/kit/launchArgs.ts',
-      'engines/kit/launchStartup.ts', 'dsh/adapters.ts']) {
+      'engines/kit/launchStartup.ts', 'dsh/adapters.ts', 'engines/launchPrep.ts', 'engines/kit/folderTrust.ts',
+      'engines/kit/resumeRepair.ts', 'dsh/runtime.ts', 'lib/apiInstructions.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)), entry).toEqual([])
     }
     expect([...closureOf('lib/engineLaunch.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
@@ -258,7 +261,7 @@ describe('the daemon\'s shape', () => {
     // load-time repair still reads Codex rollouts (rollout.ts, a later step of the plan). Nothing else of the two.
     const declared = new Set([...contracts, 'engines/claude/hookContract.ts', 'engines/codex/hookContract.ts', 'engines/codex/rollout.ts'])
     for (const entry of ['core/agents/create.ts', 'core/agents/fork.ts', 'core/agents/restart.ts', 'core/agents/swap.ts',
-      'lib/resumeAgentService.ts']) {
+      'core/agents/launch.ts', 'core/agents/launches.ts', 'lib/resumeAgentService.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !declared.has(file)), entry).toEqual([])
     }
   })

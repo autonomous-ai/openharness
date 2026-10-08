@@ -9,9 +9,11 @@ const permissionModes = {
 
 /**
  * Codex's launch, declared: data only, which core applies with the kit (engines/launches.ts,
- * lib/engineLaunch.ts). The pane script's startup probe and retry were lib/engineLaunch.ts's and
- * lib/codexStartupRetry.ts's, the own-login provider was engines/codex/ownLoginProvider.ts, and the
- * environment flags were `codexEnvArgs` in this file (docs/design/2026-10-08-engine-launch.md).
+ * engines/launchPrep.ts, lib/engineLaunch.ts). The pane script's startup probe and retry were
+ * lib/engineLaunch.ts's and lib/codexStartupRetry.ts's, the own-login provider was
+ * engines/codex/ownLoginProvider.ts, the environment flags were `codexEnvArgs` in this file, the folder trust
+ * was lib/claudeTrust.ts's and the resume repair was engines/codex/portableHistory.ts
+ * (docs/design/2026-10-08-engine-launch.md).
  */
 export const launch: EngineLaunch = {
   permissionModes, bypassPermission: permissionModes.auto,
@@ -51,6 +53,28 @@ export const launch: EngineLaunch = {
    * every launch, and OpenCode's is a file this daemon writes, so only Codex declares this.
    */
   ownProvider: { home: 'CODEX_HOME', file: 'config.toml', key: 'model_provider', fallback: 'openai', args: ['-c', 'model_provider="{value}"'] },
+  /**
+   * Codex keeps its folder trust in `<CODEX_HOME>/config.toml` as a `[projects."<path>"]` table with
+   * `trust_level = "trusted"`, read from the agent's own profile or a CODEX_HOME the person moved, exact
+   * folders only. Copied from the former lib/claudeTrust.ts.
+   */
+  trust: { home: { setting: 'CODEX_HOME' }, file: 'config.toml', format: 'toml', table: 'projects', key: 'trust_level', value: 'trusted' },
+  /**
+   * A rollout written on a grid relay keeps reasoning items the relay's portable_reasoning_item contract
+   * forbids (a vendor-style id on plaintext reasoning, text in `content`). Back on Codex's own provider,
+   * `codex resume` replays them and fails. Retargeting to the native subscription bypasses the grid, so
+   * response-side relay cleanup cannot repair items already persisted: they are repaired before the resume.
+   * `response_item` records are replayed as they are, and `compacted` ones replay their `replacement_history`.
+   * Copied from the former engines/codex/portableHistory.ts and the rollout lookup of engines/codex/rollout.ts.
+   */
+  resumeRepair: {
+    sessions: { home: { setting: 'CODEX_HOME' }, folder: 'sessions', suffix: '.jsonl', id: /^[a-zA-Z0-9-]{8,128}$/, walk: 5_000 },
+    first: { type: 'session_meta', id: ['payload', 'id'] },
+    items: [{ type: 'response_item', at: ['payload'] }, { type: 'compacted', at: ['payload', 'replacement_history'], list: true }],
+    repair: 'portable-reasoning',
+    backup: '.reasoning-backup-', temporary: '.reasoning-tmp-',
+    names: { file: 'Codex rollout', history: 'Codex history', items: 'Codex reasoning items' },
+  },
   startup: {
     /**
      * Codex 0.157+ otherwise puts the writer outside tmux in a shared server. Keep Harness-owned launches

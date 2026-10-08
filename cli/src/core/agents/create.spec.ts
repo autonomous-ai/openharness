@@ -6,7 +6,6 @@ import { installedDsh } from '../../dsh/installed.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { materializeWorkspace } from '../../dsh/materialize.js'
 import { harnessLaunchOrRefusal, incompatibleHarnessEngine } from '../../dsh/runtime.js'
-import { preTrustClaudeProject, preTrustCodexProject } from '../../lib/claudeTrust.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { buildEngineLaunchArgv, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
@@ -32,7 +31,15 @@ vi.mock('../../dsh/runtime.js', async (real) => ({
 }))
 vi.mock('../../dsh/launch.js', async (real) => ({ ...await real<object>(), harnessEnvToClear: vi.fn(() => ['HARNESS_OLD']) }))
 vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
-vi.mock('../../lib/claudeTrust.js', () => ({ preTrustClaudeProject: vi.fn(), preTrustCodexProject: vi.fn() }))
+// The engines' folder trust (engines/launchPrep.ts), one spy per engine: never the person's own config.
+const trust = vi.hoisted(() => ({
+  claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
+  preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
+}))
+const { preTrustClaudeProject, preTrustCodexProject } = trust
+vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
+    ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
+    : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 vi.mock('../../lib/engineInstall.js', async (real) => ({ ...await real<object>(), engineInstallRecipe: vi.fn(() => ({ install: 'recipe' })) }))
