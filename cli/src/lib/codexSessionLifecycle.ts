@@ -10,6 +10,7 @@ import WebSocket from 'ws'
 import { sessionCodexHome } from './engineHomes.js'
 import { engineBin } from './engineBin.js'
 import { argvTokens, processRows, type ProcessRow } from './tmux.js'
+import { sameProcessIdentity } from './terminalRuntime.js'
 import type { RegisteredSession } from './registry.js'
 
 export interface CodexControl {
@@ -108,7 +109,7 @@ export async function stopSharedCodexSession(session: RegisteredSession, current
     guard()
     return
   }
-  const owner = rows.find(row => row.pid === session.processIdentity?.pid && row.startMarker === session.processIdentity?.startMarker && row.executable === session.processIdentity?.executable)
+  const owner = rows.find(row => sameProcessIdentity(row, session.processIdentity) && row.executable === session.processIdentity?.executable)
   if (owner) {
     const args = argvTokens(owner.args)
     // Harness inserts this as the FIRST option, before resume/fork or prompt

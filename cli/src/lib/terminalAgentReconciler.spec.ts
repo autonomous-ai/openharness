@@ -67,6 +67,25 @@ describe('composite terminal reconciliation', () => {
     } finally { reconciler.stop() }
   })
 
+  it('observes a bound agent saved before start ticks as the same process seen with them', async () => {
+    const current = { ...session([tmux]), sessionId: 'saved-conversation' }
+    const live = { ...observed([tmux]), processIdentity: { ...identity, startTicks: 26385008 } }
+    const onDiscovered = vi.fn()
+    const onObserved = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => [current], backends: [], backendOrder: ['tmux'],
+      onDiscovered, onObserved, onDormant: vi.fn(), onRemoved: vi.fn(),
+      probe: async () => probe([
+        { instanceId: 'tmux:default', result: { state: 'available', roots: [{ runtime: tmux, rootPid: 1, cwd: '/work' }] } },
+      ], [live]),
+    })
+    try {
+      await reconciler.start(60_000)
+      expect(onObserved).toHaveBeenCalledWith(live, current)
+      expect(onDiscovered).not.toHaveBeenCalled()
+    } finally { reconciler.stop() }
+  })
+
   it('advertises a retained pane even when no engine process is observed', async () => {
     const current = { ...session([tmux]), active: false }
     const onTerminalAvailability = vi.fn()
