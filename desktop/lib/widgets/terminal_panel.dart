@@ -2076,10 +2076,16 @@ class _TerminalPanelState extends State<TerminalPanel>
     final cancellation = MediaDownloadCancellation();
     _previewCancellation = cancellation;
     try {
+      final machine = notifier.stateOf(session.machineId);
       final message = await _linkOpener.open(
         target,
-        isLocalMachine:
-            notifier.stateOf(session.machineId)?.isLocalMachine == true,
+        isLocalMachine: machine?.isLocalMachine == true,
+        // "index.html" as the agent printed it is a file in its project.
+        workingDirectory: machine?.agents
+            .where((agent) => agent.id == session.agentId)
+            .firstOrNull
+            ?.project
+            ?.cwd,
         isCancelled: () =>
             cancellation.isCancelled ||
             !mounted ||
