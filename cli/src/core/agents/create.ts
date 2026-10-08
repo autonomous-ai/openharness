@@ -17,8 +17,8 @@ import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { materializeWorkspace } from '../../dsh/materialize.js'
 import { harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch } from '../../dsh/runtime.js'
-import { opencodeMajorVersion } from '../../engines/opencode/version.js'
-import { isTerminalEngine } from '../../engines/types.js'
+import { loadEngine } from '../../engines/inProcess.js'
+import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
@@ -71,7 +71,8 @@ export interface CreateAgentDeps {
   /** OpenCode's plugin, installed again before an OpenCode spawn (core/engines/hooks.ts
    *  `installOpencodePluginBeforeSpawn`): false when the other engines' installers could not be loaded. */
   installOpencodePlugin: (port: number) => Promise<boolean>
-  gridLaunchMachine: () => GridLaunchMachine
+  /** The facts about this machine a launch of `engine` needs (lib/gridLaunch.ts). */
+  gridLaunchMachine: (engine: AgentEngine) => GridLaunchMachine
   /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
    *  builds none itself, and a create on a grid while models is down is refused (GRID_UNAVAILABLE). */
   buildGridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
@@ -131,6 +132,15 @@ export function createAgentCreator({
       console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
       return { ok: false, ...refusal }
     }
+    // Which OpenCode is installed decides its argv: v2's TUI exits on v1's flags. Its probe is OpenCode's own code,
+    // loaded for an OpenCode launch alone (engines/inProcess.ts), here before anything is written: without it the
+    // launch is refused, never given a guessed argv.
+    const opencode = engine === 'opencode' ? await loadEngine('opencode') : null
+    if (engine === 'opencode' && !opencode) {
+      const detail = 'OpenCode\'s code could not be loaded'
+      console.warn(`[agent] create opencode refused · ${detail}`)
+      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail }
+    }
     // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
     // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
     // before the grid block because a file-configured engine keys its config directory on it.
@@ -167,7 +177,7 @@ export function createAgentCreator({
     // refusal rather than a fallback — an agent silently started on the engine's own login spends the
     // wrong account and looks identical to one that worked. Asked of models before a harness's workspace is
     // laid out or trusted: a create refused here leaves the folder as it was.
-    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: gridLaunchMachine() }) : null
+    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: gridLaunchMachine(engine) }) : null
     if (built && !built.ok) {
       console.warn(`[agent] create ${engine} refused · ${built.detail}`)
       return { ok: false, error: built.error, detail: built.detail }
@@ -267,7 +277,7 @@ export function createAgentCreator({
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
-    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencodeMajorVersion()) : []), ...resumeArgs]
+    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencode ? opencode.opencodeMajorVersion() : null) : []), ...resumeArgs]
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     // Stopped mid-turn, the resumed conversation is told to carry on — by an engine that can open

@@ -20,15 +20,13 @@ import { basename, dirname, join, relative, sep } from 'path'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
 import { headBytes } from '../engines/kit/continuation.js'
-import { museEvent, museWorkspaceRoot } from '../engines/muse/normalizer.js'
 import { findSessionFileOf, sessionMetaOf } from '../engines/sessionFiles.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
-import { agyConversationForPid, findAgyTranscript } from '../engines/agy/session.js'
-import { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from '../engines/copilot/session.js'
-import { hermesDbPath, listHermesHomes } from '../engines/hermes/home.js'
+import { HERMES_HOMES, hermesDbPath } from '../engines/hermes/contract.js'
+import { listStoreHomes } from '../engines/kit/storeHomes.js'
+import { loadEngine, type InProcessModules } from '../engines/inProcess.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
-import { piSessionFolder, readPiHead } from './sessionSearch/externals/pi.js'
 import { sessionRoots } from './engineHomes.js'
 import { argvTokens, engineProcessMatchScore, processRows, type ProcessRow } from './tmux.js'
 
@@ -190,7 +188,7 @@ const str = (v: unknown): string => (typeof v === 'string' ? v : '')
  * triggered it rather than a person. `payload.kind` is what separates the two lifecycles that share the
  * name `started`; a `task` one is scheduler bookkeeping and several fire inside a single run.
  */
-function hasRun(lines: string[]): boolean {
+function hasRun(lines: string[], museEvent: InProcessModules['muse']['museEvent']): boolean {
   for (const line of lines) {
     const record = museEvent(line)
     if (record?.scope === 'run' && str(record.event.kind) === 'started') return true
@@ -277,7 +275,8 @@ function placeholders(count: number): string {
 async function copilotDirectoryScan(
   cwd: string,
   startedAtMs: number,
-  opts?: { bornOnly?: boolean },
+  opts: { bornOnly?: boolean } | undefined,
+  copilotSessionCwd: InProcessModules['copilot']['copilotSessionCwd'],
 ): Promise<RepairedSession | null> {
   return fileEngineSession(join(env.COPILOT_HOME, 'session-state'), cwd, startedAtMs, async (path) => {
     if (basename(path) !== 'events.jsonl') return null
@@ -329,12 +328,17 @@ export async function findLiveSession(
   const real = await realpath(cwd).catch(() => cwd)
   const dirs = real === cwd ? [cwd] : [cwd, real]
   const dirList = placeholders(dirs.length)
+  // Muse's, Copilot's and agy's readers of their own files are their code, loaded where they are read
+  // (engines/inProcess.ts); Hermes's homes are declared (engines/hermes/contract.ts). An engine whose code could not be loaded has no repair answer: its process stays
+  // unbound, as when nothing is found.
   switch (engine) {
     case 'pi':
       return fileEngineSession(join(env.PI_HOME, 'agent', 'sessions'), cwd, startedAtMs, readTranscriptMeta, opts)
     case 'commandcode':
       return fileEngineSession(join(env.COMMANDCODE_HOME, 'projects'), cwd, startedAtMs, readTranscriptMeta, opts)
-    case 'muse':
+    case 'muse': {
+      const muse = await loadEngine('muse')
+      if (!muse) return null
       // Muse's hooks never fire, so this scan is the ONLY way a muse pane is ever bound. The tree is
       // `sessions/YYYY/MM/DD/<session-uuid>/session.jsonl` (4 levels — exactly MAX_DEPTH) and nothing in
       // the path names the project: `workspace_root` in the first record is the only link. Sub-agent
@@ -342,7 +346,7 @@ export async function findLiveSession(
       return fileEngineSession(join(env.MUSE_HOME, 'sessions'), cwd, startedAtMs, async (path) => {
         if (path.includes(`${sep}subagent${sep}`)) return null
         const lines = (await readFile(path, 'utf-8').catch(() => '')).split('\n')
-        const root = museWorkspaceRoot(lines[0] ?? '')
+        const root = muse.museWorkspaceRoot(lines[0] ?? '')
         if (!root) return null
         // Muse opens sessions of its OWN under the same workspace_root — memory reminders
         // (`memory_reminder_child_session_linked`) are the ones seen live. They are indistinguishable from
@@ -350,9 +354,10 @@ export async function findLiveSession(
         // measured, the daemon tailed an 11-line reminder session while the real conversation ran on in
         // another file, so web and device received nothing at all. What separates them is that a session
         // being conversed in has opened a RUN.
-        if (!hasRun(lines)) return null
+        if (!hasRun(lines, muse.museEvent)) return null
         return { cwd: root, sessionId: basename(dirname(path)) }
       }, opts)
+    }
     case 'amp':
       // The transcripts scanned here are the adapter's own — Amp keeps no conversation on disk, so its
       // plugin writes one per thread as `<AMP_SESSIONS_DIR>/<threadId>.jsonl` with `cwd` on the first
@@ -402,7 +407,7 @@ export async function findLiveSession(
       // never rebind a profile agent after a restart (openharness#191). Each store is asked on its
       // own and the answers are pooled, so two homes claiming the same cwd is ambiguous — exactly as
       // two rows in one store already are — rather than "whichever home was listed first".
-      const homes = await listHermesHomes()
+      const homes = await listStoreHomes(HERMES_HOMES, env.HERMES_HOME)
       const found: RepairedSession[] = []
       for (const home of homes) {
         const one = await dbEngineSession(
@@ -431,12 +436,14 @@ export async function findLiveSession(
       // The lock the process holds is the only thing a `/resume` leaves behind, and it is exact.
       // Fall through to the directory scan when there is no pid or no lock yet (a brand-new session
       // takes its lock only once Copilot creates it).
-      const locked = opts?.pid ? await copilotSessionForPid(env.COPILOT_HOME, opts.pid) : null
+      const copilot = await loadEngine('copilot')
+      if (!copilot) return null
+      const locked = opts?.pid ? await copilot.copilotSessionForPid(env.COPILOT_HOME, opts.pid) : null
       if (locked) {
-        const transcriptPath = await findCopilotTranscript(env.COPILOT_HOME, locked)
+        const transcriptPath = await copilot.findCopilotTranscript(env.COPILOT_HOME, locked)
         return { sessionId: locked, transcriptPath: transcriptPath ?? undefined }
       }
-      return copilotDirectoryScan(cwd, startedAtMs, opts)
+      return copilotDirectoryScan(cwd, startedAtMs, opts, copilot.copilotSessionCwd)
     }
 
     case 'agy':
@@ -455,9 +462,11 @@ export async function findLiveSession(
 
 /** The conversation the given `agy` pid is holding, if its transcript exists yet. */
 async function agySession(pid: number): Promise<RepairedSession | null> {
-  const conversationId = await agyConversationForPid(env.AGY_HOME, pid)
+  const agy = await loadEngine('agy')
+  if (!agy) return null
+  const conversationId = await agy.agyConversationForPid(env.AGY_HOME, pid)
   if (!conversationId) return null
-  const transcriptPath = await findAgyTranscript(env.AGY_HOME, conversationId)
+  const transcriptPath = await agy.findAgyTranscript(env.AGY_HOME, conversationId)
   // A conversation with no transcript is one agy has opened but not written to; registry derives the
   // path anyway, so bind it and let the watcher pick the file up when it appears.
   return { sessionId: conversationId, transcriptPath: transcriptPath ?? undefined }
@@ -481,6 +490,10 @@ export async function findResumedTranscript(
     // exact ID again at Close, including after exit, without guessing by mtime.
     if (!opts?.cwd || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9]$/.test(sessionId)
       || sessionId.endsWith('.jsonl')) throw new Error('The Pi conversation location is unavailable.')
+    // Pi's own code names its folders and reads its files (engines/inProcess.ts): without it, the location is not known.
+    const pi = await loadEngine('pi')
+    if (!pi) throw new Error('The Pi conversation location is unavailable.')
+    const { piSessionFolder, readPiHead } = pi
     const directory = join(env.PI_HOME, 'agent', 'sessions', piSessionFolder(opts.cwd))
     let files: string[]
     try { files = await readdir(directory) } catch (error) {

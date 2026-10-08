@@ -4,12 +4,23 @@ import { rememberApiBase } from '../../lib/gridAssignment.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps } from '../../lib/launchOverrides.js'
+import { loadEngine } from '../../engines/inProcess.js'
+import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchHelpers, gridLaunchThrough, type LaunchHelperDeps } from './launch.js'
 
 vi.mock('../../engines/launchPrep.js', async (real) => ({ ...await real<object>(), prepareResume: vi.fn(() => ({ repairedItems: 0 })) }))
 vi.mock('../../lib/gridAssignment.js', async (real) => ({ ...await real<object>(), rememberApiBase: vi.fn() }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), dropPermissionFlagIfUnsupported: vi.fn() }))
+// OpenCode's version is its own code, loaded for an OpenCode relaunch alone; a test may say it could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
+vi.mock('../../scm/scmProjects.js', async (real) => {
+  const actual = await real<typeof import('../../scm/scmProjects.js')>()
+  return { ...actual, prepareInstructionWrites: vi.fn(async () => {}) }
+})
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), buildLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
 
 const session = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
@@ -27,6 +38,23 @@ function setup() {
 
 describe('relaunch helpers', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it('refuses an OpenCode relaunch whose code could not be loaded, having written nothing, and loads nothing for another engine', async () => {
+    const { deps, helpers } = setup()
+    vi.mocked(loadEngine).mockResolvedValueOnce(null)
+    expect(await helpers.relaunchOverrides(session({ engine: 'opencode' }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
+    // No instruction files prepared, no API notes, no overrides built.
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
+    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+    expect(buildLaunchOverrides).not.toHaveBeenCalled()
+    vi.mocked(loadEngine).mockClear()
+    expect(await helpers.relaunchOverrides(session())).toEqual({ ok: true })
+    expect(loadEngine).not.toHaveBeenCalled()
+    expect(prepareInstructionWrites).toHaveBeenCalledWith('/work')
+    // With OpenCode's code, an OpenCode relaunch is built.
+    expect(await helpers.relaunchOverrides(session({ engine: 'opencode' }))).toEqual({ ok: true })
+    expect(loadEngine).toHaveBeenCalledWith('opencode')
+  })
 
   it('rebuilds a launch from the row: its DSH, folder and named agent, whatever the source adds', async () => {
     const { deps, helpers } = setup()

@@ -13,6 +13,7 @@
  */
 
 import { join } from 'node:path'
+import { loadEngine } from '../engines/inProcess.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
 import { ownLoginProviderArgs } from '../engines/launches.js'
@@ -61,7 +62,7 @@ export type LaunchOverridesResult =
 
 export interface LaunchOverridesDeps {
   /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
-  machine: () => GridLaunchMachine
+  machine: (engine: AgentEngine) => GridLaunchMachine
   /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
    *  builds none itself. */
   gridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
@@ -140,10 +141,19 @@ export async function validateLaunchOverrides(
   engine: AgentEngine,
   source: LaunchSource,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string; unavailable?: string }> {
+  const unloaded = await opencodeUnloaded(engine)
+  if (unloaded) return unloaded
   if (!source.gridLaunch) return { ok: true }
-  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine() })
+  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(engine) })
   if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
   return tmuxRefusal(deps, engine, source.gridLaunch)
+}
+
+/** Which OpenCode is installed decides its argv (`machine`), read by OpenCode's own probe: loaded for an OpenCode
+ *  launch alone (engines/inProcess.ts), and the launch refused without it rather than given a guess. */
+async function opencodeUnloaded(engine: AgentEngine): Promise<{ ok: false; error: string; detail: string } | null> {
+  if (engine !== 'opencode' || await loadEngine('opencode')) return null
+  return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
 }
 
 /** Only a launch that SETS variables needs the tmux that can set them. */
@@ -197,7 +207,7 @@ export async function buildLaunchOverrides(
   // handing the engine a flag it does not know. The same guard covers an opencode agent created on
   // v1 and relaunched on v2, whose TUI has no `--agent`: a resumed v2 session keeps the agent it
   // stored (`session_v2.agent`), so nothing is lost by not naming it.
-  const opencodeMajor = deps.machine().opencodeMajor ?? null
+  const opencodeMajor = deps.machine(engine).opencodeMajor ?? null
   if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
     overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
   }
@@ -210,6 +220,9 @@ async function buildBaseLaunchOverrides(
   source: LaunchSource,
   configKey: string,
 ): Promise<LaunchOverridesResult> {
+  // Checked first, as every relaunch was before its grid launch moved to models (validateLaunchOverrides).
+  const unloaded = await opencodeUnloaded(engine)
+  if (unloaded) return unloaded
   // Coming back to the engine's own login undoes TWO things the grid launch set, and they are
   // undone separately because the engine remembers them differently.
   //
@@ -225,7 +238,7 @@ async function buildBaseLaunchOverrides(
   // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
-    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, deps.machine().opencodeMajor ?? null)
+    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, deps.machine(engine).opencodeMajor ?? null)
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
     const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
@@ -241,7 +254,7 @@ async function buildBaseLaunchOverrides(
   if (source.gridLaunch) {
     // Built once, by the models service, with a saved API's endpoint and key as saved now: a removed API is
     // refused first, then an engine that cannot be pointed there, then a tmux that cannot set the variables.
-    const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(), refresh: true })
+    const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(engine), refresh: true })
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
     const tmux = await tmuxRefusal(deps, engine, built.override)
     if (!tmux.ok) return tmux

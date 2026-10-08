@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
@@ -30,6 +31,11 @@ const { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject }
 vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
     ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
     : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
+// OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 vi.mock('../../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/newAgentModel.js', async (real) => ({
   ...await real<object>(), parseNewAgentModel: vi.fn(() => ({ state: 'absent' })),
@@ -165,6 +171,16 @@ describe('agent_create, refused before any pane exists', () => {
     expect(await ask({ engine: 'opencode', cwd: '/w', agent: 'reviewer' })).toMatchObject({ error: 'AGENT_UNSUPPORTED' })
     expect(supportsNamedAgent).toHaveBeenLastCalledWith('opencode', 2)
     expect(create).not.toHaveBeenCalled()
+  })
+
+  it('an OpenCode named agent when OpenCode\'s code could not be loaded, and loads nothing for another engine\'s', async () => {
+    const { ask, create } = setup()
+    vi.mocked(loadEngine).mockResolvedValueOnce(null)
+    expect(await ask({ engine: 'opencode', cwd: '/w', agent: 'reviewer' })).toStrictEqual({ error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
+    expect(create).not.toHaveBeenCalled()
+    vi.mocked(loadEngine).mockClear()
+    await ask({ engine: 'claude', cwd: '/w', agent: 'reviewer' })
+    expect(loadEngine).not.toHaveBeenCalled()
   })
 
   it('a permission mode the engine does not have, and a conversation to resume that is not one or comes with new-conversation choices', async () => {

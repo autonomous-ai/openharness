@@ -8,11 +8,12 @@ import { materializeWorkspace } from '../../dsh/materialize.js'
 import { harnessLaunchOrRefusal, incompatibleHarnessEngine } from '../../dsh/runtime.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
-import { buildEngineLaunchArgv, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
+import { buildEngineLaunchArgv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import type { GridLaunchAnswer, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { engineHooks } from '../../engines/hooks.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/external.js'
 import { clearPaneRemainOnExit } from '../../lib/tmux.js'
@@ -29,6 +30,11 @@ vi.mock('../../dsh/runtime.js', async (real) => ({
   prepareHarnessLaunch: vi.fn(),
 }))
 vi.mock('../../dsh/launch.js', async (real) => ({ ...await real<object>(), harnessEnvToClear: vi.fn(() => ['HARNESS_OLD']) }))
+// OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
 // The engines' folder trust (engines/launchPrep.ts), one spy per engine: never the person's own config.
 const trust = vi.hoisted(() => ({
@@ -336,6 +342,27 @@ describe('creating an agent', () => {
       expect(await t.create(request({ engine: 'opencode' }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s plugin installer could not be loaded' })
       expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · OpenCode\'s plugin installer could not be loaded')
       expect(createAndRegisterPane).not.toHaveBeenCalled()
+      warn.mockRestore()
+    })
+
+    it('refuses an OpenCode create whose code could not be loaded, before anything is written or any pane opens', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.mocked(loadEngine).mockResolvedValueOnce(null)
+      const t = setup()
+      expect(await t.create(request({ engine: 'opencode', agent: 'reviewer', grid: { networkName: 'g' } }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
+      expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · OpenCode\'s code could not be loaded')
+      expect(t.deps.gridLaunchMachine).not.toHaveBeenCalled()
+      expect(t.deps.installOpencodePlugin).not.toHaveBeenCalled()
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+      // Any other engine's launch loads nothing, and its machine facts are asked for that engine.
+      vi.mocked(loadEngine).mockClear()
+      buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_UNSUPPORTED', detail: 'no' })
+      await t.create(request({ engine: 'claude', agent: 'reviewer', grid: { networkName: 'g' } }))
+      expect(loadEngine).not.toHaveBeenCalled()
+      expect(t.deps.gridLaunchMachine).toHaveBeenCalledWith('claude')
+      // With OpenCode's code, its own probe names the version its named agent opens for.
+      await t.create(request({ engine: 'opencode', agent: 'reviewer' }))
+      expect(namedAgentArgs).toHaveBeenLastCalledWith('opencode', 'reviewer', 2)
       warn.mockRestore()
     })
 

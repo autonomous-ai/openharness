@@ -19,18 +19,13 @@ import { statSync } from 'node:fs'
 import { opencodeBin } from '../../lib/engineBin.js'
 import { resolveBinaryOnPath } from '../../lib/binaryOnPath.js'
 
-/** The first major whose TUI rejects `-m` / `--agent` and whose sessions live behind its API. */
-const OPENCODE_V2_MAJOR = 2
-
 /** The major in what `opencode --version` prints: `opencode v2.0.18` on v2, a bare `1.18.31` on v1. */
 export function parseOpencodeMajor(output: string): number | null {
   const match = /(\d+)\.\d+\.\d+/.exec(output)
   return match ? Number(match[1]) : null
 }
 
-export function isOpencodeV2(major: number | null | undefined): boolean {
-  return (major ?? 0) >= OPENCODE_V2_MAJOR
-}
+export { isOpencodeV2 } from './contract.js'
 
 /** How the version is read. A seam so the cache can be specified without a binary. */
 export interface OpencodeVersionProbe {

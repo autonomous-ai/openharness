@@ -45,7 +45,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
-import { isOpencodeV2 } from '../engines/opencode/version.js'
+import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import {
   anthropicBaseUrl, API_NETWORK_PREFIX, GRID_KEY_VAR, GRID_ROUTER_MODEL, isApiLaunch, relayBaseUrl,
   type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchOverride, type GridLaunchRequest,

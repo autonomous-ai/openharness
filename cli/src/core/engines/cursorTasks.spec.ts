@@ -1,8 +1,11 @@
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import { engineNow, loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { createCursorTaskHooks, type CursorTaskDeps } from './cursorTasks.js'
+import { createCursorTaskHooks, loadPendingCursorTasks, removePendingCursorTasks, type CursorTaskDeps } from './cursorTasks.js'
 
 const made = vi.hoisted(() => ({ managers: [] as unknown[], queues: [] as unknown[] }))
 vi.mock('../../engines/cursor/home.js', () => ({ cursorConfigDir: () => '/cursor/config', cursorDataDir: () => '/cursor/data' }))
@@ -27,7 +30,7 @@ vi.mock('../../engines/cursor/taskHookQueue.js', () => ({
 // could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
-  return { ...actual, engineNow: vi.fn(actual.engineNow) }
+  return { ...actual, engineNow: vi.fn(actual.engineNow), loadEngine: vi.fn(actual.loadEngine) }
 })
 beforeAll(async () => { await loadEngine('cursor') })
 
@@ -136,5 +139,54 @@ describe('Cursor\'s Task hooks', () => {
     tasks.onCursorTaskStart('s1', 't1', {})
     expect(built()).toEqual({ manager: undefined, queue: undefined })
     expect(deps.cursorNormalizers.size).toBe(0)
+  })
+})
+
+describe('Cursor\'s queued Tasks', () => {
+  const dirs: string[] = []
+  const dataDir = () => { const dir = mkdtempSync(join(tmpdir(), 'cursor-pending-')); dirs.push(dir); return dir }
+  const now = Date.now()
+  const task = (sessionId: string, toolUseId: string) => ({ sessionId, toolUseId, input: { prompt: toolUseId }, createdAt: now })
+  afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); vi.clearAllMocks() })
+
+  it('load none of Cursor\'s code where its hook never queued one: the start, a Stop and a forget find nothing', async () => {
+    const dir = dataDir()
+    expect(await loadPendingCursorTasks(dir)).toEqual([])
+    await removePendingCursorTasks(dir, 's1')
+    expect(loadEngine).not.toHaveBeenCalled()
+    expect(existsSync(join(dir, 'cursor-pending-tasks.json'))).toBe(false)
+  })
+
+  it('are taken at the start by Cursor\'s own code, and a session\'s dropped on its Stop or its forget', async () => {
+    const dir = dataDir()
+    const file = join(dir, 'cursor-pending-tasks.json')
+    writeFileSync(file, JSON.stringify([task('s1', 't1'), task('s2', 't2')]))
+    expect(await loadPendingCursorTasks(dir)).toEqual([task('s1', 't1'), task('s2', 't2')])
+    expect(loadEngine).toHaveBeenCalledWith('cursor')
+    await removePendingCursorTasks(dir, 's1')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([task('s2', 't2')])
+    await removePendingCursorTasks(dir, 's2')
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it('are read once the hook that holds the queue\'s lock lets go, as Cursor\'s code always waited', async () => {
+    const dir = dataDir()
+    const file = join(dir, 'cursor-pending-tasks.json')
+    mkdirSync(`${file}.lock`)
+    setTimeout(() => {
+      writeFileSync(file, JSON.stringify([task('s1', 't1')]))
+      rmSync(`${file}.lock`, { recursive: true, force: true })
+    }, 60)
+    expect(await loadPendingCursorTasks(dir)).toEqual([task('s1', 't1')])
+  })
+
+  it('are none, and stay queued, when Cursor\'s code could not be loaded', async () => {
+    const dir = dataDir()
+    const file = join(dir, 'cursor-pending-tasks.json')
+    writeFileSync(file, JSON.stringify([task('s1', 't1')]))
+    vi.mocked(loadEngine).mockResolvedValueOnce(null).mockResolvedValueOnce(null)
+    expect(await loadPendingCursorTasks(dir)).toEqual([])
+    await removePendingCursorTasks(dir, 's1')
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual([task('s1', 't1')])
   })
 })

@@ -8,10 +8,14 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 12: docs/design/2026-10-03-harnessd.md).
  */
+import { access } from 'node:fs/promises'
+import { join } from 'node:path'
+import { PENDING_TASKS_FILE } from '../../engines/cursor/contract.js'
+import type { PendingCursorTask } from '../../engines/cursor/pendingTasks.js'
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { CursorTaskHookQueue } from '../../engines/cursor/taskHookQueue.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
-import { engineNow } from '../../engines/inProcess.js'
+import { engineNow, loadEngine } from '../../engines/inProcess.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
 import type { registry } from '../../lib/registry.js'
 import type { Watcher } from '../../watcher/watcher.js'
@@ -65,4 +69,32 @@ export function createCursorTaskHooks({ emitSessionEvents, watcher, registry, cu
     tasks.queue.enqueue(sessionId, { toolUseId, input: toolInput }, normalizer)
   }
   return { cursorSubagents, cursorTaskHooks, onCursorTaskStart }
+}
+
+/**
+ * Whether Cursor's hook queued Tasks while no daemon ran, or is queueing one now: the lock it takes to write the
+ * queue, or the queue (engines/cursor/contract.ts). Neither is there on a machine whose Cursor never did, and
+ * Cursor's code is loaded only when one is: its own read and write of the queue then run as they always did. The
+ * lock is looked for first: a hook that takes it, writes the queue and lets go between the two looks leaves the
+ * queue for the second.
+ */
+async function queued(dataDir: string): Promise<boolean> {
+  const file = join(dataDir, PENDING_TASKS_FILE)
+  for (const path of [`${file}.lock`, file]) {
+    try { await access(path); return true } catch { /* not this one */ }
+  }
+  return false
+}
+
+/** The Tasks Cursor's hook queued while no daemon ran, taken at the start. None without Cursor's code. */
+export async function loadPendingCursorTasks(dataDir: string): Promise<PendingCursorTask[]> {
+  if (!await queued(dataDir)) return []
+  const cursor = await loadEngine('cursor')
+  return cursor ? cursor.loadCursorPendingTasks(dataDir) : []
+}
+
+/** A session's queued Tasks, dropped on its Stop and when it is forgotten. */
+export async function removePendingCursorTasks(dataDir: string, sessionId: string): Promise<void> {
+  if (!await queued(dataDir)) return
+  await (await loadEngine('cursor'))?.removeCursorPendingTasks(dataDir, sessionId)
 }

@@ -6,6 +6,7 @@ import { findAgyTranscript } from '../../engines/agy/session.js'
 import { copilotSessionForPid, findCopilotTranscript } from '../../engines/copilot/session.js'
 import { findCursorTranscript } from '../../engines/cursor/discovery.js'
 import { findGrokTranscript } from '../../engines/grok/session.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -18,6 +19,11 @@ vi.mock('../../engines/copilot/session.js', () => ({ copilotSessionForPid: vi.fn
 vi.mock('../../engines/cursor/discovery.js', async (real) => ({ ...await real<object>(), findCursorTranscript: vi.fn(async () => '/t/cursor.jsonl') }))
 vi.mock('../../engines/cursor/home.js', async (real) => ({ ...await real<object>(), cursorDataDir: () => '/cursor' }))
 vi.mock('../../engines/grok/session.js', () => ({ findGrokTranscript: vi.fn(async () => '/t/grok.jsonl') }))
+// The other engines' finders are their own code, loaded when asked; a test may say one could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 vi.mock('../../lib/deletedSessions.js', () => ({ isRecentlyDeleted: vi.fn(() => false) }))
 vi.mock('../../engines/sessionFiles.js', () => ({ continuationOf: vi.fn(async () => null) }))
 vi.mock('../../lib/sessionRepair.js', () => ({
@@ -333,6 +339,31 @@ describe('binding a running process to its session', () => {
       expect(findGrokTranscript).toHaveBeenCalledWith('/grok', '/work', 'grok-resumed')
       expect(findAgyTranscript).toHaveBeenCalledWith('/agy', 'agy-resumed')
       expect(findResumedTranscript).toHaveBeenCalledWith('codex', 'codex-resumed', { codexHome: undefined })
+    })
+
+    it('finds nothing without the engine\'s code: bound without a transcript, or not at all, as when none is found', async () => {
+      const run = setup()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
+      vi.mocked(loadEngine).mockResolvedValue(null)
+      try {
+        for (const engine of ['cursor', 'grok', 'agy', 'copilot']) {
+          await run.binding.bindObservedAgent(observed({ engine, resumeSessionId: 'r' } as Partial<DiscoveredTerminalAgent>))
+        }
+        expect(vi.mocked(run.deps.registry.register).mock.calls.map(([input]) => [input.engine, input.transcriptPath])).toEqual([['agy', undefined], ['copilot', undefined]])
+        // Nor is a Copilot /resume followed.
+        vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ engine: 'copilot' } as Partial<RegisteredSession>))
+        vi.mocked(copilotSessionForPid).mockResolvedValue('s2')
+        await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
+        expect(run.deps.registry.register).toHaveBeenCalledTimes(2)
+        expect([findCursorTranscript, findGrokTranscript, findAgyTranscript, findCopilotTranscript, copilotSessionForPid].map((find) => vi.mocked(find).mock.calls.length)).toEqual([0, 0, 0, 0, 0])
+      } finally { vi.mocked(loadEngine).mockReset() }
+      // Claude Code and Codex find theirs with no engine code loaded.
+      vi.mocked(loadEngine).mockClear()
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ sessionId: '' }))
+      for (const engine of ['claude', 'codex']) {
+        await run.binding.bindObservedAgent(observed({ engine, resumeSessionId: `${engine}-resumed` } as Partial<DiscoveredTerminalAgent>))
+      }
+      expect(loadEngine).not.toHaveBeenCalled()
     })
 
     it('needs a transcript for the engines whose sessions are files, and skips a deleted session', async () => {

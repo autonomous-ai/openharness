@@ -7,7 +7,7 @@ import { env } from '../config/env.js'
 import { atomicWriteJson, engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { sqliteReadAll } from './sqliteRead.js'
-import { hermesDbPath } from '../engines/hermes/home.js'
+import { hermesDbPath } from '../engines/hermes/contract.js'
 import { findResumedTranscript } from './sessionRepair.js'
 
 export class SessionCheckpointError extends Error {

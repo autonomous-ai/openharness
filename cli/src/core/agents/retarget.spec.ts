@@ -17,6 +17,11 @@ vi.mock('../../engines/opencode/sessionModel.js', async (real) => ({
   applyOpencodeSessionModel: vi.fn(async () => ({ ok: true })),
   parseOpencodeModelId: vi.fn((id: string) => ({ providerID: id.split('/')[0], modelID: id.split('/')[1] })),
 }))
+// OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 vi.mock('../../engines/opencode/version.js', () => ({ isOpencodeV2: vi.fn(() => false), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/binaryOnPath.js', () => ({ binaryOnPath: vi.fn(() => true) }))
 vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
@@ -205,6 +210,15 @@ describe('retargeting an agent', () => {
       expect(await setup(agent({ engine: 'opencode', subscriptionModel: 'claude' } as Partial<RegisteredSession>), withModel).retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
       expect(await setup(agent({ engine: 'opencode', sessionId: '' } as Partial<RegisteredSession>), withModel).retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
       vi.mocked(binaryOnPath).mockReturnValue(true)
+    })
+
+    it('refuses to move OpenCode when its code could not be loaded, before the pane is touched', async () => {
+      const { loadEngine } = await import('../../engines/inProcess.js')
+      vi.mocked(loadEngine).mockResolvedValueOnce(null)
+      const run = setup(agent({ engine: 'opencode' } as Partial<RegisteredSession>))
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
+      expect(restartAgent).not.toHaveBeenCalled()
+      expect(applyOpencodeSessionModel).not.toHaveBeenCalled()
     })
 
     it('reads the live bypass flag only when the row recorded none, and announces nothing for a row gone meanwhile', async () => {

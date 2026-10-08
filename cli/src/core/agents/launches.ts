@@ -15,7 +15,7 @@ import type { BackendSocket } from '../../backendSocket.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
 import { folderTrust } from '../../engines/launchPrep.js'
-import { opencodeMajorVersion } from '../../engines/opencode/version.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationReceipts, type AgentCreationStatus } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
@@ -184,8 +184,13 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
       if (typeof payload.agent !== 'string' || !AGENT_NAME_RE.test(payload.agent)) {
         reply({ error: 'INVALID_AGENT', detail: 'agent must be 1-64 letters, digits, `-` or `_`' }); return
       }
-      // OpenCode v2 counts as no way: its TUI exits 1 on `--agent` (engineLaunch.ts).
-      if (!supportsNamedAgent(engine, engine === 'opencode' ? opencodeMajorVersion() : null)) {
+      // OpenCode v2 counts as no way: its TUI exits 1 on `--agent` (engineLaunch.ts). Which one is installed is
+      // read by OpenCode's own probe, loaded for OpenCode alone (engines/inProcess.ts); without it, no launch.
+      const opencode = engine === 'opencode' ? await loadEngine('opencode') : null
+      if (engine === 'opencode' && !opencode) {
+        reply({ error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }); return
+      }
+      if (!supportsNamedAgent(engine, opencode ? opencode.opencodeMajorVersion() : null)) {
         reply({ error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(engine).message }); return
       }
       agent = payload.agent

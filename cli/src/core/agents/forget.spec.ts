@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { removeCursorPendingTasks } from '../../engines/cursor/pendingTasks.js'
+import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createForgetSession, type ForgetDeps } from './forget.js'
 
-vi.mock('../../engines/cursor/pendingTasks.js', () => ({ removeCursorPendingTasks: vi.fn(async () => {}) }))
+// Cursor's queued Tasks are cleared through the core's own door to them (core/engines/cursorTasks.ts).
+vi.mock('../engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
 
 function setup() {
   const agents = new Map<string, RegisteredSession>([
@@ -47,7 +48,7 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
   expect(deps.clearAgyIdleWatch).toHaveBeenCalledWith(sessionId)
   expect(deps.cursorDiscovery.remove).toHaveBeenCalledWith(sessionId)
   expect(deps.cursorSubagents.forget).toHaveBeenCalledWith(sessionId)
-  expect(removeCursorPendingTasks).toHaveBeenCalledWith('/data', sessionId)
+  expect(removePendingCursorTasks).toHaveBeenCalledWith('/data', sessionId)
   expect(deps.runtimeProfiles.forget).toHaveBeenCalledWith(sessionId)
   expect(deps.watcher.removeSession).toHaveBeenCalledWith(sessionId)
   expect(deps.stopHeartbeat).toHaveBeenCalledWith(sessionId)
@@ -58,7 +59,7 @@ function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
 }
 
 describe('forgetting a session', () => {
-  afterEach(() => { vi.restoreAllMocks(); vi.mocked(removeCursorPendingTasks).mockClear() })
+  afterEach(() => { vi.restoreAllMocks(); vi.mocked(removePendingCursorTasks).mockClear() })
 
   it('releases a session and keeps its agent: everything per-session goes, the agent and its tiles stay', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})

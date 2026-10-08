@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { loadEngine } from '../engines/inProcess.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
 import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
@@ -11,6 +12,12 @@ const GRID: GridLaunchOverride = {
   apiKey: 'gridkey-abc123',
   model: 'gpt-5',
 }
+
+// OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+vi.mock('../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 
 function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   const calls: string[] = []
@@ -100,6 +107,19 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(await buildLaunchOverrides(d, 'claude', {}, 'a')).toEqual({ ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [...DSH_SESSION_ENV] } })
     expect(await buildLaunchOverrides(d, 'claude', { gridLaunch: null, codexHome: null }, 'a')).toMatchObject({ ok: true })
     expect(calls).toEqual([])
+  })
+
+  it('refuses an OpenCode launch whose code could not be loaded, and asks the machine for the engine it launches', async () => {
+    vi.mocked(loadEngine).mockResolvedValueOnce(null)
+    expect(await buildLaunchOverrides(deps().d, 'opencode', {}, 'agent-1')).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
+    vi.mocked(loadEngine).mockClear()
+    const machine = vi.fn((_engine: string) => ({ hermesSystemManaged: false }))
+    await buildLaunchOverrides(deps({ machine }).d, 'claude', { gridLaunch: GRID, subscriptionModel: 'opus' }, 'agent-1')
+    expect(loadEngine).not.toHaveBeenCalled()
+    expect(machine.mock.calls.every(([engine]) => engine === 'claude')).toBe(true)
+    await buildLaunchOverrides(deps({ machine }).d, 'opencode', { agent: 'reviewer' }, 'agent-1')
+    expect(loadEngine).toHaveBeenCalledWith('opencode')
+    expect(machine).toHaveBeenLastCalledWith('opencode')
   })
 
   it('never lets the key into argv', async () => {

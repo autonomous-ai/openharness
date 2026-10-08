@@ -5,3 +5,4 @@
  */
 export { GrokNormalizer, grokMessagesToEvents, lastGrokTurnText } from './normalizer.js'
 export { parseGrokFooterProfile } from './runtimeProfile.js'
+export { findGrokTranscript } from './session.js'
