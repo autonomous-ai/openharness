@@ -1,107 +1,165 @@
 #!/usr/bin/env python3
-"""On-demand, loopback-only Connections page for Harness OS."""
+"""On-demand, loopback-only Connectors page and commands for Harness OS.
+
+harness connections                 open the Connectors page
+harness connections connect CODE    sign in from the terminal
+harness connections disconnect CODE
+harness connections refresh [CODE]  renew tokens that are due (or CODE now)
+harness connections sync            give agents their connections again
+harness connections list|info|call  see connector.py
+"""
 import argparse
 import contextlib
 import hmac
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import io
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-import os
-from pathlib import Path
 import re
 import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
+from pathlib import Path
 
-import connector
+import agents
 import connection_store as store
+import connector
+import gateway
+import oauth
+import renew
 
 ASSETS = Path(__file__).parent / "web"
+GATEWAY_CACHE_SECONDS = 60
 
 
 def identity_proof(key, nonce):
     return hmac.new(key.encode(), ("harness-connections-v1:" + nonce).encode(), "sha256").hexdigest()
 
 
-# Read-only identity checks. API keys are not saved until the check succeeds.
-# OAuth-only services stay unavailable until browser authorization and renewal
-# work for a local Harness user. Intern hardware enrollment is not part of this.
-MANUAL = {
-    "github": ("GET", "https://api.github.com/user", [], "https://github.com/settings/tokens"),
-    "notion": ("GET", "https://api.notion.com/v1/users/me", [], "https://www.notion.so/profile/integrations"),
-    "linear": ("POST", "https://api.linear.app/graphql", ["--json", '{"query":"{ viewer { id name email } }"}'],
-               "https://linear.app/settings/api"),
-    "asana": ("GET", "https://app.asana.com/api/1.0/users/me", [], "https://app.asana.com/0/my-apps"),
-    "figma": ("GET", "https://api.figma.com/v1/me", [], "https://developers.figma.com/docs/rest-api/personal-access-tokens/"),
-}
+def custom_code(name, taken):
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "server"
+    code = base if base not in store.CATALOG else "custom-" + base
+    n = 2
+    while code in taken:
+        code, n = f"{base}-{n}", n + 1
+    return store.validate_code(code)
 
 
-def catalog(vault):
+def sign_in_for(vault, code):
+    """The sign-in that connects CODE: the gateway's or this computer's own."""
+    item = store.CATALOG.get(code)
+    if item is None:
+        raise store.StoreError("Unknown connection.")
+    if item["auth"] == "app":
+        return gateway.SignIn(code)
+    return oauth.SignIn(vault, item["mcp_url"])
+
+
+def finish(vault, code, token, label=None):
+    if label:
+        token["label"] = label
+        token["source"] = "custom"
+    vault.save(code, token)
+    with contextlib.suppress(store.StoreError, OSError):
+        agents.sync(vault)
+
+
+def disconnect(vault, code):
+    token = vault.token(code)
+    if token and token.get("source") == "gateway":
+        gateway.disconnect(code)
+    vault.disconnect(code)
+    with contextlib.suppress(store.StoreError, OSError):
+        agents.sync(vault)
+
+
+class Flows:
+    """Browser sign-ins in progress, each finishing on its own thread."""
+
+    def __init__(self, vault):
+        self.vault, self.items, self.lock = vault, {}, threading.Lock()
+
+    def start(self, code, sign_in, label=None):
+        authorize = sign_in.prepare()
+        flow = secrets.token_urlsafe(12)
+        record = {"connector": code, "state": "pending", "error": "", "cancel": False}
+        with self.lock:
+            # One sign-in per service: a newer one replaces a forgotten tab.
+            for other in self.items.values():
+                if other["connector"] == code and other["state"] == "pending":
+                    other["cancel"] = True
+            self.items[flow] = record
+
+        def run():
+            try:
+                token = sign_in.wait(lambda: record["cancel"])
+                finish(self.vault, code, token, label)
+                record["state"] = "connected"
+            except (store.StoreError, OSError) as error:
+                record.update(state="failed", error=str(error) if isinstance(error, store.StoreError)
+                              else "The sign-in did not finish. Try again.")
+        threading.Thread(target=run, daemon=True).start()
+        return {"flow": flow, "authorize_url": authorize}
+
+    def get(self, flow):
+        with self.lock:
+            record = self.items.get(flow)
+        if not record:
+            raise store.StoreError("This sign-in has ended. Try again.")
+        return {"connector": record["connector"], "state": record["state"], "error": record["error"]}
+
+
+def catalog(vault, offered=None):
+    """The page's cards: every service, connected first, then custom servers."""
+    tokens = vault.tokens()
+    signed_in = gateway.session() is not None
+    offered = offered or {}
     items = []
-    for code in store.SERVICES:
-        if code == "figma-api" and not vault.path(code).exists():
+    for code, item in store.CATALOG.items():
+        card = vault.status(code, tokens.get(code) or {})
+        card.update(description=item["description"], color=item["color"], auth=item["auth"], custom=False, reason="")
+        if item["auth"] == "app" and card["state"] == "not_connected":
+            if not signed_in:
+                card["reason"] = "Sign in to Harness first (harness login)."
+            elif offered and code not in offered:
+                card["reason"] = "Not available yet."
+        items.append(card)
+    for code, token in tokens.items():
+        if code in store.CATALOG:
             continue
-        try:
-            item = vault.status(code)
-        except store.StoreError:
-            item = {"connector": code, "name": store.SERVICES[code], "state": "unreadable", "scopes": []}
-        item["manual"] = code in MANUAL
-        item["manage_url"] = MANUAL[code][3] if code in MANUAL else None
-        items.append(item)
-    return items
+        card = vault.status(code, token)
+        card.update(description=token.get("mcp_entry", {}).get("url", ""), color="#59634b", auth="custom", custom=True, reason="")
+        items.append(card)
+    return {"connections": items, "signed_in": signed_in}
 
 
-def connect_token(vault, code, token):
-    if code not in MANUAL:
-        raise store.StoreError("Browser sign-in is not available for this service yet.")
-    entry = store.clean_entry({"auth_type": "pat", "api_key": token, "obtained_at": int(time.time())})
-    method, url, args, _ = MANUAL[code]
-    output, error = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
-        status = connector.cmd_call(code, method, url, args, entry_override=entry)
-    if status:
-        raise store.StoreError("Could not verify this token. Check its permissions and your connection, then try again.")
-    try:
-        result = json.loads(output.getvalue())
-        if not isinstance(result, dict):
-            raise ValueError()
-        if code == "linear":
-            if result.get("errors"):
-                raise ValueError()
-            account = result["data"]["viewer"]
-        elif code == "asana":
-            account = result["data"]
-        else:
-            account = result
-        if not isinstance(account, dict) or not (account.get("id") or account.get("gid")):
-            raise ValueError()
-        identity = account.get("email") or account.get("login") or account.get("name") or account.get("handle") or ""
-        if not isinstance(identity, str):
-            raise ValueError()
-        entry["user_email"] = identity[:512]
-    except (ValueError, KeyError, TypeError):
-        raise store.StoreError("The service did not confirm this account. The token was not saved.")
-    vault.save(code, entry)
-    return vault.status(code)
-
-
-class PageServer(HTTPServer):
+class PageServer(ThreadingHTTPServer):
     allow_reuse_address = False
+    daemon_threads = True
 
     def __init__(self, vault=None, port=0, idle_seconds=900):
         self.vault = vault or store.Store()
+        self.flows = Flows(self.vault)
         self.key = secrets.token_urlsafe(32)
         self.idle_seconds = idle_seconds
         self.last_request = time.monotonic()
+        self.offered, self.offered_at = {}, 0.0
         super().__init__(("127.0.0.1", port), PageHandler)
         self.origin = "http://127.0.0.1:" + str(self.server_address[1])
         self.timeout = 1
 
+    def gateway_offers(self):
+        if time.monotonic() - self.offered_at > GATEWAY_CACHE_SECONDS:
+            self.offered, self.offered_at = gateway.available(), time.monotonic()
+        return self.offered
+
+    def busy(self):
+        return any(f["state"] == "pending" for f in self.flows.items.values())
+
     def serve_until_idle(self):
-        while time.monotonic() - self.last_request < self.idle_seconds:
+        while self.busy() or time.monotonic() - self.last_request < self.idle_seconds:
             self.handle_request()
 
 
@@ -110,7 +168,7 @@ class PageHandler(BaseHTTPRequestHandler):
 
     def setup(self):
         super().setup()
-        self.connection.settimeout(5)
+        self.connection.settimeout(15)
 
     def log_message(self, *_args):
         pass  # Do not log account names, request bodies or session credentials.
@@ -146,12 +204,19 @@ class PageHandler(BaseHTTPRequestHandler):
                 return
             self.reply(200, {"proof": identity_proof(self.server.key, nonce)})
             return
-        if self.path == "/api/connections":
+        if self.path == "/api/connections" or self.path.startswith("/api/flows/"):
             if not self.authenticated():
                 self.reply(403, {"error": "Open harness connections again to continue."})
                 return
             self.server.last_request = time.monotonic()
-            self.reply(200, {"connections": catalog(self.server.vault)})
+            try:
+                if self.path == "/api/connections":
+                    offered = self.server.gateway_offers()
+                    self.reply(200, catalog(self.server.vault, offered))
+                else:
+                    self.reply(200, self.server.flows.get(self.path.removeprefix("/api/flows/")))
+            except store.StoreError as error:
+                self.reply(400, {"error": str(error)})
             return
         files = {"/": ("index.html", "text/html; charset=utf-8"),
                  "/style.css": ("style.css", "text/css; charset=utf-8"),
@@ -175,13 +240,17 @@ class PageHandler(BaseHTTPRequestHandler):
             data = json.loads(self.rfile.read(length))
             if not isinstance(data, dict):
                 raise ValueError()
-            code = store.validate_code(data.get("connector"))
             self.server.last_request = time.monotonic()
+            vault = self.server.vault
             if self.path == "/api/connect":
-                result = connect_token(self.server.vault, code, data.get("token"))
+                code = store.validate_code(data.get("connector"))
+                result = self.server.flows.start(code, sign_in_for(vault, code))
+            elif self.path == "/api/custom":
+                result = self.custom(data)
             elif self.path == "/api/disconnect":
-                self.server.vault.disconnect(code)
-                result = self.server.vault.status(code)
+                code = store.validate_code(data.get("connector"))
+                disconnect(vault, code)
+                result = {"connector": code, "state": "not_connected"}
             else:
                 self.reply(404, {"error": "Not found."})
                 return
@@ -192,6 +261,20 @@ class PageHandler(BaseHTTPRequestHandler):
             self.reply(400, {"error": "Invalid request."})
         except (OSError, TimeoutError):
             self.reply(503, {"error": "Connection unavailable. Try again."})
+
+    def custom(self, data):
+        """Add custom: a remote MCP server, signed in like any other when it asks."""
+        name = store.text(data.get("name"), 64).strip()
+        url = store.clean_url((data.get("url") or "").strip())
+        headers = store.clean_headers(data.get("headers") or {})
+        if not name:
+            raise store.StoreError("Give the server a name.")
+        vault = self.server.vault
+        code = custom_code(name, set(vault.tokens()) | set(store.CATALOG))
+        if headers:
+            finish(vault, code, {"mcp_entry": {"url": url, "headers": headers}, "obtained_at": int(time.time())}, label=name)
+            return {"connector": code, "state": "connected"}
+        return self.server.flows.start(code, oauth.SignIn(vault, url), label=name)
 
 
 def running_page(vault):
@@ -224,9 +307,16 @@ def forget_page(vault, identity):
             path.unlink(missing_ok=True)
 
 
-def open_page():
-    browser = shutil.which("hn-browser")
+def browse(url):
+    browser = shutil.which("hn-browser") or shutil.which("xdg-open")
     if not browser:
+        return False
+    subprocess.Popen([browser, url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return True
+
+
+def open_page():
+    if not shutil.which("hn-browser"):
         raise store.StoreError("Open this page on a Harness computer, or run 'connections.py serve' for local review.")
     vault = store.Store()
     with store.locked(vault.root):
@@ -243,8 +333,40 @@ def open_page():
                 time.sleep(0.1)
             if not url:
                 raise store.StoreError("Could not open Connections.")
-    subprocess.Popen([browser, url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    browse(url)
     print("Connections opened in the browser.")
+
+
+def connect_here(code):
+    """Sign in from the terminal: the same flow as the page, waited for here."""
+    vault = store.Store()
+    sign_in = sign_in_for(vault, store.validate_code(code))
+    url = sign_in.prepare()
+    if url:
+        print("Opening the sign-in page. If it does not open, visit:\n" + url, flush=True)
+        browse(url)
+    finish(vault, code, sign_in.wait())
+    print(f"{store.SERVICES[code]} connected. Agents can use it now.")
+    return 0
+
+
+def serve(argv):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("serve")
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--background", action="store_true")
+    args = parser.parse_args(argv)
+    with PageServer(port=args.port) as server:
+        identity = {"port": server.server_address[1], "key": server.key}
+        store.write_private(server.vault.root / "page.json", identity)
+        try:
+            if not args.background:
+                print(server.origin + "/#" + server.key, flush=True)
+            server.serve_until_idle()
+        finally:
+            with contextlib.suppress(store.StoreError, OSError):
+                forget_page(server.vault, identity)
+    return 0
 
 
 def main(argv):
@@ -252,24 +374,32 @@ def main(argv):
         if not argv or argv == ["open"]:
             open_page()
             return 0
-        if argv[0] != "serve":
-            return connector.main(argv)
-        parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument("serve")
-        parser.add_argument("--port", type=int, default=0)
-        parser.add_argument("--background", action="store_true")
-        args = parser.parse_args(argv)
-        with PageServer(port=args.port) as server:
-            identity = {"port": server.server_address[1], "key": server.key}
-            store.write_private(server.vault.root / "page.json", identity)
-            try:
-                if not args.background:
-                    print(server.origin + "/#" + server.key, flush=True)
-                server.serve_until_idle()
-            finally:
-                with contextlib.suppress(store.StoreError, OSError):
-                    forget_page(server.vault, identity)
-        return 0
+        command = argv[0]
+        if command == "serve":
+            return serve(argv)
+        if command == "connect" and len(argv) == 2:
+            return connect_here(argv[1])
+        if command == "disconnect" and len(argv) == 2:
+            disconnect(store.Store(), store.validate_code(argv[1]))
+            print("Disconnected on this computer. Revoke access at the provider to remove it elsewhere.")
+            return 0
+        if command == "sync" and len(argv) == 1:
+            changed = agents.sync(store.Store())
+            print("Agents updated: " + (", ".join(sorted(changed)) or "none installed"))
+            return 0
+        if command == "refresh" and len(argv) <= 2:
+            vault = store.Store()
+            if len(argv) == 2:
+                renew.refresh(vault, store.validate_code(argv[1]), force=True)
+                return 0
+            failed = renew.refresh_due(vault)
+            for code, error in failed.items():
+                print(f"{code}: {error}", file=sys.stderr)
+            return 3 if failed else 0
+        if command == "bridge":
+            import bridge
+            return bridge.main(argv[1:])
+        return connector.main(argv)
     except (store.StoreError, OSError) as error:
         print(str(error) if isinstance(error, store.StoreError) else "Could not open Connections.", file=sys.stderr)
         return 1
