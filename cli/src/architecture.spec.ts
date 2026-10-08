@@ -232,16 +232,6 @@ const theirs = (file: string): boolean => THEIRS.some((pattern) => pattern.test(
 const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
   'engines/cursor/pendingTasks.ts': '(o6) Cursor\'s pending tasks, read at the start and cleared on Stop and forget: a declared file, then a lazy load',
   'lib/hermesHome.ts': '(o6) homes: which Hermes store a session\'s history is in',
-  'engines/agy/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/amp/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/commandcode/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/devin/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/grok/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/hermes/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/kilo/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/muse/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/opencode/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/pi/runtimeProfile.ts': '(o4) runtime profiles and model switching',
   'engines/agy/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
   'engines/amp/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
   'engines/commandcode/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
@@ -294,6 +284,9 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['core/transcripts/databaseHistory.ts', '(o3)'],
   ['core/engines/cursorTasks.ts', '(o3)'],
   ['core/turns/agyBackstop.ts', '(o3)'],
+  // What the core reads of their model and effort, and how a switch of theirs would be driven.
+  ['lib/runtimeProfileManager.ts', '(o4)'],
+  ['lib/runtimeControl.ts', '(o4)'],
 ]
 
 describe('the daemon\'s shape', () => {
