@@ -350,9 +350,9 @@
 
   <!-- ===================== 2. NEW USER ===================== -->
   <h2>2. Arrival: someone with no agents yet</h2>
-  <p class="lede">No New Harness box, no starter game, no webview: one tab with three agents, the same terminals as every other harness, so the first screen matches the rest of the app.
-    OpenCode runs full height on the left, ready and focused, with a first task already in its message box. Codex and Claude Code sit on the right, one above the other, showing the person
-    that one window holds several agents.</p>
+  <p class="lede">No New Harness box, no starter game, no webview: one tab, three ordinary harness panes. OpenCode runs full height on the left, ready and focused, with a first task in its
+    message box. Codex and Claude Code open on the right and install themselves right away, so by the time the person looks over, each shows its own sign-in screen.
+    No special panes: these are the same panes ⌘N makes, and each has the usual × to close it.</p>
   <div class="win">
     <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on">code</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
     <div class="ws">
@@ -365,30 +365,56 @@
             <div class="composer"><span class="sel">make a small web page that shows today's date</span><span class="cur"></span><span class="ghint">⏎ send · or type your own</span></div>
           </div>
         </div>
-        <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">not set up yet</span></div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">first-project</span><span style="margin-left:.8cqw;color:var(--muted)">×</span></div>
           <div class="b" style="display:grid;place-items:center;text-align:center;font-family:var(--sans)">
-            <div><img src="../../../desktop/assets/engine-icons/codex.png" alt="" style="width:2.6cqw;height:2.6cqw;border-radius:.5cqw;opacity:.9"><div style="font-size:1.25cqw;color:var(--text);font-weight:600;margin-top:.6cqw">Codex</div>
-            <div style="font-size:1cqw;color:var(--muted);margin-top:.3cqw;max-width:22cqw">Uses your ChatGPT plan. Installs and asks you to sign in when you first type here.</div>
-            <div style="font-size:1cqw;color:var(--muted);margin-top:.8cqw;border:1px solid var(--line);border-radius:2cqw;padding:.35cqw 1cqw;display:inline-block">Type here to set it up</div></div>
+            <div style="width:24cqw"><img src="../../../desktop/assets/engine-icons/codex.png" alt="" style="width:2.6cqw;height:2.6cqw;border-radius:.5cqw"><div style="font-size:1.3cqw;color:var(--text);font-weight:600;margin:.6cqw 0 .8cqw">Getting Codex ready…</div>
+            <div class="meter" style="width:100%"><i style="width:55%;background:#6d8cff"></i></div>
+            <div style="font-size:.95cqw;color:var(--muted);margin-top:.6cqw">about 9 s</div>
+            <div style="font-size:.95cqw;color:var(--muted);margin-top:.7cqw;border:1px solid var(--line);border-radius:2cqw;padding:.25cqw .9cqw;display:inline-block">Show details</div></div>
           </div></div>
-        <div class="p"><div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">not set up yet</span></div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">first-project</span><span style="margin-left:.8cqw;color:var(--muted)">×</span></div>
           <div class="b" style="display:grid;place-items:center;text-align:center;font-family:var(--sans)">
-            <div><img src="../../../desktop/assets/model-icons/claude.png" alt="" style="width:2.6cqw;height:2.6cqw;border-radius:.5cqw;opacity:.9"><div style="font-size:1.25cqw;color:var(--text);font-weight:600;margin-top:.6cqw">Claude Code</div>
-            <div style="font-size:1cqw;color:var(--muted);margin-top:.3cqw;max-width:22cqw">Uses your Claude plan. Installs and asks you to sign in when you first type here.</div>
-            <div style="font-size:1cqw;color:var(--muted);margin-top:.8cqw;border:1px solid var(--line);border-radius:2cqw;padding:.35cqw 1cqw;display:inline-block">Type here to set it up</div></div>
+            <div style="width:24cqw"><img src="../../../desktop/assets/model-icons/claude.png" alt="" style="width:2.6cqw;height:2.6cqw;border-radius:.5cqw"><div style="font-size:1.3cqw;color:var(--text);font-weight:600;margin:.6cqw 0 .8cqw">Getting Claude Code ready…</div>
+            <div class="meter" style="width:100%"><i style="width:80%;background:#6d8cff"></i></div>
+            <div style="font-size:.95cqw;color:var(--muted);margin-top:.6cqw">almost there</div>
+            <div style="font-size:.95cqw;color:var(--muted);margin-top:.7cqw;border:1px solid var(--line);border-radius:2cqw;padding:.25cqw .9cqw;display:inline-block">Show details</div></div>
           </div></div>
       </div>
       <div class="status"><span>Harnesses 3</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>first-project</span></div>
     </div>
   </div>
-  <p class="cap"><b>First screen for a brand-new person.</b> One tab, three agents. Return in OpenCode sends the pre-filled first task; the result shows in the terminal, as in any harness.</p>
+  <p class="cap"><b>First seconds.</b> OpenCode is ready at once (downloaded during setup). Codex and Claude Code show the friendly install screen (#1069), about 20 s and 12 s.</p>
+  <div class="win">
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on">code</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
+    <div class="ws">
+      <div class="panes" style="grid-template-columns: 1.25fr 1fr; grid-template-rows: 1fr 1fr">
+        <div class="p" style="grid-row: 1 / span 2">
+          <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">~/harnesses/first-project</span></div>
+          <div class="b">
+            <span class="dim">Welcome to Harness: all your machines, all your agents, in one place.</span><br>
+            <span class="dim">OpenCode is free and ready. Press Return to try the task below, or type your own.</span><br><br>
+            <div class="composer"><span class="sel">make a small web page that shows today's date</span><span class="cur"></span><span class="ghint">⏎ send · or type your own</span></div>
+          </div>
+        </div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">first-project</span><span style="margin-left:.8cqw;color:var(--muted)">×</span></div>
+          <div class="b">Welcome to <b style="color:var(--text)">Codex</b>, OpenAI's command-line coding agent<br><br>
+            Sign in with ChatGPT to use Codex as part of your paid plan<br>or connect an API key for usage-based billing<br><br>
+            <span style="color:#5ac8fa">&gt; 1. Sign in with ChatGPT</span><br>&nbsp;&nbsp;&nbsp;2. Sign in with Device Code<br>&nbsp;&nbsp;&nbsp;3. Provide your own API key<br><br><span class="dim">Press enter to continue</span></div></div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">first-project</span><span style="margin-left:.8cqw;color:var(--muted)">×</span></div>
+          <div class="b">Welcome to <b style="color:var(--text)">Claude Code</b><br><br>
+            Select login method:<br><br><span style="color:#e8927c">❯ 1. Claude account with subscription</span><br>&nbsp;&nbsp;&nbsp;2. Anthropic Console account<br>&nbsp;&nbsp;&nbsp;3. 3rd-party platform<br><br><span class="dim">Enter to confirm</span></div></div>
+      </div>
+      <div class="status"><span>Harnesses 3</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>first-project</span></div>
+    </div>
+  </div>
+  <p class="cap"><b>Half a minute later.</b> Codex and Claude Code show their own sign-in screens, exactly as they would in any terminal. Signing in is optional; × closes either pane.</p>
   <p class="note"><b>Logic:</b>
-    <b>OpenCode</b> starts at once in a new project folder (it was downloaded during setup), with a first task pre-filled and selected in Harness's in-pane composer: Return sends it, typing replaces it, so the box is never blank.
-    The two lines above it are printed by Harness, not the agent.
-    <b>Codex and Claude Code</b> are not installed yet, so their panes start quiet: nothing downloads until the person types in one. Then the friendly install screen from #1069 shows
-    ("Getting Codex ready…", about 20 s), followed by that agent's own sign-in. That keeps a first launch from downloading two agents nobody asked for.
-    <b>Someone with one of them already</b> is not in this group (section 3 applies). <b>Layout:</b> Harness's existing three-pane grid, one large pane and two stacked.<br>
-    <b>To decide:</b> install Codex and Claude Code right away instead, so they are ready by the time the person looks at them (about 30 s of downloads, but no wait later)?</p>
+    <b>OpenCode</b> starts at once in a new project folder, with a first task pre-filled and selected in Harness's in-pane composer: Return sends it, typing replaces it, so the box is never blank.
+    The two lines above it are printed by Harness.
+    <b>Codex and Claude Code</b> are created as normal harnesses in the same project, with no first message, so each installs in its pane (behind #1069's screen) and then opens on its own sign-in.
+    Nothing new is built for these panes. <b>Cost:</b> about 30 s of downloads on the first launch, in the background while the person uses OpenCode.
+    <b>If a sign-in can't be reached</b> (for example Anthropic blocked on the network), the pane keeps the agent's own error and becomes a shell, instead of disappearing. Fixed today on #1052,
+    found by this very flow on a VM. <b>Only for someone with none of the three agents</b>; anyone with Claude Code or Codex gets section 3.</p>
 
   <h2>3. Arrival: someone who already uses Claude Code and Codex</h2>
   <p class="lede">Their most recent sessions that are not running anywhere open by themselves. Most recent means most recently active: the same order as ⌘P and the recent list on ⌘T, by each conversation's last activity. With both agents, tab 1 holds the most recently active Claude Code session and the most recently active Codex session side by side,
@@ -475,19 +501,19 @@
     <b>Recent sessions and their order (screen 3): yes.</b> The daemon's <code>session_search</code>, asked with a time and no words, returns recent Claude Code and Codex sessions with engine,
     folder, title and last activity; the welcome page reads it today and sorts by <code>lastActivityAt</code>, as ⌘P does. Whether a conversation is open somewhere else is what the daemon already
     checks before resuming one (it refuses a conversation open in another terminal).<br>
-    <b>Panes whose agent starts on the first keystroke (screens 2 and 3):</b> new plumbing, the largest piece of this build.<br>
+    <b>Panes whose agent starts on the first keystroke (screen 3 only):</b> new plumbing, the largest piece of this build. Screen 2 no longer needs it.<br>
     <b>Friendly agent install (screen 4): built</b> as #1069 and checked on a fresh VM.</p>
 
   <h2>Decided</h2>
   <p class="note" style="font-size:15px;line-height:1.7">
     <b>Tour:</b> 5 slides: machines, agents, ⌘P, ⌘N, then sessions + the Harness phone app + the Harness device. Tagline "All your machines. All your agents. One command center." Harness opens by itself when setup finishes; no button.<br>
-    <b>New users:</b> one tab, OpenCode full height on the left with a first task pre-filled, Codex and Claude Code stacked on the right and set up on first keystroke. No game, no webview. OpenCode is downloaded only when there is no agent engine.<br>
+    <b>New users:</b> one tab, OpenCode full height on the left with a first task pre-filled; Codex and Claude Code stacked on the right, installing right away and then showing their own sign-in. Ordinary panes, closable. No game, no webview. OpenCode is downloaded only when there is no agent engine.<br>
     <b>Not in this build:</b> any webview or preview. Help ▸ Welcome Tour is in the macOS menu bar's Help menu.<br>
     <b>Existing users:</b> only sessions not running anywhere. Tab 1 = most recently active Claude Code + most recently active Codex; tab 2 = the next 3 most recently active, both agents where possible (order = ⌘P / ⌘T recents, by last activity); one agent = its own recent sessions.
     A pane's agent starts on the first keystroke. No welcome strip.<br>
     <b>Pickers:</b> no status badges; agent installs get a friendly progress screen instead of installer text (built: #1069, checked on a fresh VM).<br>
     <b>Not changed:</b> the footer and everything outside onboarding. (Footers in these renders now match the app: usage on the left after Models.)<br>
-    <b>Still open:</b> Codex and Claude Code panes for new users: set up on first keystroke (rendered), or install right away?</p>
+    <b>Still open:</b> nothing; waiting for your approval.</p>
 </main>
 </body>
 </html>
