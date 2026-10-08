@@ -102,8 +102,11 @@ while True:
     receipt['apply_seconds'] = round(time.monotonic() - started, 3)
     assert version() == 'harness-os ' + manifest['package']['version']
     assert json.loads(Path('/usr/share/harness-os/runtime.json').read_text()) == manifest['runtime']
+    # The screen showing "Restart when ready" is still there after the package's systemd reload,
+    # before anything restarts it: 0.1.1's BindsTo stopped it mid-update from preview 14.
+    run('systemctl', '--user', 'is-active', '--quiet', 'harness-os.target', 'hn-screen')
     alive()
-    receipt['checks'].append('Package and cached dependencies installed offline and verified without restarting the existing terminal process')
+    receipt['checks'].append('Package and cached dependencies installed offline and verified without restarting the existing terminal process or stopping the screen')
     run('sudo', 'harness', 'upgrade', str(bundle))
     alive()
     receipt['checks'].append('Repeated apply recognizes the installed build without another transaction')

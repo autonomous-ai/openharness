@@ -119,6 +119,7 @@ export function createRecaps(core: CoreApi, options: RecapsOptions = {}): Recaps
         return
       case 'asked': notifications.asked(event.sessionId, event.requestId); return
       case 'answered': notifications.answered(event.sessionId, event.requestId); return
+      case 'settled': mirror.catchUp(know(event.session)); return
       case 'rejoined': {
         const now = new Set(event.working)
         for (const sessionId of new Set([...working.keys(), ...now])) working.set(sessionId, now.has(sessionId))

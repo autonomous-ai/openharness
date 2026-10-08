@@ -7,7 +7,7 @@ import { basename, dirname, join, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { hermesDbPath } from '../engines/hermes/home.js'
 import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
-import { builtinSqlite, sqliteReadAll } from './sqliteRead.js'
+import { sqliteReadAll } from './sqliteRead.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { SessionCheckpointStore } from './sessionCheckpoint.js'
 import type { StopAgentOptions } from './stopAgentService.js'
@@ -77,6 +77,8 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
     sessionTable = 'session_v2'; children = [['session_message', `session_id = ${id}`]]
   }
   await query(`SELECT id FROM ${sessionTable} WHERE id = ${id}`)
+  // The binding, only for a purge of a store-backed engine's history: the monitor's process imports this module.
+  const { builtinSqlite } = await import('./sqliteBuiltin.js')
   if (!builtinSqlite()) await exec('sqlite3', ['--version'], { timeout: 2500, maxBuffer: 4096 })
   const allowedTables = new Set([sessionTable, ...children.map(([table]) => table)])
   if ((await query("SELECT name, tbl_name FROM sqlite_master WHERE type='trigger'")).some(t => allowedTables.has(String(t.tbl_name)))) {
@@ -130,7 +132,7 @@ export async function eraseNativeHistory(history: History): Promise<number> {
     const current = file(history.database)
     if (current.dev !== history.databaseFile?.dev || current.ino !== history.databaseFile?.ino) fail('The engine history store changed. Review deletion again.')
     const sql = ['PRAGMA busy_timeout=1000;', 'PRAGMA foreign_keys=ON;', 'BEGIN IMMEDIATE;', ...history.statements!, 'COMMIT;'].join('\n')
-    const Database = builtinSqlite()
+    const Database = (await import('./sqliteBuiltin.js')).builtinSqlite()
     if (Database) {
       const db = new Database(history.database, { readOnly: false })
       try { db.exec(sql) } finally { db.close() }

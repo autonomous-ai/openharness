@@ -28,6 +28,9 @@ class MainFlutterWindow: NSWindow {
   private var notifications: HarnessNotifications?
 
   override func awakeFromNib() {
+    // Before the engine exists: its first frame already draws from the
+    // back-buffer cache this patches (flutter/flutter#185394).
+    SurfaceCacheGuard.install()
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
     self.contentViewController = flutterViewController

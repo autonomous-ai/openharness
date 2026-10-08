@@ -2,14 +2,6 @@ name: Harness OS Apple firmware preservation
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['os-polish/t2-firmware']
-    paths:
-      - 'os/platforms/apple-t2/firmware_names.py'
-      - 'os/tools/prepare-t2-firmware.py'
-      - 'os/tests/test_t2_firmware.py'
-      - 'os/tests/t2_firmware_reference.py'
-      - '.github/workflows/os-t2-firmware.yml'
 
 permissions:
   contents: read

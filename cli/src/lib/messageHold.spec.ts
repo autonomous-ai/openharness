@@ -222,7 +222,7 @@ describe('what the person is told', () => {
       'Claude Code is asking whether to update. Answer it in its terminal, then send the message again.',
       'Claude Code is asking whether to switch to a new model. Answer it in its terminal, then send the message again.',
       'Claude Code is asking how to sign in. Sign in in its terminal, then send the message again.',
-      'Claude Code has a list of suggestions open in its prompt, where Enter would pick one. Close it with Esc in its terminal, then send the message again.',
+      'Claude Code message not sent. Close suggestions with Esc in its terminal, then retry.',
       'Claude Code isn\'t showing its prompt; finish what\'s on its screen in its terminal, then send the message again.',
       'Claude Code\'s screen could not be read, so the message was not typed. Send it again in a moment.',
     ])

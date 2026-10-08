@@ -52,7 +52,7 @@ import { copilotTranscriptPath } from '../engines/copilot/session.js'
 import { bootChanged, currentBootId } from './bootId.js'
 import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
-import { mergeTerminalRuntimes, processIdentityKey, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
+import { mergeTerminalRuntimes, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
@@ -1225,10 +1225,7 @@ class Registry {
         // place instead of deleting/recreating its tile. Once bound, process identity remains strict.
         !agent.sessionId
         || !agent.processIdentity
-        || (
-          agent.processIdentity.pid === processIdentity.pid
-          && agent.processIdentity.startMarker === processIdentity.startMarker
-        )
+        || sameProcessIdentity(agent.processIdentity, processIdentity)
       ))
     const existing = processAgent ?? routeAgent
     if (existing) {
@@ -2244,9 +2241,7 @@ class Registry {
             if (otherId === agentId) continue
             const otherRow = strictPersistedRow(other)
             if (!otherRow) continue
-            const sameProcess = !!process && !!otherRow.processIdentity && otherRow.engine === engine
-              && process.pid === otherRow.processIdentity.pid
-              && process.startMarker === otherRow.processIdentity.startMarker
+            const sameProcess = otherRow.engine === engine && sameProcessIdentity(process, otherRow.processIdentity)
             const sameSession = !!sessionId && otherRow.sessionId === sessionId
             const sameRoute = otherRow.runtimes.some((runtime) => routes.has(terminalRouteKey(runtime)))
             if (!sameProcess && !sameSession && !sameRoute) continue

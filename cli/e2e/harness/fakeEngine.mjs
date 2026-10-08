@@ -526,6 +526,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const suggestions = (text) => {
     const token = text.split(/\s/).at(-1) ?? ''
     if (bottom || token === dismissed || !/^[/@]/.test(token)) return null
+    // Codex only suggests a slash command at the beginning of its first line (sync_command_popup).
+    // A path in ordinary prose must not open a menu just because it ends the draft.
+    if (engine === 'codex' && token.startsWith('/') && !text.startsWith('/')) return null
     const found = token.startsWith('/')
       ? COMMANDS.filter(([name]) => name.startsWith(token))
       : FILES.filter((file) => file.startsWith(token.slice(1))).map((file) => [file, ''])
@@ -677,7 +680,13 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const dialogKeys = (chunk) => {
     for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
       if (!dialog) return
-      const settle = (choice) => { eraseDialog(); const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice) }
+      const settle = (choice) => {
+        // An old dialog can survive in tmux scrollback after a redraw/resize, as in the chaos run.
+        // Keep the whole frame for that acceptance case; the composer below it is the live screen.
+        if (dialog.keepInScrollback) process.stdout.write('\r\n')
+        else eraseDialog()
+        const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice)
+      }
       const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
       if (key.startsWith('\x1b[200~')) {
         if (dialog.kind !== 'permit' && engine === 'codex') dialog.notes = key.slice(6).replace(/\x1b\[201~$/, '')
@@ -1199,11 +1208,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await permitted(command, row)
       return
     }
-    if (directive?.[1] === 'ask') {
+    if (directive?.[1] === 'ask' || directive?.[1] === 'askscrollback') {
       // A real engine thinks before it asks; a dialog already on screen when its turn began reads to the
       // daemon as the previous turn's (askQuestion.ts `noteTurnStart`).
       await new Promise((resolve) => setTimeout(resolve, 2_000))
-      const choice = await new Promise((resolve) => { eraseComposer(); dialog = { cursor: 0, drawn: 0, resolve }; drawDialog() })
+      const choice = await new Promise((resolve) => { eraseComposer(); dialog = { cursor: 0, drawn: 0, keepInScrollback: directive[1] === 'askscrollback', resolve }; drawDialog() })
       if (choice === null) {
         say('(question cancelled)\r\n')
         await finish('(question cancelled)')

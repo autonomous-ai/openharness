@@ -1,7 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { RistrettoPoint } from '@noble/curves/ed25519'
 import * as C from './core.js'
-import { pwCpaceGenerator, pwContext, stretchPassword } from './passwordPake.js'
+import { PW_SCRYPT_TEST_TIMEOUT_MS, pwCpaceGenerator, pwContext, stretchPassword } from './passwordPake.js'
+
+// Most cases here run one or two real scrypts (N=2^17), the cost being the point: the budget the other password
+// suites give theirs. One with two of them ran past vitest's 5 s in a full unit run under load (12 busy loops,
+// load 87).
+vi.setConfig({ testTimeout: PW_SCRYPT_TEST_TIMEOUT_MS })
 
 const MACHINE_A = 'f2e0383771b734e4fc00f0bc8ccf060f'
 const MACHINE_B = 'a1b2c3d4e5f60718293a4b5c6d7e8f90'

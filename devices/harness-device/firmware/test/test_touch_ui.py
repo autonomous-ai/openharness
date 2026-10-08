@@ -207,7 +207,7 @@ static bool scroll_emit(ht_scroll_phase_t phase, int dy, int velocity, void *ctx
 code += function('color')
 code += function('settings_item') + function('settings_count') + function('hit_contains')
 code += function('find')
-for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'focus_dot', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
+for name in ['copy', 'recap_preview', 'notice_unread', 'notice_was_read', 'notice_forget_read', 'notice_flush_reads', 'notice_mark_read', 'habitat_scene_receipt', 'habitat_scene_presented', 'pane_memory', 'pane_memory_apply', 'dismiss_result', 'activity_text', 'ensure', 'input_cancel', 'view', 'notice_open', 'workspace_index', 'tabs_open', 'workspace_failed', 'tab_request', 'tabs_sync', 'ui_scroll_reportable', 'focus_skin', 'focus_face_for', 'focus_chord', 'focus_put', 'focus_span', 'focus_take', 'focus_rows', 'ui_rows', 'ui_can_display', 'ui_wrap', 'text_in', 'control', 'home_footer', 'footer_control', 'text', 'center', 'render_brand', 'heading', 'question_view', 'question_rows', 'question_move', 'question_text', 'render_question', 'render_choices', 'render_answer_review', 'question_answer', 'send_answer', 'make_action', 'character_mood', 'voice_status', 'home_caption_rotates', 'home_caption_tick', 'status_animated', 'status_speed', 'status_wake_ms', 'surface_tick', 'command_face', 'render_workspace_preview', 'question_prompt', 'focus_bell', 'render_home', 'render_voice', 'render_selection', 'render_form', 'draft_move', 'render_draft', 'render_draft_options', 'ui_swarms_replace', 'ui_workspace_applied', 'ui_land_after_reload']:
     code += function(name)
 code += function('render_settings') + function('ui_visit_state')
 code += function('ui_project_known') + function('ui_focus_project') + function('ui_apply_pending_focus')
@@ -2080,27 +2080,31 @@ int main(int argc, char **argv) {
         #undef XRUN
         #undef XBARS
     }
-    // THE WORKING SCENE and a notice (owner, 2026-10-05): no bell pill. For each engine with a scene the pet plays its
-    // alert once (a bell bubble over the working scene), then a blue dot flies up round the rim, a
-    // ring goes out once, and the 12 px dot stays at 12 o'clock; a tap there opens the inbox, and a second notice
-    // plays the alert again. The run count never changes while it does.
+    // THE WORKING SCENE and a notice (owner, 2026-10-05; 2026-10-07 "keep the bell, the number beside it"): no bell
+    // pill. For each engine with a scene the pet's bell bubble pops in over the working scene and rings, the count
+    // written in it once it is whole, then its last step holds until the notice is read; a tap on it opens the inbox,
+    // and a second notice rings it again without popping in, the count 2. The run count never changes meanwhile.
     {
         const ht_pet_scene_t *ws = ht_pets[0].working_scene;
         static const char *engines[3] = {"claude", "codex", "muse"};
         for (int e = 0; e < 3; e++) {
             const ht_pet_t *pet = NULL;
             for (unsigned i = 0; i < ht_pet_count; i++) if (!strcmp(ht_pets[i].engine, engines[e])) pet = &ht_pets[i];
-            assert(pet && pet->alert_scene && pet->alert_scene->overlay && pet->alert_scene->steps >= 10);
+            assert(pet && pet->alert_scene && pet->alert_scene->overlay && pet->alert_scene->count_at &&
+                   pet->alert_scene->steps >= 10 && !pet->alert_scene->frames);
             const ht_pet_scene_t *al = pet->alert_scene, *wk = pet->working_scene;
+            assert(e != 1 || !wk->overlay);                                  // Codex works without its sandbox bubble
             const uint32_t A = (uint32_t)al->steps * al->step_ms, S = al->step_ms;
             #define HAS_SPRITE(sc_) ({ bool f_ = false; for (int i_ = 0; i_ < scene.count; i_++) \
                 f_ |= scene.runs[i_].sprite.cells && scene.runs[i_].sprite.width == (sc_)->w && \
                       scene.runs[i_].sprite.height == (sc_)->h; f_; })
-            // The alert on the glass at a step: its own frames, or (Claude: a bubble only) the working scene under the
-            // step's bubble frame.
+            // The bubble on the glass at a step, over the working scene.
             #define ALERT_AT(k_) ({ bool g_ = false; const ht_cell_frame_t *b_ = &al->overlay->frames[al->overlay->loop[k_]]; \
                 for (int i_ = 0; i_ < scene.count; i_++) g_ |= scene.runs[i_].sprite.cells == b_->cells; \
-                al->frames ? HAS_SPRITE(al) && g_ : HAS_SPRITE(wk) && g_; })
+                HAS_SPRITE(wk) && g_; })
+            // The count's run, in the notice blue: its index, -1 = none.
+            #define COUNT(t_) ({ int c_ = -1; for (int i_ = 0; i_ < scene.count; i_++) if (!strcmp(scene.runs[i_].text, t_) && \
+                scene.runs[i_].fg == ht_rgb(0x006fff)) c_ = i_; c_; })
             #define BLUE_BOX() ({ int f_ = -1; for (int i_ = 0; i_ < scene.count; i_++) if (scene.runs[i_].box.h && \
                 scene.runs[i_].box.fill == color(0x006fff)) f_ = i_; f_; })
             reset(); ht_character_select(&character, HT_CHARACTER_FOCUS); strcpy(s.agents[0].engine, engines[e]);
@@ -2112,53 +2116,35 @@ int main(int argc, char **argv) {
             ui_notif_replace(&note,1);
             fake_ms = 2000; scene_take();
             uint32_t from = s.notice_ms;
-            assert(from && ALERT_AT(0) && BLUE_BOX() < 0);                         // the pet tells, no dot yet
+            assert(from && ALERT_AT(0) && BLUE_BOX() < 0 && COUNT("1") < 0 && scene.count == runs);
             for (int i = 0; i < scene.count; i++) {
-                assert(scene.runs[i].font != &ht_lv_montserrat_14.base || !scene.runs[i].text[0]);   // no bell
+                assert(scene.runs[i].font != &ht_lv_montserrat_14.base || !scene.runs[i].text[0]);   // no bell pill
                 if (scene.runs[i].arc == 2 && scene.runs[i].text[0]) assert(scene.runs[i].fg == ht_rgb(0x00ff2f));
             }
-            // its next step (under a bubble only, or the working scene's next frame if that comes first)
-            assert(al->frames ? s.pet_next_ms == from + S : s.pet_next_ms > from && s.pet_next_ms <= from + S);
-            fake_ms = from + 5 * S + 3; scene_take();
-            assert(ALERT_AT(5) && (al->frames ? s.pet_next_ms == from + 6 * S :
-                                   s.pet_next_ms > fake_ms && s.pet_next_ms <= from + 6 * S));
-            // A bubble that covers the working overlay (Codex's sandboxes) hides it while it shows, and only then.
-            #define WORK_OV() ({ bool o_ = false; for (int i_ = 0; i_ < scene.count; i_++) for (unsigned k_ = 0; wk->overlay && \
-                k_ < wk->steps; k_++) o_ |= scene.runs[i_].sprite.cells && \
-                scene.runs[i_].sprite.cells == wk->overlay->frames[wk->overlay->loop[k_]].cells; o_; })
-            if (wk->overlay) { fake_ms = from + 8 * S; scene_take(); assert(ALERT_AT(8) && WORK_OV() == !al->covers_overlay); }
-            fake_ms = from + A + 100; scene_take();                          // flying
-            int b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h > 12 && scene.runs[b].box.h < 28);
-            assert(HAS_SPRITE(wk) && s.pet_next_ms && s.pet_next_ms - fake_ms <= 40);
-            fake_ms = from + A + 550 + 100; scene_take();                    // landed, the ring going out
-            b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h == 12 && scene.runs[b].x == 227 && scene.runs[b].y == 6);
-            bool ring = false; for (int i = 0; i < scene.count; i++) ring |= scene.runs[i].ring.set && scene.runs[i].ring.w16;
-            assert(ring);
-            fake_ms = from + A + 550 + 500; scene_take();                    // settled
-            b = BLUE_BOX(); assert(b >= 0 && scene.runs[b].box.h == 12 && scene.runs[b].y == 6);
-            ring = false; for (int i = 0; i < scene.count; i++) ring |= scene.runs[i].ring.set && scene.runs[i].ring.w16;
-            assert(!ring && scene.count == runs + 2 && action_enabled(A_INBOX));
-            // The dot (ink inside r 230) is clear of the name's ink.
-            static uint16_t px[HT_WIDTH * HT_HEIGHT];
-            ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, px);
-            for (int y = 0; y < 26; y++) for (int x = 200; x < 266; x++) {
-                uint16_t v = px[y * HT_WIDTH + x];
-                bool blue = (uint16_t)((v >> 8) | (v << 8)) == color(0x006fff);   // panel order back
-                int dx = x - 233, dy = y - 12;
-                if (dx * dx + dy * dy > 8 * 8) assert(!blue);
-                if (dx * dx + dy * dy <= 4 * 4) assert(blue);
-            }
-            // A second notice: the alert again, the dot hidden while it plays.
+            // its next step, or the working scene's next frame if that comes first
+            assert(s.pet_next_ms > from && s.pet_next_ms <= from + S);
+            fake_ms = from + 5 * S + 3; scene_take();                        // still popping in: no count yet
+            assert(ALERT_AT(5) && COUNT("1") < 0 && s.pet_next_ms > fake_ms && s.pet_next_ms <= from + 6 * S);
+            fake_ms = from + 8 * S; scene_take();                            // whole and ringing: the count in it
+            assert(ALERT_AT(8) && COUNT("1") >= 0 && scene.count == runs);
+            fake_ms = from + A + 3000; scene_take();                         // held after the ring, the work playing on
+            int c = COUNT("1");
+            assert(ALERT_AT(al->steps - 1) && c >= 0 && BLUE_BOX() < 0 && scene.count == runs);
+            assert(s.pet_next_ms > fake_ms && s.pet_next_ms <= fake_ms + 1000);   // the work's frames, not a spin
+            // The count sits inside the bubble, on the glass.
+            assert(scene.runs[c].x > 40 && scene.runs[c].x < 420 && scene.runs[c].y > 60 && scene.runs[c].y < 300);
+            // A second notice: rung again from where it is whole, the count 2.
             cable_notif_t two[2] = {note, {.agent_id="c",.name="Third",.summary="Done"}};
             fake_ms += 1000; ui_notif_replace(two,2); scene_take();
-            assert(s.notice_ms == (fake_ms | 1) && ALERT_AT(0) && BLUE_BOX() < 0);
-            // The dot opens the inbox, the name still the panes.
-            fake_ms += A + 1000; scene_take(); assert(BLUE_BOX() >= 0);
-            tap(fake_ms + 10, 233, 10); assert(s.view == INBOX);
+            uint32_t pop = (fake_ms | 1) - s.notice_ms;
+            assert(pop >= 3 * S && pop <= 8 * S && COUNT("2") >= 0 && COUNT("1") < 0 && scene.count == runs);
+            // A tap on the bubble opens the inbox, the name still the panes.
+            fake_ms += A + 1000; scene_take(); c = COUNT("2"); assert(c >= 0);
+            tap(fake_ms + 10, scene.runs[c].x + 4, scene.runs[c].y + 8); assert(s.view == INBOX);
             #undef HAS_SPRITE
             #undef ALERT_AT
+            #undef COUNT
             #undef BLUE_BOX
-            #undef WORK_OV
         }
         cable_notif_t note={.agent_id="b",.name="Other",.summary="Done"};
         bool box = false, scene_run = false;

@@ -20,11 +20,14 @@ use std::time::SystemTime;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::border;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, At, Placement};
+use crate::buttons::{Answer, Button, Row as ButtonRow};
+use crate::dialog::{Dialog, Input};
 use crate::keys::{self, Chord, MouseKind};
 use crate::layout::Dir;
 use crate::theme;
@@ -154,11 +157,26 @@ struct Menu { target: Target, items: Vec<Option<Item>>, x: u16, y: u16, sel: Opt
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Ask { NewFile, NewFolder, Rename(PathBuf) }
 
-/// The name prompt: what for, in which folder, its text, the cursor and where a selection starts.
+/// The name prompt: what for, in which folder, its text, the cursor and where a selection starts;
+/// and whether the keys are on its buttons (Tab) and which one is chosen (0 Cancel, 1 the action).
 #[derive(Clone, Debug)]
-struct Prompt { ask: Ask, dir: PathBuf, text: Vec<char>, cursor: usize, mark: Option<usize> }
+struct Prompt { ask: Ask, dir: PathBuf, text: Vec<char>, cursor: usize, mark: Option<usize>, buttons: bool, chosen: usize }
+
+/// The columns the name prompt's input box wants.
+const PROMPT_W: u16 = 40;
 
 impl Prompt {
+    fn new(ask: Ask, dir: PathBuf, text: Vec<char>, cursor: usize, mark: Option<usize>) -> Prompt {
+        Prompt { ask, dir, text, cursor, mark, buttons: false, chosen: 1 }
+    }
+
+    /// `[ Cancel ]  [ Create ]` (`[ Rename ]`), the chosen button only while the keys are on them.
+    fn row(&self) -> ButtonRow {
+        let button = |label: &str| Button { label: label.into(), key: None };
+        let action = if matches!(self.ask, Ask::Rename(_)) { "Rename" } else { "Create" };
+        ButtonRow { buttons: vec![button("Cancel"), button(action)], chosen: if self.buttons { self.chosen } else { usize::MAX }, hint: crate::buttons::KEYS.into() }
+    }
+
     /// The selection, from the mark to the cursor, when there is one.
     fn selection(&self) -> Option<(usize, usize)> { self.mark.filter(|m| *m != self.cursor).map(|m| (m.min(self.cursor), m.max(self.cursor))) }
     /// The selection gone (what is typed replaces it).
@@ -176,7 +194,7 @@ impl Prompt {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Doom { Trash(PathBuf), Purge(PathBuf, String) }
 
-/// A confirmation: its question and which of its two buttons (0 yes, 1 no) has the keys.
+/// A confirmation: its question and which of its two buttons (0 Cancel, 1 Delete) has the keys.
 #[derive(Clone, Debug)]
 struct Confirm { doom: Doom, focus: usize }
 
@@ -211,7 +229,7 @@ fn geom(w: u16, h: u16, view: View) -> Geom {
 }
 
 /// The colours it draws with: mode-style for what is selected, as choose-tree's current line.
-pub struct Look { mode: Style, accent: Style, muted: Style, text: Style, warn: Style, code: Style, media: Style }
+pub struct Look { mode: Style, accent: Style, muted: Style, text: Style, warn: Style, code: Style, media: Style, border: border::Set<'static> }
 
 impl Look {
     /// The theme's colours, with [mode] for the selection.
@@ -224,6 +242,7 @@ impl Look {
             warn: theme::fg(theme::WARN),
             code: theme::fg(theme::ONLINE),
             media: theme::fg(Color::Magenta),
+            border: border::PLAIN,
         }
     }
 }
@@ -543,7 +562,7 @@ impl Files {
             Act::External => { if let Some((path, false)) = item { return Outcome::Edit(path) } }
             Act::NewFile | Act::NewFolder => {
                 let ask = if act == Act::NewFile { Ask::NewFile } else { Ask::NewFolder };
-                self.prompt = Some(Prompt { ask, dir: t.folder(), text: Vec::new(), cursor: 0, mark: None });
+                self.prompt = Some(Prompt::new(ask, t.folder(), Vec::new(), 0, None));
             }
             Act::Terminal => return Outcome::Terminal(t.folder()),
             Act::Cut | Act::Copy => {
@@ -577,7 +596,7 @@ impl Files {
                 let text: Vec<char> = name_of(&path).chars().collect();
                 // The stem selected, as VS Code and Finder do (a folder's whole name).
                 let stem = if dir { text.len() } else { text.iter().rposition(|c| *c == '.').filter(|i| *i > 0).unwrap_or(text.len()) };
-                self.prompt = Some(Prompt { ask: Ask::Rename(path.clone()), dir: t.folder_of_item(), text, cursor: stem, mark: Some(0) });
+                self.prompt = Some(Prompt::new(Ask::Rename(path.clone()), t.folder_of_item(), text, stem, Some(0)));
             }
             Act::Delete => { if let Some((path, _)) = item { self.confirm = Some(Confirm { doom: Doom::Trash(path), focus: 0 }) } }
             Act::Hidden => { self.hidden = !self.hidden; self.reload() }
@@ -760,6 +779,22 @@ impl Files {
     fn prompt_key(&mut self, k: Chord) -> Outcome {
         let Some(p) = self.prompt.as_mut() else { return Outcome::None };
         let typed = matches!(k.code, KeyCode::Char(_)) && !k.mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+        // Tab takes the keys to the buttons and back; a printable key is typed wherever they were.
+        // (↓ from the input to the buttons, ↑ back up, as Tab goes either way.)
+        let across = match k.code { KeyCode::Tab | KeyCode::BackTab => true, KeyCode::Down => !p.buttons, KeyCode::Up => p.buttons, _ => false };
+        if across { p.buttons = !p.buttons; return Outcome::None }
+        if typed { p.buttons = false }
+        if p.buttons {
+            let mut row = p.row();
+            let code = if is_ctrl(&k, 'm') { KeyCode::Enter } else { k.code };
+            match row.key(code, k.mods) {
+                Answer::Moved => p.chosen = row.chosen,
+                Answer::Chosen(1) => self.accept(),
+                Answer::Chosen(_) | Answer::Cancel => self.prompt = None,
+                Answer::Ignored => {}
+            }
+            return Outcome::None;
+        }
         match k.code {
             KeyCode::Esc => self.prompt = None,
             _ if is_ctrl(&k, 'c') || is_ctrl(&k, 'g') => self.prompt = None,
@@ -770,6 +805,7 @@ impl Files {
             KeyCode::Right => { p.mark = None; p.cursor = (p.cursor + 1).min(p.text.len()) }
             KeyCode::Home => { p.mark = None; p.cursor = 0 }
             KeyCode::End => { p.mark = None; p.cursor = p.text.len() }
+            _ if is_ctrl(&k, 'u') => { p.mark = None; p.text.clear(); p.cursor = 0 }
             _ if is_ctrl(&k, 'a') => { p.mark = None; p.cursor = 0 }
             _ if is_ctrl(&k, 'e') => { p.mark = None; p.cursor = p.text.len() }
             KeyCode::Char(c) if typed => {
@@ -808,14 +844,24 @@ impl Files {
     }
 
     fn confirm_key(&mut self, k: Chord) -> Outcome {
-        let Some(c) = self.confirm.as_mut() else { return Outcome::None };
-        match () {
-            _ if matches!(k.code, KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab) || is_char(&k, 'h') || is_char(&k, 'l') => c.focus ^= 1,
-            _ if k.code == KeyCode::Enter || is_ctrl(&k, 'm') => { if c.focus == 0 { self.confirmed() } else { self.confirm = None } }
-            _ if k.code == KeyCode::Esc || is_char(&k, 'q') || is_char(&k, 'n') || is_ctrl(&k, 'g') || is_ctrl(&k, 'c') => self.confirm = None,
-            _ => {}
+        if self.confirm.is_none() { return Outcome::None }
+        let mut row = self.confirm_row();
+        let code = if is_ctrl(&k, 'm') { KeyCode::Enter } else { k.code };
+        match row.key(code, k.mods) {
+            Answer::Moved => if let Some(c) = self.confirm.as_mut() { c.focus = row.chosen },
+            Answer::Chosen(1) => self.confirmed(),
+            Answer::Chosen(_) | Answer::Cancel => self.confirm = None,
+            // The files' own way out besides Esc: q and n.
+            Answer::Ignored => if is_char(&k, 'q') || is_char(&k, 'n') { self.confirm = None },
         }
         Outcome::None
+    }
+
+    /// The confirmation's buttons, Cancel first, the one with the keys chosen.
+    fn confirm_row(&self) -> ButtonRow {
+        let yes = match self.confirm.as_ref().map(|c| &c.doom) { Some(Doom::Purge(..)) => "Delete Permanently", _ => "Delete" };
+        let button = |label: &str| Button { label: label.into(), key: None };
+        ButtonRow { buttons: vec![button("Cancel"), button(yes)], chosen: self.confirm.as_ref().map_or(0, |c| c.focus), hint: crate::buttons::KEYS.into() }
     }
 
     /// Yes to the confirmation: to the Trash — or, when it can't go there, a second question before
@@ -825,7 +871,7 @@ impl Files {
         match c.doom {
             Doom::Trash(path) => match ops::trash(&path, &self.trash) {
                 Ok(_) => { self.gone(&path); self.message = Some(format!("Moved '{}' to the Trash", name_of(&path))); self.reload() }
-                Err(e) => self.confirm = Some(Confirm { doom: Doom::Purge(path, e.to_string()), focus: 1 }),
+                Err(e) => self.confirm = Some(Confirm { doom: Doom::Purge(path, e.to_string()), focus: 0 }),
             },
             Doom::Purge(path, _) => match ops::remove_all(&path) {
                 Ok(()) => { self.gone(&path); self.message = Some(format!("Deleted '{}'", name_of(&path))); self.reload() }
@@ -851,12 +897,21 @@ impl Files {
 
     fn click_at(&mut self, x: u16, y: u16, double: bool, g: Geom) -> Outcome {
         if self.confirm.is_some() {
-            let (_, _, buttons, by) = self.confirm_layout(g);
-            if let Some(b) = buttons.iter().position(|(a, z, _)| y == by && x >= *a && x < *z) { if b == 0 { self.confirmed() } else { self.confirm = None } }
+            let Some((.., row)) = self.confirm_layout(g) else { return Outcome::None };
+            if let Some(b) = self.confirm_row().click(row, Position::new(x, y)) { if b == 1 { self.confirmed() } else { self.confirm = None } }
             return Outcome::None;
         }
         if self.prompt.is_some() {
-            if !contains(prompt_box(g), x, y) { self.prompt = None }
+            let at = Position::new(x, y);
+            match self.prompt_layout(g) {
+                // On the dialog: a button answers, the input gets the keys; its rule does nothing.
+                Some((r, a)) if r.contains(at) => {
+                    let Some(p) = self.prompt.as_mut() else { return Outcome::None };
+                    if let Some(b) = p.row().click(a.row, at) { if b == 1 { self.accept() } else { self.prompt = None } }
+                    else if a.input.is_some_and(|i| i.contains(at)) { p.buttons = false }
+                }
+                _ => self.prompt = None,
+            }
             return Outcome::None;
         }
         if self.menu.is_some() {
@@ -1017,6 +1072,12 @@ impl Files {
         self.draw_footer(buf, area, g, look);
         self.draw_tree(buf, area, g, look);
         self.draw_popups(buf, area, g, look);
+        // A question with no room to be drawn must not stay open to answering keys.
+        let unfit = (self.prompt.is_some() && self.prompt_layout(g).is_none()) || (self.confirm.is_some() && self.confirm_layout(g).is_none());
+        if unfit {
+            (self.prompt, self.confirm) = (None, None);
+            self.message = Some(crate::workspace_menu::TOO_SMALL_TO_ANSWER.into());
+        }
     }
 
     /// What the grid says in place of entries: why the folder can't be read, or that it is empty.
@@ -1163,64 +1224,73 @@ impl Files {
             }
         }
         if let Some(p) = &self.prompt {
-            let r = at(prompt_box(g));
-            frame(buf, r, look.accent);
-            let title = match &p.ask { Ask::NewFile => " New File ".to_string(), Ask::NewFolder => " New Folder ".to_string(), Ask::Rename(path) => format!(" Rename '{}' ", fit(&name_of(path), 30)) };
-            put(buf, r.x + 2, r.y, r.width.saturating_sub(4), &title, look.accent.add_modifier(Modifier::BOLD));
-            // The text, from where the cursor stays in view; the selection and the cursor marked.
-            let field = r.width.saturating_sub(4) as usize;
-            let start = (p.cursor + 1).saturating_sub(field);
-            let sel = p.selection();
-            for (k, i) in (start..=p.text.len()).take(field).enumerate() {
-                let ch = p.text.get(i).copied().unwrap_or(' ');
-                let st = if i == p.cursor { look.text.add_modifier(Modifier::REVERSED) } else if sel.is_some_and(|(a, b)| i >= a && i < b) { look.mode } else { look.text.add_modifier(Modifier::UNDERLINED) };
-                put(buf, r.x + 2 + k as u16, r.y + 1, 1, &ch.to_string(), st);
+            let (row, c, value) = (p.row(), crate::settings::chrome(), p.text.iter().collect::<String>());
+            if let Some((r, d)) = self.prompt_dialog(g, p, &value, &row, &c, look.border) {
+                let r = at(r);
+                d.render_over(area, r, buf);
+                // (A pane has no terminal cursor to put in the box: the caret is a reversed cell.)
+                if let Some(caret) = d.cursor(r) { buf.set_style(Rect::new(caret.x, caret.y, 1, 1), Style::new().add_modifier(Modifier::REVERSED)) }
             }
-            put(buf, r.x + 2, r.y + 2, r.width.saturating_sub(4), "Enter OK · Esc cancel", look.muted);
         }
         if self.confirm.is_some() {
-            let (r, lines, buttons, by) = self.confirm_layout(g);
-            let r = at(r);
-            frame(buf, r, look.warn);
-            for (k, line) in lines.iter().enumerate() { put(buf, r.x + 2, r.y + 1 + k as u16, r.width.saturating_sub(4), line, look.text); }
-            let focus = self.confirm.as_ref().map(|c| c.focus).unwrap_or(1);
-            for (b, (a, _, label)) in buttons.iter().enumerate() { put(buf, area.x + a, area.y + by, label.width() as u16, label, if b == focus { look.mode } else { look.text }); }
+            let (row, c) = (self.confirm_row(), crate::settings::chrome());
+            if let Some((r, d)) = self.confirm_dialog(g, &row, &c, look.border) { d.render_over(area, at(r), buf) }
         }
     }
 
-    /// The confirmation's box (in the middle of the view), its lines, its buttons' columns and
-    /// words, and their row.
-    fn confirm_layout(&self, g: Geom) -> ConfirmLayout {
-        let (lines, yes) = match self.confirm.as_ref().map(|c| &c.doom) {
-            Some(Doom::Trash(p)) => ([format!("Delete '{}'?", fit(&name_of(p), 40)), "It goes to the Trash.".to_string()], "Delete"),
-            Some(Doom::Purge(p, why)) => ([format!("'{}' can't go to the Trash: {why}.", fit(&name_of(p), 30)), "Delete it permanently? This can't be undone.".to_string()], "Delete Permanently"),
-            None => ([String::new(), String::new()], ""),
+    /// The name prompt as the shared dialog over the grid: titled with what it does, the name in
+    /// an input box (its selection marked) and `[ Cancel ]  [ Create ]`. None where the buttons,
+    /// or the input, cannot fit.
+    fn prompt_dialog<'a>(&self, g: Geom, p: &'a Prompt, value: &'a str, row: &'a ButtonRow, c: &'a crate::settings::Chrome, border: border::Set<'a>) -> Option<(Rect, Dialog<'a>)> {
+        let (title, label) = match &p.ask {
+            Ask::NewFile => ("New File".to_string(), "File name"),
+            Ask::NewFolder => ("New Folder".to_string(), "Folder name"),
+            Ask::Rename(path) => (format!("Rename · {}", fit(&name_of(path), 30)), "New name"),
         };
-        let labels = [format!("[ {yes} ]"), "[ Cancel ]".to_string()];
-        let need = lines.iter().map(|l| l.width()).max().unwrap_or(0).max(labels.iter().map(|l| l.width() + 2).sum::<usize>()) as u16 + 4;
-        let w = need.min(g.size.0);
-        let h = 6u16.min(g.size.1);
-        let r = Rect::new(g.size.0.saturating_sub(w) / 2, g.size.1.saturating_sub(h) / 2, w, h);
-        let by = r.y + 4;
-        let mut x = (r.x + r.width).saturating_sub(2 + labels.iter().map(|l| l.width() as u16 + 2).sum::<u16>() - 2);
-        let buttons = labels.map(|l| { let w = l.width() as u16; let b = (x, x + w, l); x += w + 2; b });
-        (r, lines, buttons, by)
+        let mut d = Dialog::new(&title, Vec::new(), row, c);
+        d.border = border;
+        d.input = Some(Input { label, value, caret: p.cursor, select: p.selection(), secret: false, focused: !p.buttons, width: PROMPT_W });
+        if row.buttons_width() > g.grid.width.saturating_sub(4) || !d.fit(g.grid.height) { return None }
+        Some((d.place(g.grid), d))
+    }
+
+    /// The name prompt's box and the parts inside it (for drawing and clicks alike).
+    fn prompt_layout(&self, g: Geom) -> Option<(Rect, crate::dialog::Areas)> {
+        let p = self.prompt.as_ref()?;
+        let (row, c, value) = (p.row(), crate::settings::chrome(), p.text.iter().collect::<String>());
+        let (r, d) = self.prompt_dialog(g, p, &value, &row, &c, border::PLAIN)?;
+        Some((r, d.areas(r)))
+    }
+
+    /// The confirmation as the shared dialog, in the middle of the view: titled with what goes,
+    /// its question wrapped to the view, a line in the danger colour where it can't be undone,
+    /// and its buttons. None where the buttons, or one line of the question, cannot fit.
+    fn confirm_dialog<'a>(&self, g: Geom, row: &'a ButtonRow, c: &'a crate::settings::Chrome, border: border::Set<'a>) -> Option<(Rect, Dialog<'a>)> {
+        let (title, lines, undone) = match self.confirm.as_ref().map(|c| &c.doom) {
+            Some(Doom::Trash(p)) => (format!("Delete · {}", fit(&name_of(p), 30)), vec![format!("Delete '{}'?", fit(&name_of(p), 40)), "It goes to the Trash.".to_string()], ""),
+            Some(Doom::Purge(p, why)) => (format!("Delete Permanently · {}", fit(&name_of(p), 30)), vec![format!("'{}' can't go to the Trash: {why}.", fit(&name_of(p), 30)), "Delete it permanently?".to_string()], "This can't be undone."),
+            None => (String::new(), Vec::new(), ""),
+        };
+        let room = g.size.0.saturating_sub(4).clamp(1, 60);
+        let mut d = Dialog::new(&title, lines.iter().flat_map(|l| crate::dialog::wrap(l, room, c.base)).collect(), row, c);
+        d.border = border;
+        d.message = crate::dialog::wrap(undone, room, c.danger);
+        if row.buttons_width() > g.size.0.saturating_sub(4) || !d.fit(g.size.1) { return None }
+        Some((d.place(Rect::new(0, 0, g.size.0, g.size.1)), d))
+    }
+
+    /// The confirmation's box and its buttons' row (for drawing and clicks alike).
+    fn confirm_layout(&self, g: Geom) -> Option<(Rect, Rect)> {
+        let (row, c) = (self.confirm_row(), crate::settings::chrome());
+        let (r, d) = self.confirm_dialog(g, &row, &c, border::PLAIN)?;
+        Some((r, d.areas(r).row))
     }
 }
-
-/// The confirmation's box, its two lines, its buttons (columns and words) and their row.
-type ConfirmLayout = (Rect, [String; 2], [(u16, u16, String); 2], u16);
 
 /// The menu's box: as wide as its longest item and key.
 fn menu_box(m: &Menu) -> Rect {
     let w = m.items.iter().flatten().map(|i| i.label.width() + if i.key.is_empty() { 0 } else { i.key.width() + 3 }).max().unwrap_or(0) as u16 + 4;
     Rect::new(m.x, m.y, w, m.items.len() as u16 + 2)
-}
-
-/// The name prompt's box, a third of the way down the grid.
-fn prompt_box(g: Geom) -> Rect {
-    let w = g.grid.width.saturating_sub(4).clamp(20.min(g.size.0), 56);
-    Rect::new(g.grid.x + g.grid.width.saturating_sub(w) / 2, g.grid.y + g.grid.height.saturating_sub(4) / 3, w, 4)
 }
 
 fn contains(r: Rect, x: u16, y: u16) -> bool { x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height }
@@ -1434,7 +1504,8 @@ pub fn exit(app: &mut App, pane: u64) {
 /// Draws [pane]'s file manager into [area] (the pane's cells).
 pub fn draw(app: &mut App, pane: u64, buf: &mut Buffer, area: Rect) {
     let window = app.tabs.iter().position(|t| t.panes().contains(&pane)).unwrap_or(app.active);
-    let look = Look::with_mode(crate::draw::style_over(&app.style_spec("mode-style", window, Some(pane)), Style::default()));
+    let mut look = Look::with_mode(crate::draw::style_over(&app.style_spec("mode-style", window, Some(pane)), Style::default()));
+    look.border = crate::ui::dialog_border(&app.style_spec("menu-border-lines", window, Some(pane)));
     if let Some(f) = app.panes.get_mut(&pane).and_then(|p| p.files.as_mut()) { f.draw(buf, area, &look) }
 }
 
@@ -2125,11 +2196,12 @@ mod tests {
         assert_eq!(names(&f)[f.selected], "a copy 2.txt");
         // Delete: asked first; Cancel leaves it.
         press(&mut f, KeyCode::Delete);
-        assert!(matches!(f.confirm.as_ref().map(|c| &c.doom), Some(Doom::Trash(_))));
-        press(&mut f, KeyCode::Right);
+        assert!(matches!(f.confirm.as_ref().map(|c| (&c.doom, c.focus)), Some((Doom::Trash(_), 0))), "a risky action starts on Cancel");
         press(&mut f, KeyCode::Enter);
         assert!(f.confirm.is_none() && s.0.join("a copy 2.txt").exists());
         press(&mut f, KeyCode::Delete);
+        press(&mut f, KeyCode::Right);
+        assert_eq!(f.confirm.as_ref().map(|c| c.focus), Some(1));
         press(&mut f, KeyCode::Enter);
         assert!(!s.0.join("a copy 2.txt").exists());
         assert!(s.0.join(".Trash/files/a copy 2.txt").exists() && s.0.join(".Trash/info/a copy 2.txt.trashinfo").exists());
@@ -2157,16 +2229,200 @@ mod tests {
         std::fs::write(s.0.join("not-a-folder"), "").unwrap();
         f.trash = s.0.join("not-a-folder/Trash");
         press(&mut f, KeyCode::Delete);
+        press(&mut f, KeyCode::Right);
         press(&mut f, KeyCode::Enter);
-        assert!(matches!(f.confirm.as_ref().map(|c| (&c.doom, c.focus)), Some((Doom::Purge(..), 1))), "asked again, Cancel first");
+        assert!(matches!(f.confirm.as_ref().map(|c| (&c.doom, c.focus)), Some((Doom::Purge(..), 0))), "asked again, Cancel first");
         assert!(s.0.join("x.txt").exists());
         press(&mut f, KeyCode::Enter);
         assert!(f.confirm.is_none() && s.0.join("x.txt").exists(), "Enter on Cancel keeps it");
         press(&mut f, KeyCode::Delete);
+        press(&mut f, KeyCode::Right);
         press(&mut f, KeyCode::Enter);
-        press(&mut f, KeyCode::Left);
+        press(&mut f, KeyCode::Right);
         press(&mut f, KeyCode::Enter);
         assert!(!s.0.join("x.txt").exists());
+    }
+
+    #[test]
+    fn the_delete_confirm_is_one_row_cancel_first_the_chosen_button_lifted() {
+        let s = Scratch::new(&["x.txt"]);
+        let mut f = files(&s);
+        press(&mut f, KeyCode::Delete);
+        let (area, g) = (Rect::new(0, 0, 100, 30), geom(100, 30, f.view));
+        let (r, row) = f.confirm_layout(g).expect("fits");
+        let buttons = f.confirm_row().areas(row);
+        let by = row.y;
+        let screen = |f: &mut Files| { let mut buf = Buffer::empty(area); f.draw(&mut buf, area, &Look::default()); buf };
+        let word = |buf: &Buffer, b: Rect| (b.x..b.right()).map(|x| buf[(x, by)].symbol()).collect::<String>();
+        let shown = screen(&mut f);
+        assert_eq!([word(&shown, buttons[0]), word(&shown, buttons[1])], ["[ Cancel ]", "[ Delete ]"]);
+        // The shared dialog: its title in the top rule, the question inside, the panel's surface.
+        let text = contents(&shown);
+        assert!(text.contains("┌─Delete · x.txt") && text.contains("│ Delete 'x.txt'?") && text.contains("│ It goes to the Trash."), "{text}");
+        let c = crate::settings::chrome();
+        let q = (r.x + 1, r.y + 1);
+        assert_eq!((shown[(r.x, r.y + 1)].symbol(), shown[q].bg), ("│", c.base.bg.unwrap_or(ratatui::style::Color::Reset)), "{text}");
+        assert!(buttons[0].right() + 2 <= buttons[1].x, "two columns apart");
+        let bg = |f: &mut Files, b: usize| screen(f)[(buttons[b].x + 2, by)].bg;
+        let c = crate::settings::chrome();
+        if !crate::theme::no_color() {
+            assert_eq!(bg(&mut f, 0), c.selected.bg.unwrap());
+            assert_ne!(bg(&mut f, 1), c.selected.bg.unwrap());
+            press(&mut f, KeyCode::Tab);
+            assert_eq!(bg(&mut f, 1), c.selected.bg.unwrap());
+        }
+        // A click on Cancel closes; between the buttons nothing runs.
+        f.click_at(buttons[0].right() + 1, by, false, g);
+        assert!(f.confirm.is_some());
+        f.click_at(buttons[0].x + 1, by, false, g);
+        assert!(f.confirm.is_none() && s.0.join("x.txt").exists());
+    }
+
+    fn type_in(f: &mut Files, text: &str) { for ch in text.chars() { press(f, KeyCode::Char(ch)); } }
+
+    /// The Files drawn at [w]×[h] as text.
+    fn drawn(f: &mut Files, look: &Look, w: u16, h: u16) -> (String, Buffer) {
+        let area = Rect::new(0, 0, w, h);
+        let mut buf = Buffer::empty(area);
+        f.draw(&mut buf, area, look);
+        (contents(&buf), buf)
+    }
+
+    #[test]
+    fn the_name_prompt_is_the_shared_dialog_with_an_input_and_buttons() {
+        let s = Scratch::new(&["here.txt"]);
+        let mut f = files(&s);
+        let g = gal(100, 30);
+        f.act(Act::NewFile, Target::Space(s.0.clone()));
+        type_in(&mut f, "abc");
+        let (text, buf) = drawn(&mut f, &Look::default(), 100, 30);
+        assert!(text.contains("┌─New File") && text.contains("[ Cancel ]  [ Create ]"), "{text}");
+        assert!(text.contains("│abc"), "the name in the input box:\n{text}");
+        assert!(!text.contains("Enter OK") && !text.contains("╭"), "not the old rounded box:\n{text}");
+        let (r, _) = f.prompt_layout(g).expect("fits");
+        let c = crate::settings::chrome();
+        assert_eq!(buf[(r.x + 1, r.y + 1)].bg, c.base.bg.unwrap_or(ratatui::style::Color::Reset), "the panel's surface");
+        // The caret moves in the input; Home, End, Delete and C-u edit at it.
+        press(&mut f, KeyCode::Left);
+        press(&mut f, KeyCode::Char('X'));
+        assert_eq!(f.prompt.as_ref().map(|p| p.text.iter().collect::<String>()), Some("abXc".into()));
+        press(&mut f, KeyCode::Home);
+        press(&mut f, KeyCode::Delete);
+        assert_eq!(f.prompt.as_ref().map(|p| (p.text.iter().collect::<String>(), p.cursor)), Some(("bXc".into(), 0)));
+        press(&mut f, KeyCode::End);
+        assert_eq!(f.prompt.as_ref().map(|p| p.cursor), Some(3));
+        ctrl(&mut f, 'u');
+        assert_eq!(f.prompt.as_ref().map(|p| p.text.len()), Some(0));
+        // Tab to the buttons: Create is chosen; a letter there is typed and brings the keys back.
+        type_in(&mut f, "n.md");
+        press(&mut f, KeyCode::Tab);
+        assert!(f.prompt.as_ref().is_some_and(|p| p.buttons && p.chosen == 1));
+        press(&mut f, KeyCode::Left);
+        assert_eq!(f.prompt.as_ref().map(|p| p.chosen), Some(0), "← → move between the buttons");
+        press(&mut f, KeyCode::Char('h'));
+        assert!(f.prompt.as_ref().is_some_and(|p| !p.buttons && p.text.iter().collect::<String>() == "n.mdh"), "h is typed");
+        press(&mut f, KeyCode::Backspace);
+        // Back on the buttons, the choice is kept (as the Machines inputs keep it). Enter on Cancel
+        // closes; on Create makes it.
+        press(&mut f, KeyCode::Tab);
+        assert_eq!(f.prompt.as_ref().map(|p| p.chosen), Some(0));
+        press(&mut f, KeyCode::Enter);
+        assert!(f.prompt.is_none() && !s.0.join("n.md").exists());
+        f.act(Act::NewFile, Target::Space(s.0.clone()));
+        type_in(&mut f, "n.md");
+        press(&mut f, KeyCode::Tab);
+        press(&mut f, KeyCode::Enter);
+        assert!(f.prompt.is_none() && s.0.join("n.md").is_file());
+        // The mouse: Create, Cancel, the input, beside the dialog and outside it.
+        let click = |f: &mut Files, at: Position| f.click_at(at.x, at.y, false, g);
+        f.act(Act::NewFile, Target::Space(s.0.clone()));
+        type_in(&mut f, "m.md");
+        press(&mut f, KeyCode::Tab);
+        let (r, a) = f.prompt_layout(g).expect("fits");
+        click(&mut f, Position::new(a.input.unwrap().x + 2, a.input.unwrap().y + 1));
+        assert!(f.prompt.as_ref().is_some_and(|p| !p.buttons), "a click on the input gives it the keys");
+        click(&mut f, Position::new(r.x + 1, r.y + 1));
+        assert!(f.prompt.is_some(), "the dialog's own rule does nothing");
+        let (cancel, create) = { let b = f.prompt.as_ref().unwrap().row().areas(a.row); (b[0], b[1]) };
+        click(&mut f, Position::new(create.x + 1, create.y));
+        assert!(f.prompt.is_none() && s.0.join("m.md").is_file(), "Create");
+        f.act(Act::NewFile, Target::Space(s.0.clone()));
+        click(&mut f, Position::new(cancel.x + 1, cancel.y));
+        assert!(f.prompt.is_none(), "Cancel");
+        f.act(Act::NewFile, Target::Space(s.0.clone()));
+        click(&mut f, Position::new(0, 29));
+        assert!(f.prompt.is_none(), "outside cancels");
+    }
+
+    #[test]
+    fn rename_is_titled_with_the_name_says_rename_and_replaces_the_selected_stem() {
+        let s = Scratch::new(&["here.txt"]);
+        let mut f = files(&s);
+        f.selected = 0;
+        press(&mut f, KeyCode::F(2));
+        let (text, buf) = drawn(&mut f, &Look::default(), 100, 30);
+        assert!(text.contains("┌─Rename · here.txt") && text.contains("[ Cancel ]  [ Rename ]"), "{text}");
+        let (_, a) = f.prompt_layout(gal(100, 30)).unwrap();
+        let field = a.field.unwrap();
+        let c = crate::settings::chrome();
+        assert_eq!(buf[(field.x, field.y)].bg, c.selected.bg.unwrap_or(ratatui::style::Color::Reset), "the stem is marked");
+        assert_ne!(buf[(field.x + 5, field.y)].bg, c.selected.bg.unwrap_or(ratatui::style::Color::Reset), "the extension is not");
+        type_in(&mut f, "there");
+        press(&mut f, KeyCode::Enter);
+        assert!(s.0.join("there.txt").is_file());
+    }
+
+    #[test]
+    fn a_dialog_that_cannot_fit_cancels_the_name_prompt() {
+        let s = Scratch::new(&[]);
+        let mut f = files(&s);
+        f.act(Act::NewFile, Target::Space(s.0.clone()));
+        drawn(&mut f, &Look::default(), 20, 8);
+        assert!(f.prompt.is_none(), "an invisible question must not keep answering keys");
+        assert_eq!(f.message.as_deref(), Some("Make the terminal larger to answer this"));
+    }
+
+    #[test]
+    fn dialogs_follow_the_border_lines_they_are_given() {
+        let s = Scratch::new(&["x.txt"]);
+        let mut f = files(&s);
+        let mut look = Look::default();
+        look.border = crate::ui::dialog_border("double");
+        press(&mut f, KeyCode::Delete);
+        let (text, _) = drawn(&mut f, &look, 100, 30);
+        assert!(text.contains("╔═Delete · x.txt") && text.contains("╚"), "{text}");
+        press(&mut f, KeyCode::Esc);
+        f.act(Act::NewFile, Target::Space(s.0.clone()));
+        let (text, _) = drawn(&mut f, &look, 100, 30);
+        assert!(text.contains("╔═New File") && text.matches('╔').count() >= 2, "the input box too:\n{text}");
+        let (text, _) = drawn(&mut f, &Look::default(), 100, 30);
+        assert!(text.contains("┌─New File"), "single lines by default:\n{text}");
+    }
+
+    #[test]
+    fn delete_permanently_says_it_cannot_be_undone_in_the_danger_colour_and_long_text_wraps() {
+        let s = Scratch::new(&["x.txt"]);
+        let mut f = files(&s);
+        f.confirm = Some(Confirm { doom: Doom::Purge(s.0.join("x.txt"), "the Trash folder is on another disk".into()), focus: 0 });
+        let (text, buf) = drawn(&mut f, &Look::default(), 100, 30);
+        assert!(text.contains("This can't be undone."), "{text}");
+        let (y, line) = text.lines().enumerate().find(|(_, l)| l.contains("This can't be undone.")).unwrap();
+        let x = line[..line.find("This").unwrap()].chars().count() as u16;
+        let c = crate::settings::chrome();
+        assert_eq!(buf[(x, y as u16)].fg, c.danger.fg.unwrap_or(ratatui::style::Color::Reset));
+        assert!(buf[(x, y as u16)].modifier.contains(c.danger.add_modifier));
+        // A narrow view: the question is wrapped at its words, not cut.
+        let (text, _) = drawn(&mut f, &Look::default(), 40, 16);
+        for word in ["can't", "Trash:", "another", "disk.", "permanently?", "undone."] {
+            assert!(text.contains(word), "{word} lost:\n{text}");
+        }
+        let dialog: Vec<&str> = text.lines().skip_while(|l| !l.contains("┌─Delete")).take_while(|l| !l.contains('└')).collect();
+        assert!(dialog.len() > 6 && dialog.iter().all(|l| !l.contains('…')), "{text}");
+        assert!(text.contains("[ Cancel ]  [ Delete Permanently ]"), "the buttons whole:\n{text}");
+        // Narrower than its buttons: the question is cancelled, never drawn cut or kept invisible.
+        drawn(&mut f, &Look::default(), 36, 16);
+        assert!(f.confirm.is_none() && s.0.join("x.txt").exists());
+        assert_eq!(f.message.as_deref(), Some("Make the terminal larger to answer this"));
     }
 
     #[test]

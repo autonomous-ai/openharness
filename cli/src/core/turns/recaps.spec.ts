@@ -123,6 +123,12 @@ describe('recaps, as the core keeps them', () => {
     ])
   })
 
+  it('tells the recaps a session attached with its last turn already over', () => {
+    const { recaps, port } = setup()
+    recaps.mirror.settled('s1')
+    expect(port.lifecycle.mock.calls.map(([event]) => event)).toMatchObject([{ kind: 'settled', session: { sessionId: 's1' } }])
+  })
+
   it('says, as a device joins, which turns are verifiably working, so their busy cards go with it', () => {
     const { deps, recaps, port } = setup()
     vi.mocked(deps.turnActivity.snapshot).mockImplementation((sessionId) => (sessionId === 's2' ? { state: 'working' } as ActivityFrame : undefined))

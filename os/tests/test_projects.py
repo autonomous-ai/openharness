@@ -10,6 +10,22 @@ spec.loader.exec_module(projects)
 
 
 class Projects(unittest.TestCase):
+    def test_existing_users_get_shared_account_discovery_without_replacing_instructions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            root = home / 'projects'
+            root.mkdir()
+            (root / 'AGENTS.md').write_text('My instructions.\n')
+            target = home / 'user-managed.md'
+            target.write_text('Keep linked instructions.\n')
+            (root / 'CLAUDE.md').symlink_to(target)
+            projects.prepare(home)
+            projects.prepare(home)
+            self.assertEqual((root / 'AGENTS.md').read_text().count('<!-- harness-os-connections -->'), 1)
+            self.assertTrue((root / 'AGENTS.md').read_text().startswith('My instructions.\n'))
+            self.assertEqual(target.read_text(), 'Keep linked instructions.\n')
+            self.assertTrue((root / 'CLAUDE.md').is_symlink())
+
     def test_agent_folders_match_cli_convention_and_never_reuse_work(self):
         with tempfile.TemporaryDirectory() as temp:
             now = datetime(2026, 10, 4, 9, 5, 7)

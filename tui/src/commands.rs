@@ -93,9 +93,11 @@ pub const COMMANDS: &[(&str, &str, &str)] = &[
     ("devices", "devices", "Manage computer connections"),
     ("hardware-devices", "hardware-devices", "Manage physical Harness devices on your computers"),
     ("account", "login", "Optional sign-in and your Harness account"),
+    ("signout", "logout", "Sign out of your Harness account (harnesses on this computer keep running)"),
     ("appearance", "appearance", "Choose the TUI appearance"),
     ("pane-menu", "pane-menu", "Actions for a pane (-t target)"),
     ("window-menu", "window-menu", "Actions for a window (-t target)"),
+    ("machine-menu", "machine-menu", "Actions for a machine: machine-menu <new-harness|new-terminal|open|connect|machine> <machine>"),
     ("pane-control", "pane-control", "Run an action from a captured pane or window menu"),
     ("new-terminal", "newt", "A shell on this pane's machine"),
     ("choose-command", "choosec", "Every command and setting by name (C-b Enter)"),
@@ -1266,6 +1268,10 @@ fn after_set(app: &mut App, name: &str, now: Option<String>, global: bool, tab: 
     // (The bar down a side and the pane frames change the panes' room.)
     if matches!(name.as_str(), "@hn-status-bar" | "@hn-border" | "@hn-focus") { app.redraw_all = true; app.fit_panes(); }
     if name == "@hn-dim" { app.redraw_all = true }
+    // (Set by hand too: the tab's format and every window's name follow, as from Appearance — the
+    // format only while it is hn's own, never one the user wrote: `set -g window-status-format '#I #W'`.)
+    if matches!(name.as_str(), "@hn-window-name" | "@hn-window-active") { app.rederive_window_status(); app.sync_titles(); app.redraw_all = true }
+    if name == "@hn-auto-rename" { app.sync_titles(); app.redraw_all = true }
     // alerts_reset_all: every window's silence timer starts again.
     if name == "monitor-silence" { for t in app.tabs.iter_mut() { t.last_output = std::time::Instant::now() } }
     if name.starts_with('@') && now.is_none() { app.opts.user.remove(&name); return }
@@ -3477,7 +3483,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
                 let from = (starting as usize).min(n - 1);
                 (0..n).map(|k| (from + k) % n).find(|k| !items[*k].disabled && !items[*k].separator)
             };
-            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None, complete: None, responsive: None }));
+            app.modal = Some(Modal::Menu(crate::modal::Menu { title, items, choice, x, y, width, stay_open: args.has('O') > 0, no_mouse, mouse: app.mouse_ev.clone(), tree: None, complete: None, responsive: None, buttons: None }));
             app.wait_cli = app.capture.is_some();
         }
         "customize-mode" => {
@@ -3533,6 +3539,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
         "workspace-menu" => crate::workspace_controls::command(app, &words[1..]),
         "workspace-sync" => crate::agent_switch::retry_sync(app),
         "account" => crate::account::open(app),
+        "signout" => crate::account::sign_out_command(app),
         "change-agent" => {
             if let Some((_, p)) = target_pane(app, words) { crate::agent_switch::open(app, p); }
             else { app.error("can't find pane"); }
@@ -3546,6 +3553,7 @@ fn run_words_in(app: &mut App, words: &[String]) {
             if opt(words, "-t").is_some() && target.is_none() { app.error("can't find window"); }
             else { crate::workspace_controls::tab_menu(app, target.unwrap_or(app.active), None); }
         }
+        "machine-menu" => crate::machine_menu::command(app, &words[1..]),
         "pane-control" => {
             let args = positional(words);
             if args.len() == 2 { crate::workspace_controls::run(app, &args[0], &args[1]); }

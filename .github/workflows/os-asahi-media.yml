@@ -11,13 +11,6 @@ on:
         description: Exact image producer source commit
         type: string
         required: true
-  push:
-    branches: ['os-polish/asahi-media', 'os-polish/asahi-media-zstd']
-    paths:
-      - 'os/platforms/apple-silicon/**'
-      - 'os/tools/asahi_media.py'
-      - 'os/tests/*asahi_media*.py'
-      - '.github/workflows/os-asahi-media.yml'
 
 permissions:
   contents: read

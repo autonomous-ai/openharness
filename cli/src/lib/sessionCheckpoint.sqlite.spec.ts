@@ -12,7 +12,7 @@ beforeEach(() => {
   for (const key of ['OPENCODE_DATA_DIR', 'KILO_DATA_DIR', 'HERMES_HOME', 'DEVIN_HOME']) vi.stubEnv(key, root)
 })
 afterEach(async () => {
-  const { closeSqliteHandles } = await import('./sqliteRead.js')
+  const { closeSqliteHandles } = await import('./sqliteBuiltin.js')
   closeSqliteHandles()
   for (const database of databases.splice(0)) database.close()
   vi.unstubAllEnvs()

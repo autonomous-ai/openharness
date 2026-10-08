@@ -26,7 +26,7 @@ import { thisDeviceLabel } from '../lib/daemonState.js'
 import { switchAccountTrust } from '../lib/e2ee/accountTrust.js'
 import { b64d, b64e, fingerprint } from '../lib/e2ee/core.js'
 import { DeviceLogStore } from '../lib/e2ee/deviceLogStore.js'
-import { DeviceLogSyncer, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
+import { DeviceLogSyncer, type DeviceKeysSeen, type DeviceLogFetched, type DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
 import { GroupSyncer, relayRequester, SELF_STAMP } from '../lib/e2ee/groupSyncer.js'
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { E2eeStore } from '../lib/e2ee/store.js'
@@ -37,6 +37,7 @@ import { RelayGateway } from './gateway.js'
 import { LaneSessions } from './lane.js'
 import { observerKey } from './observerKey.js'
 import { shareWindows } from './share.js'
+import { createAccountHttp } from './accountHttp.js'
 
 /** What the gateway needs of the core, in whichever process it runs. */
 export interface GatewayHost {
@@ -49,8 +50,10 @@ export interface GatewayHost {
   signedIn: boolean
   /** The account's tokens, as `core.account` hands them out; it never holds the session itself. */
   tokens: Pick<AuthSessionManager, 'accessToken'>
-  /** A read of the backend's REST API under the account's session, as the core answers it. */
-  backend(method: 'GET', path: string): Promise<HttpAnswer>
+  /** Local identity for the guest list; the core reports these facts without doing network work. */
+  machineName: string
+  hostname: string
+  machines?(state: import('../core/api.js').GatewayMachines): void
   /** The account's sign-in as it stood when the core started; `GatewayOps.account` says it again. */
   account: GatewayAccount
 }
@@ -113,6 +116,13 @@ const PAIR_STATUS: Record<string, number> = {
 export function startGateway(host: GatewayHost): StartedGateway {
   let account = host.account
   let reachable: Set<string> | null = null
+  const accountHttp = createAccountHttp({
+    tokens: host.tokens, account: () => account,
+    computer: { id: host.computerId, name: host.machineName, hostname: host.hostname }, environment: host.autonomousEnv,
+    changed: host.machines,
+    reachable: (ids) => { reachable = ids ? new Set(ids) : null },
+    log: (line) => console.log(`[gateway] ${line}`),
+  })
   const gateway = new RelayGateway({
     machineId: host.machineId, auth: host.tokens, computerId: host.computerId, autonomousEnv: host.autonomousEnv, core: host.events,
   })
@@ -156,7 +166,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
   // socket to the backend (`/api/observer-ws`), signed in with the account's token. It finds the share
   // among those the backend lists for this account first.
   const shareRelay = new HarnessShareRelay(host.tokens, env.BACKEND_WS_URL, host.autonomousEnv, async () => {
-    const result = await host.backend('GET', '/api/harness-shares')
+    const result = await accountHttp.backend('GET', '/api/harness-shares')
     if (result.status !== 200) throw new Error('Shared harnesses are temporarily unavailable.')
     return ((result.body as { data?: { machines?: SharedMachineReference[] } }).data?.machines ?? [])
   })
@@ -206,12 +216,14 @@ export function startGateway(host: GatewayHost): StartedGateway {
     syncer.start()
   }
   if (host.signedIn) { groupStarted = true; syncer.start() }
-  // When each key last opened a session or read the log, from the backend: the Devices list's "last
-  // active", and what `sweepStale` judges an unused app key by. null when it could not be asked.
-  const deviceKeysSeen = async (): Promise<Record<string, number> | null> => {
-    const r = await host.backend('GET', '/api/device-keys/seen').catch(() => null)
-    const seen = r?.status === 200 ? (r.body.data as { seen?: unknown } | undefined)?.seen : undefined
-    return seen && typeof seen === 'object' ? seen as Record<string, number> : null
+  // When each key last opened a session or read the log, from the backend, and since when that record
+  // runs: the Devices list's "last active", and what `sweepStale` judges an unused app key by. null when
+  // it could not be asked; `since` null from a backend that does not say.
+  const deviceKeysSeen = async (): Promise<DeviceKeysSeen | null> => {
+    const r = await accountHttp.backend('GET', '/api/device-keys/seen').catch(() => null)
+    const data = r?.status === 200 ? r.body.data as { seen?: unknown; since?: unknown } | undefined : undefined
+    if (!data?.seen || typeof data.seen !== 'object') return null
+    return { seen: data.seen as Record<string, number>, since: Number.isSafeInteger(data.since) ? data.since as number : null }
   }
   const devlog = new DeviceLogSyncer({
     store: new DeviceLogStore(),
@@ -234,7 +246,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     fetch: async (since) => {
       // `self`: this read counts as this machine's key being used (a backend from before it ignores it).
       const self = encodeURIComponent(b64e(relayIdentityStore.getIdentity().pub))
-      const r = await host.backend('GET', `/api/device-keys?since=${since}&self=${self}`)
+      const r = await accountHttp.backend('GET', `/api/device-keys?since=${since}&self=${self}`)
       const data = r.status === 200 ? r.body.data as Partial<DeviceLogFetched> | undefined : undefined
       const head = data?.head as { seq?: unknown; hash?: unknown } | undefined
       if (!data || typeof data.acct !== 'string' || !Array.isArray(data.entries) || typeof head?.seq !== 'number'
@@ -360,6 +372,9 @@ export function startGateway(host: GatewayHost): StartedGateway {
   const devicePairs = () => gateway.listPairs().filter((p) => p.role === 'device')
 
   const ops: GatewayOps = {
+    backend: accountHttp.backend,
+    machines: accountHttp.machines,
+    mintGridName: accountHttp.mintGridName,
     status: async () => ({ fingerprint: gateway.fingerprint(), pairs: gateway.listPairs(), pending: gateway.pendingPair() as Record<string, unknown> | null }),
     // `harness pair <code>` → run CPace toward the waiting browser; map the result to an HTTP outcome.
     pair: async (code) => {
@@ -397,7 +412,7 @@ export function startGateway(host: GatewayHost): StartedGateway {
     devicesList: async () => {
       // When each key last opened a session, from the backend — a hint for removing apps not used in a
       // long while. Without it the list is still the list.
-      return { status: 200, body: { ...devlog.list(), lastSeen: await deviceKeysSeen() ?? {} } }
+      return { status: 200, body: { ...devlog.list(), lastSeen: (await deviceKeysSeen())?.seen ?? {} } }
     },
     devicesRemove: async (pub) => {
       syncer.remove(pub)

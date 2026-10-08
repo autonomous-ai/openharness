@@ -25,6 +25,12 @@ export async function startFakeRelay(): Promise<FakeRelay> {
   const seen: RelayRequest[] = []
   const answers = new Map<string, RelayAnswer | (() => RelayAnswer)>()
   const server = createServer((req, res) => {
+    // Only what was sent to a grid's address is the spec's: a request with Node's own User-Agent, which no
+    // grid read sends, reached gridReads.spec.ts's relay port under load, from outside the code under test.
+    if (!req.url?.startsWith('/g/')) {
+      res.writeHead(404).end()
+      return
+    }
     seen.push({ method: req.method ?? '', path: req.url ?? '', headers: req.headers })
     const planned = answers.get(req.url ?? '')
     const found = (typeof planned === 'function' ? planned() : planned) ?? { status: 404, body: { detail: 'Not Found' } }

@@ -39,7 +39,14 @@ async function pageThrough(engine: Engine, file: string, limit: number): Promise
   }
 }
 
-describe('history pages equal the windows cut from the whole file', () => {
+/** These cases do a fixed amount of real file work, the subject here: a page read is reads of a file on disk.
+ *  One cut is up to 16 sweeps of a file page by page, and the growing-file case 600 appends, each with an
+ *  index update and a whole-file read: hundreds of reads either way. 1.2 to 3.1 s under 12 busy loops on a
+ *  12-core Mac (load 50 to 77), and past vitest's 5 s in a full run under more. Room for the reads, not a
+ *  wait for anything: none of them waits on a clock. */
+const FILE_WORK_TIMEOUT_MS = 30_000
+
+describe('history pages equal the windows cut from the whole file', { timeout: FILE_WORK_TIMEOUT_MS }, () => {
   describe.each([['claude', claudeScenario], ['codex', codexScenario]] as const)('%s', (engine, scenario) => {
     const records = scenario()
     const cuts = records.map((_, index) => index + 1)
@@ -233,7 +240,7 @@ describe('a page held to its size', () => {
   })
 })
 
-describe('LineIndex', () => {
+describe('LineIndex', { timeout: FILE_WORK_TIMEOUT_MS }, () => {
   const tricky = [
     '{"a":1}', '', '   ', '\t', ' ', '　 ', '﻿', '\u0001', 'é', '{"b":2}',
     Buffer.from([0xff, 0xfe]).toString('latin1'),

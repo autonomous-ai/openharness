@@ -104,10 +104,17 @@ function codexComposer(lines: string[], raw: string[]): ComposerState {
   while (end < lines.length && lines[end].trim()) end++
   const footer = lines.slice(end).filter((line) => line.trim())
   if (footer.length > 3) return 'absent'
-  const draft = [lines[composer].replace(/^›\s?/, ''), ...lines.slice(composer + 1, end).map((line) => line.trim())].join(' ').trim()
+  const draft = [lines[composer].replace(/^[›»]\s?/, ''), ...lines.slice(composer + 1, end).map((line) => line.trim())].join(' ').trim()
   const token = typedToken(draft)
-  const above = lines.slice(Math.max(0, composer - 20), composer)
-  if (token.startsWith('/') && above.some((line) => /^(?:›\s*|\s+)\/[\w-]+\s{2,}\S/.test(line))) return 'popup'
+  // A voice send was refused as popup_open even though the recording had transcribed. Looking through
+  // twenty conversation rows also matched command examples and old menu hints. A popup is the block
+  // immediately above the composer; a slash menu has a selected row and edits the initial /command.
+  let popupEnd = composer - 1
+  while (popupEnd >= 0 && !lines[popupEnd].trim()) popupEnd--
+  let popupStart = popupEnd
+  while (popupStart >= Math.max(0, composer - 20) && lines[popupStart].trim()) popupStart--
+  const above = lines.slice(popupStart + 1, popupEnd + 1)
+  if (draft.startsWith('/') && token.startsWith('/') && above.some((line) => /^›\s+\/[\w-]+(?:\s{2,}\S|$)/.test(line))) return 'popup'
   if (token.startsWith('@') && above.some((line) => /\benter\/tab insert · esc close\b/.test(line))) return 'popup'
   return 'ready'
 }

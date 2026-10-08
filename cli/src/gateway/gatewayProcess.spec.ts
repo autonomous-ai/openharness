@@ -25,6 +25,8 @@ function stubGateway() {
   } satisfies GatewayPort
   const answer = { status: 200, body: { ok: true } }
   const ops = {
+    backend: vi.fn(async (_method: string, _path: string, _body?: unknown) => answer),
+    machines: vi.fn(async (_fallback?: boolean) => answer), mintGridName: vi.fn(async (): Promise<string | null> => 'private-grid'),
     status: vi.fn(async () => ({ fingerprint: 'AB12', pairs: [], pending: null })),
     pair: vi.fn(async () => answer), listPairs: vi.fn(async () => answer), revoke: vi.fn(async () => answer), revokeAll: vi.fn(async () => answer),
     setRemotePassword: vi.fn(async () => answer), clearRemotePassword: vi.fn(async () => answer), remotePasswordStatus: vi.fn(async () => answer),
@@ -116,14 +118,12 @@ describe('the gateway\'s process, spoken to by the core', () => {
     // Its tokens and its reads of the backend are the core's to hand out.
     expect(await w.hosts[0].tokens.accessToken({ force: true })).toBe('token-a')
     expect(w.tokens.accessToken).toHaveBeenCalledWith({ force: true })
-    expect(await w.hosts[0].backend('GET', '/api/device-keys?since=0')).toEqual({ status: 200, body: { data: { acct: 'a' } } })
     w.tokens.accessToken.mockRejectedValueOnce(Object.assign(new Error('session over'), { code: 'INVALID_REFRESH' }))
     await expect(w.hosts[0].tokens.accessToken()).rejects.toMatchObject({ name: 'AuthSessionError', code: 'INVALID_REFRESH' })
     // The core going stops it; the next core builds a new one, signed out this time serving this computer only.
     w.disconnect()
     expect(gateway.stop).toHaveBeenCalled()
     await expect(w.hosts[0].tokens.accessToken()).rejects.toMatchObject({ code: 'UNAVAILABLE' })
-    expect(await w.hosts[0].backend('GET', '/api/device-keys')).toMatchObject({ status: 502 })
     w.link.port.serveThisComputerOnly()
     w.link.port.openRequests()
     w.connect()
@@ -356,5 +356,22 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.options().onEvent!({ kind: 'mystery' })
     w.options().onBinary!(Uint8Array.of(9))
     expect(w.gateways).toHaveLength(0)
+  })
+})
+
+describe('account HTTP across the gateway service link', () => {
+  it('performs backend and machine requests in the gateway, with the core supplying only tokens', async () => {
+    const w = wire()
+    w.connect()
+    const { ops } = w.gateways[0]
+    expect(await w.link.ops.backend('POST', '/api/desk/ops', { changes: [] })).toEqual({ status: 200, body: { ok: true } })
+    expect(ops.backend).toHaveBeenCalledWith('POST', '/api/desk/ops', { changes: [] })
+    await w.link.ops.machines(true)
+    expect(ops.machines).toHaveBeenCalledWith(true)
+    await w.link.ops.machines()
+    expect(ops.machines).toHaveBeenCalledWith(false)
+    expect(await w.link.ops.mintGridName()).toBe('private-grid')
+    expect(w.backend).not.toHaveBeenCalled()
+    w.hosts[0].machines!({ owner: 'machine-1', body: { machines: [{ machineId: 'm2' }] }, fetchedAt: 1000 })
   })
 })

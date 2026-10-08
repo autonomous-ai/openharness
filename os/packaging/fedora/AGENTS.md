@@ -31,6 +31,10 @@ and running agents. Read `guide.md` and the shipped TUI reference before advisin
 
 ## Network, tools and diagnosis
 
+- `harness connections` manages this computer's service accounts. Read
+  `/usr/share/harness-os/connections.md` before using them. All local agents
+  share the helper; credentials do not synchronize to other computers.
+
 - Fedora's NetworkManager owns networking. `hn-os wifi` opens the root-owned
   network form through sudo; passwords stay in its masked input. Explicit login
   setup grants only that form's two exact commands to the selected user. Do not

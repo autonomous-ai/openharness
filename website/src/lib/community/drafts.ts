@@ -1,15 +1,17 @@
+import { communityLimits } from './contract';
 import type { HarnessSnapshot } from './types';
 
-export type HubDraft = Partial<HarnessSnapshot> & { version?: number; clientId?: string; contextNote?: string };
+/** `originalOutput` is kept only by the review page, to tell a fork's new output from the one it arrived with. */
+export type HubDraft = Partial<HarnessSnapshot> & { version?: number; clientId?: string; contextNote?: string; originalOutput?: string };
 export const draftDatabase = 'harness.hub.drafts';
 
 export function validateDraft(value: unknown): HubDraft {
   if (!value || typeof value !== 'object') throw new Error('Choose a Harness project bundle.');
   const draft = value as HubDraft;
-  for (const key of ['title', 'description', 'category', 'engine', 'viewerPath', 'cover', 'harnessId', 'forkedFrom', 'clientId', 'contextNote'] as const) {
+  for (const key of ['title', 'description', 'category', 'engine', 'viewerPath', 'cover', 'harnessId', 'forkedFrom', 'clientId', 'contextNote', 'originalOutput'] as const) {
     if (draft[key] !== undefined && typeof draft[key] !== 'string') throw new Error('Invalid draft metadata.');
   }
-  if (draft.version !== 1 || !Array.isArray(draft.files) || draft.files.length > 30 || !draft.files.every(file => typeof file.path === 'string' && typeof file.content === 'string' && file.content.length <= 3_000_000 && (!file.encoding || file.encoding === 'base64')) || !Array.isArray(draft.conversation) || draft.conversation.length > 80 || !draft.conversation.every(turn => ['user', 'assistant', 'tool'].includes(turn.role) && typeof turn.text === 'string' && turn.text.length <= 12000)) throw new Error('Choose the OPEN-HARNESS.json from your harness.');
+  if (draft.version !== 1 || !Array.isArray(draft.files) || draft.files.length > communityLimits.files || !draft.files.every(file => typeof file.path === 'string' && typeof file.content === 'string' && file.content.length <= communityLimits.fileChars && (!file.encoding || file.encoding === 'base64')) || !Array.isArray(draft.conversation) || draft.conversation.length > communityLimits.turns || !draft.conversation.every(turn => ['user', 'assistant', 'tool'].includes(turn.role) && typeof turn.text === 'string' && turn.text.length <= communityLimits.turnChars)) throw new Error('Choose the OPEN-HARNESS.json from your harness.');
   if (typeof draft.viewerPath !== 'string' || !draft.files.some(file => file.path === draft.viewerPath && !file.encoding && file.path.endsWith('.html'))) throw new Error('Include a self-contained HTML preview of your output.');
   return draft;
 }

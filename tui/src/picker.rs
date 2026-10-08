@@ -129,6 +129,8 @@ pub struct Picker {
     pub prefixed: bool,
     /// An inline composer can use a scope character not used by the app launcher.
     pub scope_prefix: Option<char>,
+    /// The shell composer is drawn with the command panel's pieces rather than fzf's frame.
+    pub shell_panel: bool,
     /// Screen row → visible index, from the last draw (for clicks).
     pub row_at: Vec<(u16, usize)>,
     /// A row whose action needs a second Enter (a big download).
@@ -285,6 +287,7 @@ impl Picker {
             scroll: 0,
             prefixed: false,
             scope_prefix: None,
+            shell_panel: false,
             row_at: Vec::new(),
             armed: None,
             qcursor: 0,

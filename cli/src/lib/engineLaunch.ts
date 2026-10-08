@@ -5,6 +5,7 @@ import { homedir, userInfo } from 'node:os'
 import { isAbsolute, basename, dirname, join } from 'node:path'
 import { baseNode } from '../harnessd/baseNode.js'
 import { env } from '../config/env.js'
+import { launchField } from '../engines/launches.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { isOpencodeV2 } from '../engines/opencode/version.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
@@ -22,11 +23,7 @@ import { CODEX_STARTUP_RETRY_PROBE } from './codexStartupRetry.js'
  * `null` = no known/safe flag — callers must hide the option rather than guess one.
  */
 export const BYPASS_PERMISSION_FLAGS: Readonly<Record<AgentEngine, string[] | null>> = {
-  // The engines' own auto modes, not their "skip every check" switches: Claude Code's auto mode
-  // approves routine actions and still runs its safety checks on risky ones, and Codex routes each
-  // approval to its automatic review and keeps commands in the workspace sandbox.
-  claude: ['--permission-mode', 'auto'],
-  codex: ['--approve-for-me'],
+  ...launchField('bypassPermission'),
   cursor: ['--force'],
   opencode: ['--auto'],
   // No permission-prompt system to bypass (pi), or config-file based rather than a flag (hermes).
@@ -55,19 +52,7 @@ export const BYPASS_PERMISSION_FLAGS: Readonly<Record<AgentEngine, string[] | nu
  * The desktop mirrors this table in `lib/core/permission_modes.dart` — keep both in step.
  */
 export const PERMISSION_MODES: Readonly<Partial<Record<AgentEngine, Readonly<Record<string, readonly string[]>>>>> = {
-  claude: {
-    auto: ['--permission-mode', 'auto'],
-    acceptEdits: ['--permission-mode', 'acceptEdits'],
-    plan: ['--permission-mode', 'plan'],
-    ask: [],
-    full: ['--dangerously-skip-permissions'],
-  },
-  codex: {
-    auto: ['--approve-for-me'],
-    readOnly: ['--sandbox', 'read-only'],
-    ask: [],
-    full: ['--dangerously-bypass-approvals-and-sandbox'],
-  },
+  ...launchField('permissionModes'),
   cursor: { auto: ['--force'], ask: [] },
   opencode: { auto: ['--auto'], ask: [] },
 }
@@ -93,15 +78,11 @@ export function permissionModeApproves(mode: string): boolean {
  * engine that reads a bare positional. Each entry cites where it was read from.
  */
 export const FIRST_PROMPT_ARGS: Readonly<Record<AgentEngine, readonly string[] | null>> = {
+  ...launchField('firstPromptArgs'),
   // `opencode --help`: `--prompt  prompt to use`, a TUI flag — the interactive session starts with
   // the message submitted. A flag rather than a positional because opencode's own positional is
   // `[project]`, a directory: handed the text bare, it would try to open a folder by that name.
   opencode: ['--prompt'],
-  // `claude --help`: `Usage: claude [options] [command] [prompt]`, "prompt: Your prompt".
-  claude: [],
-  // Per vendor CLI help: `codex [OPTIONS] [PROMPT]`, the optional positional the interactive TUI
-  // opens with. Not verified on a local install when this entry was written.
-  codex: [],
   // No documented first-prompt argument for an interactive launch. Not guessed.
   cursor: null,
   pi: null,
@@ -312,8 +293,7 @@ export interface LaunchCommandOptions {
  * commands"); it must run in the session's own folder, or Devin asks which folder to use.
  */
 export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>> = {
-  claude: ['--resume'],
-  codex: ['resume'],
+  ...launchField('resumeArgs'),
   cursor: ['--resume'],
   opencode: ['--session'],
   kilo: ['--session'],
@@ -340,8 +320,7 @@ export const LAUNCH_RESUME_FLAG: Readonly<Partial<Record<AgentEngine, string[]>>
  * one, and refuses otherwise — never a plain `--resume`, which would put two processes on ONE session.
  */
 export const LAUNCH_FORK_FLAG: Readonly<Partial<Record<AgentEngine, { lead: string[]; after?: string[] }>>> = {
-  claude: { lead: ['--resume'], after: ['--fork-session'] },
-  codex: { lead: ['fork'] },
+  ...launchField('forkArgs'),
 }
 
 /** Whether a relaunch can reopen this engine's previous conversation — see [LAUNCH_RESUME_FLAG].

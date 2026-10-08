@@ -726,6 +726,8 @@ export class RemoteRelayPool {
     })
     entry.heartbeat = watchSocketLiveness(ws, {
       onIdle: (idleMs) => console.log(`[relay] ${machineId.slice(0, 8)} no traffic for ${Math.round(idleMs / 1000)}s — terminating`),
+      // A wake can end the socket too, and never reaches onIdle (wsLiveness.ts, the wake branch).
+      onWake: (sleptMs, givingUp) => console.log(`[relay] ${machineId.slice(0, 8)} woke after ${Math.round(sleptMs / 1000)}s asleep — ${givingUp ? 'giving up on the link' : 're-probing'}`),
       // The relay socket ends at the backend, which hung up on it while we slept.
       peerGivesUpAfterMs: BACKEND_IDLE_DEADLINE_MS,
       // Piggybacked sweep for a migration that never completed (pane closed mid-flight, responder never

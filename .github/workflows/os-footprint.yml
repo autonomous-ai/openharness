@@ -8,9 +8,6 @@ on:
         type: string
         default: '37207405290'
         required: true
-  push:
-    branches: ['os-polish/footprint-audit']
-    paths: ['os/tests/footprint_*.py', 'os/tests/test_footprint.py', '.github/workflows/os-footprint.yml']
 
 permissions:
   contents: read

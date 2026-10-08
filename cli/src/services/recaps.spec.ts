@@ -136,6 +136,38 @@ describe('the recaps', () => {
     expect(vi.mocked(core.clients.turnCard).mock.calls.map(([frame]) => [frame.dbSessionId, frame.payload.kind])).toEqual([['s2', 'processing']])
   })
 
+  it('recaps, quietly and once, a turn that ended while nobody was listening (attached with its last turn over)', async () => {
+    const { core, recaps, tell } = setup()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.mocked(core.transcripts.lastTurn).mockResolvedValue({ assistantText: 'Giá vàng PNJ hôm nay: mua 14,00 triệu.', userMessage: 'giá PNJ' } as never)
+    tell({ kind: 'settled', session: s1 })
+    await vi.waitFor(() => expect(core.clients.turnCard).toHaveBeenCalled())
+    const summary = deriveTurnSummary('Giá vàng PNJ hôm nay: mua 14,00 triệu.')
+    // History, not news: the tile's recap with no notification, no busy card, nothing for the apps to announce.
+    expect(vi.mocked(core.clients.turnCard).mock.calls.map(([frame]) => frame.payload)).toEqual([
+      { kind: 'summary', text: 'Giá vàng PNJ hôm nay: mua 14,00 triệu.', recap: 'Giá vàng PNJ hôm nay: mua 14,00 triệu.', notification: null, restored: true },
+    ])
+    expect(core.clients.turnSummary).not.toHaveBeenCalled()
+    expect(recaps.port.recaps('s1')).toMatchObject({ busy: false, history: [summary], asks: ['giá PNJ'], fullTexts: ['Giá vàng PNJ hôm nay: mua 14,00 triệu.'] })
+    // Every attach may ask: a turn already recapped is left alone.
+    tell({ kind: 'settled', session: s1 })
+    await flush(); await flush()
+    expect(core.clients.turnCard).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a turn recapped live alone when its session attaches again', async () => {
+    const { core, recaps, tell } = setup()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    tell({ kind: 'events', session: s1, events: [started()], replay: false })
+    tell({ kind: 'events', session: s1, events: [ended], replay: false })
+    await vi.waitFor(() => expect(core.clients.turnSummary).toHaveBeenCalled())
+    vi.mocked(core.clients.turnCard).mockClear()
+    tell({ kind: 'settled', session: s1 })
+    await flush(); await flush()
+    expect(core.clients.turnCard).not.toHaveBeenCalled()
+    expect(recaps.port.recaps('s1')?.history).toHaveLength(1)
+  })
+
   it('says the cards of every turn still at work, for a dial that just attached', async () => {
     const { recaps, tell } = setup()
     tell({ kind: 'events', session: s1, events: [started()], replay: false })

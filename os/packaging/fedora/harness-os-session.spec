@@ -7,7 +7,7 @@ Name: harness-os-session
 Version: %{harness_version}
 Release: %{harness_release}
 Summary: Harness OS terminal and agent session for Fedora
-License: MIT
+License: MIT AND Apache-2.0
 URL: https://github.com/autonomous-ai/openharness
 ExclusiveArch: aarch64
 Source0: payload.tar.gz

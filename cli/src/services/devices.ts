@@ -133,6 +133,7 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
     sessions: () => core.agents.advertised(),
     refresh: deps.refresh,
     displayName: (session) => core.agents.displayName(session),
+    appFocus: () => focus.voice ?? undefined,
     activityText: (agentId) => core.agents.activityText(agentId),
     machineName: () => core.machine.name(),
     machineId: () => core.machine.id(),
@@ -279,6 +280,9 @@ export function startDevices(core: CoreApi, ports: CorePorts, deps: DevicesDeps)
       .then((result) => { if (!result.ok) log(`[cable] settings for ${id || 'no device'}: ${result.error}`) })),
     windowFocus: (next) => {
       focus = next
+      // State replay after a service restart carries windowFocus, without another appFocus event.
+      const selected = next.voice
+      if (selected) part.call('dial', () => cable.followApp(selected.machineId, selected.agentId))
       part.call('window', () => windowSelection.focusChanged())
     },
     windowReply: (kind, connId, machineId, payload) => part.call('window', () =>

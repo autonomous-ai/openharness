@@ -90,7 +90,7 @@ try:
     wait(lambda:'studio' in screen(),'local fixture connected')
     hn('workspace-menu','new-tab'); shows('New Terminal'); shows('Recent harnesses')
     shows('gpu-box shell')  # Terminals remain recent harnesses, as in production.
-    shows('What task should this agent work on?')
+    shows('What should it do?')
     snapshot('welcome-empty')
     initial_header=header()
     assert initial_header.index('OpenCode') < initial_header.index(LOCAL_LABEL) < initial_header.rfind('[ '), initial_header
@@ -102,11 +102,13 @@ try:
     choose_machine('gpu-box'); assert '[ gpu-box ▾ ]' in header(),header()
     click('New Folder'); shows('Search projects')
     snapshot('welcome-project-picker')
-    # A side picker leaves the recent list visible. Check the picker column,
-    # not unrelated local projects in that background list.
+    # The picker drops down over the recent list. Check its own rows (query line
+    # to keys line), not unrelated local projects in that background list.
     project_lines=screen().splitlines()
-    picker_x=next(line.index('Search projects') for line in project_lines if 'Search projects' in line)
-    projects='\n'.join(line[picker_x:] for line in project_lines)
+    top=next(y for y,line in enumerate(project_lines) if 'Search projects' in line)
+    bottom=next(y for y in range(top,len(project_lines)) if 'esc back' in project_lines[y])
+    picker_x=project_lines[top].index('Search projects')
+    projects='\n'.join(line[picker_x:picker_x+60] for line in project_lines[top:bottom+1])
     assert 'ml-lab' in projects and 'billing' not in projects, 'projects must belong to the selected computer'
     type_text('ml-lab'); keys('Enter'); shows('[ ml-lab ▾ ]'); shows(task)
     choose_machine('studio'); assert header()==initial_header,(header(),initial_header)
@@ -161,7 +163,7 @@ try:
     count=len(created()); click('New Terminal'); shows('dev@gpu-box')
     assert len(created())==count, 'New Terminal must not launch the chosen coding agent'
     print('PASS keyboard traversal, All action, wide/narrow/light rendering, preserved task, New Terminal',flush=True)
-    hn('workspace-menu','new-tab'); shows('What task should this agent work on?')
+    hn('workspace-menu','new-tab'); shows('What should it do?')
     task="what's 1+1"
     type_text(task); keys('Enter')
     assert len(created())==count, 'first task Enter only highlights New Harness'

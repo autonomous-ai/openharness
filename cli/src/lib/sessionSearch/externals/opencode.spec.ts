@@ -11,7 +11,7 @@ import { join } from 'node:path'
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../sqliteRead.js'
+import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../sqliteBuiltin.js'
 import {
   LIST_LIMIT, ancestry, argvSubcommand, engineProcess, opencodeListSql, opencodeProvider, opencodeTurnOpen,
   ownerRecord, parseOwnerRecord, readSql, rowsOf, splitCounts, storeStamp, tableColumns, tally, type SqlRead,

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Feed from './Feed';
 import Detail from './Detail';
-import { emptySocial } from '@/lib/community/client';
+import { CommunityError, emptySocial } from '@/lib/community/client';
 import type { OpenHarness } from '@/lib/community/types';
 
 const request = vi.hoisted(() => vi.fn());
@@ -48,6 +48,38 @@ describe('community navigation', () => {
     expect(screen.queryByRole('link', { name: 'Open Blue hour' })).not.toBeInTheDocument();
     await waitFor(() => expect(request).toHaveBeenCalled());
   });
+  it('draws the starters after the last page, so paging never lands above them', async () => {
+    request.mockResolvedValueOnce({ harnesses: [{ ...sample, id: 'first' }], nextCursor: 'next-page', following: [], stats: {}, signedIn: true });
+    render(<Feed />);
+    await screen.findByRole('button', { name: 'More harnesses' });
+    expect(screen.queryByRole('link', { name: 'Open Blue hour' })).not.toBeInTheDocument();
+    // A search finds them at once: there is nothing to scroll past.
+    fireEvent.click(screen.getByRole('button', { name: 'Search harnesses' }));
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'melody' } });
+    expect(screen.getByRole('link', { name: 'Open Blue hour' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
+    request.mockResolvedValueOnce({ harnesses: [{ ...sample, id: 'second', title: 'Second' }], nextCursor: null, following: [], stats: {}, signedIn: true });
+    fireEvent.click(screen.getByRole('button', { name: 'More harnesses' }));
+    await screen.findByRole('link', { name: 'Open Blue hour' });
+    const links = screen.getAllByRole('link', { name: /^Open / }).map(link => link.getAttribute('href'));
+    expect(links.indexOf('/hub/second')).toBeLessThan(links.indexOf('/hub/starter-blue-hour'));
+  });
+  it('reports a failed like without offering to reload the feed', async () => {
+    request.mockResolvedValueOnce({ harnesses: [], nextCursor: null, following: [], stats: {}, signedIn: true });
+    render(<Feed />);
+    await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    request.mockRejectedValueOnce(new CommunityError('The community is temporarily unavailable. Try again.', 503));
+    fireEvent.click(screen.getByRole('button', { name: 'Like Blue hour' }));
+    await screen.findByText('The community is temporarily unavailable. Try again.');
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+  it('offers Reply only to a signed-in reader', async () => {
+    const comment = { id: 'comment-1', body: 'Lovely.', authorName: 'Bob', mine: false, createdAt: '2026-10-06' };
+    request.mockResolvedValue({ social: { ...emptySocial, comments: [comment] } });
+    render(<Detail id={sample.id} initial={sample} initialComments />);
+    await screen.findByText('Lovely.');
+    expect(screen.queryByRole('button', { name: 'Reply' })).not.toBeInTheDocument();
+  });
   it('keeps the viewer in place while comments replace the chat and escape user text', async () => {
     request.mockResolvedValue({ harness: null, social: { ...emptySocial, comments: [{ id: 'c', body: '<img src=x onerror=alert(1)>', authorName: 'Someone', mine: false, createdAt: '2026-10-05' }] } });
     render(<Detail id={sample.id} initial={sample} />);
@@ -62,6 +94,23 @@ describe('community navigation', () => {
     expect(screen.getByTitle('Orbit output')).toBe(viewer);
     fireEvent.click(screen.getByRole('button', { name: 'Back to chat log' }));
     expect(screen.getByText('Make an orbit.')).toBeInTheDocument();
+  });
+  it('reads a publication once, then refreshes only its social state', async () => {
+    const id = '0f8fad5b-d9cb-469f-a165-70867728950e';
+    request.mockResolvedValueOnce({ harness: { ...sample, id }, social: emptySocial }).mockResolvedValue({ social: { ...emptySocial, likes: 3 } });
+    render(<Detail id={id} initial={null} />);
+    await screen.findByTitle('Orbit output');
+    expect(request).toHaveBeenLastCalledWith(`harnesses/${id}`);
+    act(() => { window.dispatchEvent(new Event('focus')); });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Like harness' })).toHaveTextContent('3'));
+    expect(request).toHaveBeenLastCalledWith(`harnesses/${id}/social`);
+  });
+  it('still loads beside a backend that has no social route yet', async () => {
+    request.mockRejectedValueOnce(new CommunityError('Not found.', 404)).mockResolvedValueOnce({ harness: null, social: { ...emptySocial, likes: 2 } });
+    render(<Detail id={sample.id} initial={sample} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Like harness' })).toHaveTextContent('2'));
+    expect(request.mock.calls.map(call => call[0])).toEqual(['harnesses/starter-orbit/social', 'harnesses/starter-orbit']);
+    expect(screen.queryByText('This harness is unavailable.')).not.toBeInTheDocument();
   });
   it('does not pretend a signed-out like succeeded', async () => {
     request.mockResolvedValue({ harness: null, social: emptySocial });

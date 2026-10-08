@@ -72,6 +72,7 @@ void main() {
     AppKeymap? keymap,
     Brightness brightness = Brightness.dark,
     double scale = 1,
+    Future<String> Function()? publish,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -103,6 +104,7 @@ void main() {
                       child: ShareHarnessDialog(
                         name: 'Climate dashboard',
                         manage: manage,
+                        publish: publish,
                       ),
                     ),
                   );
@@ -843,4 +845,24 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+  testWidgets('Publish to Hub says what the Hub needs next', (tester) async {
+    await show(
+      tester,
+      (action, payload) async => {
+        'collaboration': true,
+        'shares': [],
+        'link': {'visibility': 'private'},
+      },
+      publish: () async =>
+          'Choose its project folder on the Hub page that opened.',
+    );
+    await tester.tap(find.text('Publish to Hub'));
+    await tester.pumpAndSettle();
+    expect(
+      find.text('Choose its project folder on the Hub page that opened.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Review your files'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
 }

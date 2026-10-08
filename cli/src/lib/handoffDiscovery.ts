@@ -9,7 +9,7 @@ import type { RecentRecap } from './recapReads.js'
 import type { RegisteredSession } from './registry.js'
 import type { RepairedSession } from './sessionRepair.js'
 import type { TurnSource } from './sessionSearch/sessionTurns.js'
-import { SQLITE_BACKED_ENGINES } from './sqliteAvailability.js'
+import { SQLITE_BACKED_ENGINES } from './sqliteRead.js'
 
 export interface DiscoveryDeps {
   /** Engines other than Claude: the born, unique session of a process (sessionRepair findLiveSession). */

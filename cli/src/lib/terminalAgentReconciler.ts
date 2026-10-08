@@ -7,7 +7,7 @@ import {
   type TerminalAgentProbe,
 } from './terminalAgentDiscovery.js'
 import type { TerminalBackend } from './terminalBackend.js'
-import { mergeTerminalRuntimes, processIdentityKey, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
+import { mergeTerminalRuntimes, processIdentityKey, sameProcessIdentity, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { TerminalRuntimeRef } from './terminalTypes.js'
 
 const MISS_LIMIT = 2
@@ -326,6 +326,10 @@ export class TerminalAgentReconciler {
         if (this.routeHeld(current.runtimes, probeSeq)) continue
         const processKey = currentProcessKey(current)
         const observed = (processKey ? observedByProcess.get(processKey) : undefined)
+          // A row saved before start ticks is keyed by its marker, the same process observed with them
+          // by its ticks: match it here, or the pass takes it for a new process (ProcessIdentity.startTicks).
+          ?? probe.agents.find((agent) => agent.engine === current.engine
+            && sameProcessIdentity(agent.processIdentity, current.processIdentity))
           ?? unboundRouteObservation(current, probe.agents)
         if (observed) matchedProcesses.add(processIdentityKey(observed.engine, observed.processIdentity))
 

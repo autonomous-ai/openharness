@@ -10,7 +10,7 @@ import { join } from 'node:path'
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../sqliteRead.js'
+import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../sqliteBuiltin.js'
 import {
   activeProfile, argvProfile, bestContinuation, compressionTip, hermesChains, hermesHomes, hermesKind, hermesLeases,
   hermesListSql, hermesProvider, hermesRow, hermesTurnOpen, leaseHeldBy, type HermesRow, type HermesSession,

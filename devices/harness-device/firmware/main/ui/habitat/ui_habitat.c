@@ -240,7 +240,7 @@ static EXT_RAM_BSS_ATTR struct {
     uint32_t character_activity;
     uint8_t status_phase;
     unsigned bell_unread;     // the bell's count at the last home render, to see a notice arrive
-    uint32_t notice_ms;       // the face clock when it last went up, 0 = none since boot (focus_dot, the pet's alert)
+    uint32_t notice_ms;       // the face clock when it last went up, 0 = none since boot (the pet's alert bubble)
     uint32_t pet_next_ms;   // when the pet's (or the voice screen's listening scene's) drawn frame next changes (clock_ms), 0 = never
     int start_x, start_y, last_x, last_y;
     uint32_t touch_started;
@@ -1090,7 +1090,7 @@ static void render_workspace_preview(ht_scene_t *f)
  * THE BLUE BELL — the Focus skin's notification pill, as the LVGL firmware drew it: #006fff, fully
  * round, padded 13 px, always 32 px tall: the bell (FontAwesome, montserrat_14, the one icon face) and, 6 px on,
  * the count in Inter 20, each centred vertically in it. Three runs: box, bell, count. It sits at the bottom edge, where the
- * microphone was: the top belongs to the curved name. Not on the working face, which has the dot (focus_dot).
+ * microphone was: the top belongs to the curved name. Not on the working face, where the pet's bubble says it.
  */
 static void focus_bell(ht_scene_t *f, unsigned count, int bell_y)
 {
@@ -1106,54 +1106,6 @@ static void focus_bell(ht_scene_t *f, unsigned count, int bell_y)
     ht_text(f, x + BELL_PAD_H, bell_y + (h - bf->height) / 2, bw, bf, ink, blue,
             HT_LV_BELL);
     ht_text(f, x + BELL_PAD_H + bw + BELL_GAP, bell_y + (h - cf->height) / 2, cw, cf, ink, blue, text);
-}
-/*
- * THE DOT (owner, 2026-10-05): on the working face a notice is no longer the bell pill. The pet tells you first
- * (its alert scene, focus.c), then a blue dot flies from the pet's bubble out to the rim and round it to 12 o'clock,
- * a ring goes out once as it lands, and the dot stays above the name until the notice is read. Two runs in every
- * phase (the dot's box, the ring; an empty text where either has nothing to draw). Returns when its drawing next
- * changes (the face clock), 0 = never.
- */
-static uint32_t focus_dot(ht_scene_t *f, const ht_character_face_t *face, const char *recap)
-{
-    enum { FLY_MS = 550, RING_MS = 440, TICK_MS = 40, DOT = 12, DOT_X = 233, DOT_Y = 12 };
-    const ht_font_t *none = &ht_lv_inter_20.base;
-    uint32_t clock = face->clock_ms, alert = ht_focus_alert_ms(face, recap);
-    uint32_t age = face->notice_ms ? clock - face->notice_ms : UINT32_MAX;
-    uint16_t blue = color(0x006fff);
-    if (age < alert) {   // the pet is telling: no dot yet
-        ht_text(f, DOT_X, DOT_Y, 1, none, f->background, f->background, "");
-        ht_text(f, DOT_X, DOT_Y, 1, none, f->background, f->background, "");
-        return face->notice_ms + alert;
-    }
-    age -= alert;
-    if (age < FLY_MS) {
-        // Out to the rim first, then round it to 12 o'clock, shrinking to the dot: it never crosses the name.
-        int bx, by;
-        ht_focus_alert_from(face, &bx, &by);
-        float u = (float)age / FLY_MS;
-        u = u * u * (3 - 2 * u);
-        float a0 = atan2f((float)(bx - 233), (float)(233 - by)), r0 = hypotf((float)(bx - 233), (float)(233 - by));
-        float r = u < 0.35f ? r0 + (226 - r0) * u / 0.35f : 226 + (221 - 226) * (u - 0.35f) / 0.65f;
-        float a = a0 * (1 - fmaxf(0, (u - 0.2f) / 0.8f));
-        int d = (int)(28 * (1 - u) + DOT * u + 0.5f);
-        int x = (int)(233 + r * sinf(a) + 0.5f), y = (int)(233 - r * cosf(a) + 0.5f);
-        ht_box(f, x - d / 2, y - d / 2, d, d, d / 2, blue, blue);
-        ht_text(f, DOT_X, DOT_Y, 1, none, f->background, f->background, "");
-        return clock + TICK_MS;
-    }
-    age -= FLY_MS;
-    ht_box(f, DOT_X - DOT / 2, DOT_Y - DOT / 2, DOT, DOT, DOT / 2, blue, blue);
-    if (age < RING_MS) {
-        // One ring out from the dot as it lands, darkening to the black ground (the panel keeps no alpha).
-        unsigned k = 255 - age * 255 / RING_MS;
-        unsigned rgb = ((0x00 * k / 255) << 16) | ((0x6f * k / 255) << 8) | (0xff * k / 255);
-        int radius16 = (DOT / 2 + 4) * 16 + (int)(age * 16 * 15 / RING_MS);
-        ht_ring_arc(f, DOT_X * 16, DOT_Y * 16 + 8, radius16, 32, 90, 180, color(rgb));
-        return clock + TICK_MS;
-    }
-    ht_text(f, DOT_X, DOT_Y, 1, none, f->background, f->background, "");
-    return 0;
 }
 static void render_home(ht_scene_t *f)
 {
@@ -1202,7 +1154,9 @@ static void render_home(ht_scene_t *f)
     uint32_t since = a && a->busy && a->busy_ms && !is_question(a->id) ? (ms() - a->busy_ms) / 1000 : 0;
     int tab_index = workspace_index(s.selected_tab);
     uint32_t clock = ms() | 1;
-    // A notice arrives: the count went up. Its time drives the pet's alert and the dot's flight (focus_dot).
+    // A notice arrives: the count went up. Its time drives the pet's alert bubble (focus.c THE ALERT); one that is
+    // already up rings again without popping in (set below, once the face knows the pet).
+    bool again = unread > s.bell_unread && s.bell_unread && s.notice_ms;
     if (unread > s.bell_unread) s.notice_ms = clock;
     s.bell_unread = unread;
     ht_character_face_t f_ = {.recipient = caption, .status = bell ? "" : status,
@@ -1218,6 +1172,7 @@ static void render_home(ht_scene_t *f)
         .asking = a && is_question(a->id),
         .clock_ms = (s.quiet || display_is_asleep()) ? 0 : clock,   // the pet's loop
         .notice_ms = bell ? s.notice_ms : 0,
+        .notices = bell ? (uint16_t)(unread > 65535 ? 65535 : unread) : 0,
         .straight_title = s.straight_title,
         .footer_action = carry.active || carry.error[0] || visit.available,
         .ink = FG, .foreground = FG, .dim = DIM,
@@ -1231,16 +1186,17 @@ static void render_home(ht_scene_t *f)
     }
     if (visit.available) f_.hint = "";
     bool focus_face = character.id == HT_CHARACTER_FOCUS;
+    if (again && focus_face) {
+        s.notice_ms = (clock - ht_focus_alert_pop_ms(&f_)) | 1;
+        f_.notice_ms = bell ? s.notice_ms : 0;
+    }
     ht_character_face(f, &character, &f_, ACCENT, recap);
     s.pet_next_ms = focus_face ? ht_focus_pet_next_ms(&f_, recap) : 0;
-    // The pill sits at 400..432, or at 376..408 above the working scene's arc status.
-    // The working face says it with the pet and a dot at 12 o'clock; every other face keeps the pill at 400.
-    bool dot = bell && focus_face && ht_focus_scene_shown(&f_, recap);
+    // The working face says it with the pet's bell bubble; every other face keeps the pill at 400.
+    ht_rect_t bubble = {0};
+    bool told = bell && focus_face && ht_focus_alert_shown(&f_, recap, &bubble);
     int bell_y = 400;
-    if (dot) {
-        uint32_t next = focus_dot(f, &f_, recap);
-        if (next && (!s.pet_next_ms || (int32_t)(next - s.pet_next_ms) < 0)) s.pet_next_ms = next;
-    } else if (bell) {
+    if (bell && !told) {
         if (focus_face) focus_bell(f, unread, bell_y);
         else ht_notification_bell(f, unread, f_.ink);
     }
@@ -1264,8 +1220,6 @@ static void render_home(ht_scene_t *f)
     if (!carry.active && !carry.error[0] && !visit.available) {
         // Both phases of the caption open the pane picker — on Focus too, whose name is on the same
         // curve. The tab list is a hold on the face (A_PET below), on every skin.
-        // The dot's own target, above the name and registered first, so it opens the inbox, not the panes.
-        if (dot) s.hits[s.hit_count++] = (hit_t){{233 - 40, 0, 80, 26}, A_INBOX, 0, true};
         s.hits[s.hit_count++] = (hit_t){{83, 0, 300, 66}, A_AGENTS, 0, true};
         for (int i = 0; i < f->count; i++) if (f->runs[i].arc == 1) {
             ht_rect_t r = ht_run_bounds(&f->runs[i]);
@@ -1274,7 +1228,9 @@ static void render_home(ht_scene_t *f)
         }
     }
     // The badge's own target follows it, at the bottom on every skin.
-    if (bell && !dot) s.hits[s.hit_count++] = (hit_t){{83, bell_y - 18, 300, 84}, A_INBOX, 0, unread > 0};
+    if (bell && !told) s.hits[s.hit_count++] = (hit_t){{83, bell_y - 18, 300, 84}, A_INBOX, 0, unread > 0};
+    // The pet's bell bubble opens it too, with a finger's margin round it.
+    if (told && bubble.w) s.hits[s.hit_count++] = (hit_t){{bubble.x - 14, bubble.y - 14, bubble.w + 28, bubble.h + 28}, A_INBOX, 0, true};
     // The bell and the creature never share a target, even when the bell is
     // hidden or its count changes under a finger. Centre always starts voice. On Focus the whole face
     // below the name does, down to the bottom edge; the bell's target, registered above, wins there.

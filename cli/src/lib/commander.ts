@@ -771,6 +771,48 @@ export class CommanderMirror {
       })
   }
 
+  /**
+   * A turn that ended while nobody was listening: the session attached with its last turn already over (it
+   * finished while the daemon was stopped, say — a restart, an update, a flash). The fold reads such a turn
+   * as history, so no `turn_ended` reached `ingest` and the turn would have no recap: the dial restored the
+   * agent blank ("Tap to talk") with the answer sitting in the transcript.
+   *
+   * Recapped here, as history: stored like any recap and drawn on the tile, but no notification, no beep and
+   * no drawer entry (`restored`) — the person was not waiting on a turn they never saw end. Nothing when the
+   * newest stored turn already is this one, so every attach can ask.
+   */
+  catchUp(sessionId: string): void {
+    const st = this.stateFor(sessionId)
+    if (st.turnOpen || st.summarizing || !this.opts.readLastTurn) return
+    const alwaysGenerate = typeof this.opts.alwaysGenerate === 'function' ? this.opts.alwaysGenerate() : this.opts.alwaysGenerate
+    if (!this.opts.summarizeIsLocal && !this.opts.hasDevice() && !this.opts.recapForce && !alwaysGenerate) return
+    const sid = sessionId.slice(0, 8)
+    const ac = new AbortController()
+    st.abort = ac
+    void this.opts.readLastTurn(sessionId)
+      .then(async (turn) => {
+        const text = turn?.assistantText.trim() ?? ''
+        if (ac.signal.aborted || !text || st.turnOpen) return
+        if (this.fullTexts.get(sessionId)?.[0] === clipBytes(text, FULL_TEXT_MAX_BYTES)) return
+        const userMessage = turn?.userMessage ?? ''
+        const summary = await this.opts.summarize(text, ac.signal, userMessage, sessionId, this.summaries.get(sessionId))
+        if (ac.signal.aborted || !summary) return
+        if (userMessage && this.asks.get(sessionId)?.[0] !== userMessage) this.rememberAsk(sessionId, userMessage)
+        this.summaries.set(sessionId, summary)
+        this.remember(sessionId, summary)
+        this.rememberFullText(sessionId, text)
+        this.stored(sessionId)
+        this.saveSoon()
+        const { recap, body } = splitSummary(summary)
+        this.trace(sessionId, `${sid} caught up a turn that ended unseen · recap="${recap}" · bodyLen=${body.length}`)
+        this.emit(sessionId, { kind: 'summary', text: body || recap, recap, notification: null, restored: true })
+      })
+      .catch((err) => {
+        this.trace(sessionId, `${sid} catch-up failed: ${err instanceof Error ? err.message : String(err)}`, true)
+      })
+      .finally(() => { if (st.abort === ac) st.abort = null })
+  }
+
   /** Converge on commander (re)join — fires when a device joins OR when the adapter reconnects to the backend
    *  with a device still attached (the adapter has no periodic heartbeat). For an OPEN turn, re-assert its
    *  live processing/tool state. For an IDLE session, re-assert a terminal `done`: its turn-end summary may

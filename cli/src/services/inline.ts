@@ -12,6 +12,9 @@
  * target, and its test"). The core still routes these services' requests and holds their fallbacks: both are
  * declared in core/api.ts, which it loads either way.
  */
+export { engineTranscriptFor } from '../engines/transcripts.js'
+export { liveFor } from '../engines/live.js'
+export { runtimeFor } from '../engines/runtime.js'
 export { startGateway } from '../gateway/start.js'
 export { startCommandBar } from './commandBar.js'
 export { startDevices } from './devices.js'
@@ -23,9 +26,11 @@ export { startOrchestrator } from './orchestrator.js'
 export { startProjects } from './projects.js'
 export { startRecaps } from './recaps.js'
 export { startSearch } from './search.js'
+export { startShell } from './shell.js'
 export { startSharing } from './sharing.js'
 export { startStore } from './store.js'
 export { startUsage } from './usage.js'
 export { startViewers } from './viewers.js'
 export { startWifi } from './wifi.js'
+export { startWindowNames } from './windowNames.js'
 export { startWorkspaces } from './workspaces.js'

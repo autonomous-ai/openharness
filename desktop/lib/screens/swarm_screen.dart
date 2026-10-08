@@ -259,6 +259,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       widget.projectStore ??
       SwarmProjectStore(storage: kUnderTest ? null : HarnessFileStore.shared);
   StreamSubscription<SpokenTaskRequest>? _spokenTasks;
+  StreamSubscription<void>? _deviceWindowRequests;
+  Timer? _deviceRevealCooldown;
+  bool _deviceRevealInFlight = false;
   StreamSubscription<void>? _modelsRequests;
   final _shellFocus = FocusNode(debugLabel: 'Tab shell');
 
@@ -709,6 +712,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
     unawaited(_projects.load());
     unawaited(_navigation.load());
     _spokenTasks = app.spokenTasks.listen(_openSpokenTask);
+    _deviceWindowRequests = app.deviceWindowRequests.listen(
+      (_) => unawaited(_revealForDevice()),
+    );
     // The app's shared controller, so this menu and every pane's model picker show one reading.
     _modelsMenu = widget.modelsMenu ?? app.modelsMenu;
     _modelsMenu!.addListener(_subscriptionUsageChanged);
@@ -894,6 +900,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
     _commandFocus.dispose();
     if (_hasCommandBar) _commandBar.dispose();
     unawaited(_spokenTasks?.cancel());
+    unawaited(_deviceWindowRequests?.cancel());
+    _deviceRevealCooldown?.cancel();
     app.systemNotifications.onTap = null;
     if (_menuHost) {
       unawaited(_menuBus.send('machinesState', {'machines': []}));
@@ -6221,6 +6229,28 @@ class _SwarmScreenState extends State<SwarmScreen> {
       },
     );
   });
+
+  Future<void> _revealForDevice() async {
+    if (!RuntimePlatform.isMacOS ||
+        !mounted ||
+        app.inForeground ||
+        nativePickerOpen ||
+        _deviceRevealInFlight ||
+        _deviceRevealCooldown != null) {
+      return;
+    }
+    // The first gesture raises immediately. Rapid dial steps share that
+    // request, including when macOS declines it or has not reported focus yet.
+    _deviceRevealCooldown = Timer(const Duration(milliseconds: 500), () {
+      _deviceRevealCooldown = null;
+    });
+    _deviceRevealInFlight = true;
+    try {
+      await revealWindow();
+    } finally {
+      _deviceRevealInFlight = false;
+    }
+  }
 
   Future<void> _openSpokenTask(SpokenTaskRequest request) async {
     final spoken = SpokenTask(
