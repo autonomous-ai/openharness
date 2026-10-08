@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { ENGINES, type AgentEngine } from './types.js'
 import { baseNode } from '../harnessd/baseNode.js'
+import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { GridLaunchOverride } from '../lib/gridLaunch.js'
 
@@ -68,11 +69,14 @@ const api = (connection: string, model = 'vendor/model-a'): GridLaunchOverride =
 const M1 = { hermesSystemManaged: false, opencodeMajor: 2 }
 const M2 = { hermesSystemManaged: true, opencodeMajor: 1 }
 
-/** The machine's own parts of a text, as placeholders: the spec's folders, the API's port, this node. */
+/** The machine's own parts of a text, as placeholders: the spec's folders, the API's port, this node, its tmux. */
 const placeheld = (text: string, label?: string): string => {
   const node = baseNode(process.execPath)
+  // The daemon's tmux, as a launch finds it on PATH: /opt/homebrew/bin/tmux on a Mac, /usr/bin/tmux on CI's Linux.
+  const tmux = resolveBinaryOnPath('tmux')
   // Quoted, as every script quotes them: a Node in /usr/bin must not turn `/usr/bin/env` into a placeholder.
   let out = text.split(`'${node}'`).join("'<daemon-node>'").split(`'${dirname(node)}'`).join("'<daemon-node-dir>'")
+  if (tmux) out = out.split(`'${tmux}'`).join("'<tmux>'")
     .split(root).join('<root>').split(`127.0.0.1:${port}`).join('127.0.0.1:<port>')
     .replace(/\/launch\/[0-9a-f-]{36}\.sh/g, '/launch/<script>.sh')
   if (label) out = out.split(label).join('<label>')
