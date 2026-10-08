@@ -1,20 +1,22 @@
 /**
  * The Harness Store on this machine: the harnesses (DSHs) installed here, and installing, updating and
  * removing one (`dsh_list`, `dsh_install`, `dsh_update`, `dsh_remove`; store/spec/README.md § Wire).
- * The core never calls it, so it has no port: it only answers the apps. What each request reads off its
- * payload and replies is dsh/wire.ts.
+ * What each request reads off its payload and replies is dsh/wire.ts. The core calls it for a harness package's
+ * part of a launch (`StorePort`, services/storeLaunch.ts): in this process its port, beside the viewers its process's
+ * port calls (services/storeProcess.ts).
  *
  * Install and update take minutes for a toolchain. Their handlers return a promise, so the socket never
  * holds anything else for them, and they say how they are going as `dsh_install_status` pushes, which
  * the apps show in the create dialog. Agents already running from a harness that is removed keep running:
  * their processes hold what they need.
  */
-import type { CoreApi, ServiceRequests } from '../core/api.js'
+import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { refreshDshRegistry } from '../dsh/catalog.js'
 import { removeDsh } from '../dsh/install.js'
 import { mutateDsh } from '../dsh/service.js'
 import { dshInstallReply, dshInstallRequest, dshInstallStatus, dshListRows, dshRemoveId, dshRemoveReply } from '../dsh/wire.js'
+import { storeLaunchPort } from './storeLaunch.js'
 
 /** The requests the store answers for the apps, declared in core/api.ts for the core to route. */
 export { STORE_REQUESTS } from '../core/api.js'
@@ -58,4 +60,11 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRe
         .then(dshInstallReply, internal)
     },
   }
+}
+
+/** The Store in the core's process (core/serviceHost.ts `start`): its port, which the core asks for a launch's
+ *  harness, beside the apps' requests. */
+export function startStoreInCore(core: CoreApi, ports: CorePorts): ServiceRequests {
+  ports.store = storeLaunchPort()
+  return startStore(core)
 }

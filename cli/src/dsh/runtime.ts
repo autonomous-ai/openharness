@@ -11,7 +11,6 @@ import { instructionFileOf, launchContract } from '../engines/launches.js'
 import { HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
 import { installedDsh, type InstalledDsh } from './installed.js'
 import { dshAccountEnv, dshLaunch, type DshAccount, type DshLaunch } from './launch.js'
-import { compatibleHarnessEngines } from './compatibility.js'
 import { skillDirsIn } from './materialize.js'
 
 const Snapshot = z.object({
@@ -130,22 +129,6 @@ function snapshot(dsh: InstalledDsh, workspace: string, engine: AgentEngine): Ru
   return Snapshot.parse({ version: 1, id: dsh.id, engine, instructions, env: launch.env, args: launch.args, skills })
 }
 
-/** Prepare before spawning any engine process. `sourceKey` is a fork's original bundle. A saved
- * bundle is authoritative: changing the store default or instructions cannot retarget a session.
- */
-/**
- * Why `engine` cannot run the harness `id`, or null when it can. The words are what a refused
- * create says, so they name what WOULD work rather than only what was wrong.
- */
-export function incompatibleHarnessEngine(id: string, manifest: { kind?: string; engine?: AgentEngine },
-  engine: AgentEngine): string | null {
-  const supported = compatibleHarnessEngines(manifest)
-  if (supported.includes(engine)) return null
-  return supported.length
-    ? `${id} supports ${supported.join(', ')}; ${engine} is not compatible`
-    : `${id} cannot run as an agent`
-}
-
 /**
  * The runtime bundle a fork copies. A session records its key when it is created; one created
  * before keys were recorded still has a bundle under its agent id if it ran on this version, and
@@ -156,20 +139,9 @@ export function forkRuntimeKey(source: { cwd: string; agentId: string; dshRuntim
   return existsSync(join(harnessRuntimeDir(source.cwd, source.agentId), 'runtime.json')) ? source.agentId : null
 }
 
-/**
- * `prepare`, refused rather than thrown. A runtime that cannot be prepared — a missing skill, a
- * corrupt snapshot, an occupied path — has to fail the one create or fork that asked for it, never
- * the daemon that is serving every other session.
+/** Prepare before spawning any engine process. `sourceKey` is a fork's original bundle. A saved
+ * bundle is authoritative: changing the store default or instructions cannot retarget a session.
  */
-export function harnessLaunchOrRefusal(prepare: () => DshLaunch):
-  { ok: true; launch: DshLaunch } | { ok: false; error: 'DSH_RUNTIME_FAILED'; detail: string } {
-  try {
-    return { ok: true, launch: prepare() }
-  } catch (error) {
-    return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: error instanceof Error ? error.message : String(error) }
-  }
-}
-
 export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engine: AgentEngine,
   key: string, account: DshAccount = {}, sourceKey?: string | null): DshLaunch {
   const adapter = harnessAdapter(engine)

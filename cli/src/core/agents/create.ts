@@ -15,8 +15,8 @@ import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
-import { materializeWorkspace } from '../../dsh/materialize.js'
-import { harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch } from '../../dsh/runtime.js'
+import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
+import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../../dsh/launchWire.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import { isTerminalEngine } from '../../engines/types.js'
 import { engineLabel } from '../../lib/agentNames.js'
@@ -75,6 +75,11 @@ export interface CreateAgentDeps {
   /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
    *  builds none itself, and a create on a grid while models is down is refused (GRID_UNAVAILABLE). */
   buildGridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
+  /** A harness package's workspace and its session's runtime, laid out and prepared by the Store
+   *  (core/agents/dshThrough.ts): the core prepares none itself, and a create of one while the Store is down is
+   *  refused (DSH_UNAVAILABLE), never started without its harness. */
+  dshMaterialize: (request: DshMaterializeRequest) => Promise<DshMaterializeAnswer>
+  dshLaunch: (request: DshLaunchRequest) => Promise<DshLaunchAnswer>
   terminalHintMachineName: () => string
   /** Whether a folder is being purged (PurgeAgentService.blocksFolder). */
   blocksFolder: (cwd: string) => boolean | undefined
@@ -86,8 +91,8 @@ export interface CreateAgentDeps {
 
 export function createAgentCreator({
   tmuxBackend, registry, adoptableSession, heldBy, takeOverWhenIdle, watchNewPane, announceSession, attachDsh,
-  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
-  gridSetup, privateGridName,
+  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, dshMaterialize, dshLaunch,
+  terminalHintMachineName, blocksFolder, gridSetup, privateGridName,
 }: CreateAgentDeps) {
   const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, scmLaunchRecord }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
@@ -169,31 +174,32 @@ export function createAgentCreator({
         const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
         if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
       }
-      try {
-        dshAccount = { privateGrid: await privateGridName().catch(() => null) }
-        // Asked BEFORE the template goes in: afterwards every folder has content.
-        // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
-        const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
-          (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
-        const materialized = await materializeWorkspace(installed, cwd, dshAccount, engine)
-        for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
-        console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
-        // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
-        // need not ask. Laid into a folder that already held something — a clone, the person's own repo —
-        // it proves nothing about the rest, so trust stays the person's call (engines/kit/folderTrust.ts).
-        if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
-          try {
-            // In the agent's own profile when it has one: that config.toml is the one a Codex agent reads.
-            folderTrust(engine, codexHome)?.record(cwd)
-          } catch (error) { console.warn(`[dsh] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
-        }
-      } catch (error) {
-        const detail = `could not prepare the workspace for ${dsh} · ${error instanceof Error ? error.message : error}`
+      dshAccount = { privateGrid: await privateGridName().catch(() => null) }
+      // Asked BEFORE the template goes in: afterwards every folder has content.
+      // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
+      const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
+        (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
+      const materialized = await dshMaterialize({ dsh, workspace: cwd, engine, account: dshAccount })
+      if (!materialized.ok) {
+        // The Store could not be asked: said as it is. Anything else is the workspace, as it always was.
+        const detail = materialized.error === 'DSH_UNAVAILABLE' ? materialized.detail : `could not prepare the workspace for ${dsh} · ${materialized.detail}`
+        const error = materialized.error === 'DSH_UNAVAILABLE' ? materialized.error : 'DSH_MATERIALIZE_FAILED'
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
-        return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
+        return { ok: false, error, detail }
       }
-      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label, dshAccount, null))
-      if (!prepared.ok) return prepared
+      for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
+      console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
+      // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
+      // need not ask. Laid into a folder that already held something — a clone, the person's own repo —
+      // it proves nothing about the rest, so trust stays the person's call (engines/kit/folderTrust.ts).
+      if (emptyBefore && materialized.created.some((item) => item.startsWith('template'))) {
+        try {
+          // In the agent's own profile when it has one: that config.toml is the one a Codex agent reads.
+          folderTrust(engine, codexHome)?.record(cwd)
+        } catch (error) { console.warn(`[dsh] pre-trust ${cwd} · ${error instanceof Error ? error.message : error}`) }
+      }
+      const prepared = await dshLaunch({ dsh, workspace: cwd, engine, key: label, account: dshAccount })
+      if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail }
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name

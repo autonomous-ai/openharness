@@ -12,7 +12,7 @@ import { statSync } from 'node:fs'
 import type { BackendSocket } from '../../backendSocket.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear } from '../../dsh/launch.js'
-import { forkRuntimeKey, harnessLaunchOrRefusal, prepareHarnessLaunch } from '../../dsh/runtime.js'
+import type { DshLaunchAnswer, DshLaunchRequest } from '../../dsh/launchWire.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -44,10 +44,14 @@ export interface ForkAgentDeps {
   relaunchOverrides: ReturnType<typeof createLaunchHelpers>['relaunchOverrides']
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName: () => string | null
+  /** A harness package's session runtime, prepared by the Store (core/agents/dshThrough.ts): a fork's copied from
+   *  its source's. A fork of a harness agent while the Store is down is refused (DSH_UNAVAILABLE). */
+  dshLaunch: (request: DshLaunchRequest) => Promise<DshLaunchAnswer>
 }
 
 export function createAgentForker({
   tmuxBackend, registry, mirror, pendingForkInherit, watchNewPane, announceSession, attachDsh, prepareApiTools, relaunchOverrides, gridName,
+  dshLaunch,
 }: ForkAgentDeps) {
   const forkAgent: ForkAgent = async ({ agentId, name, prompt }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
@@ -84,12 +88,11 @@ export function createAgentForker({
     if (source.dsh) {
       const installed = installedDsh(source.dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${source.dsh} is no longer installed on this machine` }
-      // Narrowed above; a closure would lose that, so the checked values are named here.
-      const cwd = source.cwd
-      const sourceKey = forkRuntimeKey({ cwd, agentId: source.agentId, dshRuntime: source.dshRuntime })
-      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label,
-        { privateGrid: gridName() }, sourceKey))
-      if (!prepared.ok) return prepared
+      const prepared = await dshLaunch({
+        dsh: source.dsh, workspace: source.cwd, engine, key: label, account: { privateGrid: gridName() },
+        forkOf: { agentId: source.agentId, dshRuntime: source.dshRuntime ?? null },
+      })
+      if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail }
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name

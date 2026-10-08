@@ -8,3 +8,16 @@ export function compatibleHarnessEngines(manifest: { kind?: string; engine?: Age
   if (manifest.kind === 'viewer' || !manifest.engine || manifest.engine === 'terminal') return []
   return [manifest.engine, ...PROCESS_ENGINES.filter(engine => engine !== manifest.engine)]
 }
+
+/**
+ * Why `engine` cannot run the harness `id`, or null when it can. The words are what a refused
+ * create says, so they name what WOULD work rather than only what was wrong.
+ */
+export function incompatibleHarnessEngine(id: string, manifest: { kind?: string; engine?: AgentEngine },
+  engine: AgentEngine): string | null {
+  const supported = compatibleHarnessEngines(manifest)
+  if (supported.includes(engine)) return null
+  return supported.length
+    ? `${id} supports ${supported.join(', ')}; ${engine} is not compatible`
+    : `${id} cannot run as an agent`
+}

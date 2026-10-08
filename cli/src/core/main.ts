@@ -62,7 +62,7 @@ import { processSessionOf } from '../engines/sessionStores.js'
 import { handoffProviderDeps } from '../lib/handoffDiscovery.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
-import { restoreAgents, tmuxSurvey } from '../lib/restoreAgents.js'
+import { restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
 import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
@@ -75,7 +75,6 @@ import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from '../lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from '../lib/tmuxAgentDiscovery.js'
 import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
-import { prepareHarnessLaunch } from '../dsh/runtime.js'
 import { ApiConnections } from '../lib/apiConnections.js'
 import { rememberSavedApis } from '../lib/gridAssignment.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
@@ -124,6 +123,8 @@ import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
+import { dshThrough } from './agents/dshThrough.js'
+import { createStoreWaits, STORE_BOOT_WAIT_MS, STORE_RESTORE_WAIT_MS } from './agents/storeWaits.js'
 import { createCancel, createCancelRequest } from './turns/cancel.js'
 import { createPaneWatcher } from './agents/newPane.js'
 import { createAdoption } from './agents/adopt.js'
@@ -141,7 +142,7 @@ import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
-import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
+import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -1209,7 +1210,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     outOfProcess, experiments, onWant: { collaboration: () => teamsLink.on() } })
   backend.onAccountNotice = (notice) => experimentHooks.notice(notice)
   // What the Store in its own process tells the core: an install's progress, and that what is installed changed (core/storeLink.ts).
-  const storeLink = createStoreLink(coreApi, invalidateInstalledDsh)
+  // And how it asks it a harness package's part of a launch (`port`).
+  const storeLink = createStoreLink(coreApi, invalidateInstalledDsh, (type, payload) => serviceLinks.call('store', type, payload))
   // What the core keeps of models in its own process for frames and keystrokes, and how it asks it the rest (core/modelsLink.ts).
   const modelsLink = createModelsLink(coreApi, (type, payload) => serviceLinks.call('models', type, payload), (frame) => serviceLinks.notify('models', frame))
   // The devices in their own process (core/devicesLink.ts): told what the windows say, asked ⌘K, and told it
@@ -1337,7 +1339,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   else serviceHost.start('teams', inline!.startTeamsInCore, coreApi, TEAMS_FALLBACKS, TEAMS_REQUESTS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts): in this
   // process, or beside the viewers in theirs (services/storeProcess.ts).
-  if (!outOfProcess.has('store')) serviceHost.serve('store', inline!.startStore, coreApi, STORE_REQUESTS)
+  // Every launch of a harness package asks it for that package's part (core/agents/dshThrough.ts).
+  if (outOfProcess.has('store')) ports.store = storeLink.port
+  else serviceHost.start('store', inline!.startStoreInCore, coreApi, STORE_FALLBACKS, STORE_REQUESTS)
   // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts): in this
   // process, or in the edge host (services/usageProcess.ts).
   if (!outOfProcess.has('usage')) serviceHost.serve('usage', inline!.startUsage, coreApi, USAGE_REQUESTS)
@@ -1500,6 +1504,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const handleRegistered = binding.handleRegistered
   const bindObservedAgent = binding.bindObservedAgent
 
+  // A harness package's part of every launch, asked of the Store (core/agents/dshThrough.ts): refused while it
+  // cannot be asked, never launched without the harness. What the package is told of the account is the socket's.
+  const dshLaunches = dshThrough({
+    store: () => ports.store ?? STORE_OFF,
+    nameOf: (id) => installedDsh(id)?.manifest.name,
+    installed: (id) => !!installedDsh(id),
+    account: () => ({ privateGrid: backend.gridName() }),
+  })
+  // Harness agents a restore left waiting for the Store, restored once it is ready (core/agents/storeWaits.ts):
+  // with the boot's own restore, set below where tmux is there to restore into.
+  let restoreOnly: ((only: ReadonlySet<string>) => Promise<RestoreSummary>) | null = null
+  const storeWaits = createStoreWaits({
+    registry,
+    restore: (only) => restoreOnly?.(only) ?? Promise.resolve({ restored: [], skipped: [], failed: [], unsurveyed: [] }),
+    log: (line) => console.log(line),
+  })
+
   // What the reconciler's scans mean for the registry (core/agents/discovery.ts).
   const discovery = createDiscoveryHandlers({
     registry,
@@ -1518,6 +1539,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     retainExitedSession,
     stoppedAgents,
     restoreDegraded: (agentId) => restoreFailed || restoreUnsurveyed.has(agentId),
+    awaitsStore: (agentId) => storeWaits.awaits(agentId),
   })
   // HARNESSD_TEST_SLOW_PROBE_MS holds each discovery probe for up to that long, at random, before it is
   // applied: some scans land at once and some straddle an agent's start, as on a loaded machine. The
@@ -1917,14 +1939,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     writeGridConfigDir,
     tmuxSupportsSessionEnv,
     installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) engineHookFacets.codex.installIn(hookPort, codexHome) },
-    dshLaunch: (id, workspace, engine, runtimeKey) => {
-      const installed = installedDsh(id)
-      if (!installed) {
-        console.warn(`[dsh] ${id} is not installed on this machine · cannot restore its harness context`)
-        return null
-      }
-      return prepareHarnessLaunch(installed, workspace, engine, runtimeKey, { privateGrid: backend.gridName() }, null)
-    },
+    dshLaunch: dshLaunches.relaunch,
   }
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
   // pass below, which calls these for every pane it rebuilds.
@@ -1951,8 +1966,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     console.warn(`[repair] cwd repair skipped · ${error instanceof Error ? error.message : error}`)
   }
   // Bundled harness installation is the Store's. Wait for its first preparation before restore reads
-  // the index, with a deadline so a broken Store never prevents ordinary agents from coming back.
-  if (outOfProcess.has('store') && !await storeLink.ready()) console.warn('[store] preparation unavailable · restoring with the installed harnesses')
+  // the index, with a deadline so a broken Store never prevents ordinary agents from coming back. A harness
+  // agent's restore asks the Store too, so with harness agents to restore it is given longer; one it still cannot
+  // prepare waits for it, never launched without its harness (core/agents/storeWaits.ts).
+  const harnessAgents = registry.list().some((row) => row.dsh)
+  if (outOfProcess.has('store') && !await storeLink.ready(harnessAgents ? STORE_RESTORE_WAIT_MS : STORE_BOOT_WAIT_MS)) {
+    console.warn(`[store] preparation unavailable · restoring with the installed harnesses${harnessAgents ? ' · harness agents wait for the Store' : ''}`)
+  }
   watcher.start()
   await cursorDiscovery.start()
   // What a restored agent's engine writes from here on is live: the first attach of each folds its
@@ -1972,13 +1992,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const saved = isTerminalEngine(entry.engine) ? stoppedAgents.get(entry.agentId) : null
     if (saved && !isTerminalEngine(saved.engine)) retainExitedSession(entry, true)
   }
+  // Later passes (core/agents/storeWaits.ts) wait for this one.
+  await storeWaits.boot(async () => {
   if (tmuxBackend) {
    // Best effort, like the cwd repair above it: panes that cannot be rebuilt cost this boot its
    // tiles, not the daemon. `restoreDegraded` then stops discovery retiring the rows whose panes
    // restore never got to, so the next daemon can put them back.
    try {
     const backend = tmuxBackend
-    const summary = await restoreAgents({
+    const restoreDeps: RestoreAgentsDeps = {
       retainStopped: retainExitedSession,
       keepAbandoned: keepAbandonedConversation,
       registry,
@@ -2048,7 +2070,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       releaseRoute: (key) => agentReconciler.releaseRoute(key),
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
-    })
+    }
+    // A later pass restores exactly the harness agents this one left waiting for the Store.
+    restoreOnly = (only) => restoreAgents({ ...restoreDeps, only })
+    const summary = await restoreAgents(restoreDeps)
     // A row restore could not look at keeps its pane for discovery to judge, but not to retire this boot.
     for (const agentId of summary.unsurveyed) restoreUnsurveyed.add(agentId)
     if (summary.restored.length || summary.failed.length || registry.rebootedSinceLastRun) {
@@ -2061,6 +2086,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       + ' · agents keep their rows and come back on the next start')
    }
   }
+  })
+  // Harness agents this restore left waiting for the Store come back once it is ready: now, if it became ready
+  // while this pass ran, and each time it says so from here on (a restarted Store, a restarted core).
+  storeLink.onReady(() => { void storeWaits.restoreWaiting() })
+  void storeLink.ready(0).then((ready) => ready && storeWaits.restoreWaiting())
   // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
   // agent whose pane is still up is still that harness.
   for (const session of registry.list()) if (session.dsh) attachDsh(session)
@@ -2227,6 +2257,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     installOpencodePlugin: installOpencodePluginBeforeSpawn,
     gridLaunchMachine,
     buildGridLaunch: gridLaunch,
+    dshMaterialize: dshLaunches.materialize,
+    dshLaunch: dshLaunches.launch,
     terminalHintMachineName,
     blocksFolder: (cwd) => backend.purgeAgentService?.blocksFolder(cwd),
     gridSetup: () => {
@@ -2249,6 +2281,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareApiTools,
     relaunchOverrides,
     gridName: () => backend.gridName(),
+    dshLaunch: dshLaunches.launch,
   })
 
   // Swapping a pane's engine process, for restart and retarget (core/agents/swap.ts).
@@ -2354,6 +2387,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     refreshGridWebSearch,
     liveBypassPermission,
     paneSwapDeps,
+    restartWaiting: (agentId) => storeWaits.restartWaiting(agentId),
   })
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.

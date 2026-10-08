@@ -82,10 +82,15 @@ export interface LaunchOverridesDeps {
    * file. See `ownProvider` in `engines/codex/launch.ts`.
    */
   readCodexConfig?: (path: string) => string | null
-  /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
-   * relaunch: starting a plain agent would silently change the user's chosen harness. */
-  dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => DshLaunch | null
+  /** Prepare the saved harness context before restarting: the Store does (core/agents/dshThrough.ts). Missing or
+   * broken packages, and a Store that cannot be asked, refuse the relaunch: starting a plain agent would silently
+   * change the user's chosen harness. */
+  dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshRelaunch>
 }
+
+/** A harness package's part of a relaunch, or the refusal: `DSH_NOT_INSTALLED`, `DSH_RUNTIME_FAILED` or
+ *  `DSH_UNAVAILABLE`. */
+export type DshRelaunch = { ok: true; launch: DshLaunch } | { ok: false; error: string; detail: string }
 
 /** Where the agent should come back: the registry row, or an override the desktop just sent. */
 export interface LaunchSource {
@@ -170,13 +175,17 @@ export async function buildLaunchOverrides(
   let overrides = base.overrides
   if (source.dsh && !source.cwd) return { ok: false, error: 'DSH_WORKSPACE_MISSING', detail: `${source.dsh} has no saved workspace` }
   if (source.dsh && source.cwd) {
-    let dsh: DshLaunch | null
+    let prepared: DshRelaunch
     try {
-      dsh = deps.dshLaunch?.(source.dsh, source.cwd, engine, source.dshRuntime ?? configKey) ?? null
+      prepared = deps.dshLaunch
+        ? await deps.dshLaunch(source.dsh, source.cwd, engine, source.dshRuntime ?? configKey)
+        : { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${source.dsh} is not installed on this machine` }
     } catch (error) {
       return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: String(error) }
     }
-    if (!dsh) return { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${source.dsh} is not installed on this machine` }
+    // Never a launch without the harness it was created as: a refusal is the whole answer.
+    if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail }
+    const dsh = prepared.launch
     // The DSH's variables layer over the grid's or the profile's; `HARNESS_*` are the daemon's own
     // and a manifest cannot set them (see `dshLaunch`), so nothing here can shadow a grid credential.
     overrides = {

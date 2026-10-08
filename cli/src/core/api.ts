@@ -24,6 +24,7 @@ import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
+import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
 import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
@@ -495,7 +496,9 @@ const MINUTE = 60_000
  *   hands it this machine's sign-in and makes the account's grid: a Set up, a Get, a Use, `ensure` and
  *   a move onto a grid model (`moveTarget`) each wait for it.
  * - A launch target, the private grid's name and the lists each run a few `grid` calls of up to 30 s.
- * - The Store's install and update set up a harness's toolchain: minutes.
+ * - The Store's install and update set up a harness's toolchain: minutes. A create's workspace (`dshMaterialize`)
+ *   runs the harness's init, which is given five minutes (dsh/materialize.ts): six. A session's runtime
+ *   (`dshLaunch`) is files in the workspace, and takes the half minute.
  *
  * A grid or saved-API launch (`gridLaunch`) is built from what models has in hand, and a saved API's target
  * (`apiTarget`) reads its model list for at most 15 s (lib/apiModels.ts): both take the half minute, which bounds
@@ -508,7 +511,7 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
     ensure: 15 * MINUTE, moveTarget: 15 * MINUTE,
     launchTarget: 3 * MINUTE, privateGridName: 2 * MINUTE, lists: 2 * MINUTE,
   },
-  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE },
+  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE, dshMaterialize: 6 * MINUTE },
 }
 
 /** The orchestrator (services/orchestrator.ts): its projects, for the apps and for the agents it runs. */
@@ -684,6 +687,29 @@ export const VIEWERS_UNAVAILABLE = { error: 'SERVICE_UNAVAILABLE', service: 'vie
 export const VIEWERS_FALLBACKS: PortFallbacks<ViewersPort> = {
   attach: undefined, detach: undefined, frameContext: null, forwardingUrl: null, stop: later(undefined),
   stream: false, surface: later(VIEWERS_UNAVAILABLE), closed: undefined,
+}
+
+/**
+ * The core's calls into the Store (services/store.ts): a harness package's part of a launch, which the core never
+ * prepares itself (docs/design/2026-10-08-launch-port.md, (L3)). In the core's process the Store answers itself; in
+ * its own, beside the viewers, core/storeLink.ts asks it. The core reads the installed index and makes its checks
+ * first; a package it would launch the Store prepares, or the launch is refused.
+ */
+export interface StorePort {
+  /** A create's workspace: the package's template and its init. */
+  dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
+  /** A session's runtime, env and args: at create, at every relaunch and for a fork. */
+  dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
+}
+
+/** What the core gets when the Store fails: every harness launch refused (DSH_UNAVAILABLE), never one started
+ *  without its harness. A launch with no harness never asks the Store. */
+export const STORE_FALLBACKS: PortFallbacks<StorePort> = { dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
+
+/** What the core calls while `ports.store` is null (the Store is off): its fallbacks' answers. */
+export const STORE_OFF: StorePort = {
+  dshMaterialize: () => Promise.reject(new ServiceUnavailableError('store')),
+  dshLaunch: () => Promise.reject(new ServiceUnavailableError('store')),
 }
 
 /**
@@ -1296,10 +1322,11 @@ export interface CorePorts {
   orchestrator: OrchestratorPort | null
   sharing: SharingPort | null
   recaps: RecapsPort | null
+  store: StorePort | null
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
+  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null, store: null }
 }
 
 export interface CoreApiDeps {

@@ -18,6 +18,7 @@ import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
 import { clearPaneRemainOnExit, processArgs } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
+import type { WaitingRestart } from './storeWaits.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
 import type { RestartAgent } from './launches.js'
@@ -64,12 +65,15 @@ export interface RestartDeps {
   refreshGridWebSearch: LaunchHelpers['refreshGridWebSearch']
   liveBypassPermission: PaneSwap['liveBypassPermission']
   paneSwapDeps: PaneSwap['paneSwapDeps']
+  /** A harness agent a restore left waiting for the Store has no process to swap: its restart is that restore,
+   *  once more (core/agents/storeWaits.ts). Null for any other agent. */
+  restartWaiting: (agentId: string) => Promise<WaitingRestart> | null
 }
 
 export function createAgentRestarter({
   restartJobs, registry, purgeBusy, stopJobs, pinnedControls, tmuxBackend, sameRestartTarget, agentReconciler,
   terminalHintMachineName, announceSession, relaunchOverrides, downgradedPermission, refreshGridWebSearch,
-  liveBypassPermission, paneSwapDeps,
+  liveBypassPermission, paneSwapDeps, restartWaiting,
 }: RestartDeps) {
   /**
    * Web or device restarted an agent (`agent_restart`): exit the live engine process and relaunch it in
@@ -94,6 +98,8 @@ export function createAgentRestarter({
     if (purgeBusy(agentId) || stopJobs.has(agentId) || pinnedControls.has(agentId)) return { ok: false, error: 'AGENT_BUSY' }
     const session = registry.resolve(agentId)
     if (!session) return { ok: false, error: 'AGENT_NOT_FOUND' }
+    const waiting = restartWaiting(session.agentId)
+    if (waiting) return waiting
     if (!session.tmuxPane || !tmuxBackend) return { ok: false, error: 'RESTART_UNSUPPORTED_BACKEND' }
     const target = { ...session }
     const current = () => operationCurrent() && sameRestartTarget(target)

@@ -43,6 +43,13 @@ export type RestoreLaunchResult = RestoreLaunch | { error: string; detail: strin
 /** The row knows it was on a grid but not how to get back there. */
 export const GRID_CREDENTIAL_REQUIRED = 'GRID_CREDENTIAL_REQUIRED'
 
+/**
+ * A launch that failed only because the service that prepares it could not be asked: the Store, for a harness
+ * package (core/agents/dshThrough.ts). Nothing about the agent is wrong, so unlike any other failed launch it is
+ * tried again: by the next restore, and by the core once the Store is ready (core/agents/storeWaits.ts).
+ */
+export const RETRIED_LAUNCH_FAILURES: ReadonlySet<string> = new Set(['DSH_UNAVAILABLE'])
+
 export interface RestoreAgentsDeps {
   retainStopped?: (entry: RegisteredSession, paneAlive: boolean) => void
   /** Keeps a conversation the restore had to leave for a new one as a stopped harness (keepAbandonedConversation.ts). */
@@ -95,6 +102,8 @@ export interface RestoreAgentsDeps {
   releaseRoute: (routeKey: string) => void
   triggerHint: (runtime: TmuxRuntimeRef, engine: AgentEngine) => Promise<void>
   log: (message: string) => void
+  /** Restore only these agents, every other row as it is: a second pass for the ones the first could not prepare. */
+  only?: ReadonlySet<string>
   /** How long a restored pane may take to show an engine process. Default matches `agent_create`. */
   budgetMs?: number
   /** How long the engine must stay up after appearing before the pane is handed over. */
@@ -215,10 +224,14 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
   // one pane whose `tmux list-panes` timed out, or one archive that could not be written, and the
   // whole desk comes back empty. A row that cannot be surveyed is reported and the rest go on.
   for (const entry of deps.registry.list()) {
+   if (deps.only && !deps.only.has(entry.agentId)) continue
    try {
     const runtime = tmuxRuntime(entry)
     if (!runtime) { summary.skipped.push({ agentId: entry.agentId, reason: 'no tmux pane' }); continue }
-    if (entry.launch?.state === 'failed') { summary.skipped.push({ agentId: entry.agentId, reason: 'last launch failed' }); continue }
+    if (entry.launch?.state === 'failed' && !RETRIED_LAUNCH_FAILURES.has(entry.launch.error)) {
+      summary.skipped.push({ agentId: entry.agentId, reason: 'last launch failed' })
+      continue
+    }
     // A pane is alive as long as tmux has it, whatever runs in it: every pane is a shell with the
     // engine inside, so an engine that exited while the daemon was down left a shell at its prompt
     // — exactly the exit the reconciler would have caught — and the row is put back to a terminal
@@ -247,7 +260,10 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
     // (`relaunchFresh` refuses it for a resume-only row). Measured: a harness opened from the
     // catalog, then `harness stop` + `tmux kill-server` + app relaunch — every other tile came
     // back, this one sat on "no verified terminal pane" with nothing to press.
-    if (entry.resumeOnly && entry.launch?.state !== 'ready' && deps.retainStopped) {
+    // A launch the Store could not prepare was a confirmed one's restore: only a row that came back ready gets
+    // that far, so it is restored like one.
+    const retried = entry.launch?.state === 'failed' && RETRIED_LAUNCH_FAILURES.has(entry.launch.error)
+    if (entry.resumeOnly && entry.launch?.state !== 'ready' && !retried && deps.retainStopped) {
       deps.retainStopped(entry, false)
       summary.skipped.push({ agentId: entry.agentId, reason: 'saved conversation awaits explicit Open' })
       continue

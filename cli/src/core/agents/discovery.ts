@@ -41,13 +41,18 @@ export interface DiscoveryDeps {
   /** Whether restore did not get to this agent this boot (it did not run, or could not look at its row):
    *  its missing pane is then one never rebuilt, not one closed. */
   restoreDegraded: (agentId: string) => boolean
+  /** Whether a restore left this harness agent waiting for the Store (core/agents/storeWaits.ts): it has no pane on
+   *  purpose, and is restored once the Store is ready. */
+  awaitsStore: (agentId: string) => boolean
 }
 
 export function createDiscoveryHandlers({
   registry, attachDsh, forgetSession, announceSession, bindObservedAgent, syncRecapPool, attachSession,
   invalidateTerminalControl, teams, input, deviceInput, questionWatcher, stopHeartbeat, retainExitedSession,
-  stoppedAgents, restoreDegraded,
+  stoppedAgents, restoreDegraded, awaitsStore,
 }: DiscoveryDeps) {
+  /** Waiting agents already said to be kept: a pane that stays gone is seen again every few scans. */
+  const keptWaiting = new Set<string>()
   const onDiscovered = async (observed: DiscoveredTerminalAgent): Promise<void> => {
     const launching = observed.runtimes
       .map((runtime) => registry.byRuntimeEngine(runtime, observed.engine))
@@ -204,6 +209,14 @@ export function createDiscoveryHandlers({
     announceSession(agent)
   }
   const onRemoved = (agent: RegisteredSession, reason: string): void => {
+    // Waiting for the Store, its tile says why, and it comes back on its own once the Store is ready. Retired, it
+    // would be archived and its reason with it.
+    if (awaitsStore(agent.agentId)) {
+      if (!keptWaiting.has(agent.agentId)) console.log(`[discovery] ${sid(agent.agentId)} kept · waiting for the Store to prepare its harness · ${reason}`)
+      keptWaiting.add(agent.agentId)
+      return
+    }
+    keptWaiting.delete(agent.agentId)
     // A pane absent because RESTORE never ran is not a pane the person closed. Retiring it here
     // would archive a row whose tmux pane was simply never rebuilt, and the person would have to
     // Open each one by hand; keeping it dormant leaves the next daemon — the fixed one — something
