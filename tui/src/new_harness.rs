@@ -2002,6 +2002,22 @@ mod tests {
         assert!(buf[(form.child_area.x + 3, y)].modifier.contains(c.selected.add_modifier));
     }
 
+    #[test]
+    fn the_dropdown_says_what_it_waits_for_and_its_error_in_place_of_its_keys() {
+        use ratatui::widgets::StatefulWidget;
+        let mut picker = Picker::new("", "Search folders");
+        picker.busy = Some("Loading folders…".into());
+        let area = Rect::new(0, 0, 50, 6);
+        let mut buf = Buffer::empty(area);
+        let dropdown = view::Dropdown { editing: false, error: "That machine is not connected", chrome: crate::settings::chrome_with(true) };
+        dropdown.render(area, &mut buf, &mut picker);
+        let row = |y| (0..50).map(|x| buf[(x, y)].symbol()).collect::<String>();
+        assert!(row(0).starts_with(" › Search folders"), "{}", row(0));
+        assert!(row(1).starts_with(" 0/0 ─") && row(1).trim_end().ends_with("Loading folders…"), "{}", row(1));
+        assert!(row(2).trim().is_empty(), "no empty-list notice while it loads: {}", row(2));
+        assert_eq!(row(5).trim(), "That machine is not connected");
+    }
+
     #[tokio::test]
     async fn at_colon_percent_in_the_task_open_their_choosers() {
         let mut app = app();

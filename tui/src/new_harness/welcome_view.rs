@@ -2,7 +2,7 @@
 //! same recent sessions. All controls use the existing form and launch receipt.
 use super::*;
 use crate::input::HomeRow;
-use ratatui::{style::Color, widgets::{Block, BorderType, Widget}};
+use ratatui::{style::Color, widgets::{Block, BorderType, Paragraph, Widget}};
 
 struct Chip { field: Field, text: String, x: u16, width: u16 }
 fn settings(form: &Form, width: u16) -> Vec<Chip> {
@@ -105,7 +105,7 @@ pub(super) fn draw(buf: &mut Buffer, app: &App, body: Rect, form: &mut Form) -> 
     form.task_area = Rect::new(x + 3, y + 1, width - 6, task_box.height - 3);
     // An agent that takes no task says so where the task goes, as the form page does.
     let cursor = if let Some(blocked) = form.blocked(Field::Task) {
-        view::put(buf, form.task_area.x, form.task_area.y, form.task_area.width, &blocked, chrome.muted);
+        Paragraph::new(ratatui::text::Line::styled(blocked, chrome.muted)).render(form.task_area, buf);
         None
     } else {
         form.task_editor.draw(buf, form.task_area, &form.draft.task,

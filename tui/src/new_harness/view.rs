@@ -1,5 +1,6 @@
 //! Terminal rendering of the compact desktop form.
 use super::*;
+use ratatui::{text::{Line, Span}, widgets::{Block, Clear, Padding, Paragraph, StatefulWidget, Widget}};
 use unicode_segmentation::UnicodeSegmentation;
 
 // Keep the recovery instruction readable, including long project names and wide glyphs.
@@ -221,36 +222,65 @@ pub(super) fn dropdown(c: &Child, x: u16, y: u16, width: u16, bottom: u16) -> Op
     (room >= if c.kind.editing() { 2 } else { 4 } && width > 0).then(|| Rect::new(x, y, width, wanted(c).min(room)))
 }
 
-pub(super) fn draw_child(buf: &mut Buffer, r: Rect, form: &mut Form) -> Option<Position> {
-    let Some(c) = &mut form.child else { return None };
-    let chrome = crate::settings::chrome();
-    form.child_area = r;
-    panel(buf, r, chrome.base);
-    // The command panel's pieces, as the shell composer draws them: the query, the count rule,
-    // the list and the keys line (a chooser's own error in its place).
-    let (x, w) = (r.x + 1, r.width.saturating_sub(2));
-    let ghost = c.picker.placeholder.clone();
-    let (at, _) = crate::settings::query_line(buf, &c.picker, x, r.y, w, &ghost, &chrome);
-    let ky = r.bottom() - 1;
-    if form.error.is_empty() {
-        let keys: &[(&str, &str)] = if c.kind.editing() { &[("enter", "choose"), ("esc", "back")] } else { &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")] };
-        if ky > r.y { crate::settings::keys_line(buf, keys, x, ky, w, &chrome) }
-    } else if ky > r.y {
-        put(buf, x, ky, w, &form.error, chrome.base.patch(theme::fg(theme::DANGER)));
-    }
-    c.picker.row_at.clear();
-    if !c.kind.editing() && r.height >= 4 {
-        let total = c.picker.total_rows.unwrap_or_else(|| c.picker.rows.iter().filter(|r| !r.disabled).count());
+/// An entered chooser, dropped down: on the panel's surface, the command panel's query line,
+/// count rule, rows and keys line, as the shell composer draws them (the chooser's error in place
+/// of its keys). A path or a name being typed has no list: its query and keys only.
+pub(super) struct Dropdown<'a> {
+    pub editing: bool,
+    pub error: &'a str,
+    pub chrome: crate::settings::Chrome,
+}
+
+impl StatefulWidget for Dropdown<'_> {
+    type State = Picker;
+    fn render(self, area: Rect, buf: &mut Buffer, picker: &mut Picker) {
+        use ratatui::layout::{Constraint::{Fill, Length}, Layout};
+        let c = &self.chrome;
+        crate::term_out::clear_extras(area);
+        Clear.render(area, buf);
+        let surface = Block::new().style(c.base).padding(Padding::horizontal(1));
+        let inner = surface.inner(area);
+        surface.render(area, buf);
+        picker.row_at.clear();
+        // (Too short for a list: the query and keys only, as a path being typed has.)
+        let list = !self.editing && inner.height >= 4;
+        let rows = if list { Layout::vertical([Length(1), Length(1), Fill(1), Length(1)]).split(inner) }
+            else { Layout::vertical([Length(1), Fill(1)]).split(inner) };
+        // The query, rule, keys and rows are the command panel's own helpers, so the three
+        // read as one list (and its rows report where they are drawn, for the mouse).
+        let ghost = picker.placeholder.clone();
+        crate::settings::query_line(buf, picker, rows[0].x, rows[0].y, rows[0].width, &ghost, c);
+        let keys = rows[rows.len() - 1];
+        if keys.height > 0 {
+            if self.error.is_empty() {
+                let what: &[(&str, &str)] = if list { &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")] } else { &[("enter", "choose"), ("esc", "back")] };
+                crate::settings::keys_line(buf, what, keys.x, keys.y, keys.width, c);
+            } else {
+                Paragraph::new(Line::styled(self.error, c.base.patch(theme::fg(theme::DANGER)))).render(keys, buf);
+            }
+        }
+        if !list { return }
+        let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
         // While it loads, the rule ends in what it waits for, as the shell composer's does.
-        let wait = c.picker.busy.as_ref().map(|b| format!("{} {b}", theme::spinner(0)));
-        let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(w / 2));
-        crate::settings::count_rule(buf, c.picker.visible.len(), total, None, x, r.y + 1, w - room, &chrome);
-        if let Some(t) = wait { put(buf, x + w - room + 1, r.y + 1, room.saturating_sub(1), &t, chrome.muted); }
-        let list = Rect::new(x, r.y + 2, w, r.height - 3);
-        c.picker.page_rows.set(list.height as i64);
-        if c.picker.busy.is_none() || !c.picker.visible.is_empty() {
-            crate::settings::list_from(buf, &mut c.picker, list, &chrome, true, false);
+        let wait = picker.busy.as_ref().map(|b| format!(" {} {b}", theme::spinner(0)));
+        let room = wait.as_ref().map_or(0, |t| (t.width() as u16).min(rows[1].width / 2));
+        let [rule, waiting] = Layout::horizontal([Fill(1), Length(room)]).areas(rows[1]);
+        crate::settings::count_rule(buf, picker.visible.len(), total, None, rule.x, rule.y, rule.width, c);
+        if let Some(t) = wait { Paragraph::new(Span::styled(t, c.muted)).render(waiting, buf) }
+        picker.page_rows.set(rows[2].height as i64);
+        if picker.busy.is_none() || !picker.visible.is_empty() {
+            crate::settings::list_from(buf, picker, rows[2], c, true, false);
         }
     }
-    form.child_active.then_some(Position::new(at.x.min(r.right().saturating_sub(1)), at.y))
+}
+
+pub(super) fn draw_child(buf: &mut Buffer, r: Rect, form: &mut Form) -> Option<Position> {
+    let Some(c) = &mut form.child else { return None };
+    form.child_area = r;
+    let dropdown = Dropdown { editing: c.kind.editing(), error: &form.error, chrome: crate::settings::chrome() };
+    dropdown.render(r, buf, &mut c.picker);
+    // The text cursor in the query, where the query line put it.
+    let (y, x) = c.picker.prompt_at.get();
+    let before: String = c.picker.query.chars().take(c.picker.qcursor).collect();
+    form.child_active.then_some(Position::new((x + before.width() as u16).min(r.right().saturating_sub(1)), y))
 }
