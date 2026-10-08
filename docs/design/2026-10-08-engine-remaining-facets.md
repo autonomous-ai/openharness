@@ -26,7 +26,11 @@ Still in core and engine-specific, as data or copy: `engines/{claude,codex}/subm
 `lib/goalCommand.ts` (`/goal` and `/loop` adaptation, synchronous on the input path). The tmux paste
 settle in `lib/tmux.ts` is the writer's own and stays in core.
 
-## (b) Hook admission and installers
+## (b) Hook admission and installers: done in the batch after (d)
+
+See [engine hooks](2026-10-08-engine-hooks.md). Nothing moved into a worker: the engines' hook code left
+the core, replaced by declared contracts and `engines/kit` mechanics that core runs in line. The map below
+is as it stood before it.
 
 | File | Engine-specific behavior | Stays in core | Can move | Risk |
 | --- | --- | --- | --- | --- |
@@ -80,7 +84,7 @@ About 220 lines would leave, and with them core's only native child process and 
 2. **(d) Native control connections.** The smallest and fully async. It removes a native child process
    and a long-lived socket from core, the kind of work that crashes, hangs or leaks. It reuses the
    control-grant pattern of model and question control.
-3. **(b) Hook admission and installers.** Revised after the (d) review, which ruled that session control
+3. **(b) Hook admission and installers.** Done: see [engine hooks](2026-10-08-engine-hooks.md). Revised after the (d) review, which ruled that session control
    must not depend on an engine worker. Hooks are how sessions bind and turns close, so every part of
    this batch stays worker-free. The engines' code leaves the core; declared data and shared kit
    mechanics replace it, the way the stop's ownership rules did in (d):
