@@ -166,20 +166,38 @@ export const INSTALLABLE_ENGINES: ReadonlySet<AgentEngine> = new Set(
 export const ENGINE_INSTALL_TIMEOUT_MS = 10 * 60_000
 
 /**
- * How long a pane waits for another install of its engine to finish before it gives up and says so.
+ * How long the first of a recipe's two install lines may run before it is stopped and the second,
+ * its `fallback`, runs instead. Only recipes with a fallback get one: a lone installer is left to
+ * finish, since stopping it would leave nothing to try.
  *
- * Not the background install's whole ten minutes: the daemon gives a new pane ten minutes in all to
- * show its engine (`watchNewPane`), and a pane that waited that long would leave its own install no
- * time at all, with the person looking at one line. Two minutes covers every healthy install measured
- * (OpenCode 8.6 s on a fresh VM, npm packages under a minute); past it the other install is in trouble
- * and the person is better told than kept waiting.
+ * OpenCode's native installer downloads from GitHub Releases, which a network in Vietnam could not
+ * reach on 2026-10-08 (the reason for the fallback). A download that is accepted and then stalls has
+ * no `--max-time` in the vendor's script to end it (found in the review of #1047): the installer
+ * would never exit, the npm fallback never run, and the pane wait for good. A healthy native install
+ * takes eight to fourteen seconds; two minutes leaves a slow line room before the fallback, which
+ * carries the same binaries, takes over.
  */
-export const ENGINE_INSTALL_WAIT_S = 120
+export const ENGINE_INSTALL_PRIMARY_LIMIT_S = 120
 
 /**
- * A lock older than this is stale whoever seems to hold it: well past the background install's own
- * limit, so only a holder that outlived every bound is ever taken over. It covers what a pid and its
- * start time cannot, such as a clock that cannot be read for the start marker.
+ * How long a pane waits for another install of its engine to finish before it gives up and says so.
+ *
+ * Long enough for the worst healthy case on the network the fallback exists for: the native
+ * installer stopped at `ENGINE_INSTALL_PRIMARY_LIMIT_S`, then `npm install -g opencode-ai`, about a
+ * minute; with a margin, five minutes. At two minutes, a new user's first harness on that network
+ * would have given up, "not started", on a background install still on its healthy course (review
+ * of #1047). Not
+ * the background install's whole ten minutes: the daemon gives a new pane ten minutes in all to show
+ * its engine (`watchNewPane`), and the pane's own install, if the other one failed, needs the rest.
+ */
+export const ENGINE_INSTALL_WAIT_S = 300
+
+/**
+ * A backstop, not a rule: a lock whose holder can be checked (its pid running with the start marker
+ * it wrote) is held however long it takes, since a slow pane install past any bound is still an
+ * install that a second one beside it would break. Only a holder whose start cannot be compared
+ * (no marker written, or none readable now) and whose lock is older than this is taken over: past
+ * the background install's own limit, such a pid is more likely reused than still installing.
  */
 export const ENGINE_INSTALL_LOCK_MAX_AGE_S = 30 * 60
 

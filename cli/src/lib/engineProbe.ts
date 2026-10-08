@@ -85,6 +85,9 @@ function launchCommand(engine: AgentEngine): string | null {
  */
 export async function probeEngines(
   engines: readonly AgentEngine[] = ENGINES,
+  /** `accounts: false` skips the sign-in and last-use reads (a Keychain lookup on macOS), for a
+   *  caller that only needs to know what is installed (engineWarmup.ts). */
+  options: { readonly accounts?: boolean } = {},
 ): Promise<EngineAvailability[]> {
   const results = new Array<EngineAvailability>(engines.length)
   let next = 0
@@ -112,7 +115,7 @@ export async function probeEngines(
         }
       }
       // Lets the New Harness box open on the agent this person already uses (engineAccount.ts).
-      const account = installed && (engine === 'claude' || engine === 'codex')
+      const account = installed && options.accounts !== false && (engine === 'claude' || engine === 'codex')
         ? await engineAccount(engine).catch(() => null)
         : null
       results[index] = {

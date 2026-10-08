@@ -14,6 +14,7 @@ import { engineBin } from './engineBin.js'
 import {
   BACKGROUND_INSTALL_BUSY_EXIT,
   ENGINE_INSTALL_LOCK_MAX_AGE_S,
+  ENGINE_INSTALL_PRIMARY_LIMIT_S,
   ENGINE_INSTALL_WAIT_S,
   engineInstallLockDir,
   engineInstallLockPath,
@@ -1080,17 +1081,23 @@ const ENGINE_INSTALL_LOG_HINT = '~/.harness/logs/engine-install.log'
  *
  * A lock is stale, and taken over, when its holder is gone: its pid is not running, or is running as
  * another process than the one that took it (a different start marker, which is what a pid left from
- * before a power loss looks like), or it is older than `ENGINE_INSTALL_LOCK_MAX_AGE_S`. One with no
- * owner line yet is a holder between its `mkdir` and its write, stale after ten looks. Where no lock
- * can be made at all (a read-only home), the install goes ahead without one rather than never.
+ * before a power loss looks like). A holder that checks out is held however long its install takes;
+ * only one that cannot be checked (no start marker to compare) is aged out, past
+ * `ENGINE_INSTALL_LOCK_MAX_AGE_S`. A lock with no owner line yet is a holder between its `mkdir` and
+ * its write, stale after ten looks at that same folder. A stale lock is removed only if it is still
+ * the one judged (the same owner line, or still none in the same folder), since another waiter may
+ * have taken it over in between. Where no lock can be made at all (a home it cannot write), the
+ * install goes ahead without one rather than never; a lock that is merely contested, or let go
+ * between two looks, is waited for and taken, never skipped.
  *
  * A pane waits at most `ENGINE_INSTALL_WAIT_S`, saying so every fifteen seconds, and Ctrl-C stops the
  * wait. Either way it then ends with a line saying why, and does NOT install: a second installer beside
  * one still running is the very thing the lock is for, and the person can create the harness again a
  * moment later. The background install gives up the same way, with `BACKGROUND_INSTALL_BUSY_EXIT`.
  *
- * Shell rules this keeps: everything external is run as `command <name>` and every builtin as
- * `\<name>`, so a person's rc file cannot change what they do. These run in their login shell after
+ * Shell rules this keeps: everything external is run as `command -p <name>` and every builtin as
+ * `\<name>`, so neither a person's rc file nor their PATH can change what they do (`-p` looks in the
+ * system's default PATH: a pane whose PATH lacks /bin still finds `mkdir`). These run in their login shell after
  * their rc files, and Prezto's `alias mkdir='mkdir -p'` (found in review; engineWarmup.spec.ts
  * reproduces it) makes every `mkdir` of the lock succeed, so it would exclude nobody; an aliased
  * `cat`, `ps` or `kill` would misread the holder. Everything the wait runs is a builtin or
@@ -1114,16 +1121,17 @@ function installLockFunctions(recipe: EngineInstallRecipe, mode: InstallScriptMo
     'harness_lock_held=',
     'harness_lock_waits=0',
     'harness_lock_unclaimed=0',
+    'harness_lock_seen=',
     'harness_lock_kind=',
     // The start of process $1 as `processStartMarker` (processLiveness.ts) writes it: Linux's start
     // in clock ticks, else ps's lstart in UTC and the C locale, trimmed.
     'harness_lock_start_of() {',
     '  harness_lock_marker=',
     '  if [ -r "/proc/$1/stat" ]; then',
-    `    harness_lock_marker=$(command awk '{ s = $0; sub(/.*\\) /, "", s); split(s, f, " "); print f[20] }' "/proc/$1/stat" 2>/dev/null) || harness_lock_marker=`,
+    `    harness_lock_marker=$(command -p awk '{ s = $0; sub(/.*\\) /, "", s); split(s, f, " "); print f[20] }' "/proc/$1/stat" 2>/dev/null) || harness_lock_marker=`,
     '    if [ -n "$harness_lock_marker" ]; then harness_lock_marker="linux:$harness_lock_marker"; return 0; fi',
     '  fi',
-    '  harness_lock_marker=$(LC_ALL=; LC_TIME=C; TZ=UTC; export LC_ALL LC_TIME TZ; command ps -p "$1" -o lstart= 2>/dev/null) || harness_lock_marker=',
+    '  harness_lock_marker=$(LC_ALL=; LC_TIME=C; TZ=UTC; export LC_ALL LC_TIME TZ; command -p ps -p "$1" -o lstart= 2>/dev/null) || harness_lock_marker=',
     '  harness_lock_marker=${harness_lock_marker#"${harness_lock_marker%%[! ]*}"}',
     '  harness_lock_marker=${harness_lock_marker%"${harness_lock_marker##*[! ]}"}',
     '  [ -z "$harness_lock_marker" ] || harness_lock_marker="ps-c:$harness_lock_marker"',
@@ -1131,7 +1139,7 @@ function installLockFunctions(recipe: EngineInstallRecipe, mode: InstallScriptMo
     '}',
     // The owner line, split without a fork: `<pid> <since> <kind> <start>`. 1 when there is none yet.
     'harness_lock_owner() {',
-    `  harness_lock_line=$(command cat ${owner} 2>/dev/null) || harness_lock_line=`,
+    `  harness_lock_line=$(command -p cat ${owner} 2>/dev/null) || harness_lock_line=`,
     '  harness_lock_pid=${harness_lock_line%% *}',
     '  harness_lock_rest=${harness_lock_line#* }',
     '  harness_lock_since=${harness_lock_rest%% *}',
@@ -1140,81 +1148,114 @@ function installLockFunctions(recipe: EngineInstallRecipe, mode: InstallScriptMo
     '  harness_lock_start=${harness_lock_rest#* }',
     '  [ -n "$harness_lock_line" ]',
     '}',
-    // 0 while the owner line names a process that is still the one that took the lock.
+    // 0 while the owner line names a process that is still the one that took the lock. Its start
+    // marker, compared in the same form only (as `lockOwnerState` does), settles it either way; the
+    // age bound is for a holder that cannot be checked like that.
     'harness_lock_live() {',
     '  case $harness_lock_pid in ""|0|*[!0-9]*) return 1 ;; esac',
+    '  \\kill -0 "$harness_lock_pid" 2>/dev/null || return 1',
+    '  if [ -n "$harness_lock_start" ]; then',
+    '    harness_lock_start_of "$harness_lock_pid"',
+    '    case $harness_lock_marker in',
+    '      "${harness_lock_start%%:*}":*) if [ "$harness_lock_marker" = "$harness_lock_start" ]; then return 0; fi; return 1 ;;',
+    '    esac',
+    '  fi',
     '  case $harness_lock_since in ""|*[!0-9]*) harness_lock_since=0 ;; esac',
-    '  harness_lock_now=$(command date +%s 2>/dev/null) || harness_lock_now=0',
+    '  harness_lock_now=$(command -p date +%s 2>/dev/null) || harness_lock_now=0',
     '  case $harness_lock_now in ""|*[!0-9]*) harness_lock_now=0 ;; esac',
     `  if [ "$harness_lock_since" -gt 0 ] && [ "$harness_lock_now" -gt 0 ] && [ $((harness_lock_now - harness_lock_since)) -gt ${ENGINE_INSTALL_LOCK_MAX_AGE_S} ]; then return 1; fi`,
-    '  \\kill -0 "$harness_lock_pid" 2>/dev/null || return 1',
-    '  [ -n "$harness_lock_start" ] || return 0',
-    '  harness_lock_start_of "$harness_lock_pid"',
-    // Compared only in the same form, as `lockOwnerAlive` does: one that cannot be read keeps the holder.
-    '  case $harness_lock_marker in',
-    '    "${harness_lock_start%%:*}":*) [ "$harness_lock_marker" = "$harness_lock_start" ] ;;',
-    '    *) return 0 ;;',
-    '  esac',
+    '  return 0',
     '}',
-    // 0 while someone else holds the lock; a stale one is cleared, and then it is free.
+    // The lock folder's inode, so ownerless looks are counted for one folder, not across a new one.
+    'harness_lock_inode() {',
+    `  harness_lock_ino=$(command -p ls -di ${lock} 2>/dev/null) || harness_lock_ino=`,
+    '  harness_lock_ino=${harness_lock_ino#"${harness_lock_ino%%[! ]*}"}',
+    '  harness_lock_ino=${harness_lock_ino%% *}',
+    '  return 0',
+    '}',
+    // 0 while someone else holds the lock, or it changed hands as it was looked at; 1 when it is free,
+    // a stale one included, which is then removed.
     'harness_lock_busy() {',
-    `  [ -d ${lock} ] || return 1`,
-    '  if ! harness_lock_owner; then',
+    `  if ! [ -d ${lock} ]; then harness_lock_unclaimed=0; harness_lock_seen=; return 1; fi`,
+    '  if harness_lock_owner; then',
+    '    harness_lock_unclaimed=0',
+    '    harness_lock_seen=',
+    '    if harness_lock_live; then return 0; fi',
+    '    harness_lock_judged=$harness_lock_line',
+    '  else',
+    '    harness_lock_inode',
+    '    if [ "$harness_lock_ino" != "$harness_lock_seen" ]; then harness_lock_seen=$harness_lock_ino; harness_lock_unclaimed=0; fi',
     '    harness_lock_unclaimed=$((harness_lock_unclaimed + 1))',
     '    [ "$harness_lock_unclaimed" -ge 10 ] || return 0',
-    '  else',
-    '    harness_lock_unclaimed=0',
-    '    if harness_lock_live; then return 0; fi',
+    '    harness_lock_judged=',
     '  fi',
-    `  harness_lock_out=$(command rm -rf ${lock} 2>/dev/null) || :`,
+    `  harness_lock_again=$(command -p cat ${owner} 2>/dev/null) || harness_lock_again=`,
+    '  if [ "$harness_lock_again" != "$harness_lock_judged" ]; then return 0; fi',
+    '  if [ -z "$harness_lock_judged" ]; then',
+    '    harness_lock_was=$harness_lock_ino',
+    '    harness_lock_inode',
+    '    if [ "$harness_lock_ino" != "$harness_lock_was" ]; then return 0; fi',
+    '  fi',
+    `  harness_lock_out=$(command -p rm -rf ${lock} 2>/dev/null) || :`,
+    '  harness_lock_unclaimed=0',
+    '  harness_lock_seen=',
     '  return 1',
     '}',
-    // 0: this script holds the lock, or none can be had here. 1: someone else holds it.
+    // 0 when this script holds the lock, or no lock can be made here at all; 1 while someone else
+    // has it, or it was let go between the failed mkdir and the look: wait a second and take it again.
     'harness_lock_take() {',
     '  harness_lock_tries=0',
-    '  while [ "$harness_lock_tries" -lt 3 ]; do',
+    '  while [ "$harness_lock_tries" -lt 2 ]; do',
     '    harness_lock_tries=$((harness_lock_tries + 1))',
-    `    if harness_lock_out=$(command mkdir -p ${dir} 2>/dev/null && command mkdir ${lock} 2>/dev/null); then`,
+    `    if harness_lock_out=$(command -p mkdir -p ${dir} 2>/dev/null && command -p mkdir ${lock} 2>/dev/null); then`,
     '      harness_lock_start_of "$$"',
-    '      harness_lock_now=$(command date +%s 2>/dev/null) || harness_lock_now=0',
+    '      harness_lock_now=$(command -p date +%s 2>/dev/null) || harness_lock_now=0',
     `      { \\printf '%s %s %s %s\\n' "$$" "$harness_lock_now" ${mode} "$harness_lock_marker" > ${owner}; } 2>/dev/null || :`,
     '      harness_lock_held=1',
     '      return 0',
     '    fi',
-    `    [ -d ${lock} ] || return 0`,
-    '    if harness_lock_busy; then return 1; fi',
+    `    if [ -d ${lock} ]; then`,
+    '      if harness_lock_busy; then return 1; fi',
+    // Judged stale and removed: take it now.
+    '      continue',
+    '    fi',
+    `    if [ -d ${dir} ] && [ -w ${dir} ]; then return 1; fi`,
+    '    return 0',
     '  done',
+    '  return 1',
+    '}',
+    // One second of waiting for someone else's install: what it says, its limit, and Ctrl-C.
+    'harness_lock_wait_second() {',
+    '  if [ "$harness_lock_waits" -eq 0 ]; then',
+    `    if [ "$harness_lock_kind" = background ]; then ${say(`harness: ${name} is already installing in the background — waiting for it${stop}`)}; `
+      + `else ${say(`harness: ${name} is already installing in another terminal — waiting for it${stop}`)}; fi`,
+    '  elif [ $((harness_lock_waits % 15)) -eq 0 ]; then',
+    `    \\printf '%s\\n' "harness: still waiting for the ${name} install (\${harness_lock_waits}s)"`,
+    '  fi',
+    `  if [ "$harness_lock_waits" -ge ${ENGINE_INSTALL_WAIT_S} ]; then`,
+    `    if [ "$harness_lock_kind" = background ]; then ${say(elsewhere('in the background', ` (${ENGINE_INSTALL_LOG_HINT})`))}; else ${say(elsewhere('in another terminal'))}; fi`,
+    `    exit ${mode === 'pane' ? 1 : BACKGROUND_INSTALL_BUSY_EXIT}`,
+    '  fi',
+    // The second's sleep in a command substitution, and an INT trap around it as the Codex retry has:
+    // Ctrl-C ends the sleep and is seen here, where SIGNAL_GUARD alone would let the wait go on.
+    '  harness_lock_interrupted=0',
+    "  trap 'harness_lock_interrupted=1' INT",
+    '  harness_lock_out=$(command -p sleep 1) || harness_lock_interrupted=1',
+    '  trap : INT',
+    '  if [ "$harness_lock_interrupted" -eq 1 ]; then',
+    `    \\printf '\\n%s\\n' ${shellSingleQuote(`harness: stopped waiting, so the agent was not started. The ${name} install goes on; create the agent again once it finishes.`)}`,
+    '    exit 130',
+    '  fi',
+    '  harness_lock_waits=$((harness_lock_waits + 1))',
     '  return 0',
     '}',
     // Waits while someone else holds the lock; ends the script past the wait, or on Ctrl-C.
     'harness_lock_await() {',
-    '  while harness_lock_busy; do',
-    '    if [ "$harness_lock_waits" -eq 0 ]; then',
-    `      if [ "$harness_lock_kind" = background ]; then ${say(`harness: ${name} is already installing in the background — waiting for it${stop}`)}; `
-      + `else ${say(`harness: ${name} is already installing in another terminal — waiting for it${stop}`)}; fi`,
-    '    elif [ $((harness_lock_waits % 15)) -eq 0 ]; then',
-    `      \\printf '%s\\n' "harness: still waiting for the ${name} install (\${harness_lock_waits}s)"`,
-    '    fi',
-    `    if [ "$harness_lock_waits" -ge ${ENGINE_INSTALL_WAIT_S} ]; then`,
-    `      if [ "$harness_lock_kind" = background ]; then ${say(elsewhere('in the background', ` (${ENGINE_INSTALL_LOG_HINT})`))}; else ${say(elsewhere('in another terminal'))}; fi`,
-    `      exit ${mode === 'pane' ? 1 : BACKGROUND_INSTALL_BUSY_EXIT}`,
-    '    fi',
-    // The second's sleep in a command substitution, and an INT trap around it as the Codex retry has:
-    // Ctrl-C ends the sleep and is seen here, where SIGNAL_GUARD alone would let the wait go on.
-    '    harness_lock_interrupted=0',
-    "    trap 'harness_lock_interrupted=1' INT",
-    '    harness_lock_out=$(command sleep 1) || harness_lock_interrupted=1',
-    '    trap : INT',
-    '    if [ "$harness_lock_interrupted" -eq 1 ]; then',
-    `      \\printf '\\n%s\\n' ${shellSingleQuote(`harness: stopped waiting, so the agent was not started. The ${name} install goes on; create the agent again once it finishes.`)}`,
-    '      exit 130',
-    '    fi',
-    '    harness_lock_waits=$((harness_lock_waits + 1))',
-    '  done',
+    '  while harness_lock_busy; do harness_lock_wait_second; done',
     '  return 0',
     '}',
     'harness_install_lock() {',
-    '  while ! harness_lock_take; do harness_lock_await; done',
+    '  while ! harness_lock_take; do harness_lock_wait_second; done',
     '  return 0',
     '}',
     // Only this script's own: a lock taken over from it as stale, or just made by someone else and
@@ -1223,12 +1264,45 @@ function installLockFunctions(recipe: EngineInstallRecipe, mode: InstallScriptMo
     '  [ -n "$harness_lock_held" ] || return 0',
     '  harness_lock_held=',
     '  if harness_lock_owner && [ "$harness_lock_pid" = "$$" ]; then',
-    `    harness_lock_out=$(command rm -rf ${lock} 2>/dev/null) || :`,
+    `    harness_lock_out=$(command -p rm -rf ${lock} 2>/dev/null) || :`,
     '  fi',
     '  return 0',
     '}',
   ].join('\n')
 }
+
+/**
+ * Runs a recipe's first install line (`/bin/sh -c`) for at most its limit, then stops it and its whole
+ * process tree, so that the recipe's fallback can run (`ENGINE_INSTALL_PRIMARY_LIMIT_S`). Node, as the
+ * Codex probe uses, because a POSIX shell has no portable way to put a command in a group of its own:
+ * the installer runs detached, in a session of its own, which a kill of its group reaches whole
+ * whatever the pane's shell does with job control (macOS's bash 3.2 gives every job its own group
+ * even without a terminal, which kept an earlier kill from reaching the installer). The signals a
+ * pane's Ctrl-C or close send this runner are passed on to that group. Exits 124 when it stopped the
+ * install, else with the install's own status; its one line says why it stopped it.
+ */
+const PRIMARY_INSTALL_RUNNER = [
+  'const { spawn } = require("node:child_process");',
+  'const { writeSync } = require("node:fs");',
+  'const { constants } = require("node:os");',
+  'const limit = Number(process.argv[1]);',
+  'const child = spawn("/bin/sh", ["-c", process.argv[2]], { stdio: "inherit", detached: true });',
+  'const group = (signal) => { try { process.kill(-child.pid, signal); } catch {} };',
+  'let late = false;',
+  'const timer = setTimeout(() => {',
+  '  late = true;',
+  '  writeSync(1, "\\nharness: that install ran for " + limit + "s without finishing, so it was stopped\\n");',
+  '  group("SIGTERM");',
+  '  setTimeout(() => group("SIGKILL"), 5000).unref();',
+  '}, limit * 1000);',
+  'for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"]) process.on(signal, () => group(signal));',
+  'child.on("error", () => process.exit(127));',
+  'child.on("exit", (code, signal) => {',
+  '  clearTimeout(timer);',
+  '  if (late) group("SIGKILL");',
+  '  process.exit(late ? 124 : code ?? 128 + (constants.signals[signal] || 1));',
+  '});',
+].join('\n')
 
 /**
  * Install-if-missing has to resolve twice: before installing, and again after it returns.
@@ -1252,10 +1326,17 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
   // Scope both npm env spellings to the installer subprocess. Do not rewrite .npmrc or install
   // into a different OS user's shared prefix, and do not tie the engine to a versioned Node folder.
   // Either way a subshell, run at the top level where a stop is resumed (STOP_PROOF_FUNCTIONS).
-  const run = (line: string) => recipe.executable.npmGlobal
-    ? `(export npm_config_prefix=${shellSingleQuote(npmEnginePrefix())} NPM_CONFIG_PREFIX=${shellSingleQuote(npmEnginePrefix())}; eval ${shellSingleQuote(line)})`
-    : `(eval ${shellSingleQuote(line)})`
-  const installCommand = run(install)
+  // A recipe with a fallback runs its first line under a time limit (PRIMARY_INSTALL_RUNNER), so a
+  // stalled download gives way to the fallback instead of holding the pane for good.
+  const run = (line: string, limited = false) => {
+    const command = limited
+      ? `${shellSingleQuote(baseNode(process.execPath))} -e ${shellSingleQuote(PRIMARY_INSTALL_RUNNER)} "$harness_primary_limit" ${shellSingleQuote(line)}`
+      : `eval ${shellSingleQuote(line)}`
+    return recipe.executable.npmGlobal
+      ? `(export npm_config_prefix=${shellSingleQuote(npmEnginePrefix())} NPM_CONFIG_PREFIX=${shellSingleQuote(npmEnginePrefix())}; ${command})`
+      : `(${command})`
+  }
+  const installCommand = run(install, Boolean(recipe.fallback))
   const candidates = [names, paths].filter(Boolean).join(' ')
   // `curl … | bash` exits 0 when curl itself fails (bash ran an empty script), so the fallback is
   // decided by whether an executable exists afterwards, not by the first line's status.
@@ -1324,6 +1405,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     '  fi',
     'fi',
     `if [ "$harness_lock_waits" -gt 0 ] && [ -n "$harness_engine_bin" ]; then printf '%s\\n' ${shellSingleQuote(`harness: ${name} is installed`)}; fi`,
+    ...(recipe.fallback ? [`harness_primary_limit=${ENGINE_INSTALL_PRIMARY_LIMIT_S}`] : []),
     'harness_status=0',
     'harness_ran_install=',
     '[ -n "$harness_engine_bin" ] || harness_ran_install=1',
