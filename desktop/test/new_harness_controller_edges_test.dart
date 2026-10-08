@@ -541,6 +541,24 @@ void main() {
     expect(create['projectName'], 'robot-noi-chuyen-voi-gemini-2');
   });
 
+  // The desktop composer types the task through setTask, not the chooser's
+  // query; a fresh VM's first harness was "Untitled Pane" in a clock folder.
+  test('the desktop composer names the suggested project and agent after the task', () async {
+    final fixture = _Fixture();
+    final box = fixture.box(folder: null, autoProject: true);
+    await _settle();
+    expect(box.project.name, startsWith('codex-'), reason: 'no task yet');
+
+    box.setTask("make a small web page that shows today's date");
+    await _settle();
+    expect(box.project.name, 'make-a-small-web-page-that');
+
+    await box.create();
+    final create = fixture.connection.requests('agent_create').single;
+    expect(create['name'], 'make a small web page that');
+    expect(create['projectName'], 'make-a-small-web-page-that');
+  });
+
   test('a clock-named project leaves the agent for the machine to name', () async {
     final fixture = _Fixture();
     final box = fixture.box(folder: null, autoProject: true);

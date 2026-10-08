@@ -1163,7 +1163,23 @@ class NewHarnessController extends ChangeNotifier {
         ? 'A first message can be $kFirstTaskMaxLength characters; '
               'this is ${value.trim().length}.'
         : null;
+    // The desktop composer is where almost every first task is typed. Without
+    // this its harnesses kept the clock name (`opencode-2026-10-08-13-24`,
+    // "Untitled Pane") unless something else happened to rebuild the project.
+    _followTask();
     notifyListeners();
+  }
+
+  /// A suggested project follows the task it will be named after; a name the
+  /// person typed is theirs and stays.
+  void _followTask() {
+    if (_project.generated case final suggested?) {
+      final next = _generatedProject();
+      if (next.generated?.generatedTask != suggested.generatedTask) {
+        _project = next;
+        unawaited(_refreshGeneratedProject());
+      }
+    }
   }
 
   /// The permission mode picked, by id; an engine without it uses its default.
@@ -1528,15 +1544,7 @@ class NewHarnessController extends ChangeNotifier {
           ? 'A first message can be $kFirstTaskMaxLength characters; '
                 'this is ${value.trim().length}.'
           : null;
-      // A suggested project follows the task it will be named after; a name
-      // the person typed is theirs and stays.
-      if (_project.generated case final suggested?) {
-        final next = _generatedProject();
-        if (next.generated?.generatedTask != suggested.generatedTask) {
-          _project = next;
-          unawaited(_refreshGeneratedProject());
-        }
-      }
+      _followTask();
       notifyListeners();
       return;
     }
