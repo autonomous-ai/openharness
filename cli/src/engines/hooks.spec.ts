@@ -3,17 +3,32 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
-import { admitHook, engineHooks, hooksFor } from './hooks.js'
+import { admitHook, engineHooks, hookContracts, hooksFor } from './hooks.js'
 import { engineFor } from './registry.js'
 import { liveFor } from './live.js'
 
 afterEach(() => vi.restoreAllMocks())
 
-it('exposes the same hooks through the full and hook-only engine interfaces', () => {
-  for (const name of ['claude', 'codex']) expect(engineFor(name)!.hooks).toBe(hooksFor(name))
+it('declares each engine\'s hooks once, for the full engine interface and the hook-only lookup', () => {
+  for (const name of ['claude', 'codex'] as const) {
+    expect(engineFor(name)!.hooks).toBe(hookContracts[name])
+    expect(hooksFor(name)).toBe(engineHooks[name])
+  }
   for (const name of [null, undefined, '', 'future', 'constructor', '__proto__']) expect(hooksFor(name)).toBeUndefined()
   expect(admitHook('future', {})).toEqual({ accepted: true })
   expect(admitHook('claude', {})).toEqual({ accepted: true })
+})
+
+it('composes only what a contract declares: Claude Code corrects transcripts and closes turns, Codex admits', () => {
+  expect(Object.keys(engineHooks.claude).sort()).toEqual(['install', 'installIn', 'onStop', 'transcriptFor'])
+  expect(Object.keys(engineHooks.codex).sort()).toEqual(['admit', 'install', 'installIn'])
+})
+
+it('keeps every contract plain data: nothing in it runs', () => {
+  const functions = (value: unknown): number => typeof value === 'function' ? 1
+    : value && typeof value === 'object' ? Object.values(value).reduce<number>((sum, inner) => sum + functions(inner), 0) : 0
+  expect(functions(hookContracts)).toBe(0)
+  expect(JSON.parse(JSON.stringify(hookContracts))).toEqual(hookContracts)
 })
 
 it('installs Claude hooks into the requested home through its facet', () => {

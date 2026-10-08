@@ -26,7 +26,11 @@ Still in core and engine-specific, as data or copy: `engines/{claude,codex}/subm
 `lib/goalCommand.ts` (`/goal` and `/loop` adaptation, synchronous on the input path). The tmux paste
 settle in `lib/tmux.ts` is the writer's own and stays in core.
 
-## (b) Hook admission and installers
+## (b) Hook admission and installers: done in the batch after (d)
+
+See [engine hooks](2026-10-08-engine-hooks.md). Nothing moved into a worker: the engines' hook code left
+the core, replaced by declared contracts and `engines/kit` mechanics that core runs in line. The map below
+is as it stood before it.
 
 | File | Engine-specific behavior | Stays in core | Can move | Risk |
 | --- | --- | --- | --- | --- |
@@ -80,9 +84,30 @@ About 220 lines would leave, and with them core's only native child process and 
 2. **(d) Native control connections.** The smallest and fully async. It removes a native child process
    and a long-lived socket from core, the kind of work that crashes, hangs or leaks. It reuses the
    control-grant pattern of model and question control.
-3. **(b) Hook admission and installers.** The installers become worker operations that core awaits
-   before it spawns or binds the hook port. Admission needs a bounded async path, or a declarative rule
-   core can evaluate in line, so a worker that is down does not reject every hook.
+3. **(b) Hook admission and installers.** Done: see [engine hooks](2026-10-08-engine-hooks.md). Revised after the (d) review, which ruled that session control
+   must not depend on an engine worker. Hooks are how sessions bind and turns close, so every part of
+   this batch stays worker-free. The engines' code leaves the core; declared data and shared kit
+   mechanics replace it, the way the stop's ownership rules did in (d):
+   - **Installers.** `engines/{claude,codex}/installHooks.ts` become declared hook settings in each
+     engine's hooks contract: the file in the home, the events and matchers, the timeout, and what to do
+     with a malformed file (Claude starts empty; Codex leaves it untouched). One kit installer applies
+     them, synchronously, at daemon start and before a spawn, as today. Core keeps authoring the
+     command (`kit/notifyHooks.ts`). The risk is byte-identical output: the two installers detect drift
+     and write slightly differently today (plain versus atomic write, which hook counts as ours). The
+     contract must carry those differences, or fixtures must prove them equal.
+   - **Admission.** Codex's subagent rule (`engines/codex/hooks.ts` `admit`) must still run before
+     `onPromptSubmitted`, or a delegated session's prompt is credited to its parent's pane. It reads the
+     rollout's first record, and `registry.register` repeats the same read. It becomes a declared rule
+     that core evaluates in line: the first record's type, plus the field whose presence marks a child.
+     The read stays bounded at 128 KB. Alternatively it stays a (c) item with the registry's copy.
+   - **Claude's transcript correction** (`transcriptFor`, synchronous on the hook path) becomes declared
+     naming (`<sessionId>.jsonl`) plus a kit rule.
+   - **Claude's Stop rule** (`onStop`) is engine-neutral turn mechanics, apart from the `continued`
+     (`/goal`) flag, which is already a `LiveTurn` field. It moves to `engines/kit`, and Claude's contract
+     declares that its Stop hook closes turns.
+
+   With this approach nothing moves into a worker. About 230 lines of Claude/Codex code leave the core
+   closure, and a few dozen lines of declared data come in.
 4. **(c) Launch, discovery and resume.** The largest. It has the most synchronous call sites (registry
    load, discovery tables, argv). Split it into sub-batches:
    - resume preparation and trust writes (async callers, before spawn)

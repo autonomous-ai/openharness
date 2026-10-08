@@ -8,8 +8,6 @@ import { VERSION } from '../version.js'
 import { hermesConfigHomes } from '../engines/hermes/home.js'
 import { opencodeMajorVersion } from '../engines/opencode/version.js'
 import { command, isOurs, writeJsonAtomic, type HookBlock, type Settings } from '../engines/kit/notifyHooks.js'
-export { installSessionHooks } from '../engines/claude/installHooks.js'
-export { installCodexHooks } from '../engines/codex/installHooks.js'
 
 const GROK_HOOKS_PATH = join(env.GROK_HOME, 'hooks', 'harness.json')
 const CURSOR_HOOKS_PATH = join(cursorConfigDir(), 'hooks.json')
@@ -353,9 +351,10 @@ const COMMANDCODE_EVENTS = ['SessionStart', 'PreToolUse', 'Stop'] as const
 
 /**
  * Command Code's hook file is `~/.commandcode/settings.json` with the SAME nested `matcher`/`hooks`
- * schema as `~/.claude/settings.json`, so this mirrors installSessionHooks — including its dedup
- * discipline: every "ours" block (any command mentioning notify.mjs, whatever its old path/port) is
- * collapsed into exactly one canonical entry, and foreign blocks are preserved untouched.
+ * schema as `~/.claude/settings.json`, so this mirrors Claude Code's hook settings
+ * (engines/claude/hookContract.ts) — including its dedup discipline: every "ours" block (any command
+ * mentioning notify.mjs, whatever its old path/port) is collapsed into exactly one canonical entry, and
+ * foreign blocks are preserved untouched.
  */
 export function installCommandCodeHooks(port: number): void {
   let settings: Settings = {}
@@ -393,11 +392,12 @@ export function installCommandCodeHooks(port: number): void {
 }
 
 // Devin reads Claude's hook schema verbatim (its binary parses `ClaudeHookConfig`/`ClaudeHookMatcherConfig`),
-// so the only differences from installSessionHooks are the file and that hooks nest under a "hooks" key of
-// the user's general config — which also holds `devin.org_id`, `theme_mode`, etc, so this MERGES and never
-// rewrites the file wholesale. Verified live: SessionStart/UserPromptSubmit/Stop all fire with
-// `$TMUX_PANE` intact; the payload carries {hook_event_name, session_id, prompt_id, prompt, source} but
-// NO transcript_path and NO cwd (notify.mjs derives cwd from its own process).
+// so the only differences from Claude Code's hook settings (engines/claude/hookContract.ts) are the file and
+// that hooks nest under a "hooks" key of the user's general config — which also holds `devin.org_id`,
+// `theme_mode`, etc, so this MERGES and never rewrites the file wholesale. Verified live:
+// SessionStart/UserPromptSubmit/Stop all fire with `$TMUX_PANE` intact; the payload carries
+// {hook_event_name, session_id, prompt_id, prompt, source} but NO transcript_path and NO cwd (notify.mjs
+// derives cwd from its own process).
 const DEVIN_EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd'] as const
 
 export function installDevinHooks(port: number): void {

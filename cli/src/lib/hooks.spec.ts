@@ -18,7 +18,9 @@ async function loadHooks() {
   process.env.HERMES_HOME = hermesHome
   process.env.COMMANDCODE_HOME = commandcodeHome
   process.env.DEVIN_CONFIG_PATH = devinConfigPath
-  return import('./hooks.js')
+  // Claude Code's and Codex's installers are their declared hook settings, applied by the kit (engines/hooks.ts).
+  const [hooks, { engineHooks }] = await Promise.all([import('./hooks.js'), import('../engines/hooks.js')])
+  return { ...hooks, claude: engineHooks.claude, codex: engineHooks.codex }
 }
 
 describe('Codex hook installation', () => {
@@ -48,8 +50,8 @@ describe('Codex hook installation', () => {
     const script = process.argv[1]
     process.argv[1] = join(cliDir, 'cli.js')
     try {
-      const { installCodexHooks } = await loadHooks()
-      installCodexHooks(19473)
+      const { codex } = await loadHooks()
+      codex.install(19473)
       expect(readFileSync(join(codexHome, 'hooks.json'), 'utf-8')).toContain(join(cliDir, 'notify.mjs'))
     } finally {
       process.argv[1] = script
@@ -67,8 +69,8 @@ describe('Codex hook installation', () => {
       },
     }))
 
-    const { installCodexHooks } = await loadHooks()
-    installCodexHooks(19473)
+    const { codex } = await loadHooks()
+    codex.install(19473)
     const first = readFileSync(file, 'utf-8')
     const parsed = JSON.parse(first)
 
@@ -79,15 +81,15 @@ describe('Codex hook installation', () => {
     expect(parsed.hooks.UserPromptSubmit[1]).not.toHaveProperty('matcher')
     expect(parsed.hooks.UserPromptSubmit[1].hooks[0].command).toContain('--engine codex')
 
-    installCodexHooks(19473)
+    codex.install(19473)
     expect(readFileSync(file, 'utf-8')).toBe(first)
   })
 
   it('installs into a custom CODEX_HOME profile, with a matching --codex-home baked in', async () => {
     const customProfile = mkdtempSync(join(tmpdir(), 'adapter-codex-profile-'))
     try {
-      const { installCodexHooks } = await loadHooks()
-      installCodexHooks(19473, customProfile)
+      const { codex } = await loadHooks()
+      codex.installIn(19473, customProfile)
 
       const profileFile = join(customProfile, 'hooks.json')
       const first = readFileSync(profileFile, 'utf-8')
@@ -99,7 +101,7 @@ describe('Codex hook installation', () => {
       expect(existsSync(join(codexHome, 'hooks.json'))).toBe(false)
 
       // Idempotent: a second install into the same profile is a no-op.
-      installCodexHooks(19473, customProfile)
+      codex.installIn(19473, customProfile)
       expect(readFileSync(profileFile, 'utf-8')).toBe(first)
     } finally {
       rmSync(customProfile, { recursive: true, force: true })
@@ -110,8 +112,8 @@ describe('Codex hook installation', () => {
     const file = join(codexHome, 'hooks.json')
     writeFileSync(file, '{not-json')
 
-    const { installCodexHooks } = await loadHooks()
-    installCodexHooks(19473)
+    const { codex } = await loadHooks()
+    codex.install(19473)
 
     expect(readFileSync(file, 'utf-8')).toBe('{not-json')
     expect(existsSync(`${file}.${process.pid}.tmp`)).toBe(false)
@@ -502,8 +504,8 @@ describe('the Node interpreter baked into hook commands', () => {
 
   it('names an absolute, runnable interpreter and never the bare word node', async () => {
     const file = join(codexHome, 'hooks.json')
-    const { installCodexHooks } = await loadHooks()
-    installCodexHooks(18473)
+    const { codex } = await loadHooks()
+    codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     const command = out.hooks.SessionStart[0].hooks[0].command
@@ -524,8 +526,8 @@ describe('the Node interpreter baked into hook commands', () => {
     process.env.ADAPTER_RUNTIME_DIR = runtimeDir
 
     const file = join(codexHome, 'hooks.json')
-    const { installCodexHooks } = await loadHooks()
-    installCodexHooks(18473)
+    const { codex } = await loadHooks()
+    codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     expect(interpreterOf(out.hooks.SessionStart[0].hooks[0].command)).toBe(upgraded)
@@ -536,8 +538,8 @@ describe('the Node interpreter baked into hook commands', () => {
     process.env.ADAPTER_RUNTIME_DIR = runtimeDir
 
     const file = join(codexHome, 'hooks.json')
-    const { installCodexHooks } = await loadHooks()
-    installCodexHooks(18473)
+    const { codex } = await loadHooks()
+    codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     // A hook naming an interpreter that cannot run is strictly worse than one naming the interpreter
@@ -550,8 +552,8 @@ describe('the Node interpreter baked into hook commands', () => {
     process.env.ADAPTER_RUNTIME_DIR = runtimeDir
 
     const file = join(codexHome, 'hooks.json')
-    const { installCodexHooks } = await loadHooks()
-    installCodexHooks(18473)
+    const { codex } = await loadHooks()
+    codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     expect(interpreterOf(out.hooks.SessionStart[0].hooks[0].command)).toBe(process.execPath)
@@ -568,8 +570,8 @@ describe('the Node interpreter baked into hook commands', () => {
       },
     }))
 
-    const { installCodexHooks } = await loadHooks()
-    installCodexHooks(18473)
+    const { codex } = await loadHooks()
+    codex.install(18473)
 
     const out = JSON.parse(readFileSync(file, 'utf8')) as { hooks: Record<string, Array<{ hooks: Array<{ command: string }> }>> }
     const commands = out.hooks.SessionStart.flatMap((block) => block.hooks.map((h) => h.command))
@@ -631,14 +633,14 @@ describe('Claude Code hooks in a moved home', () => {
     const file = join(home, 'work', 'settings.json')
     mkdirSync(join(home, 'work'), { recursive: true })
     writeFileSync(file, JSON.stringify({ model: 'opus', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'say done' }] }] } }))
-    const { installSessionHooks } = await loadHooks()
-    installSessionHooks(19473, file)
+    const { claude } = await loadHooks()
+    claude.installIn(19473, join(home, 'work'))
     const first = readFileSync(file, 'utf-8')
     const settings = JSON.parse(first)
     expect(settings.model).toBe('opus')
     expect(settings.hooks.SessionStart[0].hooks[0].command).toContain('notify.mjs')
     expect(settings.hooks.Stop.map((block: { hooks: Array<{ command: string }> }) => block.hooks[0].command)).toEqual(['say done', expect.stringContaining('notify.mjs')])
-    installSessionHooks(19473, file)
+    claude.installIn(19473, join(home, 'work'))
     expect(readFileSync(file, 'utf-8')).toBe(first)
   })
 })

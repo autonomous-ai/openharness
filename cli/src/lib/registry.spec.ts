@@ -1433,6 +1433,33 @@ describe('agent identity: the process owns the agent, the session is bound to it
     }
   })
 
+  it('never registers a delegated Codex session, agreeing with the hook server\'s admission', async () => {
+    const { registry } = await loadRegistryModule()
+    const { admitHook } = await import('../engines/hooks.js')
+    registry.load()
+    const profile = mkdtempSync(join(tmpdir(), 'adapter-codex-profile-'))
+    try {
+      registry.openPendingAgent({ engine: 'codex', runtimes: [{ backend: 'tmux', paneId: '%10' }], cwd: '/tmp/demo', codexHome: profile })
+      const rollout = (id: string, source: unknown): string => {
+        const file = join(profile, 'sessions', `rollout-${id}.jsonl`)
+        mkdirSync(join(file, '..'), { recursive: true })
+        writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { id, source } }) + '\n')
+        return file
+      }
+      const register = (sessionId: string, transcriptPath: string) => registry.register({
+        engine: 'codex', sessionId, transcriptPath, tmuxPane: '%10', cwd: '/tmp/demo', processIdentity: processIdentity(910),
+      })
+      const child = rollout('child', { subagent: { thread_spawn: { parent_thread_id: 'parent', depth: 1 } } })
+      expect(admitHook('codex', { transcriptPath: child })).toEqual({ accepted: false, reason: 'codex_subagent' })
+      expect(register('child', child)).toBeNull()
+      const parent = rollout('parent', 'cli')
+      expect(admitHook('codex', { transcriptPath: parent })).toEqual({ accepted: true })
+      expect(register('parent', parent)?.entry.sessionId).toBe('parent')
+    } finally {
+      rmSync(profile, { recursive: true, force: true })
+    }
+  })
+
   it('keeps a name given before the agent had a session', async () => {
     // Names live under the ENGINE session id — that is what survives the launcher and comes back on a
     // resume, since the agent id is minted fresh each launch. An agent renamed while still unbound has

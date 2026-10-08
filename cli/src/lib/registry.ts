@@ -42,6 +42,7 @@ import { cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
 import { claudeProjectsRoots, codexHomeRoots, sessionCodexHome } from './engineHomes.js'
 import { readCodexRolloutMeta, resolveCodexRollout } from '../engines/codex/rollout.js'
+import { admitHook } from '../engines/hooks.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
 import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunch.js'
@@ -1514,7 +1515,9 @@ class Registry {
       // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
       || (transcriptPath && !validTranscriptPath(engine, transcriptPath, processAgent?.codexHome ?? undefined))
     ) return null
-    if (engine === 'codex' && transcriptPath && readCodexRolloutMeta(transcriptPath)?.isSubagent) return null
+    // A delegated session is never registered, by any caller: the same admission the hook server asks before
+    // it credits a prompt (hookServer.ts), so that the two can never disagree.
+    if (transcriptPath && !admitHook(engine, { transcriptPath }).accepted) return null
 
     const now = Date.now()
     const existing = this.agents.get(agentId)

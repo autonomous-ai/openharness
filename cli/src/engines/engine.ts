@@ -6,7 +6,7 @@ import type { EngineModelControl } from './facets/modelControl.js'
 import type { ProcessEngine } from './types.js'
 import type { EngineTranscript } from './facets/transcript.js'
 import type { EngineLaunch } from './facets/launch.js'
-import type { EngineHooks } from './facets/hooks.js'
+import type { HookContract } from './facets/hooks.js'
 import type { EngineLive } from './facets/live.js'
 import type { EngineRuntime } from './facets/runtime.js'
 
@@ -15,7 +15,8 @@ export interface Engine {
   readonly name: ProcessEngine
   readonly transcript: EngineTranscript
   readonly launch: EngineLaunch
-  readonly hooks: EngineHooks
+  /** Declared data that core applies in line (engines/hooks.ts): never run in the engine's worker. */
+  readonly hooks: HookContract
   readonly live: EngineLive
   readonly runtime: EngineRuntime
   readonly screen: EngineScreen

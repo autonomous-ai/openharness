@@ -56,7 +56,7 @@ const { checkPidRuntime } = await import('../src/lib/deleteAgentFallback.js')
 const { startHookServer } = await import('../src/hookServer.js')
 const { BackendSocket } = await import('../src/backendSocket.js')
 const { bindNativeResumeRequests } = await import('../src/testing/nativeResumeSocket.js')
-const { installCodexHooks } = await import('../src/lib/hooks.js')
+const { engineHooks } = await import('../src/engines/hooks.js')
 const backend = new TmuxBackend()
 const socketBackend = new BackendSocket('fixture-only')
 const hooks: Array<{ engine: string; sessionId: string }> = []
@@ -121,7 +121,7 @@ try {
         { timestamp, type: 'event_msg', payload: { type: 'task_complete', turn_id: sessionId, last_agent_message: `Retained ${marker}` } },
       ].map(row => JSON.stringify(row)).join('\n') + '\n')
       writeFileSync(join(profile, 'config.toml'), `model_provider = "fixture"\ncheck_for_update_on_startup = false\n[model_providers.fixture]\nname = "Local fixture"\nbase_url = "http://127.0.0.1:9/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects.${JSON.stringify(cwd)}]\ntrust_level = "trusted"\n[features]\nhooks = true\n`)
-      installCodexHooks(server.port, profile)
+      engineHooks.codex.installIn(server.port, profile)
 
     }
     const old = registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId: '%99999' }], cwd, codexHome: engine === 'codex' ? profile : null, defaultName: `Native ${engine} fixture` })!

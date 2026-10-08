@@ -113,7 +113,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     for (const risky of [
       'requireTmuxAvailable(',      // throws outright when tmux is missing
       'await startHookServer(',     // EADDRINUSE on a fixed port with no fallback
-      'installSessionHooks(',       // 13 vendor settings files, any of which can be unreadable
+      'installEngineHooks(',        // 13 vendor settings files, any of which can be unreadable
       'await restoreAgents({',      // tmux, the registry, and the closures a bad edit puts in a dead zone
       'await agentReconciler.start(',
       'loadCursorPendingTasks(',    // a file lock that can hang, not just throw

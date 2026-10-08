@@ -1,0 +1,2771 @@
+{
+ "claude installIn: no file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: no home folder": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: empty file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: whitespace only": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: malformed JSON": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: byte order mark": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: JSON null": {
+  "runs": [
+   {
+    "logs": [],
+    "threw": "TypeError"
+   },
+   {
+    "logs": [],
+    "threw": "TypeError"
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "null"
+   }
+  }
+ },
+ "claude installIn: JSON array": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "[]\n"
+   }
+  }
+ },
+ "claude installIn: JSON string": {
+  "runs": [
+   {
+    "logs": [],
+    "threw": "TypeError"
+   },
+   {
+    "logs": [],
+    "threw": "TypeError"
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "\"text\""
+   }
+  }
+ },
+ "claude installIn: JSON number": {
+  "runs": [
+   {
+    "logs": [],
+    "threw": "TypeError"
+   },
+   {
+    "logs": [],
+    "threw": "TypeError"
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "42"
+   }
+  }
+ },
+ "claude installIn: hooks is a string": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  },\n  \"keep\": 1\n}\n"
+   }
+  }
+ },
+ "claude installIn: hooks is an array": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": []\n}\n"
+   }
+  }
+ },
+ "claude installIn: hooks is null": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: an event is not a list": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: odd blocks": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      null,\n      \"text\",\n      {\n        \"hooks\": \"no\"\n      },\n      {\n        \"hooks\": [\n          null,\n          {}\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: a command that is not text": {
+  "runs": [
+   {
+    "logs": [],
+    "threw": "TypeError"
+   },
+   {
+    "logs": [],
+    "threw": "TypeError"
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":5}]}]}}"
+   }
+  }
+ },
+ "claude installIn: duplicate keys": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\"hooks\":{},\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}]}}"
+   }
+  }
+ },
+ "claude installIn: foreign hooks only": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: our old hook": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] updated (path/port changed) → <script> --port 19473 in <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: our old hook beside foreign hooks": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] updated (path/port changed) → <script> --port 19473 in <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: ours current on some events, old or missing on others": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] updated (path/port changed) → <script> --port 19473 in <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: ours current": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: ours current, minified": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command claude 19473>\",\"timeout\":5}]}]}}"
+   }
+  }
+ },
+ "claude installIn: ours current before foreign hooks": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: ours current with another timeout": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: ours twice on an event": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: ours twice, the first old": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] updated (path/port changed) → <script> --port 19473 in <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: our block led by a foreign hook": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          },\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          },\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          },\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          },\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-first\"\n          },\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: our block with another matcher": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ],\n        \"matcher\": \"other\"\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ],\n        \"matcher\": \"other\"\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ],\n        \"matcher\": \"other\"\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ],\n        \"matcher\": \"other\"\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ],\n        \"matcher\": \"other\"\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: our block missing its matcher": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: ours current for another port": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] updated (path/port changed) → <script> --port 19473 in <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: a symlink to foreign settings": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "link",
+    "target": "<root>/elsewhere/real.json"
+   },
+   "elsewhere/real.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: a symlink to current settings": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "link",
+    "target": "<root>/elsewhere/real.json"
+   },
+   "elsewhere/real.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: a dangling symlink": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "link",
+    "target": "<root>/elsewhere/missing.json"
+   },
+   "elsewhere/missing.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: a symlink into a missing folder": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] failed to write settings.json: Error ENOENT open <root>/moved/claude-work/settings.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] failed to write settings.json: Error ENOENT open <root>/moved/claude-work/settings.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "link",
+    "target": "<root>/elsewhere/gone/missing.json"
+   }
+  }
+ },
+ "claude installIn: a read-only file": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] failed to write settings.json: Error EACCES open <root>/moved/claude-work/settings.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] failed to write settings.json: Error EACCES open <root>/moved/claude-work/settings.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "444",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: a read-only file, current": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "444",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: an unreadable file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "200",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: a read-only folder": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] failed to write settings.json: Error EACCES open <root>/moved/claude-work/settings.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] failed to write settings.json: Error EACCES open <root>/moved/claude-work/settings.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "555"
+   }
+  }
+ },
+ "claude installIn: a read-only folder holding a writable file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "555"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: a private file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "600",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude installIn: the file is a folder": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] failed to write settings.json: Error EISDIR open <root>/moved/claude-work/settings.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] failed to write settings.json: Error EISDIR open <root>/moved/claude-work/settings.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "dir",
+    "mode": "755"
+   }
+  }
+ },
+ "claude installIn: a temporary file left by this process": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/moved/claude-work/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/claude-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/claude-work/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   },
+   "moved/claude-work/settings.json.<pid>.tmp": {
+    "type": "file",
+    "mode": "600",
+    "text": "junk"
+   }
+  }
+ },
+ "claude install: no file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/home/.claude/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.claude": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.claude/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude install: no home folder": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/home/.claude/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.claude": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.claude/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude install: malformed JSON": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/home/.claude/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.claude": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.claude/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude install: foreign hooks only": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/home/.claude/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.claude": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.claude/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude install: our old hook": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] updated (path/port changed) → <script> --port 19473 in <root>/home/.claude/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.claude": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.claude/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude install: ours current": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.claude": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.claude/settings.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "claude install: a symlink to foreign settings": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Claude session + turn (Stop/StopFailure) hooks → <root>/home/.claude/settings.json",
+     "log [hooks] (takes effect on the next claude session start)"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Claude session + turn (Stop/StopFailure) hooks already installed"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.claude": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.claude/settings.json": {
+    "type": "link",
+    "target": "<root>/elsewhere/real.json"
+   },
+   "elsewhere/real.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command claude 19473>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: no file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: no home folder": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: empty file": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": ""
+   }
+  }
+ },
+ "codex installIn: whitespace only": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "  \n"
+   }
+  }
+ },
+ "codex installIn: malformed JSON": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{not-json"
+   }
+  }
+ },
+ "codex installIn: byte order mark": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "﻿{}"
+   }
+  }
+ },
+ "codex installIn: JSON null": {
+  "runs": [
+   {
+    "logs": [],
+    "threw": "TypeError"
+   },
+   {
+    "logs": [],
+    "threw": "TypeError"
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "null"
+   }
+  }
+ },
+ "codex installIn: JSON array": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "[]\n"
+   }
+  }
+ },
+ "codex installIn: JSON string": {
+  "runs": [
+   {
+    "logs": [],
+    "threw": "TypeError"
+   },
+   {
+    "logs": [],
+    "threw": "TypeError"
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "\"text\""
+   }
+  }
+ },
+ "codex installIn: JSON number": {
+  "runs": [
+   {
+    "logs": [],
+    "threw": "TypeError"
+   },
+   {
+    "logs": [],
+    "threw": "TypeError"
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "42"
+   }
+  }
+ },
+ "codex installIn: hooks is a string": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  },\n  \"keep\": 1\n}\n"
+   }
+  }
+ },
+ "codex installIn: hooks is an array": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": []\n}\n"
+   }
+  }
+ },
+ "codex installIn: hooks is null": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: an event is not a list": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: odd blocks": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      null,\n      \"text\",\n      {\n        \"hooks\": \"no\"\n      },\n      {\n        \"hooks\": [\n          null,\n          {}\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a command that is not text": {
+  "runs": [
+   {
+    "logs": [],
+    "threw": "TypeError"
+   },
+   {
+    "logs": [],
+    "threw": "TypeError"
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\"hooks\":{\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":5}]}]}}"
+   }
+  }
+ },
+ "codex installIn: duplicate keys": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\"hooks\":{},\"hooks\":{\"SessionStart\":[{\"matcher\":\"startup|resume|clear|compact\",\"hooks\":[{\"type\":\"command\",\"command\":\"<command codex 19473 installIn>\",\"timeout\":5}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command codex 19473 installIn>\",\"timeout\":5}]}]}}"
+   }
+  }
+ },
+ "codex installIn: foreign hooks only": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: our old hook": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: our old hook beside foreign hooks": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: ours current on some events, old or missing on others": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: ours current": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: ours current, minified": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\"hooks\":{\"SessionStart\":[{\"matcher\":\"startup|resume|clear|compact\",\"hooks\":[{\"type\":\"command\",\"command\":\"<command codex 19473 installIn>\",\"timeout\":5}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"<command codex 19473 installIn>\",\"timeout\":5}]}]}}"
+   }
+  }
+ },
+ "codex installIn: ours current before foreign hooks": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-after\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: ours current with another timeout": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 30\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: ours twice on an event": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: ours twice, the first old": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: our block led by a foreign hook": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: our block with another matcher": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: our block missing its matcher": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: ours current for another port": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a symlink to foreign settings": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   },
+   "elsewhere/real.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a symlink to current settings": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "link",
+    "target": "<root>/elsewhere/real.json"
+   },
+   "elsewhere/real.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a dangling symlink": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a symlink into a missing folder": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a read-only file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a read-only file, current": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "444",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: an unreadable file": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "200",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a read-only folder": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] failed to write Codex hooks.json: Error EACCES open <root>/moved/codex-work/hooks.json.<pid>.tmp"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] failed to write Codex hooks.json: Error EACCES open <root>/moved/codex-work/hooks.json.<pid>.tmp"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "555"
+   }
+  }
+ },
+ "codex installIn: a read-only folder holding a writable file": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] failed to write Codex hooks.json: Error EACCES open <root>/moved/codex-work/hooks.json.<pid>.tmp"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] failed to write Codex hooks.json: Error EACCES open <root>/moved/codex-work/hooks.json.<pid>.tmp"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "555"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: a private file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex installIn: the file is a folder": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/moved/codex-work/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "dir",
+    "mode": "755"
+   }
+  }
+ },
+ "codex installIn: a temporary file left by this process": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/moved/codex-work/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "moved/codex-work": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "moved/codex-work/hooks.json": {
+    "type": "file",
+    "mode": "600",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 installIn>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex install: no file": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.codex": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.codex/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex install: no home folder": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.codex": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.codex/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex install: malformed JSON": {
+  "runs": [
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/home/.codex/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "error [hooks] Codex hooks file is invalid JSON; leaving it unchanged: <root>/home/.codex/hooks.json",
+     "error [hooks] fix the file, then restart harness login"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.codex": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.codex/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{not-json"
+   }
+  }
+ },
+ "codex install: foreign hooks only": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.codex": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.codex/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex install: our old hook": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.codex": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.codex/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex install: ours current": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.codex": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.codex/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ },
+ "codex install: a symlink to foreign settings": {
+  "runs": [
+   {
+    "logs": [
+     "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/home/.codex/hooks.json",
+     "log [hooks] Codex requires reviewing these user hooks with /hooks before normal use"
+    ],
+    "threw": null
+   },
+   {
+    "logs": [
+     "log [hooks] Codex SessionStart/UserPromptSubmit hooks already installed → <root>/home/.codex/hooks.json"
+    ],
+    "threw": null
+   }
+  ],
+  "files": {
+   "home/.codex": {
+    "type": "dir",
+    "mode": "755"
+   },
+   "home/.codex/hooks.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      },\n      {\n        \"matcher\": \"startup|resume|clear|compact\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      },\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"<command codex 19473 install>\",\n            \"timeout\": 5\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   },
+   "elsewhere/real.json": {
+    "type": "file",
+    "mode": "644",
+    "text": "{\n  \"model\": \"opus\",\n  \"nested\": {\n    \"list\": [\n      1,\n      2.5,\n      \"x\"\n    ],\n    \"none\": null\n  },\n  \"note\": \"café ✓ 🎉\",\n  \"hooks\": {\n    \"SessionStart\": [\n      {\n        \"matcher\": \"resume\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-start\",\n            \"timeout\": 9\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-prompt\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"matcher\": \"Bash\",\n        \"hooks\": [\n          {\n            \"type\": \"command\",\n            \"command\": \"foreign-tool\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+   }
+  }
+ }
+}

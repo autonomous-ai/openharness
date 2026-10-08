@@ -144,6 +144,9 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
   /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal|modelControl|modelPicker|questionControl|submission|nativeControl)\.ts$/,
+  // Claude Code's and Codex's hooks are declared data (hookContract.ts) that the kit applies in core: no hook code
+  // of theirs is the core's, and none runs in a worker either (docs/design/2026-10-08-engine-hooks.md).
+  /^engines\/(claude|codex)\/(hooks|installHooks)\.ts$/,
   /^lib\/(askQuestion|runtimeProfileController|composerScreen|teamWriteHold|messageHold|terminalActivity|codexTurnRecovery)\.ts$/,
   /^engines\/(screens|modelControls|questionControls|submissions|nativeControls)\.ts$/,
   // Claude Code's and Codex's reading of their composer: shared by the two, loaded only by their workers.
@@ -229,6 +232,15 @@ describe('the daemon\'s shape', () => {
       'core/engines/nativeControls.ts', 'core/turns/activity.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
     }
+  })
+
+  it('hook installation, admission, transcript correction and turn closing load the engines\' declared hook contracts alone', () => {
+    const contracts = new Set(['engines/claude/hookContract.ts', 'engines/codex/hookContract.ts'])
+    for (const entry of ['engines/hooks.ts', 'engines/kit/hookSettings.ts', 'engines/kit/hookRules.ts', 'engines/kit/stopHook.ts',
+      'core/turns/turnHooks.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)), entry).toEqual([])
+    }
+    expect([...closureOf('engines/hooks.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
   })
 
   it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
