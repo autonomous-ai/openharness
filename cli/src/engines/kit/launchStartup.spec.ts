@@ -2,8 +2,15 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Script } from 'node:vm'
 import { afterEach, describe, expect, it } from 'vitest'
-import { CODEX_STARTUP_RETRY_PROBE } from './codexStartupRetry.js'
+import type { EngineLaunch, StartupRetry } from '../facets/launch.js'
+import { launch as codex } from '../codex/launch.js'
+import { startupFunctions, startupNeedsScript, startupProbe, startupRetries, startupRuns } from './launchStartup.js'
+
+// The evidence probe Codex's declared retry runs, as the kit writes it: the former lib/codexStartupRetry.ts's,
+// whose cases below run unchanged against it.
+const CODEX_STARTUP_RETRY_PROBE = startupProbe(codex.startup!.retry!)
 
 // The probe gives tmux 2 s, as it should in a pane. Here tmux is a /bin/sh script, and under 12 busy loops on a
 // 12-core Mac (load 60) it took longer than that to start: the probe gave up and printed nothing, and a test
@@ -107,5 +114,57 @@ describe('Codex startup update evidence', () => {
     expect(f.probe('after-update', JSON.stringify(before), 'other-session').status).toBe(1)
     rmSync(f.tmux)
     expect(f.probe('after-update', JSON.stringify(before)).status).toBe(1)
+  })
+})
+
+describe('the startup an engine declares', () => {
+  const TMUX = '/opt/homebrew/bin/tmux'
+  const retry: StartupRetry = {
+    updated: { status: 0, line: String.raw`^Updated\.$`, message: 'Updated; starting again.' },
+    transient: { status: 7, line: "it's \\ busy", withinMs: 5_000, attempts: 2, backoffSeconds: 3, message: 'Busy "$HOME" `x` {attempt} of {attempts}, in {delay}s.' },
+  }
+
+  it('needs the script only for an engine that declares a startup', () => {
+    expect(startupNeedsScript(codex)).toBe(true)
+    expect(startupNeedsScript({})).toBe(false)
+    expect(startupNeedsScript(undefined)).toBe(false)
+  })
+
+  it('runs again only where the daemon\'s own tmux can read the pane', () => {
+    expect(startupRetries(codex, TMUX)).toBe(codex.startup!.retry)
+    expect(startupRetries(codex, 'tmux')).toBeNull()
+    expect(startupRetries(codex, null)).toBeNull()
+    expect(startupRetries({ startup: {} }, TMUX)).toBeNull()
+  })
+
+  it('probes the owned flag only with a shared server to name it', () => {
+    const launch: Pick<EngineLaunch, 'startup'> = { startup: { ownedFlag: { unverified: 'no' } } }
+    expect(startupFunctions('codex', launch, TMUX, '/node')).toBe('')
+    expect(startupRuns('codex', launch, null)).toBe('harness_status=0\n"$harness_engine_bin" "$@" || harness_status=$?\nharness_resume\nharness_after')
+    expect(startupFunctions('codex', undefined, TMUX, '/node')).toBe('')
+  })
+
+  it('writes a retry with no probe, the engine\'s own words and numbers, quoted for the shell', () => {
+    const script = startupFunctions('pi', { startup: { retry } }, TMUX, "/opt/it's/node")
+    expect(script).not.toContain('harness_pi_probe')
+    expect(script).toContain(`'/opt/it'"'"'s/node' -e`)
+    expect(script).toContain('[ "$harness_status" -eq 0 ] && [ "$harness_pi_updated" -eq 0 ]')
+    expect(script).toContain('[ "$harness_status" -eq 7 ] && [ "$harness_pi_attempt" -lt 2 ]')
+    expect(script).toContain('harness_pi_delay=$((harness_pi_attempt * 3))')
+    expect(script).toContain("printf '\\n%s\\n' 'harness: Updated; starting again.'")
+    expect(script).toContain('printf \'\\n%s\\n\' "harness: Busy \\"\\$HOME\\" \\`x\\` $harness_pi_attempt of 2, in ${harness_pi_delay}s."')
+    const runs = startupRuns('pi', { startup: { retry } }, TMUX)
+    expect(runs.split('\n').filter((line) => line === 'harness_pi_next')).toHaveLength(3)
+    expect(runs).toContain('[ "$harness_pi_go" != 1 ] || "$harness_engine_bin" "$@" || harness_status=$?')
+  })
+
+  it('writes an evidence probe that is JavaScript, with the failure line as one string', () => {
+    const probe = startupProbe(retry)
+    expect(() => new Script(probe)).not.toThrow()
+    expect(probe).toContain("const error = 'it\\'s \\\\ busy';")
+    expect(probe).toContain('? /^Updated\\.$/.test(last)')
+    expect(probe).toContain('elapsed <= 5000')
+    expect(() => new Script(CODEX_STARTUP_RETRY_PROBE)).not.toThrow()
+    expect(startupProbe({ ...retry, transient: { ...retry.transient, line: 'two\nlines' } })).toContain("const error = 'two\\nlines';")
   })
 })

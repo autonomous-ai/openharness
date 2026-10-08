@@ -147,6 +147,9 @@ const EDGE: RegExp[] = [
   // Claude Code's and Codex's hooks are declared data (hookContract.ts) that the kit applies in core: no hook code
   // of theirs is the core's, and none runs in a worker either (docs/design/2026-10-08-engine-hooks.md).
   /^engines\/(claude|codex)\/(hooks|installHooks)\.ts$/,
+  // Their launch specifics are declared data too (launch.ts): Codex's startup probe and retry and its own-login
+  // provider are the kit's, in core, and never a worker's (docs/design/2026-10-08-engine-launch.md).
+  /^engines\/codex\/ownLoginProvider\.ts$/, /^lib\/codexStartupRetry\.ts$/,
   /^lib\/(askQuestion|runtimeProfileController|composerScreen|teamWriteHold|messageHold|terminalActivity|codexTurnRecovery)\.ts$/,
   /^engines\/(screens|modelControls|questionControls|submissions|nativeControls)\.ts$/,
   // Claude Code's and Codex's reading of their composer: shared by the two, loaded only by their workers.
@@ -241,6 +244,23 @@ describe('the daemon\'s shape', () => {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)), entry).toEqual([])
     }
     expect([...closureOf('engines/hooks.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
+  })
+
+  it('building a launch loads the engines\' declared launch contracts alone', () => {
+    const contracts = new Set(['engines/claude/launch.ts', 'engines/codex/launch.ts'])
+    // The builders: the argv and its script, a relaunch's overrides, a harness's flags.
+    for (const entry of ['lib/engineLaunch.ts', 'lib/launchOverrides.ts', 'engines/launches.ts', 'engines/kit/launchArgs.ts',
+      'engines/kit/launchStartup.ts', 'dsh/adapters.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !contracts.has(file)), entry).toEqual([])
+    }
+    expect([...closureOf('lib/engineLaunch.ts').keys()].filter(file => contracts.has(file)).sort()).toEqual([...contracts].sort())
+    // The launches themselves reach the registry too, whose hook admission reads the hook contracts and whose
+    // load-time repair still reads Codex rollouts (rollout.ts, a later step of the plan). Nothing else of the two.
+    const declared = new Set([...contracts, 'engines/claude/hookContract.ts', 'engines/codex/hookContract.ts', 'engines/codex/rollout.ts'])
+    for (const entry of ['core/agents/create.ts', 'core/agents/fork.ts', 'core/agents/restart.ts', 'core/agents/swap.ts',
+      'lib/resumeAgentService.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !declared.has(file)), entry).toEqual([])
+    }
   })
 
   it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {

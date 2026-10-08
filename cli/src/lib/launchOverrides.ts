@@ -15,7 +15,7 @@
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
-import { ownLoginProviderArgs } from '../engines/codex/ownLoginProvider.js'
+import { ownLoginProviderArgs } from '../engines/launches.js'
 import { namedAgentArgs, supportsNamedAgent } from './engineLaunch.js'
 import {
   buildGridEngineLaunch,
@@ -74,7 +74,7 @@ export interface LaunchOverridesDeps {
    * A seam rather than a direct read: without it every relaunch built in a test would consult
    * whatever Codex configuration the machine running the test happens to have, and a developer who
    * had set `model_provider` would watch unrelated specs change their answer. Absent ⇒ the real
-   * file. See `engines/codex/ownLoginProvider.ts`.
+   * file. See `ownProvider` in `engines/codex/launch.ts`.
    */
   readCodexConfig?: (path: string) => string | null
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
@@ -209,8 +209,8 @@ async function buildBaseLaunchOverrides(
   //     `subscriptionModel.ts` for why an engine with no cited mechanism is given nothing rather
   //     than a guess.
   //   * The PROVIDER — named again, because Codex persists the grid's in state of its own that
-  //     outlives the argv defining it, and a resume then fails before the TUI is up. See
-  //     `engines/codex/ownLoginProvider.ts`.
+  //     outlives the argv defining it, and a resume then fails before the TUI is up. See `ownProvider`
+  //     in `engines/codex/launch.ts`.
   //
   // Accumulated rather than returned, because a Codex agent needs its profile (below) as well, and
   // an early return here used to drop it: a row with both a remembered model and a CODEX_HOME came

@@ -7,8 +7,8 @@
  * `\uXXXX` means the same character in a regular expression (an emoji's two escapes are one code
  * point under `u`, two code units without it, as the literal was) and in a comment. In a tagged
  * template it changes the raw text; the only ones that carry such characters build RegExp sources
- * (lib/askQuestion.ts) or a script whose one such character is in a regular expression
- * (lib/codexStartupRetry.ts), where the escape and the character match alike. Checked 2026-10-07:
+ * (lib/askQuestion.ts, and Codex's startup update line in engines/codex/launch.ts, which the kit writes into
+ * a probe's regular expression), where the escape and the character match alike. Checked 2026-10-07:
  * all 133 regular expressions in the bundle matched the same as their escaped form on random input.
  */
 export function asciiOnly(code) {
