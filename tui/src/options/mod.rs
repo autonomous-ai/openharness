@@ -142,21 +142,25 @@ pub fn defaults() -> &'static BTreeMap<String, String> {
     })
 }
 
-/// What a tab shows unless `@hn-window-name` says otherwise: the selected pane's title (`pane`), or
-/// auto rename's name for the window. (No longer a choice in Appearance; `tmux` from a tmux.conf or
-/// an older tui.toml still shows the window's name.)
-pub const DEFAULT_TAB_NAME: &str = "pane";
+/// What a tab shows unless `@hn-window-name` says otherwise (Appearance › Tab names): its name cut
+/// to [TAB_NAME_COLS] columns with `…` (`short`), or whole (`full`). (`pane`, an older tui.toml's
+/// word, reads as `short`; `tmux` from a tmux.conf shows the window's own short name.)
+pub const DEFAULT_TAB_NAME: &str = "short";
 
-/// The status bar's per-window text. [name] is the tab name source (`tmux` = the window's short
-/// name, `pane` = the window's full name); [star] is whether the window you are on is marked `*`
-/// (`false` for a filled tab, which needs no `*` beside its name).
+/// The columns a `short` tab name keeps (as tmux's window names are short).
+pub const TAB_NAME_COLS: usize = 20;
+
+/// The status bar's per-window text. [name] is how the tab's name is shown (`short` | `full` |
+/// `tmux`); [star] is whether the window you are on is marked `*` (`false` for a filled tab, which
+/// needs no `*` beside its name). No `-` for the window used before: tmux's last-window flag says
+/// nothing hn's tabs need.
 pub fn status_window_format(name: &str, star: bool) -> String {
-    // `tmux` keeps hn's window name, `pane` the active pane's own title (a harness's task, not the
-    // window's auto-renamed name) — the two can differ, which is the point of the option. A window
-    // auto rename has named (its repo and its work) shows that name either way, whole: it is four
-    // words at most already.
-    let name_part = if name == "pane" { "#{?window_auto_named,#{window_name},#{pane_title}}" } else { "#{?window_auto_named,#{window_name},#{window_short_name}}" };
-    let mark = if star { "#{?window_active,*,#{?window_last_flag,-,}}" } else { "#{?window_last_flag,-,}" };
+    // The active pane's own title (a harness's task), or the name auto rename gave the window (its
+    // repo and its work); `tmux` the window's own name.
+    let cut = |var: &str| if name == "full" { format!("#{{{var}}}") } else { format!("#{{=/{TAB_NAME_COLS}/…:{var}}}") };
+    let name_part = if name == "tmux" { "#{?window_auto_named,#{window_name},#{window_short_name}}".to_string() }
+        else { format!("#{{?window_auto_named,{},{}}}", cut("window_name"), cut("pane_title")) };
+    let mark = if star { "#{?window_active,*,}" } else { "" };
     // (Two closing braces: the idle test's and the icon's. With one, the icon never showed.)
     format!("#I:{name_part}{mark}#{{s/[*-]//:window_flags}}#{{?#{{==:#{{window_agent_state}},idle}},,#{{?window_agent_icon, #{{window_agent_icon}},}}}}")
 }

@@ -608,7 +608,8 @@ mod tests {
         let filled = Look { window_active: Some("filled".into()), window_name: Some("pane".into()), ..Default::default() }.assignments();
         assert!(get(&filled, "window-status-format").is_none(), "the other tabs: the default");
         let current = get(&filled, "window-status-current-format").unwrap();
-        assert!(current.contains("#{pane_title}"), "pane uses the active pane's title: {current}");
+        assert!(current.contains("#{=/20/…:pane_title}"), "the active pane's title, cut short: {current}");
+        assert!(!current.contains("window_last_flag"), "no `-` for the window used before: {current}");
         assert!(!current.contains("#{window_active,*"), "filled leaves no `*`: {current}");
         let style = get(&filled, "window-status-current-style").unwrap();
         assert!(style.contains("bold"), "{style}");

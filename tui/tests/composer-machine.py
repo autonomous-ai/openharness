@@ -32,6 +32,7 @@ class Shell:
     def __init__(self, root, shell):
         self.root, self.data, self.wire = root, b'', b''
         self.requests, self.answered = [], set()
+        self.delayed, self.launches, self.allow_launch = [], [], False
         self.snapshot = root / 'snapshot'
         self.done = root / 'done'
         # Test-only observation/loading widgets preserve the exact Readline/ZLE
@@ -67,7 +68,24 @@ bind -x '"\\C-x\\C-b": _test_snapshot'
     def send(self, text):
         os.write(self.fd, text.encode() if isinstance(text, str) else text)
 
+    def answer(self, request_id, catalog):
+        path = self.root / '.harness/shell-requests' / TOKEN / request_id
+        data = path.with_suffix('.json')
+        try:
+            if not path.exists():
+                return  # the user changed scope before this reply
+            data.write_text(json.dumps(catalog))
+            data.chmod(0o600)
+            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+            os.write(fd, ('HN:' + request_id + ':0:\n').encode())
+            os.close(fd)
+        except OSError:
+            if path.exists():
+                raise
+
     def pump(self):
+        for item in [d for d in self.delayed if d[0] <= time.monotonic()]:
+            self.delayed.remove(item); self.answer(item[1], item[2])
         if not select.select([self.fd], [], [], .02)[0]:
             return
         chunk = os.read(self.fd, 65536)
@@ -87,17 +105,23 @@ bind -x '"\\C-x\\C-b": _test_snapshot'
             verb = match[3].decode()
             if verb == 'close-picker':
                 continue
+            if verb == 'compose-launch' and self.allow_launch:
+                # Never answered: Enter on a slow computer waits, and nothing starts.
+                self.launches.append(json.loads(base64.b64decode(match[4])))
+                continue
             assert verb in ('list-compose', 'list-sessions'), ('completion launched or switched the shell', verb, base64.b64decode(match[4]))
             args = json.loads(base64.b64decode(match[4]))
             args.setdefault('kind', 'sessions')
             self.requests.append((verb, args))
             host = args.get('compose', {}).get('host')
-            machine = 'remote-id' if host in ('Office', 'office', 'remote-id') else 'local-id'
+            machine = ('remote-id' if host in ('Office', 'office', 'remote-id')
+                       else 'slow-id' if host in ('Slow', 'slow', 'slow-id') else 'local-id')
             kind = args['kind']
             if kind == 'host':
-                rows = [dict(id='M2', label='M2', extra='local-id'), dict(id='Office', label='Office', extra='remote-id')]
+                rows = [dict(id='M2', label='M2', extra='local-id'), dict(id='Office', label='Office', extra='remote-id'),
+                        dict(id='Slow', label='Slow', extra='slow-id')]
             elif kind == 'folder':
-                path = '~/office-project' if machine == 'remote-id' else '~/mac-project'
+                path = {'remote-id': '~/office-project', 'slow-id': '~/slow-project'}.get(machine, '~/mac-project')
                 rows = [dict(id=path, label=path)]
             elif kind == 'agent':
                 rows = [dict(id='codex', label='Codex'), dict(id='claude', label='Claude Code')]
@@ -106,19 +130,11 @@ bind -x '"\\C-x\\C-b": _test_snapshot'
             else:
                 raise AssertionError(('unexpected completion scope', kind))
             catalog = dict(rows=rows, machine=machine, folder='~')
-            path = self.root / '.harness/shell-requests' / TOKEN / request_id
-            data = path.with_suffix('.json')
-            try:
-                if not path.exists():
-                    continue  # the user changed scope before this reply
-                data.write_text(json.dumps(catalog))
-                data.chmod(0o600)
-                fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
-                os.write(fd, ('HN:' + request_id + ':0:\n').encode())
-                os.close(fd)
-            except OSError:
-                if path.exists():
-                    raise
+            if machine == 'slow-id' and kind == 'folder':
+                # The picker re-sends the same id every second; self.answered queues it once.
+                self.delayed.append((time.monotonic() + 8, request_id, catalog))
+                continue
+            self.answer(request_id, catalog)
 
     def wait(self, predicate, label, seconds=6):
         end = time.monotonic() + seconds
@@ -216,6 +232,39 @@ def check(shell):
                         assert words[0] == 'codex' and '%gpt' in words, words
                     if original.startswith('claude'):
                         assert words == ['claude', '--prompt', ':literal', '@Office', '--', '@literal', ':literal'], words
+            # Enter on a computer that has not answered says what it waits for, within 1 s.
+            # (Both Slow journeys run before failing, so one red run shows both causes.)
+            problems = []
+            assert not s.launches, 'an earlier journey started an agent'
+            s.load('claude @Slow '); s.data = b''; s.wire = b''
+            s.allow_launch = True    # only this check may reach compose-launch
+            s.send('\r')
+            end = time.monotonic() + 1
+            while time.monotonic() < end and 'Starting on Slow… Ctrl-C to cancel' not in s.data.decode('utf-8', 'ignore'):
+                s.pump()
+            if 'Starting on Slow… Ctrl-C to cancel' not in s.data.decode('utf-8', 'ignore'):
+                problems.append(('Enter on claude @Slow drew no "Starting on Slow… Ctrl-C to cancel" within 1 s', s.data[-500:]))
+            s.send('\x03'); s.wait(lambda: b'READY> ' in s.data[-200:], 'Ctrl-C after Enter on Slow')
+            # The wait line is erased (its one row cleared) before the prompt comes back.
+            after = s.data.rsplit('Starting on Slow… Ctrl-C to cancel'.encode(), 1)[-1]
+            if b'\r\x1b[2K' not in after.split(b'READY> ', 1)[0]:
+                problems.append(('the wait line was not erased after Ctrl-C', after[-500:]))
+            s.allow_launch = False
+            if not (len(s.launches) == 1 and s.launches[0].get('host') == 'Slow'):
+                problems.append(('Enter did not ask for exactly one launch on Slow', s.launches))
+
+            # A computer whose folders take 8 s: the spinner keeps turning with no key pressed.
+            s.load('codex '); n = s.count(); start = len(s.requests)
+            s.host('Slow'); s.scope('folder', start, 'Slow')
+            s.data = b''
+            end = time.monotonic() + 2
+            while time.monotonic() < end:
+                s.pump()
+            glyphs = set(re.findall('[⠋⠙⠸⢰⣠⣄⡆⠇]', s.data.decode('utf-8', 'ignore')))
+            if len(glyphs) < 2:
+                problems.append(('the spinner did not turn', glyphs, s.data[-500:]))
+            s.send('\x1b'); s.wait(lambda: s.count() == n + 1, 'cancel slow folders')
+            assert not problems, problems
             assert b'No such widget' not in s.data, 'automatic completion displayed a missing ZLE widget error'
             print('PASS', shell, 'Ctrl-N agent -> folder -> different machine -> remote folder; same-machine aliases; Unicode; folder-first; native literals; Escape/Ctrl-C/backspace; no launch', flush=True)
         finally:

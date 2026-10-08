@@ -9,11 +9,13 @@ use std::time::SystemTime;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::Modifier;
+use ratatui::widgets::Widget;
 use unicode_width::UnicodeWidthStr;
 
 use super::{art, editor, file_style, fit, frame, home, icon, list, name_of, ops, put, shorten, tile, Entry, Look, TILE_H, TILE_W};
+use crate::buttons::{Answer, Button, Row};
 use crate::keys::Chord;
 
 /// The sidebar's width, and a column's (its separator in it).
@@ -65,13 +67,15 @@ enum Tool { Back, Forward, Columns, Icons, Path, Search }
 pub(super) enum DOut { None, Cancel, Open(PathBuf, bool) }
 
 /// Where a dialog's things are at a size: its sidebar, main area and bottom row.
+/// [bottom]: the buttons' row; [hint]: the box's last line, a blank row under the buttons — what
+/// was said, else the keys (as every dialog keeps its keys hint there, never on the buttons' row).
 #[derive(Clone, Copy, Debug)]
-struct Layout { side: Rect, main: Rect, bottom: u16 }
+struct Layout { side: Rect, main: Rect, bottom: u16, hint: u16 }
 
 fn layout(w: u16, h: u16) -> Layout {
     let side_w = SIDE_W.min(w / 4);
-    let body_h = h.saturating_sub(6);
-    Layout { side: Rect::new(1, 3, side_w, body_h), main: Rect::new(2 + side_w, 3, w.saturating_sub(3 + side_w), body_h), bottom: h.saturating_sub(2) }
+    let body_h = h.saturating_sub(8);
+    Layout { side: Rect::new(1, 3, side_w, body_h), main: Rect::new(2 + side_w, 3, w.saturating_sub(3 + side_w), body_h), bottom: h.saturating_sub(4), hint: h.saturating_sub(2) }
 }
 
 /// A history entry: the columns' folders and which one is active.
@@ -309,12 +313,20 @@ impl Dialog {
     }
 
     fn button_key(&mut self, k: Chord) -> DOut {
-        match k.code {
-            KeyCode::Left | KeyCode::Right => self.button ^= 1,
-            KeyCode::Enter => return if self.button == 1 { self.open(self.target()) } else { DOut::Cancel },
-            _ => {}
+        let mut row = self.row();
+        let out = row.key(k.code, k.mods);
+        self.button = row.chosen;
+        match out {
+            Answer::Chosen(1) => self.open(self.target()),
+            Answer::Chosen(_) | Answer::Cancel => DOut::Cancel,
+            Answer::Moved | Answer::Ignored => DOut::None,
         }
-        DOut::None
+    }
+
+    /// Cancel, Open — Open the one that has the keys until moved. No hint: the bottom row keeps its own.
+    fn row(&self) -> Row {
+        let button = |label: &str| Button { label: label.into(), key: None };
+        Row { buttons: vec![button("Cancel"), button("Open")], chosen: self.button, hint: String::new() }
     }
 
     fn column_key(&mut self, k: Chord) -> DOut {
@@ -421,15 +433,14 @@ impl Dialog {
         c.selected().filter(|e| !e.dir).map(|e| (c.dir.join(&e.name), e))
     }
 
-    /// The buttons at the right of the bottom row: Cancel, Open.
-    fn buttons(&self) -> [(u16, u16, &'static str); 2] {
-        let right = self.size.0.saturating_sub(2);
-        let open = "[ Open ]";
-        let cancel = "[ Cancel ]";
-        let ox = right - open.width() as u16;
-        let cx = ox - 2 - cancel.width() as u16;
-        [(cx, cx + cancel.width() as u16, cancel), (ox, right, open)]
+    /// The bottom row's buttons (Cancel, Open) at its right, inside the frame: for drawing and
+    /// clicks alike.
+    fn button_row(&self) -> Rect {
+        Rect::new(0, layout(self.size.0, self.size.1).bottom, self.size.0.saturating_sub(2), 1)
     }
+
+    /// Where Cancel and Open are.
+    fn buttons(&self) -> Vec<Rect> { self.row().areas(self.button_row()) }
 
     /// A click at (x, y), a [double] one opening what it is on.
     pub(super) fn click(&mut self, x: u16, y: u16, double: bool) -> DOut {
@@ -454,7 +465,7 @@ impl Dialog {
             return DOut::None;
         }
         if y == l.bottom {
-            match self.buttons().iter().position(|(a, z, _)| x >= *a && x < *z) { Some(0) => return DOut::Cancel, Some(_) => return self.open(self.target()), None => {} }
+            match self.row().click(self.button_row(), Position::new(x, y)) { Some(0) => return DOut::Cancel, Some(_) => return self.open(self.target()), None => {} }
             return DOut::None;
         }
         if contains(l.side, x, y) {
@@ -550,16 +561,12 @@ impl Dialog {
         self.draw_toolbar(buf, area, look);
         self.draw_sidebar(buf, area, l, look);
         match self.view { DView::Columns => self.draw_columns(buf, area, l, look), DView::Icons => self.draw_icons(buf, area, l, look) }
-        // The bottom row: what was said, else the keys; Cancel and Open.
-        let buttons = self.buttons();
-        let room = buttons[0].0.saturating_sub(3);
+        // Cancel and Open; under them, the last line: what was said, else the keys.
+        let room = area.width.saturating_sub(4);
         let (text, st) = match &self.message { Some(m) => (m.clone(), look.warn), None => ("Enter open · Esc cancel · Tab sidebar/columns/buttons · / search".to_string(), look.muted) };
-        put(buf, ox + 2, oy + l.bottom, room, &fit(&text, room as usize), st);
-        for (b, (a, _, label)) in buttons.iter().enumerate() {
-            let mut st = if b == 1 { look.mode.add_modifier(Modifier::BOLD) } else { look.text };
-            if self.focus == Focus::Buttons && self.button == b { st = st.add_modifier(Modifier::UNDERLINED | Modifier::BOLD) }
-            put(buf, ox + a, oy + l.bottom, label.width() as u16, label, st);
-        }
+        put(buf, ox + 2, oy + l.hint, room, &fit(&text, room as usize), st);
+        let row = self.button_row();
+        self.row().view(&crate::settings::chrome()).render(Rect { x: ox + row.x, y: oy + row.y, ..row }, buf);
         if let Some((items, sel)) = &self.popup {
             let (px, py, pw) = self.popup_at();
             let r = Rect::new(ox + px, oy + py, pw, items.len() as u16 + 2).intersection(area);
@@ -732,10 +739,30 @@ mod tests {
         assert!(lines[1].contains("◀ ▶") && lines[1].contains("Columns") && lines[1].contains("Icons") && lines[1].contains("app ▾") && lines[1].contains("⌕ Search"), "{}", lines[1]);
         assert!(t.contains("Favorites") && t.contains("Home") && t.contains("Locations") && t.contains("Computer"), "{t}");
         assert!(t.contains("[/] app") && t.contains("main.py") && t.contains("Python script") && t.contains("print('xin chào')"), "{t}");
-        assert!(lines[32].contains("[ Cancel ]") && lines[32].contains("[ Open ]"));
+        // The buttons' row, and under it — the box's last line — the keys.
+        assert!(lines[30].contains("[ Cancel ]") && lines[30].contains("[ Open ]") && !lines[30].contains("Enter open"), "{t}");
+        assert!(!lines[31].contains("Enter open") && lines[32].contains("Enter open · Esc cancel"), "a blank row, then the keys: {t}");
+        // Open is chosen even unfocused; Tab to the buttons, Left chooses Cancel, Enter cancels.
+        if !crate::theme::no_color() {
+            let c = crate::settings::chrome();
+            let area = Rect::new(0, 0, 130, 34);
+            let mut buf = Buffer::empty(area);
+            d.draw(&mut buf, area, &Look::default());
+            let (cx, ox) = (d.buttons()[0].x, d.buttons()[1].x);
+            assert_eq!(buf[(ox + 2, 30)].bg, c.selected.bg.unwrap());
+            assert_ne!(buf[(cx + 2, 30)].bg, c.selected.bg.unwrap());
+        }
+        d.focus = Focus::Columns;
+        d.key(k(KeyCode::Tab));
+        assert_eq!(d.focus, Focus::Buttons);
+        d.key(k(KeyCode::Left));
+        assert_eq!(d.button, 0);
+        assert_eq!(d.key(k(KeyCode::Enter)), DOut::Cancel);
+        d.key(k(KeyCode::Right));
+        assert_eq!(d.button, 1);
         // It fits a small window too.
         let small = text(&mut d, 90, 24);
-        assert!(small.lines().nth(22).unwrap().contains("[ Open ]") && small.contains("main.py"), "{small}");
+        assert!(small.lines().nth(20).unwrap().contains("[ Open ]") && small.contains("main.py"), "{small}");
     }
 
     #[test]
@@ -794,7 +821,7 @@ mod tests {
         d.key(k(KeyCode::Right));
         assert_eq!(d.key(k(KeyCode::Enter)), DOut::Open(s.0.join("me/app/main.py"), false));
         let mut e = s.dialog();
-        let (ox, ..) = e.buttons()[1];
+        let ox = e.buttons()[1].x;
         assert_eq!(e.click(ox + 1, layout(130, 34).bottom, false), DOut::Open(s.0.join("me"), true));
         // Recent: the latest first, once each, those still there.
         let recent = load_recent(&s.0.join("state/open-recent.json"));

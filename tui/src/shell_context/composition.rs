@@ -64,17 +64,11 @@ fn data(app: &mut App, request: &Request, rows: Vec<Row>, notice: String) {
             // therefore produce a different response for each query.
             items.revision = format!("{}:{}:{}", catalog.revision, catalog.scan_revision, args["query"].as_str().unwrap_or(""));
             if args["revision"].as_str() == Some(items.revision.as_str()) {
-                return reply_data(
-                    app,
-                    request,
-                    0,
-                    "",
-                    Some(json!({"unchanged":true,"revision":items.revision})),
-                );
+                return catalog_reply(app, request, json!({"unchanged":true,"revision":items.revision}));
             }
         }
     }
-    reply_data(app, request, 0, "", serde_json::to_value(items).ok());
+    if let Ok(data) = serde_json::to_value(items) { catalog_reply(app, request, data); }
 }
 
 fn folder_items(picker: &mut Picker, query: &str) -> crate::shell_picker::Items {

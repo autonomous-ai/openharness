@@ -125,7 +125,7 @@ def created(): return [p for p in state().get('created', []) if p['engine'] != '
 def window(): return hn('display', '-p', '#{window_id}')
 def new_tab():
     hn('workspace-menu', 'new-tab')
-    shows('What task should this agent work on?')
+    shows('What should it do?')
 def initial_gui():
     wait(lambda: hn('display', '-p', '#{window_panes}', ok=False) == '1', 'initial shell ready')
     shell = window()
@@ -213,7 +213,9 @@ try:
     snapshot('new-window-draft')
     print('PASS welcome: immediate first task, duplicate prevention, delayed placement and independent drafts', flush=True)
 
-    keys('Down'); shows('Search agents')
+    # Down reaches Agent (no chooser until it is entered: → opens it, Esc closes it there).
+    keys('Down', 'Right'); shows('Search agents')
+    keys('Escape'); wait(lambda: 'Search agents' not in screen(), 'Esc closes the chooser on Agent')
     keys('Up'); type_text('!'); shows('second window draft!')
     keys('BSpace')
     wait(lambda: 'second window draft!' not in screen(), 'Backspace edits the task after returning from Agent')
@@ -285,7 +287,7 @@ try:
     new_tab()
     type_text('Keep this task away from the terminal')
     click('Agent'); type_text('Terminal')
-    shows('No matches')
+    shows('Nothing matches')
     keys('Escape')
     click('New Terminal'); shows('Mock terminal (mock)')
     assert len(created()) == count + 1, 'New Terminal never starts a coding agent'

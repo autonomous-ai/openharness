@@ -98,6 +98,16 @@ impl Node {
 
     pub fn leaves(&self) -> Vec<u64> { self.walk(self.root).into_iter().map(|i| self.c[i].pane).collect() }
 
+    /// The pane right before [pane] (or after it) in the split it is directly in, when that split
+    /// is [dir] and the neighbour a pane, not a split of its own.
+    pub fn neighbour(&self, pane: u64, dir: Dir, before: bool) -> Option<u64> {
+        let i = self.find(pane)?;
+        let (p, _) = self.index_in_parent(i)?;
+        if self.c[p].dir != Some(dir) { return None }
+        let n = if before { self.prev(i)? } else { self.next(i)? };
+        self.is_pane(n).then(|| self.c[n].pane)
+    }
+
     /// The window's size in cells.
     pub fn size(&self) -> (u16, u16) { (self.c[self.root].sx as u16, self.c[self.root].sy as u16) }
 

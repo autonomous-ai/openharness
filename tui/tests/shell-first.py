@@ -161,14 +161,21 @@ def screen(): return tm('capture-pane','-p','-t','test',check=False)
 def finder_text():
     pane=hn('capture-pane','-p',check=False)
     start=pane.find('╭')
-    return pane[start:pane.find('╰',start)] if start>=0 else ''
+    if start>=0: return pane[start:pane.find('╰',start)]
+    # The composer has no box: its `›` query line, an `n/m ───` rule, the rows, then the keys line.
+    lines=pane.splitlines()
+    for i,line in enumerate(lines[:-1]):
+        if '›' in line and re.match(r'\s*\d+/\d+\b',lines[i+1]):
+            end=next((j for j in range(i+2,len(lines)) if 'esc back' in lines[j]),len(lines)-1)
+            return '\n'.join(lines[i:end+1])
+    return ''
 def finder_ready():
     return re.search(r'\d+/\d+',finder_text())
 def browsing(directory):
     # A recursive result already contains its descendants' names. Those names
     # alone do not prove Tab was handled or the destination's list was loaded.
     query=':~/'+directory.relative_to(BASE).as_posix()+'/'
-    return '> '+query+' ' in finder_text()
+    return '› '+query+' ' in finder_text()
 def prompt_ready():
     lines=[line.strip() for line in hn('capture-pane','-p',check=False).splitlines() if line.strip()]
     return bool(lines) and lines[-1]=='SHELL_READY>'
@@ -258,7 +265,7 @@ try:
         tm('send-keys','-t','test','-l','cd')
         # The temporary root name can also fuzzy-match "cd". The desired code
         # directory must rank first and open; the match count need not be one.
-        wait(lambda:finder_ready() and '> :cd ' in finder_text() and '~/project ü %/code' in finder_text() and re.search(r'\b[1-9]\d*/\d+',finder_text()),'fuzzy folder search without full spelling')
+        wait(lambda:finder_ready() and '› :cd ' in finder_text() and '~/project ü %/code' in finder_text() and re.search(r'\b[1-9]\d*/\d+',finder_text()),'fuzzy folder search without full spelling')
         keys('Tab')
         wait(lambda:browsing(PROJECT/'code') and 'cool-project/' in finder_text() and 'client 日本/' in finder_text(),'Tab browses code')
         tm('send-keys','-t','test','-l','clpj')
@@ -286,7 +293,7 @@ try:
         tm('send-keys','-t','test','-l','claude :')
         wait(finder_ready,'relative path folder picker')
         tm('send-keys','-t','test','-l','code/')
-        wait(lambda:'> :code/ ' in finder_text() and 'cool-project/' in finder_text() and 'client 日本/' in finder_text(),'relative code/ resolves against shell cwd')
+        wait(lambda:'› :code/ ' in finder_text() and 'cool-project/' in finder_text() and 'client 日本/' in finder_text(),'relative code/ resolves against shell cwd')
         tm('send-keys','-t','test','-l','missing/')
         wait(lambda:finder_ready() and ('unavailable' in finder_text() or 'Could not read' in finder_text()),'missing folder explains failure')
         assert re.search(r'\b0/0\b',finder_text()),screen()
@@ -306,9 +313,9 @@ try:
     if os.environ.get('HN_SHELL_TEST_GUI')=='1':
         def click_text(text):
             lines=screen().splitlines()
-            for y,line in ([(len(lines)-1,lines[-1])] if text in ('+','…') else enumerate(lines)):
+            for y,line in ([(len(lines)-1,lines[-1])] if text in ('+','⋮') else enumerate(lines)):
                 if text in line:
-                    x=line.index('  '+text+'  ')+2 if text in ('+','…') else line.index(text)
+                    x=line.index('  '+text+'  ')+2 if text in ('+','⋮') else line.index(text)
                     tm('send-keys','-t','test','-l',f'\x1b[<0;{x+1};{y+1}M\x1b[<0;{x+1};{y+1}m')
                     return
             raise AssertionError(('missing clickable text',text,screen()))
@@ -317,10 +324,10 @@ try:
         wait(lambda:'New Harness' in screen() and 'Task' in screen(),'footer + opens GUI composer')
         assert pane_count()==1 and hn('display-message','-p','#{window_id}').strip()==original_window
         keys('Escape');wait(prompt_ready,'GUI composer cancels back to original shell')
-        click_text('…');wait(lambda:'New Harness' in screen() and 'New Tab' in screen(),'workspace mouse menu')
+        click_text('⋮');wait(lambda:'New Harness' in screen() and 'New Tab' in screen(),'workspace mouse menu')
         click_text('New Harness');wait(lambda:'Task' in screen(),'menu New Harness opens GUI')
         keys('Escape');wait(prompt_ready,'menu composer cancels')
-        click_text('…');wait(lambda:'New Tab' in screen(),'workspace menu reopened')
+        click_text('⋮');wait(lambda:'New Tab' in screen(),'workspace menu reopened')
         click_text('New Tab');wait(lambda:'New Harness' in screen() and 'Task' in screen() and 'machines connected' in screen(),'mouse New Tab opens welcome composer')
         gui_window=hn('display-message','-p','#{window_id}').strip()
         assert gui_window!=original_window
@@ -331,7 +338,8 @@ try:
         start_window=hn('display-message','-p','#{window_id}').strip()
         keys('C-b','c')
         wait(lambda:finder_ready() and 'Claude Code' in screen(),'new keyboard tab opens agent picker',30)
-        assert 'Search agents' in screen() and '> &' not in screen(),screen()
+        assert 'Search agents' in screen() and '› &' not in screen(),screen()
+        for scope in ['@ computer',': project','% model','& agent']: assert scope in screen(),(scope,screen())
         tm('send-keys','-t','test','-l','cld')
         wait(lambda:finder_ready() and 'Claude Code' in screen() and re.search(r'\b1/\d+',screen()),'plain fuzzy agent search')
         keys('Enter')
@@ -379,7 +387,7 @@ try:
                 tm('send-keys','-t','test','-l',prefix)
                 wait(lambda:finder_ready() and expected in finder_text(),'automatic '+prefix+' selector')
                 keys('BSpace')
-                wait(lambda:not finder_ready() and '╭' not in hn('capture-pane','-p'),'erasing '+prefix+' closes suggestions instead of switching lists')
+                wait(lambda:not finder_ready(),'erasing '+prefix+' closes suggestions instead of switching lists')
                 assert 'Search sessions' not in hn('capture-pane','-p') and 'Search agents' not in hn('capture-pane','-p')
                 assert not (BASE/'fixture-agent.json').exists(),'deleting a selector launched the agent'
             # Print the draft as data to inspect every argument; no agent runs.
@@ -406,24 +414,24 @@ try:
             keys('C-n');wait(lambda:finder_ready() and 'Claude Code' in screen(),'Ctrl-N opens agents directly after folder')
             tm('send-keys','-t','test','-l','clau')
             wait(lambda:finder_ready() and 'Claude Code' in screen(),'Ctrl-N agent filter')
-            keys('Enter');wait(lambda:'SHELL_READY> claude' in hn('capture-pane','-p') and '╭' not in hn('capture-pane','-p'),'agent inserted into draft')
+            keys('Enter');wait(lambda:'SHELL_READY> claude' in hn('capture-pane','-p') and not finder_ready(),'agent inserted into draft')
             assert not (BASE/'fixture-agent.json').exists(),'selection launched agent'
             tm('send-keys','-t','test','-l','%');wait(finder_ready,'automatic model list');tm('send-keys','-t','test','-l','son')
             wait(lambda:finder_ready() and 'sonnet' in screen(),'native model autocomplete')
-            keys('Enter');wait(lambda:'%sonnet' in hn('capture-pane','-p') and '╭' not in hn('capture-pane','-p'),'model inserted after folder')
+            keys('Enter');wait(lambda:'%sonnet' in hn('capture-pane','-p') and not finder_ready(),'model inserted after folder')
             tm('send-keys','-t','test','-l','@')
             wait(finder_ready,'automatic computer list')
-            keys('Escape');wait(lambda:'╭' not in hn('capture-pane','-p'),'automatic computer choice cancelled')
+            keys('Escape');wait(lambda:not finder_ready(),'automatic computer choice cancelled')
             keys('BSpace')
             tm('send-keys','-t','test','-l',':')
             wait(lambda:finder_ready() and 'project ü' in screen(),'folder list')
             tm('send-keys','-t','test','-l','project ü')
-            keys('Enter');wait(lambda:'╭' not in hn('capture-pane','-p') and 'project ü' in screen(),'folder inserted and quoted')
+            keys('Enter');wait(lambda:not finder_ready() and 'project ü' in screen(),'folder inserted and quoted')
             assert not (BASE/'fixture-agent.json').exists()
             keys('C-p');wait(finder_ready,'continue composing');keys('Escape')
-            wait(lambda:'╭' not in hn('capture-pane','-p'),'composer cancellation')
+            wait(lambda:not finder_ready(),'composer cancellation')
             keys('C-n');wait(lambda:finder_ready() and 'Claude Code' in screen(),'Ctrl-N reopens agents in composed draft');keys('Escape')
-            wait(lambda:'╭' not in hn('capture-pane','-p'),'Ctrl-N cancellation preserves composed draft')
+            wait(lambda:not finder_ready(),'Ctrl-N cancellation preserves composed draft')
             assert not (BASE/'fixture-agent.json').exists()
             keys('Enter')
         else:
@@ -583,7 +591,7 @@ try:
     wait(lambda:'Use agent default' in screen(),'model scope in shared finder')
     assert 'SHORTCUT_DRAFT_LRIGHT' not in screen(),'opening the finder executed the draft'
     keys('Enter')
-    wait(lambda:'SHELL_READY> '+draft in hn('capture-pane','-p') and '╭' not in hn('capture-pane','-p'),'model selection preserves draft')
+    wait(lambda:'SHELL_READY> '+draft in hn('capture-pane','-p') and not finder_ready(),'model selection preserves draft')
     tm('send-keys','-t','test','-l','M');keys('Enter')
     wait(lambda:'SHORTCUT_DRAFT_LMRIGHT' in screen(),'model selection preserves cursor')
     # Simulate a terminal reporting Cmd-P via the Kitty protocol, not a claim
@@ -594,7 +602,7 @@ try:
     tm('send-keys','-t','test','-l','@')
     wait(lambda:'this computer' in screen(),'computer scope in shared finder')
     keys('Enter')
-    wait(lambda:"SHELL_READY> printf 'CMD_PICKER_" in hn('capture-pane','-p') and '╭' not in hn('capture-pane','-p'),'computer selection preserves draft')
+    wait(lambda:"SHELL_READY> printf 'CMD_PICKER_" in hn('capture-pane','-p') and not finder_ready(),'computer selection preserves draft')
     assert 'CMD_PICKER_OK' not in screen()
     keys('Enter');wait(lambda:'CMD_PICKER_OK' in screen(),'computer shortcut returns usable draft')
     keys('C-p');wait(finder_ready,'scope-switch cancellation')
