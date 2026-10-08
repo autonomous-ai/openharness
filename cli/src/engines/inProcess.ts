@@ -27,6 +27,8 @@ const MODULES = {
   /** Their pane and dialog readers, the twelve in one: lib/legacyScreen.ts with lib/legacyPane.ts,
    *  lib/questionPane.ts and the eight `askQuestion.ts`. A pane is read on every poll of one of their sessions. */
   screens: () => import('../lib/legacyScreen.js'),
+  /** Their hook installers, eleven in one file (lib/hooks.ts): run once, as the core starts. */
+  hooks: () => import('../lib/hooks.js'),
 }
 export type InProcessModules = { [Name in keyof typeof MODULES]: Awaited<ReturnType<(typeof MODULES)[Name]>> }
 

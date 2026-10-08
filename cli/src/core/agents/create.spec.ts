@@ -13,7 +13,6 @@ import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { buildGridEngineLaunch } from '../../lib/gridLaunch.js'
 import { engineHooks } from '../../engines/hooks.js'
-import { installOpencodePlugin } from '../../lib/hooks.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/external.js'
 import { clearPaneRemainOnExit } from '../../lib/tmux.js'
@@ -65,7 +64,6 @@ vi.mock('../../engines/hooks.js', async (real) => {
   const actual = await real<typeof import('../../engines/hooks.js')>()
   return { ...actual, engineHooks: { ...actual.engineHooks, codex: { ...actual.engineHooks.codex, installIn: vi.fn() } } }
 })
-vi.mock('../../lib/hooks.js', async (real) => ({ ...await real<object>(), installOpencodePlugin: vi.fn() }))
 vi.mock('../../lib/sessionSearch/external.js', async (real) => ({ ...await real<object>(), stopSessionOwner: vi.fn(async () => true) }))
 vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), clearPaneRemainOnExit: vi.fn(async () => {}) }))
 vi.mock('../../lib/tmuxVersion.js', async (real) => ({ ...await real<object>(), tmuxSupportsSessionEnv: vi.fn(async () => true) }))
@@ -101,6 +99,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     prepareApiTools: vi.fn(),
     hookPort: 4242,
     hooksDisabled: false,
+    installOpencodePlugin: vi.fn(async () => true),
     gridLaunchMachine: vi.fn(() => ({}) as never),
     terminalHintMachineName: () => 'this-mac',
     blocksFolder: vi.fn(() => false),
@@ -307,13 +306,22 @@ describe('creating an agent', () => {
       await on.create(request({ engine: 'codex', codexHome: '/codex-work' }))
       await on.create(request({ engine: 'opencode' }))
       expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/codex-work')
-      expect(installOpencodePlugin).toHaveBeenCalledWith(4242)
+      expect(on.deps.installOpencodePlugin).toHaveBeenCalledWith(4242)
       expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ env: { CODEX_HOME: '/codex-work' }, codexHome: '/codex-work' })
       const off = setup({ hooksDisabled: true })
       await off.create(request({ engine: 'codex', codexHome: '/codex-work' }))
       await off.create(request({ engine: 'opencode' }))
       expect(engineHooks.codex.installIn).toHaveBeenCalledTimes(1)
-      expect(installOpencodePlugin).toHaveBeenCalledTimes(1)
+      expect(off.deps.installOpencodePlugin).not.toHaveBeenCalled()
+    })
+
+    it('refuses an OpenCode create whose plugin installer could not be loaded, before any pane opens', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const t = setup({ installOpencodePlugin: vi.fn(async () => false) })
+      expect(await t.create(request({ engine: 'opencode' }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s plugin installer could not be loaded' })
+      expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · OpenCode\'s plugin installer could not be loaded')
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+      warn.mockRestore()
     })
 
     it('opens as a named agent, with a first prompt, and does not install an engine with a path override', async () => {

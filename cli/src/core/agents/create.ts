@@ -34,7 +34,6 @@ import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/h
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { folderTrust } from '../../engines/launchPrep.js'
-import { installOpencodePlugin } from '../../lib/hooks.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/external.js'
@@ -68,6 +67,9 @@ export interface CreateAgentDeps {
   hookPort: number
   /** Whether engine hooks are installed at all (DISABLE_HOOK_INSTALL). */
   hooksDisabled: boolean
+  /** OpenCode's plugin, installed again before an OpenCode spawn (core/engines/hooks.ts
+   *  `installOpencodePluginBeforeSpawn`): false when the other engines' installers could not be loaded. */
+  installOpencodePlugin: (port: number) => Promise<boolean>
   gridLaunchMachine: () => GridLaunchMachine
   terminalHintMachineName: () => string
   /** Whether a folder is being purged (PurgeAgentService.blocksFolder). */
@@ -80,7 +82,7 @@ export interface CreateAgentDeps {
 
 export function createAgentCreator({
   tmuxBackend, registry, adoptableSession, heldBy, takeOverWhenIdle, watchNewPane, announceSession, attachDsh,
-  prepareApiTools, hookPort, hooksDisabled, gridLaunchMachine, terminalHintMachineName, blocksFolder, gridSetup,
+  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, terminalHintMachineName, blocksFolder, gridSetup,
   privateGridName,
 }: CreateAgentDeps) {
   const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, scmLaunchRecord }) => {
@@ -236,7 +238,13 @@ export function createAgentCreator({
     if (codexHome && !hooksDisabled) engineHooks.codex.installIn(hookPort, codexHome)
     // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
     // not discover our old server plugin; the cached version probe changes with the executable.
-    if (engine === 'opencode' && !hooksDisabled) installOpencodePlugin(hookPort)
+    // Its installer is loaded with the other engines' (engines/inProcess.ts): one that could not be loaded
+    // refuses the create, since an OpenCode with no plugin never tells the daemon its session.
+    if (engine === 'opencode' && !hooksDisabled && !await installOpencodePlugin(hookPort)) {
+      const detail = 'OpenCode\'s plugin installer could not be loaded'
+      console.warn(`[agent] create opencode refused · ${detail}`)
+      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail }
+    }
     // Do not start a second interactive login shell merely to ask whether the engine is installed.
     // The pane's own shell performs the same check before exec, and installs only when necessary.
     // This removes ~1s of shell startup from the click-to-terminal critical path.

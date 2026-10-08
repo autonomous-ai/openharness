@@ -87,11 +87,14 @@ describe('the lean bundle a release carries', () => {
     }
   })
 
-  it('leaves the other engines\' pane readers out of the core until one of their sessions needs them', () => {
+  it.each([
+    // Each a string its module alone holds: lib/questionPane.ts's, and lib/hooks.ts's (its Amp plugin's).
+    ['pane readers', 'legacyScreen', 'Native screen reader must be injected'],
+    ['hook installers', 'hooks', 'Mirrors this Amp thread to the machine adapter'],
+  ])('leaves the other engines\' %s out of the core until it needs them', (_, module, marker) => {
     // engines/inProcess.ts imports them (docs/design/2026-10-08-other-engines-out-of-core.md): a file of the
-    // core's own, which Node reads only then. The string is lib/questionPane.ts's alone.
-    const marker = 'Native screen reader must be injected'
-    expect([...files.keys()].filter((name) => name.startsWith('core-legacyScreen-'))).toHaveLength(1)
+    // core's own, which Node reads only then.
+    expect([...files.keys()].filter((name) => name.startsWith(`core-${module}-`))).toHaveLength(1)
     expect([...files].some(([name, code]) => name.startsWith('core-') && code.includes(marker))).toBe(true)
     expect([...loads('core')].filter((name) => files.get(name)!.includes(marker))).toEqual([])
   })
