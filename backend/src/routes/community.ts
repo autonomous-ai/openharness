@@ -3,38 +3,47 @@ import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
 import { parseAutonomousEnvironment } from '../lib/autonomousEnvironment.js'
 import { communityStarters } from '../lib/communityAccess.js'
+import { communityCategories, communityEngines, communityHarnessIds, communityHarnessMarkers, communityLimits, communityPathPattern, communityReservedName } from '../lib/communityContract.js'
 import { validateBody, validateParams, validateQuery } from '../middlewares/validation.js'
 import { sendError, sendSuccess } from '../utils/response.js'
 import { ValidationError } from '../errors/index.js'
 
 const identifier = z.string().regex(/^[a-z0-9-]{1,80}$/)
+
+/** A stored cover's bytes and type, or null unless its data URL holds the image it claims. */
+export function coverImage(value: string): { type: string; bytes: Buffer } | null {
+  const match = value.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/)
+  if (!match) return null
+  const bytes = Buffer.from(match[2], 'base64')
+  const valid = match[1] === 'png' ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    : match[1] === 'jpeg' ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
+    : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
+  return valid ? { type: `image/${match[1]}`, bytes } : null
+}
+
+/** Readers get a cover's address, never its bytes: a feed page would otherwise carry every image inline. */
+function withCoverPath<T extends { id: string; cover: string | null }>(row: T): Omit<T, 'cover'> & { cover?: string } {
+  const { cover, ...rest } = row
+  return { ...rest, ...(cover ? { cover: `/api/community/harnesses/${row.id}/cover` } : {}) }
+}
 const params = z.object({ id: identifier })
 const file = z.object({
-  path: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,179}$/).refine(path =>
-    !path.split('/').some(part => !part || part.startsWith('.') ||
-      /^(?:harness\.json|AGENTS\.md|CLAUDE\.md|SESSION\.md|LICENSE|OPEN-HARNESS\.json|README\.md|CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i.test(part)), 'Use a relative project path, not a reserved bundle file.'),
-  content: z.string().max(3_000_000),
+  path: z.string().regex(communityPathPattern).refine(path =>
+    !path.split('/').some(part => !part || part.startsWith('.') || communityReservedName.test(part)), 'Use a relative project path, not a reserved bundle file.'),
+  content: z.string().max(communityLimits.fileChars),
   encoding: z.literal('base64').optional(),
 }).strict()
 
 export const publicationSchema = z.object({
   title: z.string().trim().min(1).max(100),
   description: z.string().trim().min(1).max(300),
-  category: z.enum(['Apps', 'Games', 'Motion', 'Music', 'Design', 'Data', 'Documents', 'Experiments']),
-  engine: z.enum(['Codex', 'Claude Code', 'OpenCode', 'pi']),
-  harnessId: z.enum(["autonomous/blender", "autonomous/marp", "autonomous/typst", "autonomous/circuitjs", "autonomous/godogen", "autonomous/jev-sheets", "autonomous/mujoco", "autonomous/rdkit", "autonomous/strudel"]).optional(),
-  files: z.array(file).min(1).max(30),
+  category: z.enum(communityCategories),
+  engine: z.enum(communityEngines),
+  harnessId: z.enum(communityHarnessIds).optional(),
+  files: z.array(file).min(1).max(communityLimits.files),
   viewerPath: z.string().max(180),
-  conversation: z.array(z.object({ role: z.enum(['user', 'assistant', 'tool']), text: z.string().min(1).max(12_000) }).strict()).min(1).max(80),
-  cover: z.string().max(350_000).optional().refine(value => {
-    if (!value) return true
-    const match = value.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/)
-    if (!match) return false
-    const bytes = Buffer.from(match[2], 'base64')
-    return match[1] === 'png' ? bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-      : match[1] === 'jpeg' ? bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255
-      : bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP'
-  }, 'Use a PNG, JPEG, or WebP cover.'),
+  conversation: z.array(z.object({ role: z.enum(['user', 'assistant', 'tool']), text: z.string().min(1).max(communityLimits.turnChars) }).strict()).min(1).max(communityLimits.turns),
+  cover: z.string().max(communityLimits.coverChars).optional().refine(value => !value || !!coverImage(value), 'Use a PNG, JPEG, or WebP cover.'),
   forkedFrom: identifier.optional(),
   clientId: z.string().uuid().optional(),
   license: z.literal('MIT'),
@@ -49,9 +58,9 @@ export const publicationSchema = z.object({
     ctx.addIssue({ code: 'custom', message: 'Project paths must be unique.' })
   if (!value.viewerPath.endsWith('.html') || !value.files.some(f => f.path === value.viewerPath && !f.encoding))
     ctx.addIssue({ code: 'custom', message: 'Choose an included HTML file as the viewer.' })
-  const marker = value.harnessId ? {"autonomous/blender": "scenes/hello.py", "autonomous/marp": "deck.md", "autonomous/typst": "main.typ", "autonomous/circuitjs": "circuit.txt", "autonomous/godogen": "studio.json", "autonomous/jev-sheets": "sheet.json", "autonomous/mujoco": "sim/hello.py", "autonomous/rdkit": "molecules/hello.py", "autonomous/strudel": "track.strudel"}[value.harnessId] : undefined
+  const marker = value.harnessId ? communityHarnessMarkers[value.harnessId] : undefined
   if (marker && !value.files.some(file => file.path === marker && !file.encoding)) ctx.addIssue({ code: 'custom', message: 'Include the harness project source.' })
-  if (Buffer.byteLength(JSON.stringify(value)) > 6_000_000)
+  if (Buffer.byteLength(JSON.stringify(value)) > communityLimits.snapshotBytes)
     ctx.addIssue({ code: 'custom', message: 'Keep the published snapshot under 6 MB.' })
 })
 
@@ -63,6 +72,22 @@ function environment(req: FastifyRequest): string {
 async function authorName(userId: string): Promise<string> {
   const user = await prisma.user.findUnique({ where: { id: userId }, select: { name: true } })
   return user?.name?.trim().slice(0, 80) || 'Harness user'
+}
+
+type Publication = NonNullable<Awaited<ReturnType<typeof publication>>>
+
+async function socialState(post: Publication, autonomousEnv: string, userId: string | undefined) {
+  const harnessId = post.id
+  const [likes, liked, comments, follow] = await Promise.all([
+    prisma.communityLike.count({ where: { autonomousEnv, harnessId } }),
+    userId ? prisma.communityLike.findUnique({ where: { autonomousEnv_harnessId_userId: { autonomousEnv, harnessId, userId } } }) : null,
+    prisma.communityComment.findMany({ where: { autonomousEnv, harnessId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100 }),
+    userId ? prisma.communityFollow.findUnique({ where: { autonomousEnv_authorId_userId: { autonomousEnv, authorId: post.authorId, userId } } }) : null,
+  ])
+  return {
+    likes, liked: !!liked, following: !!follow, signedIn: !!userId, mine: post.authorId === userId,
+    comments: comments.reverse().map(row => ({ id: row.id, body: row.body, authorName: row.authorName, createdAt: row.createdAt, parentId: row.parentId, parentAuthorName: row.parentAuthorName, creator: row.userId === post.authorId, mine: row.userId === userId || post.authorId === userId })),
+  }
 }
 
 async function publication(id: string, autonomousEnv: string) {
@@ -80,36 +105,48 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
     const follows = req.user ? await prisma.communityFollow.findMany({ where: { autonomousEnv, userId: req.user.sub }, select: { authorId: true } }) : []
     const rows = await prisma.communityHarness.findMany({
       where: { autonomousEnv, deletedAt: null, ...(req.query.following === 'true' ? { authorId: { in: follows.map(row => row.authorId) } } : {}), ...(req.query.mine === 'true' ? { authorId: req.user!.sub } : {}) },
-      select: { id: true, title: true, description: true, category: true, engine: true, harnessId: true, authorId: true, authorName: true, cover: true, forkedFrom: true, createdAt: true },
+      select: { id: true, title: true, description: true, category: true, engine: true, harnessId: true, authorId: true, authorName: true, forkedFrom: true, createdAt: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 31,
       ...(req.query.cursor ? { cursor: { id: req.query.cursor }, skip: 1 } : {}),
     })
-    const ids = [...rows.slice(0, 30).map(row => row.id), ...communityStarters]
-    const [likes, comments, liked] = await Promise.all([
+    const page = rows.slice(0, 30), ids = [...page.map(row => row.id), ...communityStarters]
+    const [likes, comments, liked, covered] = await Promise.all([
       prisma.communityLike.groupBy({ by: ['harnessId'], where: { autonomousEnv, harnessId: { in: ids } }, _count: { _all: true } }),
       prisma.communityComment.groupBy({ by: ['harnessId'], where: { autonomousEnv, harnessId: { in: ids } }, _count: { _all: true } }),
       req.user ? prisma.communityLike.findMany({ where: { autonomousEnv, userId: req.user.sub, harnessId: { in: ids } }, select: { harnessId: true } }) : [],
+      // Which have a cover, without reading one: a page of them is megabytes of base64.
+      prisma.communityHarness.findMany({ where: { id: { in: page.map(row => row.id) }, cover: { isSet: true, not: null } }, select: { id: true } }),
     ])
+    const withCover = new Set(covered.map(row => row.id))
     const stats = Object.fromEntries(ids.map(id => [id, { likes: likes.find(row => row.harnessId === id)?._count._all ?? 0, comments: comments.find(row => row.harnessId === id)?._count._all ?? 0, liked: liked.some(row => row.harnessId === id) }]))
-    sendSuccess(reply, { harnesses: rows.slice(0, 30), stats, signedIn: !!req.user, nextCursor: rows.length > 30 ? rows[29].id : null, following: follows.map(row => row.authorId) })
+    sendSuccess(reply, { harnesses: page.map(row => withCoverPath({ ...row, cover: withCover.has(row.id) ? 'set' : null })), stats, signedIn: !!req.user, nextCursor: rows.length > 30 ? rows[29].id : null, following: follows.map(row => row.authorId) })
   })
 
   app.get<{ Params: z.infer<typeof params> }>('/api/community/harnesses/:id', { preHandler: validateParams(params) }, async (req, reply) => {
     const autonomousEnv = environment(req), harnessId = req.params.id
     const post = await publication(harnessId, autonomousEnv)
     if (!post) return sendError(reply, 'This harness is unavailable.', 'NOT_FOUND', 404)
-    const userId = req.user?.sub
-    const [likes, liked, comments, follow] = await Promise.all([
-      prisma.communityLike.count({ where: { autonomousEnv, harnessId } }),
-      userId ? prisma.communityLike.findUnique({ where: { autonomousEnv_harnessId_userId: { autonomousEnv, harnessId, userId } } }) : null,
-      prisma.communityComment.findMany({ where: { autonomousEnv, harnessId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 100 }),
-      userId ? prisma.communityFollow.findUnique({ where: { autonomousEnv_authorId_userId: { autonomousEnv, authorId: post.authorId, userId } } }) : null,
-    ])
     sendSuccess(reply, {
-      harness: communityStarters.has(harnessId) ? null : post,
-      social: { likes, liked: !!liked, following: !!follow, signedIn: !!userId, mine: post.authorId === userId,
-        comments: comments.reverse().map(row => ({ id: row.id, body: row.body, authorName: row.authorName, createdAt: row.createdAt, parentId: row.parentId, parentAuthorName: row.parentAuthorName, creator: row.userId === post.authorId, mine: row.userId === userId || post.authorId === userId })) },
+      // A starter's files are the website's own; only a publication is stored here.
+      harness: 'title' in post ? withCoverPath(post) : null,
+      social: await socialState(post, autonomousEnv, req.user?.sub),
     })
+  })
+
+  // What a reader's page refreshes: the publication itself never changes after it is published.
+  app.get<{ Params: z.infer<typeof params> }>('/api/community/harnesses/:id/social', { preHandler: validateParams(params) }, async (req, reply) => {
+    const autonomousEnv = environment(req)
+    const post = await publication(req.params.id, autonomousEnv)
+    if (!post) return sendError(reply, 'This harness is unavailable.', 'NOT_FOUND', 404)
+    sendSuccess(reply, { social: await socialState(post, autonomousEnv, req.user?.sub) })
+  })
+
+  // Read by an <img>, which sends no environment header: a publication id is a UUID, unique across both.
+  app.get<{ Params: z.infer<typeof params> }>('/api/community/harnesses/:id/cover', { preHandler: validateParams(params) }, async (req, reply) => {
+    const post = await prisma.communityHarness.findFirst({ where: { id: req.params.id, deletedAt: null }, select: { cover: true } })
+    const image = post?.cover ? coverImage(post.cover) : null
+    if (!image) return sendError(reply, 'This cover is unavailable.', 'NOT_FOUND', 404)
+    reply.header('Content-Type', image.type).header('X-Content-Type-Options', 'nosniff').send(image.bytes)
   })
 
   app.post<{ Body: z.infer<typeof publicationSchema> }>('/api/community/harnesses', { bodyLimit: 6_100_000, preHandler: validateBody(publicationSchema) }, async (req, reply) => {

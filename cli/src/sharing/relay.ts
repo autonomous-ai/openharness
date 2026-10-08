@@ -49,7 +49,13 @@ export class HarnessShareRelay {
           if (!settled) reject(new Error(reason.toString() || 'The owner’s machine is offline.'))
           if (!detached) onClosed(code === 4403 ? 4403 : 1012, reason.toString() || 'Owner disconnected')
         })
-        ws.on('open', () => { heartbeat = watchSocketLiveness(ws, { peerGivesUpAfterMs: BACKEND_IDLE_DEADLINE_MS }) })
+        // Without onIdle this closed the shared harness as a bare `1012 Owner disconnected` with
+        // nothing in the log to say the watcher was the one that gave up.
+        ws.on('open', () => { heartbeat = watchSocketLiveness(ws, {
+          onIdle: (idleMs) => console.log(`[sharing] ${machineId.slice(0, 8)} no traffic for ${Math.round(idleMs / 1000)}s — terminating`),
+          onWake: (sleptMs, givingUp) => console.log(`[sharing] ${machineId.slice(0, 8)} woke after ${Math.round(sleptMs / 1000)}s asleep — ${givingUp ? 'giving up on the link' : 're-probing'}`),
+          peerGivesUpAfterMs: BACKEND_IDLE_DEADLINE_MS,
+        }) })
         ws.on('message', raw => {
           try {
             const frame = JSON.parse(raw.toString()) as { type: string; payload: Record<string, unknown> }

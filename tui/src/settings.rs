@@ -3,8 +3,10 @@
 //! section. The list is on the left; the right is one preview of the whole look (every section at
 //! once), which only changes where the row under the cursor would change it.
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Clear, Fill, StatefulWidget, Widget};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::App;
@@ -18,6 +20,7 @@ use crate::theme;
 static FZF_LISTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_fzf_lists(on: bool) { FZF_LISTS.store(on, std::sync::atomic::Ordering::Relaxed) }
+pub fn fzf_lists() -> bool { FZF_LISTS.load(std::sync::atomic::Ordering::Relaxed) }
 
 /// The lists drawn as this panel rather than as fzf's full-screen list: every one, unless
 /// `@hn-lists fzf` asks for fzf's.
@@ -277,13 +280,16 @@ fn rebind(app: &mut App, command: &str, title: &str, own: bool, chord: crate::ke
 }
 
 /// The panel's colours, shared with the New Harness form so the two read as one component:
-/// its surface, muted and accent text, and the backdrop laid over the panes behind it.
-pub struct Chrome { pub base: Style, pub muted: Style, pub accent: Style, pub backdrop: Style, pub selected: Style }
+/// its surface, muted and accent text, what went wrong, and the backdrop laid over the panes behind it.
+pub struct Chrome { pub base: Style, pub muted: Style, pub accent: Style, pub backdrop: Style, pub selected: Style, pub danger: Style }
 
-pub fn chrome() -> Chrome {
-    if theme::no_color() {
+pub fn chrome() -> Chrome { chrome_with(theme::no_color()) }
+
+/// [chrome] with NO_COLOR decided by the caller, not by the environment.
+pub fn chrome_with(no_color: bool) -> Chrome {
+    if no_color {
         let base = Style::default();
-        return Chrome { base, muted: base.add_modifier(Modifier::DIM), accent: base.add_modifier(Modifier::BOLD), backdrop: base.add_modifier(Modifier::DIM), selected: base.add_modifier(Modifier::REVERSED) };
+        return Chrome { base, muted: base.add_modifier(Modifier::DIM), accent: base.add_modifier(Modifier::BOLD), backdrop: base.add_modifier(Modifier::DIM), selected: base.add_modifier(Modifier::REVERSED), danger: base.add_modifier(Modifier::BOLD) };
     }
     chrome_for(theme::pane_palette())
 }
@@ -307,7 +313,7 @@ pub fn chrome_for(pal: theme::PanePalette) -> Chrome {
     let panel_fit = theme::depth_fit(panel);
     let lifted = [10, 18, 28, 40].iter().map(|a| theme::depth_fit(mix(panel, fg, *a))).find(|c| *c != panel_fit).unwrap_or(panel_fit);
     let selected = base.add_modifier(Modifier::BOLD).bg(lifted);
-    Chrome { base, muted, accent, backdrop, selected }
+    Chrome { base, muted, accent, backdrop, selected, danger: base.patch(theme::fg(theme::DANGER)) }
 }
 
 /// A pane you are not in, a little quieter (`@hn-dim on`): every cell's text moved toward its
@@ -333,21 +339,32 @@ fn mix(a: Color, b: Color, amount: u16) -> Color {
     Color::Rgb(c(ar, br), c(ag, bg), c(ab, bb))
 }
 
-/// Dim every cell of [area] under the panel, keeping what is drawn there visible.
+/// Dim every cell of [area] under the panel, keeping what is drawn there visible: a borderless
+/// `Block` in [style].
 pub fn backdrop(buf: &mut Buffer, area: Rect, style: Style) {
     crate::term_out::clear_extras(area);
-    for y in area.y..area.bottom() { for x in area.x..area.right() { if let Some(c) = buf.cell_mut((x, y)) { c.set_style(style); } } }
+    Block::new().style(style).render(area, buf);
 }
 
-/// Fill [r] with the panel's surface — no border: the surface against the backdrop is the edge.
-pub fn fill(buf: &mut Buffer, r: Rect, base: Style) {
-    crate::term_out::clear_extras(r);
-    for y in r.y..r.bottom() { for x in r.x..r.right() { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(base); } } }
+/// The panel's surface — no border: the surface against the backdrop is the edge. What was drawn
+/// under it is cleared first (ratatui's popup way), its underlines and links too.
+pub struct Surface(pub Style);
+
+impl Widget for Surface {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        crate::term_out::clear_extras(area);
+        Clear.render(area, buf);
+        Block::new().style(self.0).render(area, buf);
+    }
 }
 
-/// [text] at (x, y) in at most [width] columns, cut with an ellipsis. Returns the columns used.
-pub fn put(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) -> u16 {
-    if width == 0 { return 0 }
+/// Fill [r] with the panel's surface.
+pub fn fill(buf: &mut Buffer, r: Rect, base: Style) { Surface(base).render(r, buf) }
+
+/// [text] cut to [width] columns with an ellipsis (ratatui cuts without one), and the columns it
+/// takes.
+pub fn fit(text: &str, width: u16) -> (String, u16) {
+    if width == 0 { return (String::new(), 0) }
     let limit = width as usize;
     let cut = text.width() > limit;
     let (mut out, mut used) = (String::new(), 0);
@@ -358,8 +375,126 @@ pub fn put(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Styl
         used += w;
     }
     if cut { out.push('…'); used += 1 }
-    buf.set_stringn(x, y, out, limit, style);
-    used as u16
+    (out, used as u16)
+}
+
+/// [text] at (x, y) in at most [width] columns, cut with an ellipsis: a `Span` in [style] (only
+/// its own cells take the style, as a `Line`'s would take the whole width). Returns the columns
+/// used.
+pub fn put(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) -> u16 {
+    if width == 0 { return 0 }
+    let (out, used) = fit(text, width);
+    Span::styled(out, style).render(Rect::new(x, y, width, 1), buf);
+    used
+}
+
+/// The parts of [ghost] (`   `-separated: `@ computer   : project`) that fit [w] whole, joined by
+/// `   `. A ghost without separators is returned as is (the caller cuts it with `…`).
+pub fn whole_parts(ghost: &str, w: u16) -> String {
+    if !ghost.contains("   ") { return ghost.to_string() }
+    let mut out = String::new();
+    for part in ghost.split("   ") {
+        let next = if out.is_empty() { part.to_string() } else { format!("{out}   {part}") };
+        if next.width() > w as usize && !out.is_empty() { break }
+        out = next;
+    }
+    out
+}
+
+/// `› query` (or the ghost, muted, when empty) across its line. Rendered by reference, it leaves
+/// the text cursor in [cursor] and the columns the query or ghost took in [used] (the launcher puts
+/// its tabs after it). A query wider than the line scrolls: it is shown from [Picker::xoffset],
+/// moved only as far as keeps the cursor in view, so moving the cursor moves the cursor, not the
+/// text (fzf's way; a click maps through it too).
+pub struct QueryLine<'a> {
+    picker: &'a Picker,
+    ghost: &'a str,
+    chrome: &'a Chrome,
+    pub cursor: Position,
+    pub used: u16,
+}
+
+impl<'a> QueryLine<'a> {
+    pub fn new(picker: &'a Picker, ghost: &'a str, chrome: &'a Chrome) -> Self {
+        QueryLine { picker, ghost, chrome, cursor: Position::default(), used: 0 }
+    }
+}
+
+impl Widget for &mut QueryLine<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let (picker, c) = (self.picker, self.chrome);
+        let [mark, text] = Layout::horizontal([Constraint::Length(2), Constraint::Fill(1)]).areas(area);
+        Span::styled("›", c.accent).render(mark, buf);
+        let room = text.width;
+        // (Where the text starts, past the mark's two columns — even on a line too narrow for any.)
+        let start = area.x + 2;
+        picker.prompt_at.set((area.y, start));
+        let at = |cols: usize| Position::new((start + cols as u16).min(area.right()), area.y);
+        if picker.query.is_empty() {
+            picker.xoffset.set(0);
+            // (The ghost's scopes whole, a ghost of words cut with `…`.)
+            let (ghost, used) = fit(&whole_parts(self.ghost, room), room);
+            Span::styled(ghost, c.muted).render(text, buf);
+            (self.cursor, self.used) = (at(0), used);
+            return;
+        }
+        let chars: Vec<char> = picker.query.chars().collect();
+        let to = picker.qcursor.min(chars.len());
+        let width = |s: &[char]| s.iter().map(|ch| ch.width().unwrap_or(0)).sum::<usize>();
+        // (The cursor's own cell is in the room too: what is before it takes at most room - 1.)
+        let mut from = if width(&chars) < room as usize { 0 } else { picker.xoffset.get().min(to) };
+        while from < to && width(&chars[from..to]) >= room as usize { from += 1 }
+        picker.xoffset.set(from);
+        let shown = Line::from(Span::styled(chars[from..].iter().collect::<String>(), c.base));
+        self.used = (shown.width() as u16).min(room);
+        shown.render(text, buf);
+        self.cursor = at(width(&chars[from..to]));
+    }
+}
+
+/// `shown/total ───…` (and ` (marked)` after the total when [marked] is Some), muted, across its
+/// line.
+pub struct CountRule<'a> {
+    pub shown: usize,
+    pub total: usize,
+    pub marked: Option<usize>,
+    pub chrome: &'a Chrome,
+}
+
+impl Widget for CountRule<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let CountRule { shown, total, marked, chrome: c } = self;
+        let count = match marked { Some(m) => format!("{shown}/{total} ({m})"), None => format!("{shown}/{total}") };
+        let (count, cw) = fit(&count, area.width);
+        // (The rule a column after the count, to the line's end.)
+        let [n, rule] = Layout::horizontal([Constraint::Length(cw.saturating_add(1)), Constraint::Fill(1)]).areas(area);
+        Span::styled(count, c.muted).render(n, buf);
+        Fill::new("─").style(c.muted.remove_modifier(Modifier::BOLD)).render(rule, buf);
+    }
+}
+
+/// `key what · key what`, the keys bold, the words muted; cut with `…` where the line ends.
+pub struct KeysLine<'a> {
+    pub keys: &'a [(&'a str, &'a str)],
+    pub chrome: &'a Chrome,
+}
+
+impl Widget for KeysLine<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let c = self.chrome;
+        let parts = self.keys.iter().enumerate().flat_map(|(i, (k, what))| {
+            let sep = (i > 0).then(|| (" · ".to_string(), c.muted));
+            sep.into_iter().chain([(k.to_string(), c.base.add_modifier(Modifier::BOLD)), (format!(" {what}"), c.muted)])
+        });
+        let (mut line, mut room) = (Line::default(), area.width);
+        for (text, style) in parts {
+            if room == 0 { break }
+            let (text, used) = fit(&text, room);
+            line.push_span(Span::styled(text, style));
+            room -= used;
+        }
+        line.render(area, buf);
+    }
 }
 
 // ── sizes ──
@@ -459,13 +594,10 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, kind: &PickerKind, picker: 
     // of the launcher's lists, fzf's way, its keys and its count over it (below).
     let launcher = crate::modal::is_launcher(kind);
     let qy = if launcher { r.bottom().saturating_sub(2) } else { r.y + 3 };
-    put(buf, x, qy, 2, "›", c.accent);
     let hint = if launcher { format!("Search {}", title(app, kind, picker).to_lowercase()) } else { picker.placeholder.clone() };
-    let shown = if picker.query.is_empty() { (hint.as_str(), c.muted) } else { (picker.query.as_str(), c.base) };
-    let qw = put(buf, x + 2, qy, inner_w.saturating_sub(2), shown.0, shown.1);
-    picker.prompt_at.set((qy, x + 2));
-    let before: String = picker.query.chars().take(picker.qcursor).collect();
-    let cursor = Position::new((x + 2 + before.width() as u16).min(right), qy);
+    let mut query = QueryLine::new(picker, &hint, &c);
+    query.render(Rect::new(x, qy, inner_w, 1), buf);
+    let (cursor, qw) = (query.cursor, query.used);
     // (On the tab row the keys are not the query's: no text cursor.)
     let cursor = Some(cursor).filter(|_| !picker.on_tabs);
 
@@ -483,19 +615,11 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, kind: &PickerKind, picker: 
             sx += put(buf, sx, qy, right.saturating_sub(sx), &text, style) + 3;
         }
         // Over it: how many rows match of how many (and how many marked), a rule after.
-        let count = format!("{}/{} ({})", picker.visible.len(), picker.rows.len(), picker.marked.len());
-        let cw = put(buf, x, qy - 1, inner_w, &count, c.muted);
-        for cx in x + cw + 1..right { put(buf, cx, qy - 1, 1, "─", c.muted.remove_modifier(Modifier::BOLD)); }
+        CountRule { shown: picker.visible.len(), total: picker.rows.len(), marked: Some(picker.marked.len()), chrome: &c }.render(Rect::new(x, qy - 1, inner_w, 1), buf);
         // Over that: this list's keys, `key what` · `key what`, the keys bold (the tab row's own,
         // while it has the keys).
-        let mut kx = x;
         let tab_keys = [("← →", "switch"), ("↑", "list"), ("type", "to search")];
-        for (i, (k, what)) in if picker.on_tabs { &tab_keys[..] } else { &picker.hints[..] }.iter().enumerate() {
-            if i > 0 { kx += put(buf, kx, qy - 2, right.saturating_sub(kx), " · ", c.muted); }
-            kx += put(buf, kx, qy - 2, right.saturating_sub(kx), k, c.base.add_modifier(Modifier::BOLD));
-            kx += put(buf, kx, qy - 2, right.saturating_sub(kx), &format!(" {what}"), c.muted);
-            if kx >= right { break }
-        }
+        KeysLine { keys: if picker.on_tabs { &tab_keys[..] } else { &picker.hints[..] }, chrome: &c }.render(Rect::new(x, qy - 2, inner_w, 1), buf);
     }
 
     // The list, and beside it the preview when there is room for both.
@@ -588,31 +712,98 @@ pub fn section_title(section: &str) -> &'static str {
     }
 }
 
+/// Whether [list_from] titles the groups: not while typing, when the best matches come first,
+/// untitled — as opencode's search reads. (A launcher's scope character alone — `:` — is no
+/// search yet: its list keeps its headings.)
+fn grouped(picker: &Picker) -> bool {
+    picker.query.is_empty() || (picker.prefixed && crate::picker::scope_of(&picker.query).is_some() && picker.query.trim().chars().count() == 1)
+}
+
+/// The lines [list] draws for [picker]'s rows, top-down: each row, a heading where the group
+/// changes and a blank line before every heading but the first (at least one: the empty notice).
+pub fn list_lines(picker: &Picker) -> usize {
+    let (grouped, mut lines, mut last) = (grouped(picker), 0, None);
+    for (i, _) in &picker.visible {
+        let group = picker.rows[*i].group.as_deref().filter(|_| grouped);
+        if group.is_some() && group != last { lines += 1 + usize::from(lines > 0) }
+        last = group;
+        lines += 1;
+    }
+    lines.max(1)
+}
+
 /// The rows, top-down, the cursor's row marked as the New Harness chooser marks its own.
 pub fn list(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, details: bool) { list_from(buf, picker, r, c, details, false) }
 
 /// [list], [bottom_up]: the first row at the bottom, by the query under it, the rest going up
 /// (fzf's way, for the launcher's lists) — a group's heading over its rows still.
 pub fn list_from(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, details: bool, bottom_up: bool) {
-    picker.list_area.set(r);
-    let mut row_at = Vec::new();
-    let n = r.height as usize;
-    if n == 0 { picker.row_at = row_at; return }
-    if picker.visible.is_empty() {
-        // (A list says what its emptiness means — "no harnesses yet" — where it can.)
-        let empty = if picker.empty.is_empty() || !picker.query.is_empty() { "Nothing matches".to_string() } else { picker.empty.clone() };
-        put(buf, r.x + 2, if bottom_up { r.bottom() - 1 } else { r.y }, r.width.saturating_sub(2), &empty, c.muted);
+    PanelList { chrome: c, details, bottom_up }.render(r, buf, picker)
+}
+
+/// The command panel's list — the panel's, the launcher's, the shell composer's and the New
+/// Harness choosers' — as a ratatui `StatefulWidget` whose state is its [Picker]: it scrolls the
+/// picker to keep the cursor's row (and its group's heading) in view, unless the wheel moved it,
+/// and keeps where each row went for the mouse (`row_at`, `list_area`). Each row is a line of
+/// `Span`s at their columns — the pointer, a mark, the row's lead and label, its hint or what it
+/// says, its right column — over a `Block` in the chosen style for the cursor's row. (Not a
+/// ratatui `List` or `Table`: a row's right column has its own width, the hint a column only
+/// where both fit, and a bottom-up list keeps each heading over its rows.) [details]: the hint
+/// beside the name; [bottom_up]: the first row at the bottom.
+pub struct PanelList<'a> { pub chrome: &'a Chrome, pub details: bool, pub bottom_up: bool }
+
+impl StatefulWidget for PanelList<'_> {
+    type State = Picker;
+
+    fn render(self, r: Rect, buf: &mut Buffer, picker: &mut Picker) {
+        let (c, bottom_up) = (self.chrome, self.bottom_up);
+        picker.list_area.set(r);
+        picker.row_at = Vec::new();
+        let n = r.height as usize;
+        if n == 0 { return }
+        if picker.visible.is_empty() {
+            let empty = empty_notice(picker);
+            if !empty.is_empty() { put(buf, r.x + 2, if bottom_up { r.bottom() - 1 } else { r.y }, r.width.saturating_sub(2), &empty, c.muted); }
+            return;
+        }
+        let (lines, titles) = list_layout(picker, bottom_up);
+        scroll_to_cursor(picker, &lines, &titles, n, bottom_up);
+        let mut row_at = Vec::new();
+        for (slot, i) in (picker.scroll..lines.len()).take(n).enumerate() {
+            let y = if bottom_up { r.bottom() - 1 - slot as u16 } else { r.y + slot as u16 };
+            let line = Rect::new(r.x, y, r.width, 1);
+            match lines[i] {
+                Some(vi) => { self.row(buf, picker, vi, line); row_at.push((y, vi)) }
+                None => if let Some((_, title)) = titles.iter().find(|(at, _)| *at == i) { put(buf, r.x + 2, y, r.width.saturating_sub(2), title, c.muted.add_modifier(Modifier::BOLD)); },
+            }
+        }
+        // (No scrollbar: the list follows the cursor, the wheel scrolls it.)
         picker.row_at = row_at;
-        return;
     }
+}
+
+/// What an empty list says: what its emptiness means — "no harnesses yet" — where it can.
+fn empty_notice(picker: &Picker) -> String {
+    let mut empty = if picker.empty.is_empty() || !picker.query.is_empty() { "Nothing matches".to_string() } else { picker.empty.clone() };
+    let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+    if picker.shell_panel && total == 0 {
+        // The shell composer's list with no rows at all reads as its fzf frame's: blank while it
+        // loads (a failure being retried is said in the rule), else why — a failed request, a
+        // directory it could not read — under a query too.
+        if picker.busy.is_some() { empty.clear() } else if !picker.empty.is_empty() { empty = picker.empty.clone() }
+    }
+    empty
+}
+
+/// The lines as drawn, first to last (bottom to top when [bottom_up]): each visible row by its
+/// index, and None for a heading (titled, at its line) or the blank line before one.
+fn list_layout(picker: &Picker, bottom_up: bool) -> (Vec<Option<usize>>, Vec<(usize, String)>) {
     // The lines as drawn: each row, and a titled heading (a blank line before it) wherever the
     // group changes — as opencode's palette groups its commands. The scroll counts lines.
     let mut lines: Vec<Option<usize>> = Vec::new();
     let mut titles: Vec<(usize, String)> = Vec::new();
     let mut last: Option<&str> = None;
-    // (While typing, the best matches come first, untitled — as opencode's search reads.)
-    // (A launcher's scope character alone — `:` — is no search yet: its list keeps its headings.)
-    let grouped = picker.query.is_empty() || (picker.prefixed && crate::picker::scope_of(&picker.query).is_some() && picker.query.trim().chars().count() == 1);
+    let grouped = grouped(picker);
     if !bottom_up {
         for vi in 0..picker.visible.len() {
             let group = picker.rows[picker.visible[vi].0].group.as_deref().filter(|_| grouped);
@@ -638,26 +829,29 @@ pub fn list_from(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, det
         }
         if let Some(title) = pending { titles.push((lines.len(), title)); lines.push(None) }
     }
+    (lines, titles)
+}
+
+/// [picker]'s scroll (the first line shown of [n]) keeping the cursor's row in view — and, top
+/// down, its heading with it — unless the wheel put the list where it is.
+fn scroll_to_cursor(picker: &mut Picker, lines: &[Option<usize>], titles: &[(usize, String)], n: usize, bottom_up: bool) {
     let at_line = lines.iter().position(|l| *l == Some(picker.cursor)).unwrap_or(0);
-    // (The cursor's heading comes into view with it.)
     let top = if !bottom_up && at_line >= 1 && titles.iter().any(|(i, _)| *i + 1 == at_line) { at_line - 1 } else { at_line };
-    // (Scrolled by the wheel: the list stays where it was put, the cursor wherever it is.)
     if !picker.free_scroll {
         if top < picker.scroll { picker.scroll = top }
         if at_line >= picker.scroll + n { picker.scroll = at_line + 1 - n }
     }
     picker.scroll = picker.scroll.min(lines.len().saturating_sub(n));
-    for (slot, line) in lines.iter().enumerate().skip(picker.scroll).take(n).map(|(i, l)| (i - picker.scroll, (i, *l))) {
-        let y = if bottom_up { r.bottom() - 1 - slot as u16 } else { r.y + slot as u16 };
-        let (li, Some(vi)) = line else {
-            if let Some((_, title)) = titles.iter().find(|(i, _)| *i == line.0) { put(buf, r.x + 2, y, r.width.saturating_sub(2), title, c.muted.add_modifier(Modifier::BOLD)); }
-            continue;
-        };
-        let _ = li;
+}
+
+impl PanelList<'_> {
+    /// Row [vi] of [picker] on [line]: the cursor's in the chosen style across the line.
+    fn row(&self, buf: &mut Buffer, picker: &Picker, vi: usize, line: Rect) {
+        let (c, details, r, y) = (self.chrome, self.details, line, line.y);
         let row = &picker.rows[picker.visible[vi].0];
         let here = vi == picker.cursor;
         let style = if here { c.selected } else { c.base };
-        if here { for x in r.x..r.right() { if let Some(cell) = buf.cell_mut((x, y)) { cell.set_style(style); } } }
+        if here { Block::new().style(style).render(line, buf) }
         put(buf, r.x, y, 1, if here { "›" } else { " " }, if here { c.selected } else { c.accent });
         // Marked with Tab (several at once): a dot beside the pointer.
         if picker.marked.contains(&row.id) { put(buf, r.x + 1, y, 1, "•", if here { c.selected } else { c.accent }); }
@@ -688,10 +882,7 @@ pub fn list_from(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, det
             if !said.is_empty() { put(buf, at, y, end - at, &format!(" · {said}"), quiet); }
         }
         if right_w > 0 { put(buf, r.right().saturating_sub(right_w + 2), y, right_w, right_text, if here { style } else { c.muted }); }
-        row_at.push((y, vi));
     }
-    // (No scrollbar: the list follows the cursor, the wheel scrolls it.)
-    picker.row_at = row_at;
 }
 
 // ── the preview: a small hn with the whole look applied ─────────────────────────────
@@ -1016,6 +1207,318 @@ fn preview_bar(buf: &mut Buffer, bar: Rect, left: bool, pal: &theme::PanePalette
     line(buf, &mut y, &[(" └─ ", Style::default().fg(pal.muted)), ("?", Style::default().fg(theme::paint(theme::ATTENTION))), (" 0:claude", Style::default().fg(fg).add_modifier(Modifier::BOLD))], Some(row));
 }
 
+/// The panel's lines and the panel as they were drawn by hand, cell by cell (2026-10-08), kept so
+/// the ratatui widgets that replaced them can be shown to draw the very same buffer. Copied as
+/// they were; the names here shadow the widgets' module's.
+#[cfg(test)]
+pub(crate) mod oracle {
+    use super::*;
+
+    /// The chromes the widgets are checked in: a dark theme, a light one, and NO_COLOR, without
+    /// touching the environment. (The caller holds `colours_lock`.)
+    pub fn chromes() -> Vec<Chrome> {
+        let mut out = Vec::new();
+        for (bg, fg) in [("#1e1e2e", "#cdd6f4"), ("#fafafa", "#383a42")] {
+            crate::term_out::set_theme_colours(Some((bg.into(), fg.into())));
+            out.push(chrome_with(false));
+        }
+        crate::term_out::set_theme_colours(None);
+        out.push(chrome_with(true));
+        out
+    }
+
+    /// A blank buffer and one already written over, so a widget that touches a cell the old
+    /// drawing left alone shows.
+    pub fn grounds(area: Rect) -> [Buffer; 2] {
+        let mut dirty = Buffer::empty(area);
+        for p in area.positions() { dirty[p].set_symbol("x").set_style(Style::default().fg(Color::Red).bg(Color::Blue).add_modifier(Modifier::ITALIC)); }
+        [Buffer::empty(area), dirty]
+    }
+
+    /// A query wider than any line it is drawn in.
+    pub const LONG: &str = "/home/dev/harnesses/worktrees/autonomous-harness/hn-007/tui/src/settings.rs";
+
+    /// Fill [r] with the panel's surface — no border: the surface against the backdrop is the edge.
+    pub fn fill(buf: &mut Buffer, r: Rect, base: Style) {
+        crate::term_out::clear_extras(r);
+        for y in r.y..r.bottom() { for x in r.x..r.right() { if let Some(c) = buf.cell_mut((x, y)) { c.reset(); c.set_style(base); } } }
+    }
+
+    /// [text] at (x, y) in at most [width] columns, cut with an ellipsis. Returns the columns used.
+    pub fn put(buf: &mut Buffer, x: u16, y: u16, width: u16, text: &str, style: Style) -> u16 {
+        if width == 0 { return 0 }
+        let limit = width as usize;
+        let cut = text.width() > limit;
+        let (mut out, mut used) = (String::new(), 0);
+        for ch in text.chars().filter(|c| !c.is_control()) {
+            let w = ch.width().unwrap_or(0);
+            if used + w > limit - usize::from(cut) { break }
+            out.push(ch);
+            used += w;
+        }
+        if cut { out.push('…'); used += 1 }
+        buf.set_stringn(x, y, out, limit, style);
+        used as u16
+    }
+
+    /// Dim every cell of [area] under the panel, keeping what is drawn there visible.
+    pub fn backdrop(buf: &mut Buffer, area: Rect, style: Style) {
+        crate::term_out::clear_extras(area);
+        for y in area.y..area.bottom() { for x in area.x..area.right() { if let Some(c) = buf.cell_mut((x, y)) { c.set_style(style); } } }
+    }
+
+    /// The list as it was drawn by hand (2026-10-08), [super::list_from]'s oracle.
+    pub fn list_from(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, details: bool, bottom_up: bool) {
+        picker.list_area.set(r);
+        let mut row_at = Vec::new();
+        let n = r.height as usize;
+        if n == 0 { picker.row_at = row_at; return }
+        if picker.visible.is_empty() {
+            let mut empty = if picker.empty.is_empty() || !picker.query.is_empty() { "Nothing matches".to_string() } else { picker.empty.clone() };
+            let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+            if picker.shell_panel && total == 0 {
+                if picker.busy.is_some() { empty.clear() } else if !picker.empty.is_empty() { empty = picker.empty.clone() }
+            }
+            if !empty.is_empty() { put(buf, r.x + 2, if bottom_up { r.bottom() - 1 } else { r.y }, r.width.saturating_sub(2), &empty, c.muted); }
+            picker.row_at = row_at;
+            return;
+        }
+        let mut lines: Vec<Option<usize>> = Vec::new();
+        let mut titles: Vec<(usize, String)> = Vec::new();
+        let mut last: Option<&str> = None;
+        let grouped = grouped(picker);
+        if !bottom_up {
+            for vi in 0..picker.visible.len() {
+                let group = picker.rows[picker.visible[vi].0].group.as_deref().filter(|_| grouped);
+                if group.is_some() && group != last {
+                    if !lines.is_empty() { lines.push(None) }
+                    titles.push((lines.len(), group.unwrap_or_default().to_string()));
+                    lines.push(None);
+                }
+                last = group;
+                lines.push(Some(vi));
+            }
+        } else {
+            let mut pending: Option<String> = None;
+            for vi in 0..picker.visible.len() {
+                let group = picker.rows[picker.visible[vi].0].group.as_deref().filter(|_| grouped);
+                if group != last {
+                    if let Some(title) = pending.take() { titles.push((lines.len(), title)); lines.push(None); lines.push(None) }
+                    pending = group.map(str::to_string);
+                }
+                last = group;
+                lines.push(Some(vi));
+            }
+            if let Some(title) = pending { titles.push((lines.len(), title)); lines.push(None) }
+        }
+        let at_line = lines.iter().position(|l| *l == Some(picker.cursor)).unwrap_or(0);
+        let top = if !bottom_up && at_line >= 1 && titles.iter().any(|(i, _)| *i + 1 == at_line) { at_line - 1 } else { at_line };
+        if !picker.free_scroll {
+            if top < picker.scroll { picker.scroll = top }
+            if at_line >= picker.scroll + n { picker.scroll = at_line + 1 - n }
+        }
+        picker.scroll = picker.scroll.min(lines.len().saturating_sub(n));
+        for (slot, line) in lines.iter().enumerate().skip(picker.scroll).take(n).map(|(i, l)| (i - picker.scroll, (i, *l))) {
+            let y = if bottom_up { r.bottom() - 1 - slot as u16 } else { r.y + slot as u16 };
+            let (_, Some(vi)) = line else {
+                if let Some((_, title)) = titles.iter().find(|(i, _)| *i == line.0) { put(buf, r.x + 2, y, r.width.saturating_sub(2), title, c.muted.add_modifier(Modifier::BOLD)); }
+                continue;
+            };
+            let row = &picker.rows[picker.visible[vi].0];
+            let here = vi == picker.cursor;
+            let style = if here { c.selected } else { c.base };
+            if here { for x in r.x..r.right() { if let Some(cell) = buf.cell_mut((x, y)) { cell.set_style(style); } } }
+            put(buf, r.x, y, 1, if here { "›" } else { " " }, if here { c.selected } else { c.accent });
+            if picker.marked.contains(&row.id) { put(buf, r.x + 1, y, 1, "•", if here { c.selected } else { c.accent }); }
+            let mut at = r.x + 2;
+            for span in &row.lead {
+                let s = if here { style.patch(Style::default().fg(span.style.fg.unwrap_or(Color::Reset))) } else { c.base.patch(span.style) };
+                at += put(buf, at, y, r.right().saturating_sub(at), &span.content, s);
+            }
+            let right_text = row.right_at(r.width as usize);
+            let right_w = (right_text.width() as u16).min(if picker.right_half { r.width / 2 } else { r.width / 3 });
+            let end = r.right().saturating_sub(if right_w > 0 { right_w + 3 } else { 2 });
+            let hint: String = if details { row.detail.iter().map(|s| s.content.as_ref()).collect() } else { String::new() };
+            let hx = at + 28;
+            let with_hint = !hint.is_empty() && hx + 8 < end;
+            at += put(buf, at, y, if with_hint { 26 } else { end.saturating_sub(at) }, &row.label, style);
+            let quiet = if here { style.remove_modifier(Modifier::BOLD) } else { c.muted };
+            if with_hint { put(buf, hx.max(at + 2), y, end - hx.max(at + 2), &hint, quiet); }
+            else if !details && at + 10 < end {
+                let said: String = row.detail.iter().map(|s| s.content.as_ref()).collect();
+                if !said.is_empty() { put(buf, at, y, end - at, &format!(" · {said}"), quiet); }
+            }
+            if right_w > 0 { put(buf, r.right().saturating_sub(right_w + 2), y, right_w, right_text, if here { style } else { c.muted }); }
+            row_at.push((y, vi));
+        }
+        picker.row_at = row_at;
+    }
+
+    pub fn query_line(buf: &mut Buffer, picker: &Picker, x: u16, y: u16, w: u16, ghost: &str, c: &Chrome) -> (Position, u16) {
+        put(buf, x, y, 2, "›", c.accent);
+        let room = w.saturating_sub(2);
+        picker.prompt_at.set((y, x + 2));
+        if picker.query.is_empty() {
+            picker.xoffset.set(0);
+            return (Position::new((x + 2).min(x + w), y), put(buf, x + 2, y, room, &whole_parts(ghost, room), c.muted));
+        }
+        let chars: Vec<char> = picker.query.chars().collect();
+        let at = picker.qcursor.min(chars.len());
+        let width = |s: &[char]| s.iter().map(|ch| ch.width().unwrap_or(0)).sum::<usize>();
+        // (The cursor's own cell is in the room too: what is before it takes at most room - 1.)
+        let mut from = if width(&chars) < room as usize { 0 } else { picker.xoffset.get().min(at) };
+        while from < at && width(&chars[from..at]) >= room as usize { from += 1 }
+        picker.xoffset.set(from);
+        let text = ratatui::text::Line::from(ratatui::text::Span::styled(chars[from..].iter().collect::<String>(), c.base));
+        let used = (text.width() as u16).min(room);
+        ratatui::widgets::Widget::render(&text, Rect::new(x + 2, y, room, 1), buf);
+        (Position::new((x + 2 + width(&chars[from..at]) as u16).min(x + w), y), used)
+    }
+
+    pub fn count_rule(buf: &mut Buffer, shown: usize, total: usize, marked: Option<usize>, x: u16, y: u16, w: u16, c: &Chrome) {
+        let count = match marked { Some(m) => format!("{shown}/{total} ({m})"), None => format!("{shown}/{total}") };
+        let cw = put(buf, x, y, w, &count, c.muted);
+        for cx in x + cw + 1..x + w { put(buf, cx, y, 1, "─", c.muted.remove_modifier(Modifier::BOLD)); }
+    }
+
+    pub fn keys_line(buf: &mut Buffer, keys: &[(&str, &str)], x: u16, y: u16, w: u16, c: &Chrome) {
+        let (mut kx, right) = (x, x + w);
+        for (i, (k, what)) in keys.iter().enumerate() {
+            if i > 0 { kx += put(buf, kx, y, right.saturating_sub(kx), " · ", c.muted); }
+            kx += put(buf, kx, y, right.saturating_sub(kx), k, c.base.add_modifier(Modifier::BOLD));
+            kx += put(buf, kx, y, right.saturating_sub(kx), &format!(" {what}"), c.muted);
+            if kx >= right { break }
+        }
+    }
+
+    pub fn draw(buf: &mut Buffer, app: &App, body: Rect, kind: &PickerKind, picker: &mut Picker) -> (Option<Position>, Option<Rect>) {
+        // ── machines & devices ── (the same panel, laid out by devices.rs: Add phone's QR code takes
+        // the panel's whole height, and each view draws its own right side)
+        if let PickerKind::Devices(view) = kind { return (crate::devices::draw(buf, app, body, *view, picker), None) }
+        if matches!(kind, PickerKind::Account) { return (crate::account::draw(buf, app, body, picker), None) }
+        let c = chrome();
+        backdrop(buf, body, c.backdrop);
+        if body.width < 24 || body.height < 8 {
+            put(buf, body.x, body.y, body.width, &format!("{} · resize or Esc", title(app, kind, picker)), c.base);
+            return (None, None);
+        }
+        // (A palette as tall as all its rows, not the ones a search leaves, so it stays put as you type;
+        // Commands' search reaches every tmux command, so theirs is the most a palette takes.)
+        let all = if matches!(kind, PickerKind::Commands) { u16::MAX } else { picker.rows.len().min(u16::MAX as usize) as u16 };
+        let r = area(body, kind.size(), all);
+        fill(buf, r, c.base);
+        picker.screen_area.set(r);
+        let (x, right) = (r.x + 2, r.right().saturating_sub(2));
+        let inner_w = right.saturating_sub(x);
+
+        // Title: where you are, and how to leave.
+        let mut at = x + put(buf, x, r.y + 1, inner_w, &title(app, kind, picker), c.base.add_modifier(Modifier::BOLD));
+        if let Some(section) = picker.theme_in.as_deref() {
+            at += put(buf, at, r.y + 1, right.saturating_sub(at), "  ›  ", c.muted);
+            at += put(buf, at, r.y + 1, right.saturating_sub(at), section_title(section), c.accent);
+        }
+        // What the list says of itself (a count, "searching…"), before the way out — with a spinner
+        // while it waits on something (a read, a model moving), so a still panel is not a stuck one.
+        let working = picker.busy.clone().or_else(|| if matches!(kind, PickerKind::Models) { crate::models::working(app) } else { None });
+        let status = match working { Some(w) => format!("{} {w}", theme::spinner(app.tick)), None => picker.status.clone() };
+        if !status.is_empty() {
+            let w = (status.width() as u16).min(right.saturating_sub(at + 8));
+            put(buf, right.saturating_sub(w + 6), r.y + 1, w, &status, c.muted);
+        }
+        put(buf, right.saturating_sub(3), r.y + 1, 3, "esc", c.muted);
+
+        // The query: at the top of the menus (as the New Harness chooser has its own); at the bottom
+        // of the launcher's lists, fzf's way, its keys and its count over it (below).
+        let launcher = crate::modal::is_launcher(kind);
+        let qy = if launcher { r.bottom().saturating_sub(2) } else { r.y + 3 };
+        let hint = if launcher { format!("Search {}", title(app, kind, picker).to_lowercase()) } else { picker.placeholder.clone() };
+        let (cursor, qw) = query_line(buf, picker, x, qy, inner_w, &hint, &c);
+        // (On the tab row the keys are not the query's: no text cursor.)
+        let cursor = Some(cursor).filter(|_| !picker.on_tabs);
+
+        if launcher {
+            // After the query: the tabs it switches between, the one you are in marked — lit while the
+            // tab row has the keys (↓ past the list's last row).
+            let here = crate::picker::scope_of(&picker.query);
+            let mut sx = x + 2 + qw + 3;
+            for (ch, name) in crate::modal::LAUNCHER_TABS {
+                let text = ch.map(|ch| format!("{ch} {name}")).unwrap_or_else(|| name.to_string());
+                // (The one you are in in brackets — seen in any theme, colour or none.)
+                let text = if here == *ch { format!("[{text}]") } else { text };
+                if sx + text.width() as u16 > right { break }
+                let style = match (here == *ch, picker.on_tabs) { (true, true) => c.selected.add_modifier(Modifier::BOLD), (true, false) => c.base.add_modifier(Modifier::BOLD | Modifier::UNDERLINED), _ => c.muted };
+                sx += put(buf, sx, qy, right.saturating_sub(sx), &text, style) + 3;
+            }
+            // Over it: how many rows match of how many (and how many marked), a rule after.
+            count_rule(buf, picker.visible.len(), picker.rows.len(), Some(picker.marked.len()), x, qy - 1, inner_w, &c);
+            // Over that: this list's keys, `key what` · `key what`, the keys bold (the tab row's own,
+            // while it has the keys).
+            let tab_keys = [("← →", "switch"), ("↑", "list"), ("type", "to search")];
+            keys_line(buf, if picker.on_tabs { &tab_keys[..] } else { &picker.hints[..] }, x, qy - 2, inner_w, &c);
+        }
+
+        // The list, and beside it the preview when there is room for both.
+        // (Without a keys row, the list and the preview reach down to the panel's last rows; the
+        // launcher's reach down to its keys.)
+        let (top, bottom) = if launcher { (r.y + 3, r.bottom().saturating_sub(5)) } else { (r.y + 5, r.bottom().saturating_sub(if keyed(kind) { 3 } else { 1 })) };
+        let rows = bottom.saturating_sub(top) as usize;
+        // (Commands need no preview: the list takes the width, a row's hint beside its name. A list
+        // that is the whole answer — output, messages, keys — has none either.)
+        // (Keybinds are keys, not a look: no preview; the list takes the width, a key beside each.)
+        let settings = matches!(kind, PickerKind::Theme);
+        // (A palette is a list only.)
+        let side = inner_w >= 64 && kind.size() == PanelSize::Large && (settings || (picker.preview && !matches!(kind, PickerKind::Commands | PickerKind::Theme)));
+        // (A list's preview gets at least half: a harness's screen, a machine's, a model's facts —
+        // the list room for a row's name and what it says, a harness's doing.)
+        // (Models: a model's name, its size and speed, and its word side by side, as the desktop's rows.)
+        let widest = if matches!(kind, PickerKind::Models) { 72 } else { 56 };
+        let list_w = if !side { inner_w } else if settings { (inner_w * 2 / 5).clamp(28, 40) } else { (inner_w / 2).clamp(30, widest) };
+        list_from(buf, picker, Rect::new(x, top, list_w, rows as u16), &c, !side, !top_down(kind));
+        picker.preview_area.set(None);
+        picker.bar.set(None);
+        let mut shown = None;
+        if side {
+            let px = x + list_w + 3;
+            // (The settings' preview is the page's picture, from the query line down; a list's is
+            // beside its rows, under the query and the scopes, which keep the whole width.)
+            let from = if settings { r.y + 3 } else { top };
+            let pr = Rect::new(px, from, right.saturating_sub(px), bottom.saturating_sub(from));
+            if settings {
+                let look = Look::of(app).with(picker.theme_in.as_ref().and(picker.current_id()).as_deref());
+                preview(buf, pr, &look, &c);
+            } else {
+                // A thin rule between the list and its preview, in the panel's muted colour.
+                for y in pr.y..pr.bottom() { put(buf, px - 2, y, 1, "│", c.muted.remove_modifier(Modifier::BOLD)); }
+                picker.preview_area.set(Some((pr, 'r')));
+                shown = Some(pr);
+            }
+        }
+
+        // The footer: what was just said, else — in the menus (Commands, Appearance) — their keys. The
+        // other lists say nothing there: their room is the list's and the preview's.
+        // (The launcher's: in place of its keys, for the moment it is said.)
+        let fy = r.bottom().saturating_sub(if launcher { 4 } else if keyed(kind) { 2 } else { 1 });
+        let flash = picker.flash.as_ref().filter(|(_, at)| at.elapsed().as_secs() < 3).map(|(t, _)| t.clone());
+        let keys = match kind {
+            PickerKind::Commands if in_tmux(picker) => Some("↑↓ move   enter run   type to search   esc back"),
+            PickerKind::Commands => Some("↑↓ move   enter run   type to search   esc close"),
+            PickerKind::Theme if picker.theme_in.is_some() => Some("↑↓ move   enter apply   ← back   esc back"),
+            PickerKind::Theme if picker.from_commands => Some("↑↓ move   → open   type to search   esc back"),
+            PickerKind::Theme => Some("↑↓ move   → open   type to search   esc close"),
+            // ── keys ──
+            PickerKind::Keybinds if picker.from_commands => Some("↑↓ move   enter change   type to search   esc back"),
+            PickerKind::Keybinds => Some("↑↓ move   enter change   type to search   esc close"),
+            _ => None,
+        };
+        match (flash, keys) {
+            (Some(text), _) => { put(buf, x, fy, inner_w, &" ".repeat(inner_w as usize), c.base); put(buf, x, fy, inner_w, &text, c.accent); }
+            (None, Some(keys)) => { put(buf, x, fy, inner_w, keys, c.muted); }
+            (None, None) => {}
+        }
+        (cursor, shown)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1042,6 +1545,17 @@ mod tests {
             None => p.set_rows(modal::theme_sections(app)),
         }
         p
+    }
+
+    /// The query line and count rule widgets at (x, y), [w] wide, as the tests below draw them.
+    fn query_line(buf: &mut Buffer, picker: &Picker, x: u16, y: u16, w: u16, ghost: &str, c: &Chrome) -> (Position, u16) {
+        let mut q = QueryLine::new(picker, ghost, c);
+        q.render(Rect::new(x, y, w, 1), buf);
+        (q.cursor, q.used)
+    }
+
+    fn count_rule(buf: &mut Buffer, shown: usize, total: usize, marked: Option<usize>, x: u16, y: u16, w: u16, c: &Chrome) {
+        CountRule { shown, total, marked, chrome: c }.render(Rect::new(x, y, w, 1), buf);
     }
 
     /// The panel stays where it is, the same size, whether it shows the sections or one section's
@@ -1248,5 +1762,400 @@ mod tests {
         // `with` read the knob, and the filled tab has no `*` beside its name.
         assert_eq!(Look::of(&app).with(Some("window_active:filled")).window_active, "filled");
         assert!(row(&filled, 19).contains("0:claude") && !row(&filled, 19).contains("0:claude*"), "{}", text(&filled));
+    }
+
+    fn launcher_buffer(query: &str, on_tabs: bool) -> (Buffer, Rect, Option<Position>) {
+        let app = app((100, 30));
+        let body = Rect::new(0, 0, 100, 29);
+        let kind = PickerKind::Open { filter: modal::Filter::All, machine: None, project: None };
+        let mut p = Picker::new("harnesses", "");
+        p.hints = vec![("↑↓", "move"), ("enter", "open")];
+        p.set_rows(vec![crate::picker::Row::new("a", "alpha"), crate::picker::Row::new("b", "beta"), crate::picker::Row::new("c", "alpine")]);
+        if !query.is_empty() { p.set_query(query); }
+        p.marked = vec!["a".into()];
+        p.on_tabs = on_tabs;
+        let mut buf = Buffer::empty(body);
+        let (cursor, _) = draw(&mut buf, &app, body, &kind, &mut p);
+        (buf, p.screen_area.get(), cursor)
+    }
+
+    /// The launcher's rows from the list's tail to the query, and the styles of its query, count,
+    /// rule and keys: what `draw` drew inline before those lines became shared pieces.
+    #[test]
+    fn the_launcher_keeps_its_rows_and_styles() {
+        let _l = crate::term_out::colours_lock();
+        let c = chrome();
+        let fg = |s: Style| s.fg.unwrap_or(Color::Reset);
+        let rule = |count: &str| format!("  {count} {}", "─".repeat(86 - count.width() - 1));
+        let query = |typed: &str, more: &str| format!("  › {typed}   [harnesses]   > commands   @ machines   # projects   : models{more}");
+        let keys = |s: &str| format!("  {s}");
+        let (alpine, beta, alpha) = ("    alpine".to_string(), "    beta".to_string(), "  ›•alpha".to_string());
+        let cases = [
+            ("", false, [alpine.clone(), beta.clone(), alpha.clone(), String::new(), keys("↑↓ move · enter open"), rule("3/3 (1)"), query("Search harnesses", "")]),
+            ("al", false, [String::new(), alpine.clone(), alpha.clone(), String::new(), keys("↑↓ move · enter open"), rule("2/3 (1)"), query("al", "   * store")]),
+            ("", true, [alpine, beta, alpha, String::new(), keys("← → switch · ↑ list · type to search"), rule("3/3 (1)"), query("Search harnesses", "")]),
+        ];
+        for (typed, on_tabs, want) in cases {
+            let (buf, r, _) = launcher_buffer(typed, on_tabs);
+            let row = |y: u16| (r.x..r.right()).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().trim_end().to_string();
+            let q = r.bottom() - 2;
+            let title = row(r.y + 1);
+            assert!(title.starts_with("  Harnesses ") && title.ends_with(" esc"), "{title}");
+            let rows: Vec<String> = (q - 6..=q).map(row).collect();
+            assert_eq!(rows.iter().map(|r| r.replace('│', "").trim_end().to_string()).collect::<Vec<_>>(), want.to_vec(), "{typed:?} tabs={on_tabs}");
+            let cell = |y: u16, x: u16| buf[(r.x + x, y)].clone();
+            // the prompt in accent; the count and its rule muted; a key bold, its word muted
+            assert_eq!((cell(q, 2).symbol().to_string(), cell(q, 2).fg), ("›".to_string(), fg(c.accent)));
+            assert_eq!(cell(q - 1, 2).fg, fg(c.muted));
+            assert_eq!((cell(q - 1, 12).symbol().to_string(), cell(q - 1, 12).fg), ("─".to_string(), fg(c.muted)));
+            assert!(!cell(q - 1, 12).modifier.contains(Modifier::BOLD));
+            assert_eq!(cell(q - 2, 2).fg, fg(c.base));
+            assert!(cell(q - 2, 2).modifier.contains(Modifier::BOLD));
+            assert_eq!(cell(q - 2, 5).fg, fg(c.muted));
+        }
+    }
+
+    #[test]
+    fn the_launcher_draws_keys_count_and_query_in_three_rows() {
+        let _l = crate::term_out::colours_lock();
+        let app = app((100, 30));
+        let body = Rect::new(0, 0, 100, 29);
+        let kind = PickerKind::Open { filter: modal::Filter::All, machine: None, project: None };
+        let mut p = Picker::new("harnesses", "");
+        p.hints = vec![("↑↓", "move"), ("enter", "open")];
+        p.set_rows(vec![crate::picker::Row::new("a", "alpha"), crate::picker::Row::new("b", "beta")]);
+        let mut buf = Buffer::empty(body);
+        let (cursor, _) = draw(&mut buf, &app, body, &kind, &mut p);
+        let r = p.screen_area.get();
+        let qy = r.bottom() - 2;
+        let row = |y: u16| (r.x..r.right()).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+        assert!(row(qy).contains('›'), "{}", row(qy));
+        assert!(row(qy - 1).trim_start().starts_with("2/2 (0) ─"), "{}", row(qy - 1));
+        assert!(row(qy - 2).contains("↑↓ move · enter open"), "{}", row(qy - 2));
+        assert_eq!(cursor, Some(Position::new(r.x + 2 + 2, qy)));
+    }
+
+    #[test]
+    fn the_count_rule_without_a_marked_count() {
+        let _l = crate::term_out::colours_lock();
+        let c = chrome();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        count_rule(&mut buf, 3, 5, None, 2, 0, 16, &c);
+        let line: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert_eq!(line, format!("  3/5 {}  ", "─".repeat(12)));
+        assert_eq!(buf[(6, 0)].fg, c.muted.fg.unwrap_or(Color::Reset));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        count_rule(&mut buf, 3, 5, Some(1), 2, 0, 16, &c);
+        let line: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert!(line.starts_with("  3/5 (1) ─"), "{line}");
+    }
+
+    #[test]
+    fn the_query_line_is_the_panels() {
+        let _l = crate::term_out::colours_lock();
+        let c = chrome();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 3));
+        let mut p = Picker::new("", "");
+        p.query = "gpt".into(); p.qcursor = 3;
+        let (at, used) = query_line(&mut buf, &p, 0, 0, 40, "@ computer", &c);
+        assert_eq!(buf[(0, 0)].symbol(), "›");
+        assert_eq!(buf[(0, 0)].fg, c.accent.fg.unwrap_or(Color::Reset));
+        assert_eq!((buf[(2, 0)].symbol(), at, used), ("g", Position::new(5, 0), 3));
+        p.query.clear(); p.qcursor = 0;
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 3));
+        query_line(&mut buf, &p, 0, 0, 40, "@ computer", &c);
+        assert_eq!(buf[(2, 0)].fg, c.muted.fg.unwrap_or(Color::Reset), "the ghost is muted");
+        // whole scopes only, never a scope cut in half
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+        query_line(&mut buf, &p, 0, 0, 20, "@ computer   : project   % model", &c);
+        let line: String = (0..20).map(|x| buf[(x, 0)].symbol().to_string()).collect();
+        assert!(line.contains("@ computer") && !line.contains("proj") && !line.contains('…'), "{line}");
+    }
+
+    #[test]
+    fn a_long_query_scrolls_to_keep_its_cursor_in_view() {
+        let c = chrome_with(true);
+        let mut p = Picker::new("", "");
+        p.query = "/home/dev/harnesses/worktrees/autonomous-harness/hn-007/tui/src".into();
+        p.qcursor = p.query.chars().count();
+        let draw = |p: &Picker| {
+            let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+            let (at, _) = query_line(&mut buf, p, 0, 0, 40, "", &c);
+            (at, (0..40).map(|x| buf[(x, 0)].symbol().to_string()).collect::<String>())
+        };
+        let (at, line) = draw(&p);
+        assert!(line.trim_end().ends_with("hn-007/tui/src"), "the last typed text: {line}");
+        assert_eq!(at.x as usize, line.trim_end().width(), "the cursor right after it: {line}");
+        assert!(at.x < 40);
+        p.qcursor = 0;
+        let (at, line) = draw(&p);
+        assert!(line.starts_with("› /home/dev/harnesses"), "home shows the start: {line}");
+        assert_eq!(at, Position::new(2, 0));
+    }
+
+    #[test]
+    fn list_lines_counts_what_list_draws() {
+        let mut p = Picker::new("", "");
+        use crate::picker::Row;
+        p.set_rows(vec![Row::new("a", "alpha").group("One"), Row::new("b", "beta").group("One"), Row::new("c", "gamma").group("Two")]);
+        // One, alpha, beta, (blank), Two, gamma
+        assert_eq!(list_lines(&p), 6);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30, 10));
+        list(&mut buf, &mut p, Rect::new(0, 0, 30, 10), &chrome_with(true), false);
+        let drawn = (0..10).rposition(|y| (0..30).any(|x| buf[(x, y)].symbol() != " ")).unwrap() + 1;
+        assert_eq!(list_lines(&p), drawn);
+        p.query = "ga".into();
+        p.refilter();
+        assert_eq!(list_lines(&p), p.visible.len(), "while typing: the matches, untitled");
+    }
+
+    /// Only the shell composer keeps its empty message under a query: the command panel's lists
+    /// (Projects, Models …) with no rows still say "Nothing matches" once something is typed.
+    #[test]
+    fn an_empty_list_under_a_query_says_nothing_matches_except_in_the_shell_composer() {
+        let draw = |p: &mut Picker| { let mut buf = Buffer::empty(Rect::new(0, 0, 40, 4)); list(&mut buf, p, Rect::new(0, 0, 40, 4), &chrome_with(true), false); text(&buf) };
+        for empty in ["No projects yet.", "Loading its models…"] {
+            let mut p = Picker::new("", "");
+            p.empty = empty.into();
+            assert!(draw(&mut p).contains(empty), "{empty}");
+            p.query = "foo".into();
+            p.refilter();
+            let shown = draw(&mut p);
+            assert!(shown.contains("Nothing matches") && !shown.contains(empty), "{empty}: {shown}");
+            p.shell_panel = true;
+            assert!(draw(&mut p).contains(empty), "the composer says why: {empty}");
+            p.busy = Some("loading".into());
+            assert_eq!(draw(&mut p).trim(), "", "a loading composer's list is blank");
+        }
+    }
+
+    // ── the lines as ratatui widgets draw what the hand-drawn ones drew (`oracle`) ──
+    use oracle::{chromes, grounds, LONG};
+
+    /// `put` as a `Span` writes the cells, styles and width the hand-drawn one did: wide
+    /// characters, a combining mark in its grapheme, control characters, cut text, every width
+    /// and an edge of the buffer.
+    #[test]
+    fn put_as_a_span_draws_what_set_stringn_did() {
+        let texts = ["", "›", "New Harness", "日本語のクエリ", "e\u{301}cole · café", "tab\there\nnewline", "🙂 emoji wide", LONG];
+        let styles = [Style::default(), Style::default().fg(Color::Rgb(1, 2, 3)).add_modifier(Modifier::BOLD), Style::default().bg(Color::Indexed(236)).add_modifier(Modifier::REVERSED)];
+        let area = Rect::new(0, 0, 40, 2);
+        for ground in grounds(area) { for text in texts { for style in styles { for x in [0u16, 3, 30, 39] { for width in 0..=42u16 {
+            let (mut old, mut new) = (ground.clone(), ground.clone());
+            let was = oracle::put(&mut old, x, 1, width, text, style);
+            assert_eq!(put(&mut new, x, 1, width, text, style), was, "{text:?} at {x} in {width}");
+            assert_eq!(old, new, "{text:?} at {x} in {width}");
+        } } } } }
+    }
+
+    #[test]
+    fn backdrop_as_a_block_dims_what_it_did() {
+        let _l = crate::term_out::colours_lock();
+        for c in chromes() { for ground in grounds(Rect::new(0, 0, 12, 6)) { for r in [Rect::new(0, 0, 12, 6), Rect::new(2, 1, 5, 3), Rect::new(10, 4, 8, 8), Rect::default()] {
+            let (mut old, mut new) = (ground.clone(), ground.clone());
+            oracle::backdrop(&mut old, r, c.backdrop);
+            backdrop(&mut new, r, c.backdrop);
+            assert_eq!(old, new, "{r:?}");
+        } } }
+    }
+
+    /// The pickers the list is checked with, by [kind] (each built afresh: a picker is not
+    /// `Clone`): plain rows; grouped rows with leads, hints, right columns (a long one, a narrow
+    /// form, a wide-character one) and marks; the right column given half; a query that ungroups
+    /// them; an empty list that says why; the composer's, saying nothing while it loads.
+    const LIST_PICKERS: usize = 6;
+    fn list_picker(kind: usize) -> (&'static str, Picker) {
+        let mut p = Picker::new("", "");
+        let grouped = || {
+            let mut rows = Vec::new();
+            for (g, group) in ["Harnesses", "Projects", "Machines"].iter().enumerate() {
+                for i in 0..6 {
+                    let mut r = crate::picker::Row::new(format!("{g}:{i}"), format!("{group} item {i} with a longer name than most"));
+                    r.group = Some(group.to_string());
+                    r.lead = vec![Span::styled("● ", Style::default().fg(Color::Green)), Span::raw("cx ")];
+                    r.detail = vec![Span::raw(format!("what it is doing now, step {i}"))];
+                    r.right = match i % 3 { 0 => "autonomous-harness · studio · 3m".into(), 1 => "2h".into(), _ => String::new() };
+                    if i == 2 { r.right_narrow = Some("1d".into()) }
+                    if i == 4 { r.right = "大きな機械".into() }
+                    rows.push(r);
+                }
+            }
+            rows
+        };
+        let what = match kind {
+            0 => { p.set_rows((0..30).map(|i| crate::picker::Row::new(format!("r{i}"), format!("row {i}"))).collect()); "plain" }
+            1 => { p.set_rows(grouped()); p.marked = vec!["0:1".into(), "1:3".into()]; "grouped" }
+            2 => { p.set_rows(grouped()); p.right_half = true; "right half" }
+            3 => { p.set_rows(grouped()); p.query = "item".into(); p.refilter(); "queried" }
+            4 => { p.empty = "No harnesses yet".into(); p.set_rows(Vec::new()); "empty" }
+            _ => { p.set_rows(Vec::new()); p.shell_panel = true; p.busy = Some("loading".into()); "composer loading" }
+        };
+        (what, p)
+    }
+
+    /// The list as a `StatefulWidget` draws, scrolls and keeps its rows for the mouse as the
+    /// hand-drawn one did: every picker above, top down and bottom up, with and without hints,
+    /// the cursor at its first, a middle and its last row, scrolled by the wheel or following the
+    /// cursor, in sizes down to nothing, in a dark and a light theme and NO_COLOR.
+    #[test]
+    fn the_panel_list_widget_draws_what_the_hand_drawn_list_did() {
+        let _l = crate::term_out::colours_lock();
+        for c in chromes() { for kind in 0..LIST_PICKERS { for bottom_up in [false, true] { for details in [false, true] {
+            let last = list_picker(kind).1.visible.len().saturating_sub(1);
+            for cursor in [0, last / 2, last] { for free in [false, true] { for (w, h) in [(0, 0), (4, 3), (20, 1), (30, 8), (60, 12), (90, 40)] {
+                let area = Rect::new(2, 1, w, h);
+                for ground in grounds(Rect::new(0, 0, w + 4, h + 2)) {
+                    let ((what, mut po), (_, mut pn)) = (list_picker(kind), list_picker(kind));
+                    for p in [&mut po, &mut pn] { p.cursor = cursor; p.free_scroll = free; p.scroll = if free { 3 } else { 0 } }
+                    let (mut old, mut new) = (ground.clone(), ground.clone());
+                    oracle::list_from(&mut old, &mut po, area, &c, details, bottom_up);
+                    list_from(&mut new, &mut pn, area, &c, details, bottom_up);
+                    let at = format!("{what} bottom_up {bottom_up} details {details} cursor {cursor} free {free} at {w}x{h}");
+                    assert_eq!(old, new, "{at}");
+                    assert_eq!((pn.scroll, &pn.row_at, pn.list_area.get()), (po.scroll, &po.row_at, po.list_area.get()), "{at}");
+                }
+            } } }
+        } } } }
+    }
+
+    #[test]
+    fn the_query_line_widget_draws_what_the_hand_drawn_one_did() {
+        let _l = crate::term_out::colours_lock();
+        let ghosts = ["Search agents   @ computer   : project   % model   & agent", "Search harnesses on every machine you have connected", ""];
+        let queries = ["gpt", "日本語のクエリ", LONG];
+        for c in chromes() { for w in 1..=160u16 {
+            let area = Rect::new(3, 1, w, 1);
+            for ground in grounds(Rect::new(0, 0, w + 6, 3)) {
+                let check = |p: &Picker, ghost: &str, old: &mut Buffer, new: &mut Buffer, what: &str| {
+                    let before = p.xoffset.get();
+                    let was = oracle::query_line(old, p, area.x, area.y, area.width, ghost, &c);
+                    let (xoffset, prompt_at) = (p.xoffset.get(), p.prompt_at.get());
+                    p.xoffset.set(before);
+                    p.prompt_at.set((0, 0));
+                    let mut q = QueryLine::new(p, ghost, &c);
+                    q.render(area, new);
+                    assert_eq!((q.cursor, q.used), was, "{what} at {w}");
+                    assert_eq!((p.xoffset.get(), p.prompt_at.get()), (xoffset, prompt_at), "{what} at {w}");
+                    assert_eq!(old, new, "{what} at {w}");
+                };
+                for ghost in ghosts {
+                    let p = Picker::new("", "");
+                    check(&p, ghost, &mut ground.clone(), &mut ground.clone(), &format!("ghost {ghost:?}"));
+                }
+                for query in queries {
+                    let mut p = Picker::new("", "");
+                    p.query = query.into();
+                    let n = query.chars().count();
+                    // A cursor moved along the query frame by frame: its scroll carries over.
+                    for at in [n, 0, n / 2, n, 1, n] {
+                        p.qcursor = at;
+                        check(&p, "@ computer", &mut ground.clone(), &mut ground.clone(), &format!("{query:?} cursor {at}"));
+                    }
+                }
+            }
+        } }
+    }
+
+    #[test]
+    fn the_count_rule_widget_draws_what_the_hand_drawn_one_did() {
+        let _l = crate::term_out::colours_lock();
+        for c in chromes() { for w in 1..=160u16 {
+            let area = Rect::new(2, 1, w, 1);
+            for ground in grounds(Rect::new(0, 0, w + 4, 3)) {
+                for (shown, total, marked) in [(0, 0, None), (3, 5, None), (3, 5, Some(1)), (1234, 56789, Some(12))] {
+                    let (mut old, mut new) = (ground.clone(), ground.clone());
+                    oracle::count_rule(&mut old, shown, total, marked, area.x, area.y, area.width, &c);
+                    CountRule { shown, total, marked, chrome: &c }.render(area, &mut new);
+                    assert_eq!(old, new, "{shown}/{total} {marked:?} at {w}");
+                }
+            }
+        } }
+    }
+
+    #[test]
+    fn the_keys_line_widget_draws_what_the_hand_drawn_one_did() {
+        let _l = crate::term_out::colours_lock();
+        let sets: [&[(&str, &str)]; 4] = [
+            &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")],
+            &[("← →", "switch"), ("↑", "list"), ("type", "to search")],
+            &[("enter", "choose"), ("esc", "back")],
+            &[],
+        ];
+        for c in chromes() { for w in 1..=160u16 {
+            let area = Rect::new(2, 1, w, 1);
+            for ground in grounds(Rect::new(0, 0, w + 4, 3)) {
+                for keys in sets {
+                    let (mut old, mut new) = (ground.clone(), ground.clone());
+                    oracle::keys_line(&mut old, keys, area.x, area.y, area.width, &c);
+                    KeysLine { keys, chrome: &c }.render(area, &mut new);
+                    assert_eq!(old, new, "{keys:?} at {w}");
+                }
+            }
+        } }
+    }
+
+    #[test]
+    fn the_surface_widget_fills_as_fill_did() {
+        let _l = crate::term_out::colours_lock();
+        for c in chromes() {
+            for ground in grounds(Rect::new(0, 0, 30, 6)) {
+                let (mut old, mut new) = (ground.clone(), ground.clone());
+                oracle::fill(&mut old, Rect::new(2, 1, 20, 4), c.base);
+                Surface(c.base).render(Rect::new(2, 1, 20, 4), &mut new);
+                assert_eq!(old, new);
+                // (A surface reaching past the buffer is cut at its edge, as fill's was.)
+                let (mut old, mut new) = (ground.clone(), ground);
+                oracle::fill(&mut old, Rect::new(20, 3, 20, 4), c.base);
+                fill(&mut new, Rect::new(20, 3, 20, 4), c.base);
+                assert_eq!(old, new);
+            }
+        }
+    }
+
+    /// The command panel (the launcher's lists, with their tabs, and the menus) drawn whole with
+    /// the widgets is the panel the hand-drawn lines drew, in a dark and a light theme.
+    #[test]
+    fn the_command_panel_draws_what_it_did_with_the_hand_drawn_lines() {
+        let _l = crate::term_out::colours_lock();
+        // (The spinner still, so the two draws a moment apart show the same frame.)
+        theme::begin_animation_frame(false);
+        let app = app((200, 42));
+        let rows = || (0..30).map(|i| crate::picker::Row::new(format!("r{i}"), format!("row {i}")).detail(vec![ratatui::text::Span::raw("a detail")]).right("C-b x").group(if i < 10 { "One" } else { "Two" })).collect::<Vec<_>>();
+        let kinds = [
+            PickerKind::Palette,
+            PickerKind::Open { filter: modal::Filter::All, machine: None, project: None },
+            PickerKind::Commands,
+            PickerKind::Keybinds,
+            PickerKind::Theme,
+        ];
+        for (bg, fg) in [("#1e1e2e", "#cdd6f4"), ("#fafafa", "#383a42")] {
+            crate::term_out::set_theme_colours(Some((bg.into(), fg.into())));
+            for kind in &kinds { for (w, h) in [(24, 8), (30, 12), (40, 24), (64, 20), (96, 30), (160, 41), (200, 41)] {
+                for (query, tabs, flash) in [("", false, false), ("ro", false, false), (LONG, false, false), ("", true, false), ("ro", false, true)] {
+                    let body = Rect::new(0, 0, w, h);
+                    let picker = || {
+                        let mut p = Picker::new("t", "Search commands");
+                        p.hints = vec![("↑↓", "move"), ("enter", "open"), ("ctrl-x", "close it"), ("tab", "mark")];
+                        p.set_rows(rows());
+                        p.query = query.into();
+                        p.qcursor = query.chars().count();
+                        p.refilter();
+                        p.on_tabs = tabs;
+                        p.marked = vec!["r1".into()];
+                        if flash { p.flash = Some(("Copied".into(), std::time::Instant::now())) }
+                        p
+                    };
+                    let (mut a, mut b) = (picker(), picker());
+                    let (mut old, mut new) = (Buffer::empty(body), Buffer::empty(body));
+                    let was = oracle::draw(&mut old, &app, body, kind, &mut a);
+                    let now = draw(&mut new, &app, body, kind, &mut b);
+                    let what = format!("{kind:?} {w}x{h} {query:?} tabs {tabs} flash {flash}");
+                    assert_eq!(was, now, "{what}");
+                    assert_eq!((a.xoffset.get(), a.prompt_at.get(), &a.row_at), (b.xoffset.get(), b.prompt_at.get(), &b.row_at), "{what}");
+                    assert!(old == new, "{what}: the cells that differ, as drawn now: {:?}", old.diff(&new));
+                }
+            } }
+        }
+        crate::term_out::set_theme_colours(None);
     }
 }

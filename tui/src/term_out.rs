@@ -30,6 +30,15 @@ pub struct TmuxBackend<W: Write> {
     /// silent, as tmux is — a terminal's or an outer tmux's activity mark stays clear).
     cursor_at: Option<Position>,
     cursor_shown: Option<bool>,
+    /// How many cells the last frame wrote (0 for one that wrote nothing): a large one is a
+    /// burst the settle rewrite follows.
+    last_cells: usize,
+    /// The terminal's size as a test gives it (else the terminal is asked).
+    size_known: Option<Size>,
+    /// The rows written cell by cell (or owed) since the last settle rewrite, and the rows that
+    /// rewrite writes whole in the next frame.
+    touched: std::collections::BTreeSet<u16>,
+    rewrite: std::collections::BTreeSet<u16>,
 }
 
 /// Whether a frame is wrapped in synchronized output (?2026): yes, unless `HARNESS_TUI_SYNC=off`
@@ -41,7 +50,7 @@ fn sync_wanted(setting: &str) -> bool {
 /// A cluster whose width terminals may count otherwise than hn does: several code points (a
 /// base and its marks, ZWJ emoji, a keycap, VS16), or a script whose vowels some count as
 /// spacing and some as combining (Thai, Lao, Tibetan, Myanmar, Khmer).
-fn risky(symbol: &str) -> bool {
+pub(crate) fn risky(symbol: &str) -> bool {
     let mut n = 0;
     for c in symbol.chars() {
         n += 1;
@@ -134,6 +143,10 @@ pub fn set_extra(x: u16, y: u16, extra: Extra) {
     if let Ok(mut f) = FRAME.lock() { if let Some(f) = f.as_mut() { f.extras.insert((x, y), extra); } }
 }
 
+/// A full repaint rewrites rows over what the terminal holds, unless its size changed: then the
+/// terminal reflowed its own cells and only an erase leaves no text outside the new rows.
+pub fn repaint_is_soft(drawn: Size, now: Size) -> bool { drawn == now }
+
 /// An overlay owns its cells; pane metadata underneath must not bleed through it.
 pub fn clear_extras(area: ratatui::layout::Rect) {
     if let Ok(mut frame) = FRAME.lock() { if let Some(frame) = frame.as_mut() {
@@ -169,11 +182,30 @@ impl<W: Write> TmuxBackend<W> {
         Self { sync_ok, ..Self::with_sync(writer) }
     }
 
-    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None } }
+    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None, last_cells: 0, size_known: None, touched: Default::default(), rewrite: Default::default() } }
 
-    /// The next `clear()` does not erase the screen: every row is written again, each erased and
-    /// rewritten in the same write, so a stale cell goes but the screen is never seen blank.
+    fn screen_size(&self) -> Option<Size> { self.size_known.or_else(|| self.inner.size().ok()) }
+
+    /// The next `clear()` does not erase the screen: every row is written again, its text and then
+    /// the rest of it erased, so a stale cell goes but the screen is never seen blank.
     pub fn soft_clear_next(&mut self) { self.soft = true }
+
+    /// The cells the last frame wrote.
+    pub fn last_cells(&self) -> usize { self.last_cells }
+
+    /// Rows the next settle rewrite writes too (where an overlay was).
+    pub fn owe_rows(&mut self, rows: impl IntoIterator<Item = u16>) { self.touched.extend(rows) }
+
+    /// The settle rewrite: the next frame writes whole every row touched since the last one (and
+    /// nothing when none was: an idle hn stays silent).
+    pub fn settle_next(&mut self) { let touched = std::mem::take(&mut self.touched); self.rewrite.extend(touched) }
+
+    /// Opens the frame's synchronized update (once); `flush` closes it. A clear belongs inside it,
+    /// so the terminal shows the erase and the redraw together, never the blank between them.
+    fn begin_sync(&mut self) -> io::Result<()> {
+        if self.sync_ok && !self.syncing { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
+        Ok(())
+    }
 
     fn row_risky(&self, y: u16) -> bool { self.shadow.get(y as usize).map(|r| r.iter().any(|c| risky(c.symbol()))).unwrap_or(false) }
 
@@ -240,13 +272,51 @@ pub fn ask_terminal() {
     let _ = out.flush();
 }
 
-/// The terminal's colours 1-7 as it answered OSC 4 (`#rrggbb`), where it did.
-static PALETTE: std::sync::RwLock<[Option<[u8; 3]>; 8]> = std::sync::RwLock::new([None; 8]);
+/// What hn draws with that the terminal answered or the look chose: one for the whole process —
+/// and in tests each test thread's own, as the fzf look is (theme.rs): tests run side by side, and
+/// each draws with the colours it set, not with what another set meanwhile.
+struct Kept<T: 'static> {
+    #[cfg(not(test))]
+    shared: std::sync::RwLock<T>,
+    #[cfg(test)]
+    local: &'static std::thread::LocalKey<std::cell::RefCell<T>>,
+}
+
+impl<T: Clone> Kept<T> {
+    fn get(&self) -> T {
+        #[cfg(not(test))]
+        { self.shared.read().unwrap_or_else(|e| e.into_inner()).clone() }
+        #[cfg(test)]
+        { self.local.with(|c| c.borrow().clone()) }
+    }
+
+    fn update<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        #[cfg(not(test))]
+        { f(&mut self.shared.write().unwrap_or_else(|e| e.into_inner())) }
+        #[cfg(test)]
+        { self.local.with(|c| f(&mut c.borrow_mut())) }
+    }
+}
+
+/// A [Kept] named [$name] of type [$t], starting as [$init].
+macro_rules! kept {
+    ($name:ident, $local:ident, $t:ty, $init:expr) => {
+        #[cfg(test)]
+        thread_local! { static $local: std::cell::RefCell<$t> = const { std::cell::RefCell::new($init) }; }
+        #[cfg(not(test))]
+        static $name: Kept<$t> = Kept { shared: std::sync::RwLock::new($init) };
+        #[cfg(test)]
+        static $name: Kept<$t> = Kept { local: &$local };
+    };
+}
+
+// The terminal's colours 1-7 as it answered OSC 4 (`#rrggbb`), where it did.
+kept!(PALETTE, PALETTE_HERE, [Option<[u8; 3]>; 8], [None; 8]);
 
 /// Record an OSC 4 answer for colour [n] (1-7 are kept; the rest are not asked).
 pub fn set_palette_colour(n: u8, colour: Option<String>) {
     let Some((r, g, b)) = colour.as_deref().and_then(hex_rgb) else { return };
-    if (1..8).contains(&n) { if let Ok(mut p) = PALETTE.write() { p[n as usize] = Some([r, g, b]) } }
+    if (1..8).contains(&n) { PALETTE.update(|p| p[n as usize] = Some([r, g, b])) }
 }
 
 /// The accent the terminal's own theme gives, when it answered its colours and its background:
@@ -254,7 +324,7 @@ pub fn set_palette_colour(n: u8, colour: Option<String>) {
 pub fn native_accent() -> Option<[u8; 3]> {
     let (bg, _) = native_terminal_colours()?;
     let (r, g, b) = hex_rgb(&bg)?;
-    let p = PALETTE.read().ok()?;
+    let p = PALETTE.get();
     let colours: Vec<(usize, [u8; 3])> = (1..8).filter_map(|i| p[i].map(|c| (i, c))).collect();
     // (Most of them, or it is not the terminal's palette speaking.)
     if colours.len() < 5 { return None }
@@ -288,7 +358,7 @@ pub fn set_colours(n: u32) { COLOURS.store(n, std::sync::atomic::Ordering::Relax
 /// these are asked directly and answer reliably; the daemon uses them to paint agent panes.
 #[derive(Clone)]
 struct TerminalColours { bg: String, fg: String, foreground_reported: bool }
-static TERMINAL_FG_BG: std::sync::RwLock<Option<TerminalColours>> = std::sync::RwLock::new(None);
+kept!(TERMINAL_FG_BG, TERMINAL_FG_BG_HERE, Option<TerminalColours>, None);
 
 fn hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let h = hex.trim_start_matches('#');
@@ -308,20 +378,21 @@ fn companion_fg(bg: &str) -> String {
 /// A theme chosen in the settings (`@hn-theme`) stands in for them: hn's chrome, and the panes the
 /// daemon paints, take the theme's background and foreground.
 pub fn terminal_colours() -> Option<(String, String)> {
-    if let Some(theme) = THEME_COLOURS.read().ok().and_then(|g| g.clone()) { return Some(theme) }
-    TERMINAL_FG_BG.read().ok()?.as_ref().map(|c| (c.bg.clone(), c.fg.clone()))
+    if let Some(theme) = THEME_COLOURS.get() { return Some(theme) }
+    native_terminal_colours()
 }
 
 /// The terminal's own answer, whatever theme is chosen (the settings' "Terminal default").
 pub fn native_terminal_colours() -> Option<(String, String)> {
-    TERMINAL_FG_BG.read().ok()?.as_ref().map(|c| (c.bg.clone(), c.fg.clone()))
+    TERMINAL_FG_BG.get().map(|c| (c.bg, c.fg))
 }
 
-/// The chosen theme's (background, foreground) as `#rrggbb`; None: the terminal's own.
-static THEME_COLOURS: std::sync::RwLock<Option<(String, String)>> = std::sync::RwLock::new(None);
+// The chosen theme's (background, foreground) as `#rrggbb`; None: the terminal's own.
+kept!(THEME_COLOURS, THEME_COLOURS_HERE, Option<(String, String)>, None);
 
-/// Tests that set hn's colours (a theme, an accent) or read them back hold this, one at a time:
-/// the colours are one for the whole process, and tests run side by side.
+/// Tests that set hn's colours (a theme, an accent) or read them back held this, one at a time,
+/// when the colours were one for the whole test process; they are each test thread's own now
+/// ([Kept]), so it only orders those tests.
 #[cfg(test)]
 pub fn colours_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -329,26 +400,23 @@ pub fn colours_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Whether a theme's colours stand in for the terminal's now.
-pub fn theme_chosen() -> bool { THEME_COLOURS.read().ok().is_some_and(|g| g.is_some()) }
+pub fn theme_chosen() -> bool { THEME_COLOURS.get().is_some() }
 
 /// Draw with a theme's colours (or, None, the terminal's again). True when that changed them.
 pub fn set_theme_colours(colours: Option<(String, String)>) -> bool {
-    let Ok(mut g) = THEME_COLOURS.write() else { return false };
-    let changed = *g != colours;
-    *g = colours;
-    changed
+    THEME_COLOURS.update(|g| { let changed = *g != colours; *g = colours; changed })
 }
 
-/// The `[look]` accent (`@hn-accent`, a `#rrggbb`) to draw hn's chrome with, when the look names
-/// one. Kept separate from the terminal palette because an accent is a choice, not a terminal
-/// answer; `theme::accent()` consults it first and falls back to the derived teal.
-static ACCENT_OVERRIDE: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+// The `[look]` accent (`@hn-accent`, a `#rrggbb`) to draw hn's chrome with, when the look names
+// one. Kept separate from the terminal palette because an accent is a choice, not a terminal
+// answer; `theme::accent()` consults it first and falls back to the derived teal.
+kept!(ACCENT_OVERRIDE, ACCENT_OVERRIDE_HERE, Option<String>, None);
 
 pub fn set_accent_override(hex: Option<String>) {
-    if let Ok(mut g) = ACCENT_OVERRIDE.write() { *g = hex.map(normalise_hex_short) }
+    ACCENT_OVERRIDE.update(|g| *g = hex.map(normalise_hex_short))
 }
 
-pub fn accent_override() -> Option<String> { ACCENT_OVERRIDE.read().ok()?.clone() }
+pub fn accent_override() -> Option<String> { ACCENT_OVERRIDE.get() }
 
 /// Accept `#rgb` too (shorthand) by expanding it to `#rrggbb`, the form hn parses.
 fn normalise_hex_short(hex: String) -> String {
@@ -373,9 +441,7 @@ mod accent_override_tests {
 /// Record an OSC 10/11 answer. A half left blank keeps the other (a terminal may answer bg only);
 /// a missing foreground is chosen for contrast on the background.
 pub fn set_terminal_colours(bg: Option<String>, fg: Option<String>) {
-    if let Ok(mut guard) = TERMINAL_FG_BG.write() {
-        *guard = updated_terminal_colours(guard.as_ref(), bg, fg);
-    }
+    TERMINAL_FG_BG.update(|kept| *kept = updated_terminal_colours(kept.as_ref(), bg, fg));
 }
 
 fn updated_terminal_colours(existing: Option<&TerminalColours>, bg: Option<String>, fg: Option<String>) -> Option<TerminalColours> {
@@ -551,24 +617,34 @@ impl<W: Write> Backend for TmuxBackend<W> {
         self.extra_shadow = extras;
         // Nothing changed: nothing written.
         let all = std::mem::take(&mut self.force_whole);
-        if cells.is_empty() && !all { return Ok(()) }
+        let rewrite = std::mem::take(&mut self.rewrite);
+        self.last_cells = cells.len();
+        if cells.is_empty() && !all && rewrite.is_empty() { return Ok(()) }
+        // An input method or the terminal itself may have moved the cursor since the last frame:
+        // the first cell of a frame that writes is placed by a CUP, never assumed.
+        self.cursor_at = None;
         // A row that holds (or held) a cluster the terminal may count otherwise is written again
         // whole from its first column, as fzf writes a line: a cell-by-cell update there would
         // leave a stale character where the two counts part (a Thai vowel beside a keycap).
         let touched: std::collections::BTreeSet<u16> = cells.iter().map(|c| c.1).collect();
         let was: std::collections::HashSet<u16> = touched.iter().copied().filter(|y| self.row_risky(*y)).collect();
         for (x, y, c) in &cells { self.remember(*x, *y, c) }
-        let mut whole: std::collections::BTreeSet<u16> = touched.into_iter().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
-        // A soft clear: every row of the screen (the terminal's height; else the rows known).
+        let mut whole: std::collections::BTreeSet<u16> = touched.iter().copied().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
+        // A soft clear: every row of the screen (the terminal's height; else the rows known). A
+        // settle rewrite: the rows touched since the last one.
         if all {
-            let rows = self.inner.size().map(|s| s.height as usize).unwrap_or(self.shadow.len()).max(self.shadow.len());
+            let rows = self.screen_size().map(|s| s.height as usize).unwrap_or(self.shadow.len()).max(self.shadow.len());
             whole.extend((0..rows).map(|y| y as u16));
         }
+        whole.extend(rewrite);
+        // The rows written cell by cell are the next settle rewrite's.
+        self.touched.extend(touched.into_iter().filter(|y| !whole.contains(y)));
         // A single-cell update fits in the writer's one buffered flush; synchronizing it
         // adds sixteen bytes to an ordinary one-byte echo without hiding any redraw.
-        if self.sync_ok && !self.syncing && (cells.len() > 1 || !whole.is_empty()) { self.inner.write_all(b"\x1b[?2026h")?; self.syncing = true }
+        if cells.len() > 1 || !whole.is_empty() { self.begin_sync()? }
         let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
         let extra_at = |x: u16, y: u16| frame.and_then(|f| f.extras.get(&(x, y)));
+        let cols = if whole.is_empty() { None } else { self.screen_size().map(|s| s.width as usize) };
         // CrosstermBackend writes through to its writer.
         let w = &mut self.inner;
         let mut pen = Pen::new();
@@ -580,28 +656,35 @@ impl<W: Write> Backend for TmuxBackend<W> {
             let width = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1) as u16;
             self.cursor_at = Some(Position::new(x.saturating_add(width), *y));
         }
+        // A row written whole: its text from the first column, then the rest of the row erased —
+        // never erased first, which a terminal without ?2026 would show blank for a moment.
+        let blank = Cell::default();
+        let width = |c: &Cell| unicode_width::UnicodeWidthStr::width(c.symbol()).max(1);
         for y in whole {
             // A row of a soft clear with nothing on it is still erased: a stale cell may be there.
-            let Some(row) = self.shadow.get(y as usize) else {
-                if all { write!(w, "\x1b[{};1H", y + 1)?; pen.reset(w)?; w.write_all(b"\x1b[2K")?; self.cursor_at = None }
-                continue
-            };
+            let row = match self.shadow.get(y as usize) { Some(row) => row.as_slice(), None if all => &[], None => continue };
+            // (Blank cells at its end are the erase's.)
+            let end = row.iter().enumerate().rev().find(|(x, c)| **c != blank || extra_at(*x as u16, y).is_some())
+                .map_or(0, |(x, c)| x + width(c));
             write!(w, "\x1b[{};1H", y + 1)?;
-            self.cursor_at = Some(Position::new(0, y));
-            pen.reset(w)?;
-            w.write_all(b"\x1b[2K")?;
             let (mut skip, mut placed) = (0usize, true);
-            for (x, cell) in row.iter().enumerate() {
+            for (x, cell) in row[..end].iter().enumerate() {
                 if skip > 0 { skip -= 1; continue }
                 // After a cluster the terminal may have counted otherwise, the next cell goes
                 // where hn counts it.
                 if !placed { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
                 pen.put(w, cell, extra_at(x as u16, y), usstyle, links)?;
-                let width = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1);
-                skip = width - 1;
+                skip = width(cell) - 1;
                 placed = !risky(cell.symbol());
-                self.cursor_at = placed.then(|| Position::new((x + width) as u16, y));
             }
+            // A row that reaches the last column needs no erase (and the cursor waiting there
+            // would take that column's cell with it).
+            if cols.is_none_or(|c| end < c) {
+                if !placed { write!(w, "\x1b[{};{}H", y + 1, end + 1)?; placed = true }
+                pen.reset(w)?;
+                w.write_all(b"\x1b[K")?;
+            }
+            self.cursor_at = placed.then(|| Position::new(end as u16, y));
         }
         // SGR 0 restores all three colours and attributes in one command; when they
         // are already default, a plain-text echo has nothing to restore.
@@ -619,13 +702,18 @@ impl<W: Write> Backend for TmuxBackend<W> {
         self.cursor_at = Some(p);
         self.inner.set_cursor_position(p)
     }
-    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.extra_shadow.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
+    fn clear(&mut self) -> io::Result<()> { self.shadow.clear(); self.extra_shadow.clear(); self.touched.clear(); self.rewrite.clear(); self.cursor_at = None; self.cursor_shown = None; self.inner.clear() }
     fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
         if matches!(clear_type, ClearType::All) {
+            // Hard or soft, the draw that follows is the same update; `flush` closes it.
+            self.begin_sync()?;
             self.shadow.clear();
             self.extra_shadow.clear();
+            // Every row is written again: no settle rewrite is owed for what came before.
+            self.touched.clear();
+            self.rewrite.clear();
             // A soft clear forgets what was written but erases nothing: the draw that follows writes
-            // every row, each erased and rewritten at once, so the screen is never seen blank.
+            // every row, each its text and then the rest erased, so the screen is never seen blank.
             if std::mem::take(&mut self.soft) { self.cursor_at = None; self.force_whole = true; return Ok(()) }
         }
         self.inner.clear_region(clear_type)
@@ -662,6 +750,186 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_knows_how_many_cells_it_wrote() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        let mut c = Cell::default();
+        c.set_char('a');
+        backend.draw([(0u16, 0u16, &c), (1, 0, &c), (2, 0, &c)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        assert_eq!(backend.last_cells(), 3);
+        backend.draw(std::iter::empty()).unwrap();
+        assert_eq!(backend.last_cells(), 0, "a frame with no change wrote none");
+    }
+
+    #[test]
+    fn a_repaint_is_soft_unless_the_size_changed() {
+        assert!(repaint_is_soft(Size::new(80, 24), Size::new(80, 24)));
+        assert!(!repaint_is_soft(Size::new(80, 24), Size::new(100, 24)));
+        assert!(!repaint_is_soft(Size::new(80, 24), Size::new(80, 20)));
+    }
+
+    #[test]
+    fn a_soft_clear_writes_each_row_once_inside_one_update_and_never_erases_first() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(10, 3));
+        let mut cells = Vec::new();
+        for y in 0..3u16 { let mut c = Cell::default(); c.set_char('x'); cells.push((0u16, y, c)) }
+        backend.draw(cells.iter().map(|(x, y, c)| (*x, *y, c))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        backend.draw(cells.iter().map(|(x, y, c)| (*x, *y, c))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(!s.contains("\x1b[2J") && !s.contains("\x1b[2K"), "{s:?}");
+        // Each row's text, then the rest of the row erased: never a blank row mid-write.
+        for y in 1..=3 { assert_eq!(s.matches(&format!("\x1b[{y};1Hx\x1b[K")).count(), 1, "row {y}: {s:?}") }
+        assert_eq!(s.matches("\x1b[?2026h").count(), 2, "one update per frame: {s:?}");
+        assert_eq!(s.matches("\x1b[?2026l").count(), 2, "{s:?}");
+        // The soft frame's update opens before its first row is written.
+        let after_first = &s[s.find("\x1b[?2026l").unwrap()..];
+        assert!(after_first.find("\x1b[?2026h").unwrap() < after_first.find("\x1b[1;1Hx").unwrap(), "{s:?}");
+    }
+
+    /// Cells for [text] from column 0 of row [y], each at the column its width puts it.
+    fn text_at(backend: &mut TmuxBackend<&mut Vec<u8>>, y: u16, text: &str) {
+        use unicode_segmentation::UnicodeSegmentation;
+        let mut cells = Vec::new();
+        let mut x = 0u16;
+        for g in text.graphemes(true) {
+            let mut c = Cell::default();
+            c.set_symbol(g);
+            cells.push((x, y, c));
+            x += unicode_width::UnicodeWidthStr::width(g).max(1) as u16;
+        }
+        backend.draw(cells.iter().map(|(x, y, c)| (*x, *y, c))).unwrap();
+        Backend::flush(backend).unwrap();
+    }
+
+    #[test]
+    fn a_whole_row_writes_its_text_and_then_erases_the_rest() {
+        use alacritty_terminal::index::{Column, Line};
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(20, 2));
+        text_at(&mut backend, 0, "abcdefgh");
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        text_at(&mut backend, 0, "ab");
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(!s.contains("\x1b[2K"), "{s:?}");
+        assert!(s.contains("\x1b[1;1Hab\x1b[K"), "the text first, then the rest of the row: {s:?}");
+        assert!(s.contains("\x1b[2;1H\x1b[K"), "an empty row is still erased: {s:?}");
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 2);
+        pane.feed(&written);
+        let row: String = (0..8).map(|x| pane.term.grid()[Line(0)][Column(x)].c).collect();
+        assert_eq!(row, "ab      ", "no cell of the longer row survives");
+    }
+
+    #[test]
+    fn a_whole_row_that_reaches_the_right_edge_is_not_erased_after_it() {
+        // The cursor waits on the last column after printing there: an erase then takes that cell.
+        use alacritty_terminal::index::{Column, Line};
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(4, 1));
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        text_at(&mut backend, 0, "abcd");
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(!s.contains("\x1b[K") && !s.contains("\x1b[2K"), "{s:?}");
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 4, 1);
+        pane.feed(&written);
+        assert_eq!(pane.term.grid()[Line(0)][Column(3)].c, 'd', "{s:?}");
+    }
+
+    #[test]
+    fn a_risky_row_is_written_whole_text_first_and_placed_after_each_risky_symbol() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(20, 2));
+        text_at(&mut backend, 0, "go⚡ now");
+        text_at(&mut backend, 1, "ab⚡");
+        // One cell changes on each row: both rows hold a risky symbol, so both are written whole.
+        let mut x = Cell::default();
+        x.set_char('x');
+        backend.draw([(5u16, 0u16, &x), (0, 1, &x)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        let last = &s[s.rfind("\x1b[?2026h").unwrap()..];
+        assert!(!last.contains("\x1b[2K"), "{last:?}");
+        assert!(last.contains("\x1b[1;1Hgo⚡\x1b[1;5H xow\x1b[K"), "the cell after ⚡ placed by hn, the erase after the text: {last:?}");
+        // A row that ends on a risky symbol: the erase starts where hn counts the row's end.
+        assert!(last.contains("\x1b[2;1Hxb⚡\x1b[2;5H\x1b[K"), "{last:?}");
+    }
+
+    #[test]
+    fn a_settle_rewrite_writes_only_the_rows_touched_since_the_last_one() {
+        use alacritty_terminal::index::{Column, Line};
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(10, 4));
+        text_at(&mut backend, 0, "ab");
+        text_at(&mut backend, 2, "cd");
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // Nothing touched since: the next one writes nothing (an idle hn stays silent).
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        let settle = &s[s.rfind("\x1b[?2026h").unwrap()..];
+        assert_eq!(settle, "\x1b[?2026h\x1b[1;1Hab\x1b[K\x1b[3;1Hcd\x1b[K\x1b[?2026l", "rows 1 and 3, not the screen: {s:?}");
+        // A cell the terminal kept wrongly on a touched row is gone after it.
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 10, 4);
+        pane.feed(b"\x1b[1;6HX");
+        pane.feed(&written);
+        assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, ' ');
+    }
+
+    #[test]
+    fn a_settle_rewrite_takes_the_rows_an_overlay_left_and_none_a_repaint_wrote() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(10, 4));
+        for y in 0..3 { text_at(&mut backend, y, "xy") }
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // One row changes, and an overlay that covered row 2 is gone.
+        text_at(&mut backend, 0, "ab");
+        backend.owe_rows(1..2);
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // A row changes, then a repaint writes every row: nothing is owed after it.
+        text_at(&mut backend, 2, "cd");
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        let (mut a, mut b) = (Cell::default(), Cell::default());
+        a.set_char('a'); b.set_char('b');
+        backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        backend.settle_next();
+        backend.draw(std::iter::empty()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        let frames: Vec<&str> = s.split("\x1b[?2026h").collect();
+        let second = frames.iter().find(|f| f.starts_with("\x1b[1;1Hab\x1b[K")).unwrap_or_else(|| panic!("{s:?}"));
+        assert!(second.starts_with("\x1b[1;1Hab\x1b[K\x1b[2;1Hxy\x1b[K\x1b[?2026l"), "the changed row and the overlay's, not row 3: {s:?}");
+        assert!(frames.last().unwrap().contains("\x1b[4;1H\x1b[K"), "the repaint is the last frame written: {s:?}");
+    }
+
+    #[test]
     fn a_soft_clear_writes_every_row_over_the_screen_without_erasing_it() {
         use alacritty_terminal::index::{Column, Line};
         let mut written = Vec::new();
@@ -687,6 +955,45 @@ mod tests {
         assert!(!text.contains("\x1b[2J"), "a soft clear must not erase the screen: {text:?}");
         assert_eq!(pane.term.grid()[Line(0)][Column(0)].c, 'a');
         assert_eq!(pane.term.grid()[Line(0)][Column(5)].c, ' ', "the stale cell was erased by its row being written again");
+    }
+
+    fn two_cells(backend: &mut TmuxBackend<&mut Vec<u8>>) {
+        let (mut a, mut b) = (Cell::default(), Cell::default());
+        a.set_char('a'); b.set_char('b');
+        backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+    }
+
+    #[test]
+    fn a_hard_clear_is_inside_the_frames_synchronized_update() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        two_cells(&mut backend);
+        Backend::flush(&mut backend).unwrap();
+        // What `Terminal::clear` asks of the backend, then the frame that follows it.
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        two_cells(&mut backend);
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        let clear = s.find("\x1b[2J").expect("a hard clear");
+        let open = s[..clear].rfind("\x1b[?2026h").expect("opened before the clear");
+        assert!(s[..clear].rfind("\x1b[?2026l").map_or(true, |close| close < open), "no close between open and clear: {s:?}");
+        assert!(s[clear..].contains("\x1b[?2026l"), "closed after the redraw: {s:?}");
+        assert_eq!(s.matches("\x1b[?2026h").count(), s.matches("\x1b[?2026l").count(), "balanced: {s:?}");
+        assert_eq!(s[clear..].matches("\x1b[?2026h").count(), 0, "the frame joins the clear's update, it does not open another: {s:?}");
+    }
+
+    #[test]
+    fn a_hard_clear_without_synchronized_output_writes_no_2026() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.sync_ok = false;
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        two_cells(&mut backend);
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(s.contains("\x1b[2J") && !s.contains("2026"), "{s:?}");
     }
 
     #[test]
@@ -739,12 +1046,52 @@ mod tests {
         Backend::flush(&mut backend).unwrap();
         drop(backend);
         let bytes = written.as_slice();
-        assert!(bytes.len() <= 7, "one echoed key wrote {} bytes including its initial cursor", bytes.len());
+        assert!(bytes.len() <= 13, "one echoed key wrote {} bytes: its initial cursor, the frame's own CUP and the char", bytes.len());
         let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 4);
         pane.feed(bytes);
         use alacritty_terminal::index::{Column, Line, Point};
         assert_eq!(pane.term.grid()[Line(1)][Column(2)].c, 'x');
         assert_eq!(pane.term.grid().cursor.point, Point::new(Line(1), Column(3)));
+    }
+
+    #[test]
+    fn each_frame_places_the_cursor_itself() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        let (mut a, mut b, mut c) = (Cell::default(), Cell::default(), Cell::default());
+        a.set_char('a'); b.set_char('b'); c.set_char('c');
+        backend.draw([(0u16, 0u16, &a), (1, 0, &b)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        // The next frame changes only the cell right after the cursor hn left (column 2).
+        backend.draw(std::iter::once((2u16, 0u16, &c))).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(s.contains("\x1b[1;3H"), "the second frame moved the cursor first: {s:?}");
+    }
+
+    #[test]
+    fn an_idle_frame_writes_nothing_after_a_frame_with_cells() {
+        // As ratatui calls the backend for a frame: draw, place the cursor, flush. A frame with
+        // nothing changed writes nothing, not even a cursor move.
+        let mut a = Cell::default();
+        a.set_char('a');
+        let at = Position::new(1, 0);
+        let (mut one, mut two) = (Vec::new(), Vec::new());
+        let mut backend = TmuxBackend::with_sync(&mut one);
+        backend.draw(std::iter::once((0u16, 0u16, &a))).unwrap();
+        backend.set_cursor_position(at).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let mut backend = TmuxBackend::with_sync(&mut two);
+        backend.draw(std::iter::once((0u16, 0u16, &a))).unwrap();
+        backend.set_cursor_position(at).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        backend.draw(std::iter::empty()).unwrap();
+        backend.set_cursor_position(at).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        assert_eq!(String::from_utf8_lossy(&one), String::from_utf8_lossy(&two));
     }
 
     #[test]

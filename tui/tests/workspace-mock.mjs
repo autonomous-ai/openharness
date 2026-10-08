@@ -81,6 +81,12 @@ const server = http.createServer(async (req, res) => {
       state.visibleMachines = update.remote ? [state.currentLocal, REMOTE] : [state.currentLocal]
       state.machinesStale = update.stale === true
       broadcast(state.currentLocal, 'machines_changed', {})
+    } else if (update.action === 'remote-agent') {
+      // A harness on the remote computer that no tab shows (the side bar lists it), or it stopped.
+      let target = agents[REMOTE].find(a => a.id === update.agent)
+      if (!target) { target = makeAgent(update.agent, update.name, 'codex', '/work/remote'); agents[REMOTE].push(target); state.activities[update.agent] = 'idle' }
+      if (update.stop) { target.status = 'stopped'; target.terminal.available = false }
+      broadcast(REMOTE, 'agent_synced', { agent: target })
     } else if (update.action === 'desk-refresh') deskChanged()
     else if (update.action === 'disconnect') { for (const peer of peers) if (peer.machine === update.machine) peer.ws.terminate() }
     else if (update.action === 'activity') state.activities[update.agent] = update.activity

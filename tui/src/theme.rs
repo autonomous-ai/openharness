@@ -537,7 +537,7 @@ fn pane_palette_for(native: Option<(Color, Color)>) -> PanePalette {
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
 #[derive(Clone)]
-pub struct Fzf { pub reverse: bool, pub unicode: bool, pub pointer_char: String, pub marker_char: String, pub marker_multi: [String; 3], pub prompt_text: String, pub bg_plus: Color, pub hl: Color, pub prompt: Color, pub bw: bool, pub pal: fzfcolor::Palette }
+pub struct Fzf { pub reverse: bool, pub unicode: bool, pub pointer_char: String, pub marker_char: String, pub marker_multi: [String; 3], pub prompt_text: String, pub hl: Color, pub prompt: Color, pub pal: fzfcolor::Palette }
 
 impl Fzf {
     /// The border (and --border's glyphs) and the scrollbar: each its own slot.
@@ -689,7 +689,7 @@ fn fzf_base() -> &'static Fzf {
             marker_char,
             // (Its first line only, as fzf's firstLine keeps it.)
             prompt_text: prompt.map(|p| p.split('\n').next().unwrap_or("").to_string()).unwrap_or_else(|| "> ".into()),
-            bg_plus: pal.current.style().bg.unwrap_or(Color::Reset), hl: fg(pal.matched), prompt: fg(pal.prompt), bw: !pal.colored, pal,
+            hl: fg(pal.matched), prompt: fg(pal.prompt), pal,
         }
     })
 }
@@ -1352,11 +1352,14 @@ pub fn animation_frame() -> usize {
     (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() / 100).unwrap_or(0)) as usize
 }
 
+/// hn's spinner, everywhere one turns (working dots, connecting cards, a list loading, a launch
+/// waiting): three dots chasing round all four rows of a braille cell, so it turns about the
+/// cell's middle. (fzf's ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏ keep to the top three rows: it sat high in the cell.)
+pub const SPINNER: [&str; 8] = ["⠋", "⠙", "⠸", "⢰", "⣠", "⣄", "⡆", "⠇"];
+
 /// A spinner frame for things in motion (working dots, connecting cards).
 pub fn spinner(_tick: u64) -> &'static str {
-    // fzf's frames, in its order.
-    const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    FRAMES[animation_frame() % FRAMES.len()]
+    SPINNER[animation_frame() % SPINNER.len()]
 }
 
 #[cfg(test)]
@@ -1453,6 +1456,7 @@ mod palette_tests {
     /// of it disagrees with the theme.
     #[test]
     fn palette_follows_the_terminal_answer() {
+        let _colours = crate::term_out::colours_lock();
         crate::term_out::set_terminal_colours(Some("#201f26".into()), Some("#f5f5f5".into()));
         let (bg, fg, light) = palette();
         assert_eq!(bg, Color::Rgb(0x20, 0x1f, 0x26), "dark bg must map to the terminal's rgb");

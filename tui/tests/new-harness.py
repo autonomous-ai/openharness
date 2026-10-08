@@ -62,8 +62,8 @@ def form_screen():
 def settle_ui():
     # Wait for chooser content to redraw, not just tmux send-keys returning,
     # before taking mouse coordinates.
-    # The panels are borderless; crop around the centered form and right-hand chooser
-    # so animated working panes around them cannot keep the fixture unsettled.
+    # The panels are borderless; crop around the centered form (its choosers drop down
+    # inside it) so animated working panes around it cannot keep the fixture unsettled.
     previous, changed = None, time.monotonic()
     deadline = changed + 3
     while time.monotonic() < deadline:
@@ -71,17 +71,8 @@ def settle_ui():
         # Once the form/chooser closes, live panes are allowed to keep changing.
         if not any('›' in line for line in lines):
             return
-        width = max(map(len, lines), default=0)
-        height = len(lines) - 1  # hn's bottom status line
         left, top, form_w, form_h = form_bounds(lines)
-        side = width - (left + form_w) - 4 >= 32
         signature = tuple(line[left:left+form_w] for line in lines[top:top+form_h])
-        child_left = left + form_w + 2
-        header = lines[top+2][child_left+2:].lstrip() if top + 2 < len(lines) else ''
-        if side and (header.startswith('›') or header.startswith('Task (optional)')):
-            child_right = child_left + min(60, width - left - form_w - 4)
-            bottom = min(height - 1, top + 22)
-            signature += tuple(line[child_left:child_right] for line in lines[top:bottom])
         if signature != previous:
             previous, changed = signature, time.monotonic()
         elif time.monotonic() - changed >= .15:
@@ -204,13 +195,16 @@ try:
     field('Project'); type_text('m2 webapp'); keys('Enter'); shows('webapp @ local')
     assert create_count() == before, 'searching projects across machines only changes the draft'
     print('PASS New Harness: short local machine name and remote folders after a large local history', flush=True)
-    # Moving over a field previews its choices beside the stationary form.
-    keys('Down', 'Tab'); shows('Search agents and harnesses')
-    assert field_position('Task') == anchor, 'a preview must not move or hide the form'
-    assert any(line.find('Search agents and harnesses') > anchor[0] + 50 for line in screen().splitlines())
+    # Moving over a field drops nothing down; entering it drops its chooser under it, in the form.
+    keys('Down', 'Tab')
+    # (Wait for the redraw that moved the pointer to Agent before reading what it shows.)
+    wait(lambda: re.search(r'›\s+(Agent|Harness)\s', form_screen()), 'Tab reaches Agent')
+    assert 'Search agents' not in screen(), 'arrowing over a field shows no chooser'
     keys('Right'); shows('Search agents and harnesses')
+    assert 'Search agents and harnesses' in form_screen(), 'the chooser drops down inside the form'
     assert field_position('Task') == anchor, 'entering a chooser keeps the form visible'
-    assert 'Blender' in screen(), 'the agent chooser lists the harnesses'
+    # (The dropdown shows a dozen rows; the harnesses follow the agents.)
+    keys('PageDown', 'PageDown'); assert 'Blender' in screen(), 'the agent chooser lists the harnesses'
     snapshot('new-harness-agent')
     type_text('codex'); keys('Escape')
     shows('Approvals'); keys('Right'); shows('Search agents and harnesses')
@@ -273,14 +267,14 @@ try:
     assert 'codexHome' not in request, request
     print('PASS New Harness: machine-scoped profiles and explicit model routes', flush=True)
 
-    # Blender asks for its coding agent next in the same side chooser.
+    # Blender asks for its coding agent next in the same chooser.
     new_form(); field('Agent|Harness'); type_text('Blender'); keys('Enter'); shows('Choose a coding agent'); type_text('codex'); keys('Enter'); shows('Blender · Codex')
     submit(before + 6)
     assert state()['created'][-1]['dsh'] == 'example/blender'
     new_form()
     before_terminal = placement()
     previous_agents = {a['id'] for a in state()['agents']}
-    field('Harness'); type_text('Terminal'); shows('No matches')
+    field('Harness'); type_text('Terminal'); shows('Nothing matches')
     keys('Escape', 'Escape', 'C-b', 'T')
     wait(lambda: create_count() == before + 7 and not form_visible(), 'Terminal shortcut opens a shell immediately')
     snapshot('new-harness-terminal')

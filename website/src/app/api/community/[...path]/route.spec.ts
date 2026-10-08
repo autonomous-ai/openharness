@@ -28,6 +28,22 @@ describe('community API boundary', () => {
     expect(fetcher.mock.calls[0][1].headers.has('content-type')).toBe(false);
     expect(fetcher.mock.calls[0][1].body).toBeUndefined();
   });
+  it('serves a cover as a cacheable image, and only an image', async () => {
+    const id = '0f8fad5b-d9cb-469f-a165-70867728950e', context = { params: Promise.resolve({ path: ['harnesses', id, 'cover'] }) };
+    const request = new Request(`https://harness.example/api/community/harnesses/${id}/cover`, { headers: { authorization: 'Bearer fixture' } });
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(new Uint8Array([137, 80]), { headers: { 'Content-Type': 'image/png' } }))
+      .mockResolvedValueOnce(new Response('<svg onload=alert(1)>', { headers: { 'Content-Type': 'image/svg+xml' } }))
+      .mockResolvedValueOnce(Response.json({ success: false }, { status: 404 }));
+    vi.stubGlobal('fetch', fetcher);
+    const image = await GET(request, context);
+    expect(image.headers.get('content-type')).toBe('image/png');
+    expect(image.headers.get('cache-control')).toBe('public, max-age=86400');
+    expect(new Uint8Array(await image.arrayBuffer())).toEqual(new Uint8Array([137, 80]));
+    expect(fetcher.mock.calls[0][1].headers).toBeUndefined();
+    expect((await GET(request, context)).status).toBe(503);
+    expect((await GET(request, context)).status).toBe(404);
+  });
   it('preserves backend permission errors and handles service outages', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ success: false, error: { message: 'Sign in.' } }, { status: 401 })).mockRejectedValueOnce(new Error('offline'));
     vi.stubGlobal('fetch', fetcher);
