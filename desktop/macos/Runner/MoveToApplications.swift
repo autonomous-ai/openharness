@@ -1,4 +1,5 @@
 import Cocoa
+import DiskArbitration
 
 /// Offers to move Harness into Applications when it was opened from inside the disk image.
 ///
@@ -7,54 +8,70 @@ import Cocoa
 /// restarts there is no Harness to reopen (it is not in Applications, Launchpad or Spotlight),
 /// and the updater cannot replace a bundle on a read-only volume. Asked before the engine starts,
 /// so a move never interrupts the first-run setup; the copy then opens and the image is ejected.
+///
+/// The relaunch is a plain `open`: a harness:// link or an `open --env` variable that started the
+/// image's copy does not reach the moved one. Both are rare on a first open from the image.
 enum MoveToApplications {
   private static let declinedKey = "HarnessMoveToApplicationsDeclined"
 
   /// Returns when Harness should keep starting from where it is; exits after a move.
   static func offerIfNeeded() {
     if ProcessInfo.processInfo.environment["FLUTTER_TEST"] != nil { return }
-    if UserDefaults.standard.bool(forKey: declinedKey) { return }
 
     let running = Bundle.main.bundleURL
     // Only the disk image: the website hands out nothing else, and moving a copy out of Downloads
     // or Desktop would add macOS's own "access files in your Downloads folder" prompt.
-    guard let volume = diskImageVolume(of: originalURL(of: running)) else { return }
-    let destination = applicationsFolder().appendingPathComponent(running.lastPathComponent)
+    guard let volume = diskImageVolume(of: originalURL(of: running)),
+          let bundleID = Bundle.main.bundleIdentifier else { return }
+    let installed = installedCopy(of: bundleID, named: running.lastPathComponent)
+    let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+      .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
 
-    // A Harness already in Applications that is running: this second copy has nothing to add.
-    if let installed = NSWorkspace.shared.runningApplications.first(where: {
-      $0.bundleURL?.standardizedFileURL == destination.standardizedFileURL
-    }) {
-      installed.activate(options: [])
-      exit(0)
+    // People keep the disk image in Downloads and open Harness from it again on later days. When
+    // Applications has this build or a newer one, that is the Harness they mean.
+    if let installed, isSameOrNewer(installed, than: running) {
+      if let open = others.first {
+        open.activate(options: [])
+        exit(0)
+      }
+      if relaunch(installed, ejecting: volume) { exit(0) }
+      return
     }
-    // People keep the disk image in Downloads and open Harness from it again on later days. Once
-    // Applications has this version or a newer one, that is the Harness they mean.
-    if let installed = version(of: destination), let own = version(of: running),
-       installed.compare(own, options: .numeric) != .orderedAscending {
-      relaunch(destination, ejecting: volume)
-      exit(0)
-    }
+    if UserDefaults.standard.bool(forKey: declinedKey) { return }
 
     NSApp.activate(ignoringOtherApps: true)
     let alert = NSAlert()
-    alert.messageText = "Move Harness to Applications?"
-    alert.informativeText = "Harness is running from the disk image. In Applications it stays "
-      + "after you eject the disk image or restart, opens from Launchpad and Spotlight, and can "
-      + "update itself."
-    alert.addButton(withTitle: "Move to Applications")
+    if installed == nil {
+      alert.messageText = "Move Harness to Applications?"
+      alert.informativeText = "Harness is running from the disk image. In Applications it stays "
+        + "after you eject the disk image or restart, opens from Launchpad and Spotlight, and can "
+        + "update itself."
+      alert.addButton(withTitle: "Move to Applications")
+    } else {
+      alert.messageText = "Replace the Harness in Applications?"
+      alert.informativeText = "Applications has an older or different Harness. This one replaces "
+        + "it, and the old one goes to the Trash."
+        + (others.isEmpty ? "" : " The Harness that is open now quits first.")
+      alert.addButton(withTitle: "Replace")
+    }
     alert.addButton(withTitle: "Not Now")
     alert.showsSuppressionButton = true
     alert.suppressionButton?.title = "Don't ask again"
-    let answer = alert.runModal()
-    if alert.suppressionButton?.state == .on {
-      UserDefaults.standard.set(true, forKey: declinedKey)
+    guard alert.runModal() == .alertFirstButtonReturn else {
+      // Only a declined prompt is remembered, and it only hides the prompt: opening the image's
+      // copy later still goes to an installed Harness.
+      if alert.suppressionButton?.state == .on {
+        UserDefaults.standard.set(true, forKey: declinedKey)
+      }
+      return
     }
-    guard answer == .alertFirstButtonReturn else { return }
 
+    let destination = installed
+      ?? applicationsFolder().appendingPathComponent(running.lastPathComponent)
     do {
+      try quit(others)
       // From the running bundle, which is this app's own even when Gatekeeper translocated it.
-      try move(from: running, to: destination)
+      try install(running, at: destination, bundleID: bundleID)
     } catch {
       let failed = NSAlert()
       failed.messageText = "Harness could not be moved to Applications"
@@ -64,20 +81,59 @@ enum MoveToApplications {
       failed.runModal()
       return
     }
-
-    // The disk image is ejected only after this process has exited and the copy has opened,
-    // since a running app keeps its volume busy.
-    relaunch(destination, ejecting: volume)
-    exit(0)
+    if relaunch(destination, ejecting: volume) { exit(0) }
   }
 
-  /// The mounted volume a read-only disk image put the app on, to eject after the move. An
-  /// external drive someone keeps apps on is writable, so it is never mistaken for one.
+  /// The mounted volume a disk image put the app on, to eject after the move. DiskArbitration
+  /// says whether it is one: a read-only NTFS drive, network share or backup volume also sits
+  /// under /Volumes, and ejecting it would unmount the person's own disk.
   private static func diskImageVolume(of url: URL) -> URL? {
     guard url.path.hasPrefix("/Volumes/"),
           let values = try? url.resourceValues(forKeys: [.volumeIsReadOnlyKey, .volumeURLKey]),
-          values.volumeIsReadOnly == true else { return nil }
-    return values.volume
+          values.volumeIsReadOnly == true, let volume = values.volume,
+          let session = DASessionCreate(kCFAllocatorDefault),
+          let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, volume as CFURL),
+          let description = DADiskCopyDescription(disk) as? [String: Any],
+          // macOS 26 reports such an image as model "Disk Image", protocol "Virtual Interface".
+          description[kDADiskDescriptionDeviceModelKey as String] as? String == "Disk Image"
+            || (description[kDADiskDescriptionDevicePathKey as String] as? String)?
+              .contains("AppleDiskImage") == true
+    else { return nil }
+    return volume
+  }
+
+  /// This app's copy in /Applications or ~/Applications: same bundle identifier, and an
+  /// executable that is really there.
+  private static func installedCopy(of bundleID: String, named name: String) -> URL? {
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let ownApplications = home.appendingPathComponent("Applications", isDirectory: true)
+    let candidates = [
+      URL(fileURLWithPath: "/Applications", isDirectory: true).appendingPathComponent(name),
+      ownApplications.appendingPathComponent(name),
+    ] + NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundleID).filter {
+      let folder = $0.deletingLastPathComponent().standardizedFileURL.path
+      return folder == "/Applications" || folder == ownApplications.standardizedFileURL.path
+    }
+    return candidates.first { app in
+      guard let bundle = Bundle(url: app), bundle.bundleIdentifier == bundleID,
+            let executable = bundle.executableURL else { return false }
+      return FileManager.default.isExecutableFile(atPath: executable.path)
+    }
+  }
+
+  /// A newer version, or this very build. Internal builds carry the next release's version, so
+  /// an equal version is the same build only when the signed resources match too.
+  private static func isSameOrNewer(_ installed: URL, than running: URL) -> Bool {
+    guard let theirs = version(of: installed), let ours = version(of: running) else { return false }
+    switch theirs.compare(ours, options: .numeric) {
+    case .orderedDescending: return true
+    case .orderedAscending: return false
+    case .orderedSame:
+      let seal = "Contents/_CodeSignature/CodeResources"
+      return FileManager.default.contentsEqual(
+        atPath: installed.appendingPathComponent(seal).path,
+        andPath: running.appendingPathComponent(seal).path)
+    }
   }
 
   /// "1.2.59+412": the marketing version, then the build number, compared numerically.
@@ -92,45 +148,82 @@ enum MoveToApplications {
     if FileManager.default.isWritableFile(atPath: "/Applications") {
       return URL(fileURLWithPath: "/Applications", isDirectory: true)
     }
-    let own = FileManager.default.homeDirectoryForCurrentUser
+    return FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Applications", isDirectory: true)
-    try? FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
-    return own
   }
 
-  private static func move(from source: URL, to destination: URL) throws {
-    let files = FileManager.default
-    if files.fileExists(atPath: destination.path) {
-      // An older Harness from an earlier download: the Trash keeps it recoverable.
-      try files.trashItem(at: destination, resultingItemURL: nil)
+  /// Asks the other open Harness to quit, so its bundle can be replaced, and waits up to 10 s.
+  private static func quit(_ apps: [NSRunningApplication]) throws {
+    guard !apps.isEmpty else { return }
+    apps.forEach { $0.terminate() }
+    let deadline = Date().addingTimeInterval(10)
+    while apps.contains(where: { !$0.isTerminated }) && Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
-    try files.copyItem(at: source, to: destination)
-    // The person already confirmed opening this download once. The copy keeps the image's
-    // quarantine mark, and without removing it Gatekeeper would ask again on the next open.
+    if apps.contains(where: { !$0.isTerminated }) {
+      throw failure("The Harness that is already open did not quit. Quit it, then open this one again.")
+    }
+  }
+
+  /// Copies into a staging folder on the destination's volume and renames it into place, so a
+  /// copy that fails or is interrupted (171 MB from a compressed image) never leaves a partial
+  /// Harness in Applications, and the old one goes to the Trash only once the new one is whole.
+  private static func install(_ source: URL, at destination: URL, bundleID: String) throws {
+    let files = FileManager.default
+    let folder = destination.deletingLastPathComponent()
+    try files.createDirectory(at: folder, withIntermediateDirectories: true)
+    let staging = try files.url(
+      for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: folder, create: true)
+    defer { try? files.removeItem(at: staging) }
+    let copy = staging.appendingPathComponent(destination.lastPathComponent)
+    try files.copyItem(at: source, to: copy)
+    // The person already confirmed opening this download once. A copy that kept the image's
+    // quarantine mark would be translocated again from Applications, where the updater could not
+    // replace it, so a failure here fails the move.
     let xattr = Process()
     xattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-    xattr.arguments = ["-d", "-r", "com.apple.quarantine", destination.path]
-    try? xattr.run()
+    xattr.arguments = ["-d", "-r", "com.apple.quarantine", copy.path]
+    try xattr.run()
     xattr.waitUntilExit()
+    guard xattr.terminationStatus == 0 else {
+      throw failure("Its download mark could not be cleared (xattr exited \(xattr.terminationStatus)).")
+    }
+    if files.fileExists(atPath: destination.path) {
+      guard Bundle(url: destination)?.bundleIdentifier == bundleID else {
+        throw failure("Applications already has a different app called \(destination.lastPathComponent).")
+      }
+      try files.trashItem(at: destination, resultingItemURL: nil)
+    }
+    try files.moveItem(at: copy, to: destination)
   }
 
-  /// Opens the moved copy once this process is gone, then ejects the image it came from.
-  private static func relaunch(_ app: URL, ejecting volume: URL) {
+  /// Opens the moved copy once this process is gone, then ejects the image it came from. False
+  /// when the helper could not start, and Harness keeps running from the image instead.
+  private static func relaunch(_ app: URL, ejecting volume: URL) -> Bool {
     let pid = ProcessInfo.processInfo.processIdentifier
     // A translocated copy keeps the image busy through its nullfs mount for a moment after it
     // exits (seen in a fresh macOS 26 VM: the first detach failed, one a second later worked).
     let script = "while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.1; done; "
-      + "/usr/bin/open \(quoted(app.path)); "
+      + "/usr/bin/open \(quoted(app.path)) && "
       + "for _ in 1 2 3 4 5 6 7 8 9 10; do "
       + "/usr/bin/hdiutil detach \(quoted(volume.path)) -quiet && break; /bin/sleep 1; done"
     let shell = Process()
     shell.executableURL = URL(fileURLWithPath: "/bin/sh")
     shell.arguments = ["-c", script]
-    try? shell.run()
+    do {
+      try shell.run()
+      return true
+    } catch {
+      return false
+    }
   }
 
   private static func quoted(_ text: String) -> String {
     "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+  }
+
+  private static func failure(_ reason: String) -> NSError {
+    NSError(domain: "MoveToApplications", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
   }
 
   /// Gatekeeper runs a quarantined app opened from a downloaded disk image from a randomized
