@@ -13,6 +13,8 @@ export const LIVE_CLOSE = 'engine_live_close'
 export const LIVE_FORGET = 'engine_live_forget'
 export const LIVE_WAIT_MS = 15_000
 export const LIVE_PAGE_BYTES = 1024 * 1024
+/** Match the legacy tailer's small-rewrite replay limit; larger rewrites hydrate from their end. */
+export const LIVE_HISTORY_BYTES = 32 * 1024 * 1024
 /** A single record may exceed a page; transfer it in bounded fragments, never a giant socket frame. */
 export const LIVE_RESULT_BYTES = 64 * 1024 * 1024
 export const LIVE_PART_BYTES = 256 * 1024
@@ -39,6 +41,8 @@ export interface LiveCursor {
   prepareEnd: number | null
   /** A first turn emitted after activation may include its final complete, unterminated record. */
   completeUntil: number | null
+  /** A rewritten file's existing records replay as history, even across pages or worker restart. */
+  historyUntil?: number
   stamp: LiveStamp | null
 }
 export interface LiveFrame {
@@ -82,6 +86,7 @@ export function liveCursor(value: unknown): value is LiveCursor {
     && liveTurn(value.turn) && [false, 'cancel', 'abandoned', 'hook'].includes(value.closed as false | string)
     && (value.prepareEnd === null || (typeof value.prepareEnd === 'number' && Number.isSafeInteger(value.prepareEnd) && value.prepareEnd >= value.offset))
     && (value.completeUntil === null || (typeof value.completeUntil === 'number' && Number.isSafeInteger(value.completeUntil) && value.completeUntil >= value.offset))
+    && (value.historyUntil === undefined || (typeof value.historyUntil === 'number' && Number.isSafeInteger(value.historyUntil) && value.historyUntil > value.offset))
     && liveStamp(value.stamp)
 }
 
@@ -116,5 +121,7 @@ export interface LivePull {
   replay: boolean
   /** Activate an empty parser first, then stream the first turn with ordinary bounded live pages. */
   liveStart?: boolean
+  /** Rebuild after replacement/truncation; stream a small rewritten file as history after activation. */
+  rewritten?: boolean
   end?: number
 }

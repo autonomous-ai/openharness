@@ -136,6 +136,25 @@ describe('engine live checkpoints', () => {
     expect(whole.cursor.offset).toBe(record.length)
   })
 
+  it.each(['claude', 'codex'] as const)('%s replays a small rewritten file as history across pages and restart, then resumes live delivery', async engine => {
+    const t = await setup(engine, prompt(engine, 'x'.repeat(700_000)) + done(engine))
+    const active = await t.page({ rewritten: true, end: 1 })
+    expect(active.prepared).toBe(true)
+    expect(active.frames).toEqual([])
+    expect(active.cursor.historyUntil).toBe(active.end)
+    const first = await t.page({ rewritten: true })
+    expect(first.more).toBe(true)
+    expect(first.frames.every(frame => frame.replay)).toBe(true)
+    t.restart()
+    await appendFile(t.file, prompt(engine, 'fresh'))
+    const rest = await t.page({ rewritten: true })
+    expect(rest.frames.flatMap(frame => frame.events.map(event => [event.type, frame.replay])))
+      .toContainEqual(['turn_ended', true])
+    expect(rest.frames.flatMap(frame => frame.events.map(event => [event.type, frame.replay])))
+      .toContainEqual(['turn_started', false])
+    expect(rest.cursor.historyUntil).toBeUndefined()
+  })
+
   it('accepts complete attach records without a trailing newline and finishes after trailing blank bytes', async () => {
     const t = await setup('claude', prompt('claude', 'attached').trimEnd())
     expect((await t.page()).prepared).toBe(true)

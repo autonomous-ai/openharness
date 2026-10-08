@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
-import { LIVE_READ } from '../../engines/worker/liveProtocol.js'
+import { LIVE_PREPARE, LIVE_READ } from '../../engines/worker/liveProtocol.js'
 import { engineLiveRequests } from '../../engines/worker/liveRequests.js'
 import { createLiveTransport } from './liveTransport.js'
 import { createLiveSessions, type LiveSessions } from './liveSessions.js'
@@ -56,6 +56,16 @@ afterEach(async () => {
 })
 
 describe('core engine stream authority', () => {
+  it('remembers first-turn delivery when initial preparation fails and a normal retry follows', async () => {
+    const t = await setup(prompt('born after the agent') + done)
+    t.intercept(async (method, reply) => { if (method === LIVE_PREPARE) throw new Error('worker disconnected'); return reply })
+    await expect(t.prepare(true)).rejects.toThrow('ENGINE_UNAVAILABLE')
+    t.intercept(null)
+    await t.attach()
+    expect(t.events().filter(event => event.type === 'turn_started')).toHaveLength(1)
+    expect(t.events().filter(event => event.type === 'turn_ended')).toHaveLength(1)
+  })
+
   it('activates before emitting the first turn and streams it in bounded pages', async () => {
     const t = await setup(prompt('x'.repeat(700_000)) + done)
     const prepared = await t.prepare(true)
@@ -123,6 +133,29 @@ describe('core engine stream authority', () => {
     expect(prepared.state.handle.turnOpen).toBe(true)
   })
 
+  it('accepts a read across a Linux clock correction but rejects a changed process start tick', async () => {
+    const t = await setup()
+    t.session.processIdentity = { pid: 7, executable: 'claude', startMarker: 'one', startTicks: 42 }
+    const prepared = await t.attach()
+    let entered = deferred<void>(), release = deferred<void>()
+    t.intercept(async (method, reply) => { if (method === LIVE_READ) { entered.resolve(); await release.promise }; return reply })
+    await appendFile(t.file, prompt('current'))
+    const read = t.live.pollSession(t.session.sessionId)
+    await entered.promise
+    t.session.processIdentity.startMarker = 'two'
+    release.resolve(); await read
+    expect(t.events().map(event => event.type)).toEqual(['turn_started'])
+    expect(prepared.state.handle.turnOpen).toBe(true)
+    entered = deferred<void>(); release = deferred<void>()
+    await appendFile(t.file, done)
+    const stale = t.live.pollSession(t.session.sessionId)
+    await entered.promise
+    t.session.processIdentity.startTicks = 43
+    release.resolve(); await stale
+    expect(t.events().map(event => event.type)).toEqual(['turn_started'])
+    expect(prepared.state.handle.turnOpen).toBe(true)
+  })
+
   it('holds delivery while a replacement parser hydrates, and cannot install a candidate after cancellation', async () => {
     const t = await setup(prompt('one'))
     const first = await t.attach()
@@ -153,5 +186,23 @@ describe('core engine stream authority', () => {
     await t.live.removeSession(t.session.sessionId)
     expect(t.unwatch).toHaveBeenCalledWith(t.file)
     expect(t.live.tails(t.session.sessionId, t.file)).toBe(false)
+  })
+
+  it('activates a replacement under a hold and replays its history before delivering a fresh turn', async () => {
+    const t = await setup(prompt('a much longer original turn'))
+    await t.attach()
+    await writeFile(t.file, prompt('history') + done)
+    await expect(t.live.pollSession(t.session.sessionId)).rejects.toThrow('ENGINE_TRANSCRIPT_CHANGED')
+    const hold = await t.live.hold(t.session.sessionId, t.file)
+    const replacement = await t.prepare()
+    expect(replacement.page.frames).toEqual([])
+    expect(t.live.install(replacement)).toBe(true)
+    hold!.release()
+    await t.live.pollSession(t.session.sessionId)
+    expect(t.events().map(event => event.type)).toEqual(['turn_started', 'text_delta', 'turn_ended'])
+    expect(t.frames.every(frame => frame.replay)).toBe(true)
+    await appendFile(t.file, prompt('fresh'))
+    await t.live.pollSession(t.session.sessionId)
+    expect(t.frames.at(-1)).toMatchObject({ replay: false, events: [{ type: 'turn_started', payload: { userMessage: 'fresh' } }] })
   })
 })

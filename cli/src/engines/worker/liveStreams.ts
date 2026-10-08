@@ -6,7 +6,7 @@ import { isWholeRecord, locateAttachSpan, type AttachSpan } from '../../lib/atta
 import type { RuntimeField } from '../../lib/runtimeProfile.js'
 import { streamRecords } from '../../lib/transcriptTail.js'
 import { sameStamp, stampAt } from './liveFiles.js'
-import { LIVE_PAGE_BYTES, type LiveCursor, type LiveFrame, type LivePage, type LiveSession, type LivePull } from './liveProtocol.js'
+import { LIVE_HISTORY_BYTES, LIVE_PAGE_BYTES, type LiveCursor, type LiveFrame, type LivePage, type LiveSession, type LivePull } from './liveProtocol.js'
 
 interface Stream {
   session: LiveSession
@@ -17,6 +17,7 @@ interface Stream {
   cursor: LiveCursor | null
   lastStarted: LiveEvent | null
   head: boolean
+  activation: { end: number; history: boolean } | null
 }
 
 const emptySpan = (): AttachSpan => ({ end: 0, turnFrom: 0, profileFrom: 0, head: null, seeds: [] })
@@ -49,12 +50,21 @@ export class LiveStreams {
     const parser = this.adapter.create(ask.session)
     const stream: Stream = { session: { ...ask.session }, parser, span: emptySpan(),
       turn: { ...parser.snapshot(), identity: `${ask.token}:empty` }, closed: false,
-      cursor: null, lastStarted: null, head: true }
+      cursor: null, lastStarted: null, head: true, activation: null }
     const file = ask.session.transcriptPath
-    if (!file || (!ask.cursor && ask.liveStart)) return stream
+    if (!ask.cursor && (ask.liveStart || ask.rewritten)) {
+      let end = 0
+      try { if (file) end = (await stat(file)).size }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      if (ask.liveStart || end <= LIVE_HISTORY_BYTES) {
+        stream.activation = { end, history: !!ask.rewritten }
+        return stream
+      }
+    }
+    if (!file) return stream
     const cursor = ask.cursor
     if (cursor && !sameStamp(cursor.stamp, await stampAt(file, cursor.offset))) changed()
-    const end = cursor ? cursor.origin : ask.end
+    const end = cursor ? cursor.origin : ask.rewritten ? undefined : ask.end
     const rules = this.adapter.attachRules!((line) => this.fields(ask.session, line))
     try {
       stream.span = await locateAttachSpan(file, rules, { end, fromStart: ask.fromStart })
@@ -96,12 +106,11 @@ export class LiveStreams {
   async pull(ask: LivePull): Promise<LivePage> {
     const stream = await this.get(ask)
     const file = ask.session.transcriptPath
-    if (!ask.cursor && ask.liveStart) {
-      let end = 0
-      try { if (file) end = (await stat(file)).size }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    if (!ask.cursor && stream.activation) {
+      const { end, history } = stream.activation
       const cursor: LiveCursor = { serial: 1, origin: 0, offset: 0, turn: stream.turn, closed: false,
-        prepareEnd: null, completeUntil: end || null, stamp: null }
+        prepareEnd: null, completeUntil: history ? null : end || null, stamp: null,
+        ...(history && end > 0 ? { historyUntil: end } : {}) }
       stream.cursor = cursor
       return { frames: [], cursor, prepared: true, content: end > 0, more: false, records: 0,
         turnFrom: 0, profileFrom: 0, end, lastStarted: null }
@@ -130,7 +139,7 @@ export class LiveStreams {
       const result = fold ? this.ingest(stream, ask.token, raw, offset) : { events: [] }
       if (fold) records++
       const events = preparing && !ask.replay ? [] : result.events
-      frames.push({ raw, profile: true, observe: fold, events, replay: false, turn: { ...stream.turn },
+      frames.push({ raw, profile: true, observe: fold, events, replay: offset < (ask.cursor?.historyUntil ?? 0), turn: { ...stream.turn },
         ...(!preparing && result.failure !== undefined ? { failure: result.failure } : {}) })
       // Account for normalized output as well as raw input. A large record occupies its own page;
       // the reply transport fragments it and enforces the independent hard result bound.
@@ -143,6 +152,7 @@ export class LiveStreams {
       offset: read.next, turn: { ...stream.turn }, closed: stream.closed,
       prepareEnd: preparing && !prepared ? end : null,
       completeUntil: stopped && read.next < end ? ask.cursor?.completeUntil ?? null : null,
+      ...(ask.cursor?.historyUntil !== undefined && read.next < ask.cursor.historyUntil ? { historyUntil: ask.cursor.historyUntil } : {}),
       stamp: file ? await stampAt(file, read.next) : null }
     // Verify the old boundary again before publishing; a concurrent rewrite invalidates this page.
     if (file && ask.cursor && !sameStamp(ask.cursor.stamp, await stampAt(file, start))) changed()

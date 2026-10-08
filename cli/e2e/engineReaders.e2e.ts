@@ -1,5 +1,5 @@
 /** Private daemon/home/tmux; real supervised reader processes and the engines' recorded wire format. */
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
@@ -45,7 +45,8 @@ describe('Claude Code and Codex readers in their own processes', () => {
     const { d, c } = await fresh()
     expect(readerPid(d, 'claude')).toBeUndefined()
     expect(readerPid(d, 'codex')).toBeUndefined()
-    for (const type of ['engine_history_page', 'engine_last_turn']) {
+    for (const type of ['engine_history_page', 'engine_last_turn', 'engine_live_capabilities', 'engine_live_prepare',
+      'engine_live_read', 'engine_live_part', 'engine_live_close', 'engine_live_forget']) {
       const answer = await c.request(type, { version: 1, session: { transcriptPath: '/etc/passwd' } })
       expect(answer.error).toBe('UNSUPPORTED')
     }
@@ -117,8 +118,41 @@ describe('Claude Code and Codex readers in their own processes', () => {
     expect(d.coresStarted()).toBe(1)
   })
 
+  it.each(['claude', 'codex'] as const)('%s replays a shortened transcript as history and delivers the next turn live once', async engine => {
+    const { d, c } = await fresh()
+    const agent = await create(d, c, engine)
+    await turn(c, agent, 'older turn')
+    await turn(c, agent, 'retained history')
+    const row = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')).find((row: any) => row.agentId === agent.id)
+    const lines = readFileSync(row.transcriptPath, 'utf8').split('\n')
+    let start = lines.findIndex(line => {
+      try {
+        const record = JSON.parse(line)
+        return engine === 'claude'
+          ? record.type === 'user' && record.message?.content === 'retained history'
+          : record.type === 'event_msg' && record.payload?.type === 'item_completed'
+            && record.payload?.item?.type === 'UserMessage'
+            && record.payload.item.content.some((part: any) => part.text === 'retained history')
+      } catch { return false }
+    })
+    expect(start).toBeGreaterThan(0)
+    if (engine === 'codex') {
+      // Keep the real turn's task marker and context before its completed UserMessage item.
+      while (start > 0 && JSON.parse(lines[start]).payload?.type !== 'task_started') start--
+      expect(start).toBeGreaterThan(0)
+    }
+    const first = c.frames.length
+    const replayed = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id && frame.replay === true, 30_000, 'rewritten history')
+    writeFileSync(row.transcriptPath, lines.slice(start).join('\n'))
+    await replayed
+    expect(c.frames.slice(first).filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.id && !frame.replay)).toEqual([])
+    await turn(c, agent, 'after rewrite')
+    expect(c.frames.slice(first).filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.id && !frame.replay)).toHaveLength(1)
+    expect(d.coresStarted()).toBe(1)
+  })
+
   it('parks a crashing engine worker while the CLI continues, then delivers its queued turn once after recovery', async () => {
-    const { d, c } = await fresh({ HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_PARK_RETRY_MS: '20000' })
+    const { d, c } = await fresh({ HARNESSD_SERVICE_PARK_CRASHES: '3', HARNESSD_SERVICE_PARK_RETRY_MS: '30000' })
     const agent = await create(d, c, 'codex')
     await turn(c, agent, 'before parking')
     const corePid = d.corePid()
@@ -135,7 +169,7 @@ describe('Claude Code and Codex readers in their own processes', () => {
     await until('reader parked', () => d.log().includes('service engine-codex ended 3 times') || null, 60_000, 200)
     expect(await history(c, agent)).toMatchObject({ error: 'ENGINE_UNAVAILABLE', retryable: true })
     const first = c.frames.length
-    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 45_000, 'queued turn after worker recovery')
+    const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === agent.id, 60_000, 'queued turn after worker recovery')
     c.send('message', { agentId: agent.id, content: 'worker-is-parked' })
     await until('the independent CLI to finish writing its turn', () => {
       const file = registered().transcriptPath
@@ -143,6 +177,9 @@ describe('Claude Code and Codex readers in their own processes', () => {
         try { const row = JSON.parse(line); return row.payload?.type === 'task_complete' && row.payload?.last_agent_message?.includes('worker-is-parked') } catch { return false }
       }) || null
     }, 30_000, 100)
+    const parked = readerPid(d, 'codex')
+    expect(parked === undefined || !alive(parked)).toBe(true)
+    expect(c.frames.slice(first).filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.id)).toEqual([])
     await ended
     expect(c.frames.slice(first).filter(frame => frame.type === 'turn_started' && frame.agentId === agent.id)).toHaveLength(1)
     expect(c.frames.slice(first).filter(frame => frame.type === 'turn_ended' && frame.agentId === agent.id)).toHaveLength(1)

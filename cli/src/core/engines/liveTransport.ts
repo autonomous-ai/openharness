@@ -19,9 +19,12 @@ export function createLiveTransport(deps: LiveTransportDeps) {
     const service = READER_SERVICES[engine]
     const state = states.get(service)!
     const generation = state.generation + (state.connected ? 0 : 1)
+    const deadline = performance.now() + LIVE_WAIT_MS
     const one = async (method: string, data: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const remaining = Math.ceil(deadline - performance.now())
+      if (remaining <= 0) throw new EngineLiveError('ENGINE_UNAVAILABLE')
       let reply: Record<string, unknown>
-      try { reply = await deps.call(service, method, { ...data, version: LIVE_VERSION }, LIVE_WAIT_MS) }
+      try { reply = await deps.call(service, method, { ...data, version: LIVE_VERSION }, remaining) }
       catch { throw new EngineLiveError('ENGINE_UNAVAILABLE') }
       if (state.generation !== generation) throw new EngineLiveError('ENGINE_STALE_REPLY')
       if (reply.error !== undefined) throw new EngineLiveError(typeof reply.error === 'string' && reply.error.startsWith('ENGINE_') ? reply.error : 'ENGINE_UNAVAILABLE')
@@ -66,7 +69,10 @@ export function createLiveTransport(deps: LiveTransportDeps) {
     async pull(ask: LivePull): Promise<LivePage> {
       if (!readerEngine(ask.session.engine)) throw new EngineLiveError('ENGINE_INVALID_REQUEST')
       const reply = await request(ask.session.engine, ask.cursor ? LIVE_READ : LIVE_PREPARE, { ...ask })
-      if (!livePage(reply.answer) || reply.answer.cursor.serial <= (ask.cursor?.serial ?? 0)) throw new EngineLiveError('ENGINE_INVALID_REPLY')
+      if (!livePage(reply.answer) || reply.answer.cursor.serial !== (ask.cursor?.serial ?? 0) + 1
+        || (ask.cursor && (reply.answer.cursor.offset < ask.cursor.offset || reply.answer.cursor.origin !== ask.cursor.origin))
+        || !reply.answer.cursor.turn.identity.startsWith(`${ask.token}:`)
+        || reply.answer.frames.some(frame => !frame.turn.identity.startsWith(`${ask.token}:`))) throw new EngineLiveError('ENGINE_INVALID_REPLY')
       return reply.answer
     },
     async close(ask: LivePull, identity: string, reason: Exclude<LiveCursor['closed'], false>): Promise<{ closed: boolean; cursor: LiveCursor }> {

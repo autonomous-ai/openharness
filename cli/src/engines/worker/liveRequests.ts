@@ -35,9 +35,11 @@ function pullOf(payload: Record<string, unknown>, engine: ReaderEngine): LivePul
   const session = sessionOf(payload.session, engine)
   if (!session || !label(payload.token) || (payload.cursor !== null && !liveCursor(payload.cursor))
     || typeof payload.fromStart !== 'boolean' || typeof payload.replay !== 'boolean'
-    || (payload.end !== undefined && !position(payload.end)) || (payload.liveStart !== undefined && typeof payload.liveStart !== 'boolean')) return null
+    || (payload.end !== undefined && !position(payload.end)) || (payload.liveStart !== undefined && typeof payload.liveStart !== 'boolean')
+    || (payload.rewritten !== undefined && typeof payload.rewritten !== 'boolean')) return null
   return { token: payload.token, session, cursor: payload.cursor, fromStart: payload.fromStart,
     replay: payload.replay, ...(payload.liveStart === undefined ? {} : { liveStart: payload.liveStart }),
+    ...(payload.rewritten === undefined ? {} : { rewritten: payload.rewritten }),
     ...(payload.end === undefined ? {} : { end: payload.end }) }
 }
 

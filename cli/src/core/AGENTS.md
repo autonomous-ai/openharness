@@ -26,8 +26,8 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 - `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
 - `transcripts/`: attach (bounded reads from the end), ingest, live tail, relaunch marks, normalizers.
   Claude Code/Codex live interpretation is injected through `Engine.live`; core keeps parser handles
-  and immutable turn snapshots, never edits their engine state. Live parsers are still in process
-  pending the transport in [the live design](../../../docs/design/2026-10-07-engine-live.md).
+  and immutable turn snapshots, never edits their engine state. Supervised Claude Code/Codex parsers
+  run in workers through [the live transport](../../../docs/design/2026-10-07-engine-streams.md).
 - `turns/`: working/idle, the event funnel, cancel, heartbeats, hooks, and `recaps.ts`, the core's whole
   side of the recaps: the turn lifecycle it tells them, and what it reads back.
 - `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),

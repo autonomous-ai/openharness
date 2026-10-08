@@ -144,7 +144,7 @@ import { createExperimentHooks, wakeExperiments } from './experiments.js'
 import { answerExperimentQuery, createForExperiment } from './experimentQueries.js'
 import { createOrchestratorLink } from './orchestratorLink.js'
 import { daemonCommand } from '../lib/daemonCommand.js'
-import { ENGINE_LIVE_ENV, KNOWN_SERVICES, servicesTheMasterRuns } from '../harnessd/services.js'
+import { KNOWN_SERVICES, masterRunsLiveEngines, servicesTheMasterRuns } from '../harnessd/services.js'
 import { createTeamsLink, teamsOutOfProcess } from './teamsLink.js'
 import { createDevicesLink } from './devicesLink.js'
 import { CORE_EXIT_STOP, CORE_EXIT_UPDATE, PROBE_COMMAND } from '../harnessd/protocol.js'
@@ -783,9 +783,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // one in its own process, as each is by default, is never loaded here.
   // A reader-only older master knows these names but cannot host live parsers. Its explicit version
   // report selects compatibility; a worker timeout or crash never activates an inline fallback.
-  const isolatedLive = (engine: string): boolean => process.env[ENGINE_LIVE_ENV] === '1'
+  const liveHosted = masterRunsLiveEngines(process.env, process.ppid)
+  const isolatedLive = (engine: string): boolean => liveHosted
     && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || process.env[ENGINE_LIVE_ENV] !== '1'
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !liveHosted
     ? await import('../services/inline.js') : null
   const liveFor: LiveFor = (engine) => isolatedLive(engine) ? undefined : inline?.liveFor(engine)
   // The relay and its E2EE (gateway/): the backend link, the sessions and the keys, which every remote
