@@ -1,18 +1,8 @@
 import { readdir, stat } from 'fs/promises'
 import { join } from 'path'
 
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/**
- * `<COPILOT_HOME>/session-state/<sessionId>/events.jsonl`.
- *
- * Deterministic from the session id alone, and confirmed by Copilot itself: the `agentStop` hook
- * reports this exact path in `transcriptPath`.
- */
-export function copilotTranscriptPath(copilotHome: string, sessionId: string): string | null {
-  if (!SESSION_ID.test(sessionId)) return null
-  return join(copilotHome, 'session-state', sessionId, 'events.jsonl')
-}
+import { copilotTranscriptPath, SESSION_ID } from './contract.js'
+export { copilotTranscriptPath } from './contract.js'
 
 async function isFile(path: string): Promise<boolean> {
   try { return (await stat(path)).isFile() } catch { return false }

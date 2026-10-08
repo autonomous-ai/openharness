@@ -45,7 +45,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEngine } from '../engines/types.js'
-import { isOpencodeV2 } from '../engines/opencode/version.js'
+import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import {
   CLAUDE_ALLOW_WEB_TOOLS_ARG,
   CLAUDE_DISALLOW_WEB_TOOLS_ARG,

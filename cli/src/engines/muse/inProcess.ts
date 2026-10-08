@@ -5,3 +5,4 @@
  */
 export { MuseNormalizer, lastMuseTurnText, museMessagesToEvents } from './normalizer.js'
 export { parseMuseSettings } from './runtimeProfile.js'
+export { museEvent, museWorkspaceRoot } from './normalizer.js'

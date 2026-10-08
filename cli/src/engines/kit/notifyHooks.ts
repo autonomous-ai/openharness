@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { env } from '../../config/env.js'
 import { managedNodePath } from '../../lib/nodeRuntime.js'
-import { cursorDataDir } from '../cursor/home.js'
+import { cursorDataDir } from '../cursor/contract.js'
 
 // notify.mjs location depends on the layout (import.meta.url is the REAL executing file at runtime):
 //  - packaged/bundled: cli.js at ~/.harness/cli/cli.js → notify.mjs is a SIBLING (dist/ bundle too).

@@ -5,13 +5,8 @@ import { promisify } from 'util'
 
 const execFileAsync = promisify(execFile)
 
-const CONVERSATION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/** `<AGY_HOME>/brain/<conversationId>/.system_generated/logs/transcript_full.jsonl`. */
-export function agyTranscriptPath(agyHome: string, conversationId: string): string | null {
-  if (!CONVERSATION_ID.test(conversationId)) return null
-  return join(agyHome, 'brain', conversationId, '.system_generated', 'logs', 'transcript_full.jsonl')
-}
+import { agyTranscriptPath, CONVERSATION_ID } from './contract.js'
+export { agyTranscriptPath } from './contract.js'
 
 async function isFile(path: string): Promise<boolean> {
   try { return (await stat(path)).isFile() } catch { return false }

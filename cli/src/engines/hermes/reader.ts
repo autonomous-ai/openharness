@@ -13,6 +13,7 @@
 
 import type { LiveEvent } from '../../lib/normalize.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { HERMES_HISTORY_ID_RE } from './contract.js'
 import {
   messageToEvents, newHermesTurnState, isTerminalFinish,
   type HermesTurnState, type HmMessage,
@@ -20,14 +21,8 @@ import {
 
 // `YYYYMMDD_HHMMSS_<hex>` — CLI/TUI use 6 hex chars, the gateway 8.
 const SESSION_ID_RE = /^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/
-/**
- * Every id a Hermes store keeps a conversation under: the ones above, and an editor's. The ACP adapter
- * names its sessions with a uuid4 (`acp_adapter/session.py`; all six ACP rows on the machine measured
- * were uuids), so their history is readable too. `hermesSessionSource` keeps the narrower shape: it
- * decides whether a hook's session is a pane's own, and editors' sessions never are.
- */
-export const HERMES_HISTORY_ID_RE =
-  /^(?:[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/
+// Every id a Hermes store keeps a conversation under, declared (contract.ts): homes are found by it too.
+export { HERMES_HISTORY_ID_RE } from './contract.js'
 const POLL_MS = 1_000
 const MAX_BUFFER = 32 * 1024 * 1024
 

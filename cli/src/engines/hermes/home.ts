@@ -25,9 +25,9 @@ import { readdirSync, realpathSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { env } from '../../config/env.js'
+import { HERMES_HISTORY_ID_RE, hermesDbPath } from './contract.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import type { AgentEngine } from '../types.js'
-import { HERMES_HISTORY_ID_RE } from './reader.js'
 
 /** `YYYYMMDD_HHMMSS_<hex>`, or an editor's (ACP) uuid — the shapes `reader.ts` reads history for. */
 const SESSION_ID_RE = HERMES_HISTORY_ID_RE
@@ -36,9 +36,7 @@ const HOMES_TTL_MS = 30_000
 /** A person with hundreds of profile folders has a different problem; this keeps the scan bounded. */
 const MAX_PROFILES = 64
 
-export function hermesDbPath(home: string): string {
-  return join(home, 'state.db')
-}
+export { hermesDbPath } from './contract.js'
 
 function canonical(path: string): string {
   try { return realpathSync(path) } catch { return path }

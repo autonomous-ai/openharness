@@ -30,7 +30,7 @@
  * a regression, and it is recoverable by hand in the pane.
  */
 import type { AgentEngine } from '../engines/types.js'
-import { isOpencodeV2 } from '../engines/opencode/version.js'
+import { isOpencodeV2 } from '../engines/opencode/contract.js'
 
 export interface SubscriptionModelLaunch {
   env: Record<string, string>

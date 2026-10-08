@@ -16,7 +16,7 @@
 import { realpath, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 
-import { agyTranscriptPath } from '../../../engines/agy/session.js'
+import { agyTranscriptPath } from '../../../engines/agy/contract.js'
 import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { engineProcessMatch } from '../../tmux.js'
 import { absoluteFolder, entries, fileStamp, parseLine, readJson, readText, record, text, UUID } from './support.js'

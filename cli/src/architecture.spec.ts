@@ -239,8 +239,6 @@ const theirs = (file: string): boolean => THEIRS.some((pattern) => pattern.test(
  * reached fails the test, so remove it with the move that ends it. Empty, the core loads none of their code.
  */
 const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
-  'engines/cursor/pendingTasks.ts': '(o6) Cursor\'s pending tasks, read at the start and cleared on Stop and forget: a declared file, then a lazy load',
-  'lib/hermesHome.ts': '(o6) homes: which Hermes store a session\'s history is in',
   'engines/copilot/normalizer.ts': '(o5) adoption\'s readers',
   'engines/devin/errorLog.ts': '(o5) adoption\'s readers',
   'engines/devin/normalizer.ts': '(o5) adoption\'s readers',
@@ -259,19 +257,13 @@ const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
   'lib/sessionSearch/externals/hermes.ts': '(o5) adoption\'s readers',
   'lib/sessionSearch/externals/muse.ts': '(o5) adoption\'s readers',
   'lib/sessionSearch/externals/opencode.ts': '(o5) adoption\'s readers',
-  'engines/agy/session.ts': '(o6) identity: the registry\'s layouts, bind and repair',
-  'engines/commandcode/transcript.ts': '(o6) identity: the registry\'s layouts',
-  'engines/copilot/session.ts': '(o6) identity: the registry\'s layouts, bind and repair',
-  'engines/cursor/discovery.ts': '(o6) identity: bind\'s finders',
-  'engines/cursor/home.ts': '(o6) homes: a declared home',
-  'engines/grok/session.ts': '(o6) identity: bind\'s finders',
-  'engines/hermes/home.ts': '(o6) homes: a declared home and admission',
+  'engines/cursor/home.ts': '(o5) adoption\'s readers, through lib/sessionSearch/externals/index.ts',
+  'engines/hermes/home.ts': '(o6) homes: the hook server\'s admission and discovery\'s probe',
   'engines/hermes/homeProbe.ts': '(o6) homes: discovery\'s probe',
-  'engines/hermes/reader.ts': '(o6) homes: the hook server\'s source check',
-  'engines/muse/normalizer.ts': '(o6) identity: repair',
+  'engines/hermes/reader.ts': '(o6) homes: the hook server\'s source check; (o5) adoption\'s readers',
   'engines/opencode/sessionModel.ts': '(o6) launch data: retarget\'s session model',
   'engines/opencode/version.ts': '(o6) launch data: OpenCode\'s version',
-  'lib/sessionSearch/externals/pi.ts': '(o6) identity: repair',
+  'lib/sessionSearch/externals/pi.ts': '(o5) adoption\'s readers',
 }
 
 /** Core's entries for each facet, and the sub-batch after which they reach none of the other engines' files. */
@@ -290,6 +282,17 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   // What the core reads of their model and effort, and how a switch of theirs would be driven.
   ['lib/runtimeProfileManager.ts', '(o4)'],
   ['lib/runtimeControl.ts', '(o4)'],
+  // Where their conversations are: the registry's layouts and Cursor's homes, declared; bind's finders and
+  // repair's readers, loaded; Cursor's discovery and its queued Tasks, built on first use; Hermes's store.
+  ['lib/registry.ts', '(o6)'],
+  ['core/agents/bind.ts', '(o6)'],
+  ['lib/sessionRepair.ts', '(o6)'],
+  ['core/engines/cursorDiscovery.ts', '(o6)'],
+  ['core/agents/forget.ts', '(o6)'],
+  ['core/turns/turnHooks.ts', '(o6)'],
+  ['engines/kit/notifyHooks.ts', '(o6)'],
+  ['lib/sessionCheckpoint.ts', '(o6)'],
+  ['lib/purgeAgentService.ts', '(o6)'],
 ]
 
 describe('the daemon\'s shape', () => {
@@ -431,11 +434,8 @@ describe('the daemon\'s shape', () => {
     const reached = [...closure.keys()].filter(theirs).sort()
     expect(reached.filter((file) => !OTHER_ENGINES_CORE_MAY_REACH[file]), 'Load their code through engines/inProcess.ts (loadEngine), or declare what the core needs of it in engines/<name>/contract.ts.').toEqual([])
     expect(Object.keys(OTHER_ENGINES_CORE_MAY_REACH).filter((file) => !closure.has(file)), 'No longer loaded by the core: remove it from OTHER_ENGINES_CORE_MAY_REACH').toEqual([])
-    // Until (o6) gives the registry declared layouts, what it reaches of theirs is reached by whatever imports it
-    // (history.ts names a session's project through it, as the frames do).
-    const throughRegistry = new Set(closureOf('lib/registry.ts').keys())
     for (const [entry, batch] of FACETS_FREE_OF_THEM) {
-      expect([...closureOf(entry).keys()].filter((file) => theirs(file) && !throughRegistry.has(file)), `${entry}, free of their code since ${batch}`).toEqual([])
+      expect([...closureOf(entry).keys()].filter(theirs), `${entry}, free of their code since ${batch}`).toEqual([])
     }
     // (o2) The start's hook step loads the other engines' installers through the loader. What else it reaches
     // of theirs (the hook server's Hermes source check, the registry's layouts) leaves in (o6).
@@ -444,8 +444,9 @@ describe('the daemon\'s shape', () => {
     // environment, and nothing of any engine's code.
     const contracts = [...closure.keys()].filter((file) => /^engines\/\w+\/contract\.ts$/.test(file))
     expect(contracts.length).toBeGreaterThan(0)
+    const environment = new Set(closureOf('config/env.ts').keys())
     for (const contract of contracts) {
-      expect([...closureOf(contract).keys()].filter((file) => file !== contract && !/^engines\/(kit\/|types\.ts$)|^config\/env\.ts$/.test(file)), contract).toEqual([])
+      expect([...closureOf(contract).keys()].filter((file) => file !== contract && !environment.has(file) && !/^engines\/(kit\/|types\.ts$)/.test(file)), contract).toEqual([])
     }
   }, WALK_TIMEOUT_MS)
 

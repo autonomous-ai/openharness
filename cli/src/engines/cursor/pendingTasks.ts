@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { PENDING_TASKS_FILE } from './contract.js'
 
 export interface PendingCursorTask {
   sessionId: string
@@ -8,7 +9,7 @@ export interface PendingCursorTask {
   createdAt: number
 }
 
-const FILE_NAME = 'cursor-pending-tasks.json'
+const FILE_NAME = PENDING_TASKS_FILE
 const MAX_AGE_MS = 10 * 60_000
 const LOCK_RETRIES = 20
 const LOCK_RETRY_MS = 25

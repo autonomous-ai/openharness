@@ -9,7 +9,7 @@
  */
 import { hooksFor } from '../../engines/hooks.js'
 import type { HookTurnContext } from '../../engines/facets/hooks.js'
-import { removeCursorPendingTasks } from '../../engines/cursor/pendingTasks.js'
+import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { CursorSubagentManager } from '../../engines/cursor/subagent.js'
 import type { CursorTaskHookQueue } from '../../engines/cursor/taskHookQueue.js'
 import type { TurnRecaps } from './recaps.js'
@@ -119,7 +119,7 @@ export function createTurnHooks({
         if (status === 'error' && closing.length === 0) {
           announceTurnAborted(sessionId, 'cursor', 'Cursor ended the turn with an error before producing any output')
         }
-        setTimeout(() => void removeCursorPendingTasks(dataDir, sessionId), 2_500)
+        setTimeout(() => void removePendingCursorTasks(dataDir, sessionId), 2_500)
       })().catch((err) => {
         console.error('[cursor] stop hook failed:', err instanceof Error ? err.message : err)
       })
