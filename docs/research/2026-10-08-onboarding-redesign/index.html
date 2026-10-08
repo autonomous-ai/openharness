@@ -359,10 +359,17 @@
       <div class="panes" style="grid-template-columns: 1.25fr 1fr; grid-template-rows: 1fr 1fr">
         <div class="p" style="grid-row: 1 / span 2">
           <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">~/harnesses/first-project</span></div>
-          <div class="b">
-            <span class="dim">Welcome to Harness: all your machines, all your agents, in one place.</span><br>
-            <span class="dim">OpenCode is free and ready. Press Return to try the task below, or type your own.</span><br><br>
-            <div class="composer"><span class="sel">make a small web page that shows today's date</span><span class="cur"></span><span class="ghint">⏎ send · or type your own</span></div>
+          <div class="b" style="display:flex;flex-direction:column;justify-content:center;align-items:center;gap:1.2cqw">
+            <pre style="margin:0;font-family:var(--mono);font-size:.95cqw;line-height:1.05;color:#d4d4cc">                                 ▄
+█▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+█  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀</pre>
+            <div style="width:88%;border-left:.25cqw solid #6d8cff;background:#1f1f1d;padding:1cqw 1.2cqw">
+              <div style="color:var(--text)">make a small web page that shows today's date<span class="cur" style="display:inline-block;width:.55cqw;height:1.1cqw;background:#d4d4cc;vertical-align:-.2cqw;margin-left:.2cqw"></span></div>
+              <div style="margin-top:.8cqw"><span style="color:#6d8cff">Build</span> <span class="dim">·</span> Muse Spark 1.3 Free <span class="dim">OpenCode Zen</span></div>
+            </div>
+            <div class="dim" style="width:88%;text-align:right">tab agents&nbsp;&nbsp;ctrl+p commands</div>
+            <div class="dim"><span style="color:var(--amber)">●</span> Tip Run /connect to add an AI provider and start coding</div>
           </div>
         </div>
         <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">first-project</span><span style="margin-left:.8cqw;color:var(--muted)">×</span></div>
@@ -376,12 +383,13 @@
       <div class="status"><span>Harnesses 3</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>first-project</span></div>
     </div>
   </div>
-  <p class="cap"><b>The first screen after the tour.</b> Codex and Claude Code show their own sign-in screens, exactly as they would in any terminal. Signing in is optional; × closes either pane.</p>
+  <p class="cap"><b>The first screen after the tour.</b> All three are each agent's own screen: OpenCode's start screen with a first task typed in, Codex's and Claude Code's sign-in. Signing in is optional; × closes either pane.</p>
   <p class="note"><b>Logic:</b>
     <b>Downloads happen during the setup tour,</b> not here: OpenCode from the first second (its installer needs only curl), and Codex and Claude Code with one npm command as soon as
     setup's own Node is in place (both are npm packages, installed into <code>~/.local</code> exactly as the panes would). The Details line in the tour lists them.
-    <b>When Harness opens</b> (as soon as Harness itself is ready), it creates three ordinary harnesses in one new project: OpenCode, focused, with a first task pre-filled and selected in
-    Harness's in-pane composer (Return sends it, typing replaces it), and Codex and Claude Code with no message, so they open on their own sign-in.
+    <b>When Harness opens</b> (as soon as Harness itself is ready), it creates three ordinary harnesses in one new project. OpenCode opens on its own default screen, focused, with a first
+    task typed into its own message box but not sent: Return sends it; to write something else, the person clears the line first (that is OpenCode's box, so Harness cannot pre-select the text).
+    Codex and Claude Code get no message, so they open on their own sign-in. Nothing in these three panes is drawn by Harness.
     <b>On a slow network,</b> a download that hasn't finished when Harness opens finishes in its pane behind the friendly install screen (#1069) instead of the sign-in, for the seconds that are left.
     <b>If a sign-in can't be reached</b> (for example Anthropic blocked on the network), the pane keeps the agent's own error as a shell instead of disappearing. Fixed today on #1052,
     found by this flow on a VM. <b>Only for someone with none of the three agents</b>; anyone with Claude Code or Codex gets section 3, and OpenCode is not downloaded for them.</p>
