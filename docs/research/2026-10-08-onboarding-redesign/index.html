@@ -409,7 +409,9 @@
     <b>Who gets it:</b> only someone with no Claude Code, Codex or OpenCode and no sessions, the same people OpenCode is downloaded for.
     <b>To decide:</b> the web viewer is a Store package fetched at install, so the app should bundle it (or fetch it during setup) to make the first screen appear without waiting.</p>
 
-  <h3>Every web project gets the same preview, not only the starter</h3>
+  <h3>Later, its own PR, not this build: every web project gets the same preview</h3>
+  <p class="note" style="color:var(--amber)"><b>Out of the onboarding scope.</b> This changes how every harness behaves, so it is built and tested separately, after onboarding ships.
+    The starter itself does not need it: its preview is the Store viewer that already works today. Reliability bar before it ships: static pages, Vite/Next/Astro dev servers, a server on a reused port, two servers at once, an HTML file that is not a page (docs, test fixtures), and a remote machine, each on a fresh VM.</p>
   <p class="lede">So the starter doesn't promise something the rest of Harness doesn't do: in <b>any</b> harness, with any agent, the first time the agent writes an HTML page or starts a local web server,
     the preview opens beside it by itself, exactly like the starter's. Nobody has to know a viewer exists.</p>
   <div class="win">
@@ -545,7 +547,7 @@
   <p class="note" style="font-size:15px;line-height:1.7">
     <b>Tour:</b> 5 slides: machines, agents, ⌘P, ⌘N, then sessions + the Harness phone app + the Harness device. Tagline "All your machines. All your agents. One command center." Harness opens by itself when setup finishes; no button.<br>
     <b>New users:</b> the Space Dodge game, preview beside it, a first change pre-filled and selected. OpenCode is downloaded only when there is no agent engine.<br>
-    <b>Every web project:</b> the preview opens by itself when an agent writes a page or starts a local server; × hides it, ⇧⌘V shows it.<br>
+    <b>Not in this build:</b> the preview for every web project (its own PR later, with its own testing). Onboarding's starter uses the Store viewer that exists today. ⇧⌘V for Toggle Viewer is in.<br>
     <b>Existing users:</b> only sessions not running anywhere. Tab 1 = most recently active Claude Code + most recently active Codex; tab 2 = the next 3 most recently active, both agents where possible (order = ⌘P / ⌘T recents, by last activity); one agent = its own recent sessions.
     A pane's agent starts on the first keystroke. No welcome strip.<br>
     <b>Pickers:</b> no status badges; agent installs get a friendly progress pane instead of installer text.<br>
