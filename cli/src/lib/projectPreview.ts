@@ -4,6 +4,7 @@ import { constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
+import { insideGitCheckout } from './gitProject.js'
 import { withinRoots } from './pathContainment.js'
 
 const exec = promisify(execFile)
@@ -33,11 +34,16 @@ export async function projectPreview(path: string, knownRoots: string[] = []) {
       }
       if (++seen >= 200) break
     }
+    // Any folder the picker previews, a checkout or not (insideGitCheckout).
+    const checkout = await insideGitCheckout(target)
     const git = async (args: string[]) => {
+      if (!checkout) return undefined
       try {
         return (await exec('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', target, ...args], {
           timeout: 2000, maxBuffer: 32 * 1024,
-          env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' },
+          // Without the GIT_* the daemon may have inherited, so git finds what insideGitCheckout found.
+          env: Object.fromEntries(Object.entries({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' })
+            .filter(([key]) => !['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX'].includes(key))),
         })).stdout.trim()
       } catch { return undefined }
     }

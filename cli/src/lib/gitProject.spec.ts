@@ -462,6 +462,19 @@ describe('launch Git preparation', { timeout: 30_000 }, () => {
     expect(await read(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
   })
 
+  // A fresh Mac's /usr/bin/git is Apple's Command Line Tools installer stub, which exits 1. A folder
+  // that is not a checkout must still read as one without git, or no harness can start in it.
+  it('reads a non-Git folder without running git, so the macOS installer stub cannot fail it', async () => {
+    const stubs = join(root, 'stub-bin')
+    await mkdir(stubs)
+    await writeFile(join(stubs, 'git'), '#!/bin/sh\necho "xcode-select: note: No developer tools were found, requesting install." >&2\nexit 1\n', { mode: 0o755 })
+    vi.stubEnv('PATH', stubs)
+    const plain = join(root, 'plain project')
+    await mkdir(plain)
+    expect(await read(plain)).toEqual({ isGit: false, branches: [] })
+    expect(await read(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })
+  })
+
   it('reports unreadable refs instead of silently treating the repository as non-Git', async () => {
     await writeFile(join(repo, '.git', 'packed-refs'), 'invalid packed refs\n')
     expect(await read(repo)).toEqual({ error: 'GIT_UNAVAILABLE' })

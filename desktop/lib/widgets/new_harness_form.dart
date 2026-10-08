@@ -862,6 +862,14 @@ class NewHarnessFormState extends State<NewHarnessForm> {
 
   bool _checkingLaunch = false;
 
+  /// Start as soon as the machine has said which agents it has: the first
+  /// task was typed and sent while this computer was being prepared.
+  Future<void> startWhenReady() async {
+    await box.enginesProbed;
+    if (!mounted || box.locked || box.busy || box.task.trim().isEmpty) return;
+    await _start();
+  }
+
   Future<void> _start() async {
     if (box.busy) return;
     _restoreChoiceFocus = false;
@@ -2555,6 +2563,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
               : null
         : !option.enabled
         ? option.why
+        : box.field == NewHarnessField.harness ||
+              box.field == NewHarnessField.agent
+        ? box.agentStatus(option.id)
         : null;
     return Semantics(
       key: ValueKey('new-harness-option-${option.id}'),
@@ -3523,6 +3534,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         ? option.why
         : box.field == NewHarnessField.machine
         ? _machineNote(option.id)
+        : box.field == NewHarnessField.harness ||
+              box.field == NewHarnessField.agent
+        ? box.agentStatus(option.id)
         : null;
     final showDetail = _showsDetail(option);
     final unlinked = _unlinked(option);

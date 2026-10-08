@@ -92,7 +92,11 @@ export function startupRuns(engine: string, launch: Launch, tmuxBinary: string |
  */
 function ownedFlagProbe(engine: string, flag: string, unverified: string, node: string): string {
   const pattern = flag.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
-  const probe = `const {execFileSync}=require('node:child_process');try { const h=execFileSync(process.argv[1],['--help'],{timeout:5000,maxBuffer:1048576,encoding:'utf8',stdio:['ignore','pipe','pipe']});process.exit(/${pattern}(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }`
+  // 30 s, not 5: the first run of a freshly installed Codex is slow (2.9 s on an idle fresh Mac while
+  // macOS scans the new binary), and at a new user's first launch, beside the daemon's start and its
+  // engine probes, it passed 5 s and ended their first Codex harness with "could not verify Codex
+  // startup options" (fresh macOS VM, 2026-10-08). The second run takes 0.05 s.
+  const probe = `const {execFileSync}=require('node:child_process');try { const h=execFileSync(process.argv[1],['--help'],{timeout:30000,maxBuffer:1048576,encoding:'utf8',stdio:['ignore','pipe','pipe']});process.exit(/${pattern}(?:[^A-Za-z0-9-]|$)/.test(h)?0:64); } catch { process.exit(2); }`
   const ns = `harness_${engine}`
   return `${ns}_probe() {\n`
     + `  ${ns}_mode=0\n`

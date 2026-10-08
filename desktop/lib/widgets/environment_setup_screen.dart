@@ -210,8 +210,8 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
           count == 0
               ? 'Your tools are ready. Verify them to continue.'
               : count == 1
-              ? 'Install this tool, then sign in to start your first harness.'
-              : 'Install these $countLabel, then sign in to start your first harness.',
+              ? 'Install this tool, then start your first harness.'
+              : 'Install these $countLabel, then start your first harness.',
         ),
         Row(
           children: [
@@ -271,6 +271,8 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
           'Harness cannot see your password',
           'Finish the prompts in Terminal, then return here. Harness checks progress automatically.',
         ),
+      if (state.phase != EnvironmentSetupPhase.waitingForTerminal)
+        SetupTaskField(notifier: widget.notifier),
       const SizedBox(height: 18),
       _checkList(state, checking: true),
       _logs(state),
@@ -307,7 +309,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       _heading(
         'Setup complete',
         'This computer is ready',
-        'Every required command passed. Continue to Harness sign-in.',
+        'Every required command passed. Continue to your workspace.',
       ),
       _checkList(state),
     ],
@@ -578,7 +580,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
             ? widget.notifier.retryEnvironmentSetup
             : widget.notifier.startEnvironmentSetup;
       case EnvironmentSetupPhase.ready:
-        label = 'Continue to sign in';
+        label = 'Continue';
         action = widget.notifier.continueAfterEnvironmentSetup;
       case EnvironmentSetupPhase.waitingForTerminal:
         label = 'Recheck now';
@@ -630,7 +632,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
     final next = Semantics(
       liveRegion: _copyError != null,
       child: Text(
-        _copyError ?? 'Next: sign in and start a harness.',
+        _copyError ?? 'Next: start your first harness.',
         style: grid.AppType.body(
           color: _copyError == null
               ? AppColors.textSoft
@@ -785,6 +787,91 @@ class _CheckRow extends StatelessWidget {
           }, style: grid.AppType.label(color: color)),
         ],
       ),
+    );
+  }
+}
+
+/// The first task, typed while this computer is being prepared. A new user
+/// otherwise waited 45–65 s on this screen before they could type anything
+/// (fresh macOS VM, 2026-10-08). Typing hands the text to the first New
+/// Harness box; Enter also starts it as soon as setup finishes.
+class SetupTaskField extends StatefulWidget {
+  const SetupTaskField({super.key, required this.notifier});
+
+  final AppNotifier notifier;
+
+  @override
+  State<SetupTaskField> createState() => _SetupTaskFieldState();
+}
+
+class _SetupTaskFieldState extends State<SetupTaskField> {
+  late final _text = TextEditingController(text: widget.notifier.setupTask);
+  final _focus = FocusNode(debugLabel: 'Setup first task');
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && FocusManager.instance.primaryFocus == null) {
+        _focus.requestFocus();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _text.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final queued = widget.notifier.setupTaskQueued;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 4),
+        TextField(
+          key: const ValueKey('setup-first-task'),
+          controller: _text,
+          focusNode: _focus,
+          // One line: Return sends, which is the gesture the note promises.
+          textInputAction: TextInputAction.send,
+          style: grid.AppType.body(color: AppColors.text),
+          decoration: InputDecoration(
+            hintText: 'While this finishes: what would you like to work on?',
+            hintStyle: grid.AppType.body(color: AppColors.textSoft),
+            filled: true,
+            fillColor: AppColors.background,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 12,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: AppColors.border),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide(color: AppColors.border),
+            ),
+          ),
+          onChanged: (value) =>
+              setState(() => widget.notifier.setSetupTask(value)),
+          onSubmitted: (value) => setState(
+            () => widget.notifier.setSetupTask(value, queued: true),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          queued
+              ? 'Starts as soon as this computer is ready.'
+              : 'Press Return to start it as soon as setup finishes.',
+          key: const ValueKey('setup-first-task-note'),
+          style: grid.AppType.caption(color: AppColors.textSoft),
+        ),
+      ],
     );
   }
 }

@@ -737,7 +737,7 @@ void main() {
         find.text('All checks passed. Opening your workspace…'),
         findsOneWidget,
       );
-      expect(find.text('Continue to sign in'), findsNothing);
+      expect(find.text('Continue'), findsNothing);
       expect(find.text('ENVIRONMENT SETUP'), findsNothing);
 
       cliLogin.status.complete(const CliAuthStatus(loggedIn: false));

@@ -792,7 +792,17 @@ class AppNotifier extends ChangeNotifier {
           },
           lanBlocked: () async {
             try {
-              await AutonomousDeviceCli().discover();
+              final cli = AutonomousDeviceCli();
+              // Discovery is what raises macOS's "find devices on local networks… Autonomous robots"
+              // prompt. Everyone who reopened the app after its daemon outlived it saw that prompt on
+              // their second session, robots or not (fresh macOS VM, 2026-10-08). Without a paired
+              // robot nothing here needs the LAN, so it is not tested.
+              final paired = (await cli.list())['devices'];
+              if (!_localNetworkWanted &&
+                  (paired is! List || paired.isEmpty)) {
+                return null;
+              }
+              await cli.discover();
               return false;
             } on AutonomousDeviceCliException catch (error) {
               return error.localNetworkBlocked ? true : null;
@@ -834,6 +844,11 @@ class AppNotifier extends ChangeNotifier {
     foreground.value = state == null || state == AppLifecycleState.resumed;
     // Back in front: a viewer reads the device log again, and joins it if the boot never got in.
     if (foreground.value && !wasForeground) {
+      if (_notificationOfferDue) {
+        _notificationOfferDue = false;
+        unawaited(notificationOfferStoreForTest.set(true));
+        notificationOffer?.call();
+      }
       _refreshDeviceLogAfterReconnect();
       // ...and, hearing no machine at all, looks again for one: the person most likely just went to
       // their computer to sign it in.
@@ -4938,6 +4953,46 @@ class AppNotifier extends ChangeNotifier {
         );
     }
     _startDaemonSupervision(discovery);
+  }
+
+  /// A first task typed on the setup screen while this computer was being
+  /// prepared. A new user sat 45–65 s on "Preparing this computer" before
+  /// they could type anything (fresh macOS VM, 2026-10-08); now the first New
+  /// Harness box opens with it, and starts it at once when it was sent.
+  String _setupTask = '';
+  bool _setupTaskQueued = false;
+  String get setupTask => _setupTask;
+  bool get setupTaskQueued => _setupTaskQueued;
+
+  void setSetupTask(String text, {bool queued = false}) {
+    _setupTask = text;
+    _setupTaskQueued = queued && text.trim().isNotEmpty;
+    notifyListeners();
+  }
+
+  /// The setup screen's task, once: the first box takes it.
+  ({String task, bool start})? takeSetupTask() {
+    final task = _setupTask;
+    final start = _setupTaskQueued;
+    _setupTask = '';
+    _setupTaskQueued = false;
+    return task.trim().isEmpty ? null : (task: task, start: start);
+  }
+
+  /// Settings › Devices could not see the local network. Without a paired
+  /// robot the daemon-owner check never tests the LAN (it is what raises the
+  /// macOS prompt), so a daemon started from a terminal would stay refused it
+  /// and the first robot could never be found. Asked here, by the person
+  /// looking for one, the check runs again with the LAN test.
+  bool _localNetworkWanted = false;
+
+  Future<void> localNetworkBlocked() async {
+    _localNetworkWanted = true;
+    final guard = _daemonOwner;
+    if (guard == null) return;
+    final probe = await _discovery.ensureRunning();
+    final pid = probe.pid;
+    if (probe.ready && pid != null) await guard.recheck(pid);
   }
 
   /// One line per probe STATE the gate lands in, never per tick: this gate was silent, and the one
@@ -9469,6 +9524,86 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The first message each harness was created with, by machine and agent,
+  /// for as long as this window runs. An agent that exits before it reads it
+  /// hands it to the shell that keeps its pane, and a Change agent with no
+  /// conversation to hand off starts the new agent on it: the person picked
+  /// OpenCode after Claude Code could not reach Anthropic, and had to type
+  /// their task again (fresh macOS VM, 2026-10-08).
+  final _firstMessages = <(String, String), String>{};
+
+  @visibleForTesting
+  void rememberFirstMessageForTest(
+    String machineId,
+    String agentId,
+    String message,
+  ) => _firstMessages[(machineId, agentId)] = message;
+
+  /// An engine that exited left its pane's shell running under [successor]
+  /// (the daemon's retainExitedSession). Its tiles move to that shell instead
+  /// of closing, so the engine's last screen — the reason it stopped — stays in
+  /// front of the person. A first Claude Code harness that could not reach
+  /// Anthropic closed its only pane and left a new user on an empty box with
+  /// no message (fresh macOS VM, 2026-10-08). The retained deletion reloads the
+  /// machine, and that load attaches the tiles once the successor is listed.
+  Future<void> _handOverViews(
+    MachineState machine,
+    String agentId,
+    String successor,
+  ) async {
+    final machineId = machine.machine.machineId;
+    if (_firstMessages.remove((machineId, agentId)) case final message?) {
+      _firstMessages[(machineId, successor)] = message;
+    }
+    // An explicit Close or a Change agent owns these panes until it finishes,
+    // as [_removeAgent] honours; a shell must not take them from under it.
+    if (_closingViewAgents.containsKey((machineId, agentId)) ||
+        _agentChanges[(machineId, agentId)]?.preservingViews == true) {
+      return;
+    }
+    final terminals = allPanes
+        .where((p) => p.machineId == machineId && p.agentId == agentId)
+        .toList();
+    if (terminals.isEmpty) return;
+    // As a Change agent does: a tab whose only agent was the one that ended
+    // gets a fresh desk identity, so a peer that prunes that agent (an older
+    // window ignores `successor`) cannot close the tab now showing the shell.
+    final replacedTabs = _desk.enabled
+        ? swarms.where((swarm) {
+            final agents = swarm.panes.where((pane) => pane.agentId != null);
+            return _deskTracks(swarm) &&
+                isDeskId(swarm.id) &&
+                agents.isNotEmpty &&
+                agents.every(
+                  (pane) =>
+                      pane.machineId == machineId && pane.agentId == agentId,
+                );
+          }).toList()
+        : <Swarm>[];
+    for (final pane in terminals) {
+      await _detachSession(pane, sendClose: false);
+      if (allPanes.contains(pane) && pane.agentId == agentId) {
+        pane.agentId = successor;
+      }
+    }
+    for (final swarm in swarms) {
+      if (swarm.titleMachineId == machineId && swarm.titleAgentId == agentId) {
+        swarm.titleAgentId = successor;
+      }
+    }
+    for (final swarm in replacedTabs) {
+      if (!swarms.contains(swarm)) continue;
+      final previousId = swarm.id;
+      swarm.id = newDeskId();
+      if (_activeSwarmId == previousId) _activeSwarmId = swarm.id;
+      for (final entry in _draftSwarmReturns.entries.toList()) {
+        if (entry.value == previousId) _draftSwarmReturns[entry.key] = swarm.id;
+      }
+    }
+    _persistLayout();
+    notifyListeners();
+  }
+
   Future<void> _removeAgent(MachineState machine, String agentId) async {
     // Repeated retained-stop events must not invalidate the history refresh
     // already in flight. There is no newer removal when nothing changed.
@@ -9485,6 +9620,7 @@ class AppNotifier extends ChangeNotifier {
     final confirmedStop = stop != null && _agentStopCurrent(stop) ? stop : null;
     confirmedStop?.confirmed = true;
     machine._agentRemovals[agentId] = ++machine._agentRevision;
+    _firstMessages.remove((machine.machine.machineId, agentId));
     _agentRenames.remove((machine.machine.machineId, agentId));
     machine._agentNames.remove(agentId);
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
@@ -9990,8 +10126,31 @@ class AppNotifier extends ChangeNotifier {
     // counts as not in front, for the reason [lifecycle] gives.
     if (lifecycle() != AppLifecycleState.resumed) {
       systemNotifications.post(alert);
+      _noteNotificationOffer(kind);
     }
   }
+
+  /// Called with the offer when the person is back in front of Harness: an
+  /// agent finished (or needs them) while they were away and nothing told
+  /// them, because notifications are off. The workspace shows it once.
+  void Function()? notificationOffer;
+  bool _notificationOfferDue = false;
+
+  @visibleForTesting
+  NotificationOfferStore notificationOfferStoreForTest = notificationOfferStore;
+
+  void _noteNotificationOffer(AlertKind kind) {
+    if (kind != AlertKind.done && kind != AlertKind.needsYou) return;
+    if (systemNotifications.store.value ||
+        !systemNotifications.supported ||
+        notificationOfferStoreForTest.value) {
+      return;
+    }
+    _notificationOfferDue = true;
+  }
+
+  /// Turns notifications on from the offer, asking the system's permission.
+  Future<void> acceptNotificationOffer() => systemNotifications.setEnabled(true);
 
   /// What clicking a banner does: show that agent, wherever it is.
   ///
@@ -11249,6 +11408,9 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
+    if (choices['prompt'] case final String prompt when prompt.trim().isNotEmpty) {
+      _firstMessages[(machineId, agent.id)] = prompt;
+    }
     _upsertAgent(machine, agent);
     // Apply each creation receipt once, even if its transport result is replayed.
     // A Git start remembers its repository, never the worktree it made.
@@ -12362,6 +12524,7 @@ class AppNotifier extends ChangeNotifier {
         change.handoffEmpty = accepted.prompt == null;
         change.handoffFailed = false;
         change.contextLoaded = true;
+        _resendUnreadFirstMessage(machineId, change, source);
         return null;
       }
     } catch (_) {
@@ -12387,7 +12550,23 @@ class AppNotifier extends ChangeNotifier {
     } catch (_) {
       return 'Could not read the conversation for the handoff. Try switching again.';
     }
+    _resendUnreadFirstMessage(machineId, change, source);
     return null;
+  }
+
+  /// Nothing to hand off, but the source was created with a first message:
+  /// the new agent starts on it (see [_firstMessages]).
+  void _resendUnreadFirstMessage(
+    String machineId,
+    _AgentChange change,
+    Agent source,
+  ) {
+    if (!change.handoffEmpty) return;
+    final message = _firstMessages[(machineId, source.id)];
+    if (message == null) return;
+    change.handoff = message;
+    change.handoffEmpty = false;
+    change.handoffFailed = false;
   }
 
   Future<String?> _changeAgent(String machineId, _AgentChange change) async {
@@ -16262,6 +16441,10 @@ class AppNotifier extends ChangeNotifier {
           );
         }
         final agentId = _eventAgentId(machine, event, payload);
+        final successor = payload['successor'];
+        if (agentId != null && successor is String && successor.isNotEmpty) {
+          await _handOverViews(machine, agentId, successor);
+        }
         if (agentId != null) {
           await _removeAgent(machine, agentId);
         }

@@ -551,10 +551,17 @@ class _SwarmScreenState extends State<SwarmScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
+        final setup = app.takeSetupTask();
         await _newAgent(
+          task: setup?.task,
           stillCurrent: () =>
               _canShowWelcomeComposer && app.activeSwarmId == tab,
         );
+        if (setup?.start == true) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            unawaited(_newHarnessFormKey.currentState?.startWhenReady());
+          });
+        }
       } finally {
         _welcomeEntryScheduled = false;
         // Switching tabs while defaults load must schedule the new page too.
@@ -588,6 +595,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.canChangeCompanionAgent = _canChangeCompanionAgent;
     app.openAgentPicker = _openPaneAgents;
     app.agentChangeNotice = _showPaneActionHint;
+    app.notificationOffer = _offerNotifications;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -809,6 +817,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app.canChangeCompanionAgent = null;
     }
     if (app.openAgentPicker == _openPaneAgents) app.openAgentPicker = null;
+    if (app.notificationOffer == _offerNotifications) {
+      app.notificationOffer = null;
+    }
     if (app.agentChangeNotice == _showPaneActionHint) {
       app.agentChangeNotice = null;
     }
@@ -3579,6 +3590,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Why a pane action did nothing, for the one route that is not gated by
   /// `_canExecuteCommand`: a native menu item clicked while no keymap region
   /// owns the focus reaches its handler directly.
+  /// Once: an agent finished while the person was away and nothing told them.
+  void _offerNotifications() {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        key: const ValueKey('notification-offer'),
+        duration: const Duration(seconds: 12),
+        content: const Text(
+          'An agent finished while you were away. Get a notification next time?',
+        ),
+        action: SnackBarAction(
+          label: 'Turn on',
+          onPressed: () => unawaited(app.acceptNotificationOffer()),
+        ),
+      ),
+    );
+  }
+
   void _showPaneActionHint(String message) {
     if (!mounted) return;
     ScaffoldMessenger.maybeOf(context)
