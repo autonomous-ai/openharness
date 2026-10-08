@@ -208,10 +208,11 @@ restored every harness with no prompt.
 
 24. **Apple's "install the command line developer tools" dialog on a fresh Mac's first harness.** On a
     Mac without the Command Line Tools, `/usr/bin/git` is Apple's stub, and running it opens that
-    dialog in front of Harness. Five daemon readers still ran git in a folder with no `.git`: the agent
+    dialog in front of Harness. Five daemon readers ran git in a folder with no `.git`: the agent
     project reader as each agent started (4 s after the first task), the pull request reader for the
     focused pane, the project picker's preview, the workspaces service naming a worktree branch once
-    the agent had a title, and Change agent's handoff check. All five now decide "not a checkout" from
+    the agent had a title, and Change agent's handoff check (review added Harness Monitor's delete preview
+    and a Store `--link` install). All of them now decide "not a checkout" from
     the missing `.git` first (`insideGitCheckout`), with a test that puts a recording `git` on PATH
     (`cli/src/lib/gitStub.spec.ts`). Found with a logging `git` wrapper and the
     `com.apple.dt.CommandLineTools.installondemand` log, which names the requesting process's parent.
