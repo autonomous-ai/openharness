@@ -109,7 +109,10 @@ draft in the browser, then opens `/hub/publish` for review. No access token or n
 transferred. Nothing becomes public until the creator reviews the output, source and conversation
 and clicks Publish. A draft survives the existing sign-in flow; repeated submission uses one
 publication ID. Remote projects and older apps can use the project-folder picker or import
-`OPEN-HARNESS.json`. The first version requires a self-contained HTML preview, up to 30 files/6 MB;
+`OPEN-HARNESS.json`. The output is the project's `preview.html` (or the page a fork arrived with,
+once changed). Without one, as for a native result such as a Typst PDF or a Blender model, the
+desktop asks the machine's daemon for a picture of the harness's viewer (`viewer_surface`, headless
+Chrome) and publishes it as `preview.html` and the cover; a fork still opens the real viewer. The first version requires a self-contained HTML preview, up to 30 files/6 MB;
 hidden configuration, symlinks and installed dependencies are excluded. Conversation tails may be
 incomplete and the review form says so. `/explore` links remain compatible with `/hub`.
 

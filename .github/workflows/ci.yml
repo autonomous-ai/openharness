@@ -156,6 +156,7 @@ jobs:
             /store/
             /docs/images/
             /mobile/pubspec.lock
+            /backend/src/lib/communityContract.ts
             /.gitattributes
             /.gitignore
             /.gitmodules
