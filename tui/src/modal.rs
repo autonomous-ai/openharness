@@ -209,6 +209,7 @@ pub const ENGINES: [&str; 15] = ["claude", "codex", "opencode", "cursor", "pi", 
 /// The palette's commands: (id, title, keys, hint, group).
 pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("account", "Account / sign in…", "", "connect computers, sync your workspace and add your phone", "General"),
+    ("signout", "Sign out", "", "leave your Harness account here — harnesses on this computer keep running", "General"),
     ("open", "Harnesses…", "⌥P", "every harness on every machine", "Harness"),
     ("projects", "Projects…", "⌥O", "a project, then one of its harnesses", "Harness"),
     ("models", "Models…", "⌥I", "local, shared, subscriptions, APIs — use one on this harness", "Harness"),

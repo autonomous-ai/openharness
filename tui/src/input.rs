@@ -1044,6 +1044,7 @@ fn remode(app: &App, kind: PickerKind, picker: &mut Picker) -> (PickerKind, bool
 pub fn run(app: &mut App, command: &str) {
     match command {
         "account" | "login" => crate::account::open(app),
+        "signout" | "logout" => crate::account::sign_out_command(app),
         "hardware-devices" => crate::hardware::open(app),
         "open" => launch(app, "", Filter::All),
         "palette" => launch(app, ">", Filter::All),
@@ -3369,7 +3370,7 @@ pub fn is_command(id: &str) -> bool {
         | "last-tab" | "next-waiting" | "prev-waiting" | "resume-focused" | "last-harness" | "tree" | "files" | "info" | "messages" | "keys"
         | "theme" | "appearance" | "commands" | "choose-buffer" | "quit" | "keybinds"
         // ── machines & devices ──
-        | "connect-machine" | "add-phone" | "devices" | "hardware-devices" | "account" | "login" | "change-agent")
+        | "connect-machine" | "add-phone" | "devices" | "hardware-devices" | "account" | "login" | "signout" | "logout" | "change-agent")
 }
 
 
