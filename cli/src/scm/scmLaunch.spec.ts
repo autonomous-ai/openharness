@@ -7,6 +7,7 @@ import { buildLaunchOverrides, type LaunchOverridesDeps } from '../lib/launchOve
 import type { TerminalCreateResult, TmuxRuntimeRef } from '../lib/terminalTypes.js'
 import * as scmProjects from './scmProjects.js'
 import type { ScmLaunchRecord } from './types.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 let dataDir = ''
 
@@ -26,7 +27,7 @@ const GIT: ScmLaunchRecord = { kind: 'git' }
 
 function deps(): LaunchOverridesDeps {
   return {
-    machine: () => ({ hermesSystemManaged: false }),
+    machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async (key) => `/state/grid-engine-config/${key}`,
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: () => {},

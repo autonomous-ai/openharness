@@ -15,7 +15,7 @@
 import { lstat, mkdir, readdir, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import type { GridConfigFile, GridConfigLink } from './gridLaunch.js'
+import type { GridConfigFile, GridConfigLink } from './gridLaunchWire.js'
 
 /** Everything this module owns lives under one root, so pruning can be confident about what it is. */
 export function gridConfigRoot(): string {

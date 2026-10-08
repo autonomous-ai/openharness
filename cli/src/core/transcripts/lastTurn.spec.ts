@@ -29,6 +29,7 @@ vi.mock('../../lib/transcriptTail.js', () => ({
 vi.mock('../../engines/claude/normalize.js', () => ({
   lastTurnTextFromRawLines: vi.fn((lines: string[]) => ({ text: `raw: ${lines[0]}` })),
   selectClaudeRecapLine: vi.fn(),
+  claudePageLine: vi.fn(),
 }))
 vi.mock('../../engines/cursor/normalizer.js', () => ({ lastCursorTurnText: vi.fn((lines: string[]) => ({ text: `cursor: ${lines[0]}` })) }))
 vi.mock('../../engines/muse/normalizer.js', () => ({ lastMuseTurnText: vi.fn((lines: string[]) => ({ text: `muse: ${lines[0]}` })) }))
@@ -88,8 +89,9 @@ describe('the last turn of each engine', () => {
     for (const engine of engines) {
       expect(await read(`${engine}-s`), engine).toEqual(text(`${engine}: /t/${engine}.jsonl capped`))
     }
-    // An engine with no reader of its own: its raw lines.
-    expect(await read('terminal-s')).toEqual(text('raw: /t/shell.log capped'))
+    // An engine with no reader and no code of its own here has no last turn: core reads no engine's lines itself.
+    // (A shell keeps no transcript: registry.engineKeepsTranscriptFile.)
+    expect(await read('terminal-s')).toBeNull()
   })
 })
 

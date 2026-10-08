@@ -7,16 +7,18 @@
  *
  * Lines are `tailFile(path, Infinity)`'s, the reader every page came from: LF, CR and CRLF end a line,
  * a line that is only whitespace is no line, and a last line with no ending yet is one. Pages are the
- * windows `windowRawLines` and `windowCodexLines` cut from those lines, with the same cursors, except:
+ * windows an engine's whole-file windower cuts from those lines (Claude Code's `windowRawLines`, Codex's
+ * `windowCodexLines`), with the same cursors, except:
  *  - a page holds at most `PAGE_MAX_BYTES` (see `pageBefore`), and a line longer than that is counted
  *    but left out — the old window held whatever its turn did, a whole file at worst;
- *  - a Claude cursor names the newest line with that id, where the old window took the oldest. Ids are
+ *  - a cursor a record names is the newest line with that id, where the old window took the oldest. Ids are
  *    unique in practice, and finding the oldest would mean reading back to the start every time.
+ *
+ * The rules are the engine's, handed in by its reader (`ThreadPages`): this file knows no engine, so the pager
+ * the core keeps for line counts loads none of their code.
  */
 import { open, stat } from 'node:fs/promises'
 import { StringDecoder } from 'node:string_decoder'
-import { codexPageStart, windowCodexLines } from '../engines/codex/normalizer.js'
-import { claudePageLine } from './normalize.js'
 import { scanRecordsBackward, streamRecords } from './transcriptTail.js'
 
 /** The most a page holds. A page used to be however long its turn was, and a turn can be gigabytes. */
@@ -240,6 +242,15 @@ export interface PageRules {
   startsPage(line: string): boolean
 }
 
+/**
+ * How an engine's thread is paged, as its reader declares it. `record`: a cursor is the id a line's record
+ * carries (`line` says which, and whether a page may start there), the page before names the newest line with
+ * that id. `line`: a cursor is `<prefix>:<n>`, the number of lines before it, kept in an index as the file grows.
+ */
+export type ThreadPages =
+  | { cursor: 'record'; line(line: string): { cursor: string | null; startsPage: boolean } }
+  | { cursor: 'line'; prefix: string; startsPage(line: string): boolean }
+
 export interface Page {
   /** Oldest first. */
   lines: string[]
@@ -354,44 +365,48 @@ export class TranscriptPager {
     try { return (await this.index(filePath)).count() } catch { return 0 }
   }
 
-  /** `windowRawLines` over the whole file, without it. No `limit` asks for every line, as far as fits. */
-  async claude(filePath: string, opts: { limit?: number; before?: string }): Promise<HistoryPage> {
+  /** The page of a thread before `opts.before` (else its end), as `rules` page it: the engine's whole-file window,
+   *  without the whole file. No `limit` asks for every line, as far as fits. */
+  page(filePath: string, rules: ThreadPages, opts: { limit?: number; before?: string }): Promise<HistoryPage> {
+    return rules.cursor === 'record' ? this.byRecord(filePath, rules, opts) : this.byLine(filePath, rules, opts)
+  }
+
+  private async byRecord(filePath: string, rules: Extract<ThreadPages, { cursor: 'record' }>, opts: { limit?: number; before?: string }): Promise<HistoryPage> {
     let end = await length(filePath)
     if (opts.before !== undefined) {
-      const at = await this.findClaude(filePath, end, opts.before)
+      const at = await this.findRecord(filePath, end, opts.before, rules)
       if (at === null) return STALE
       end = at
     }
-    const page = await pageBefore(filePath, end, opts.limit ?? Infinity, { startsPage: (line) => claudePageLine(line).startsPage }, this.maxBytes, this.options.walk)
+    const page = await pageBefore(filePath, end, opts.limit ?? Infinity, { startsPage: (line) => rules.line(line).startsPage }, this.maxBytes, this.options.walk)
     if (!page) return STALE
     // An empty window before a cursor still names that cursor's line, as the old one did.
-    const oldestCursor = page.lines.length ? claudePageLine(page.lines[0]).cursor : opts.before ?? null
+    const oldestCursor = page.lines.length ? rules.line(page.lines[0]).cursor : opts.before ?? null
     if (page.lines.length && oldestCursor !== null) this.remember(filePath, oldestCursor, page.start)
     return { lines: page.lines, hasMore: page.hasMore, oldestCursor, clipped: page.clipped }
   }
 
-  /** `windowCodexLines` over the whole file, without it. No `limit` asks for every line, as far as fits.
-   *  A file that cannot be read is an empty one, as it was to the whole-file reader. */
-  async codex(filePath: string, opts: { limit?: number; before?: string }): Promise<HistoryPage> {
-    try { return await this.codexPage(filePath, opts) } catch {
-      const old = windowCodexLines([], { limit: opts.limit ?? Infinity, before: opts.before })
-      return old.staleCursor ? STALE : { lines: [], hasMore: false, oldestCursor: old.oldestCursor, clipped: false }
+  /** A file that cannot be read is an empty one, as it was to the whole-file reader: its only cursor is the
+   *  start, `<prefix>:0`, and any other is stale. */
+  private async byLine(filePath: string, rules: Extract<ThreadPages, { cursor: 'line' }>, opts: { limit?: number; before?: string }): Promise<HistoryPage> {
+    try { return await this.linePage(filePath, rules, opts) } catch {
+      const at = opts.before === undefined ? 0 : lineCursor(rules.prefix, opts.before)
+      return at === 0 ? { lines: [], hasMore: false, oldestCursor: `${rules.prefix}:0`, clipped: false } : STALE
     }
   }
 
-  private async codexPage(filePath: string, opts: { limit?: number; before?: string }): Promise<HistoryPage> {
+  private async linePage(filePath: string, rules: Extract<ThreadPages, { cursor: 'line' }>, opts: { limit?: number; before?: string }): Promise<HistoryPage> {
     const index = await this.index(filePath)
     const count = index.count()
     let endIndex = count
     if (opts.before !== undefined) {
-      const match = /^codex:(\d+)$/.exec(opts.before)
-      if (!match) return STALE
-      endIndex = Number(match[1])
-      if (!Number.isSafeInteger(endIndex) || endIndex > count) return STALE
+      const at = lineCursor(rules.prefix, opts.before)
+      if (at === null || at > count) return STALE
+      endIndex = at
     }
-    const page = await pageBefore(filePath, await index.endOf(endIndex), opts.limit ?? Infinity, { startsPage: codexPageStart }, this.maxBytes, this.options.walk)
+    const page = await pageBefore(filePath, await index.endOf(endIndex), opts.limit ?? Infinity, { startsPage: rules.startsPage }, this.maxBytes, this.options.walk)
     if (!page) return STALE
-    return { lines: page.lines, hasMore: page.hasMore, oldestCursor: `codex:${endIndex - page.count}`, clipped: page.clipped }
+    return { lines: page.lines, hasMore: page.hasMore, oldestCursor: `${rules.prefix}:${endIndex - page.count}`, clipped: page.clipped }
   }
 
   private async index(filePath: string): Promise<LineIndex> {
@@ -416,8 +431,8 @@ export class TranscriptPager {
   }
 
   /** Where the newest line with this cursor starts, or null. A remembered byte is checked first. */
-  private async findClaude(filePath: string, end: number, cursor: string): Promise<number | null> {
-    const names = (line: string): boolean => claudePageLine(line).cursor === cursor
+  private async findRecord(filePath: string, end: number, cursor: string, rules: Extract<ThreadPages, { cursor: 'record' }>): Promise<number | null> {
+    const names = (line: string): boolean => rules.line(line).cursor === cursor
     const known = this.cursors.get(filePath)?.get(cursor)
     if (known !== undefined && known < end) {
       let line: string | null = null
@@ -440,4 +455,12 @@ export class TranscriptPager {
 
 async function length(filePath: string): Promise<number> {
   try { return (await stat(filePath)).size } catch { return 0 }
+}
+
+/** The line a `<prefix>:<n>` cursor names, or null for one that names none. */
+function lineCursor(prefix: string, cursor: string): number | null {
+  if (!cursor.startsWith(`${prefix}:`)) return null
+  const digits = cursor.slice(prefix.length + 1)
+  const at = /^\d+$/.test(digits) ? Number(digits) : NaN
+  return Number.isSafeInteger(at) && at >= 0 ? at : null
 }

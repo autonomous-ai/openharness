@@ -25,7 +25,10 @@ flags, folder trust and the resume repair, applied by `kit/launchStartup.ts`, `k
 `kit/folderTrust.ts` and `kit/resumeRepair.ts`, and what discovery reads off their processes and transcripts
 (`claude/discoveryContract.ts`, `codex/discoveryContract.ts`, `kit/processFacts.ts`, `kit/projectFolder.ts`), and
 where they keep their sessions, which the registry, session repair, Stop's capture and the handoff read
-(`claude/sessionStore.ts`, `codex/sessionStore.ts`, `kit/sessionRecords.ts`, `kit/continuation.ts`) ([launch](../../../docs/design/2026-10-08-engine-launch.md)). Claude Code and Codex history/last-turn reads,
+(`claude/sessionStore.ts`, `codex/sessionStore.ts`, `kit/sessionRecords.ts`, `kit/continuation.ts`), with the activity
+an agent's frame shows, and how their conversations are adopted (`claude/adoption.ts`, `codex/adoption.ts`,
+`kit/adoption.ts`) ([launch](../../../docs/design/2026-10-08-engine-launch.md)). Their pages are paged by rules their
+readers hand the engine-neutral pager (`lib/transcriptPages.ts`). Claude Code and Codex history/last-turn reads,
 live transcript parsing, runtime profiles/catalogs, screen interpretation, submission readings, model-control drivers, question navigation and Codex's app-server connection run on demand in supervised workers;
 the other facets still run in core. Explicit inline mode and older masters retain inline implementations. See
 [hooks](../../../docs/design/2026-10-08-engine-hooks.md),

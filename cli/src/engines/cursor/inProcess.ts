@@ -7,3 +7,6 @@ export { CursorNormalizer, cursorMessagesToEvents, lastCursorTurnText, windowCur
 export { CursorSubagentManager, loadCursorReplayTaskLinks } from './subagent.js'
 export { CursorTaskHookQueue } from './taskHookQueue.js'
 export { cursorConfigDir, cursorDataDir } from './home.js'
+export { CursorTranscriptDiscovery, findCursorTranscript } from './discovery.js'
+export { loadCursorPendingTasks, removeCursorPendingTasks } from './pendingTasks.js'
+export { cursorProvider } from '../../lib/sessionSearch/externals/cursor.js'

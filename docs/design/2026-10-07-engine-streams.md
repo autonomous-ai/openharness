@@ -62,7 +62,12 @@ their current tailers and parsers.
   the page and schedules a held re-attach. Files up to 32 MiB activate a fresh
   parser and replay existing records as history in bounded pages; subsequent
   appends are live. The history boundary survives worker restart. Larger files
-  hydrate from their new end. A trusted explicit tail move hydrates at the new
+  hydrate up to that boundary. The boundary is where the read that found the
+  change saw the file end (the worker keeps it by that stream's token until core
+  forgets the token, and drops it if the file changes again), not where the file
+  ends when core re-attaches a second later: a turn written in between is live,
+  as it was under the legacy tailer. A worker restarted in between keeps
+  everything on disk as history. A trusted explicit tail move hydrates at the new
   offset without replay. This is not a checksum of every byte in the transcript.
 
 ## Availability and compatibility

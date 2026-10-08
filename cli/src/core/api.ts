@@ -23,9 +23,9 @@ import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
-import type { GridLaunchOverride } from '../lib/gridLaunch.js'
+import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
-import type { LastTurnText, LiveEvent } from '../lib/normalize.js'
+import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
@@ -496,6 +496,10 @@ const MINUTE = 60_000
  *   a move onto a grid model (`moveTarget`) each wait for it.
  * - A launch target, the private grid's name and the lists each run a few `grid` calls of up to 30 s.
  * - The Store's install and update set up a harness's toolchain: minutes.
+ *
+ * A grid or saved-API launch (`gridLaunch`) is built from what models has in hand, and a saved API's target
+ * (`apiTarget`) reads its model list for at most 15 s (lib/apiModels.ts): both take the half minute, which bounds
+ * how long a launch on one can wait. A launch on the engine's own login asks models nothing.
  */
 export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
   models: {
@@ -703,6 +707,16 @@ export interface ModelsPort {
   moveTarget(request: { gridName: string | null; model: string }): Promise<{ target: GridLaunchOverride } | { detail: string }>
   /** An agent was just moved onto a grid model: start that grid while its pane restarts, if it sleeps. */
   moved(launch: GridLaunchOverride): void
+  /**
+   * The launch that points `request.engine` at a grid or a saved API (lib/gridLaunch.ts): what its pane starts
+   * with and the config files the core writes for it, with a saved API's endpoint and key as saved now when
+   * `refresh`. An engine that cannot be pointed there is answered with the reason. The core builds no grid launch
+   * itself (docs/design/2026-10-08-launch-port.md).
+   */
+  gridLaunch(request: GridLaunchRequest): Promise<GridLaunchAnswer>
+  /** Where an agent moved onto a saved API's model sends its inference: the key travels only into its launch. The
+   *  sentence a person reads when the API cannot be used. */
+  apiTarget(request: { connectionId: string; model: string }): Promise<{ target: GridLaunchOverride; apiBase: string } | { detail: string }>
   /** The account's private grid: the backend's word, else what this machine works out; null for none. */
   privateGridName(): Promise<string | null>
   /** What `grid_models_changed` tells the windows: the list as a window that draws row state reads it,
@@ -716,13 +730,14 @@ export interface ModelsPort {
 }
 
 /**
- * What the core gets when models fails: grid set-up and every target answered with an error (a create on
- * a grid model answers GRID_UNAVAILABLE), frames with no note and no prewarm, the private grid as the
- * backend said it or none, and no push of the lists.
+ * What the core gets when models fails: grid set-up, every target and every grid or saved-API launch answered
+ * with an error (a create on a grid model answers GRID_UNAVAILABLE, and so does a relaunch on one), frames with no
+ * note and no prewarm, the private grid as the backend said it or none, and no push of the lists. A launch on the
+ * engine's own login never asks models.
  */
 export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
   ensure: later(FAIL), annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
-  privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
+  gridLaunch: later(FAIL), apiTarget: later(FAIL), privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
 }
 
 /** What the core calls while `ports.models` is null (models is off): its fallbacks' answers. */
@@ -733,6 +748,8 @@ export const MODELS_OFF: ModelsPort = {
   launchTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   moveTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   moved: () => {},
+  gridLaunch: () => Promise.reject(new ServiceUnavailableError('models')),
+  apiTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   privateGridName: async () => null,
   lists: () => Promise.reject(new ServiceUnavailableError('models')),
   machines: () => {},

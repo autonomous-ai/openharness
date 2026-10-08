@@ -4,7 +4,7 @@ import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
-import { inProcessScreen, preloadEngine } from '../engines/inProcess.js'
+import { engineNow, inProcessScreen, preloadEngine } from '../engines/inProcess.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
 import { createNativeControls } from './engines/nativeControls.js'
@@ -49,12 +49,11 @@ import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { ensureTmuxOnPath } from '../lib/tmuxOnPath.js'
 import { AUTH_DIR, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
-import { isTerminalEngine } from '../engines/types.js'
+import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
-import { type GridLaunchMachine } from '../lib/gridLaunch.js'
-import { HERMES_SYSTEM_MANAGED_DIR } from '../lib/gridWebMcp.js'
+import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLaunchWire.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
 import { tmuxSupportsSessionEnv } from '../lib/tmuxVersion.js'
 import { clearDeleted, isRecentlyDeleted, markDeleted } from '../lib/deletedSessions.js'
@@ -63,7 +62,7 @@ import { processSessionOf } from '../engines/sessionStores.js'
 import { handoffProviderDeps } from '../lib/handoffDiscovery.js'
 import { TmuxBackend } from '../lib/tmuxBackend.js'
 import { DEFAULT_HOST_THEME, loadHostTheme, saveHostTheme, type HostTheme } from '../lib/hostTheme.js'
-import { restoreAgents, tmuxSurvey } from '../lib/restoreAgents.js'
+import { restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreSummary } from '../lib/restoreAgents.js'
 import { createRetainExitedSession } from '../lib/retainExitedSession.js'
 import { createKeepAbandonedConversation } from '../lib/keepAbandonedConversation.js'
 import { OpenTabProtection } from '../lib/openTabProtection.js'
@@ -78,7 +77,7 @@ import { adoptLegacyHarnessSessions, listTmuxPanes } from '../lib/tmuxAgentDisco
 import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { prepareHarnessLaunch } from '../dsh/runtime.js'
 import { ApiConnections } from '../lib/apiConnections.js'
-import { rememberSavedApis } from '../lib/apiModels.js'
+import { rememberSavedApis } from '../lib/gridAssignment.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
@@ -124,7 +123,8 @@ import { createRelaunchMarks, transcriptSize } from './transcripts/relaunch.js'
 import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
-import { createLaunchHelpers } from './agents/launch.js'
+import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
+import { createHeldLaunches, heldPaneArgv } from './agents/heldLaunches.js'
 import { createCancel, createCancelRequest } from './turns/cancel.js'
 import { createPaneWatcher } from './agents/newPane.js'
 import { createAdoption } from './agents/adopt.js'
@@ -140,8 +140,9 @@ import { createLaunchRequests } from './agents/launches.js'
 import { createAgentList } from './agents/list.js'
 import { createAgentUpdate } from './agents/update.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn } from './engines/hooks.js'
-import { createCursorTaskHooks } from './engines/cursorTasks.js'
-import { databaseHistory } from './transcripts/databaseHistory.js'
+import { createCursorDiscovery } from './engines/cursorDiscovery.js'
+import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
+import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
 import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
@@ -185,11 +186,7 @@ import { isLoopbackRequest, loopbackHosts } from '../lib/loopbackRequest.js'
 import { isInstalledCopy } from '../lib/installedCopy.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { type ActivityFrame } from '../lib/turnActivity.js'
-import { CursorTranscriptDiscovery } from '../engines/cursor/discovery.js'
-import { cursorDataDir } from '../engines/cursor/home.js'
-import { loadCursorPendingTasks } from '../engines/cursor/pendingTasks.js'
-import { opencodeMajorVersion } from '../engines/opencode/version.js'
-import { hermesDbForSession } from '../lib/hermesHome.js'
+import { cursorDataDir } from '../engines/cursor/contract.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
@@ -409,6 +406,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // move (it tears down two dozen subsystems declared further down). Until it is ready, a staged update is
   // applied by `bootHandoff`, which hands the machine over without finishing start-up.
   coreLink.onUpdate((version) => { void daemonBoot.applyStagedUpdate(version) })
+  // Agents held until the service their launch asks is ready, and the passes that launch them
+  // (core/agents/heldLaunches.ts): the boot's restore of only those agents, set where tmux is there to restore into.
+  let restoreOnly: ((only: ReadonlySet<string>) => Promise<RestoreSummary>) | null = null
+  const heldLaunches = createHeldLaunches({
+    registry,
+    restore: (only) => restoreOnly?.(only) ?? Promise.resolve({ restored: [], skipped: [], failed: [], held: [], unsurveyed: [] }),
+    log: (line) => console.log(line),
+  })
   wakeGateway({ outOfProcess: servicesTheMasterRuns(process.env, KNOWN_SERVICES), signedIn: !!session, dataDir: env.ADAPTER_DATA_DIR, want: (service) => coreLink.want(service) })
   // …or, under a master too old to run the updater, from the updater this core runs beside itself
   // (core/updaterBeside.ts), in a process of its own: the core downloads no build either way.
@@ -1013,7 +1018,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const emitSessionEvents = funnel.emit
   const announceTurnAborted = funnel.announceTurnAborted
-  const cursorDiscovery = new CursorTranscriptDiscovery(cursorDataDir(), (sessionId, transcriptPath) => {
+  const cursorDiscovery = createCursorDiscovery(cursorDataDir(), (sessionId, transcriptPath) => {
     const existing = registry.bySession(sessionId)
     if (!existing || existing.engine !== 'cursor' || existing.transcriptPath === transcriptPath) return
     const result = registry.register({
@@ -1062,7 +1067,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     terminalLabel: primaryTerminalLabel,
     dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
     devinHome: env.DEVIN_HOME,
-    hermesDb: (s) => hermesDbForSession(s),
+    hermesDb,
     concurrency: ATTACH_CONCURRENCY,
     relaunchMarks,
     // Built further down: told when an attach finds its last turn already over, never now.
@@ -1075,7 +1080,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A conversation's history, a page at a time, and how long it is (core/transcripts/history.ts).
   const history = createHistory({ readerFor: engineReaders.forEngine, resolve: (id) => registry.resolve(id), stopped: () => stoppedAgents.list(),
     pages: new TranscriptPager(), dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
-    hermesDb: (s) => hermesDbForSession(s) })
+    hermesDb })
   backend.historyProvider = history.sessionGet
   backend.sessionsProvider = history.sessionsList
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
@@ -1150,7 +1155,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     readerFor: engineReaders.forEngine,
     bySession: (sessionId) => registry.bySession(sessionId),
     dbs: { opencode: OPENCODE_DB, kilo: KILO_DB, devin: DEVIN_DB },
-    hermesDb: (s) => hermesDbForSession(s),
+    hermesDb,
   })
   // Recaps: turn cards, notifications, cut by the recaps (services/recaps.ts) from the lifecycle the core tells (core/turns/recaps.ts).
   const recaps = createRecaps({
@@ -1278,6 +1283,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       if (service === 'devices') devicesLink.connected()
       if (service === 'wifi') wifiCore.started(appVoiceFocus ?? null)
       devicesWake.connected(service)
+      // A service up again (or up at last): the agents held for it are launched (core/agents/heldLaunches.ts).
+      void heldLaunches.restoreHeld(service)
     },
     disconnected: (service) => {
       engineReaders.disconnected(service)
@@ -1896,11 +1903,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * cannot disagree about it.
    *
    * The other is which OpenCode is installed: v2's TUI exits 1 on v1's `-m` / `--agent`. Cached per
-   * installed file (`engines/opencode/version.ts`), so this costs a `stat` after the first read.
+   * installed file (`engines/opencode/version.ts`), so this costs a `stat` after the first read. Read for an
+   * OpenCode launch alone, by OpenCode's own code: every launch of OpenCode loads it before asking, and is refused
+   * without it (core/agents/create.ts, lib/launchOverrides.ts).
    */
-  const gridLaunchMachine = (): GridLaunchMachine => ({
+  const gridLaunchMachine = (engine: AgentEngine): GridLaunchMachine => ({
     hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR),
-    opencodeMajor: opencodeMajorVersion(),
+    opencodeMajor: engine === 'opencode' ? engineNow('opencode', 'an OpenCode launch was built')?.opencodeMajorVersion() ?? null : null,
   })
 
   /**
@@ -1909,8 +1918,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * restart read the row; retarget passes the override the desktop just sent. The config directory is
    * keyed on the agent, so relaunching the same agent rewrites one directory instead of leaving a trail.
    */
+  // Grid and saved-API launches are built by the models service (core/agents/launch.ts `gridLaunchThrough`): a
+  // launch on one while models is down is refused, and one on the engine's own login never asks it.
+  const gridLaunch = gridLaunchThrough(() => ports.models ?? MODELS_OFF)
   const launchOverridesDeps: LaunchOverridesDeps = {
     machine: gridLaunchMachine,
+    gridLaunch,
     writeGridConfigDir,
     tmuxSupportsSessionEnv,
     installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) engineHookFacets.codex.installIn(hookPort, codexHome) },
@@ -1927,7 +1940,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // pass below, which calls these for every pane it rebuilds.
   const launchHelpers = createLaunchHelpers({
     prepareApiTools,
-    savedApis,
     launchOverridesDeps,
     setGridLaunch: (agentId, launch) => registry.setGridLaunch(agentId, launch),
     setTail: (sessionId, offset) => watcher.setTail(sessionId, offset),
@@ -1970,13 +1982,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     const saved = isTerminalEngine(entry.engine) ? stoppedAgents.get(entry.agentId) : null
     if (saved && !isTerminalEngine(saved.engine)) retainExitedSession(entry, true)
   }
+  // Later passes over held agents (core/agents/heldLaunches.ts) wait for this one.
+  await heldLaunches.boot(async () => {
   if (tmuxBackend) {
    // Best effort, like the cwd repair above it: panes that cannot be rebuilt cost this boot its
    // tiles, not the daemon. `restoreDegraded` then stops discovery retiring the rows whose panes
    // restore never got to, so the next daemon can put them back.
    try {
     const backend = tmuxBackend
-    const summary = await restoreAgents({
+    const restoreDeps: RestoreAgentsDeps = {
       retainStopped: retainExitedSession,
       keepAbandoned: keepAbandonedConversation,
       registry,
@@ -1995,7 +2009,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
         // the same Codex profile with its hooks installed; the install check runs inside the pane's
         // own shell.
         const built = await relaunchOverrides(entry)
-        if (!built.ok) return { error: built.error, detail: built.detail }
+        // Models could not be asked: the agent waits for it, held, never failed (core/agents/heldLaunches.ts).
+        if (!built.ok) return built.unavailable ? { held: built.unavailable } : { error: built.error, detail: built.detail }
         if (opts.resumeSessionId) {
           try { prepareSessionResume(entry) } catch (error) {
             return { error: 'RESUME_PREPARATION_FAILED', detail: error instanceof Error ? error.message : String(error) }
@@ -2046,11 +2061,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       releaseRoute: (key) => agentReconciler.releaseRoute(key),
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
-    })
+      // A grid's or a saved API's launch asks models: not before the core is ready (core/agents/heldLaunches.ts).
+      needs: (entry) => entry.gridLaunch ? 'models' : null,
+      waitingLaunch: (_entry, held) => ({ argv: heldPaneArgv(held.detail) }),
+      killPane: async (runtime) => { await backend.kill(runtime) },
+    }
+    // Later passes launch the held agents, into the panes they wait in, outside this pass's transaction.
+    restoreOnly = (only) => restoreAgents({ ...restoreDeps, only })
+    const summary = await restoreAgents({ ...restoreDeps, defer: true })
     // A row restore could not look at keeps its pane for discovery to judge, but not to retire this boot.
     for (const agentId of summary.unsurveyed) restoreUnsurveyed.add(agentId)
-    if (summary.restored.length || summary.failed.length || registry.rebootedSinceLastRun) {
+    if (summary.restored.length || summary.failed.length || summary.held.length || registry.rebootedSinceLastRun) {
       console.log(`[restore] restored ${summary.restored.length} · skipped ${summary.skipped.length} · failed ${summary.failed.length}`
+        + (summary.held.length ? ` · held ${summary.held.length} until the core is ready` : '')
         + (registry.rebootedSinceLastRun ? ' · after reboot' : ''))
     }
    } catch (error) {
@@ -2059,13 +2082,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       + ' · agents keep their rows and come back on the next start')
    }
   }
+  })
   // Every DSH agent the registry kept gets its viewer and verdict watch back — restored or not, an
   // agent whose pane is still up is still that harness.
   for (const session of registry.list()) if (session.dsh) attachDsh(session)
   await agentReconciler.start(env.TERMINAL_RECONCILE_INTERVAL_MS ?? env.TMUX_REAP_INTERVAL_MS)
   // A file lock and a JSON parse, neither of which is worth the daemon: an unreadable queue means no
   // pending Cursor tasks this boot, not no daemon.
-  const pendingCursorTasks = await loadCursorPendingTasks(env.ADAPTER_DATA_DIR).catch((error) => {
+  const pendingCursorTasks = await loadPendingCursorTasks(env.ADAPTER_DATA_DIR).catch((error) => {
     console.warn(`[cursor] pending tasks skipped · ${error instanceof Error ? error.message : error}`)
     return []
   })
@@ -2224,6 +2248,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
     installOpencodePlugin: installOpencodePluginBeforeSpawn,
     gridLaunchMachine,
+    buildGridLaunch: gridLaunch,
     terminalHintMachineName,
     blocksFolder: (cwd) => backend.purgeAgentService?.blocksFolder(cwd),
     gridSetup: () => {
@@ -2351,6 +2376,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     refreshGridWebSearch,
     liveBypassPermission,
     paneSwapDeps,
+    restartHeld: (agentId) => heldLaunches.restartHeld(agentId),
   })
   // The requests that start an agent's process, and the receipts of those asked with a creationId
   // (core/agents/launches.ts). The orchestrator and the cable create and fork through the socket's slots.
@@ -2552,6 +2578,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   daemonBoot.openRequests = null
   coreLink.ready()
   console.log('[cli] ready')
+  // Ready first, never after a service: the agents the boot held for one are launched now, in the background.
+  void heldLaunches.restoreHeld()
 }
 
 /**

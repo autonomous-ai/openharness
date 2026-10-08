@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, CorePorts, ModelsPort, ServiceRequests } from '../core/api.js'
 import type { GridGlance } from '../lib/gridAnnotation.js'
 import type { CoreConnection, ServiceProcessOptions } from './process.js'
-import { modelsCoreApi, runModelsService } from './modelsProcess.js'
+import type { GridLaunchAnswer, GridLaunchRequest } from '../lib/gridLaunchWire.js'
+import { gridLaunchRequestIn, modelsCoreApi, runModelsService } from './modelsProcess.js'
 
 // The real default reaches a real socket and this process's own channel: never in a test.
 vi.mock('./process.js', () => ({ runServiceProcess: vi.fn(() => ({ stop: vi.fn() })) }))
@@ -11,6 +12,7 @@ vi.mock('./models.js', () => ({ startModels: vi.fn((_core: CoreApi, ports: CoreP
 
 const RELAY = 'https://fixture.invalid/g/net-own/relay/v1'
 const LAUNCH = { networkId: 'net-own', networkName: 'mine', baseUrl: RELAY, apiKey: 'fixture-key', model: 'Small-Q4' }
+const BUILT = { env: { ANTHROPIC_BASE_URL: RELAY }, args: ['--grid'], webSearch: 'on' as const }
 const glance = (state: 'awake' | 'asleep'): GridGlance => ({ id: 'net-own', view: { state, models: [{ id: 'Small-Q4' }] }, listed: true, asleep: state === 'asleep' })
 
 /** Models that read no grid: its port, every member a fake, and the apps' requests it answers. */
@@ -22,6 +24,8 @@ function fakeModels() {
     launchTarget: vi.fn(async () => LAUNCH),
     moveTarget: vi.fn(async (): Promise<{ target: typeof LAUNCH } | { detail: string }> => ({ target: LAUNCH })),
     moved: vi.fn(),
+    gridLaunch: vi.fn(async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => ({ ok: true, launch: BUILT, override: request.override })),
+    apiTarget: vi.fn(async (): Promise<{ target: typeof LAUNCH; apiBase: string } | { detail: string }> => ({ target: LAUNCH, apiBase: RELAY })),
     privateGridName: vi.fn(async () => 'mine'),
     lists: vi.fn(async () => ({ plain: { gridName: 'mine' }, rowState: { gridName: 'mine', grids: [] } })),
     machines: vi.fn(),
@@ -65,7 +69,7 @@ describe('models in its own process', () => {
   it('reaches the core as `models`, answering the apps\' requests and the core\'s port calls, and stops with its link', () => {
     const { models, options, handle, service } = setup()
     expect(options).toMatchObject({ name: 'models', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests).sort()).toEqual(['ensure', 'grid_models_list', 'launchTarget', 'lists', 'moveTarget', 'privateGridName'])
+    expect(Object.keys(options.requests).sort()).toEqual(['apiTarget', 'ensure', 'gridLaunch', 'grid_models_list', 'launchTarget', 'lists', 'moveTarget', 'privateGridName'])
     expect(options.requests.grid_models_list).toBe(models.requests.grid_models_list)
     handle.stop()
     expect(service.stop).toHaveBeenCalled()
@@ -91,6 +95,22 @@ describe('models in its own process', () => {
     expect(models.port.moveTarget.mock.calls).toEqual([[{ gridName: 'team', model: 'Shared' }], [{ gridName: null, model: '' }]])
     expect(await options.requests.privateGridName!({}, asker)).toEqual({ name: 'mine' })
     expect(await options.requests.lists!({}, asker)).toEqual({ plain: { gridName: 'mine' }, rowState: { gridName: 'mine', grids: [] } })
+  })
+
+  it("builds the core's grid launches and API targets through the port, and refuses a launch it cannot read", async () => {
+    const { models, options } = setup()
+    const asker = { local: true, owner: true }
+    const machine = { hermesSystemManaged: false, opencodeMajor: 2 }
+    expect(await options.requests.gridLaunch!({ engine: 'claude', override: LAUNCH, machine, refresh: true }, asker))
+      .toEqual({ ok: true, launch: BUILT, override: LAUNCH })
+    expect(models.port.gridLaunch.mock.calls).toEqual([[{ engine: 'claude', override: LAUNCH, machine, refresh: true }]])
+    expect(await options.requests.gridLaunch!({ engine: 'claude', override: 'nope', machine }, asker))
+      .toEqual({ ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' })
+    expect(models.port.gridLaunch).toHaveBeenCalledOnce()
+    expect(await options.requests.apiTarget!({ connectionId: 'openrouter', model: 'q' }, asker)).toEqual({ target: LAUNCH, apiBase: RELAY })
+    models.port.apiTarget.mockResolvedValueOnce({ detail: 'gone' })
+    expect(await options.requests.apiTarget!({ connectionId: 7 }, asker)).toEqual({ detail: 'gone' })
+    expect(models.port.apiTarget.mock.calls).toEqual([[{ connectionId: 'openrouter', model: 'q' }], [{ connectionId: '', model: '' }]])
   })
 
   it('does what the core tells it, and passes over what it cannot read', () => {
@@ -289,5 +309,28 @@ describe('models in its own process, before it is ever connected', () => {
     options!.onConnected!(core.core)
     await start!.account.privateGridName()
     expect(core.query).toHaveBeenCalledWith('account', {})
+  })
+})
+
+describe('a grid launch the core asks models to build, as models reads it', () => {
+  const machine = { hermesSystemManaged: true }
+
+  it('takes the engine, the launch, the machine and a relaunch as the core sent them', () => {
+    expect(gridLaunchRequestIn({ engine: 'codex', override: LAUNCH, machine })).toEqual({ engine: 'codex', override: LAUNCH, machine })
+    expect(gridLaunchRequestIn({ engine: 'opencode', override: LAUNCH, machine: { ...machine, opencodeMajor: null }, refresh: true }))
+      .toEqual({ engine: 'opencode', override: LAUNCH, machine: { ...machine, opencodeMajor: null }, refresh: true })
+    expect(gridLaunchRequestIn({ engine: 'opencode', override: LAUNCH, machine: { ...machine, opencodeMajor: 1 }, refresh: 'yes' }))
+      .toEqual({ engine: 'opencode', override: LAUNCH, machine: { ...machine, opencodeMajor: 1 } })
+  })
+
+  it('reads nothing it cannot trust: an unknown engine, an unreadable launch, or machine facts of the wrong shape', () => {
+    expect(gridLaunchRequestIn({ engine: 'vim', override: LAUNCH, machine })).toBeNull()
+    expect(gridLaunchRequestIn({ override: LAUNCH, machine })).toBeNull()
+    expect(gridLaunchRequestIn({ engine: 'claude', override: { networkId: 'n' }, machine })).toBeNull()
+    expect(gridLaunchRequestIn({ engine: 'claude', override: LAUNCH })).toBeNull()
+    expect(gridLaunchRequestIn({ engine: 'claude', override: LAUNCH, machine: 'here' })).toBeNull()
+    expect(gridLaunchRequestIn({ engine: 'claude', override: LAUNCH, machine: {} })).toBeNull()
+    expect(gridLaunchRequestIn({ engine: 'claude', override: LAUNCH, machine: { ...machine, opencodeMajor: 1.5 } })).toBeNull()
+    expect(gridLaunchRequestIn({ engine: 'claude', override: LAUNCH, machine: { ...machine, opencodeMajor: '2' } })).toBeNull()
   })
 })

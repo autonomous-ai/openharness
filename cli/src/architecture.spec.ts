@@ -184,10 +184,19 @@ const EDGE: RegExp[] = [
   /^engines\/worker\/\w+Requests\.ts$/,
   // The pilot reader implementations and their host are never loaded by supervised core.
   /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
+  // Nor their transcripts' normalizers, Codex's rollout and sub-agent readers, or what replays their history: their
+  // readers' and live parsers', in their workers. Core reads only what they declare: adoption, activity and
+  // their stores (docs/design/2026-10-08-engine-launch.md, (c5)). Search's normalizer table is search's.
+  /^engines\/(claude|codex)\/(normalize|normalizer|subagent|subagentStats|rollout|lastTurn|live|attach)\.ts$/,
+  /^lib\/(normalize|transcriptReader)\.ts$/, /^lib\/sessionSearch\/externals\/(claude|codex)\.ts$/,
   /^engines\/(runtime|(claude|codex)\/runtimeProfile)\.ts$/, /^lib\/runtimeProfile\.ts$/,
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Envelope|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
+  // The grid and saved-API launch builders are models': the core asks it for a launch (ModelsPort.gridLaunch) and keeps
+  // only the wire it checks one with and the lists every launch reads (lib/gridLaunchWire.ts), so a launch on the
+  // engine's own login loads none of them (docs/design/2026-10-08-launch-port.md, (L1)).
+  /^lib\/(gridLaunch|gridWebMcp|apiModels)\.ts$/,
   // The change-agent handoff reads and redacts history and runs git: the edge host owns that work.
   /^lib\/agentHandoff\.ts$/,
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
@@ -211,8 +220,7 @@ const EDGE: RegExp[] = [
  * The edge files the core's process still loads, each with the step of the plan that takes it out. The
  * list only shrinks: an entry no longer reached fails the test, so remove it with the move that ends it.
  */
-const CORE_MAY_REACH: Record<string, string> = {
-}
+const CORE_MAY_REACH: Record<string, string> = {}
 
 /** The other twelve engines' own files: their folders but for the data they declare, their search readers, and the
  *  shared files that hold only their code. */
@@ -229,57 +237,7 @@ const theirs = (file: string): boolean => THEIRS.some((pattern) => pattern.test(
  * (docs/design/2026-10-08-other-engines-out-of-core.md, section 5). The list only shrinks: an entry no longer
  * reached fails the test, so remove it with the move that ends it. Empty, the core loads none of their code.
  */
-const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
-  'engines/cursor/pendingTasks.ts': '(o6) Cursor\'s pending tasks, read at the start and cleared on Stop and forget: a declared file, then a lazy load',
-  'lib/hermesHome.ts': '(o6) homes: which Hermes store a session\'s history is in',
-  'engines/agy/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/amp/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/commandcode/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/devin/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/grok/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/hermes/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/kilo/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/muse/runtimeProfile.ts': '(o4) runtime profiles',
-  'engines/opencode/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/pi/runtimeProfile.ts': '(o4) runtime profiles and model switching',
-  'engines/agy/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
-  'engines/amp/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
-  'engines/commandcode/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
-  'engines/copilot/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/cursor/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
-  'engines/devin/errorLog.ts': '(o5) adoption\'s readers',
-  'engines/devin/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/devin/reader.ts': '(o5) adoption\'s readers',
-  'engines/grok/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
-  'engines/hermes/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/kilo/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/kilo/reader.ts': '(o5) adoption\'s readers',
-  'engines/opencode/normalizer.ts': '(o5) adoption\'s readers',
-  'engines/opencode/reader.ts': '(o5) adoption\'s readers',
-  'engines/pi/normalizer.ts': '(o5) adoption\'s readers, through lib/transcriptReader.ts',
-  'lib/sessionSearch/externals/agy.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/commandcode.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/copilot.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/cursor.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/devin.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/grok.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/hermes.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/muse.ts': '(o5) adoption\'s readers',
-  'lib/sessionSearch/externals/opencode.ts': '(o5) adoption\'s readers',
-  'engines/agy/session.ts': '(o6) identity: the registry\'s layouts, bind and repair',
-  'engines/commandcode/transcript.ts': '(o6) identity: the registry\'s layouts',
-  'engines/copilot/session.ts': '(o6) identity: the registry\'s layouts, bind and repair',
-  'engines/cursor/discovery.ts': '(o6) identity: bind\'s finders',
-  'engines/cursor/home.ts': '(o6) homes: a declared home',
-  'engines/grok/session.ts': '(o6) identity: bind\'s finders',
-  'engines/hermes/home.ts': '(o6) homes: a declared home and admission',
-  'engines/hermes/homeProbe.ts': '(o6) homes: discovery\'s probe',
-  'engines/hermes/reader.ts': '(o6) homes: the hook server\'s source check',
-  'engines/muse/normalizer.ts': '(o6) identity: repair',
-  'engines/opencode/sessionModel.ts': '(o6) launch data: retarget\'s session model',
-  'engines/opencode/version.ts': '(o6) launch data: OpenCode\'s version',
-  'lib/sessionSearch/externals/pi.ts': '(o6) identity: repair',
-}
+const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {}
 
 /** Core's entries for each facet, and the sub-batch after which they reach none of the other engines' files. */
 const FACETS_FREE_OF_THEM: Array<[string, string]> = [
@@ -294,6 +252,38 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['core/transcripts/databaseHistory.ts', '(o3)'],
   ['core/engines/cursorTasks.ts', '(o3)'],
   ['core/turns/agyBackstop.ts', '(o3)'],
+  // What the core reads of their model and effort, and how a switch of theirs would be driven.
+  ['lib/runtimeProfileManager.ts', '(o4)'],
+  ['lib/runtimeControl.ts', '(o4)'],
+  // Where their conversations are: the registry's layouts and Cursor's homes, declared; bind's finders and
+  // repair's readers, loaded; Cursor's discovery and its queued Tasks, built on first use; Hermes's store.
+  ['lib/registry.ts', '(o6)'],
+  ['core/agents/bind.ts', '(o6)'],
+  ['lib/sessionRepair.ts', '(o6)'],
+  ['core/engines/cursorDiscovery.ts', '(o6)'],
+  ['core/agents/forget.ts', '(o6)'],
+  ['core/turns/turnHooks.ts', '(o6)'],
+  ['engines/kit/notifyHooks.ts', '(o6)'],
+  ['lib/sessionCheckpoint.ts', '(o6)'],
+  ['lib/purgeAgentService.ts', '(o6)'],
+  // Hermes's admission and homes, declared and read by the kit; its home probe, loaded for a Hermes process.
+  ['hookServer.ts', '(o6)'],
+  ['core/engines/hooks.ts', '(o6)'],
+  ['lib/terminalAgentDiscovery.ts', '(o6)'],
+  // The launches: OpenCode's v2 rule declared, its version probe and session-model writer loaded for OpenCode.
+  ['core/agents/create.ts', '(o6)'],
+  ['core/agents/fork.ts', '(o6)'],
+  ['core/agents/launches.ts', '(o6)'],
+  ['core/agents/retarget.ts', '(o6)'],
+  ['core/agents/restart.ts', '(o6)'],
+  ['lib/launchOverrides.ts', '(o6)'],
+  ['lib/engineLaunch.ts', '(o6)'],
+  ['lib/gridLaunch.ts', '(o6)'],
+  ['lib/subscriptionModel.ts', '(o6)'],
+  // Adoption: the other engines' readers, each loaded on the first scan or question that needs it.
+  ['lib/sessionSearch/externals/index.ts', '(o5)'],
+  ['lib/sessionSearch/external.ts', '(o5)'],
+  ['core/agents/adopt.ts', '(o5)'],
 ]
 
 describe('the daemon\'s shape', () => {
@@ -369,30 +359,13 @@ describe('the daemon\'s shape', () => {
     // control, with no engine worker and none of the two engines' code (docs/design/2026-10-08-engine-launch.md, (c4)).
     const theirs = (entry: string): string[] => [...closureOf(entry).keys()]
       .filter(file => /^engines\/(claude|codex)\//.test(file) && !DECLARED.has(file) && !LAUNCH_CONTRACTS.has(file))
+    // Pi's session reader, which session repair names Pi's folders with, streams lines (lib/transcriptLines.ts) and no
+    // longer loads the readers of the two engines' transcripts ((c5)).
     for (const entry of ['lib/registry.ts', 'lib/handoffDiscovery.ts', 'lib/engineHomes.ts', 'engines/sessionFiles.ts',
-      'engines/sessionStoreContracts.ts', 'engines/kit/sessionRecords.ts', 'engines/kit/continuation.ts']) {
+      'engines/sessionStoreContracts.ts', 'engines/kit/sessionRecords.ts', 'engines/kit/continuation.ts',
+      'lib/sessionRepair.ts', 'lib/captureResumeIdentity.ts', 'engines/sessionStores.ts', 'core/agents/bind.ts']) {
       expect(theirs(entry), entry).toEqual([])
     }
-    // Pi's session reader still loads the readers of the two engines' transcripts (lib/transcriptReader.ts), and
-    // session repair names Pi's folders with it: the other engines' batch takes that out. Nothing else of session
-    // repair, resume capture or binding reaches their code.
-    const PI_READER = 'lib/sessionSearch/externals/pi.ts'
-    const notThroughPi = (entry: string): string[] => {
-      const seen = new Set<string>()
-      const pending = [join(SRC, entry)]
-      while (pending.length > 0) {
-        const path = pending.pop()!
-        const file = relative(SRC, path)
-        if (seen.has(file) || file === PI_READER) continue
-        seen.add(file)
-        pending.push(...parsedFile(path).imports)
-      }
-      return [...seen].filter(file => /^engines\/(claude|codex)\//.test(file) && !DECLARED.has(file) && !LAUNCH_CONTRACTS.has(file))
-    }
-    for (const entry of ['lib/sessionRepair.ts', 'lib/captureResumeIdentity.ts', 'engines/sessionStores.ts', 'core/agents/bind.ts']) {
-      expect(notThroughPi(entry), entry).toEqual([])
-    }
-    expect(closureOf('lib/sessionRepair.ts').has(PI_READER), 'Pi\'s reader is out of session repair: drop this exception').toBe(true)
     // The stores alone, and what Codex's shares with its launch and hook contracts (the rollout layout, the child rule).
     expect([...closureOf('engines/sessionStoreContracts.ts').keys()].filter(file => /^engines\/(claude|codex)\//.test(file)).sort())
       .toEqual(['engines/claude/sessionStore.ts', 'engines/codex/hookContract.ts', 'engines/codex/launch.ts', 'engines/codex/sessionStore.ts'])
@@ -400,6 +373,31 @@ describe('the daemon\'s shape', () => {
     for (const entry of ['engines/kit/sessionRecords.ts', 'engines/kit/continuation.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
     }
+  })
+
+  it('adoption, activity, pages, history and the last turn load the engines\' declarations alone, never their normalizers', () => {
+    // Which conversations are on this machine and which process holds one (taking one over stops that process),
+    // an agent's latest activity, a thread's pages and line count, and core's history and recap reads
+    // (docs/design/2026-10-08-engine-launch.md, (c5)). Their replays are their readers', in their workers.
+    const adoption = new Set(['engines/claude/adoption.ts', 'engines/codex/adoption.ts'])
+    const declared = new Set([...DECLARED, ...LAUNCH_CONTRACTS, ...adoption])
+    const theirs = (entry: string): string[] => [...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file) && !declared.has(file))
+    for (const entry of ['engines/adoptions.ts', 'engines/kit/adoption.ts', 'lib/transcriptActivity.ts', 'lib/transcriptPages.ts',
+      'lib/transcriptLines.ts', 'core/transcripts/history.ts', 'core/transcripts/lastTurn.ts', 'lib/agentFrame.ts',
+      'lib/sessionSearch/external.ts']) {
+      expect(theirs(entry), entry).toEqual([])
+    }
+    // Adoption's composition reads the two declarations (and, through the process table, the discovery contracts).
+    expect([...closureOf('engines/adoptions.ts').keys()].filter(file => adoption.has(file)).sort()).toEqual([...adoption].sort())
+    // The pager, the line streamer and the paged history know no engine at all: each engine's reader hands the pager
+    // its rules. The kit's adoption names none either; it reads the process table (lib/tmux.ts) to match an owner.
+    for (const entry of ['lib/transcriptPages.ts', 'lib/transcriptLines.ts', 'engines/kit/history.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(?!kit\/|facets\/|types\.ts$)/.test(file)), entry).toEqual([])
+    }
+    expect(parsedFile(join(SRC, 'engines/kit/adoption.ts')).imports.map(path => relative(SRC, path)).filter(file => /^engines\/(?!kit\/|facets\/)/.test(file))).toEqual([])
+    // Core's adoption reaches none of the two engines' code: Devin's reader, which replays its store with Claude
+    // Code's normalizer, is loaded with Devin's code ((o5)).
+    expect(theirs('lib/sessionSearch/externals/index.ts')).toEqual([])
   })
 
   it('building a launch loads the engines\' declared launch contracts alone', () => {
@@ -427,21 +425,19 @@ describe('the daemon\'s shape', () => {
     const reached = [...closure.keys()].filter(theirs).sort()
     expect(reached.filter((file) => !OTHER_ENGINES_CORE_MAY_REACH[file]), 'Load their code through engines/inProcess.ts (loadEngine), or declare what the core needs of it in engines/<name>/contract.ts.').toEqual([])
     expect(Object.keys(OTHER_ENGINES_CORE_MAY_REACH).filter((file) => !closure.has(file)), 'No longer loaded by the core: remove it from OTHER_ENGINES_CORE_MAY_REACH').toEqual([])
-    // Until (o6) gives the registry declared layouts, what it reaches of theirs is reached by whatever imports it
-    // (history.ts names a session's project through it, as the frames do).
-    const throughRegistry = new Set(closureOf('lib/registry.ts').keys())
     for (const [entry, batch] of FACETS_FREE_OF_THEM) {
-      expect([...closureOf(entry).keys()].filter((file) => theirs(file) && !throughRegistry.has(file)), `${entry}, free of their code since ${batch}`).toEqual([])
+      expect([...closureOf(entry).keys()].filter(theirs), `${entry}, free of their code since ${batch}`).toEqual([])
     }
-    // (o2) The start's hook step loads the other engines' installers through the loader. What else it reaches
-    // of theirs (the hook server's Hermes source check, the registry's layouts) leaves in (o6).
+    // (o2) The start's hook step loads the other engines' installers through the loader; since (o6) it reaches none
+    // of their code at all (above).
     expect(closureOf('core/engines/hooks.ts').has('lib/hooks.ts'), 'core/engines/hooks.ts loads lib/hooks.ts through engines/inProcess.ts').toBe(false)
     // What an engine declares is data the kit reads: its own walk reaches the kit, the engines' types and the
     // environment, and nothing of any engine's code.
     const contracts = [...closure.keys()].filter((file) => /^engines\/\w+\/contract\.ts$/.test(file))
     expect(contracts.length).toBeGreaterThan(0)
+    const environment = new Set(closureOf('config/env.ts').keys())
     for (const contract of contracts) {
-      expect([...closureOf(contract).keys()].filter((file) => file !== contract && !/^engines\/(kit\/|types\.ts$)|^config\/env\.ts$/.test(file)), contract).toEqual([])
+      expect([...closureOf(contract).keys()].filter((file) => file !== contract && !environment.has(file) && !/^engines\/(kit\/|types\.ts$)/.test(file)), contract).toEqual([])
     }
   }, WALK_TIMEOUT_MS)
 

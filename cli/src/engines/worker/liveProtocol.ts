@@ -128,5 +128,9 @@ export interface LivePull {
   liveStart?: boolean
   /** Rebuild after replacement/truncation; stream a small rewritten file as history after activation. */
   rewritten?: boolean
+  /** The stream whose read found the file rewritten. Its records up to where that read found them are
+   *  history and the rest are live, as the legacy tailer placed the boundary when it noticed the rewrite.
+   *  A worker that never saw that read, or a file changed again since, hydrates as `rewritten` alone. */
+  rewrittenFrom?: string
   end?: number
 }

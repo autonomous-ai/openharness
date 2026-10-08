@@ -16,7 +16,7 @@ import type { CoreApi, CorePorts, ModelsPort, ServiceRequest, ServiceRequests } 
 import { MODEL_MANAGER_ID } from '../dsh/builtinIds.js'
 import { installedDsh } from '../dsh/installed.js'
 import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
-import { apiModelsRequest, rememberSavedApis } from '../lib/apiModels.js'
+import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { appEngineOps, scanAppModels } from '../lib/appModels.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { createGridAccess, gridNamesLocal, reconcileGridAttach } from '../lib/gridAttach.js'
@@ -26,7 +26,7 @@ import { gridAvailable, managedGridPath } from '../lib/gridExec.js'
 import { GridFleetRpc, parseGridFleetRequest } from '../lib/gridFleetRpc.js'
 import { handOffToGrid } from '../lib/gridHandoff.js'
 import { ensureGridInstalled } from '../lib/gridInstall.js'
-import type { GridLaunchOverride } from '../lib/gridLaunch.js'
+import { answerGridLaunch, type GridLaunchOverride } from '../lib/gridLaunch.js'
 import { clearGridMcpUrlCache } from '../lib/gridMcpUrl.js'
 import {
   forgetGridModels, gridAnnotation, gridInventory, keystrokePrewarm, listAllGridModels, listGridModels, observeMachineList, onGridModelsChanged,
@@ -138,6 +138,8 @@ export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
   // for the list (after a self-update, a phone may be the only one typing).
   void warmGridModels().catch(() => {})
 
+  // The saved APIs, a file in the data folder (lib/apiConnections.ts), read afresh by every launch on one.
+  const savedApis = new ApiConnections(core.dataDir)
   ports.models = {
     ensure: grid.ensure,
     annotation: (target) => gridAnnotation(target),
@@ -150,6 +152,10 @@ export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
     // so the first message rarely waits on a boot (issue 03). It decides for itself whether a wake is
     // worth it.
     moved: (launch) => { void retargetPrewarm(launch).catch(() => {}) },
+    // The launch that points an engine at a grid or a saved API, built here for the core, which builds none
+    // (docs/design/2026-10-08-launch-port.md): a relaunch's saved API with its endpoint and key as saved now.
+    gridLaunch: async (request) => answerGridLaunch(request, refreshApiFor(savedApis)),
+    apiTarget: (request) => apiTargetAnswer(savedApis, request.connectionId, request.model),
     privateGridName,
     // `grid_models_changed` to the windows: the same payload `grid_models_list` answers, built from the
     // pictures as they stand — no read is started to build it, so a push never causes one. Each window

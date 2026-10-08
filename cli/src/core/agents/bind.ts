@@ -7,11 +7,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
 import { stat } from 'node:fs/promises'
-import { findAgyTranscript } from '../../engines/agy/session.js'
-import { copilotSessionForPid, findCopilotTranscript } from '../../engines/copilot/session.js'
-import { findCursorTranscript } from '../../engines/cursor/discovery.js'
-import { cursorDataDir } from '../../engines/cursor/home.js'
-import { findGrokTranscript } from '../../engines/grok/session.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
@@ -203,6 +199,19 @@ export function createBinding({
 
   const lastRepairAttempt = new Map<string, number>()
   const repairAttempts = new Map<string, number>()
+  /**
+   * The transcript of a session the process of one of these engines names, found by that engine's own code,
+   * loaded here (engines/inProcess.ts). One whose code could not be loaded finds nothing: the process is bound as
+   * when its transcript is not there, or not at all.
+   */
+  const ownTranscript = async (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> => {
+    switch (engine) {
+      case 'cursor': { const cursor = await loadEngine('cursor'); return cursor && cursor.findCursorTranscript(cursor.cursorDataDir(), sessionId) }
+      case 'grok': { const grok = await loadEngine('grok'); return grok && grok.findGrokTranscript(homes.grok, cwd, sessionId) }
+      case 'agy': { const agy = await loadEngine('agy'); return agy && agy.findAgyTranscript(homes.agy, sessionId) }
+      case 'copilot': { const copilot = await loadEngine('copilot'); return copilot && copilot.findCopilotTranscript(homes.copilot, sessionId) }
+    }
+  }
   const bindObservedAgent = async (observed: DiscoveredTerminalAgent): Promise<void> => {
     const agent = registry.byProcess(observed.engine, observed.processIdentity)
     if (!agent) return
@@ -216,9 +225,12 @@ export function createBinding({
     if (agent.resumeOnly && agent.launch && agent.launch.state !== 'ready') return
     if (agent.sessionId) {
       if (observed.engine === 'copilot') {
-        const current = await copilotSessionForPid(homes.copilot, observed.processIdentity.pid)
+        // Copilot's own code reads its lock (engines/inProcess.ts): without it, a /resume is not followed.
+        const copilot = await loadEngine('copilot')
+        if (!copilot) return
+        const current = await copilot.copilotSessionForPid(homes.copilot, observed.processIdentity.pid)
         if (!current || current === agent.sessionId || isRecentlyDeleted(current)) return
-        const transcript = await findCopilotTranscript(homes.copilot, current)
+        const transcript = await copilot.findCopilotTranscript(homes.copilot, current)
         console.log(`[discovery] ${sid(agent.agentId)} switched copilot session ${sid(agent.sessionId)} → ${sid(current)} (/resume)`)
         const rotated = registry.register({
           engine: 'copilot',
@@ -276,17 +288,11 @@ export function createBinding({
         const ownerStarted = Date.parse(owner.processIdentity?.startMarker ?? '')
         if (Number.isFinite(ownerStarted) && (!Number.isFinite(observedStarted) || observedStarted <= ownerStarted)) return
       }
-      transcriptPath = observed.engine === 'cursor'
-        ? await findCursorTranscript(cursorDataDir(), sessionId) ?? undefined
-        : observed.engine === 'grok'
-          ? await findGrokTranscript(homes.grok, observed.cwd, sessionId) ?? undefined
-          : observed.engine === 'agy'
-            ? await findAgyTranscript(homes.agy, sessionId) ?? undefined
-            : observed.engine === 'copilot'
-              ? await findCopilotTranscript(homes.copilot, sessionId) ?? undefined
-              : observed.engine === 'claude' || observed.engine === 'codex'
-                ? await findResumedTranscript(observed.engine, sessionId, { codexHome: agent.codexHome ?? undefined }) ?? undefined
-                : undefined
+      transcriptPath = observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'agy' || observed.engine === 'copilot'
+        ? await ownTranscript(observed.engine, sessionId, observed.cwd) ?? undefined
+        : observed.engine === 'claude' || observed.engine === 'codex'
+          ? await findResumedTranscript(observed.engine, sessionId, { codexHome: agent.codexHome ?? undefined }) ?? undefined
+          : undefined
       // The registry refuses a claude/codex session without its file, so a resume of a transcript this
       // machine does not have is not a session — the hook that follows the user's next prompt will say.
       if ((observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'claude' || observed.engine === 'codex')

@@ -91,7 +91,8 @@ export function createLiveSessions(deps: LiveSessionDeps) {
         engine: session.engine, transcriptPath: session.transcriptPath, cwd: session.cwd, model: session.model,
         cliVersion: session.cliVersion, codexHome: session.codexHome }, cursor: null, fromStart: live,
         replay: false, liveStart: live, ...(end === undefined ? {} : { end }),
-        ...(tails.get(session.sessionId)?.rewritten ? { rewritten: true } : {}) },
+        // The stream still installed is the one whose read found the rewrite: its worker knows where.
+        ...(tails.get(session.sessionId)?.rewritten ? { rewritten: true, rewrittenFrom: states.get(session.sessionId)?.ask.token } : {}) },
       handle: {
         engine: session.engine,
         // Handles escape prepare only after the worker has supplied a validated cursor.
@@ -146,6 +147,8 @@ export function createLiveSessions(deps: LiveSessionDeps) {
         catch (error) {
           if (error instanceof EngineLiveError && error.code === 'ENGINE_TRANSCRIPT_CHANGED') {
             // No cursor from the changed file is accepted. Re-attach under a hold and a new identity.
+            // Said once per rewrite, as the legacy tailer says it (core/transcripts/ingest.ts).
+            if (!tail.rewritten) (deps.log ?? console.log)(`[engine] ${id} transcript rewritten in place — attaching it again from where it was rewritten`)
             tail.rewritten = true
             const session = deps.bySession(id)
             if (session) retry(session)

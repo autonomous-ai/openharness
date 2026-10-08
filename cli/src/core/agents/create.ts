@@ -17,8 +17,8 @@ import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { materializeWorkspace } from '../../dsh/materialize.js'
 import { harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch } from '../../dsh/runtime.js'
-import { opencodeMajorVersion } from '../../engines/opencode/version.js'
-import { isTerminalEngine } from '../../engines/types.js'
+import { loadEngine } from '../../engines/inProcess.js'
+import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
@@ -29,7 +29,7 @@ import {
 } from '../../lib/engineLaunch.js'
 import { setUpWithin } from '../../lib/setUpWithin.js'
 import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
-import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, type GridLaunchMachine, type GridWebSearchStatus } from '../../lib/gridLaunch.js'
+import { describeGridLaunch, gridConflictingEnvToClear, type GridLaunchAnswer, type GridLaunchMachine, type GridLaunchRequest, type GridWebSearchStatus } from '../../lib/gridLaunchWire.js'
 import { profileEnvironment } from '../../lib/engineHomes.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
@@ -71,7 +71,11 @@ export interface CreateAgentDeps {
   /** OpenCode's plugin, installed again before an OpenCode spawn (core/engines/hooks.ts
    *  `installOpencodePluginBeforeSpawn`): false when the other engines' installers could not be loaded. */
   installOpencodePlugin: (port: number) => Promise<boolean>
-  gridLaunchMachine: () => GridLaunchMachine
+  /** The facts about this machine a launch of `engine` needs (lib/gridLaunch.ts). */
+  gridLaunchMachine: (engine: AgentEngine) => GridLaunchMachine
+  /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
+   *  builds none itself, and a create on a grid while models is down is refused (GRID_UNAVAILABLE). */
+  buildGridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
   terminalHintMachineName: () => string
   /** Whether a folder is being purged (PurgeAgentService.blocksFolder). */
   blocksFolder: (cwd: string) => boolean | undefined
@@ -83,8 +87,8 @@ export interface CreateAgentDeps {
 
 export function createAgentCreator({
   tmuxBackend, registry, adoptableSession, heldBy, takeOverWhenIdle, watchNewPane, announceSession, attachDsh,
-  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, terminalHintMachineName, blocksFolder, gridSetup,
-  privateGridName,
+  prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
+  gridSetup, privateGridName,
 }: CreateAgentDeps) {
   const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, scmLaunchRecord }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
@@ -128,6 +132,15 @@ export function createAgentCreator({
       console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
       return { ok: false, ...refusal }
     }
+    // Which OpenCode is installed decides its argv: v2's TUI exits on v1's flags. Its probe is OpenCode's own code,
+    // loaded for an OpenCode launch alone (engines/inProcess.ts), here before anything is written: without it the
+    // launch is refused, never given a guessed argv.
+    const opencode = engine === 'opencode' ? await loadEngine('opencode') : null
+    if (engine === 'opencode' && !opencode) {
+      const detail = 'OpenCode\'s code could not be loaded'
+      console.warn(`[agent] create opencode refused · ${detail}`)
+      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail }
+    }
     // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
     // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
     // before the grid block because a file-configured engine keys its config directory on it.
@@ -144,8 +157,8 @@ export function createAgentCreator({
     let dshLabel: string | undefined
     /** What the harness is told about the signed-in account (its private grid), not left to guess. */
     let dshAccount: DshAccount = {}
+    const installed = dsh ? installedDsh(dsh) : undefined
     if (dsh) {
-      const installed = installedDsh(dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
       if (installed.manifest.kind === 'viewer') return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is a viewer package, not an agent` }
       const refusal = incompatibleHarnessEngine(dsh, installed.manifest, engine)
@@ -159,10 +172,23 @@ export function createAgentCreator({
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
       }
+    }
+    // A grid is the user's answer to "where should this run", so every way of not honouring it is a
+    // refusal rather than a fallback — an agent silently started on the engine's own login spends the
+    // wrong account and looks identical to one that worked. Asked of models before a harness's workspace is
+    // laid out or trusted: a create refused here leaves the folder as it was.
+    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: gridLaunchMachine(engine) }) : null
+    if (built && !built.ok) {
+      console.warn(`[agent] create ${engine} refused · ${built.detail}`)
+      return { ok: false, error: built.error, detail: built.detail }
+    }
+    if (dsh) {
+      // Checked above: a harness that is not installed was refused before models was asked.
+      const harness = installed!
       // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
       // models picker): grid is set up before the workspace asks it which grid is this account's.
       const ensureGrid = gridSetup()
-      if (installed.id === MODEL_MANAGER_ID && ensureGrid) {
+      if (harness.id === MODEL_MANAGER_ID && ensureGrid) {
         const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
         if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
       }
@@ -172,7 +198,7 @@ export function createAgentCreator({
         // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
         const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
           (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
-        const materialized = await materializeWorkspace(installed, cwd, dshAccount, engine)
+        const materialized = await materializeWorkspace(harness, cwd, dshAccount, engine)
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
         // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
@@ -189,22 +215,14 @@ export function createAgentCreator({
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label, dshAccount, null))
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(harness, cwd, engine, label, dshAccount, null))
       if (!prepared.ok) return prepared
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
-      dshLabel = installed.manifest.name
+      dshLabel = harness.manifest.name
     }
-    // A grid is the user's answer to "where should this run", so every way of not honouring it is a
-    // refusal rather than a fallback — an agent silently started on the engine's own login spends the
-    // wrong account and looks identical to one that worked.
     let gridLaunch: { env: Record<string, string>; args: string[]; webSearch: GridWebSearchStatus } | undefined
-    if (grid) {
-      const built = buildGridEngineLaunch(engine, grid, gridLaunchMachine())
-      if (!built.ok) {
-        console.warn(`[agent] create ${engine} refused · ${built.detail}`)
-        return { ok: false, error: built.error, detail: built.detail }
-      }
+    if (grid && built?.ok) {
       if (!(await tmuxSupportsSessionEnv())) {
         const detail = `this machine's tmux is older than `
           + `${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, which is the first version that can `
@@ -259,7 +277,7 @@ export function createAgentCreator({
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
-    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencodeMajorVersion()) : []), ...resumeArgs]
+    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencode ? opencode.opencodeMajorVersion() : null) : []), ...resumeArgs]
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     // Stopped mid-turn, the resumed conversation is told to carry on — by an engine that can open

@@ -1,0 +1,186 @@
+{
+ "admission": [
+  [
+   "the default home's CLI session",
+   200,
+   {
+    "pending": true
+   },
+   [
+    {
+     "sessionId": "20261008_100000_aaaaaa",
+     "engine": "hermes",
+     "hermesHome": null
+    }
+   ],
+   [
+    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check"
+   ]
+  ],
+  [
+   "a session one delegated to",
+   200,
+   {
+    "pending": true
+   },
+   [],
+   [
+    "[hooks] 20261008 SessionStart ignored · hermes_subagent"
+   ]
+  ],
+  [
+   "a profile's TUI session",
+   200,
+   {
+    "pending": true
+   },
+   [
+    {
+     "sessionId": "20261008_100003_cccccc",
+     "engine": "hermes",
+     "hermesHome": "<root>/home/.hermes/profiles/work"
+    }
+   ],
+   [
+    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check · home=<root>/home/.hermes/profiles/work"
+   ]
+  ],
+  [
+   "a profile's session with no source",
+   200,
+   {
+    "pending": true
+   },
+   [
+    {
+     "sessionId": "20261008_100004_eeeeee",
+     "engine": "hermes",
+     "hermesHome": "<root>/home/.hermes/profiles/work"
+    }
+   ],
+   [
+    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check · home=<root>/home/.hermes/profiles/work"
+   ]
+  ],
+  [
+   "a profile's delegated session",
+   200,
+   {
+    "pending": true
+   },
+   [],
+   [
+    "[hooks] 20261008 SessionStart ignored · hermes_subagent"
+   ]
+  ],
+  [
+   "one in both homes: the default asked first",
+   200,
+   {
+    "pending": true
+   },
+   [
+    {
+     "sessionId": "20261008_100002_dddddd",
+     "engine": "hermes",
+     "hermesHome": null
+    }
+   ],
+   [
+    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check"
+   ]
+  ],
+  [
+   "an editor's session, whose id is a uuid",
+   200,
+   {
+    "pending": true
+   },
+   [
+    {
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+     "engine": "hermes",
+     "hermesHome": null
+    }
+   ],
+   [
+    "[hooks] 0b6f4f2e SessionStart · engine=hermes · isNew=true · after a source check"
+   ]
+  ],
+  [
+   "one no store holds yet",
+   200,
+   {
+    "pending": true
+   },
+   [
+    {
+     "sessionId": "20261008_100009_999999",
+     "engine": "hermes",
+     "hermesHome": null
+    }
+   ],
+   [
+    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check"
+   ]
+  ]
+ ],
+ "home probe": [
+  [
+   "a profile",
+   {
+    "engine": "hermes",
+    "hermesHome": "<root>/home/.hermes/profiles/work"
+   }
+  ],
+  [
+   "the default",
+   {
+    "engine": "hermes",
+    "hermesHome": null
+   }
+  ],
+  [
+   "the default, with a trailing slash",
+   {
+    "engine": "hermes",
+    "hermesHome": null
+   }
+  ],
+  [
+   "a relative path",
+   {
+    "engine": "hermes",
+    "hermesHome": null
+   }
+  ],
+  [
+   "a path with a control character",
+   {
+    "engine": "hermes",
+    "hermesHome": null
+   }
+  ],
+  [
+   "none",
+   {
+    "engine": "hermes",
+    "hermesHome": null
+   }
+  ],
+  [
+   "an environment that could not be read",
+   {
+    "engine": "hermes",
+    "hermesHome": "undefined"
+   }
+  ],
+  [
+   "claude",
+   {
+    "engine": "claude",
+    "hermesHome": null
+   }
+  ]
+ ]
+}

@@ -1,0 +1,294 @@
+{
+ "agent_create · OpenCode v1": [
+  [
+   "opencode",
+   "harness-compute",
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "opencode",
+     "agent": "harness-compute",
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "opencode",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "opencode",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "claude",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "claude has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "claude",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "claude",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "pi",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "pi has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "pi",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "pi",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "cursor",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "cursor has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "cursor",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "cursor",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ]
+ ],
+ "agent_create · OpenCode v2": [
+  [
+   "opencode",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "opencode has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "opencode",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "opencode",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "claude",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "claude has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "claude",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "claude",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "pi",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "pi has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "pi",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "pi",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "cursor",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "cursor has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "cursor",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "cursor",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ]
+ ],
+ "agent_create · OpenCode none": [
+  [
+   "opencode",
+   "harness-compute",
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "opencode",
+     "agent": "harness-compute",
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "opencode",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "opencode",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "claude",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "claude has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "claude",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "claude",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "pi",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "pi has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "pi",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "pi",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ],
+  [
+   "cursor",
+   "harness-compute",
+   {
+    "error": "AGENT_UNSUPPORTED",
+    "detail": "cursor has no documented way to open as a named agent, so the agent was not created."
+   },
+   []
+  ],
+  [
+   "cursor",
+   null,
+   {
+    "error": "RECORDED"
+   },
+   [
+    {
+     "engine": "cursor",
+     "agent": null,
+     "name": "Named"
+    }
+   ]
+  ]
+ ]
+}

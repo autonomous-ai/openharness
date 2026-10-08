@@ -21,8 +21,8 @@ import { resolveGridTarget } from '../lib/gridTarget.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
-import { apiConnectionsRequest } from '../lib/apiConnections.js'
-import { apiModelsRequest, rememberSavedApis } from '../lib/apiModels.js'
+import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
+import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels } from './models.js'
@@ -69,6 +69,8 @@ vi.mock('../lib/apiConnections.js', () => ({
 vi.mock('../lib/apiModels.js', () => ({
   apiModelsRequest: vi.fn(async (_store: unknown, payload: Record<string, unknown>) => ({ id: payload.id, models: ['m1'] })),
   rememberSavedApis: vi.fn(),
+  refreshApiFor: vi.fn(() => (override: unknown) => ({ override, apiBase: 'https://api.example.test/v1' })),
+  apiTargetAnswer: vi.fn(async () => ({ detail: 'This API is not saved. Add it in Models → APIs.' })),
 }))
 vi.mock('../lib/codexProfiles.js', () => ({
   listCodexProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ path, label: 'Codex' }))),
@@ -684,6 +686,19 @@ describe('the models service', () => {
         expect(await ask('api_connections', { action: 'models', id: 'a' })).toEqual({ id: 'a', models: ['m1'] })
         expect(apiModelsRequest).toHaveBeenCalledOnce()
         expect(rememberSavedApis).toHaveBeenCalledOnce()
+      })
+
+      it("builds the core's launches on a grid or a saved API, reading the saved APIs in the data folder as they are now", async () => {
+        const { port } = setup([], { dataDir: '/data/launch' })
+        const store = apis.stores.indexOf('/data/launch')
+        expect(store).toBeGreaterThanOrEqual(0)
+        const override = { networkId: 'api:a', networkName: 'Home API', baseUrl: 'https://api.example.test/v1', apiKey: 'k', model: 'm' }
+        expect(await port.gridLaunch({ engine: 'claude', override, machine: { hermesSystemManaged: false }, refresh: true })).toMatchObject({
+          ok: true, override, apiBase: 'https://api.example.test/v1', launch: { env: { ANTHROPIC_MODEL: 'm' } },
+        })
+        expect(vi.mocked(refreshApiFor).mock.calls.at(-1)![0]).toBeInstanceOf(ApiConnections)
+        expect(await port.apiTarget({ connectionId: 'a', model: 'm' })).toEqual({ detail: 'This API is not saved. Add it in Models → APIs.' })
+        expect(vi.mocked(apiTargetAnswer).mock.calls.at(-1)!.slice(1)).toEqual(['a', 'm'])
       })
 
       it('codex_profiles_list: the folders this machine offers, with the ones the asker has seen; a failed scan is said', async () => {
