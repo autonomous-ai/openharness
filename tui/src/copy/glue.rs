@@ -248,6 +248,10 @@ pub fn run(copy: &mut Copy, ps: &mut PaneSearch, c: &Ctx, args: Vec<String>, mou
 fn apply(app: &mut App, pane: u64, out: Out, m: Option<&crate::mouse::Event>) {
     let clipboard = app.options.get("set-clipboard", "", None).as_deref() != Some("off");
     let limit = app.buffer_limit();
+    // Copied to the clipboard: said a moment over the pane, so a selection let go is known taken.
+    if clipboard && matches!(out, Out::Copy { .. } | Out::Pipe { copy: Some(_), .. } | Out::Append(_)) {
+        app.copied = Some((pane, std::time::Instant::now()));
+    }
     match out {
         Out::Copy { prefix, text } => {
             if clipboard { crate::clipboard::store_as("", &text) }

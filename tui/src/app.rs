@@ -494,6 +494,8 @@ pub struct App {
     pub first_session: u32,
     pub modal: Option<Modal>,
     pub toast: Option<(String, Color, Instant)>,
+    /// A selection just went to the clipboard: the pane, and when (a moment's "Copied" over it).
+    pub copied: Option<(u64, Instant)>,
     /// How long hn's own notice stays (a harness waiting on you: longer than display-time's
     /// 750 ms, which is for tmux's messages); none for any other message.
     pub toast_hold: Option<u64>,
@@ -911,6 +913,7 @@ impl App {
             first_session: 0,
             modal: None,
             toast: None,
+            copied: None,
             display_ms: 750,
             toast_hold: None,
             toast_exact: None,
