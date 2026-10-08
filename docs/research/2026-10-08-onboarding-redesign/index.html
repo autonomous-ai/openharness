@@ -350,103 +350,45 @@
 
   <!-- ===================== 2. NEW USER ===================== -->
   <h2>2. Arrival: someone with no agents yet</h2>
-  <p class="lede">No New Harness box. Harness opens one tab with a small game OpenCode has already made. The game runs in the preview, and the composer is focused on one question.
-    The preview is the same <b>DSH viewer</b> every Store harness uses: it opens by itself beside the agent, as Space Dodge's preview on the left (70%) and the agent on the right.</p>
+  <p class="lede">No New Harness box, no starter game, no webview: one tab with three agents, the same terminals as every other harness, so the first screen matches the rest of the app.
+    OpenCode runs full height on the left, ready and focused, with a first task already in its message box. Codex and Claude Code sit on the right, one above the other, showing the person
+    that one window holds several agents.</p>
   <div class="win">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">Space Dodge</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
+    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on">code</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
     <div class="ws">
-      <div class="panes" style="grid-template-columns: 1.55fr 1fr">
-        <div class="p">
-          <div class="h">◧ Space Dodge<span class="m">preview</span><span style="margin-left:1cqw;color:var(--muted)">↗</span><span style="margin-left:.8cqw;color:var(--muted)">⟳</span><span style="margin-left:.8cqw;color:var(--muted)" title="Close viewer">×</span></div>
-          <div class="game">
-            <div class="score">SCORE 128</div>
-            <i class="star" style="left:12%;top:20%"></i><i class="star" style="left:70%;top:12%"></i><i class="star" style="left:40%;top:44%"></i><i class="star" style="left:86%;top:58%"></i><i class="star" style="left:22%;top:66%"></i>
-            <i class="rock" style="left:20%;top:30%;width:3cqw;height:3cqw"></i><i class="rock" style="left:62%;top:22%;width:2cqw;height:2cqw"></i><i class="rock" style="left:75%;top:52%;width:3.6cqw;height:3.6cqw;background:#52524c"></i>
-            <i class="ship"></i>
+      <div class="panes" style="grid-template-columns: 1.25fr 1fr; grid-template-rows: 1fr 1fr">
+        <div class="p" style="grid-row: 1 / span 2">
+          <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">~/harnesses/first-project</span></div>
+          <div class="b">
+            <span class="dim">Welcome to Harness: all your machines, all your agents, in one place.</span><br>
+            <span class="dim">OpenCode is free and ready. Press Return to try the task below, or type your own.</span><br><br>
+            <div class="composer"><span class="sel">make a small web page that shows today's date</span><span class="cur"></span><span class="ghint">⏎ send · or type your own</span></div>
           </div>
         </div>
-        <div class="p">
-          <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">space-dodge</span></div>
-          <div class="b"><span class="u">› make a tiny space game I can play in the browser</span><br>
-            <span class="ok">✓</span> index.html · game.js<br>
-            Space Dodge is running on the left: arrow keys move the ship, dodge the rocks.<br><br>
-            <span class="am">What would you like to change in the game?</span><br>
-            <span class="dim">Ideas: "add a high score" · "make the ship blue"</span>
-            <div class="composer"><span class="sel">make the rocks faster</span><span class="cur"></span><span class="ghint">⏎ send · or type your own</span></div></div>
-        </div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/engine-icons/codex.png" alt="">Codex<span class="m">not set up yet</span></div>
+          <div class="b" style="display:grid;place-items:center;text-align:center;font-family:var(--sans)">
+            <div><img src="../../../desktop/assets/engine-icons/codex.png" alt="" style="width:2.6cqw;height:2.6cqw;border-radius:.5cqw;opacity:.9"><div style="font-size:1.25cqw;color:var(--text);font-weight:600;margin-top:.6cqw">Codex</div>
+            <div style="font-size:1cqw;color:var(--muted);margin-top:.3cqw;max-width:22cqw">Uses your ChatGPT plan. Installs and asks you to sign in when you first type here.</div>
+            <div style="font-size:1cqw;color:var(--muted);margin-top:.8cqw;border:1px solid var(--line);border-radius:2cqw;padding:.35cqw 1cqw;display:inline-block">Type here to set it up</div></div>
+          </div></div>
+        <div class="p"><div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">not set up yet</span></div>
+          <div class="b" style="display:grid;place-items:center;text-align:center;font-family:var(--sans)">
+            <div><img src="../../../desktop/assets/model-icons/claude.png" alt="" style="width:2.6cqw;height:2.6cqw;border-radius:.5cqw;opacity:.9"><div style="font-size:1.25cqw;color:var(--text);font-weight:600;margin-top:.6cqw">Claude Code</div>
+            <div style="font-size:1cqw;color:var(--muted);margin-top:.3cqw;max-width:22cqw">Uses your Claude plan. Installs and asks you to sign in when you first type here.</div>
+            <div style="font-size:1cqw;color:var(--muted);margin-top:.8cqw;border:1px solid var(--line);border-radius:2cqw;padding:.35cqw 1cqw;display:inline-block">Type here to set it up</div></div>
+          </div></div>
       </div>
-      <div class="status"><span>Harnesses 1</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>space-dodge</span></div>
+      <div class="status"><span>Harnesses 3</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>first-project</span></div>
     </div>
   </div>
-  <p class="cap"><b>First screen for a brand-new person.</b> The message box is never empty: it holds a first change, "make the rocks faster", already selected.
-    Return sends it as is; typing anything replaces it. The agent edits the game and the preview reloads.
-    (This is Harness's own in-pane composer, which can hold and select text, sitting on OpenCode's input.)</p>
-  <div class="win" style="margin-top:22px">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab on"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">Space Dodge</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
-    <div class="ws">
-      <div class="panes" style="grid-template-columns: 1fr">
-        <div class="p">
-          <div class="h"><img src="../../../desktop/assets/engine-icons/opencode.png" alt="">OpenCode<span class="m">space-dodge</span><span style="margin-left:1.2cqw;color:var(--muted)">◧ Preview ⇧⌘V</span></div>
-          <div class="b"><span class="u">› make a tiny space game I can play in the browser</span><br>
-            <span class="ok">✓</span> index.html · game.js<br>
-            Space Dodge is running on the left: arrow keys move the ship, dodge the rocks.<br><br>
-            <span class="am">What would you like to change in the game?</span><br>
-            <span class="dim">Ideas: "add a high score" · "make the ship blue"</span>
-            <div class="composer"><span class="sel">make the rocks faster</span><span class="cur"></span><span class="ghint">⏎ send · or type your own</span></div></div>
-        </div>
-      </div>
-      <div class="status"><span>Harnesses 1</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>space-dodge</span></div>
-    </div>
-  </div>
-  <p class="cap"><b>Preview hidden.</b> × on the preview's header hides it. <b>⇧⌘V</b> (or View ▸ Toggle Viewer) brings it back.
-    The small "◧ Preview ⇧⌘V" in the agent's header shows only while a hidden preview exists.</p>
-  <p class="note"><b>How:</b>
-    <b>The starter</b> is a tiny Store-style harness: the finished Space Dodge project, a manifest that runs on OpenCode, and <code>viewer.use: autonomous/web-viewer</code> pointing at its <code>index.html</code>.
-    It is the same shape the community "fork a project" flow already creates (<code>fork_project.dart</code>), which waits for the viewer and shows it.
-    <b>The conversation</b> is a bundled OpenCode session, imported on first run with its folder paths rewritten (checked: an exported session resumes on another computer).
-    <b>The preview</b> is served by the daemon, which starts the viewer on a free local port when the harness attaches. The app opens it at 70/30 without taking focus from the composer.
-    <b>Hide and show</b> use what exists today: Close viewer on the preview, and View ▸ Toggle Viewer to reopen it. What's new is a default key for Toggle Viewer (⇧⌘V; nothing uses it now) and the small header hint.
-    <b>Who gets it:</b> only someone with no Claude Code, Codex or OpenCode and no sessions, the same people OpenCode is downloaded for.
-    <b>To decide:</b> the web viewer is a Store package fetched at install, so the app should bundle it (or fetch it during setup) to make the first screen appear without waiting.</p>
-
-  <h3>Later, its own PR, not this build: every web project gets the same preview</h3>
-  <p class="note" style="color:var(--amber)"><b>Out of the onboarding scope.</b> This changes how every harness behaves, so it is built and tested separately, after onboarding ships.
-    The starter itself does not need it: its preview is the Store viewer that already works today. Reliability bar before it ships: static pages, Vite/Next/Astro dev servers, a server on a reused port, two servers at once, an HTML file that is not a page (docs, test fixtures), and a remote machine, each on a fresh VM.</p>
-  <p class="lede">So the starter doesn't promise something the rest of Harness doesn't do: in <b>any</b> harness, with any agent, the first time the agent writes an HTML page or starts a local web server,
-    the preview opens beside it by itself, exactly like the starter's. Nobody has to know a viewer exists.</p>
-  <div class="win">
-    <div class="bar"><span class="dots"><i></i><i></i><i></i></span><span class="tab">Space Dodge</span><span class="tab on"><img src="../../../desktop/assets/model-icons/claude.png" alt="">landing-page</span><span class="tab"><span class="plus">+</span></span><span class="sp"></span><span class="store">Harness Store</span></div>
-    <div class="ws">
-      <div class="panes" style="grid-template-columns: 1.55fr 1fr">
-        <div class="p" style="display:flex;flex-direction:column">
-          <div class="h">◧ index.html<span class="m">preview · opened by itself</span><span style="margin-left:1cqw;color:var(--muted)">↗</span><span style="margin-left:.8cqw;color:var(--muted)">⟳</span><span style="margin-left:.8cqw;color:var(--muted)">×</span></div>
-          <div style="flex:1;background:#f6f3ee;color:#1d1c1a;padding:2.4cqw 2.6cqw;font-family:var(--sans)">
-            <div style="font-size:.95cqw;letter-spacing:.12em;text-transform:uppercase;color:#a0522d">Studio Lumen</div>
-            <div style="font-size:2.6cqw;font-weight:800;line-height:1.1;margin:.8cqw 0">Light for the<br>rooms you live in.</div>
-            <div style="font-size:1.1cqw;color:#5b5750;max-width:24cqw">Handmade lamps from Hanoi, shipped worldwide.</div>
-            <div style="margin-top:1.4cqw;display:inline-block;background:#1d1c1a;color:#fff;font-size:1cqw;padding:.6cqw 1.4cqw;border-radius:2cqw">Shop the collection</div>
-            <div style="display:flex;gap:1cqw;margin-top:2cqw"><div style="flex:1;height:8cqw;border-radius:.8cqw;background:linear-gradient(135deg,#e9d8b8,#c99a5b)"></div><div style="flex:1;height:8cqw;border-radius:.8cqw;background:linear-gradient(135deg,#d7dde4,#8a9bb0)"></div><div style="flex:1;height:8cqw;border-radius:.8cqw;background:linear-gradient(135deg,#efd1c8,#c47a62)"></div></div>
-          </div>
-        </div>
-        <div class="p">
-          <div class="h"><img src="../../../desktop/assets/model-icons/claude.png" alt="">Claude Code<span class="m">landing-page</span></div>
-          <div class="b"><span class="u">› make a landing page for my lamp shop</span><br><span class="ok">✓</span> index.html · styles.css<br>It's showing on the left. Want product photos next?
-            <div class="composer"><span class="cur"></span></div></div>
-        </div>
-      </div>
-      <div class="status"><span>Harnesses 2</span><span>Machines 1</span><span>Models 0</span><span class="sp"></span><span>landing-page</span></div>
-    </div>
-  </div>
-  <p class="cap"><b>Someone's own next project, after the starter:</b> a plain ⌘N harness on Claude Code, no Store harness, no setting. The page appears as soon as the agent writes it.</p>
-  <p class="note"><b>How Harness knows it's a web project:</b> it doesn't guess from the project; it watches what the agent does. Either the agent writes an <code>.html</code> file
-    in the project (a static page or game), or it starts a local web server and prints its address (<code>Local: http://localhost:5173</code> from Vite, Next, etc.).
-    The daemon already reads every turn's tool calls and the pane's output, so both are visible to it.<br>
-    <b>When it opens:</b> automatically, the first time either happens in that harness, without the person running anything. After that it shows the newest page, or the server's address, and reloads as files change.<br>
-    <b>Not instead of Chrome:</b> it is a preview inside Harness, beside the agent, so the person sees the result without leaving. The preview's header has "Open in browser" (↗), and ⌘-click on any
-    address or file the agent prints still opens the default browser as today.<br>
-    <b>Turning it off:</b> × hides it for that harness; ⇧⌘V (or View ▸ Toggle Viewer) brings it back; the agent's header shows "◧ Preview ⇧⌘V" while it is hidden.<br>
-    <b>What's new:</b> today the daemon starts a viewer only for Store harnesses that declare one (<code>services/viewers.ts</code> returns early for every other session). This would start the bundled web
-    viewer for any session that writes a page or prints a local address. The pane, its layout and its toggle are the ones Store harnesses use now.</p>
+  <p class="cap"><b>First screen for a brand-new person.</b> One tab, three agents. Return in OpenCode sends the pre-filled first task; the result shows in the terminal, as in any harness.</p>
+  <p class="note"><b>Logic:</b>
+    <b>OpenCode</b> starts at once in a new project folder (it was downloaded during setup), with a first task pre-filled and selected in Harness's in-pane composer: Return sends it, typing replaces it, so the box is never blank.
+    The two lines above it are printed by Harness, not the agent.
+    <b>Codex and Claude Code</b> are not installed yet, so their panes start quiet: nothing downloads until the person types in one. Then the friendly install screen from #1069 shows
+    ("Getting Codex ready…", about 20 s), followed by that agent's own sign-in. That keeps a first launch from downloading two agents nobody asked for.
+    <b>Someone with one of them already</b> is not in this group (section 3 applies). <b>Layout:</b> Harness's existing three-pane grid, one large pane and two stacked.<br>
+    <b>To decide:</b> install Codex and Claude Code right away instead, so they are ready by the time the person looks at them (about 30 s of downloads, but no wait later)?</p>
 
   <h2>3. Arrival: someone who already uses Claude Code and Codex</h2>
   <p class="lede">Their most recent sessions that are not running anywhere open by themselves. Most recent means most recently active: the same order as ⌘P and the recent list on ⌘T, by each conversation's last activity. With both agents, tab 1 holds the most recently active Claude Code session and the most recently active Codex session side by side,
@@ -530,29 +472,22 @@
 
   <h2>Checked: can it be built (2026-10-08)</h2>
   <p class="note" style="font-size:15px;line-height:1.7">
-    <b>Bundled OpenCode session (screen 2): yes.</b> In a fresh macOS VM, <code>opencode export</code> produced a 33 KB JSON of a real
-    game session. <code>opencode import</code> in a brand-new home under a different folder made it the only session there, and
-    <code>opencode --session &lt;id&gt;</code> opened with the whole conversation on screen. Two things for the build: rewrite the
-    folder paths in the JSON to the person's own folder before importing, and hand-curate the transcript. The one OpenCode
-    made ran <code>python3</code>, which on a fresh Mac raises Apple's developer-tools dialog.<br>
-    <b>Game preview pane: yes, with modest work.</b> The app already has web panes (WKWebView, <code>web_pane_panel.dart</code>)
-    for harness viewers; a local <code>index.html</code> needs a URL the pane can load.<br>
-    <b>Recent sessions and counts (screen 3): yes.</b> The daemon's <code>session_search</code>, asked with a time and no words,
-    returns recent Claude Code and Codex sessions with engine, folder, title and last activity. The app's welcome page already
-    reads it (<code>welcome_sessions.dart</code>). The limits come from the usage controller behind the Models menu.<br>
-    <b>Opening panes without starting 9 agents:</b> needs a "show the conversation, start the agent on first keystroke" pane,
-    which does not exist yet. It is the largest piece of new work here. Until it exists, the cap could be 2 live panes per tab.</p>
+    <b>Recent sessions and their order (screen 3): yes.</b> The daemon's <code>session_search</code>, asked with a time and no words, returns recent Claude Code and Codex sessions with engine,
+    folder, title and last activity; the welcome page reads it today and sorts by <code>lastActivityAt</code>, as ⌘P does. Whether a conversation is open somewhere else is what the daemon already
+    checks before resuming one (it refuses a conversation open in another terminal).<br>
+    <b>Panes whose agent starts on the first keystroke (screens 2 and 3):</b> new plumbing, the largest piece of this build.<br>
+    <b>Friendly agent install (screen 4): built</b> as #1069 and checked on a fresh VM.</p>
 
   <h2>Decided</h2>
   <p class="note" style="font-size:15px;line-height:1.7">
     <b>Tour:</b> 5 slides: machines, agents, ⌘P, ⌘N, then sessions + the Harness phone app + the Harness device. Tagline "All your machines. All your agents. One command center." Harness opens by itself when setup finishes; no button.<br>
-    <b>New users:</b> the Space Dodge game, preview beside it, a first change pre-filled and selected. OpenCode is downloaded only when there is no agent engine.<br>
-    <b>Not in this build:</b> the preview for every web project (its own PR later, with its own testing). Onboarding's starter uses the Store viewer that exists today. ⇧⌘V for Toggle Viewer is in.<br>
+    <b>New users:</b> one tab, OpenCode full height on the left with a first task pre-filled, Codex and Claude Code stacked on the right and set up on first keystroke. No game, no webview. OpenCode is downloaded only when there is no agent engine.<br>
+    <b>Not in this build:</b> any webview or preview. Help ▸ Welcome Tour is in the macOS menu bar's Help menu.<br>
     <b>Existing users:</b> only sessions not running anywhere. Tab 1 = most recently active Claude Code + most recently active Codex; tab 2 = the next 3 most recently active, both agents where possible (order = ⌘P / ⌘T recents, by last activity); one agent = its own recent sessions.
     A pane's agent starts on the first keystroke. No welcome strip.<br>
-    <b>Pickers:</b> no status badges; agent installs get a friendly progress pane instead of installer text.<br>
+    <b>Pickers:</b> no status badges; agent installs get a friendly progress screen instead of installer text (built: #1069, checked on a fresh VM).<br>
     <b>Not changed:</b> the footer and everything outside onboarding. (Footers in these renders now match the app: usage on the left after Models.)<br>
-    <b>Still open:</b> Help ▸ Welcome Tour to see the slides again? (Default: yes.)</p>
+    <b>Still open:</b> Codex and Claude Code panes for new users: set up on first keystroke (rendered), or install right away?</p>
 </main>
 </body>
 </html>
