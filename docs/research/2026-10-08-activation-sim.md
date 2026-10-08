@@ -244,7 +244,13 @@ restored every harness with no prompt.
     discovery plugins cost ~4–5 s of a new user's first result. `OPENCODE_FAST_BOOT` only skips the TUI's
     loading screen (`skipInitialLoading`), not that install. Options, not taken: install those packages
     ahead (they track OpenCode's version), or register the plugins some other way than the global config
-    folder (but that folder is what lets Harness discover OpenCode sessions started outside it). The screenshots of the whole flow are in
+    folder (but that folder is what lets Harness discover OpenCode sessions started outside it).
+    Tried and dropped: warming OpenCode during setup with a password-protected `opencode serve` and one
+    `/config` request. In isolation it cut the next first start to 2.8–4.9 s. In the real flow it made
+    things worse. The server was stopped as soon as `@opencode-ai/plugin` appeared, and the first harness's
+    OpenCode then sat 51 s loading its config folder (most likely an interrupted install's lock), so the
+    first result came at 87 s against 46 s. Not shipped; the commits stay on local branch
+    `prefetch-warm-wip`. The screenshots of the whole flow are in
     `docs/research/2026-10-08-onboarding-flow/index.html`.
 
 ## Next
