@@ -33,6 +33,8 @@ pub struct TmuxBackend<W: Write> {
     /// How many cells the last frame wrote (0 for one that wrote nothing): a large one is a
     /// burst the settle rewrite follows.
     last_cells: usize,
+    /// The terminal's size as a test gives it (else the terminal is asked).
+    size_known: Option<Size>,
 }
 
 /// Whether a frame is wrapped in synchronized output (?2026): yes, unless `HARNESS_TUI_SYNC=off`
@@ -176,7 +178,9 @@ impl<W: Write> TmuxBackend<W> {
         Self { sync_ok, ..Self::with_sync(writer) }
     }
 
-    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None, last_cells: 0 } }
+    fn with_sync(writer: W) -> Self { Self { inner: CrosstermBackend::new(writer), shadow: Vec::new(), extra_shadow: Default::default(), syncing: false, sync_ok: true, soft: false, force_whole: false, cursor_at: None, cursor_shown: None, last_cells: 0, size_known: None } }
+
+    fn screen_size(&self) -> Option<Size> { self.size_known.or_else(|| self.inner.size().ok()) }
 
     /// The next `clear()` does not erase the screen: every row is written again, each erased and
     /// rewritten in the same write, so a stale cell goes but the screen is never seen blank.
@@ -582,7 +586,7 @@ impl<W: Write> Backend for TmuxBackend<W> {
         let mut whole: std::collections::BTreeSet<u16> = touched.into_iter().filter(|y| was.contains(y) || self.row_risky(*y)).collect();
         // A soft clear: every row of the screen (the terminal's height; else the rows known).
         if all {
-            let rows = self.inner.size().map(|s| s.height as usize).unwrap_or(self.shadow.len()).max(self.shadow.len());
+            let rows = self.screen_size().map(|s| s.height as usize).unwrap_or(self.shadow.len()).max(self.shadow.len());
             whole.extend((0..rows).map(|y| y as u16));
         }
         // A single-cell update fits in the writer's one buffered flush; synchronizing it
@@ -590,6 +594,7 @@ impl<W: Write> Backend for TmuxBackend<W> {
         if cells.len() > 1 || !whole.is_empty() { self.begin_sync()? }
         let (usstyle, links) = frame.map(|f| (f.usstyle, f.links)).unwrap_or((false, false));
         let extra_at = |x: u16, y: u16| frame.and_then(|f| f.extras.get(&(x, y)));
+        let cols = if whole.is_empty() { None } else { self.screen_size().map(|s| s.width as usize) };
         // CrosstermBackend writes through to its writer.
         let w = &mut self.inner;
         let mut pen = Pen::new();
@@ -601,28 +606,35 @@ impl<W: Write> Backend for TmuxBackend<W> {
             let width = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1) as u16;
             self.cursor_at = Some(Position::new(x.saturating_add(width), *y));
         }
+        // A row written whole: its text from the first column, then the rest of the row erased —
+        // never erased first, which a terminal without ?2026 would show blank for a moment.
+        let blank = Cell::default();
+        let width = |c: &Cell| unicode_width::UnicodeWidthStr::width(c.symbol()).max(1);
         for y in whole {
             // A row of a soft clear with nothing on it is still erased: a stale cell may be there.
-            let Some(row) = self.shadow.get(y as usize) else {
-                if all { write!(w, "\x1b[{};1H", y + 1)?; pen.reset(w)?; w.write_all(b"\x1b[2K")?; self.cursor_at = None }
-                continue
-            };
+            let row = match self.shadow.get(y as usize) { Some(row) => row.as_slice(), None if all => &[], None => continue };
+            // (Blank cells at its end are the erase's.)
+            let end = row.iter().enumerate().rev().find(|(x, c)| **c != blank || extra_at(*x as u16, y).is_some())
+                .map_or(0, |(x, c)| x + width(c));
             write!(w, "\x1b[{};1H", y + 1)?;
-            self.cursor_at = Some(Position::new(0, y));
-            pen.reset(w)?;
-            w.write_all(b"\x1b[2K")?;
             let (mut skip, mut placed) = (0usize, true);
-            for (x, cell) in row.iter().enumerate() {
+            for (x, cell) in row[..end].iter().enumerate() {
                 if skip > 0 { skip -= 1; continue }
                 // After a cluster the terminal may have counted otherwise, the next cell goes
                 // where hn counts it.
                 if !placed { write!(w, "\x1b[{};{}H", y + 1, x + 1)?; }
                 pen.put(w, cell, extra_at(x as u16, y), usstyle, links)?;
-                let width = unicode_width::UnicodeWidthStr::width(cell.symbol()).max(1);
-                skip = width - 1;
+                skip = width(cell) - 1;
                 placed = !risky(cell.symbol());
-                self.cursor_at = placed.then(|| Position::new((x + width) as u16, y));
             }
+            // A row that reaches the last column needs no erase (and the cursor waiting there
+            // would take that column's cell with it).
+            if cols.is_none_or(|c| end < c) {
+                if !placed { write!(w, "\x1b[{};{}H", y + 1, end + 1)?; placed = true }
+                pen.reset(w)?;
+                w.write_all(b"\x1b[K")?;
+            }
+            self.cursor_at = placed.then(|| Position::new(end as u16, y));
         }
         // SGR 0 restores all three colours and attributes in one command; when they
         // are already default, a plain-text echo has nothing to restore.
@@ -705,9 +717,10 @@ mod tests {
     }
 
     #[test]
-    fn a_soft_clear_erases_each_row_once_inside_one_update_and_never_the_screen() {
+    fn a_soft_clear_writes_each_row_once_inside_one_update_and_never_erases_first() {
         let mut written = Vec::new();
         let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(10, 3));
         let mut cells = Vec::new();
         for y in 0..3u16 { let mut c = Cell::default(); c.set_char('x'); cells.push((0u16, y, c)) }
         backend.draw(cells.iter().map(|(x, y, c)| (*x, *y, c))).unwrap();
@@ -718,14 +731,89 @@ mod tests {
         Backend::flush(&mut backend).unwrap();
         drop(backend);
         let s = String::from_utf8_lossy(&written);
-        assert!(!s.contains("\x1b[2J"), "{s:?}");
-        // (the size query fails or answers for the developer's own window here, so: at least the three rows drawn)
-        assert!(s.matches("\x1b[2K").count() >= 3, "{s:?}");
+        assert!(!s.contains("\x1b[2J") && !s.contains("\x1b[2K"), "{s:?}");
+        // Each row's text, then the rest of the row erased: never a blank row mid-write.
+        for y in 1..=3 { assert_eq!(s.matches(&format!("\x1b[{y};1Hx\x1b[K")).count(), 1, "row {y}: {s:?}") }
         assert_eq!(s.matches("\x1b[?2026h").count(), 2, "one update per frame: {s:?}");
         assert_eq!(s.matches("\x1b[?2026l").count(), 2, "{s:?}");
         // The soft frame's update opens before its first row is written.
         let after_first = &s[s.find("\x1b[?2026l").unwrap()..];
-        assert!(after_first.find("\x1b[?2026h").unwrap() < after_first.find("\x1b[2K").unwrap(), "{s:?}");
+        assert!(after_first.find("\x1b[?2026h").unwrap() < after_first.find("\x1b[1;1Hx").unwrap(), "{s:?}");
+    }
+
+    /// Cells for [text] from column 0 of row [y], each at the column its width puts it.
+    fn text_at(backend: &mut TmuxBackend<&mut Vec<u8>>, y: u16, text: &str) {
+        use unicode_segmentation::UnicodeSegmentation;
+        let mut cells = Vec::new();
+        let mut x = 0u16;
+        for g in text.graphemes(true) {
+            let mut c = Cell::default();
+            c.set_symbol(g);
+            cells.push((x, y, c));
+            x += unicode_width::UnicodeWidthStr::width(g).max(1) as u16;
+        }
+        backend.draw(cells.iter().map(|(x, y, c)| (*x, *y, c))).unwrap();
+        Backend::flush(backend).unwrap();
+    }
+
+    #[test]
+    fn a_whole_row_writes_its_text_and_then_erases_the_rest() {
+        use alacritty_terminal::index::{Column, Line};
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(20, 2));
+        text_at(&mut backend, 0, "abcdefgh");
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        text_at(&mut backend, 0, "ab");
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(!s.contains("\x1b[2K"), "{s:?}");
+        assert!(s.contains("\x1b[1;1Hab\x1b[K"), "the text first, then the rest of the row: {s:?}");
+        assert!(s.contains("\x1b[2;1H\x1b[K"), "an empty row is still erased: {s:?}");
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 20, 2);
+        pane.feed(&written);
+        let row: String = (0..8).map(|x| pane.term.grid()[Line(0)][Column(x)].c).collect();
+        assert_eq!(row, "ab      ", "no cell of the longer row survives");
+    }
+
+    #[test]
+    fn a_whole_row_that_reaches_the_right_edge_is_not_erased_after_it() {
+        // The cursor waits on the last column after printing there: an erase then takes that cell.
+        use alacritty_terminal::index::{Column, Line};
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(4, 1));
+        backend.soft_clear_next();
+        Backend::clear_region(&mut backend, ClearType::All).unwrap();
+        text_at(&mut backend, 0, "abcd");
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        assert!(!s.contains("\x1b[K") && !s.contains("\x1b[2K"), "{s:?}");
+        let mut pane = crate::pane::Pane::new(1, "m", "a", 4, 1);
+        pane.feed(&written);
+        assert_eq!(pane.term.grid()[Line(0)][Column(3)].c, 'd', "{s:?}");
+    }
+
+    #[test]
+    fn a_risky_row_is_written_whole_text_first_and_placed_after_each_risky_symbol() {
+        let mut written = Vec::new();
+        let mut backend = TmuxBackend::with_sync(&mut written);
+        backend.size_known = Some(Size::new(20, 2));
+        text_at(&mut backend, 0, "go⚡ now");
+        text_at(&mut backend, 1, "ab⚡");
+        // One cell changes on each row: both rows hold a risky symbol, so both are written whole.
+        let mut x = Cell::default();
+        x.set_char('x');
+        backend.draw([(5u16, 0u16, &x), (0, 1, &x)].into_iter()).unwrap();
+        Backend::flush(&mut backend).unwrap();
+        drop(backend);
+        let s = String::from_utf8_lossy(&written);
+        let last = &s[s.rfind("\x1b[?2026h").unwrap()..];
+        assert!(!last.contains("\x1b[2K"), "{last:?}");
+        assert!(last.contains("\x1b[1;1Hgo⚡\x1b[1;5H xow\x1b[K"), "the cell after ⚡ placed by hn, the erase after the text: {last:?}");
+        // A row that ends on a risky symbol: the erase starts where hn counts the row's end.
+        assert!(last.contains("\x1b[2;1Hxb⚡\x1b[2;5H\x1b[K"), "{last:?}");
     }
 
     #[test]

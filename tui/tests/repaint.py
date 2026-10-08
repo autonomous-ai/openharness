@@ -97,6 +97,7 @@ def clock():
 RAW = BASE / 'raw.bin'
 SYNC = re.compile(rb'\x1b\[\?2026([hl])')
 CLEAR, ERASE_ROW = b'\x1b[2J', b'\x1b[2K'
+ROW_START = re.compile(rb'\x1b\[(\d+);1H')
 
 
 def mark():
@@ -113,8 +114,10 @@ def written(since, until=None):
 def updates(data):
     """The synchronized updates in [data]: the bytes between each ?2026h and its ?2026l.
 
-    Asserts the pairs are balanced, never nested, and that every hard clear is inside one.
+    Asserts the pairs are balanced, never nested, that every hard clear is inside one, and that no
+    row is erased before its text is written (a row written whole is its text, then \\e[K).
     """
+    assert ERASE_ROW not in data, 'a row erased before its text'
     found, open_at, last = [], None, 0
     for m in SYNC.finditer(data):
         if m[1] == b'h':
@@ -131,9 +134,14 @@ def updates(data):
     return found
 
 
+def row_starts(update):
+    """The rows (1-based) [update] writes from their first column."""
+    return {int(m[1]) for m in ROW_START.finditer(update)}
+
+
 def soft_repaints(data, rows):
-    """Updates that erase every row one by one, and not the screen: a soft repaint."""
-    return [u for u in updates(data) if u.count(ERASE_ROW) >= rows and CLEAR not in u]
+    """Updates that write every row from its first column, and do not erase the screen: a soft repaint."""
+    return [u for u in updates(data) if row_starts(u) >= set(range(1, rows + 1)) and CLEAR not in u]
 
 
 def hard_clears(data):

@@ -304,17 +304,33 @@ fn render_diff(previous:Option<&Buffer>,next:&Buffer,at:Position)->io::Result<Ve
     let mut bytes=b"\x1b[?2026h\x1b[?7l\x1b[?25l".to_vec();
     let mut backend=CrosstermBackend::new(&mut bytes);
     let cells=previous.diff(next);
-    // A row that holds (or held) a cluster the terminal may count otherwise is erased and written
-    // whole, as the main renderer does: a cell-by-cell update there leaves a stale character.
+    // A row that holds (or held) a cluster the terminal may count otherwise is written whole and
+    // its rest erased, as the main renderer does: a cell-by-cell update there leaves a stale character.
     let held=|buf:&Buffer,y:u16|(next.area.x..next.area.right()).any(|x|crate::term_out::risky(buf[(x,y)].symbol()));
     let whole:BTreeSet<u16>=cells.iter().map(|c|c.1).collect::<BTreeSet<_>>().into_iter()
         .filter(|y|held(next,*y)||held(previous,*y)).collect();
     backend.draw(cells.into_iter().filter(|c|!whole.contains(&c.1)))?;
-    if !whole.is_empty() {
-        let fresh=Buffer::empty(next.area).diff(next);
-        for y in whole {
-            write!(backend,"\x1b[{};1H\x1b[2K",y+1)?;
-            backend.draw(fresh.iter().filter(|c|c.1==y).map(|c|(c.0,c.1,c.2)))?;
+    let width=|c:&ratatui::buffer::Cell|unicode_width::UnicodeWidthStr::width(c.symbol()).max(1) as u16;
+    for y in whole {
+        // Every cell up to its last that is not blank (the erase takes the blanks after it); the
+        // area is the terminal's full width, so the erase reaches nothing of anyone else's.
+        let end=(next.area.x..next.area.right()).rev().find(|x|next[(*x,y)]!=ratatui::buffer::Cell::EMPTY)
+            .map_or(next.area.x,|x|x+width(&next[(x,y)]));
+        let mut row=Vec::new();
+        let mut x=next.area.x;
+        while x<end { row.push((x,y,&next[(x,y)])); x+=width(&next[(x,y)]); }
+        // Each draw places its first cell: after a cluster the terminal may have counted
+        // otherwise, the next cell goes where hn counts it.
+        let mut placed=true;
+        for run in row.split_inclusive(|c|crate::term_out::risky(c.2.symbol())) {
+            backend.draw(run.iter().copied())?;
+            placed=!run.last().is_some_and(|c|crate::term_out::risky(c.2.symbol()));
+        }
+        // A row that reaches the last column needs no erase (the cursor waiting there would take
+        // that column's cell with it).
+        if end<next.area.right() {
+            if !placed||row.is_empty() {write!(backend,"\x1b[{};{}H",y+1,end+1)?;}
+            write!(backend,"\x1b[K")?;
         }
     }
     backend.set_cursor_position(at)?;
@@ -856,7 +872,7 @@ mod tests {
         theme::fzf_reset();
     }
     #[test]
-    fn a_row_with_a_risky_symbol_is_erased_and_written_whole() {
+    fn a_row_with_a_risky_symbol_is_written_whole_then_its_rest_erased() {
         use ratatui::style::Style;
         let area=Rect::new(0,4,20,3);
         let mut first=Buffer::empty(area);
@@ -867,8 +883,20 @@ mod tests {
         next.set_string(8,4,"y",Style::default()); // and on a plain row
         let bytes=render_diff(Some(&first),&next,Position::new(0,4)).unwrap();
         let s=String::from_utf8_lossy(&bytes);
-        assert_eq!(s.matches("\x1b[2K").count(),1,"only the risky row is erased: {s:?}");
-        assert!(s.contains("\x1b[6;1H\x1b[2K"),"row 5 (screen row 6) is erased from its first column: {s:?}");
+        assert!(!s.contains("\x1b[2K"),"a row is never erased before its text: {s:?}");
+        // Row 5 (screen row 6) from its first column; the cell after ⚡ placed where hn counts it.
+        let row=s.find("\x1b[6;1Hgo ⚡").unwrap_or_else(||panic!("row 5 written whole: {s:?}"));
+        let after=s[row..].find("\x1b[6;6H nox").unwrap_or_else(||panic!("placed after the risky symbol: {s:?}"));
+        assert_eq!(s.matches("\x1b[K").count(),1,"only the risky row is erased: {s:?}");
+        assert!(s.find("\x1b[K").unwrap()>row+after,"its rest erased after its text: {s:?}");
+        assert!(s.contains("\x1b[5;9Hy"),"the plain row stays a cell-by-cell update: {s:?}");
+        // A terminal holding a longer, stale row 5: nothing of it survives.
+        let mut pane=crate::pane::Pane::new(1,"m","a",20,8);
+        pane.feed("\x1b[6;1Hgo ⚡ now STALE".as_bytes());
+        pane.feed(&bytes);
+        use alacritty_terminal::index::{Column,Line};
+        let text:String=(0..16).filter(|x|*x!=4).map(|x|pane.term.grid()[Line(5)][Column(x)].c).collect();
+        assert_eq!(text,"go ⚡ nox       ","{s:?}");
     }
     #[test]
     fn paste_is_inserted_at_the_query_cursor_and_fzf_editing_keys_work() {
