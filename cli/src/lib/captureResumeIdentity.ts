@@ -10,6 +10,7 @@
 import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
 import { claudeProcessSession, findLiveSession, findResumedTranscript } from './sessionRepair.js'
 import { processRows, resumeSessionId } from './tmux.js'
+import { sameProcessIdentity } from './terminalRuntime.js'
 import { isTerminalEngine } from '../engines/types.js'
 
 export async function captureResumeIdentity(session: RegisteredSession): Promise<RegisteredSession> {
@@ -28,8 +29,8 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
   }
   const expected = session.processIdentity
   if (!expected || !session.cwd) return session
-  const live = (await processRows())?.find(row => row.pid === expected.pid
-    && row.executable === expected.executable && row.startMarker === expected.startMarker)
+  const live = (await processRows())?.find(row => sameProcessIdentity(row, expected)
+    && row.executable === expected.executable)
   if (!live) return session
   const explicit = resumeSessionId(session.engine, live.args)
   const native = session.engine === 'claude'

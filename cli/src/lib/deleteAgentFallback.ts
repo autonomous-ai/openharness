@@ -2,6 +2,7 @@
 
 import type { RegisteredSession } from './registry.js'
 import { processRows, type RuntimeCheck } from './tmux.js'
+import { sameProcessIdentity } from './terminalRuntime.js'
 
 /** Delete has already removed the UI entry; signal the saved process immediately. */
 export const TERMINATE_CHECK_MS = 0
@@ -24,7 +25,7 @@ export async function checkPidRuntime(
   const rows = await processRows()
   if (!rows) return { state: 'unknown', reason: 'process table is unavailable' }
   const live = rows.find((row) => row.pid === expected.pid)
-  return live && live.startMarker === expected.startMarker && live.executable === expected.executable
+  return live && sameProcessIdentity(live, expected) && live.executable === expected.executable
     ? { state: 'alive' }
     : { state: 'gone', reason: 'saved process identity is no longer running' }
 }

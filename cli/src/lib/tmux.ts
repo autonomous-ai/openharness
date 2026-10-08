@@ -16,11 +16,13 @@ import {
 } from './engineBin.js'
 import { BYPASS_PERMISSION_FLAGS, PERMISSION_MODES, permissionModeApproves } from './engineLaunch.js'
 import { psEnv } from './childLocale.js'
+import { processStartTicks } from './processLiveness.js'
 import { nativeProcessImages } from './nativeProcessImages.js'
 import { neutralizePasteControls } from './pasteText.js'
 import { patientDeadline, patientExec } from './patientExec.js'
 import { inTmuxRoom } from './tmuxControlGate.js'
 import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
+import { processIdentityOf, sameProcessIdentity } from './terminalRuntime.js'
 export { captureTmuxPane, tmuxCaptureArgs } from './tmuxCapture.js'
 
 // Every tmux and `ps` call here: a held event loop must not turn a timeout into an empty answer
@@ -301,7 +303,7 @@ let processRowsInFlight: Promise<ProcessRow[] | null> | null = null
 /** A running process's command line as the process table shows it; '' once it is not that process. */
 export async function processArgs(identity: ProcessIdentity): Promise<string> {
   const rows = await processRows()
-  return rows?.find((row) => row.pid === identity.pid && row.startMarker === identity.startMarker)?.args ?? ''
+  return rows?.find((row) => sameProcessIdentity(row, identity))?.args ?? ''
 }
 
 /** The process table, or null when `ps` itself failed — "we could not look" is not "nothing is there". */
@@ -325,7 +327,19 @@ async function readProcessRows(): Promise<ProcessRow[] | null> {
       resolve(rows.length ? rows : null)
     })
   })
-  return rows ? liveProcessRows(repairMangledRows(rows)) : null
+  return rows ? withStartTicks(liveProcessRows(repairMangledRows(rows))) : null
+}
+
+/**
+ * Linux: each row's start ticks, the part of its identity a clock step cannot move (see
+ * `ProcessIdentity.startTicks`). One small /proc read per row, like the mangled-row repair above.
+ */
+export function withStartTicks(rows: ProcessRow[], ticksOf: (pid: number) => number | null = processStartTicks): ProcessRow[] {
+  if (process.platform !== 'linux') return rows
+  return rows.map((row) => {
+    const startTicks = ticksOf(row.pid)
+    return startTicks === null ? row : { ...row, startTicks }
+  })
 }
 
 function execText(command: string, args: string[], timeout: number): Promise<string | null> {
@@ -999,7 +1013,7 @@ export async function lookupPaneEngineProcess(
   if (!process) return { ok: false, unknown: false, reason: `no ${engine} process under pane ${pane}` }
   return {
     ok: true,
-    identity: { pid: process.pid, executable: process.executable, startMarker: process.startMarker },
+    identity: processIdentityOf(process),
   }
 }
 
@@ -1023,7 +1037,7 @@ export async function resolvePaneRootProcess(pane: string): Promise<ProcessIdent
   if (!rows) return null
   const row = rows.find((candidate) => candidate.pid === rootPid)
   if (!row) return null
-  return { pid: row.pid, executable: row.executable, startMarker: row.startMarker }
+  return processIdentityOf(row)
 }
 
 /**
@@ -1120,7 +1134,7 @@ export async function checkSessionRuntime(session: RegisteredSession): Promise<R
   // PID-reuse guard. `executable` is argv-derived and therefore mutable (Command Code rewrites its own
   // argv to `⌘ <session title>` and renames the session mid-life), so it is recorded but not compared:
   // comparing it evicted live panes for renaming themselves.
-  if (saved && (saved.pid !== live.pid || saved.startMarker !== live.startMarker)) {
+  if (saved && !sameProcessIdentity(saved, live)) {
     return {
       state: 'gone',
       reason: `process changed under pane ${session.tmuxPane}`

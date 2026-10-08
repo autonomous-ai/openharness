@@ -44,7 +44,7 @@ import { tmuxFeatures, type TmuxFeatures } from './tmuxVersion.js'
 import { DEFAULT_HOST_THEME, windowStyleOf, type HostTheme } from './hostTheme.js'
 import { machineNames } from './machineNames.js'
 import { isNoTmuxServerError, listTmuxPanes } from './tmuxAgentDiscovery.js'
-import { terminalRouteKey } from './terminalRuntime.js'
+import { sameProcessIdentity, terminalRouteKey } from './terminalRuntime.js'
 
 // Every tmux call here: a held event loop must not turn a timeout into a failure, or into an empty
 // answer that reads as a pane that was never made (patientExec.ts).
@@ -414,8 +414,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       if (expected.processIdentity && !LSTART_MARKER_RE.test(expected.processIdentity.startMarker)) {
         return { state: 'alive' }
       }
-      if (expected.processIdentity
-        && (expected.processIdentity.pid !== live.pid || expected.processIdentity.startMarker !== live.startMarker)) {
+      if (expected.processIdentity && !sameProcessIdentity(expected.processIdentity, live)) {
         return { state: 'gone', reason: 'process changed under tmux pane', replaced: true }
       }
       return { state: 'alive' }

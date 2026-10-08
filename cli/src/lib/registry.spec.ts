@@ -1022,6 +1022,56 @@ describe('agent identity: the process owns the agent, the session is bound to it
     expect(registry.resolve('s1')).toBeUndefined()
   })
 
+  it('keeps a bound agent across a clock step that moved its ps start time but not its start ticks', async () => {
+    // machine-remote-1, 2026-10-07: the Docker VM's clock was resynced after the Mac slept, every
+    // `ps lstart` moved by hours, and each pane's unchanged engine got a new agent id.
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const before = { ...processIdentity(101), startTicks: 26385008 }
+    registry.openProcessAgent({ agentId: 'bound-agent', engine: 'claude', tmuxPane: '%1', cwd: '/tmp/demo', processIdentity: before })
+    registerProcess(registry, {
+      launcherId: 'bound-agent', sessionId: 's1', transcriptPath: transcript('s1'), tmuxPane: '%1', cwd: '/tmp/demo',
+    })
+
+    const stepped = { ...before, startMarker: 'Tue Aug 11 01:00:41 2026' }
+    const observed = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%1', cwd: '/tmp/demo', processIdentity: stepped })
+
+    expect(observed).toMatchObject({ isNew: false, evicted: null })
+    expect(observed?.entry.agentId).toBe('bound-agent')
+    expect(observed?.entry.sessionId).toBe('s1')
+    expect(registry.byProcess('claude', stepped)?.agentId).toBe('bound-agent')
+
+    // Same pid, other ticks: a different process that reused the pid, whatever its marker says.
+    const reused = registry.openProcessAgent({
+      agentId: 'replacement-agent', engine: 'claude', tmuxPane: '%1', cwd: '/tmp/demo',
+      processIdentity: { ...stepped, startTicks: 26385009 },
+    })
+    expect(reused?.entry.agentId).toBe('replacement-agent')
+    expect(reused?.evicted).toEqual({ agentId: 'bound-agent', sessionId: 's1' })
+  })
+
+  it('matches a row saved without start ticks by its marker once, then keeps the ticks', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    registry.openProcessAgent({ agentId: 'bound-agent', engine: 'claude', tmuxPane: '%1', cwd: '/tmp/demo', processIdentity: processIdentity(101) })
+    registerProcess(registry, {
+      launcherId: 'bound-agent', sessionId: 's1', transcriptPath: transcript('s1'), tmuxPane: '%1', cwd: '/tmp/demo',
+    })
+
+    const upgraded = registry.openProcessAgent({
+      engine: 'claude', tmuxPane: '%1', cwd: '/tmp/demo', processIdentity: { ...processIdentity(101), startTicks: 7 },
+    })
+    expect(upgraded).toMatchObject({ isNew: false, evicted: null })
+    expect(registry.byAgent('bound-agent')?.processIdentity?.startTicks).toBe(7)
+
+    const stepped = registry.openProcessAgent({
+      engine: 'claude', tmuxPane: '%1', cwd: '/tmp/demo',
+      processIdentity: { ...processIdentity(101), startMarker: 'Tue Aug 11 01:00:41 2026', startTicks: 7 },
+    })
+    expect(stepped?.entry.agentId).toBe('bound-agent')
+    expect(stepped?.evicted).toBeNull()
+  })
+
   it('removes an agent a resume left with no session and no process', async () => {
     // `claude --resume` in a second pane after quitting the first: the session
     // moves, and the agent it moved from has nothing left to be. Kept, it is a

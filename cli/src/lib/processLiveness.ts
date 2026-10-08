@@ -20,13 +20,21 @@ export function processExists(pid: number): boolean {
   }
 }
 
-export function processStartMarker(pid: number): string | null {
+/** Linux: when `pid` started, in clock ticks since boot; null elsewhere or once it has exited. */
+export function processStartTicks(pid: number): number | null {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8')
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)
-    if (fields[19]) return `linux:${fields[19]}`
-  } catch { /* non-Linux or exited process; use ps below */ }
+    // `pid (comm) S ...`: comm may hold spaces and parentheses, so fields count from the LAST `)`.
+    const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19])
+    return Number.isSafeInteger(ticks) && ticks >= 0 ? ticks : null
+  } catch { return null }
+}
+
+export function processStartMarker(pid: number): string | null {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null
+  const ticks = processStartTicks(pid)
+  if (ticks !== null) return `linux:${ticks}`
   try {
     const started = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], {
       encoding: 'utf8', timeout: 1_000, env: { ...psEnv(), TZ: 'UTC' },

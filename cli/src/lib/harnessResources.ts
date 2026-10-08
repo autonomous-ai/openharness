@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import type { ProcessIdentity } from './terminalTypes.js'
 import { readProcessTelemetry, type ProcessTelemetry } from './harnessTelemetry.js'
 import { macProcessGpuPercent } from './macosProcessGpu.js'
+import { processStartTicks } from './processLiveness.js'
 
 const exec = promisify(execFile)
 type Agent = { agentId: string; processIdentity?: ProcessIdentity | null; engine?: string; codexHome?: string | null; transcriptPath?: string | null }
@@ -90,6 +91,7 @@ async function sharedCodexRoots(agents: readonly Agent[]): Promise<SharedResourc
 export function createHarnessResourcesReader(agents: () => readonly Agent[], deps: {
   sample: () => Promise<ResourceProcess[]>; now: () => number
   telemetry?: (pids: number[]) => Promise<Map<number, ProcessTelemetry>>
+  startTicks?: (pid: number) => number | null
 } = {
   sample: sampleProcesses, now: Date.now, telemetry: readProcessTelemetry,
 }, sharedRoots: (agents: readonly Agent[]) => Promise<SharedResourceRoot[]> = sharedCodexRoots) {
@@ -111,7 +113,10 @@ export function createHarnessResourcesReader(agents: () => readonly Agent[], dep
     const owners = new Map<number, string[]>()
     for (const agent of current) {
       const identity = agent.processIdentity
-      if (!identity || byPid.get(identity.pid)?.start !== identity.startMarker.replace(/\s+/g, ' ')) continue
+      if (!identity || !byPid.has(identity.pid)) continue
+      // A clock step moves `ps lstart` but not the start ticks (ProcessIdentity.startTicks).
+      if (byPid.get(identity.pid)!.start !== identity.startMarker.replace(/\s+/g, ' ')
+        && (identity.startTicks === undefined || (deps.startTicks ?? processStartTicks)(identity.pid) !== identity.startTicks)) continue
       owners.set(identity.pid, [...owners.get(identity.pid) ?? [], agent.agentId])
     }
     const elapsed = previous ? at - previous.at : 0

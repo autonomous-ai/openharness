@@ -17,6 +17,7 @@ import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import type { ProcessRow } from '../../lib/tmux.js'
+import { sameProcessIdentity } from '../../lib/terminalRuntime.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 
@@ -59,7 +60,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     if (!rows) return null
     const recordedAlive = (session: RegisteredSession): boolean => {
       const recorded = session.processIdentity
-      return !!recorded && rows.some((row) => row.pid === recorded.pid && row.startMarker === recorded.startMarker)
+      return !!recorded && rows.some((row) => sameProcessIdentity(row, recorded))
     }
     const callerBelongsTo = (session: RegisteredSession): boolean => {
       const expectedPid = session.processIdentity?.pid
