@@ -76,7 +76,8 @@ setInterval(() => {}, 1000)
   const file = join(dirname(dirname(lockDir)), `hold-${Date.now()}.mts`)
   mkdirSync(dirname(file), { recursive: true })
   writeFileSync(file, script)
-  const child = spawn(process.execPath, [TSX_CLI, file], { stdio: ['ignore', 'pipe', 'ignore'], env: process.env })
+  // Its own group: tsx runs the script in a child of its own, and teardown ends both.
+  const child = spawn(process.execPath, [TSX_CLI, file], { stdio: ['ignore', 'pipe', 'ignore'], env: process.env, detached: true })
   children.push(child)
   return child
 }
