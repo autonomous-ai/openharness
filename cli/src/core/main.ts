@@ -177,7 +177,7 @@ import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
 import { agentTokenUsage } from '../lib/agentTokenUsage.js'
-import { RuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfile.js'
+import { LegacyRuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfileManager.js'
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeProfileController.js'
@@ -539,12 +539,19 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const outOfProcess = servicesTheMasterRuns(process.env, KNOWN_SERVICES)
   const liveHosted = masterRunsLiveEngines(process.env, process.ppid)
   const runtimeHosted = liveHosted && masterRunsEngineRuntime(process.env, process.ppid)
+  // An older master's explicit capability report selects compatibility. A failed worker never does.
+  const isolatedLive = (engine: string): boolean => liveHosted
+    && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
+  const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted
+    ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
-  const runtimeProfiles = createRuntimeProfiles({ legacy: new RuntimeProfileManager(),
-    handles: engine => runtimeHosted && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine]),
+  const runtimeProfiles = createRuntimeProfiles({
+    legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
+    handles: isolatedRuntime,
     resolve: id => registry.resolve(id), transport: runtimeTransport })
   // An agent's Model/Effort choices, or every live agent's: what `models_list` answers (services/models.ts)
   // and the dial's picker reads, so neither can show a catalog the machine would not honour.
@@ -789,14 +796,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // only under a master, which is what gives this core the token they connect with. Their requests are
   // routed to them, and answered SERVICE_UNAVAILABLE while they are down (core/serviceLinks.ts).
   const serviceToken = process.env.HARNESSD_SUPERVISED === '1' ? process.env.HARNESSD_SERVICE_TOKEN : undefined
-  // The services' own code, for those that run in this process (services/inline.ts): loaded only then, so
-  // one in its own process, as each is by default, is never loaded here.
-  // A reader-only older master knows these names but cannot host live parsers. Its explicit version
-  // report selects compatibility; a worker timeout or crash never activates an inline fallback.
-  const isolatedLive = (engine: string): boolean => liveHosted
-    && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !liveHosted
-    ? await import('../services/inline.js') : null
   const liveFor: LiveFor = (engine) => isolatedLive(engine) ? undefined : inline?.liveFor(engine)
   // The relay and its E2EE (gateway/): the backend link, the sessions and the keys, which every remote
   // client's frames go through, held at the same gate. In its own process by default (core/gatewayLink.ts),

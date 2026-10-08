@@ -156,6 +156,29 @@ describe('core runtime profile authority', () => {
     expect(t.sessions.getState(t.s.sessionId).model).toBe('old')
   })
 
+  it('answers queue expiry while the active request is pending without releasing its successor early', async () => {
+    vi.useFakeTimers()
+    const t = setup(), firstEntered = deferred<void>(), secondEntered = deferred<void>()
+    const firstResume = deferred<void>(), secondResume = deferred<void>()
+    t.read.mockImplementationOnce(async (_e, c, o) => { firstEntered.resolve(); await firstResume.promise; return result(c, o) })
+    t.read.mockImplementationOnce(async (_e, c, o) => { secondEntered.resolve(); await secondResume.promise; return result(c, o) })
+    const first = t.sessions.read(t.s, { kind: 'describe' }); await firstEntered.promise
+    await vi.advanceTimersByTimeAsync(1000)
+    const second = t.sessions.read(t.s, { kind: 'describe' })
+    await vi.advanceTimersByTimeAsync(1000)
+    const expired = t.sessions.read(t.s, { kind: 'describe' }).catch(e => e.message)
+    await vi.advanceTimersByTimeAsync(2900)
+    firstResume.resolve(); await first; await secondEntered.promise
+    await vi.advanceTimersByTimeAsync(2100)
+    await expect(expired).resolves.toBe('ENGINE_BUSY')
+    const next = t.sessions.read(t.s, { kind: 'describe' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.read).toHaveBeenCalledTimes(2)
+    secondResume.resolve(); await second; await next
+    expect(t.read).toHaveBeenCalledTimes(3)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('copies control snapshots and invalidates hydration when core confirms a newer profile', async () => {
     const t = setup(), target = profile(t.s)
     t.sessions.beginControl(t.s, target)

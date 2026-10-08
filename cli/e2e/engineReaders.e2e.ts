@@ -41,6 +41,19 @@ describe('Claude Code and Codex readers in their own processes', () => {
   const readerPid = (d: IsolatedDaemon, engine: Engine) => harnessdProcesses(d).get(`engine-${engine}`)
   const linked = (d: IsolatedDaemon, engine: Engine) => d.log().split(`[services] engine-${engine} connected`).length - 1
 
+  it.each(['claude', 'codex'] as const)('%s keeps native runtime profiles in explicit inline mode', async engine => {
+    const { d, c } = await fresh({ HARNESSD_SERVICES: 'none' })
+    const agent = await create(d, c, engine)
+    await turn(c, agent, `inline-profile-${engine}`)
+    const selected = await until('the inline runtime profile', async () => (await rows(c)).find(row => row.id === agent.id)?.selectedModel || null)
+    expect(selected.startsWith(`runtime-v1:${agent.id}:${engine}:`)).toBe(true)
+    const catalog = await c.request('models_list', { agentId: agent.id }, 15_000)
+    expect(catalog.error, JSON.stringify(catalog)).toBeUndefined()
+    expect(catalog.models.some((option: { id: string }) => option.id === selected)).toBe(true)
+    expect(readerPid(d, engine)).toBeUndefined()
+    expect(d.coresStarted()).toBe(1)
+  })
+
   it('starts no reader for an empty core, reads pages and recap text on demand, and keeps private requests off the client router', async () => {
     const { d, c } = await fresh()
     expect(readerPid(d, 'claude')).toBeUndefined()

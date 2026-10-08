@@ -1,5 +1,5 @@
 /** Route profile interpretation to workers while keeping accepted state and control authority in core. */
-import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
+import type { LegacyRuntimeProfileManager } from '../../lib/runtimeProfileManager.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 import type { RuntimeProfile, RuntimeRecord } from '../../engines/facets/runtime.js'
@@ -16,7 +16,7 @@ export interface ProfileHydration {
 }
 
 export interface RuntimeProfilesDeps {
-  legacy: RuntimeProfileManager
+  legacy: LegacyRuntimeProfileManager
   handles(engine: string): boolean
   resolve(id: string): RegisteredSession | undefined
   transport: RuntimeTransport

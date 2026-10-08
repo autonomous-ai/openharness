@@ -2,8 +2,8 @@
 
 Status: implementation in progress. This continues [engine isolation](2026-10-05-engine-interface.md)
 after [live transcript isolation](2026-10-07-engine-streams.md). The supervised Claude Code/Codex profile
-path now executes in workers. The remaining legacy import dependencies still prevent this increment
-from being complete code and process isolation.
+path now executes in workers. Its profile implementations are also excluded from normal core's
+import closure. Final validation, runtime measurements and review remain before this increment ships.
 
 ## Ownership
 
@@ -65,13 +65,18 @@ user's first request. The wire profile parser no longer imports the runtime mana
 
 ## Remaining before this increment ships
 
-The normal routing is implemented and exercised, but the facade still receives a legacy manager whose
-imports load Claude/Codex profile implementations into core. This is an unfinished boundary, even
-though supervised Claude/Codex requests execute remotely. Do not mark this draft ready yet.
+The legacy manager takes injected runtime facets. Normal supervised core supplies no Claude/Codex
+facet; explicit inline mode or an older master's capability report loads them through
+`services/inline.ts`. Architecture checks reject either profile implementation in normal core's import
+closure. Worker failure never changes this composition.
 
-1. Remove that remaining import path while preserving other engines' existing metadata behavior.
-   Some of the legacy manager's other-engine paths intentionally retain Claude-shaped fallback reads;
-   deleting them or merely renaming the same parser would not complete the boundary.
+The old catch-all interpreted other engines' records and panes as Claude. Auditing recorded Amp,
+Muse, Copilot, agy and Pi transcripts found no native profile metadata supplied by that fallback.
+Their registry seeds and native config/footer readers remain. Claude commands quoted in their answers
+or panes no longer change their profiles. Tests replay the recordings and cover these native sources;
+this does not add new engines to the worker migration.
+
+1. Finish validation of the import split and the other-engine regression checks.
 2. Measure paired CPU, RSS and latency for the final implementation, including engine workers.
 3. Validate any further changes, then complete a separate review and automatic ready-PR CI.
 

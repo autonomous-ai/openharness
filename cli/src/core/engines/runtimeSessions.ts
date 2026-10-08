@@ -99,13 +99,20 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     let release!: () => void
     const tail = new Promise<void>(resolve => { release = resolve })
     queues.set(engine, tail)
-    await before
     try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new EngineReadError('ENGINE_BUSY')), RUNTIME_WAIT_MS)
+        void before.then(() => { clearTimeout(timer); resolve() })
+      })
       if (performance.now() >= deadline) throw new EngineReadError('ENGINE_BUSY')
       return await run()
     } finally {
-      pending.set(engine, pending.get(engine)! - 1); release()
-      if (queues.get(engine) === tail) queues.delete(engine)
+      // Expiry answers the caller immediately, but its successor still waits for the active call.
+      // Keep that reservation in the cap until released so expired queue links cannot grow forever.
+      void before.then(() => {
+        pending.set(engine, pending.get(engine)! - 1); release()
+        if (queues.get(engine) === tail) queues.delete(engine)
+      })
     }
   }
   const contextFor = (s: RegisteredSession, view: View): RuntimeContext => ({ session: snapshot(s), state: { ...view.state },
