@@ -38,11 +38,11 @@ import 'package:harness_mobile/widgets/terminal_panel.dart';
 
 import 'agent_model_sections.dart';
 import 'agent_model_sheet.dart';
-import 'agents_page.dart' show openNewAgent;
 import 'daemon_chip.dart';
 import 'daemon_scope.dart';
 import 'delete_agent.dart';
 import 'held_height.dart';
+import 'machines_tab.dart';
 import 'phone_sheet.dart';
 import 'phone_status.dart';
 import 'settings_page.dart';
@@ -106,7 +106,7 @@ class TerminalPage extends StatefulWidget {
   /// SIGWINCH to three remote shells at once.
   final bool isActive;
 
-  /// Whether a sideways swipe on the terminal opens Find (right) or a new agent (left).
+  /// Whether a sideways swipe on the terminal opens Find (right) or Computers (left).
   ///
   /// Off for a page inside a pager of agents (`AgentSwipeHost` with neighbours), where the sideways
   /// axis is the pager's: the terminal's own detector sits deeper and would win every drag.
@@ -1204,14 +1204,14 @@ class _TerminalPageState extends State<TerminalPage>
   /// terminal still under a reader ([_AnchoredTerminal.reading]).
   final _scrollback = ValueNotifier<({int above, int total})?>(null);
 
-  /// How far left a drag has gone, for the swipe that opens a new agent.
+  /// How far left a drag has gone, for the swipe that opens Computers.
   double _swipedLeft = 0;
 
   /// Whether the drag under way is pulling Find in — it then drives the slide.
   bool _swipingFind = false;
 
-  /// A sideways drag this far left opens a new agent on letting go.
-  static const double _newAgentReach = 64;
+  /// A sideways drag this far left opens Computers on letting go.
+  static const double _computersReach = 64;
 
   /// A sideways fling at least this fast counts whatever distance it covered.
   static const double _swipeFlick = 300;
@@ -1222,7 +1222,7 @@ class _TerminalPageState extends State<TerminalPage>
   }
 
   /// A drag's first move right pulls Find in, and from then on Find follows the finger; a drag
-  /// that starts left is counted toward a new agent instead.
+  /// that starts left is counted toward Computers instead.
   void _onSwipeUpdate(DragUpdateDetails details) {
     final dx = details.primaryDelta ?? 0;
     if (!_swipingFind) {
@@ -1242,7 +1242,7 @@ class _TerminalPageState extends State<TerminalPage>
 
   /// Let go: Find stays if it was flung or is a third of the way out, and goes back otherwise. A
   /// third, not half: Find is the whole screen wide, and half of it is a long reach for a thumb.
-  /// A drag left far enough, or flung, opens a new agent.
+  /// A drag left far enough, or flung, opens Computers.
   void _onSwipeEnd(DragEndDetails details) {
     final velocity = details.primaryVelocity ?? 0;
     if (_swipingFind) {
@@ -1255,8 +1255,8 @@ class _TerminalPageState extends State<TerminalPage>
       }
       return;
     }
-    if (_swipedLeft >= _newAgentReach || velocity <= -_swipeFlick) {
-      unawaited(_newAgentHere());
+    if (_swipedLeft >= _computersReach || velocity <= -_swipeFlick) {
+      unawaited(_openComputers());
     }
   }
 
@@ -1279,18 +1279,21 @@ class _TerminalPageState extends State<TerminalPage>
     return lines.reversed.join('\n');
   }
 
-  /// A new agent, on the machine of the one on screen — the form slides in from the right, the way
-  /// a swipe left asks for.
+  /// Computers — the page Settings ▸ Computers opens — slid in from the right, the way a swipe left
+  /// asks for. A new harness is Find's `New Harness` now (see `terminal_search.dart`).
   ///
   /// Rebuilt on the way back, as after every page pushed over this one: its chrome reads whether it
   /// is the top route.
-  Future<void> _newAgentHere() async {
+  Future<void> _openComputers() async {
     dismissKeyboardForSwipe();
-    await openNewAgent(
-      context,
-      widget.notifier,
-      widget.machineId,
-      voice: widget.voice,
+    await Navigator.of(context).push(
+      phoneRoute(
+        (_) => MachinesTab(
+          notifier: widget.notifier,
+          large: false,
+          fromTerminal: true,
+        ),
+      ),
     );
     if (mounted) setState(() {});
   }
@@ -1903,8 +1906,8 @@ class _TerminalPageState extends State<TerminalPage>
           const SizedBox.expand(),
           // ⚠️ **VoiceOver's way in, and the only one.** xterm draws the terminal without a
           // single semantics node, and VoiceOver keeps one-finger swipes for itself — so without
-          // this, a VoiceOver user could neither hear what the agent last said nor reach Find or a
-          // new harness, which the sideways swipes are the only way to. One node under everything,
+          // this, a VoiceOver user could neither hear what the agent last said nor reach Find or
+          // Computers, which the sideways swipes are the only way to. One node under everything,
           // painting nothing and taking no touches: the agent's name, the last lines on its screen,
           // and the two swipes as actions (VoiceOver's rotor, "Actions").
           Positioned.fill(
@@ -1915,8 +1918,8 @@ class _TerminalPageState extends State<TerminalPage>
               customSemanticsActions: widget.sideSwipes
                   ? {
                       const CustomSemanticsAction(label: 'Find'): _openSearch,
-                      const CustomSemanticsAction(label: 'New harness'): () =>
-                          unawaited(_newAgentHere()),
+                      const CustomSemanticsAction(label: 'Computers'): () =>
+                          unawaited(_openComputers()),
                     }
                   : null,
               child: const SizedBox.expand(),
@@ -1966,7 +1969,7 @@ class _TerminalPageState extends State<TerminalPage>
                             // ⚠️ **The two sideways swipes live here, on the
                             // terminal and nowhere else** — Snapchat's layout:
                             // right pulls Find in from the left edge, left opens
-                            // a new agent. The terminal scrolls vertically and
+                            // Computers. The terminal scrolls vertically and
                             // selects only with a mouse, so the horizontal axis
                             // is free; the key bar below scrolls its hints
                             // sideways and keeps that for itself.

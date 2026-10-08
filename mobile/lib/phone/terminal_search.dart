@@ -259,8 +259,9 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
   }
 
   /// `+`: away first, then the new-agent form. Null while no machine can take one.
-  /// `+ New Harness` — in the project the query matched when there is one; else on the machine of
-  /// the harness on screen, as a swipe left does; else the command's first ready machine.
+  /// `+ New Harness` and the button at the foot — in the project the query matched when there is
+  /// one (the row only); else on the machine of the harness on screen; else the command's first
+  /// ready machine.
   void Function(({String machineId, String folder, String label})? place)?
   _newAgent() {
     final showing = widget.showing;
@@ -447,6 +448,8 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
             builder: (context, _) {
               final newAgent = _newAgent();
               final hasText = _controller.text.isNotEmpty;
+              // `:` — the models of the harness on screen, not harnesses: no New Harness under them.
+              final models = _search.isModelMode && widget.showing != null;
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -506,7 +509,7 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                     ),
                   const SizedBox(height: 4),
                   Expanded(
-                    child: switch ((_search.isModelMode, widget.showing)) {
+                    child: switch ((models, widget.showing)) {
                       // `:` — the models the harness on screen can run on.
                       (true, final showing?) => FindModels(
                         notifier: widget.notifier,
@@ -528,6 +531,29 @@ class _TerminalSearchOverlayState extends State<TerminalSearchOverlay>
                       ),
                     },
                   ),
+                  // ⚠️ **Stuck to the foot, outside the list.** The list's own `+ New Harness` row
+                  // comes after every harness on the account — a few hundred rows down, where no
+                  // thumb goes. This one is always in reach, riding the keyboard while it is up. On
+                  // the machine of the harness on screen, as that row does with nothing typed.
+                  //
+                  // ⚠️ **Kept while a keyboard is up.** It was hidden with the keys once, and on an
+                  // iPhone that meant never: Find raises the keyboard as it opens, a scroll keeps
+                  // it (see `phone_search_results.dart`), and the iPhone's keys have no button to
+                  // put them away — so the button never came back.
+                  if (newAgent != null && !models)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(
+                        Tty.origin,
+                        8,
+                        Tty.origin,
+                        8,
+                      ),
+                      child: TtyPrimaryButton(
+                        key: const ValueKey('find-new-harness'),
+                        label: 'New Harness',
+                        onPressed: () => newAgent(null),
+                      ),
+                    ),
                   // Over the home indicator while the keyboard is down; on the keys once it is up.
                   SizedBox(height: widget.bottomInset),
                 ],

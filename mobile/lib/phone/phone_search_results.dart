@@ -265,9 +265,8 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
 
   /// The desk's tabs as the chips offer them: none off the plain list, and none where the desk has
   /// no tabs or has not answered — and then no chips are drawn at all.
-  List<DeskTabFilter> _tabs(PhoneSearchController search) => _plain(search)
-      ? deskTabFilters(widget.notifier)
-      : const [];
+  List<DeskTabFilter> _tabs(PhoneSearchController search) =>
+      _plain(search) ? deskTabFilters(widget.notifier) : const [];
 
   /// The picked tab among [tabs]; null is All.
   DeskTabFilter? _tab(List<DeskTabFilter> tabs) =>
@@ -465,7 +464,10 @@ class PhoneSearchResultsState extends State<PhoneSearchResults> {
     }
     items.add(() => const SizedBox(height: 24));
     return ListView.builder(
-      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      // ⚠️ **A scroll keeps the keyboard.** Scrolling is looking through what the query found, not
+      // done with the query — put away on every drag, the next letter meant tapping the field
+      // again. A row picked ([_tap]) or the return key is what puts the keys away.
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.manual,
       padding: EdgeInsets.zero,
       itemCount: items.length,
       itemBuilder: (context, i) => items[i](),

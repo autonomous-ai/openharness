@@ -28,13 +28,22 @@ import 'settings_page.dart' show PhoneSettingsButton;
 /// Harness that is not running — collect underneath, where they read as a to-do list rather than
 /// as the thing standing between you and the machine you actually came for.
 class MachinesTab extends StatelessWidget {
-  const MachinesTab({super.key, required this.notifier, this.large = true});
+  const MachinesTab({
+    super.key,
+    required this.notifier,
+    this.large = true,
+    this.fromTerminal = false,
+  });
 
   final AppNotifier notifier;
 
-  /// The tab's big title. Off when this is PUSHED — from Settings — where it draws the back chevron
-  /// above its title instead, as Settings itself does.
+  /// The tab's big title. Off when this is PUSHED — from Settings or a swipe left on the terminal —
+  /// where it draws the back chevron above its title instead, as Settings itself does.
   final bool large;
+
+  /// Pushed by a swipe left on the terminal: a swipe right ANYWHERE goes back — the way home is the
+  /// same swipe the other way, as on the New Harness form.
+  final bool fromTerminal;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -42,7 +51,7 @@ class MachinesTab extends StatelessWidget {
     builder: (context, _) {
       AppTheme.watch(context);
       final tty = Tty.of(context);
-      return Scaffold(
+      final page = Scaffold(
         backgroundColor: tty.ground,
         body: SafeArea(
           bottom: false,
@@ -82,8 +91,8 @@ class MachinesTab extends StatelessWidget {
                     onPressed: () => unawaited(notifier.retryMachines()),
                   ),
                   // Large, this is the home screen while no computer is ready — locked, or off —
-                  // and nothing else on it leads to Settings or Sign out. Pushed (small), it came
-                  // FROM Settings, and back is the way there.
+                  // and nothing else on it leads to Settings or Sign out. Pushed (small) — from
+                  // Settings, or by the terminal's swipe left — back is the way out.
                   if (large) PhoneSettingsButton(notifier: notifier),
                 ],
               ),
@@ -92,7 +101,39 @@ class MachinesTab extends StatelessWidget {
           ),
         ),
       );
+      return fromTerminal ? _SwipeBack(child: page) : page;
     },
+  );
+}
+
+/// A swipe right anywhere on [child] pops it — not only the system's sliver of left edge, which a
+/// thumb in the middle of the screen never finds. The New Harness form's reach and flick.
+class _SwipeBack extends StatefulWidget {
+  const _SwipeBack({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_SwipeBack> createState() => _SwipeBackState();
+}
+
+class _SwipeBackState extends State<_SwipeBack> {
+  /// How far right the drag under way has gone.
+  double _swiped = 0;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    // Translucent: the rows under the finger still take their taps; the list scrolls on the other
+    // axis.
+    behavior: HitTestBehavior.translucent,
+    onHorizontalDragStart: (_) => _swiped = 0,
+    onHorizontalDragUpdate: (details) => _swiped += details.primaryDelta ?? 0,
+    onHorizontalDragEnd: (details) {
+      if (_swiped >= 64 || (details.primaryVelocity ?? 0) >= 300) {
+        unawaited(Navigator.of(context).maybePop());
+      }
+    },
+    child: widget.child,
   );
 }
 

@@ -61,14 +61,14 @@ class FocusHintsSeen {
 }
 
 /// Focus's first-time hints: the three things a phone can do here that nothing on screen says —
-/// swipe right for your harnesses, swipe left for a new one, the mic to talk. Laid over the
+/// swipe right for your harnesses, swipe left for your computers, the mic to talk. Laid over the
 /// terminal once, in the terminal's own type; any touch puts them away for good.
 ///
 /// ```
 ///  tap the title       ─ rename, restart, paste…
 ///
 ///  → swipe right                swipe left ←
-///    all your harnesses       start a new one
+///    all your harnesses        your computers
 ///
 ///                 talk to it
 ///                    ( mic )
@@ -160,8 +160,8 @@ class _FocusHintsState extends State<FocusHints> {
       child: IgnorePointer(
         child: Semantics(
           label:
-              'Tips: swipe right for all your harnesses, swipe left to start '
-              'one, tap the title for its menu, the mic to talk.',
+              'Tips: swipe right for all your harnesses, swipe left for your '
+              'computers, tap the title for its menu, the mic to talk.',
           child: Material(
             color: tty.ground.withValues(alpha: 0.95),
             child: Stack(
@@ -190,7 +190,7 @@ class _FocusHintsState extends State<FocusHints> {
                               alignment: Alignment.centerRight,
                               child: hint(
                                 'swipe left ←',
-                                'start a new one',
+                                'your computers',
                                 align: TextAlign.right,
                               ),
                             ),

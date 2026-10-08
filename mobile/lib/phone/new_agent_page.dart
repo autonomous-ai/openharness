@@ -22,6 +22,7 @@ import 'new_agent_draft.dart';
 import 'new_agent_model_sheet.dart';
 import 'phone_status.dart';
 import 'new_agent_chooser.dart';
+import 'settings_page.dart' show PhoneSettingsButton;
 import 'tty.dart';
 import 'tty_controls.dart';
 import 'voice_input_controller.dart';
@@ -724,8 +725,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
       return Scaffold(
         backgroundColor: tty.ground,
         body: SafeArea(
-          // ⚠️ **A swipe right ANYWHERE goes back to Focus.** New is a swipe left from the terminal
-          // (Snapchat's layout), and the way home is the same swipe the other way — not only the
+          // ⚠️ **A swipe right ANYWHERE goes back to Focus.** New comes in from the right (Find's
+          // New Harness), and the way home is the same swipe the other way — not only the
           // system's sliver of left edge, which a thumb in the middle of the screen never finds.
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
@@ -743,8 +744,18 @@ class _NewAgentPageState extends State<NewAgentPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                // The way back where a thumb looks for it — Find's button is a tap, not a swipe, so
+                // the swipe right alone was a way out nobody was shown. Above the title, as on
+                // Computers and Settings.
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TtyBackButton(
+                    onPressed: () => Navigator.of(context).maybePop(),
+                  ),
+                ),
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(Tty.origin, 8, 4, 0),
+                  // No right padding: Settings' box puts its glyph on the gutter itself.
+                  padding: const EdgeInsets.fromLTRB(Tty.origin, 0, 0, 0),
                   child: Row(
                     children: [
                       Expanded(
@@ -763,8 +774,8 @@ class _NewAgentPageState extends State<NewAgentPage> {
                             size: TtySize.meta,
                           ),
                         ),
-                      // No Cancel: a swipe right goes back, the way a swipe left came in.
-                      const SizedBox(height: 44),
+                      // Settings at the top right, as on Computers — its box keeps the row 44 tall.
+                      PhoneSettingsButton(notifier: widget.notifier),
                     ],
                   ),
                 ),
