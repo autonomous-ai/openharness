@@ -44,18 +44,28 @@ def prepare(root, package=PACKAGE):
         extension_id = record['extension_id']
         if not re.fullmatch('[a-p]{32}', extension_id):
             return False
-        descriptor = record['descriptor']
+        descriptor = dict(record['descriptor'])
         target = root / 'External Extensions' / (extension_id + '.json')
         if target.is_symlink():
             return False
+        previous = None
         if target.exists():
             previous = read_json(target)
             if previous.get('external_crx') != descriptor['external_crx']:
                 return False  # This file is no longer ours to update.
-            if previous == descriptor:
-                return True
-        elif customized(root, extension_id):
+        try:
+            custom = customized(root, extension_id)
+        except (OSError, ValueError, TypeError, AttributeError):
+            custom = True  # An unreadable profile is never permission to replace it.
+        if custom and previous is None:
             return False
+        if custom or (previous and previous.get('keep_if_present')):
+            # Descriptors are shared across profiles. An imported profile or a
+            # choice made after registration must not acquire a new override.
+            # Chromium still updates copies already installed in other profiles.
+            descriptor['keep_if_present'] = True
+        if previous == descriptor:
+            return True
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:

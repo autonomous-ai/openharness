@@ -155,6 +155,45 @@ class BrowserHome(unittest.TestCase):
         self.assertFalse(profile.prepare(root, package))
         self.assertEqual(target.read_text(), '{"external_crx":"/user-choice.crx"}')
 
+    def test_imported_or_later_customization_prevents_new_install_after_registration(self):
+        package = self.folder / 'extension.json'
+        identity = 'b' * 32
+        descriptor = {'external_crx': '/packaged.crx', 'external_version': '1.0'}
+        package.write_text(json.dumps({'extension_id': identity, 'descriptor': descriptor}))
+        root = self.folder / 'chromium'
+        self.assertTrue(profile.prepare(root, package))
+        target = root / 'External Extensions' / (identity + '.json')
+        prefs = root / 'Imported/Preferences'
+        prefs.parent.mkdir(parents=True)
+        original = json.dumps({'extensions': {'settings': {
+            'c' * 32: {'manifest': {'chrome_url_overrides': {'newtab': 'home.html'}}}}}})
+        prefs.write_text(original)
+        self.assertTrue(profile.prepare(root, package))
+        self.assertEqual(json.loads(target.read_text()), dict(descriptor, keep_if_present=True))
+        self.assertEqual(prefs.read_text(), original)
+        # Once a customization is observed, don't silently install into that
+        # profile on a later launch or OS package update.
+        prefs.write_text('{}')
+        descriptor['external_version'] = '1.1'
+        package.write_text(json.dumps({'extension_id': identity, 'descriptor': descriptor}))
+        self.assertTrue(profile.prepare(root, package))
+        self.assertEqual(json.loads(target.read_text()), dict(descriptor, keep_if_present=True))
+
+    def test_unreadable_profile_restricts_an_existing_registration(self):
+        package = self.folder / 'extension.json'
+        identity = 'b' * 32
+        descriptor = {'external_crx': '/packaged.crx', 'external_version': '1.0'}
+        package.write_text(json.dumps({'extension_id': identity, 'descriptor': descriptor}))
+        root = self.folder / 'chromium'
+        self.assertTrue(profile.prepare(root, package))
+        prefs = root / 'Default/Preferences'
+        prefs.parent.mkdir(parents=True)
+        prefs.write_text('{broken')
+        self.assertTrue(profile.prepare(root, package))
+        target = root / 'External Extensions' / (identity + '.json')
+        self.assertTrue(json.loads(target.read_text())['keep_if_present'])
+        self.assertEqual(prefs.read_text(), '{broken')
+
 
 if __name__ == '__main__':
     unittest.main()
