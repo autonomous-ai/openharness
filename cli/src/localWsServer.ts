@@ -781,8 +781,10 @@ export function attachLocalWsServer(server: http.Server, options: LocalWsServerO
     const heartbeat = watchSocketLiveness(ws, {
       deadlineMs: LOCAL_IDLE_DEADLINE_MS,
       onIdle: (idleMs) => console.log(`[local-ws] ${connId} no traffic for ${Math.round(idleMs / 1000)}s — terminating`),
-      // The app is on this computer and slept with us: a wake re-probes it, it never ends the socket.
-      onWake: (sleptMs) => console.log(`[local-ws] ${connId} woke after ${Math.round(sleptMs / 1000)}s asleep — re-probing`),
+      // The app is on this computer and slept with us, so a wake re-probes it rather than ending the
+      // socket — but only once per answer. Unbounded forgiveness is what let a window that was already
+      // gone keep its tile roster for 912-995s against this 40s deadline (wsLiveness.ts GENUINE_SLEEP_MS).
+      onWake: (sleptMs, givingUp) => console.log(`[local-ws] ${connId} woke after ${Math.round(sleptMs / 1000)}s asleep — ${givingUp ? 'the app has not answered since the last wake, terminating' : 're-probing'}`),
     })
 
     const cleanup = (): void => {

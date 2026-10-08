@@ -69,8 +69,26 @@ pub(crate) fn identity_changed(app: &mut App) {
     if app.account.driver.is_none() && app.account.phase != Phase::SigningOut { app.account.status = Status::Unknown; app.account.phase = Phase::Ready; }
 }
 
-/// The command panel's Sign out: on the account page, where its progress and any error show.
-pub fn sign_out_command(app: &mut App) {
+/// Sign out asks first, Cancel chosen, so an Enter that was meant for something else signs
+/// nothing out. Signed out, there is nothing to ask: the account page offers sign-in.
+/// [from_account]: Cancel goes back to the account page it was asked from.
+pub fn ask_sign_out(app: &mut App, from_account: bool) {
+    if app.account.driver.is_some() || app.account.phase == Phase::SigningOut || !matches!(app.account.status, Status::SignedIn { .. }) {
+        if !visible(app) { open(app); }
+        return;
+    }
+    use crate::workspace_menu as menu;
+    let mut notes = vec![menu::note("Sign out of your Harness account on this computer?")];
+    if let Status::SignedIn { email: Some(email), .. } = &app.account.status { notes.push(menu::note(&format!("You are signed in as {email}."))); }
+    notes.push(menu::note("Harnesses on this computer keep running."));
+    let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
+    let row = crate::buttons::Row { buttons: vec![button("Cancel"), button("Sign out")], chosen: 0, hint: crate::buttons::KEYS.into() };
+    let cancel = if from_account { "account" } else { "" };
+    menu::open_buttons(app, "Sign out", notes, row, vec![cancel.into(), "signout -y".into()]);
+}
+
+/// The confirmed Sign out: on the account page, where its progress and any error show.
+pub fn sign_out_confirmed(app: &mut App) {
     open(app);
     sign_out(app);
 }
@@ -299,7 +317,7 @@ pub fn choose(app: &mut App, mut picker: Picker, id: &str) {
     app.modal = Some(Modal::Picker { kind: PickerKind::Account, picker });
     match action {
         "google" | "apple" | "qr" => start(app, action),
-        "signout" => sign_out(app),
+        "signout" => ask_sign_out(app, true),
         "cancel" | "deny" => { cancel(app); refill(app); }
         "confirm" => {
             if matches!(app.account.phase, Phase::Confirm(_)) {
@@ -622,23 +640,46 @@ mod tests {
     fn sign_out_runs_the_cli_once_and_ends_signed_out_on_this_computer() {
         let mut app = app();
         app.devices.runner = Some(Box::new(|_| None));
-        // Signed out, the command panel's Sign out runs nothing.
+        let asking = |app: &App| matches!(&app.modal, Some(Modal::Menu(m)) if m.title == "Sign out" && m.buttons.is_some());
+        // Signed out, the command panel's Sign out asks nothing and runs nothing: the account page offers sign-in.
         crate::input::run(&mut app, "signout");
+        assert!(visible(&app) && !asking(&app));
         assert_eq!(app.account.started, Vec::<Vec<String>>::new());
-        assert_eq!(app.account.phase, Phase::Ready);
         app.modal = None;
         app.account.status = Status::SignedIn { email: Some("dev@example.test".into()), offline: false };
         open(&mut app);
         let (text, _) = render(&mut app, 80, 24);
         assert!(text.contains("Sign out"), "{text}");
+        // Enter on the row asks first, Cancel chosen: a second Enter goes back to the account page.
         select(&mut app, "account:signout");
+        assert!(asking(&app));
+        let (text, _) = render(&mut app, 80, 24);
+        for expected in ["Sign out of your Harness account on this computer?", "dev@example.test", "keep running", "Cancel"] { assert!(text.contains(expected), "missing {expected}:\n{text}"); }
+        key(&mut app, KeyCode::Enter);
+        assert!(visible(&app), "Cancel returns to the account page");
+        assert_eq!(app.account.started, Vec::<Vec<String>>::new());
+        // From the command panel, Esc just closes the question.
+        crate::input::run(&mut app, "signout");
+        assert!(asking(&app));
+        key(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none());
+        assert!(app.toast.is_none(), "{:?}", app.toast);
+        assert_eq!(app.account.started, Vec::<Vec<String>>::new());
+        // → to Sign out, then Enter.
+        open(&mut app);
+        select(&mut app, "account:signout");
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
         assert_eq!(app.account.started, vec![vec!["logout"]]);
+        assert!(visible(&app), "progress shows on the account page");
         let (text, _) = render(&mut app, 80, 24);
         assert!(text.contains("Signing out") && text.contains("keep running"), "{text}");
         // The daemon restarting signed out is part of the sign-out, not the end of it.
         identity_changed(&mut app);
         assert_eq!(app.account.phase, Phase::SigningOut);
         crate::input::run(&mut app, "signout");
+        assert!(!asking(&app));
+        crate::commands::execute(&mut app, "signout -y");
         assert_eq!(app.account.started.len(), 1, "one sign-out at a time");
 
         let generation = app.account.generation;
@@ -647,7 +688,7 @@ mod tests {
         let (text, _) = render(&mut app, 80, 24);
         assert!(text.contains("Could not sign out") && text.contains("Sign out"), "{text}");
 
-        crate::input::run(&mut app, "logout");
+        crate::commands::execute(&mut app, "logout -y");
         assert_eq!(app.account.started.len(), 2);
         let generation = app.account.generation;
         signed_out(&mut app, generation - 1, true);
