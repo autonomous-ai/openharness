@@ -5,6 +5,7 @@ import 'swarm_interactions_test.dart' show chord;
 import 'package:flutter/services.dart';
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
@@ -59,6 +60,8 @@ class _GuestApp extends AppNotifier {
     super.cliLogin,
     super.environmentProvisioner,
     super.localManualFixture,
+    super.agentsInstallStarter,
+    super.harnessCliEnvironment,
   });
 
   @override
@@ -134,8 +137,11 @@ class _ScriptedEnvironmentProvisioner extends EnvironmentProvisioner {
   final List<EnvironmentReadiness?> resumeFromCalls = [];
   final List<bool> installCalls = [];
   var callCount = 0;
-  _ScriptedEnvironmentProvisioner(this.results, {this.progress = const []})
-    : super(isMacOS: true);
+  _ScriptedEnvironmentProvisioner(
+    this.results, {
+    this.progress = const [],
+    super.harnessHome,
+  }) : super(isMacOS: true);
 
   @override
   Future<EnvironmentReadiness> ensureReady({
@@ -392,6 +398,108 @@ void main() {
       app.dispose();
     },
   );
+
+  group('the background install of the default agents', () {
+    final missing = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.review,
+      plan: [EnvironmentPlanItem.harnessCli],
+    );
+    final ready = EnvironmentReadiness(
+      steps: {
+        for (final step in EnvironmentStep.values)
+          step: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.ready,
+      mode: EnvironmentSetupMode.automatic,
+    );
+    final failed = missing.copyWith(
+      phase: EnvironmentSetupPhase.failed,
+      mode: EnvironmentSetupMode.automatic,
+      failure: const EnvironmentFailure(
+        step: EnvironmentStep.harness,
+        title: 'Could not install Harness',
+        detail: 'Check your connection, then retry setup.',
+      ),
+    );
+
+    late Directory home;
+    setUp(() => home = Directory.systemTemp.createTempSync('harness-first-run-'));
+    tearDown(() => home.deleteSync(recursive: true));
+
+    ({_GuestApp app, List<String> started}) launch(
+      List<EnvironmentReadiness> results,
+    ) {
+      final started = <String>[];
+      final app = _GuestApp(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: ConfigStore(storage: _FakeKeyValueStore()),
+        cliLogin: _FakeCliLogin(loggedIn: false),
+        environmentProvisioner: _ScriptedEnvironmentProvisioner(
+          results,
+          harnessHome: Directory('${home.path}/.harness'),
+        ),
+        agentsInstallStarter: () async => started.add('agents'),
+        harnessCliEnvironment: {'HOME': home.path, 'PATH': '${home.path}/bin'},
+      );
+      return (app: app, started: started);
+    }
+
+    test('a computer with no Harness CLI at all, by any of the three tiers, is a first run', () {
+      final harnessHome = Directory('${home.path}/.harness');
+      Map<String, String> environment() => {
+        'HOME': home.path,
+        'PATH': '${home.path}/bin',
+      };
+      expect(AppNotifier.harnessCliAbsent(harnessHome, environment()), isTrue);
+      // The managed pair.
+      File('${harnessHome.path}/cli/cli.js').createSync(recursive: true);
+      expect(AppNotifier.harnessCliAbsent(harnessHome, environment()), isFalse);
+      File('${harnessHome.path}/cli/cli.js').deleteSync();
+      // The launcher.
+      File('${home.path}/.local/bin/harness').createSync(recursive: true);
+      expect(AppNotifier.harnessCliAbsent(harnessHome, environment()), isFalse);
+      File('${home.path}/.local/bin/harness').deleteSync();
+      // A `harness` on PATH.
+      File('${home.path}/bin/harness').createSync(recursive: true);
+      expect(AppNotifier.harnessCliAbsent(harnessHome, environment()), isFalse);
+    });
+
+    test('starts once when the launch install readies a computer that had no CLI', () async {
+      final run = launch([missing, ready]);
+      await run.app.bootstrap();
+      expect(run.app.environmentReadiness.phase, EnvironmentSetupPhase.ready);
+      expect(run.started, ['agents']);
+      run.app.dispose();
+    });
+
+    test('starts when Retry finds it ready after a failed install, with no install of its own', () async {
+      // The install failed; the person ran it in a terminal and pressed Retry, whose check finds
+      // Harness there: ready by a check, not by the launch's install.
+      final run = launch([missing, failed, ready]);
+      await run.app.bootstrap();
+      expect(run.app.environmentReadiness.phase, EnvironmentSetupPhase.failed);
+      expect(run.started, isEmpty);
+      await run.app.retryEnvironmentSetup();
+      expect(run.app.environmentReadiness.phase, EnvironmentSetupPhase.ready);
+      expect(run.started, ['agents']);
+      run.app.dispose();
+    });
+
+    test('never starts for a computer that already had a CLI, outdated or not', () async {
+      // The harness step is planned for an outdated CLI too: not a new user.
+      File('${home.path}/.harness/cli/cli.js').createSync(recursive: true);
+      final run = launch([missing, ready]);
+      await run.app.bootstrap();
+      expect(run.app.environmentReadiness.phase, EnvironmentSetupPhase.ready);
+      expect(run.started, isEmpty);
+      run.app.dispose();
+    });
+  });
 
   test('a failed unattended install stops on the failure screen', () async {
     final missing = EnvironmentReadiness(

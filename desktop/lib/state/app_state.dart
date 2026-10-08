@@ -1,7 +1,7 @@
 import '../core/permission_modes.dart';
 
 import 'dart:async';
-import 'dart:io' show Directory, Platform, exit, pid;
+import 'dart:io' show Directory, File, Platform, exit, pid;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -34,6 +34,7 @@ import '../auth/sign_in_client.dart';
 import '../auth/sign_in_provider.dart';
 import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
+import '../core/harness_cli_runner.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
@@ -814,6 +815,14 @@ class AppNotifier extends ChangeNotifier {
         )
       : null;
   final EnvironmentProvisioner? environmentProvisioner;
+
+  /// Starts the background install of the default agents (`_installMissingAgents`); the CLI's
+  /// `agents install-missing --background` unless a test gives its own.
+  final Future<void> Function()? agentsInstallStarter;
+
+  /// The environment the first-run check reads PATH and HOME from (`harnessCliAbsent`); the app's own
+  /// unless a test gives one.
+  final Map<String, String>? harnessCliEnvironment;
   final DesktopUpdater? desktopUpdater;
   @visibleForTesting
   final WsConn Function(String machineId)? connectionForTest;
@@ -2980,6 +2989,8 @@ class AppNotifier extends ChangeNotifier {
     AgentUnread? agentUnread,
     SystemNotifications? systemNotifications,
     this.experimentalSettingsTransport,
+    this.agentsInstallStarter,
+    this.harnessCliEnvironment,
   }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
        systemNotifications =
@@ -4209,6 +4220,11 @@ class AppNotifier extends ChangeNotifier {
     bool quiet = false,
   }) async {
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
+    // Read once, before anything is installed: whether this launch is a new user's first.
+    _harnessCliAbsentAtLaunch ??= harnessCliAbsent(
+      provisioner.harnessHome,
+      harnessCliEnvironment ?? Platform.environment,
+    );
     final result = await provisioner.ensureReady(
       onProgress: (value) {
         if (quiet &&
@@ -4239,7 +4255,73 @@ class AppNotifier extends ChangeNotifier {
       mode: mode,
     );
     environmentReadiness = result;
+    // Ready by whichever path got here (the launch's install, Retry, a Recheck): on a first run,
+    // the agents come next.
+    if (result.isReady) _installMissingAgents();
     return result;
+  }
+
+  /// Whether this computer had no Harness CLI when this launch first looked, before any install.
+  bool? _harnessCliAbsentAtLaunch;
+  bool _agentsInstallStarted = false;
+
+  /// No Harness CLI that [HarnessCliRunner] would run: no managed `cli.js` under [harnessHome], no
+  /// `~/.local/bin/harness` launcher, and no `harness` on PATH, its three tiers. Then installing
+  /// Harness now is a new user's first run. The harness step is also planned for an existing user
+  /// whose CLI is older than the app's minimum or whose managed Node went missing, and a developer may
+  /// run a CLI from PATH alone: none of them is new, and none is given agents they did not ask for.
+  @visibleForTesting
+  static bool harnessCliAbsent(
+    Directory harnessHome,
+    Map<String, String> environment,
+  ) {
+    final sep = Platform.pathSeparator;
+    if (File('${harnessHome.path}${sep}cli${sep}cli.js').existsSync()) {
+      return false;
+    }
+    final home = environment['HOME'] ?? environment['USERPROFILE'];
+    if (home != null &&
+        home.isNotEmpty &&
+        File('$home$sep.local${sep}bin${sep}harness').existsSync()) {
+      return false;
+    }
+    final pathSeparator = Platform.isWindows ? ';' : ':';
+    for (final dir in (environment['PATH'] ?? '').split(pathSeparator)) {
+      if (dir.isNotEmpty && File('$dir${sep}harness').existsSync()) return false;
+    }
+    return true;
+  }
+
+  /// A new user's first harness waited for its agent to install in the pane (OpenCode ~15 s, longer
+  /// for Claude Code and Codex). On the run that installed Harness, as soon as setup is ready, the
+  /// CLI installs whichever of the default agents are missing, in the background and OpenCode first
+  /// (`harness agents install-missing --background`); a harness started meanwhile waits for that
+  /// install rather than running its own. Once per launch. An older CLI without the command answers
+  /// an error, which is only logged.
+  void _installMissingAgents() {
+    if (_harnessCliAbsentAtLaunch != true || _agentsInstallStarted) return;
+    if (viewer != null) return;
+    final start =
+        agentsInstallStarter ?? (kUnderTest ? null : _startAgentsInstall);
+    if (start == null) return;
+    _agentsInstallStarted = true;
+    unawaited(start());
+  }
+
+  Future<void> _startAgentsInstall() async {
+    try {
+      final result = await HarnessCliRunner().run([
+        'agents',
+        'install-missing',
+        '--background',
+      ]);
+      appLog.info(
+        'agents',
+        'background install: ${'${result.stdout}'.trim()} ${'${result.stderr}'.trim()}'.trim(),
+      );
+    } catch (error) {
+      appLog.warn('agents', 'background install did not start: $error');
+    }
   }
 
   /// What `bootstrap()` does right after the environment is confirmed ready — pulled out so
