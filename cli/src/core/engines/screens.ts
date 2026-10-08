@@ -11,7 +11,9 @@ export interface ScreenDeps {
   handles(engine: AgentEngine): boolean
   transport: Pick<ScreenTransport, 'read'>
   resolve(id: string): RegisteredSession | undefined
-  inline(engine: AgentEngine, capture: string | null): ScreenReading | undefined
+  /** A screen no worker reads: Claude Code's and Codex's in an inline host, now; the other engines' once their
+   *  readers are loaded (engines/inProcess.ts `inProcessScreen`). `undefined` reads as unreadable. */
+  inline(engine: AgentEngine, capture: string | null): ScreenReading | undefined | Promise<ScreenReading | undefined>
 }
 
 export function createScreens(deps: ScreenDeps) {
@@ -20,7 +22,7 @@ export function createScreens(deps: ScreenDeps) {
     const key = identity(session), engine = session.engine, agentId = session.agentId
     if (!agentId || identity(deps.resolve(agentId)) !== key) return null
     try {
-      const answer = deps.handles(engine) ? capture === null ? null : await deps.transport.read(engine, capture) : deps.inline(engine, capture)
+      const answer = deps.handles(engine) ? capture === null ? null : await deps.transport.read(engine, capture) : await deps.inline(engine, capture)
       return identity(deps.resolve(agentId)) === key && answer ? answer : null
     } catch { return null }
   }

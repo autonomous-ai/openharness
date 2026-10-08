@@ -889,11 +889,19 @@ class Registry {
     return this.rebooted
   }
 
+  /**
+   * Told the engine of every session as it enters: loaded, registered, opened or adopted. The core starts
+   * loading what that engine's sessions read in its own process then (engines/inProcess.ts `preloadEngine`),
+   * so that nothing the session does later waits for an import. Unset outside the core.
+   */
+  onEnter: ((engine: AgentEngine) => void) | null = null
+
   private index(entry: RegisteredSession): void {
     this.agents.set(entry.agentId, entry)
     if (entry.sessionId) this.sessionIndex.set(entry.sessionId, entry.agentId)
     for (const runtime of entry.runtimes) this.runtimeIndex.set(terminalRouteKey(runtime), entry.agentId)
     if (entry.processIdentity) this.processIndex.set(processIdentityKey(entry.engine, entry.processIdentity), entry.agentId)
+    this.onEnter?.(entry.engine)
   }
 
   private drop(entry: RegisteredSession | undefined): void {

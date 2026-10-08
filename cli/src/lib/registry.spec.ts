@@ -2032,6 +2032,31 @@ describe('a terminal: a pane that becomes an engine and back', () => {
     expect(registry.list()).toHaveLength(1)
   })
 
+  it('tells the core each session\'s engine as it enters: opened, adopted, registered and loaded', async () => {
+    // The core starts loading what that engine's sessions read then (engines/inProcess.ts `preloadEngine`).
+    const transcriptPath = join(dataDir, 'session-e.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const { registry } = await loadRegistryModule()
+    const entered: string[] = []
+    registry.onEnter = (engine) => entered.push(engine)
+    registry.load()
+    // Told as often as the row is indexed: what it starts is started once (engines/inProcess.ts).
+    const opened = registry.openPendingAgent({ engine: 'terminal', runtimes: [pane], cwd: '/tmp/work' })!
+    expect(new Set(entered)).toEqual(new Set(['terminal']))
+    registry.adoptEngine(opened.agentId, 'amp', processIdentity(913))
+    expect(entered.at(-1)).toBe('amp')
+    entered.length = 0
+    expect(registerProcess(registry, { engine: 'claude', sessionId: 'session-e', transcriptPath, tmuxPane: '%10' })).not.toBeNull()
+    expect(entered).toContain('claude')
+    registry.flush()
+
+    const { registry: reloaded } = await loadRegistryModule()
+    const loaded: string[] = []
+    reloaded.onEnter = (engine) => loaded.push(engine)
+    reloaded.load()
+    expect(new Set(loaded)).toEqual(new Set(['amp', 'claude']))
+  })
+
   it('a SessionStart hook that beats the reconciler adopts the terminal at its pane rather than minting nothing', async () => {
     const transcriptPath = join(dataDir, 'session-h.jsonl')
     writeFileSync(transcriptPath, '{}\n')

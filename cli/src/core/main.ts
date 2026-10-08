@@ -4,7 +4,7 @@ import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
-import { legacyScreen } from '../lib/legacyScreen.js'
+import { inProcessScreen, preloadEngine } from '../engines/inProcess.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
 import { createNativeControls } from './engines/nativeControls.js'
@@ -453,6 +453,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     catch { console.warn('[apis] Tool instructions could not be added. Saved connections remain available through harness api.') }
   }
 
+  // What a session of another engine reads starts loading as the session enters, from disk or later
+  // (engines/inProcess.ts).
+  registry.onEnter = preloadEngine
   registry.load()
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
   // Mark them dormant before the backend socket can publish anything; the first authoritative reconcile
@@ -580,7 +583,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
   const screens = createScreens({ handles: isolatedScreen, transport: screenTransport, resolve: id => registry.resolve(id),
-    inline: (engine, capture) => readerEngine(engine) ? capture === null ? undefined : inline?.screenFor(engine).inspect(capture) : legacyScreen(engine, capture) })
+    inline: (engine, capture) => readerEngine(engine) ? capture === null ? undefined : inline?.screenFor(engine).inspect(capture) : inProcessScreen(engine, capture) })
   const submissionTransport = createSubmissionTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
