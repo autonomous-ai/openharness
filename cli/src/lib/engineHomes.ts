@@ -23,6 +23,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import type { FolderSetting } from '../engines/facets/hooks.js'
+import type { LaunchHome } from '../engines/facets/launch.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 
 const claudeHomes: string[] = []
@@ -104,6 +105,15 @@ export function codexHomeRoots(own: string): string[] {
   return [own, ...codexHomes]
 }
 
+/** The homes a setting's moves are remembered in, by setting: CODEX_HOME's are adopted above. */
+const movedBySetting: Partial<Record<FolderSetting, string[]>> = { CODEX_HOME: codexHomes }
+
+/** Every home a daemon setting names: the daemon's own, then each one the person moved and Harness adopted. */
+export function homeRoots(setting: FolderSetting): string[] {
+  load()
+  return [env[setting], ...(movedBySetting[setting] ?? [])]
+}
+
 /**
  * The environment an engine launched now starts with, as far as its homes go. Every pane runs the engine
  * through the person's login shell, which reads their profile, so the login shell's variables outrank the
@@ -166,7 +176,12 @@ export function sessionClaudeHome(session: { transcriptPath?: string | null }): 
  * written in `~/.claude.json` alone, which a moved Claude Code never reads.
  */
 export function launchClaudeConfigDir(environment: NodeJS.ProcessEnv = launchEnvironment()): string {
-  return movedHome(environment.CLAUDE_CONFIG_DIR) || homedir()
+  return launchHomeOf({ variable: 'CLAUDE_CONFIG_DIR', otherwise: 'home' }, null, environment)
+}
+
+/** The home an engine's launch contract declares (engines/facets/launch.ts `LaunchHome`), for a launch made now. */
+export function launchHomeOf(home: LaunchHome, profile: string | null | undefined, environment: NodeJS.ProcessEnv = launchEnvironment()): string {
+  return 'setting' in home ? launchHome(home.setting, profile, environment) : movedHome(environment[home.variable]) || homedir()
 }
 
 /** Test seam: forget every home, and read the data folder's again on next use. */

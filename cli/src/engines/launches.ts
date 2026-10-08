@@ -13,9 +13,14 @@ import { launchHome } from '../lib/engineHomes.js'
 export const engineLaunches = { claude, codex } satisfies Record<string, EngineLaunch>
 type MigratedEngine = keyof typeof engineLaunches
 
-/** An engine's launch contract, for an engine that declares one. */
-export function launchContract(engine: AgentEngine): EngineLaunch | undefined {
+/** An engine's launch contract, for an engine that declares one. Any name: a session row's engine is a string. */
+export function launchContract(engine: AgentEngine | string): EngineLaunch | undefined {
   return Object.hasOwn(engineLaunches, engine) ? engineLaunches[engine as MigratedEngine] : undefined
+}
+
+/** The instruction file Harness writes its own notes into for `engine`, where it declares one. */
+export function instructionFileOf(engine: AgentEngine | string): string | undefined {
+  return launchContract(engine)?.instructionFile
 }
 
 /** Compatibility tables take their migrated entries from the same launch contract. */

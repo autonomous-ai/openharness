@@ -35,7 +35,6 @@ import * as gitProject from './lib/gitProject.js'
 import * as scmProjects from './scm/scmProjects.js'
 import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
-import * as claudeTrust from './lib/claudeTrust.js'
 import * as projectPreview from './lib/projectPreview.js'
 import * as opencodeVersion from './engines/opencode/version.js'
 import { randomUUID } from 'node:crypto'
@@ -635,9 +634,15 @@ vi.mock('./lib/gridAttach.js', async (real) => ({
 }))
 // Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
 // and an unmocked run of these specs used to write test paths into the developer's own config.
-vi.mock('./lib/claudeTrust.js', () => ({
-  claudeTrusts: vi.fn(() => false), codexTrusts: vi.fn(() => false),
-  preTrustClaudeProject: vi.fn(() => 'trusted'), preTrustCodexProject: vi.fn(() => 'trusted'),
+const claudeTrust = vi.hoisted(() => ({
+  claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
+  preTrustClaudeProject: vi.fn((_path: string) => 'trusted' as const), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null) => 'trusted' as const),
+}))
+vi.mock('./engines/launchPrep.js', async (real) => ({
+  ...await real<object>(),
+  folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
+    ? { trusts: (path: string) => claudeTrust.claudeTrusts(path), record: (path: string) => claudeTrust.preTrustClaudeProject(path) }
+    : engine === 'codex' ? { trusts: (path: string) => claudeTrust.codexTrusts(path, profile), record: (path: string) => claudeTrust.preTrustCodexProject(path, profile) } : null,
 }))
 
 function parseSent(ws: InstanceType<typeof wsMock.MockWebSocket>): Array<Record<string, unknown>> {

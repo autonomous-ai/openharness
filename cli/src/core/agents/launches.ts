@@ -14,12 +14,12 @@ import { dirname, isAbsolute } from 'node:path'
 import type { BackendSocket } from '../../backendSocket.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { DSH_ID_RE, dshSupportedEngines } from '../../dsh/manifest.js'
+import { folderTrust } from '../../engines/launchPrep.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { AgentCreationReceiptError, creationFingerprint, validCreationId, type AgentCreationReceipts, type AgentCreationStatus } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { engineLabel } from '../../lib/agentNames.js'
-import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } from '../../lib/claudeTrust.js'
 import {
   AGENT_NAME_RE, FirstPromptUnsupportedError, MAX_FIRST_PROMPT_CHARS, NamedAgentUnsupportedError, permissionModeApproves,
   permissionModeFlags, supportsFirstPrompt, supportsNamedAgent,
@@ -261,12 +261,11 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
                 detail: error instanceof ProjectFolderError ? error.message : 'Could not prepare the project folder.' }
             }
             // Only a folder this daemon just made EMPTY is one the engine need not ask about. A clone or
-            // the person's own repo is theirs to answer for (lib/claudeTrust.ts); a worktree gets only
+            // the person's own repo is theirs to answer for (engines/kit/folderTrust.ts); a worktree gets only
             // the answer its source repo already has. `branch` IS the source folder: nothing to record.
             try {
               // A Codex agent on its own profile reads its trust from that profile's config.toml, not ~/.codex.
-              const engineTrust = input.engine === 'claude' ? { trusts: (path: string) => claudeTrusts(path), record: (path: string) => preTrustClaudeProject(path) }
-                : input.engine === 'codex' ? { trusts: (path: string) => codexTrusts(path, input.codexHome), record: (path: string) => preTrustCodexProject(path, input.codexHome) } : null
+              const engineTrust = folderTrust(input.engine, input.codexHome)
               if (engineTrust && (projectFolder.source === 'new'
                 || (projectFolder.source === 'worktree' && engineTrust.trusts(projectFolder.gitSource)))) {
                 engineTrust.record(preparedFolder)
@@ -278,21 +277,18 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
             // `new` project is — but only on evidence, and only where those workspaces live:
             //
             //   · directly inside the projects root, which is the one folder the app and this daemon
-            //     create workspaces in. Trust INHERITS downward (claudeTrusts), so recording it for a
+            //     create workspaces in. Claude Code's trust INHERITS downward, so recording it for a
             //     folder the person merely browsed to — an empty `~/code`, or a home with nothing in it —
             //     would silently cover every repo cloned under it later: OH-14 again by another door.
             //   · empty as read from disk, never on the client's word. A clone, a worktree or the
-            //     person's own repo has content, so it stays the engine's question (lib/claudeTrust.ts).
+            //     person's own repo has content, so it stays the engine's question (engines/kit/folderTrust.ts).
             //   · from a LOCAL frame. agent_create is not backend-only, so a relayed peer would otherwise
             //     name an empty path on this host and have it trusted.
             //
             // DSH trust is decided in cli.ts, where the template count is known; leave that to it.
             try {
               const empty = await readdir(input.cwd).then((names) => names.length === 0, () => false)
-              if (empty) {
-                if (input.engine === 'claude') preTrustClaudeProject(input.cwd)
-                if (input.engine === 'codex') preTrustCodexProject(input.cwd, input.codexHome)
-              }
+              if (empty) folderTrust(input.engine, input.codexHome)?.record(input.cwd)
             } catch (error) { console.warn(`[agent] pre-trust ${input.cwd} · ${error instanceof Error ? error.message : error}`) }
           }
           const result = await create(preparedFolder ? { ...input, cwd: preparedFolder, scmLaunchRecord } : input)

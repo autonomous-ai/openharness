@@ -5,7 +5,13 @@ import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, re
 import * as fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { portableCodexHistory, prepareCodexResume } from './portableHistory.js'
+import { launch as codex } from '../codex/launch.js'
+import { prepareResume as prepareCodexResume } from '../launchPrep.js'
+import { repairHistoryText } from './resumeRepair.js'
+
+// The former engines/codex/portableHistory.spec.ts, its cases unchanged, against Codex's declared repair
+// (`resumeRepair` in codex/launch.ts) applied by the kit, through the composition the resume calls.
+const portableCodexHistory = (history: string, sessionId: string) => repairHistoryText(codex.resumeRepair!, history, sessionId)
 
 // Keep the real filesystem, with configurable exports for simulating a concurrent writer.
 vi.mock('node:fs', async importOriginal => ({ ...await importOriginal<typeof import('node:fs')>() }))
@@ -189,15 +195,15 @@ describe('preparing a stopped Codex session for resume', () => {
     const homes = await import('../../lib/engineHomes.js')
     homes.adoptEngineHomes({ CODEX_HOME: profile }, { claudeHome: '/nowhere/.claude', codexHome: '/nowhere/.codex' })
     try {
-      const fresh = await import('./portableHistory.js')
-      expect(fresh.prepareCodexResume({ ...source(), codexHome: null }).repairedItems).toBe(1)
+      const fresh = await import('../launchPrep.js')
+      expect(fresh.prepareResume({ ...source(), codexHome: null }).repairedItems).toBe(1)
       // Found by its id there too, when the registry has no path for it.
       writeFileSync(file, history(badReasoning()))
-      expect(fresh.prepareCodexResume({ ...source(), codexHome: null, transcriptPath: null }).repairedItems).toBe(1)
+      expect(fresh.prepareResume({ ...source(), codexHome: null, transcriptPath: null }).repairedItems).toBe(1)
       // A file in no Codex home at all is still refused.
       const stray = join(profile, 'stray.jsonl')
       writeFileSync(stray, history(badReasoning()))
-      expect(() => fresh.prepareCodexResume({ ...source(), codexHome: null, transcriptPath: stray })).toThrow('outside the session profile')
+      expect(() => fresh.prepareResume({ ...source(), codexHome: null, transcriptPath: stray })).toThrow('outside the session profile')
     } finally {
       vi.unstubAllEnvs()
       rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })

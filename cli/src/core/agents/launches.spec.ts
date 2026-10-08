@@ -7,7 +7,6 @@ import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { opencodeMajorVersion } from '../../engines/opencode/version.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
-import { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } from '../../lib/claudeTrust.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
 import { parseGridLaunchOverride } from '../../lib/gridLaunch.js'
 import { parseNewAgentModel } from '../../lib/newAgentModel.js'
@@ -22,10 +21,15 @@ import { createLaunchRequests, type CreateAgent, type ForkAgent, type LaunchRequ
  * they are tested with their own modules, and a test must never write the person's own engine config.
  */
 const root = vi.hoisted(() => ({ projects: '' }))
-vi.mock('../../lib/claudeTrust.js', async (real) => ({
-  ...await real<object>(),
-  claudeTrusts: vi.fn(() => false), codexTrusts: vi.fn(() => false), preTrustClaudeProject: vi.fn(), preTrustCodexProject: vi.fn(),
+// The engines' folder trust (engines/launchPrep.ts), one spy per engine.
+const trust = vi.hoisted(() => ({
+  claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
+  preTrustClaudeProject: vi.fn((_path: string): unknown => undefined), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null): unknown => undefined),
 }))
+const { claudeTrusts, codexTrusts, preTrustClaudeProject, preTrustCodexProject } = trust
+vi.mock('../../engines/launchPrep.js', () => ({ folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
+    ? { trusts: (path: string) => trust.claudeTrusts(path), record: (path: string) => trust.preTrustClaudeProject(path) }
+    : engine === 'codex' ? { trusts: (path: string) => trust.codexTrusts(path, profile), record: (path: string) => trust.preTrustCodexProject(path, profile) } : null }))
 vi.mock('../../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/newAgentModel.js', async (real) => ({
   ...await real<object>(), parseNewAgentModel: vi.fn(() => ({ state: 'absent' })),

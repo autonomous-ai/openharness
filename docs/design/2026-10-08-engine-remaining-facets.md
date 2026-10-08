@@ -44,10 +44,11 @@ About 230 lines would leave. Transport, credential, routes and `registry.registe
 
 ## (c) Launch, discovery and resume
 
-Split into five sub-batches. See [engine launch](2026-10-08-engine-launch.md), which records (c1) and plans
-(c2) to (c5). (c1) is done: the Codex pane script's startup probe and retry, its own-login provider, and
-the two engines' context and env flags are now declared data, applied by `engines/kit`. Like (b), nothing
-moved into a worker. The map below is as it stood before (c1).
+Split into five sub-batches. See [engine launch](2026-10-08-engine-launch.md), which records (c1) and (c2)
+and plans (c3) to (c5). (c1) is done: the Codex pane script's startup probe and retry, its own-login provider,
+and the two engines' context and env flags are now declared data, applied by `engines/kit`. (c2) is done too:
+folder trust, the resume repair and the instruction-file fallbacks. Like (b), nothing moved into a worker.
+The map below is as it stood before (c1).
 
 | File | Engine-specific behavior | Stays in core | Can move | Risk |
 | --- | --- | --- | --- | --- |
@@ -115,7 +116,7 @@ About 220 lines would leave, and with them core's only native child process and 
    closure, and a few dozen lines of declared data come in.
 4. **(c) Launch, discovery and resume.** The largest. It has the most synchronous call sites (registry
    load, discovery tables, argv). It is split by risk into (c1) launch argv and the pane script (done),
-   (c2) launch preparation (trust writes and the resume repair), (c3) discovery and process matching,
+   (c2) launch preparation (trust writes and the resume repair, done), (c3) discovery and process matching,
    (c4) registry load and session identity, and (c5) adoption readers and the shared normalizers
    ([engine launch](2026-10-08-engine-launch.md)). Session control stays worker-free throughout, as in (b).
 

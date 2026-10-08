@@ -7,7 +7,7 @@ declares what it needs as data on its launch contract (`Engine.launch`, `engines
 Shared mechanics in `engines/kit` read that data, and core runs them in line.
 
 (c) is too large to land as one change. It is split into five sub-batches, each green on its own. This
-document records (c1), which is done, and plans the other four.
+document records (c1) and (c2), which are done, and plans the other three.
 
 ## (c1) Launch argv and the pane script: done
 
@@ -90,7 +90,86 @@ files. It also checks two sets of closures:
 - **The launch callers** (create, fork, restart, swap, the resume service) reach only those contracts, the
   hook contracts, and `engines/codex/rollout.ts`. The registry still holds `rollout.ts` until (c4).
 
-`core/agents/launch.ts` still imports `engines/codex/portableHistory.ts`. That is (c2).
+`core/agents/launch.ts` still imported `engines/codex/portableHistory.ts`, until (c2) below.
+
+## (c2) Launch preparation: done
+
+| Was | Now |
+| --- | --- |
+| `lib/claudeTrust.ts`: Claude Code's `.claude.json` and Codex's `config.toml` folder trust, read and recorded | `EngineLaunch.trust`: the home (`LaunchHome`: a daemon setting with an agent's profile, or a variable else the home folder), the file and the format. Claude declares `json` (the projects key, the accepted flag, a new entry's defaults; a yes covers the folders below). Codex declares `toml` (the table, key and value; exact folders only). `engines/kit/folderTrust.ts` reads and writes both, through a symlink, atomically. |
+| The `engine === 'claude'` and `engine === 'codex'` trust branches in `core/agents/create.ts` and `launches.ts` | `engines/launchPrep.ts` `folderTrust(engine, profile)`: null for an engine that asks no such question |
+| `engines/codex/portableHistory.ts`, Codex's rollout made resumable | `EngineLaunch.resumeRepair`: where histories are and how one is found by id, the record that names the session, the records whose items are replayed, the repair (`portable-reasoning`, the relay's contract), the backup and temporary suffixes, and the names in messages and the log. `engines/kit/resumeRepair.ts` applies it with the same bounded reads, digest, backup and atomic rename. `engines/launchPrep.ts` `prepareResume` is what `core/agents/launch.ts` calls. |
+| `engines/codex/rollout.ts`'s rollout lookup | The kit's `findSessionFile` on the same declared rule. The registry still calls `resolveCodexRollout` until (c4), which now delegates. |
+| The instruction-file fallbacks in `dsh/runtime.ts` (`CLAUDE.md`, and Claude's `@AGENTS.md` import line) and `lib/apiInstructions.ts` | `EngineLaunch.instructionFile` and `instructionImport` (Claude); others keep AGENTS.md. |
+
+`lib/engineHomes.ts` gains `launchHomeOf` (the declared home, at launch) and `homeRoots` (a setting's own home
+and every one the person moved). `launchClaudeConfigDir` is now one case of it. The daemon's resume log line
+names what was repaired in the contract's words, unchanged.
+
+### The same bytes
+
+**Golden record.** `engines/launchPrep.golden.spec.ts` was recorded in its own commit, before the change,
+through a composition of the former code. It holds:
+
+- **166 folder-trust cases.** Each answers five probe paths before and after, and records twice.
+  - Claude Code's `.claude.json` in 40 states: none, empty, malformed, a byte order mark, JSON scalars,
+    `projects` of every type, entries of every shape, a parent's trust, a trailing slash, a longer sibling,
+    other settings, minified, duplicate keys, unicode, symlinks (kept), dangling, read-only, unreadable, a
+    read-only folder, a folder, a private file, a leftover temporary file. Each in a moved and the default home.
+  - Codex's `config.toml` in 27 states: none, empty, no final newline, CRLF, trusted, untrusted, quoted,
+    single-quoted, spaced and escaped keys, a key JSON cannot read, inline, dotted and bare `projects`,
+    other projects, sub-tables, a commented header, a path with a quote, a backslash, DEL and unicode,
+    symlinks, permissions. Each in a profile, a moved and the default home.
+  - A relative or `~` CLAUDE_CONFIG_DIR, and every engine that asks no such question.
+- **36 resume repairs**:
+  - repairs, nothing to repair, content into the summary, compaction, encrypted reasoning;
+  - CRLF, blank lines, no final newline, past one 64 KiB read with a character across it;
+  - every refusal; found by id, stale paths;
+  - a symlinked or outside rollout, a folder, a world-readable file.
+
+  They run in the profile's home, and four of them in the daemon's and a moved home as well.
+- **96 instruction-file cases:** a harness's bootstrap for every engine and the workspace states that pick
+  a file, and the saved APIs' note for every engine plus `terminal` and `gemini`.
+
+Each case keeps what was returned or thrown, and every file: bytes (a hash past 4 KiB), mode, symlinks,
+leftover temporary files and backups. The spec passes unchanged against the kit. These mutations each fail it:
+
+- Claude's entry defaults, its import line, its instruction file or its home variable;
+- Codex's trust value, its backup suffix, its compaction rule, its session id field or its file name;
+- the kit's blank line before an appended table, its trust inheritance, its write mode, or its lookup.
+
+**Seeded differential (not committed).** The former `lib/claudeTrust.ts` and `portableHistory.ts` ran beside
+the kit in one process, on generated files, with 500 cases per seed and three seeds:
+
+- **Trust:** 3,000 settings files. 1,233 Claude Code and 631 Codex records were written.
+- **Repair as text:** 1,500 rollouts. 277 were repaired and 381 refused.
+- **Repair as a file:** 300 files. 59 were rewritten.
+
+Every answer, byte and mode was equal.
+
+**Unchanged suites.** The former `lib/claudeTrust.spec.ts` and `engines/codex/portableHistory{,.real}.spec.ts`
+run their cases unchanged against the kit (`engines/kit/folderTrust.spec.ts`,
+`engines/kit/resumeRepair{,.real}.spec.ts`). The core specs (`create`, `launches`, `launch`) and
+`backendSocket.spec.ts` route the same per-engine spies through `folderTrust`. The resume log case now uses a
+Codex session, the only engine that declares a repair.
+
+### Core closure
+
+| | Lines | Files |
+| --- | --- | --- |
+| Before (#1046 rebased, `519e51fd6`) | 73,231 | 390 |
+| After | 73,370 | 391 |
+
+**Left:** `engines/codex/portableHistory.ts` (220 lines) and `lib/claudeTrust.ts` (129). `engines/codex/rollout.ts`
+lost its own walk (16 lines). **Came in:** `kit/resumeRepair.ts` (259), `kit/folderTrust.ts` (129),
+`engines/launchPrep.ts` (61) and the contracts' data (36 lines).
+
+`architecture.spec.ts` adds the two deleted files as edge files. Its launch closure test now covers:
+
+- **The builders:** the composition, both kit modules, `dsh/runtime.ts` and `lib/apiInstructions.ts`.
+- **The callers:** `core/agents/launch.ts` and `launches.ts`.
+
+They reach no Claude Code or Codex file but the declared contracts and `rollout.ts`, the registry's until (c4).
 
 ## The plan for the rest of (c)
 
@@ -99,7 +178,6 @@ paths. Each one records today's behavior in a golden spec first, in its own comm
 
 | | Scope | Why it is in this place | Golden proof |
 | --- | --- | --- | --- |
-| **(c2) Launch preparation** | Folder trust (`lib/claudeTrust.ts`, 129 lines, and the `engine === 'claude' / 'codex'` branches in `core/agents/create.ts` and `launches.ts`). Codex's rollout repair for resume (`engines/codex/portableHistory.ts`, 220 lines, `core/agents/launch.ts` `prepareSessionResume`). The instruction-file fallback in `dsh/runtime.ts` and `lib/apiInstructions.ts`. | Async callers, before the spawn. These write into the person's engine homes and into rollouts, so their bytes matter, but no hot path depends on them. The order must stay: repair, then `setTail`, then spawn. | Every file's bytes before and after, as the hooks batch did. The trust contract declares the file, the format (a JSON path, or a TOML table) and the rule that trust inherits downward. The resume repair declares which records it drops. |
 | **(c3) Discovery and process matching** | `lib/tmux.ts` process signatures and `RESUME_ARGS`, `claudeNativeInstallPath`, `lib/gridAssignment.ts` `MODEL_IN_ARGV`, `lib/codexHomeProbe.ts`, `lib/claudeProject.ts`, `lib/cwdRepair.ts`, and the moved homes in `lib/engineHomes.ts` (with the `CODEX_HOME` env literal at create and relaunch). | This is static data, but it is read for every process row on every discovery pass, and a wrong answer adopts or drops agents. | A recorded classification of a corpus of process rows: executable, argv, environment → engine, session, bypass, model, home. |
 | **(c4) Registry load and session identity** | The registry's Codex child-rollout repair (`lib/registry.ts` with `engines/codex/rollout.ts`), `lib/sessionRepair.ts` (about 190 of 716 lines), `lib/captureResumeIdentity.ts`, `lib/handoffDiscovery.ts`. | Synchronous, at load before any worker exists, and on the hook path. A wrong answer loses bindings at every restart. It goes after (c3) because it reuses (c3)'s homes. | Recorded transcripts and pid records → binding, session id and repair, read with the same bounds. |
 | **(c5) Adoption readers and shared normalizers** | `lib/sessionSearch/externals/{claude,codex}.ts`, `lib/transcriptPages.ts`, `lib/transcriptReader.ts` and `lib/transcriptActivity.ts`. Also splitting the functions `engines/claude/normalize.ts` and `engines/codex/{normalizer,subagent}.ts` share with other engines into `engines/kit`. | The largest (1,000 to 2,000 lines) but async. Listing and paging sessions for adoption is not session control. Those readers may run in a worker, as long as adoption fails safe when it is down: refused with a reason, never a wrong session. | The adoption and paging specs, unchanged, plus a recorded corpus of transcripts → pages. |
