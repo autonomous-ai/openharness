@@ -245,13 +245,14 @@ impl StatefulWidget for &mut Dropdown<'_> {
         // The query, rule, keys and rows are the command panel's own helpers, so the three
         // read as one list (and its rows report where they are drawn, for the mouse).
         let ghost = picker.placeholder.clone();
-        let (at, _) = crate::settings::query_line(buf, picker, rows[0].x, rows[0].y, rows[0].width, &ghost, c);
-        self.cursor = Some(at);
+        let mut query = crate::settings::QueryLine::new(picker, &ghost, c);
+        query.render(rows[0], buf);
+        self.cursor = Some(query.cursor);
         let keys = rows[rows.len() - 1];
         if keys.height > 0 {
             if self.error.is_empty() {
                 let what: &[(&str, &str)] = if list { &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")] } else { &[("enter", "choose"), ("esc", "back")] };
-                crate::settings::keys_line(buf, what, keys.x, keys.y, keys.width, c);
+                crate::settings::KeysLine { keys: what, chrome: c }.render(keys, buf);
             } else {
                 Paragraph::new(Line::styled(self.error, c.base.patch(theme::fg(theme::DANGER)))).render(keys, buf);
             }
@@ -262,7 +263,7 @@ impl StatefulWidget for &mut Dropdown<'_> {
         let wait = picker.busy.as_ref().map(|b| format!(" {} {b}", theme::spinner(0)));
         let room = wait.as_ref().map_or(0, |t| (t.width() as u16).min(rows[1].width / 2));
         let [rule, waiting] = Layout::horizontal([Fill(1), Length(room)]).areas(rows[1]);
-        crate::settings::count_rule(buf, picker.visible.len(), total, None, rule.x, rule.y, rule.width, c);
+        crate::settings::CountRule { shown: picker.visible.len(), total, marked: None, chrome: c }.render(rule, buf);
         if let Some(t) = wait { Paragraph::new(Span::styled(t, c.muted)).render(waiting, buf) }
         picker.page_rows.set(rows[2].height as i64);
         if picker.busy.is_none() || !picker.visible.is_empty() {
@@ -277,4 +278,49 @@ pub(super) fn draw_child(buf: &mut Buffer, r: Rect, form: &mut Form) -> Option<P
     let mut dropdown = Dropdown { editing: c.kind.editing(), error: &form.error, chrome: crate::settings::chrome(), cursor: None };
     (&mut dropdown).render(r, buf, &mut c.picker);
     dropdown.cursor.filter(|_| form.child_active)
+}
+
+/// The dropdown as it was drawn (2026-10-08), on the command panel's hand-drawn lines, kept so the
+/// widgets that replaced those lines can be shown to draw the very same buffer.
+#[cfg(test)]
+pub(super) mod oracle {
+    use super::*;
+
+    pub fn render(d: &mut Dropdown<'_>, area: Rect, buf: &mut Buffer, picker: &mut Picker) {
+        use ratatui::layout::{Constraint::{Fill, Length}, Layout};
+        let c = &d.chrome;
+        crate::term_out::clear_extras(area);
+        Clear.render(area, buf);
+        let surface = Block::new().style(c.base).padding(Padding::horizontal(1));
+        let inner = surface.inner(area);
+        surface.render(area, buf);
+        picker.row_at.clear();
+        // (Too short for a list: the query and keys only, as a path being typed has.)
+        let list = !d.editing && inner.height >= 4;
+        let rows = if list { Layout::vertical([Length(1), Length(1), Fill(1), Length(1)]).split(inner) }
+            else { Layout::vertical([Length(1), Fill(1)]).split(inner) };
+        let ghost = picker.placeholder.clone();
+        let (at, _) = crate::settings::oracle::query_line(buf, picker, rows[0].x, rows[0].y, rows[0].width, &ghost, c);
+        d.cursor = Some(at);
+        let keys = rows[rows.len() - 1];
+        if keys.height > 0 {
+            if d.error.is_empty() {
+                let what: &[(&str, &str)] = if list { &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")] } else { &[("enter", "choose"), ("esc", "back")] };
+                crate::settings::oracle::keys_line(buf, what, keys.x, keys.y, keys.width, c);
+            } else {
+                Paragraph::new(Line::styled(d.error, c.base.patch(theme::fg(theme::DANGER)))).render(keys, buf);
+            }
+        }
+        if !list { return }
+        let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+        let wait = picker.busy.as_ref().map(|b| format!(" {} {b}", theme::spinner(0)));
+        let room = wait.as_ref().map_or(0, |t| (t.width() as u16).min(rows[1].width / 2));
+        let [rule, waiting] = Layout::horizontal([Fill(1), Length(room)]).areas(rows[1]);
+        crate::settings::oracle::count_rule(buf, picker.visible.len(), total, None, rule.x, rule.y, rule.width, c);
+        if let Some(t) = wait { Paragraph::new(Span::styled(t, c.muted)).render(waiting, buf) }
+        picker.page_rows.set(rows[2].height as i64);
+        if picker.busy.is_none() || !picker.visible.is_empty() {
+            crate::settings::list_from(buf, picker, rows[2], c, true, false);
+        }
+    }
 }

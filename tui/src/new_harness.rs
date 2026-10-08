@@ -2038,6 +2038,61 @@ mod tests {
         assert_eq!(row(5).trim(), "That machine is not connected");
     }
 
+    /// The dropdown drawn with the panel's line widgets is the dropdown the hand-drawn lines drew:
+    /// a list or a path being typed, loading, failed, every width up to 160, in a dark theme, a
+    /// light one and NO_COLOR.
+    #[test]
+    fn the_dropdown_draws_what_it_did_with_the_hand_drawn_lines() {
+        use crate::settings::oracle::{chromes, grounds, LONG};
+        use ratatui::widgets::StatefulWidget;
+        let _l = crate::term_out::colours_lock();
+        // (The spinner still, so the two draws a moment apart show the same frame.)
+        theme::begin_animation_frame(false);
+        let n = LONG.chars().count();
+        // (editing, query, its cursor, loading, the error)
+        let cases: [(bool, &str, usize, Option<&str>, &str); 7] = [
+            (false, "", 0, None, ""),
+            (false, "pro", 3, None, ""),
+            (false, LONG, n, None, ""),
+            (false, LONG, 0, None, ""),
+            (false, "", 0, Some("Loading folders…"), ""),
+            (false, "", 0, None, "That machine is not connected"),
+            (true, "~/code/api", 10, None, ""),
+        ];
+        // (From 3 columns: narrower, the old query line drew its mark past the dropdown's padding,
+        // or past the dropdown; the widget keeps to its area. Wider ones in steps — every width the
+        // line widgets are checked at is too slow here.)
+        let widths = [3, 4, 5, 8, 23, 24, 25, 30, 40, 47, 64, 80, 96, 120, 159, 160];
+        for c in chromes() { for w in widths { for h in [1, 2, 3, 4, 6, 12] {
+            let area = Rect::new(2, 1, w, h);
+            // (Over cells already written: the dropdown clears what it covers and touches nothing else.)
+            let [_, ground] = grounds(Rect::new(0, 0, w + 4, h + 2));
+            {
+                for (editing, query, at, busy, error) in cases {
+                    let make = || {
+                        let mut p = Picker::new("", "Search projects");
+                        p.set_rows((0..9).map(|i| crate::picker::Row::new(format!("p{i}"), format!("project-{i}")).right("~/code")).collect());
+                        p.query = query.into();
+                        p.refilter();
+                        p.qcursor = at;
+                        p.busy = busy.map(String::from);
+                        p
+                    };
+                    let (mut a, mut b) = (make(), make());
+                    let (mut old, mut new) = (ground.clone(), ground.clone());
+                    let mut was = view::Dropdown { editing, error, chrome: crate::settings::Chrome { ..c }, cursor: None };
+                    view::oracle::render(&mut was, area, &mut old, &mut a);
+                    let mut now = view::Dropdown { editing, error, chrome: crate::settings::Chrome { ..c }, cursor: None };
+                    (&mut now).render(area, &mut new, &mut b);
+                    let what = format!("{w}x{h} editing {editing} {query:?} at {at} {busy:?} {error:?}");
+                    assert_eq!(was.cursor, now.cursor, "{what}");
+                    assert_eq!((a.xoffset.get(), a.prompt_at.get(), &a.row_at, a.page_rows.get()), (b.xoffset.get(), b.prompt_at.get(), &b.row_at, b.page_rows.get()), "{what}");
+                    assert!(old == new, "{what}: the cells that differ, as drawn now: {:?}", old.diff(&new));
+                }
+            }
+        } } }
+    }
+
     #[tokio::test]
     async fn at_colon_percent_in_the_task_open_their_choosers() {
         let mut app = app();

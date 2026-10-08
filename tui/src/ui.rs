@@ -11,6 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::{StatefulWidget, Widget};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
@@ -2528,41 +2529,178 @@ pub(crate) fn inline_fzf(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy
     at
 }
 
+/// [InlinePanel] in the theme's chrome; where the text cursor goes.
+fn inline_panel(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, upward: bool) -> Position {
+    let c = crate::settings::chrome();
+    let mut panel = InlinePanel { busy, upward, chrome: &c, cursor: Position::default() };
+    (&mut panel).render(area, buf, picker);
+    panel.cursor
+}
+
 /// The shell composer, drawn with the command panel's own pieces (`settings::chrome()` and its
 /// query line, count rule, rows and keys line) in the reserved region, no border. Top-down, or
 /// [upward] (a composer low in its pane) mirrored as the launcher's lists are: the query at the
-/// bottom, its count over it, the keys over that, the rows going up from there.
-fn inline_panel(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, upward: bool) -> Position {
-    let c = crate::settings::chrome();
-    crate::settings::fill(buf, area, c.base);
-    let ghost = picker.placeholder.clone();
-    let inside = |p: Position| Position::new(p.x.min(area.right().saturating_sub(1)), p.y);
-    // Too small for the list: the query alone, as the panel's own too-small notice keeps its title.
-    if area.height < 4 || area.width < 24 {
-        let (at, _) = crate::settings::query_line(buf, picker, area.x, area.y, area.width, &ghost, &c);
-        return inside(at);
+/// bottom, its count over it, the keys over that, the rows going up from there. Rendered by
+/// reference, it leaves the query's text cursor in [cursor].
+pub(crate) struct InlinePanel<'a> {
+    pub busy: bool,
+    pub upward: bool,
+    pub chrome: &'a crate::settings::Chrome,
+    pub cursor: Position,
+}
+
+impl StatefulWidget for &mut InlinePanel<'_> {
+    type State = Picker;
+    fn render(self, area: Rect, buf: &mut Buffer, picker: &mut Picker) {
+        use crate::settings::{CountRule, KeysLine, QueryLine, Surface};
+        use ratatui::layout::{Constraint::{Fill, Length}, Layout, Margin};
+        let c = self.chrome;
+        Surface(c.base).render(area, buf);
+        let ghost = picker.placeholder.clone();
+        let inside = |p: Position| Position::new(p.x.min(area.right().saturating_sub(1)), p.y);
+        // Too small for the list: the query alone, as the panel's own too-small notice keeps its title.
+        if area.height < 4 || area.width < 24 {
+            let mut query = QueryLine::new(picker, &ghost, c);
+            query.render(Rect { height: 1, ..area }, buf);
+            self.cursor = inside(query.cursor);
+            return;
+        }
+        let inner = area.inner(Margin::new(1, 0));
+        let [query, rule, list, keys] = if self.upward {
+            let [list, keys, rule, query] = Layout::vertical([Fill(1), Length(1), Length(1), Length(1)]).areas(inner);
+            [query, rule, list, keys]
+        } else {
+            Layout::vertical([Length(1), Length(1), Fill(1), Length(1)]).areas(inner)
+        };
+        let mut line = QueryLine::new(picker, &ghost, c);
+        line.render(query, buf);
+        self.cursor = inside(line.cursor);
+        let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+        // While it waits on something the rule ends in the usual spinner (and what is being waited for).
+        // A flash (a failed request being retried) says itself there in the status's place, as the fzf
+        // frame's info line does.
+        let said = picker.flash.as_ref().map_or(picker.status.as_str(), |f| f.0.as_str());
+        let wait = if self.busy {
+            Some(if said.is_empty() { theme::spinner(0).to_string() } else { format!("{} {}", theme::spinner(0), said) })
+        } else { picker.flash.as_ref().map(|f| f.0.clone()) };
+        // (The wait after the rule, a column apart, in at most half the line.)
+        let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(rule.width / 2));
+        let [count, waiting] = Layout::horizontal([Fill(1), Length(room)]).areas(rule);
+        CountRule { shown: picker.visible.len(), total, marked: None, chrome: c }.render(count, buf);
+        if let Some(t) = wait {
+            let [_, said] = Layout::horizontal([Length(1), Fill(1)]).areas(waiting);
+            Span::styled(crate::settings::fit(&t, said.width).0, c.muted).render(said, buf);
+        }
+        crate::settings::list_from(buf, picker, list, c, true, self.upward);
+        KeysLine { keys: &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")], chrome: c }.render(keys, buf);
     }
-    let (x, w) = (area.x + 1, area.width - 2);
-    let (qy, ry, ky, list) = if upward {
-        (area.bottom() - 1, area.bottom() - 2, area.bottom() - 3, Rect::new(x, area.y, w, area.height - 3))
-    } else {
-        (area.y, area.y + 1, area.bottom() - 1, Rect::new(x, area.y + 2, w, area.height - 3))
-    };
-    let (at, _) = crate::settings::query_line(buf, picker, x, qy, w, &ghost, &c);
-    let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
-    // While it waits on something the rule ends in the usual spinner (and what is being waited for).
-    // A flash (a failed request being retried) says itself there in the status's place, as the fzf
-    // frame's info line does.
-    let said = picker.flash.as_ref().map_or(picker.status.as_str(), |f| f.0.as_str());
-    let wait = if busy {
-        Some(if said.is_empty() { theme::spinner(0).to_string() } else { format!("{} {}", theme::spinner(0), said) })
-    } else { picker.flash.as_ref().map(|f| f.0.clone()) };
-    let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(w / 2));
-    crate::settings::count_rule(buf, picker.visible.len(), total, None, x, ry, w - room, &c);
-    if let Some(t) = wait { crate::settings::put(buf, x + w - room + 1, ry, room.saturating_sub(1), &t, c.muted); }
-    crate::settings::list_from(buf, picker, list, &c, true, upward);
-    crate::settings::keys_line(buf, &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")], x, ky, w, &c);
-    inside(at)
+}
+
+/// The shell composer as it was drawn by hand (2026-10-08), its chrome passed in, kept so the
+/// widget that replaced it can be shown to draw the very same buffer.
+#[cfg(test)]
+pub(crate) mod oracle {
+    use super::*;
+
+    pub fn inline_panel(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, upward: bool, c: &crate::settings::Chrome) -> Position {
+        crate::settings::oracle::fill(buf, area, c.base);
+        let ghost = picker.placeholder.clone();
+        let inside = |p: Position| Position::new(p.x.min(area.right().saturating_sub(1)), p.y);
+        // Too small for the list: the query alone, as the panel's own too-small notice keeps its title.
+        if area.height < 4 || area.width < 24 {
+            let (at, _) = crate::settings::oracle::query_line(buf, picker, area.x, area.y, area.width, &ghost, c);
+            return inside(at);
+        }
+        let (x, w) = (area.x + 1, area.width - 2);
+        let (qy, ry, ky, list) = if upward {
+            (area.bottom() - 1, area.bottom() - 2, area.bottom() - 3, Rect::new(x, area.y, w, area.height - 3))
+        } else {
+            (area.y, area.y + 1, area.bottom() - 1, Rect::new(x, area.y + 2, w, area.height - 3))
+        };
+        let (at, _) = crate::settings::oracle::query_line(buf, picker, x, qy, w, &ghost, c);
+        let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+        // While it waits on something the rule ends in the usual spinner (and what is being waited for).
+        // A flash (a failed request being retried) says itself there in the status's place, as the fzf
+        // frame's info line does.
+        let said = picker.flash.as_ref().map_or(picker.status.as_str(), |f| f.0.as_str());
+        let wait = if busy {
+            Some(if said.is_empty() { theme::spinner(0).to_string() } else { format!("{} {}", theme::spinner(0), said) })
+        } else { picker.flash.as_ref().map(|f| f.0.clone()) };
+        let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(w / 2));
+        crate::settings::oracle::count_rule(buf, picker.visible.len(), total, None, x, ry, w - room, c);
+        if let Some(t) = wait { crate::settings::oracle::put(buf, x + w - room + 1, ry, room.saturating_sub(1), &t, c.muted); }
+        crate::settings::list_from(buf, picker, list, c, true, upward);
+        crate::settings::oracle::keys_line(buf, &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")], x, ky, w, c);
+        inside(at)
+    }
+}
+
+#[cfg(test)]
+mod inline_panel_tests {
+    use super::*;
+    use crate::picker::Row;
+    use crate::settings::oracle::{chromes, grounds, LONG};
+
+    /// A composer's picker: a short catalog in two groups, [query] typed (its cursor at [at]).
+    fn composer(query: &str, at: usize) -> Picker {
+        let mut p = Picker::new("", "Search agents   @ computer   : project   % model   & agent");
+        p.shell_panel = true;
+        p.set_rows((0..14).map(|i| Row::new(format!("m{i}"), format!("gpt-6-{i}")).detail(vec![Span::raw("OpenAI")]).group(if i < 5 { "Recent" } else { "All" })).collect());
+        p.query = query.into();
+        p.refilter();
+        p.qcursor = at;
+        p
+    }
+
+    /// The shell composer drawn with the InlinePanel widget is the composer the hand-drawn one
+    /// drew: down and upward, every width up to 160, waiting or failed or not, in a dark theme, a
+    /// light one and NO_COLOR.
+    #[test]
+    fn the_shell_composer_widget_draws_what_the_hand_drawn_one_did() {
+        let _l = crate::term_out::colours_lock();
+        // (The spinner still, so the two draws a moment apart show the same frame.)
+        theme::begin_animation_frame(false);
+        let n = LONG.chars().count();
+        // (query, its cursor, busy, the status, a flash, the catalog's own total)
+        let cases: [(&str, usize, bool, &str, Option<&str>, Option<usize>); 8] = [
+            ("", 0, false, "", None, None),
+            ("gpt", 3, false, "", None, None),
+            (LONG, n, false, "", None, None),
+            (LONG, 0, false, "", None, None),
+            ("", 0, true, "", None, None),
+            ("gp", 2, true, "Searching models…", None, Some(40)),
+            ("gp", 2, false, "", Some("Could not list models: the daemon is not running"), None),
+            ("zzz", 3, false, "", None, Some(0)),
+        ];
+        // (Every width the line widgets are checked at is too slow here: the too-small ones, the
+        // edge at 24, and wider ones in steps.)
+        let widths = [1, 2, 8, 23, 24, 25, 30, 40, 47, 64, 80, 96, 120, 159, 160];
+        for c in chromes() { for upward in [false, true] { for w in widths { for h in [1, 3, 4, 5, 8, 12] {
+            let area = Rect::new(2, 1, w, h);
+            // (Over cells already written: the panel clears what it covers and touches nothing else.)
+            let [_, ground] = grounds(Rect::new(0, 0, w + 4, h + 2));
+            {
+                for (query, at, busy, status, flash, total) in cases {
+                    let make = || {
+                        let mut p = composer(query, at);
+                        p.status = status.into();
+                        p.flash = flash.map(|f| (f.to_string(), Instant::now()));
+                        p.total_rows = total;
+                        p
+                    };
+                    let (mut a, mut b) = (make(), make());
+                    let (mut old, mut new) = (ground.clone(), ground.clone());
+                    let was = oracle::inline_panel(&mut old, area, &mut a, busy, upward, &c);
+                    let mut panel = InlinePanel { busy, upward, chrome: &c, cursor: Position::default() };
+                    (&mut panel).render(area, &mut new, &mut b);
+                    let what = format!("{w}x{h} upward {upward} {query:?} at {at} busy {busy} {status:?} {flash:?}");
+                    assert_eq!(was, panel.cursor, "{what}");
+                    assert_eq!((a.xoffset.get(), a.prompt_at.get(), &a.row_at), (b.xoffset.get(), b.prompt_at.get(), &b.row_at), "{what}");
+                    assert!(old == new, "{what}: the cells that differ, as drawn now: {:?}", old.diff(&new));
+                }
+            }
+        } } } }
+    }
 }
 
 /// A pane's terminal, drawn into a preview box: its bottom, where the work is.
