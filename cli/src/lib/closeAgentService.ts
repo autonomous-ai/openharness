@@ -1,8 +1,6 @@
 /** User Close is a disk-backed lifecycle operation. Hiding/switching a tab never calls this. */
-import { stripVTControlCharacters } from 'node:util'
 import { randomUUID } from 'node:crypto'
-import { teamWriteHold } from './teamWriteHold.js'
-import { terminalActivity } from './terminalActivity.js'
+import type { ScreenReading } from '../engines/facets/screen.js'
 import type { RegisteredSession, registry as liveRegistry } from './registry.js'
 import { terminalRouteKey } from './terminalRuntime.js'
 import type { StopAgentOptions } from './stopAgentService.js'
@@ -30,21 +28,14 @@ function unusedChat(session: CloseSession): boolean {
 
 /** An empty new chat has no turn state yet. Existing chats still require that state,
  * and neither kind is idle without a recognized empty composer. */
-export function inspectCloseActivity(session: CloseSession, screen: string | null,
+export function inspectCloseActivity(session: CloseSession, screen: ScreenReading | null,
   turnOpen: boolean | undefined, needsInput: boolean): CloseActivity {
   const { engine } = session
   if (needsInput) return 'needs_input'
   if (turnOpen === true) return 'working'
   if (!screen) return 'unknown'
-  const footer = stripVTControlCharacters(screen).split('\n').slice(-16).join('\n')
-  // Codex can be between turns of an active goal, and Claude can have background tasks. Codex has
-  // said an active goal two ways: `◎ /goal active (41m)` in its older footers, and `Pursuing goal (41m)`
-  // on its status line since (0.160, tui/src/bottom_pane/footer.rs), where only the older wording was
-  // known and an agent between the turns of its goal read as idle, for a close to take. Its other goal
-  // states (paused, stalled, unmet, abandoned, achieved) are not work in progress.
-  if (/\bgoal\s+active\b|\bpursuing goal\b|\b[1-9]\d*\s+background\s+(?:tasks?|agents?)\b/i.test(footer)
-    || terminalActivity(engine, screen)) return 'working'
-  const hold = teamWriteHold(engine, screen)
+  if (screen.busy) return 'working'
+  const hold = screen.teamHold
   if (hold === 'team_waiting_draft') return 'draft'
   if (hold === 'team_waiting_user') return 'needs_input'
   if (hold || (turnOpen === undefined && !unusedChat(session))) return 'unknown'

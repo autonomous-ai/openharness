@@ -1,3 +1,7 @@
+import { createScreens } from './engines/screens.js'
+import { createScreenTransport } from './engines/screenTransport.js'
+import { legacyScreen } from '../lib/legacyScreen.js'
+import { masterRunsEngineScreen } from '../harnessd/services.js'
 /**
  * The core's entry: `harness __run`. `runForeground` is the composition root, which builds the core's
  * modules, starts the services through `serviceHost` and wires them to the socket
@@ -20,7 +24,6 @@ import { sqlitePreflightMessage } from '../lib/sqliteAvailability.js'
 import { warmLoginShellEnvironment } from '../lib/loginShellEnv.js'
 import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
-import { terminalActivity } from '../lib/terminalActivity.js'
 import { registry, projectDisplayName, validTranscriptPath, type RegisteredSession } from '../lib/registry.js'
 import { engineSessionTitle } from '../lib/sessionTitle.js'
 import { machineNames } from '../lib/machineNames.js'
@@ -180,7 +183,7 @@ import { agentTokenUsage } from '../lib/agentTokenUsage.js'
 import { LegacyRuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfileManager.js'
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
-import { RuntimeProfileController } from '../lib/runtimeProfileController.js'
+import { RuntimeProfileController } from '../lib/runtimeControl.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
 import { backendHttpBase } from '../lib/controlPlane.js'
 
@@ -542,13 +545,20 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // An older master's explicit capability report selects compatibility. A failed worker never does.
   const isolatedLive = (engine: string): boolean => liveHosted
     && readerEngine(engine) && outOfProcess.has(READER_SERVICES[engine])
+  const screenHosted = masterRunsEngineScreen(process.env, process.ppid)
+  const isolatedScreen = (engine: string): boolean => screenHosted && isolatedLive(engine)
   const isolatedRuntime = (engine: string): boolean => runtimeHosted && isolatedLive(engine)
-  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted
+  const inline = KNOWN_SERVICES.some((name) => !outOfProcess.has(name)) || !runtimeHosted || !screenHosted
     ? await import('../services/inline.js') : null
   let serviceLinksRef: ServiceLinks | null = null
   const runtimeTransport = createRuntimeTransport({
     call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
   })
+  const screenTransport = createScreenTransport({
+    call: (service, type, payload, waitMs) => serviceLinksRef?.call(service, type, payload, waitMs) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }),
+  })
+  const screens = createScreens({ handles: isolatedScreen, transport: screenTransport, resolve: id => registry.resolve(id),
+    inline: (engine, capture) => readerEngine(engine) ? capture === null ? undefined : inline?.screenFor(engine).inspect(capture) : legacyScreen(engine, capture) })
   const runtimeProfiles = createRuntimeProfiles({
     legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
     handles: isolatedRuntime,
@@ -676,7 +686,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       const session = registry.resolve(agentId)
       if (!session || (session.engine !== 'claude' && session.engine !== 'codex')) return null
       const screen = await terminals.capture(session, { mode: 'visible', ansi: false })
-      return terminalActivity(session.engine, screen.state === 'succeeded' ? screen.value : null)
+      return (await screens.read(session, screen.state === 'succeeded' ? screen.value : null))?.activity?.label ?? null
     },
     // The devices' frames for the windows on this computer, never the cloud (createCoreApi checks their types).
     sendLocal: (frame) => {
@@ -929,6 +939,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   // Whether a turn is really working, beyond its transcript (core/turns/activity.ts).
   const activity = createTurnActivity({
+    readScreen: screens.read,
     terminals,
     bySession: (sessionId) => registry.bySession(sessionId),
     sessionTurnOpen,
@@ -1016,6 +1027,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.sessionsProvider = history.sessionsList
   // Everything the core writes into a pane, and the device's pane lock (core/input.ts).
   const inputs = createInput({
+    readScreen: screens.read,
     resolve: (id) => registry.resolve(id),
     byAgent: (agentId) => registry.byAgent(agentId),
     terminal: terminalControl,
@@ -1034,7 +1046,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // Reassigned further down (the funnel): always the current one.
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
     // Declared further down: read as a prompt is typed, never now.
-    promptTyped: (session, capture) => { if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture) },
+    promptTyped: (session, capture, screen) => { if (session.sessionId) questionWatcher.notePrompt(session.sessionId, capture, screen.question) },
   })
   const input = inputs.input
   const deviceInput = inputs.deviceInput
@@ -1054,6 +1066,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Questions an agent asks the person: shown on the dial and the window, answered from anywhere
   // (core/questions.ts).
   const asking = createQuestions({
+    readQuestion: screens.question,
     resolve: (id) => registry.resolve(id),
     terminal: terminalControl,
     acquireTerminalControl,
@@ -1199,6 +1212,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       engineReaders.connected(service)
       liveTransport.connected(service)
       runtimeTransport.connected(service)
+      screenTransport.connected(service)
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
@@ -1209,6 +1223,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       engineReaders.disconnected(service)
       liveTransport.disconnected(service)
       runtimeTransport.disconnected(service)
+      screenTransport.disconnected(service)
       if (service === 'gateway') gatewayLink?.disconnected()
       if (service === 'devices') devicesLink.disconnected()
       if (service === 'wifi') wifiCore.stopped()
@@ -1285,6 +1300,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.models = () => ports.models ?? MODELS_OFF
 
   const runtimeController = new RuntimeProfileController({
+    readScreen: screens.read,
     manager: runtimeProfiles,
     getSession: (id) => registry.resolve(id),
     validateRuntime: validateTerminal,
@@ -2180,6 +2196,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Moving a running agent onto a grid, or back to its own login (core/agents/retarget.ts).
   backend.onRetargetAgent = createAgentRetargeter({
+    readScreen: screens.read,
     purgeBusy: (agentId) => backend.purgeAgentService?.busy(agentId),
     tmuxBackend,
     registry,
@@ -2229,6 +2246,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.purgeProvider = createPurgeRequest({ purgeAgentService: () => lifecycle.purgeAgentService, invalidateStorage: () => { void (ports.monitor ?? MONITOR_OFF).storage([], true) } })
   // Closing agents no window shows, and the cleanup preview (core/agents/close.ts).
   const closing = createAgentClosing({
+    readScreen: screens.read,
     registry,
     cleanupTabs,
     watcher,

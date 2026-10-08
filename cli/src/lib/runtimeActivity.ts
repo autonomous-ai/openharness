@@ -1,8 +1,7 @@
 import { basename } from 'node:path'
 import { sessionCodexHome } from './engineHomes.js'
-import { terminalActivityReading } from './terminalActivity.js'
+import type { ScreenReader } from './screenReader.js'
 import { connectCodexControl, type CodexControl } from './codexSessionLifecycle.js'
-import { codexStoppedGoal } from './codexTurnRecovery.js'
 import { argvTokens, processRows, type ProcessRow } from './tmux.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import type { RegisteredSession } from './registry.js'
@@ -63,6 +62,7 @@ export class CodexActivityReader {
 export class RuntimeActivityReader {
   private readonly footers = new Map<string, { runtime: string; indicator: string | null; stopped: boolean }>()
   constructor(private readonly deps: {
+    readScreen: ScreenReader
     codex(session: RegisteredSession): Promise<ActivityState>
     capture(session: RegisteredSession): Promise<string | null>
   }) {}
@@ -74,8 +74,10 @@ export class RuntimeActivityReader {
     const screen = await this.deps.capture(session)
     const runtime = activityRuntimeKey(session)
     const previous = this.footers.get(session.sessionId)
-    const indicator = terminalActivityReading(session.engine, screen)?.indicator ?? null
-    const stopped = session.engine === 'codex' && codexStoppedGoal(screen)
+    const reading = await this.deps.readScreen(session, screen)
+    if (!reading) { this.footers.delete(session.sessionId); return 'unknown' }
+    const indicator = reading.activity?.indicator ?? null
+    const stopped = reading.stoppedGoal
     this.footers.set(session.sessionId, { runtime, indicator, stopped })
     if (previous?.runtime !== runtime) return 'unknown'
     if (stopped && previous.stopped) return 'idle'

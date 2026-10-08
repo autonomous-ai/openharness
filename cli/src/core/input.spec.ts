@@ -1,3 +1,4 @@
+import { readInlineScreen } from '../testing/inlineScreen.js'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -38,6 +39,7 @@ function deps(over: Partial<InputDeps> = {}) {
   const normalizer = { openTurn: vi.fn((text: string) => [{ type: 'turn_started', text }]) }
   let pane: string | null = READY_PANE
   const base: InputDeps = {
+    readScreen: readInlineScreen,
     resolve: (id) => agents.get(id),
     byAgent: (agentId) => agents.get(agentId),
     terminal: {
@@ -150,7 +152,7 @@ describe('the session input controller\'s dependencies', () => {
   it('reads the pane again right before the Enter, and gives the reason not to press it, a popup of the message\'s own aside', async () => {
     const screens = [READY_PANE, CLAUDE_PERMISSION, READY_PANE, null, READY_PANE, READY_PANE, `────────────\n❯ /mo\n────────────\n  /model   Set the AI model`]
     const answers: Array<string | null> = []
-    const write = messageWriter({
+    const write = messageWriter({ readScreen: deps().deps.readScreen,
       resolve: (id) => agents.get(id),
       terminal: {
         validateTerminal: vi.fn(async () => true),
@@ -178,7 +180,7 @@ describe('the session input controller\'s dependencies', () => {
     const order: string[] = []
     const promptTyped = vi.fn((session: { agentId: string }, capture: string | null) => { order.push(`prompt ${session.agentId} ${capture === READY_PANE}`) })
     const screens = [READY_PANE, CLAUDE_PERMISSION]
-    const write = messageWriter({
+    const write = messageWriter({ readScreen: deps().deps.readScreen,
       resolve: (id) => agents.get(id),
       terminal: {
         validateTerminal: vi.fn(async () => true),
@@ -199,7 +201,7 @@ describe('the session input controller\'s dependencies', () => {
     for (const screen of [null, '✻ Welcome to Claude Code']) {
       let reads = 0
       const answers: Array<string | null> = []
-      const write = messageWriter({
+      const write = messageWriter({ readScreen: deps().deps.readScreen,
         resolve: (id) => agents.get(id),
         terminal: {
           validateTerminal: vi.fn(async () => true),
@@ -232,6 +234,18 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.injectTeam!('a1', 'hi', 'd1')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'team_waiting_control' })
     expect(await wired.injectTeam!('a1', 'hi', 'd1')).toBe(ok)
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit a1 hi'])
+  })
+
+  it('holds team and device writes when an otherwise readable screen has no worker evidence', async () => {
+    const run = deps({ readScreen: async () => null })
+    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!)).toBe('team_waiting_unavailable')
+    expect(await wired.inject('a1', 'hello')).toMatchObject({ dispatch: 'not_started', reason: 'screen_unreadable' })
+    expect(await wired.injectTeam!('a1', 'hello', 'delivery')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_unavailable' })
+    const device = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
+    expect(await device.isAwaitingUser!(agents.get('a1')!)).toBe(true)
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    expect(run.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
   })
 
   it('reports an error to the app and, in the device\'s words, to the dial', () => {

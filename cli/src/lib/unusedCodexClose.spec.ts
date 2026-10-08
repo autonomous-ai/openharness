@@ -1,3 +1,4 @@
+import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -5,7 +6,7 @@ import { env } from '../config/env.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { stoppedAgents } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
-import { CloseAgentService, inspectCloseActivity } from './closeAgentService.js'
+import { CloseAgentService, inspectCloseActivity as inspectCloseReading } from './closeAgentService.js'
 import { createStopAgentService } from './stopAgentService.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { processRows } from './tmux.js'
@@ -151,3 +152,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('closes only the exited cl
     vi.unstubAllEnvs()
   }
 }, 15_000)
+
+function inspectCloseActivity(session: Parameters<typeof inspectCloseReading>[0], capture: string | null, turnOpen: boolean | undefined, needsInput: boolean) {
+  return inspectCloseReading(session, capture === null ? null : screenFor(session.engine).inspect(capture), turnOpen, needsInput)
+}

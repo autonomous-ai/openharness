@@ -1,3 +1,4 @@
+import { readInlineScreen } from '../testing/inlineScreen.js'
 import { CodexNormalizer } from '../engines/codex/normalizer.js'
 import { lineToEvents, newTurnState, type LiveEvent } from '../lib/normalize.js'
 import { randomUUID } from 'node:crypto'
@@ -29,7 +30,7 @@ function fixture(engine: 'claude' | 'codex' | 'commandcode' = 'codex') {
     submit: (id, text, delivery) => controller.submit(id, text, delivery), cancelDelivery: id => controller.cancelDelivery(id),
     stop: async () => true, answer: async () => true, recent: () => [], emit: frame => events.push(frame),
   })
-  const legacy: SessionInputController = new SessionInputController({
+  const legacy: SessionInputController = new SessionInputController({ readScreen: readInlineScreen,
     getSession: () => available ? session : undefined, validateRuntime: async () => available,
     inject: (id, text) => controller.legacyWrite(id, () => inject(id, text)),
     sendKey: (id, key) => controller.legacyWrite(id, () => sendKey(id, key)), capture, onError: vi.fn(),
