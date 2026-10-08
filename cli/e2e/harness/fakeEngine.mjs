@@ -16,8 +16,8 @@
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
 // interrupt then writes the tool's aborted output before the turn's end, as the CLIs do), `!ask` asks the person which drink they would like in the engine's own
-// dialog and answers with their choice (`!askmany`, Claude Code: which toppings, a multiSelect question
-// of six), `!permit <command>` asks permission to run a command the way
+// dialog and answers with their choice (Claude Code's "Type something." row takes a typed answer too;
+// `!askmany`, Claude Code: which toppings, a multiSelect question of six), `!permit <command>` asks permission to run a command the way
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
@@ -712,7 +712,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : engine === 'claude'
       ? [rule, ' ☐ Drink', '', QUESTION, '',
           ...CHOICES.flatMap(([label, description], i) => [`${mark(i, '❯')} ${i + 1}. ${label}`, `     ${description}`]),
-          '  3. Type something.', rule, '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
+          // Its free-text row: chosen, what is typed or pasted goes in under it, and Enter sends that.
+          `${mark(2, '❯')} 3. Type something.`, ...(dialog.typed === undefined ? [] : [`     ${dialog.typed}`]),
+          rule, '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
       : ['  Question 1/1 (1 unanswered)', `  ${QUESTION}`,
           ...CHOICES.map(([label, description], i) => `  ${mark(i, '›')} ${i + 1}. ${label.padEnd(7)} ${description}`),
           `  ${mark(2, '›')} 3. None of the above  Optionally, add details in notes (tab).`,
@@ -734,8 +736,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // Accept). In a question, Claude Code drops the paste the same way and Enter picks the focused option;
   // Codex takes a paste as notes on the focused option (request_user_input `handle_paste`) and Enter
   // submits it. Digits pick a row; Codex's `y` approves; arrows move; Esc declines or cancels.
-  const dialogKeys = (chunk) => {
-    for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
+  // A paste split across reads is one paste: its start is held until its end arrives.
+  let dialogPaste = ''
+  const dialogKeys = (input) => {
+    let chunk = dialogPaste + input
+    dialogPaste = ''
+    const opened = chunk.lastIndexOf('\x1b[200~')
+    if (opened >= 0 && chunk.indexOf('\x1b[201~', opened) < 0) { dialogPaste = chunk.slice(opened); chunk = chunk.slice(0, opened) }
+    for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[ABCD]|\x1b|\r|\n|\x7f|./gs) ?? []) {
       if (!dialog) return
       noteDialogKey(key)
       const settle = (choice) => {
@@ -767,6 +775,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
         } else if (key === '\t') { dialog.review = true; dialog.cursor = 0; drawDialog() }
         continue
       }
+      if (dialog.typed !== undefined) {
+        // Claude Code's free-text row, chosen: a paste or typing goes in, Enter sends it, Esc cancels.
+        if (key.startsWith('\x1b[200~')) { dialog.typed += key.slice(6).replace(/\x1b\[201~$/, ''); drawDialog() }
+        else if (key === '\x1b') settle(null)
+        else if (key === '\r' || key === '\n') { if (dialog.typed.trim()) settle(dialog.typed) }
+        else if (key === '\x7f') { dialog.typed = dialog.typed.slice(0, -1); drawDialog() }
+        else if (!key.startsWith('\x1b') && key >= ' ') { dialog.typed += key; drawDialog() }
+        continue
+      }
       const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
       if (key.startsWith('\x1b[200~')) {
         if (dialog.kind !== 'permit' && engine === 'codex') dialog.notes = key.slice(6).replace(/\x1b\[201~$/, '')
@@ -774,6 +791,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       }
       if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog(); continue }
       if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog(); continue }
+      if (dialog.kind !== 'permit' && engine === 'claude' && key === String(CHOICES.length + 1)) {
+        dialog.cursor = CHOICES.length
+        dialog.typed = ''
+        drawDialog()
+        continue
+      }
       if (dialog.kind === 'permit') {
         if (key === '\x1b') settle(null)
         else if (key === 'y' && engine === 'codex') settle(0)

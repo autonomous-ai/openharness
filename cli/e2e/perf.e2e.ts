@@ -6,13 +6,19 @@
  * Run alone. CPU is the core's process CPU (100% = one logical CPU), never the master's/children's.
  * PERF_READERS=1 additionally measures reader PIDs and history pages every 2 s; totals include them.
  * PERF_MODEL_CONTROLS=1 adds a window of alternating model changes in the two engine types.
+ * PERF_QUESTIONS=1 adds a window of questions asked and answered through `question_response`
+ * (e2e/harness/questionWork.ts): PERF_QUESTION_AGENTS (default all) agents ask again and again, Claude Code
+ * a choice, a multiSelect, a typed answer and a permission, Codex a choice and a permission. It measures the
+ * core and both engine workers (the workers without PERF_READERS' history pages), the master by `ps`, answer
+ * latency and errors, and compares every answer sent with the one the engine's transcript recorded.
+ * PERF_QUESTION_SECONDS (default PERF_SECONDS) is that window's length.
  * PERF_BUNDLE_SOURCE identifies an externally built baseline bundle; its bytes are hashed either way.
  * On macOS set HARNESS_PROCESS_IMAGES_ARTIFACT to a verified local build for release-like discovery.
  */
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { randomBytes, randomUUID, createHash } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
-import { cpus, platform, release, tmpdir, totalmem } from 'node:os'
+import { cpus, loadavg, platform, release, tmpdir, totalmem } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -21,6 +27,7 @@ import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until } from './harness/daemon.js'
 import { harnessdProcesses } from './harness/endurance.js'
 import { startPhoneMachine, type PhoneMachine } from './harness/fleet.js'
+import { askAndAnswer, compareAnswers, engineAnswers, QUESTION_KINDS, summarizeAnswers, type QuestionEngine, type QuestionOutcome } from './harness/questionWork.js'
 
 const sleep = (ms: number) => new Promise<void>(done => setTimeout(done, ms))
 const sha = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex')
@@ -30,6 +37,29 @@ function transcriptBytes(directory: string): number {
     const file = join(directory, entry.name)
     return bytes + (entry.isDirectory() ? transcriptBytes(file) : entry.isFile() && entry.name.endsWith('.jsonl') ? statSync(file).size : 0)
   }, 0)
+}
+/** The master's CPU and resident memory from `ps`: the probe runs in the core and the engine workers only. */
+const ps = (pid: number) => new Promise<{ cpuSeconds: number; rssBytes: number } | null>((done) => {
+  execFile('ps', ['-o', 'time=,rss=', '-p', String(pid)], { timeout: 3_000 }, (error, stdout) => {
+    const [time, rss] = String(stdout).trim().split(/\s+/)
+    if (error || !time || !rss) { done(null); return }
+    done({ cpuSeconds: time.split(':').reverse().reduce((sum, part, i) => sum + Number(part) * 60 ** i, 0), rssBytes: Number(rss) * 1024 })
+  })
+})
+function sampleProcess(pid: number) {
+  const startedAt = performance.now()
+  const rss: number[] = []
+  const first = ps(pid)
+  const timer = setInterval(() => { void ps(pid).then(sample => { if (sample) rss.push(sample.rssBytes) }) }, 1_000)
+  return async () => {
+    clearInterval(timer)
+    const [begin, end] = [await first, await ps(pid)]
+    const seconds = (performance.now() - startedAt) / 1000
+    if (end) rss.push(end.rssBytes)
+    return { pid, durationSeconds: seconds, source: 'ps (10 ms CPU resolution)',
+      cpu: { percent: begin && end ? 100 * (end.cpuSeconds - begin.cpuSeconds) / seconds : null },
+      memory: { rssMean: rss.length ? rss.reduce((a, b) => a + b, 0) / rss.length : null, rssMax: rss.length ? Math.max(...rss) : null, samples: rss.length } }
+  }
 }
 function knob(name: string, fallback: number, min: number, max: number): number {
   const n = Number(process.env[name] ?? fallback)
@@ -100,6 +130,11 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
     const historyMiB = knob('PERF_HISTORY_MIB', 1, 0, 8)
     const measureReaders = process.env.PERF_READERS === '1'
     const measureControls = process.env.PERF_MODEL_CONTROLS === '1'
+    const measureQuestions = process.env.PERF_QUESTIONS === '1'
+    const questionSeconds = knob('PERF_QUESTION_SECONDS', seconds, 10, 900)
+    const questionAgents = knob('PERF_QUESTION_AGENTS', agents, 2, agents)
+    // The engine workers' probes: with history pages (PERF_READERS), or for the question window, without.
+    const measureWorkers = measureReaders || measureQuestions
     const profile = process.env.PERF_PROFILE === '1'
     const heaps = process.env.PERF_HEAP === '1'
     const bundle = process.env.E2E_BUNDLE_PATH
@@ -118,10 +153,13 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         dirty: Boolean(git('status', '--porcelain')), bundleSource: process.env.PERF_BUNDLE_SOURCE ?? git('rev-parse', 'HEAD'), bundleSha256: sha(bundle), preloadSha256: sha(preload) },
       machine: { platform: platform(), release: release(), node: process.version, logicalCpus: cpus().length,
         cpu: cpus()[0]?.model, ramBytes: totalmem(), tmux: execFileSync('tmux', ['-V'], { encoding: 'utf8', timeout: 5_000 }).trim() },
-      workload: { modelControls: measureControls, readerPageEveryMs: measureReaders ? 2000 : null, agents, active, windows: 2, terminalStreams: 4, seconds, warmup, historyMiB,
+      workload: { modelControls: measureControls,
+        questions: measureQuestions ? { agents: questionAgents, seconds: questionSeconds, kinds: QUESTION_KINDS, answeredThrough: 'question_response from a local window, as the desktop app answers', retries: 0 } : null,
+        readerPageEveryMs: measureReaders ? 2000 : null, agents, active, windows: 2, terminalStreams: 4, seconds, warmup, historyMiB,
         turnDelayMs: '5000 + a unique round offset', inventoryEveryMs: 60_000, heartbeatEveryMs: 5_000, ackEveryMs: 16 },
       instrumentation: { profile, heaps, delayResolutionMs: 10, rssSampleEveryMs: 1_000, cpuPercentBasis: 'one logical CPU',
-        scope: measureReaders ? 'core PID and both reader PIDs; excludes master, other services, engines and tmux' : 'core PID only; excludes master, services, engines and tmux', heapPausesOutsideWindows: true },
+        scope: measureWorkers ? 'core PID and both engine worker PIDs (engine-claude, engine-codex) by in-process probe; the master by ps, reported separately; excludes other services, engines and tmux' : 'core PID only; the master by ps, reported separately; excludes services, engines and tmux', heapPausesOutsideWindows: true },
+      loadAverage: { start: loadavg() },
       nativeProcessImages: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
         ? { mode: 'embedded', artifactSha256: sha(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT) } : { mode: 'fallback' },
       limitations: ['Fake engines and a loopback fake backend; no real model latency or token streaming.',
@@ -134,7 +172,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
     let corePid: number | null = null
     try {
       machine = await startPhoneMachine({ env: { NODE_OPTIONS: nodeOptions.join(' '),
-        HARNESS_E2E_PERF_READERS: measureReaders ? '1' : '0', HARNESS_E2E_PERF_DIR: artifactDir, HARNESS_E2E_PERF_TOKEN: token } })
+        HARNESS_E2E_PERF_READERS: measureWorkers ? '1' : '0', HARNESS_E2E_PERF_DIR: artifactDir, HARNESS_E2E_PERF_TOKEN: token } })
       const d = machine.machine.daemon
       if (measureControls) writeFileSync(join(d.engineConfig.codexHome, 'models_cache.json'),
         readFileSync(join(CLI_ROOT, 'src/lib/__fixtures__/codex-home-0.160/models_cache.json')))
@@ -142,6 +180,10 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       if (!corePid) throw new Error('no owned core PID')
       report.corePid = corePid
       report.masterPid = d.pid
+      // Which engine controls the master gave this core to its workers (harnessd/services.ts
+      // `serviceProcessesEnv`): a build without isolated question control has no QUESTION_CONTROL entry.
+      const coreEnvironment = await new Promise<string>(done => execFile('ps', ['-E', '-ww', '-o', 'command=', '-p', String(corePid)], { timeout: 3_000 }, (error, stdout) => done(error ? '' : String(stdout))))
+      report.coreEngineCapabilities = Object.fromEntries([...coreEnvironment.matchAll(/\b(HARNESSD_ENGINE_[A-Z_]+)=(\d+:\d+)/g)].map(match => [match[1], match[2] === `${d.pid}:1`]))
       const readyFile = join(artifactDir, `core-${corePid}.json`)
       await until('the owned core performance probe', () => existsSync(readyFile), 10_000)
       const endpoint = JSON.parse(readFileSync(readyFile, 'utf8')) as { pid: number; port: number }
@@ -178,7 +220,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         client.send('message', { agentId: id, content })
         await ended
       }
-      const phase = async (label: string, turning: boolean, controlling = false) => {
+      const phase = async (label: string, turning: boolean, controlling = false, asking = false) => {
         await checkDesk()
         const before = windows.map(w => w.stats())
         const turns = Array.from({ length: turning ? active : 0 }, () => 0)
@@ -186,9 +228,13 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         const controlLatencies: Record<string, number[]> = { claude: [], codex: [] }
         let running = true
         let problem: unknown
-        const readers = measureReaders ? [...harnessdProcesses(d)].filter(([name]) => name.startsWith('engine-')) : []
+        const readers = measureWorkers ? [...harnessdProcesses(d)].filter(([name]) => name.startsWith('engine-')) : []
+        // On demand: with no agent yet (the empty desk) neither worker has started.
+        if (measureWorkers && saved.length) expect(readers.map(([name]) => name).sort()).toEqual(['engine-claude', 'engine-codex'])
         for (const [, pid] of readers) await until('reader performance probe', () => existsSync(join(artifactDir, `core-${pid}.json`)), 10_000)
+        const loadStart = loadavg()
         await Promise.all([probe('start', label), ...readers.map(([, pid]) => probe('start', label, pid))])
+        const masterEnd = sampleProcess(d.pid!)
         const readLatencies: number[] = []
         const reads = (async () => {
           while (measureReaders && saved.length && running) {
@@ -209,6 +255,18 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
             if (running) { turns[i]++; latencies.push(performance.now() - began) }
           }
         })
+        // Questions: each asking agent asks, the window answers it, and the turn ends, again and again. An agent
+        // whose answer did not go in still has its dialog up, so it stops asking; its errors are reported.
+        const answers: Array<QuestionOutcome & { agentId: string; completedAt: number }> = []
+        let windowEndedAt = Infinity
+        const askers = (asking ? saved.slice(0, questionAgents) : []).map(async (agent, index) => {
+          const kinds = QUESTION_KINDS[agent.engine as QuestionEngine]
+          for (let n = 0; running; n++) {
+            const outcome = await askAndAnswer(client, { id: agent.id, engine: agent.engine as QuestionEngine }, kinds[n % kinds.length], n, { token: `q${index}-${n}` })
+            answers.push({ ...outcome, agentId: agent.id, completedAt: performance.now() })
+            if (!outcome.ok) return
+          }
+        })
         const controls = (controlling ? saved.slice(0, active) : []).map(async agent => {
           let changes = 0
           while (running) {
@@ -226,14 +284,18 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         })
         let readerMetrics: Record<string, any>[] = []
         let metrics: Record<string, any>
-        try { await sleep(seconds * 1000) }
+        let master: Record<string, any> | null = null
+        try { await sleep((asking ? questionSeconds : seconds) * 1000) }
         finally {
           running = false
+          windowEndedAt = performance.now()
           const measured = await Promise.all([probe('end', label), ...readers.map(async ([name, pid]) => ({ name, ...await probe('end', label, pid) }))])
           metrics = measured[0]; readerMetrics = measured.slice(1)
+          master = await masterEnd()
         }
+        const loadEnd = loadavg()
         const after = windows.map(w => w.stats())
-        await Promise.all([...workers, ...controls, reads])
+        await Promise.all([...workers, ...controls, ...askers, reads])
         if (problem) throw problem
         expect(metrics!.cpu.percent).toBeGreaterThanOrEqual(0)
         expect(Number.isFinite(metrics!.cpu.percent)).toBe(true)
@@ -243,7 +305,21 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         if (controlling) for (const agent of saved.slice(0, active)) expect(controlLatencies[agent.engine].length).toBeGreaterThan(0)
         latencies.sort((a, b) => a - b)
         readLatencies.sort((a, b) => a - b)
-        report.phases.push({ ...metrics!, readers: readerMetrics,
+        let questions: Record<string, unknown> | null = null
+        if (asking) {
+          // What each engine took, from its transcript, against what was answered: none lost, none twice.
+          const ledger = saved.slice(0, questionAgents).map(agent => {
+            const mine = answers.filter(answer => answer.agentId === agent.id)
+            const seen = engineAnswers(d.root, agent.engine as QuestionEngine, agent.sessionId)
+            return { agentId: agent.id, engine: agent.engine, asked: mine.length, answered: mine.filter(answer => answer.ok).length,
+              ...compareAnswers(mine.filter(answer => answer.ok).map(answer => answer.expected!), seen) }
+          })
+          const inWindow = answers.filter(answer => answer.completedAt <= windowEndedAt)
+          questions = { summary: summarizeAnswers(answers), inWindow: { count: inWindow.length, summary: summarizeAnswers(inWindow) }, ledger,
+            errors: answers.flatMap(answer => answer.errors.map(error => `${answer.engine} ${answer.kind} ${answer.token}: ${error}`)),
+            samples: answers.map(({ sentAt, completedAt, ...answer }) => ({ ...answer, inWindow: completedAt <= windowEndedAt })) }
+        }
+        report.phases.push({ ...metrics!, readers: readerMetrics, master, loadAverage: { start: loadStart, end: loadEnd }, questions,
           modelControls: Object.fromEntries(Object.entries(controlLatencies).map(([engine, values]) => {
             values.sort((a, b) => a - b)
             return [engine, { count: values.length, p50Ms: values[Math.floor(values.length * .5)] ?? null, p95Ms: values[Math.floor(values.length * .95)] ?? null }]
@@ -294,6 +370,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       await phase('populated-idle', false)
       await phase('active', true)
       if (measureControls) await phase('model-control', false, true)
+      if (measureQuestions) await phase('questions', false, false, true)
       report.agents = saved
       report.state = 'passed'
     } catch (error) {
@@ -307,6 +384,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         await machine.close()
       }
       report.endedAt = new Date().toISOString()
+      report.loadAverage.end = loadavg()
       report.cpuProfiles = readdirSync(artifactDir).filter(name => name.endsWith('.cpuprofile') && name.includes(`.${corePid}.`))
         .map(name => ({ name, sha256: sha(join(artifactDir, name)), bytes: statSync(join(artifactDir, name)).size }))
       const missingProfile = profile && report.state === 'passed' && report.cpuProfiles.length === 0

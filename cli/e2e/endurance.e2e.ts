@@ -16,6 +16,12 @@
  *   the service comes back and serves again. At the end every turn sent was started once, in the order
  *   sent, and no tmux client or process of the daemon outlives it.
  *
+ * Questions are answered as the app answers them (e2e/harness/questionWork.ts): Claude Code a choice, a
+ * multiSelect through its review, a typed answer and a permission, Codex a choice and a permission. Each
+ * answer's result is awaited; a refused one is retried as a new intent, and every refusal is reported (a
+ * finding in the soak; in chaos, where an engine worker can be killed mid-answer, only an answer that never
+ * goes in is). At the end each engine's transcript must hold every answer that went in, once, in order.
+ *
  * `SOAK_OUT=<folder>` keeps the samples (CSV) and the report (JSON). `SOAK_SEED` picks the run.
  */
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
@@ -26,6 +32,7 @@ import { LocalClient, type Frame } from './harness/client.js'
 import { IsolatedDaemon, until } from './harness/daemon.js'
 import { Desk } from './harness/desk.js'
 import { alive, everyPid, forget, harnessdProcesses, slopes, startSampler, strays, tmuxClients, TurnLedger, type Sample } from './harness/endurance.js'
+import { askAndAnswer, compareAnswers, engineAnswers, QUESTION_KINDS, summarizeAnswers, type QuestionEngine, type QuestionOutcome } from './harness/questionWork.js'
 
 const ON = process.env.SOAK === '1'
 function knob(name: string, fallback: number, min: number, max: number): number {
@@ -105,6 +112,28 @@ async function wakeServices(client: LocalClient): Promise<void> {
 }
 
 interface Findings { lines: string[] }
+/** Every question asked in a run, and whether a refused answer is a finding (the soak) or expected (chaos). */
+interface Questions { outcomes: Array<QuestionOutcome & { agentId: string; at: string }>; refusalsAreFindings: boolean }
+
+/** What the questions came to: answered, refused, never answered, and each engine's own record of them. */
+async function questionReport(d: IsolatedDaemon, client: LocalClient, questions: Questions, engines: Map<string, QuestionEngine>) {
+  const rows = (await client.request('agents_list', {}, 30_000)).agents as Array<Record<string, any>>
+  const ledger = [...engines].map(([agentId, engine]) => {
+    const mine = questions.outcomes.filter(outcome => outcome.agentId === agentId)
+    const sessionId = String(rows.find(row => row.id === agentId)?.sessionId ?? '')
+    return { agentId, engine, asked: mine.length, answered: mine.filter(outcome => outcome.ok).length,
+      ...compareAnswers(mine.filter(outcome => outcome.ok).map(outcome => outcome.expected!), sessionId ? engineAnswers(d.root, engine, sessionId) : []) }
+  })
+  const outcomes = questions.outcomes
+  return {
+    asked: outcomes.length, answered: outcomes.filter(outcome => outcome.ok).length,
+    refusedThenAnswered: outcomes.filter(outcome => outcome.ok && outcome.errors.length).length,
+    neverAnswered: outcomes.filter(outcome => !outcome.ok).length,
+    refusals: outcomes.filter(outcome => outcome.errors.length).map(({ at, agentId, kind, token, attempts, errors, ok }) => ({ at, agentId, kind, token, attempts, errors, ok })),
+    lost: ledger.reduce((sum, row) => sum + row.lost, 0), duplicated: ledger.reduce((sum, row) => sum + row.duplicated, 0),
+    ledger, latency: summarizeAnswers(outcomes),
+  }
+}
 
 /** An agent's pane as it is now, kept beside the report (`SOAK_OUT`) once per agent and token. */
 async function keepPane(d: IsolatedDaemon, agentId: string, name: string): Promise<void> {
@@ -125,26 +154,38 @@ async function keepPane(d: IsolatedDaemon, agentId: string, name: string): Promi
 
 /** One agent's turns, one after another until `until`: plain, a tool call, a question answered, an
  *  interrupt, a flood of output; each carries a token the ledger checks. */
-async function agentLoop(d: IsolatedDaemon, agentId: string, tag: string, ledger: TurnLedger, deadline: () => boolean, rand: () => number, findings: Findings): Promise<number> {
+async function agentLoop(d: IsolatedDaemon, agentId: string, engine: QuestionEngine, tag: string, ledger: TurnLedger, deadline: () => boolean, rand: () => number, findings: Findings, questions: Questions): Promise<number> {
   const client = await LocalClient.connect(d)
   let n = 0
+  let asked = 0
   try {
     while (!deadline()) {
       const token = `soak-${tag}-${n++}`
       const pick = rand()
       const kind = pick < 0.5 ? 'plain' : pick < 0.65 ? 'tool' : pick < 0.78 ? 'ask' : pick < 0.93 ? 'interrupt' : 'flood'
-      const content = kind === 'plain' ? `${token} hello` : kind === 'tool' ? `!tool echo ${token}` : kind === 'ask' ? `!ask ${token}`
+      if (kind === 'ask') {
+        // Asked, answered through question_response, its result awaited and a refusal retried as a new intent.
+        const kinds = QUESTION_KINDS[engine]
+        ledger.send(agentId, token)
+        const outcome = await askAndAnswer(client, { id: agentId, engine }, kinds[asked % kinds.length], asked, { token, askMs: 60_000, endMs: 120_000, retries: 8 })
+        asked++
+        questions.outcomes.push({ ...outcome, agentId, at: new Date().toISOString() })
+        if (!outcome.ok || (outcome.errors.length && questions.refusalsAreFindings)) {
+          findings.lines.push(`${new Date().toISOString()} ${tag} ask ${outcome.kind} ${token}: ${outcome.errors.join('; ')}`)
+          await keepPane(d, agentId, `${tag}-${token}`)
+        }
+        // Never answered, its dialog is still up: this agent asks nothing more.
+        if (!outcome.ok) return n
+        forget(client)
+        await sleep(rand() * 1_500)
+        continue
+      }
+      const content = kind === 'plain' ? `${token} hello` : kind === 'tool' ? `!tool echo ${token}`
         : kind === 'interrupt' ? `!holdtool sleep-${token}` : `!flood ${token}`
       const ended = kind === 'interrupt' ? null : client.next(isTurn('turn_ended', agentId), 120_000, `turn_ended (${token})`)
-      const asked = kind === 'ask' ? client.next((frame) => frame.type === 'commander_question' && frame.agentId === agentId, 60_000, `question (${token})`) : null
       ledger.send(agentId, token)
       client.send('message', { agentId, content })
       try {
-        if (asked) {
-          const question = (await asked).payload ?? {}
-          const shaped = (question.questions as Array<{ q: string }> | undefined)?.[0]
-          client.send('question_response', { requestId: question.requestId, agentId, answers: shaped ? { [shaped.q]: 'Coffee' } : {} })
-        }
         if (kind === 'interrupt') {
           await client.next((frame) => frame.type === 'turn_started' && frame.agentId === agentId, 60_000, `turn_started (${token})`)
           await sleep(800 + rand() * 1_500)
@@ -230,6 +271,8 @@ async function dialLoop(desk: Desk, deadline: () => boolean, rand: () => number)
   return plugs
 }
 
+const engineOf = (index: number): QuestionEngine => index % 2 ? 'codex' : 'claude'
+
 async function createAgents(d: IsolatedDaemon, count: number): Promise<string[]> {
   const client = await LocalClient.connect(d)
   const ids: string[] = []
@@ -237,7 +280,7 @@ async function createAgents(d: IsolatedDaemon, count: number): Promise<string[]>
     for (let i = 0; i < count; i++) {
       const cwd = join(d.projectsDir, `soak-${i}`)
       mkdirSync(cwd, { recursive: true })
-      const created = await client.request('agent_create', { engine: i % 2 ? 'codex' : 'claude', cwd, bypassPermission: true }, 90_000)
+      const created = await client.request('agent_create', { engine: engineOf(i), cwd, bypassPermission: true }, 90_000)
       expect(created.error, JSON.stringify(created)).toBeUndefined()
       ids.push(created.agent.id)
     }
@@ -291,12 +334,13 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     const stopSampling = startSampler(d, SAMPLE_MS, join(OUT, 'soak-samples.csv'), samples)
     cleanup.push(stopSampling)
     const findings: Findings = { lines: [] }
+    const questions: Questions = { outcomes: [], refusalsAreFindings: true }
     const ends = Date.now() + SOAK_MINUTES * 60_000
     let stopping = false
     cleanup.push(() => { stopping = true })
     const deadline = () => stopping || Date.now() >= ends
     const [turns, windows, plugs] = await Promise.all([
-      Promise.all(agentIds.map((id, i) => agentLoop(d, id, `a${i}`, ledger, deadline, random(SEED + i + 1), findings))),
+      Promise.all(agentIds.map((id, i) => agentLoop(d, id, engineOf(i), `a${i}`, ledger, deadline, random(SEED + i + 1), findings, questions))),
       deskLoop(d, agentIds, deadline, random(SEED + 100), findings),
       dialLoop(desk, deadline, random(SEED + 200)),
     ])
@@ -304,15 +348,18 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     clearInterval(reading)
     await sleep(3_000)
     const differences = ledger.differences()
+    const asked = await questionReport(d, observer, questions, new Map(agentIds.map((id, i) => [id, engineOf(i)])))
     observer.close()
     const warmup = Math.min(10 * 60_000, (SOAK_MINUTES * 60_000) / 4)
     const growth = slopes(samples, warmup, Math.max(SAMPLE_MS * 4, 2 * 60_000))
-    const report = { minutes: SOAK_MINUTES, agents: AGENTS, turns: turns.reduce((sum, n) => sum + n, 0), windows, plugs, ledger: ledger.totals(), differences, findings: findings.lines, slopes: growth, coresStarted: d.coresStarted() }
+    const report = { minutes: SOAK_MINUTES, agents: AGENTS, turns: turns.reduce((sum, n) => sum + n, 0), windows, plugs, ledger: ledger.totals(), differences, questions: asked, findings: findings.lines, slopes: growth, coresStarted: d.coresStarted() }
     writeFileSync(join(OUT, 'soak-report.json'), JSON.stringify(report, null, 2))
     console.log(`soak report: ${join(OUT, 'soak-report.json')}\n${growth.map((s) => `${s.name}: ${s.first.toFixed(0)} → ${s.last.toFixed(0)} MiB, ${s.perHour?.toFixed(1) ?? 'unmeasured'} MiB/h; fds ${s.fdsFirst} → ${s.fdsLast}, ${s.fdsPerHour?.toFixed(1)}/h; restarts ${s.restarts}`).join('\n')}`)
     expect(d.coresStarted()).toBe(1)
     expect(differences).toEqual([])
     expect(findings.lines).toEqual([])
+    expect(asked.answered, 'no question answered').toBeGreaterThan(0)
+    expect(asked.ledger.filter(row => !row.equal)).toEqual([])
     expect(growth.map(p => p.name).sort()).toEqual(['master', 'core', ...Object.keys(PROBES)].sort())
     for (const process of growth) {
       expect(process.samples, `${process.name} sample count`).toBeGreaterThanOrEqual(2)
@@ -346,6 +393,9 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     const reading = setInterval(() => ledger.drain(), 1_000)
     cleanup.push(() => clearInterval(reading))
     const findings: Findings = { lines: [] }
+    // A killed engine worker fails the answer it was entering (it never resumes in a replacement), so a
+    // refusal here is expected; an answer that never goes in, or goes in twice, is not.
+    const questions: Questions = { outcomes: [], refusalsAreFindings: false }
     // The experiments and the devices, woken as the apps wake them, so their processes are in the run too.
     const waker = await LocalClient.connect(d)
     await desk.plug('CHAOS-DIAL', 'e2:e0:00:00:00:5b')
@@ -426,7 +476,7 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
       }
     })()
     const [turns] = await Promise.all([
-      Promise.all(agentIds.map((id, i) => agentLoop(d, id, `c${i}`, ledger, deadline, random(SEED + 2_000 + i), findings))),
+      Promise.all(agentIds.map((id, i) => agentLoop(d, id, engineOf(i), `c${i}`, ledger, deadline, random(SEED + 2_000 + i), findings, questions))),
       deskLoop(d, agentIds, deadline, random(SEED + 3_000), findings),
       chaos,
     ])
@@ -434,6 +484,7 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     clearInterval(reading)
     await sleep(3_000)
     const differences = ledger.differences()
+    const asked = await questionReport(d, observer, questions, new Map(agentIds.map((id, i) => [id, engineOf(i)])))
     observer.close()
     waker.close()
     await desk.unplug('CHAOS-DIAL')
@@ -441,13 +492,15 @@ describe.skipIf(!ON)('the daemon over time, every service in its own process', (
     const clients = await until('every tmux client to be let go', async () => ((await tmuxClients(d)) === 0 ? true : null), 30_000, 500).catch(async () => `still ${await tmuxClients(d)}`)
     const pids = everyPid(d)
     const growth = slopes(samples, 0, Math.max(SAMPLE_MS * 4, 2 * 60_000))
-    const report = { minutes: CHAOS_MINUTES, agents: AGENTS, turns: turns.reduce((sum, n) => sum + n, 0), events, ledger: ledger.totals(), differences, findings: findings.lines, slopes: growth, coresStarted: d.coresStarted(), tmuxClients: clients }
+    const report = { minutes: CHAOS_MINUTES, agents: AGENTS, turns: turns.reduce((sum, n) => sum + n, 0), events, ledger: ledger.totals(), differences, questions: asked, findings: findings.lines, slopes: growth, coresStarted: d.coresStarted(), tmuxClients: clients }
     writeFileSync(join(OUT, 'chaos-report.json'), JSON.stringify(report, null, 2))
     console.log(`chaos report: ${join(OUT, 'chaos-report.json')}: ${events.length} events, ${report.turns} turns`)
     expect(d.coresStarted()).toBe(1)
     expect(differences).toEqual([])
     expect(findings.lines).toEqual([])
     expect(events.length, 'no chaos event exercised').toBeGreaterThan(0)
+    expect(asked.answered, 'no question answered').toBeGreaterThan(0)
+    expect(asked.ledger.filter(row => !row.equal)).toEqual([])
     if (CHAOS_MINUTES >= 15) {
       expect(new Set(events.map(event => event.action))).toEqual(new Set(actions))
       expect(new Set(events.flatMap(event => event.targets as string[]))).toEqual(new Set(Object.keys(PROBES)))
