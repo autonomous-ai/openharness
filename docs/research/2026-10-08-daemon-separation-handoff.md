@@ -183,6 +183,27 @@ Item 3 is merged (#1066), so this can start. Record a golden of what it answers 
 - **Pane drivers in `runtimeControl.ts`:** the six unreachable ones are left in place (owner
   decision).
 
+## Left on branches and in the repo
+
+- **`claude-recovery/launch-port-l3-wip`** (7078138bf), an unfinished draft of L3's move.
+  - **It does not build,** and it is not for merging as is.
+  - **Its base** is L1's pre-review head, before #1068's held launches, which L3 must reuse.
+  - **Under it,** 699e252e8 is the L3 golden as first recorded. Re-record that from main before the move.
+  - **The draft holds:** a Store port (`services/storeLaunch.ts`, `dsh/launchWire.ts`),
+    `core/agents/dshThrough.ts`, and the Store waits at restore (`core/agents/storeWaits.ts`).
+  - **Use it** as a reference, or start fresh from `docs/design/2026-10-08-launch-port.md`.
+- **`claude-recovery/launch-port-dsh`** (a5b169d80): the same golden, recorded on main before #1068.
+- **`cli/scripts/handoff-2026-10-08/`** holds this work's scripts:
+  - the closure measure;
+  - the importer finder;
+  - the per-step mutation checks for the goldens;
+  - the landing script;
+  - the main-health watch.
+
+  Its README says how to run each.
+- **Not kept:** the validation receipts (`.harness/validation/`, git-ignored). Each PR body carries its
+  receipt's results.
+
 ## How the work is done here
 
 - **Golden first.**
