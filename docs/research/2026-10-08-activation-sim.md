@@ -54,6 +54,7 @@ vendor binaries, so their real login screens appear.
 | B2 | branch, CLI 9.0.2 preinstalled | B, signed in (fake) | yes | box opens on Claude Code; first message answered at once (fake) | none | second harness "Untitled Pane" (fixed e71fb2644) | — |
 | B3 | branch, CLI 9.0.2 preinstalled | B, not signed in, Anthropic blocked | no (network) | — | error now stays in the pane; recovery via the header's Change agent | — | — |
 | D1 | branch, CLI 9.0.2 preinstalled | D, both signed in (fake), Codex last | yes | box opens on Codex; answered within 12 s of Enter | none | — | — |
+| A5 | branch-2 (setup-time task, f8112ccd0), CLI release | A | yes | task typed and sent during setup at 21 s; first file at 70 s after opening, no further action (released CLI: grid still downloaded, OpenCode installed in the pane) | none | — | — |
 | B1 | branch, CLI release | B, Claude Code 2.1.294 installed, not signed in | no | — | default still OpenCode; picker shows no install state; Claude Code exited at start ("Unable to connect to Anthropic services", transient network) and its pane vanished: user back on an empty box with a stray "Terminal harness" | — | **~20** |
 
 ## Findings
@@ -122,6 +123,16 @@ vendor binaries, so their real login screens appear.
 ### D1 — Claude Code and Codex, both signed in, Codex used last (fake engines)
 
 16. The box opens on Codex; the first task reached it and the pane is named after it.
+
+### A5 — first task typed during setup
+
+17. The setup screen takes the first task ("While this finishes: what would you like to work on?").
+    Return queues it ("Starts as soon as this computer is ready.") and the first box starts it once
+    the machine has answered the engine probe; typing alone pre-fills the box (f8112ccd0).
+18. A run before it (A4) hung on a black window: the VM's `fseventsd` never answered, and the app
+    blocks its main thread in a Dart `Directory.watch` at launch (FSEventStreamStart). A fresh clone
+    was fine. On a real Mac with a stalled `fseventsd` the same black window would appear; worth
+    moving that watch off the first frame.
 
 ## Next
 
