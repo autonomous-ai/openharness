@@ -161,10 +161,15 @@ fn show(app: &mut App, message: &str, confirm: bool) -> bool {
     if confirm {
         let remaining: Vec<_> = op.targets.iter().filter(|t| !t.closed).collect();
         for t in remaining.iter().take(room.saturating_sub(1)) {
-            let state = match t.activity.as_str() {
-                "idle" => "Idle", "working" => "Working", "needs_input" => "Waiting for input", "draft" => "Unsent text", _ => "Activity unknown",
-            };
-            items.push(menu::note(&format!("{state} · {}", t.name)));
+            // (What it is doing, said as a sentence.)
+            let name = &t.name;
+            items.push(menu::note(&match t.activity.as_str() {
+                "idle" => format!("{name} is idle."),
+                "working" => format!("{name} is still working."),
+                "needs_input" => format!("{name} is waiting for your input."),
+                "draft" => format!("{name} has text you haven't sent."),
+                _ => format!("Not sure what {name} is doing right now."),
+            }));
         }
         let shown = items.len();
         if remaining.len() > shown { items.push(menu::note(&format!("and {} more", remaining.len() - shown))); }
