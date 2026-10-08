@@ -16,7 +16,8 @@
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
 // interrupt then writes the tool's aborted output before the turn's end, as the CLIs do), `!ask` asks the person which drink they would like in the engine's own
-// dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
+// dialog and answers with their choice (Claude Code's "Type something." row takes a typed answer too),
+// `!askmulti` (Claude Code) asks a multiSelect question answered through its review, `!permit <command>` asks permission to run a command the way
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
@@ -650,12 +651,23 @@ export async function run(engine, config = {}, { native = false } = {}) {
   let notes = ''
   const QUESTION = 'Which drink would you like?'
   const CHOICES = [['Tea', 'Lighter, steeped leaves.'], ['Coffee', 'Stronger, roasted beans.']]
+  // Claude Code's multiSelect question (`!askmulti`), as __fixtures__/question-multi.txt draws it, and the
+  // review its Tab reaches (question-review.txt).
+  const TOPPINGS_QUESTION = 'Which toppings do you want?'
+  const TOPPINGS = [['Cheese', 'Melted and savory.'], ['Ham', 'Salty cured meat.'], ['Basil', 'Fresh herb, aromatic.']]
   const drawDialog = () => {
     const rule = '─'.repeat(60)
     const mark = (i, on) => (dialog.cursor === i ? on : ' ')
     // A permission prompt, as the CLIs draw one (__fixtures__/permission-claude.txt, permission-codex.txt).
     const command = dialog.command
-    const lines = dialog.kind === 'permit' ? (engine === 'claude'
+    const toppings = () => TOPPINGS.filter((_, i) => dialog.checked[i]).map(([label]) => label).join(', ')
+    const lines = dialog.kind === 'multi' ? (dialog.review
+      ? [rule, `←  ${toppings() ? '☒' : '☐'} Toppings  ✔ Submit  →`, '', 'Review your answers', '', ` ● ${TOPPINGS_QUESTION}`, `   → ${toppings()}`, '',
+          'Ready to submit your answers?', '', `${mark(0, '❯')} 1. Submit answers`, `${mark(1, '❯')} 2. Cancel`]
+      : [rule, '←  ☐ Toppings  ✔ Submit  →', '', TOPPINGS_QUESTION, '',
+          ...TOPPINGS.flatMap(([label, description], i) => [`${mark(i, '❯')} ${i + 1}. [${dialog.checked[i] ? '✔' : ' '}] ${label}`, `  ${description}`]),
+          `${mark(3, '❯')} 4. [ ] Type something`, '     Submit', rule, '  5. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel'])
+      : dialog.kind === 'permit' ? (engine === 'claude'
       ? [rule, ' Bash command', `   ${command}`, '   Run the command', ' This command requires approval', ' Do you want to proceed?',
           ...['Yes', `Yes, and don’t ask again for: ${command} *`, 'No'].map((label, i) => `${dialog.cursor === i ? ' ❯ ' : '   '}${i + 1}. ${label}`),
           ' Esc to cancel · Tab to amend · ctrl+e to explain']
@@ -665,7 +677,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : engine === 'claude'
       ? [rule, ' ☐ Drink', '', QUESTION, '',
           ...CHOICES.flatMap(([label, description], i) => [`${mark(i, '❯')} ${i + 1}. ${label}`, `     ${description}`]),
-          '  3. Type something.', rule, '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
+          // Its free-text row: chosen, what is typed or pasted goes in under it, and Enter sends that.
+          `${mark(2, '❯')} 3. Type something.`, ...(dialog.typed === undefined ? [] : [`     ${dialog.typed}`]),
+          rule, '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
       : ['  Question 1/1 (1 unanswered)', `  ${QUESTION}`,
           ...CHOICES.map(([label, description], i) => `  ${mark(i, '›')} ${i + 1}. ${label.padEnd(7)} ${description}`),
           `  ${mark(2, '›')} 3. None of the above  Optionally, add details in notes (tab).`,
@@ -687,8 +701,14 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // Accept). In a question, Claude Code drops the paste the same way and Enter picks the focused option;
   // Codex takes a paste as notes on the focused option (request_user_input `handle_paste`) and Enter
   // submits it. Digits pick a row; Codex's `y` approves; arrows move; Esc declines or cancels.
-  const dialogKeys = (chunk) => {
-    for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
+  // A paste split across reads is one paste: its start is held until its end arrives.
+  let dialogPaste = ''
+  const dialogKeys = (input) => {
+    let chunk = dialogPaste + input
+    dialogPaste = ''
+    const opened = chunk.lastIndexOf('\x1b[200~')
+    if (opened >= 0 && chunk.indexOf('\x1b[201~', opened) < 0) { dialogPaste = chunk.slice(opened); chunk = chunk.slice(0, opened) }
+    for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[ABCD]|\x1b|\r|\n|\x7f|./gs) ?? []) {
       if (!dialog) return
       const settle = (choice) => {
         // An old dialog can survive in tmux scrollback after a redraw/resize, as in the chaos run.
@@ -697,6 +717,32 @@ export async function run(engine, config = {}, { native = false } = {}) {
         else eraseDialog()
         const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice)
       }
+      if (dialog.kind === 'multi') {
+        // Claude Code's multiSelect: a digit toggles its row, Enter the focused one; Tab (or →) goes on to the
+        // review, whose 1 submits and 2 cancels. Esc cancels. A paste is dropped.
+        if (key === '\x1b') settle(null)
+        else if (dialog.review) {
+          if (key === '\x1b[B' || key === '\x1b[A') { dialog.cursor = key === '\x1b[B' ? 1 : 0; drawDialog() }
+          else if (key === '1' || ((key === '\r' || key === '\n') && dialog.cursor === 0)) settle(TOPPINGS.filter((_, i) => dialog.checked[i]).map(([label]) => label).join(', ') || null)
+          else if (key === '2' || key === '\r' || key === '\n') settle(null)
+        } else if (key === '\t' || key === '\x1b[C') { dialog.review = true; dialog.cursor = 0; drawDialog() }
+        else if (key === '\x1b[B' || key === '\x1b[A') { dialog.cursor = Math.max(0, Math.min(TOPPINGS.length - 1, dialog.cursor + (key === '\x1b[B' ? 1 : -1))); drawDialog() }
+        else if (/^[1-3]$/.test(key) || ((key === '\r' || key === '\n') && dialog.cursor < TOPPINGS.length)) {
+          if (/^[1-3]$/.test(key)) dialog.cursor = Number(key) - 1
+          dialog.checked[dialog.cursor] = !dialog.checked[dialog.cursor]
+          drawDialog()
+        }
+        continue
+      }
+      if (dialog.typed !== undefined) {
+        // Claude Code's free-text row, chosen: a paste or typing goes in, Enter sends it, Esc cancels.
+        if (key.startsWith('\x1b[200~')) { dialog.typed += key.slice(6).replace(/\x1b\[201~$/, ''); drawDialog() }
+        else if (key === '\x1b') settle(null)
+        else if (key === '\r' || key === '\n') { if (dialog.typed.trim()) { dialog.free = true; settle(dialog.typed) } }
+        else if (key === '\x7f') { dialog.typed = dialog.typed.slice(0, -1); drawDialog() }
+        else if (!key.startsWith('\x1b') && key >= ' ') { dialog.typed += key; drawDialog() }
+        continue
+      }
       const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
       if (key.startsWith('\x1b[200~')) {
         if (dialog.kind !== 'permit' && engine === 'codex') dialog.notes = key.slice(6).replace(/\x1b\[201~$/, '')
@@ -704,6 +750,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       }
       if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog(); continue }
       if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog(); continue }
+      if (dialog.kind !== 'permit' && engine === 'claude' && key === String(CHOICES.length + 1)) {
+        dialog.cursor = CHOICES.length
+        dialog.typed = ''
+        drawDialog()
+        continue
+      }
       if (dialog.kind === 'permit') {
         if (key === '\x1b') settle(null)
         else if (key === 'y' && engine === 'codex') settle(0)
@@ -1253,6 +1305,23 @@ export async function run(engine, config = {}, { native = false } = {}) {
         say(`• ${QUESTION} → ${choice}\r\n`)
       }
       await finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'askmulti') {
+      // Claude Code's multiSelect AskUserQuestion: rows toggled, then Tab to its review and Submit there.
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+      const choice = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'multi', cursor: 0, drawn: 0, checked: TOPPINGS.map(() => false), review: false, resolve }; drawDialog() })
+      if (choice === null) {
+        say('(question cancelled)\r\n')
+        await finish('(question cancelled)')
+        return
+      }
+      const id = `toolu_${turn}`
+      const questions = [{ question: TOPPINGS_QUESTION, header: 'Toppings', multiSelect: true, options: TOPPINGS.map(([label, description]) => ({ label, description })) }]
+      claude({ type: 'assistant', message: { id: `msg_${turn}_q`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }], stop_reason: 'tool_use' } })
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `User has answered your questions: "${TOPPINGS_QUESTION}"="${choice}"` }] } })
+      say(`⏺ User answered Claude's questions:\r\n  ⎿  · ${TOPPINGS_QUESTION} → ${choice}\r\n`)
+      await finish(`you chose ${choice}`)
       return
     }
     if (engine === 'codex' && directive?.[1] === 'askasync') {
