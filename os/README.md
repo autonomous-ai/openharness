@@ -79,7 +79,9 @@ for requirements and remaining work.
 
 ## Connected accounts
 
-Run `harness connections` to open the local Connections page. Connect GitHub,
+Open **Connections** from the browser's New Tab page, or run `harness connections`.
+The local start page is removable in Chromium's extension settings and preserves
+existing New Tab customizations. Connect GitHub,
 Notion, Linear, Asana or Figma with a personal token, then any local agent can
 use the account through the same CLI. Tokens stay outside projects and agent
 configuration. No Intern hardware or device registration is required.

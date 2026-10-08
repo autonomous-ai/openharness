@@ -11,9 +11,11 @@ choose another New Tab extension. Chromium remembers removal across OS updates.
 
 The extension has only `nativeMessaging` permission. It has no network access,
 content scripts, history, tab or bookmark permissions. Clicking
-Connections starts a short-lived native host which accepts exactly one action
-from the exact extension origin. The host authenticates or starts the existing
-per-user Connections helper and returns its temporary capability URL. There is
+Connections starts a short-lived native host which accepts only the Connections
+action or install acknowledgment from the exact extension origin. The host
+authenticates or starts the existing per-user Connections helper and opens its
+temporary capability URL through the OS browser launcher. The page opens in a
+new tab; no capability is sent back to the extension. There is
 no fixed local port, unauthenticated credential endpoint or shell-command bridge.
 
 On a never-used default profile only, a temporary headless Chromium process lets

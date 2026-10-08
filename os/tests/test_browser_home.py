@@ -8,6 +8,7 @@ import struct
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -55,8 +56,17 @@ class BrowserHome(unittest.TestCase):
     def test_only_explicit_connections_action_can_start_helper(self):
         status, result = self.invoke(message({'action': 'connections'}))
         self.assertEqual(status, 0)
-        self.assertEqual(result, {'url': self.launch.return_value})
+        self.assertEqual(result, {'ok': True})
         self.launch.assert_called_once_with()
+
+    def test_native_open_uses_os_launcher_without_exposing_capability(self):
+        local = SimpleNamespace(page_url=self.launch)
+        with patch.dict(host.sys.modules, {'connections': local}), patch.object(host.sys, 'path', list(host.sys.path)), patch.object(host.subprocess, 'run') as run:
+            host.open_connections()
+        run.assert_called_once_with(['/usr/bin/hn-browser', self.launch.return_value],
+                                    check=True, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=30)
 
     def test_other_origins_cannot_invoke_helper(self):
         for origin in ['https://example.com/', 'chrome-extension://' + 'b' * 32 + '/', self.origin + '?x']:

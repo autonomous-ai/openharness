@@ -7,10 +7,22 @@ Chromium starts this only for the bundled extension's native message.
 import json
 from pathlib import Path
 import struct
+import subprocess
 import sys
 
 MAX_MESSAGE = 1024
 HOST_MANIFEST = Path('/etc/chromium/native-messaging-hosts/ai.autonomous.harness_home.json')
+
+
+def open_connections():
+    sys.path.insert(0, '/usr/lib/harness-os/connections')
+    import connections
+    # Keep the capability inside the native path. Browser-initiated navigation
+    # is cross-site; the existing OS launcher opens a trusted local tab without
+    # weakening the Connections server's fetch/origin restrictions.
+    subprocess.run(['/usr/bin/hn-browser', connections.page_url()], check=True,
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL, timeout=30)
 
 
 def read_message(stream):
@@ -49,10 +61,9 @@ def main(argv, source, destination, *, manifest=HOST_MANIFEST, launch=None, read
             reply(destination, {'ok': True})
             return 0
         if launch is None:
-            sys.path.insert(0, '/usr/lib/harness-os/connections')
-            import connections
-            launch = connections.page_url
-        reply(destination, {'url': launch()})
+            launch = open_connections
+        launch()
+        reply(destination, {'ok': True})
         return 0
     except Exception:
         # Never relay exception text, account names or local paths to the browser.

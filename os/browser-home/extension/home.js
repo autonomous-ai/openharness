@@ -8,17 +8,11 @@ connections.addEventListener("click", async () => {
   notice.textContent = "Opening Connections…";
   try {
     const response = await chrome.runtime.sendNativeMessage("ai.autonomous.harness_home", {action: "connections"});
-    // The native host supplies only this user's authenticated loopback page.
-    // Never turn a host response into an arbitrary browser navigation.
-    const url = new URL(response.url);
-    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" ||
-        Number(url.port) < 1024 || Number(url.port) > 65535 || url.pathname !== "/" ||
-        url.search || url.username || url.password || !/^#[A-Za-z0-9_-]{43}$/.test(url.hash)) {
-      throw new Error("Invalid local page");
-    }
-    window.location.assign(url.href);
+    if (response.ok !== true) throw new Error("Could not open local page");
+    notice.textContent = "Opened in a new tab.";
   } catch {
     notice.textContent = "Couldn’t open Connections. Try again, or ask your agent to open Connections.";
+  } finally {
     connections.disabled = false;
     connections.focus();
   }
