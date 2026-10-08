@@ -340,7 +340,9 @@ describe('buildEngineLaunchArgv', () => {
       const runs = lines.filter((line) => /"\$harness_engine_bin"(?: \$\{harness_codex_no_daemon:\+--no-daemon\})? "\$@" \|\| harness_status=\$\?$/.test(line.trim()))
       expect(runs.length).toBe(name.startsWith('codex, run again') || name.startsWith('codex installed') ? 4 : 1)
       for (const run of runs) expect(run).toMatch(/^(?:\[ "\$harness_codex_go" != 1 \] \|\| )?"\$harness_engine_bin"/)
-      for (const install of lines.filter((line) => line.includes('eval '))) expect(install).toMatch(/^(?:\[ -n "\$harness_engine_bin" \] \|\| )?\((?:export npm_config_prefix=.*; )?eval /)
+      // The friendly install (its progress on screen, the installer's output in a log) is the same
+      // install in a pipeline inside one more top-level subshell, behind the same guards.
+      for (const install of lines.filter((line) => line.includes('eval '))) expect(install).toMatch(/^(?:\[ -n "\$harness_engine_bin" \] \|\| )?(?:\[ "\$harness_quiet" -eq [01] \] \|\| )?(?:\( \( )?\((?:export npm_config_prefix=.*; )?eval /)
       // What follows each run is the resume, at the top level too.
       for (const run of runs) expect(lines[lines.indexOf(run) + 1]).toBe('harness_resume')
     })
@@ -1364,8 +1366,55 @@ describe('buildEngineLaunchArgv with installIfMissing', () => {
     command: string,
     executable: EngineInstallRecipe['executable'] = { names: ['harness-no-such-engine'] },
   ): EngineInstallRecipe => ({ command, source: 'test fixture', executable })
-  const script = (install: EngineInstallRecipe, runtimeNode?: string): string =>
+  // No Harness Node unless a test names one: these check the plain install, which shows the installer
+  // itself. The friendly one, which needs Node for its progress, has its own tests below.
+  const script = (install: EngineInstallRecipe, runtimeNode = '/nonexistent/harness-node'): string =>
     buildEngineLaunchArgv('opencode', { installIfMissing: install }, '/bin/zsh', runtimeNode)[4]
+
+  describe('the friendly install: plain lines and a bar on screen, the installer in a log', () => {
+    let home = ''
+    beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'harness-friendly-install-')); dirs.push(home) })
+    const friendly = (install: EngineInstallRecipe, firstPrompt?: string): string =>
+      buildEngineLaunchArgv('opencode', { installIfMissing: install, ...(firstPrompt ? { firstPrompt } : {}) }, '/bin/zsh', process.execPath)[4]
+    const run = (paneScript: string) => runPaneScript(paneScript, 'harness-no-such-engine', { ...process.env, HOME: home })
+    const log = () => readFileSync(join(home, '.harness', 'logs', 'install-opencode.log'), 'utf8')
+
+    it('shows what is happening without the installer, and keeps the installer\'s output in the log', async () => {
+      const result = await run(friendly(recipe("printf 'npm notice New major version of npm available!\\n'")))
+      expect(result.stdout).toContain('Installing OpenCode…')
+      expect(result.stdout).toMatch(/[█░]{24}/)
+      expect(result.stdout).not.toContain('npm notice')
+      expect(result.stdout).not.toContain('engine is missing')
+      expect(result.stdout).not.toContain('Your message goes as soon as it starts.')
+      expect(log()).toContain('npm notice New major version of npm available!')
+    })
+
+    it('says the first message is waiting when there is one', async () => {
+      const result = await run(friendly(recipe('true'), 'make a web page'))
+      expect(result.stdout).toContain('Your message goes as soon as it starts.')
+    })
+
+    it('a failed install says so, with the last of the log and where the rest is', async () => {
+      const result = await run(friendly(recipe("printf 'E404 not found: fixture\\n'; exit 3")))
+      expect(result).toMatchObject({ code: 1, ranEngine: false })
+      expect(result.stdout).toContain('OpenCode could not be installed.')
+      expect(result.stdout).toContain('E404 not found: fixture')
+      expect(result.stdout).toContain(`Full details: ${join(home, '.harness', 'logs', 'install-opencode.log')}`)
+      expect(result.stdout).not.toContain('The command is above')
+    })
+
+    it('runs the engine after an install that put it in place', async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'harness-friendly-engine-'))
+      dirs.push(dir)
+      const source = join(dir, 'source-engine')
+      const installed = join(dir, 'new-engine')
+      writeFileSync(source, '#!/bin/sh\n/usr/bin/printf "%s" "$1"\n')
+      chmodSync(source, 0o700)
+      const result = await run(friendly(recipe(`cp ${JSON.stringify(source)} ${JSON.stringify(installed)}`, { names: ['harness-no-such-engine'], absolutePaths: [installed] })))
+      expect(result).toMatchObject({ code: 0, ranEngine: true })
+      expect(result.stdout).toContain('Installing OpenCode…')
+    })
+  })
 
   it('execs an installed engine without running the installer', async () => {
     await expect(runPaneScript(script(recipe('false')))).resolves.toMatchObject({ code: 0, ranEngine: true })
