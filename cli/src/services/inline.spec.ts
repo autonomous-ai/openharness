@@ -1,3 +1,4 @@
+import { modelControlFor } from '../engines/modelControls.js'
 import { screenFor } from '../engines/screens.js'
 import { describe, expect, it } from 'vitest'
 import { engineTranscriptFor } from '../engines/transcripts.js'
@@ -26,6 +27,6 @@ import { startWorkspaces } from './workspaces.js'
 
 describe('the services the core runs in its own process only when they do not run in theirs', () => {
   it('are their own starts, unchanged: the same services either way', () => {
-    expect({ ...inline }).toEqual({ engineTranscriptFor, liveFor, runtimeFor, screenFor, startCommandBar, startDevices, startHandoff, startGateway, startModels, startMonitor, startOrchestrator, startProjects, startRecaps, startSearch, startSharing, startShell, startStore, startTeamsInCore, startUsage, startViewers, startWifi, startWindowNames, startWorkspaces })
+    expect({ ...inline }).toEqual({ engineTranscriptFor, liveFor, runtimeFor, screenFor, modelControlFor, startCommandBar, startDevices, startHandoff, startGateway, startModels, startMonitor, startOrchestrator, startProjects, startRecaps, startSearch, startSharing, startShell, startStore, startTeamsInCore, startUsage, startViewers, startWifi, startWindowNames, startWorkspaces })
   })
 })
