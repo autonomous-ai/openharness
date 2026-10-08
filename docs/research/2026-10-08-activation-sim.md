@@ -238,7 +238,13 @@ restored every harness with no prompt.
     `~/.config/opencode` for Harness's TUI plugin), then the turn ~5 s. `opencode models`,
     `debug config` and `agent list` do none of that first-start work, and `opencode serve` creates
     the database and model list but not the plugin install, so pre-warming it would lean on OpenCode
-    internals; not done. The screenshots of the whole flow are in
+    internals; not done. Measured in tmux on the VM, fresh home each time: OpenCode's first start
+    drew its composer after 3.1–4.9 s without Harness's plugins and 8.4–8.8 s with them, because a config
+    folder holding plugins makes OpenCode install `@opencode-ai/plugin` (26 packages) first. So Harness's
+    discovery plugins cost ~4–5 s of a new user's first result. `OPENCODE_FAST_BOOT` only skips the TUI's
+    loading screen (`skipInitialLoading`), not that install. Options, not taken: install those packages
+    ahead (they track OpenCode's version), or register the plugins some other way than the global config
+    folder (but that folder is what lets Harness discover OpenCode sessions started outside it). The screenshots of the whole flow are in
     `docs/research/2026-10-08-onboarding-flow/index.html`.
 
 ## Next
