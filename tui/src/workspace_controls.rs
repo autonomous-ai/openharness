@@ -70,6 +70,8 @@ pub fn title(buf: &mut Buffer, app: &App, pane: u64, rect: Rect, style: Style) -
 }
 
 /// The line look's title is the divider: only its first [width] cells (the name) drag the pane.
+/// (Your own pane-border-format: one that starts with #[align=…] draws no leading cells, so no
+/// grip; one that fills the whole line makes all of it a grip.)
 pub fn name_span(app: &App, pane: u64, width: u16) {
     let mut grips = app.controls.grips.borrow_mut();
     let Some(i) = grips.iter().position(|(_, p)| *p == pane) else { return };
@@ -490,10 +492,48 @@ pub(crate) mod tests {
         send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
         send(&mut app, MouseEventKind::Drag(MouseButton::Left), g.x + 1, g.y + 3);
         assert!(live(&app));
+        let typed = app.panes[&1].queued.len();
         crate::input::handle(&mut app, Event::Key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE)));
         assert!(app.controls.grab.is_none());
+        assert_eq!(app.panes[&1].queued.len(), typed, "a visible drag uses the Escape up");
         send(&mut app, MouseEventKind::Up(MouseButton::Left), r2.x + 5, r2.y + 5);
         assert_eq!(app.tabs[0].panes(), order);
+    }
+
+    #[tokio::test]
+    async fn escape_during_an_unmoved_press_lets_go_and_still_reaches_the_program() {
+        let mut app = app(120);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        app.fit_panes(); render(&mut app);
+        let g = grip(&app, 1);
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        assert!(app.controls.grab.is_some() && !live(&app));
+        let typed = app.panes[&1].queued.len();
+        crate::input::handle(&mut app, Event::Key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(app.panes[&1].queued.len() > typed, "the Escape reaches the program");
+        assert!(app.controls.grab.is_none());
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), g.x + 1, g.y + 3);
+        assert!(!live(&app), "a let-go press does not become a drag");
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), g.x + 1, g.y + 3);
+    }
+
+    #[tokio::test]
+    async fn the_surface_looks_whole_header_row_drags_the_pane() {
+        let mut app = app(100);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        app.options.set("@hn-focus", Some("surface"), &crate::options::SetFlags { global: true, ..Default::default() }, "", 0).unwrap();
+        app.fit_panes();
+        let buf = render(&mut app);
+        let title = hit(&app, Action::Header(1));
+        // the blank part of the header, right of the name and left of the … × controls
+        let x = title.right() - 8;
+        assert_eq!(buf[(x, title.y)].symbol(), " ", "this test needs a blank header cell right of the name");
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), x, title.y);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), x - 4, title.y + 3);
+        assert!(live(&app), "the surface look drags from the whole header row");
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), x - 4, title.y + 3);
     }
 
     #[tokio::test]

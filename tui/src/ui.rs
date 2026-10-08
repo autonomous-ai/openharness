@@ -525,7 +525,7 @@ fn pane_chrome(buf: &mut Buffer, app: &App) {
         let marker = if app.marked == Some(*id) { "◆" } else { " " };
         if title.width > 0 { if let Some(cell) = buf.cell_mut((title.x, title.y)) { cell.set_symbol(marker).set_style(style); } }
         let text = Rect::new(title.x + 1.min(title.width), title.y, title.width.saturating_sub(2), 1);
-        title_line(buf, app, *id, text, style);
+        title_line(buf, app, *id, text, style);   // (the whole header row drags the pane)
     }
 }
 
@@ -553,7 +553,9 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
         let style = border_style(app, t.active);
         let (x, y) = (body.x + t.x as u16, body.y + t.y as u16);
         for (k, g) in t.fill.iter().enumerate() { if let Some(cell) = buf.cell_mut((x + k as u16, y)) { cell.set_symbol(g).set_style(style); } }
-        title_line(buf, app, t.pane, Rect::new(x, y, t.width as u16, 1), style);
+        let name = title_line(buf, app, t.pane, Rect::new(x, y, t.width as u16, 1), style);
+        // (Only the name drags the pane: the line after it is the divider, which resizes.)
+        crate::workspace_controls::name_span(app, t.pane, name);
     }
 }
 
@@ -585,18 +587,18 @@ fn border_style(app: &App, active: bool) -> Style {
 /// name, its state symbol, and as far as the pane is wide, its project and branch), drawn as
 /// screen_redraw_make_pane_status draws it — format_draw over the border, so #[align=right],
 /// #[align=centre] and #[fill] place it as tmux does, the border showing wherever the format
-/// writes nothing.
-fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
-    if area.width == 0 { return }
+/// writes nothing. Returns how many leading cells the format drew (the name).
+fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) -> u16 {
+    if area.width == 0 { return 0 }
     let area = crate::workspace_controls::title(buf, app, id, area, style);
-    let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return };
+    let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return 0 };
     let expanded = crate::format::expand(app, &fmt, app.active, Some(id), true);
     let cells = crate::draw::format_draw_over(&expanded, style, area.width);
-    // (Only the name drags the pane: the line after it is the divider, which resizes.)
-    crate::workspace_controls::name_span(app, id, cells.iter().position(|c| c.is_none()).unwrap_or(cells.len()) as u16);
+    let drawn = cells.iter().position(|c| c.is_none()).unwrap_or(cells.len()) as u16;
     for (i, cell) in cells.into_iter().enumerate() {
         if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((area.x + i as u16, area.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
     }
+    drawn
 }
 
 // ── box panes ──

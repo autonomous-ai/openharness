@@ -27,7 +27,10 @@ pub fn handle(app: &mut App, event: CEvent) {
             // Escape lets go of a held pane (and is used up only when a drag was showing); the
             // release that follows still belongs to the header press.
             if key.code == KeyCode::Esc {
-                if let Some(live) = app.controls.grab.as_ref().map(|g| g.live) { crate::pane_drag::cancel(app); if live { return } }
+                if let Some(live) = app.controls.grab.as_ref().map(|g| g.live) {
+                    crate::pane_drag::cancel(app);
+                    if live { return }
+                }
             }
             let now = crate::app::epoch_secs();
             // (This client used now: a shell's command with no target comes here — each second.)
