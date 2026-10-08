@@ -1,4 +1,4 @@
-import { lastTurnTextFromRawLines, messagesToEvents, selectClaudeRecapLine } from '../../lib/normalize.js'
+import { lastTurnTextFromRawLines, messagesToEvents, selectClaudeRecapLine } from './normalize.js'
 import { tailFileUntil } from '../../lib/transcriptTail.js'
 import type { EngineTranscript } from '../facets/transcript.js'
 import { pagedHistory } from '../kit/history.js'

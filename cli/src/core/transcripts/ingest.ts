@@ -10,8 +10,7 @@
  */
 import { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import { AmpNormalizer } from '../../engines/amp/normalizer.js'
-import { CodexNormalizer, codexTaskError } from '../../engines/codex/normalizer.js'
-import { codexSubagentResolverFor } from '../../engines/codex/subagent.js'
+import type { LiveFor } from '../../engines/facets/live.js'
 import { CommandCodeNormalizer, commandCodeRunError, commandCodeRunErrorSummary } from '../../engines/commandcode/normalizer.js'
 import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
@@ -20,7 +19,7 @@ import { MuseNormalizer } from '../../engines/muse/normalizer.js'
 import { PiNormalizer } from '../../engines/pi/normalizer.js'
 import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
-import { lineToEvents, newTurnState, type LiveEvent } from '../../lib/normalize.js'
+import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { RuntimeProfileManager } from '../../lib/runtimeProfile.js'
 import type { HistoryEvent, LineEvent, RewrittenEvent, Watcher } from '../../watcher/watcher.js'
@@ -28,6 +27,7 @@ import type { SessionNormalizers } from './normalizers.js'
 import { createSideReads } from './sideReads.js'
 
 export interface IngestDeps {
+  liveFor: LiveFor
   has: (sessionId: string) => boolean
   bySession: (sessionId: string) => RegisteredSession | undefined
   tokenUsage: { changed(session: RegisteredSession): void }
@@ -41,10 +41,10 @@ export interface IngestDeps {
 }
 
 export function createIngest({
-  has, bySession, tokenUsage, device, runtimeProfiles, normalizers, announceTurnAborted, emit, attachSession,
+  liveFor, has, bySession, tokenUsage, device, runtimeProfiles, normalizers, announceTurnAborted, emit, attachSession,
 }: IngestDeps) {
   const {
-    turnStates, codexNormalizers, cursorNormalizers, museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers,
+    liveParsers, cursorNormalizers, museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers,
     copilotNormalizers, piNormalizers, commandcodeNormalizers,
   } = normalizers
   const sideRead = createSideReads()
@@ -64,16 +64,14 @@ export function createIngest({
       }
     })
     sideRead('runtime profile', evt.sessionId, () => runtimeProfiles.ingest(session, evt.text))
-    let events
-    if (session.engine === 'codex') {
-      let normalizer = codexNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new CodexNormalizer('live', codexSubagentResolverFor(session.codexHome)); codexNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
-      // Codex rides its failure ON task_complete, so the turn closes by itself — but with no text and
-      // no reason, which reads as "the agent answered nothing". Announce the reason ahead of the
-      // turn_ended that `events` carries.
-      const taskError = codexTaskError(evt.text)
-      if (taskError !== null) announceTurnAborted(evt.sessionId, 'codex', taskError)
+    let events: LiveEvent[]
+    const adapter = liveFor(session.engine)
+    if (adapter) {
+      let parser = liveParsers.get(evt.sessionId)
+      if (!parser || parser.engine !== session.engine) { parser = adapter.create(session); liveParsers.set(evt.sessionId, parser) }
+      const read = parser.ingest(evt.text)
+      events = read.events
+      if (read.failure !== undefined) announceTurnAborted(evt.sessionId, session.engine, read.failure)
     } else if (session.engine === 'cursor') {
       let normalizer = cursorNormalizers.get(evt.sessionId)
       if (!normalizer) {
@@ -117,9 +115,7 @@ export function createIngest({
         announceTurnAborted(evt.sessionId, 'commandcode', runError, commandCodeRunErrorSummary(runError))
       }
     } else {
-      let st = turnStates.get(evt.sessionId)
-      if (!st) { st = newTurnState(); turnStates.set(evt.sessionId, st) }
-      events = lineToEvents(evt.text, st)
+      events = []
     }
     return events
   }

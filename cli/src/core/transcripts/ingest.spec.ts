@@ -1,8 +1,8 @@
+import { liveFor } from '../../engines/live.js'
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import { AmpNormalizer } from '../../engines/amp/normalizer.js'
-import { CodexNormalizer } from '../../engines/codex/normalizer.js'
 import { CommandCodeNormalizer } from '../../engines/commandcode/normalizer.js'
 import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
@@ -24,6 +24,7 @@ function setup(engines: Record<string, string>, over: Partial<IngestDeps> = {}) 
   const normalizers = createSessionNormalizers()
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const deps: IngestDeps = {
+    liveFor,
     has: (sessionId) => sessions.has(sessionId),
     bySession: (sessionId) => sessions.get(sessionId),
     tokenUsage: { changed: vi.fn() },
@@ -102,12 +103,12 @@ describe('ingesting a transcript line', () => {
 
   it('creates each file engine\'s normalizer on the session\'s first line, and keeps it', () => {
     const engines = {
-      codex: CodexNormalizer, cursor: CursorNormalizer, muse: MuseNormalizer, amp: AmpNormalizer, grok: GrokNormalizer,
+      cursor: CursorNormalizer, muse: MuseNormalizer, amp: AmpNormalizer, grok: GrokNormalizer,
       agy: AgyNormalizer, copilot: CopilotNormalizer, pi: PiNormalizer, commandcode: CommandCodeNormalizer,
     } as const
     const run = setup(Object.fromEntries(Object.keys(engines).map((engine) => [engine, engine])))
     const maps = {
-      codex: run.normalizers.codexNormalizers, cursor: run.normalizers.cursorNormalizers, muse: run.normalizers.museNormalizers,
+      cursor: run.normalizers.cursorNormalizers, muse: run.normalizers.museNormalizers,
       amp: run.normalizers.ampNormalizers, grok: run.normalizers.grokNormalizers, agy: run.normalizers.agyNormalizers,
       copilot: run.normalizers.copilotNormalizers, pi: run.normalizers.piNormalizers, commandcode: run.normalizers.commandcodeNormalizers,
     } as Record<keyof typeof engines, Map<string, unknown>>
@@ -120,15 +121,15 @@ describe('ingesting a transcript line', () => {
     }
   })
 
-  it('reads Claude Code and any other engine with the turn state, created once', () => {
+  it('creates a live parser once, preserving the terminal fallback', () => {
     const run = setup({ s1: 'claude', s2: 'terminal' })
     const events = run.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))!
     expect(events.map((event) => event.type)).toContain('turn_started')
-    const state = run.normalizers.turnStates.get('s1')
+    const state = run.normalizers.liveParsers.get('s1')
     run.ingest.ingestLine(line('s1', 'claude', '{}'))
-    expect(run.normalizers.turnStates.get('s1')).toBe(state)
+    expect(run.normalizers.liveParsers.get('s1')).toBe(state)
     run.ingest.ingestLine(line('s2', 'terminal', '{}'))
-    expect(run.normalizers.turnStates.has('s2')).toBe(true)
+    expect(run.normalizers.liveParsers.has('s2')).toBe(true)
   })
 
   it('announces the reason a Codex or Command Code turn failed', () => {
@@ -141,6 +142,24 @@ describe('ingesting a transcript line', () => {
       ['cx', 'codex', 'rate limited'],
       ['cc', 'commandcode', 'Error: 500\nTrace ID: 932a', 'Error: 500'],
     ])
+  })
+
+  it('leaves a database engine to its reader when a file line is delivered for it', () => {
+    const run = setup({ db: 'opencode' })
+    expect(run.ingest.ingestLine(line('db', 'opencode', CLAUDE_PROMPT))).toEqual([])
+    expect(run.normalizers.hasState('db')).toBe(false)
+  })
+
+  it('replaces a parser when the same session id is rebound to another engine', () => {
+    const run = setup({ s1: 'claude' })
+    run.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))
+    const previous = run.normalizers.liveParsers.get('s1')!
+    run.sessions.get('s1')!.engine = 'codex'
+    const prompt = JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'new engine' } })
+    expect(run.ingest.ingestLine(line('s1', 'codex', prompt))?.find(event => event.type === 'turn_started')?.payload).toEqual({ userMessage: 'new engine' })
+    expect(run.normalizers.liveParsers.get('s1')).not.toBe(previous)
+    expect(run.normalizers.liveParsers.get('s1')!.engine).toBe('codex')
+    expect(previous.turnOpen).toBe(true)
   })
 })
 

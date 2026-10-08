@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, expect, it, vi } from 'vitest'
 import { admitHook, engineHooks, hooksFor } from './hooks.js'
 import { engineFor } from './registry.js'
+import { liveFor } from './live.js'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -54,4 +55,18 @@ it('rejects a hook when its engine admission check throws, and leaves other engi
   expect(admitHook('codex', {})).toEqual({ accepted: false, reason: 'engine_hook_failed' })
   expect(admitHook('claude', {})).toEqual({ accepted: true })
   expect(console.warn).toHaveBeenCalledWith('[hooks] codex admission failed:', 'reader failed')
+})
+
+it('does not emit an end when core rejects a stale closure proposal', async () => {
+  const parser = liveFor('claude')!.create({ engine: 'claude' })
+  parser.ingest(JSON.stringify({ type: 'user', message: { role: 'user', content: 'go' } }))
+  const emit = vi.fn()
+  const closeTurn = vi.fn(() => false)
+  await engineHooks.claude.onStop!({
+    turnState: () => parser.snapshot(), closeTurn, latestPromptAt: () => undefined,
+    drain: async () => {}, noteEngineStopped: () => {}, emit, graceMs: 0,
+  }, { sessionId: 'session' })
+  expect(closeTurn).toHaveBeenCalledWith('session', parser.snapshot().identity)
+  expect(emit).not.toHaveBeenCalled()
+  expect(parser.turnOpen).toBe(true)
 })

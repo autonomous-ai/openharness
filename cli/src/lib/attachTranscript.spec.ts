@@ -1,3 +1,5 @@
+import { claudeAttachRules } from '../engines/claude/attach.js'
+import { codexAttachRules } from '../engines/codex/attach.js'
 import { appendFileSync, chmodSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,8 +9,6 @@ import { canonical, fromTheEnd, goalForgotten, newFold, session, wholeHistory } 
 import { claude, claudeScenario, codex, codexScenario, cx } from '../testing/transcriptScenarios.js'
 import {
   attachTranscript,
-  claudeAttachRules,
-  codexAttachRules,
   HEAD_RECORD_LIMIT,
   isWholeRecord,
   locateAttachSpan,

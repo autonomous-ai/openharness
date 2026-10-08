@@ -19,7 +19,7 @@ vi.mock('../../lib/transcriptTail.js', () => ({
   tailFileCapped: vi.fn(async (path: string) => ({ lines: [`${path} capped`], truncated: false })),
   tailFileUntil: vi.fn(async (path: string) => [`${path} back to the last turn`]),
 }))
-vi.mock('../../lib/normalize.js', () => ({
+vi.mock('../../engines/claude/normalize.js', () => ({
   lastTurnTextFromRawLines: vi.fn((lines: string[]) => ({ text: `raw: ${lines[0]}` })),
   selectClaudeRecapLine: vi.fn(),
 }))

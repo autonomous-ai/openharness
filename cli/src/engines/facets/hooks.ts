@@ -1,4 +1,5 @@
-import type { LiveEvent, TurnState } from '../../lib/normalize.js'
+import type { LiveEvent } from '../kit/events.js'
+import type { LiveTurn } from './live.js'
 
 /** Only the session facts a hook needs; transport authentication and process binding stay in core. */
 export interface HookSession {
@@ -8,9 +9,11 @@ export interface HookSession {
 
 export interface HookStop { sessionId: string; status?: string; firedAt?: number }
 
-/** Core owns the state and event funnel. The engine decides what its Stop means. */
+/** Core supplies immutable observations and owns the event funnel. The engine decides what its Stop means. */
 export interface HookTurnContext {
-  turnState(sessionId: string): TurnState | undefined
+  turnState(sessionId: string): LiveTurn | undefined
+  /** Atomically close only this observed turn; a rejected stale proposal emits nothing. */
+  closeTurn(sessionId: string, identity: string): boolean
   latestPromptAt(sessionId: string): number | undefined
   drain(sessionId: string): Promise<void>
   noteEngineStopped(sessionId: string): void

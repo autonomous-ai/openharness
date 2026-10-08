@@ -28,8 +28,6 @@
  *    ended on the copied parent's `session_meta`.
  */
 import { stat } from 'node:fs/promises'
-import { codexGoalOf, codexTaskBoundary, startsCodexTurn } from '../engines/codex/normalizer.js'
-import { claudeToolLinks, startsClaudeTurn } from './normalize.js'
 import { scanRecordsBackward, streamRecords } from './transcriptTail.js'
 import type { RuntimeField } from './runtimeProfile.js'
 
@@ -277,47 +275,5 @@ export async function attachTranscript(
     console.warn(`[attach] ${filePath} could not be read: ${String(error)}`)
     const end = span ? span.end : await reach(filePath, options.end)
     return { ...(span ?? wholeFile(end)), next: end, records: 0, content: end > 0, failed: true }
-  }
-}
-
-const bytes = (...markers: string[]): Buffer[] => markers.map((marker) => Buffer.from(marker))
-
-/**
- * Claude Code: a turn opens on a real user prompt, always a `"type":"user"` record. Its results name
- * their tool from the call that made it, so calls the turn answers are reached for. The chips read
- * only the model from the transcript — the attach takes effort from Claude's settings straight after —
- * and `Set model to` is matched case-insensitively, so field records are asked for without a byte test.
- */
-export function claudeAttachRules(fields: (line: string) => readonly RuntimeField[]): AttachRules {
-  return {
-    startsTurn: startsClaudeTurn,
-    turnMarkers: bytes('"user"'),
-    fields,
-    required: ['model'],
-    links: claudeToolLinks,
-    linkMarkers: bytes('tool_use', 'tool_result'),
-  }
-}
-
-/**
- * Codex: a turn opens on a user message (`user_message`, or `UserMessage` inside `item_completed`) or a
- * `/goal` injection, and its task began at the `task_started` before it. Model, effort and mode arrive
- * together in `turn_context` and `thread_settings_applied`, written just before the turn's first
- * message. A continuing goal's label depends on the goal before it.
- */
-export function codexAttachRules(fields: (line: string) => readonly RuntimeField[]): AttachRules {
-  return {
-    startsTurn: startsCodexTurn,
-    turnMarkers: bytes('user_message', 'UserMessage', 'codex_internal_context'),
-    turnBegin: {
-      begins: (line) => codexTaskBoundary(line) === 'begins',
-      ends: (line) => codexTaskBoundary(line) === 'ends',
-      markers: bytes('task_started', 'task_complete', 'turn_aborted'),
-    },
-    fields,
-    fieldMarkers: bytes('turn_context', 'thread_settings_applied'),
-    required: ['model', 'effort', 'mode'],
-    seedFor: (opener) => (codexGoalOf(opener) === null ? null : (line) => codexGoalOf(line) !== null),
-    seedMarkers: bytes('codex_internal_context'),
   }
 }

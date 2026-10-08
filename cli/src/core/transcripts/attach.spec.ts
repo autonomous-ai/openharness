@@ -1,3 +1,4 @@
+import { liveFor } from '../../engines/live.js'
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -74,6 +75,7 @@ function setup(over: Partial<AttachDeps> = {}) {
   const service = { needsTranscript: vi.fn(() => false), observeTranscript: vi.fn() }
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   const deps: AttachDeps = {
+    liveFor,
     terminalGone: vi.fn(async () => false),
     normalizers,
     watcher: { addSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
@@ -151,6 +153,15 @@ describe('attaching a session', () => {
   })
 
   describe('a first attach', () => {
+    it('keeps an unknown engine registered without inventing a Claude parser for its file', async () => {
+      const run = setup()
+      const s = session('future-engine', transcript([CLAUDE_PROMPT]))
+      expect(await run.attach.attachSession(s)).toBe(true)
+      expect(run.normalizers.hasState(s.sessionId)).toBe(false)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.deps.watcher.addSession).toHaveBeenCalledWith(s, {})
+    })
+
     it('reads Claude Code from the end, hands the tail the byte it stopped at, and replays a turn left open', async () => {
       const log = vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
@@ -158,7 +169,7 @@ describe('attaching a session', () => {
       expect(await run.attach.attachSession(s)).toBe(true)
       const [, from] = vi.mocked(run.deps.watcher.addSession).mock.calls[0]
       expect(from).toEqual({ fromOffset: expect.any(Number) })
-      expect(run.normalizers.turnStates.get(s.sessionId)?.turnOpen).toBe(true)
+      expect(run.normalizers.liveParsers.get(s.sessionId)?.turnOpen).toBe(true)
       expect(run.profile.commit).toHaveBeenCalled()
       expect(run.deps.emit).toHaveBeenCalledWith(s.sessionId, [expect.objectContaining({ type: 'turn_started' })], { resumed: true })
       expect(run.attach.replayedFirstTurn.has(s.sessionId)).toBe(true)
@@ -172,7 +183,9 @@ describe('attaching a session', () => {
       const s = session('codex', transcript([{ type: 'event_msg', payload: { type: 'user_message', message: 'go' } }]))
       await run.attach.attachSession(s)
       const [codex] = made('codex')
-      expect(run.normalizers.codexNormalizers.get(s.sessionId)).toBe(codex)
+      expect(run.normalizers.liveParsers.get(s.sessionId)?.turnOpen).toBe(codex.turnOpen)
+      codex.turnOpen = true
+      expect(run.normalizers.liveParsers.get(s.sessionId)?.snapshot().turnOpen).toBe(true)
       expect(codex.thinkingPrefix).toMatch(/^thinking-codex-/)
     })
 
@@ -180,7 +193,7 @@ describe('attaching a session', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
       expect(await run.attach.attachSession(session('codex'))).toBe(true)
-      expect(run.normalizers.codexNormalizers.get('codex-s')).toBe(made('codex')[0])
+      expect(run.normalizers.liveParsers.get('codex-s')?.turnOpen).toBe(made('codex')[0].turnOpen)
       expect(run.attach.neverFoldedHistory.has('codex-s')).toBe(true)
     })
 
@@ -282,7 +295,7 @@ describe('attaching a session', () => {
         expect.stringContaining('the re-read could not read the transcript'),
         expect.stringContaining('the re-read outlasted its hold on the tail'),
       ])
-      expect(run.normalizers.turnStates.has('late')).toBe(false)
+      expect(run.normalizers.liveParsers.has('late')).toBe(false)
     })
 
     it('replays a first turn already on disk when the transcript was born after its agent', async () => {
@@ -331,13 +344,13 @@ describe('attaching a session', () => {
       expect(restarted.deps.emit).not.toHaveBeenCalled()
       expect(log.mock.calls.some(([line]) => String(line).includes('left the turn open at attach as history'))).toBe(true)
       // Closed where the next message is read, too: its start must not first end a turn nobody saw start.
-      expect(restarted.normalizers.turnStates.get(s.sessionId)?.turnOpen).toBe(false)
-      expect(survived.normalizers.turnStates.get(s.sessionId)?.turnOpen).toBe(true)
+      expect(restarted.normalizers.liveParsers.get(s.sessionId)?.turnOpen).toBe(false)
+      expect(survived.normalizers.liveParsers.get(s.sessionId)?.turnOpen).toBe(true)
       // Codex's own normalizer, likewise.
       const codex = session('codex', transcript([{ open: true }]))
       const resumed = setup({ relaunchMarks: { take: () => ({ offset: statSync(codex.transcriptPath!).size, engineStarted: true }) } })
       await resumed.attach.attachSession(codex)
-      expect(resumed.normalizers.codexNormalizers.get(codex.sessionId)?.turnOpen).toBe(false)
+      expect(resumed.normalizers.liveParsers.get(codex.sessionId)?.turnOpen).toBe(false)
     })
 
     it('replays a Claude Code first turn live when born after its agent, unless a held tail already delivered it', async () => {
@@ -462,7 +475,7 @@ describe('attaching a session', () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const run = setup()
       await run.attach.attachSession(session('terminal', transcript(['{}'])))
-      expect(run.normalizers.turnStates.has('terminal-s')).toBe(true)
+      expect(run.normalizers.liveParsers.has('terminal-s')).toBe(true)
       expect(run.deps.questionWatcher.start).not.toHaveBeenCalled()
     })
 
