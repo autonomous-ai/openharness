@@ -361,6 +361,10 @@ class PetEditor extends ChangeNotifier {
       if (preview == null) error = controller.petError(deviceKey);
     } on PetSourceError catch (e) {
       error = e.message;
+    } catch (_) {
+      // An unreadable file, a corrupt zip entry, a full disk: the section must
+      // stay usable, so this ends the attempt like any other refusal.
+      error = 'Couldn’t read this pet';
     }
     if (_disposed || seq != _seq) {
       await source?.cleanup();
@@ -395,6 +399,8 @@ class PetEditor extends ChangeNotifier {
     if (_preview == null || _rows[state] == row) return;
     _rows = {..._rows, state: row};
     _current = false;
+    // A reply still on its way answers the choices before this one.
+    _seq++;
     _notify();
     _debounce?.cancel();
     _debounce = Timer(petRowsDebounce, _refresh);

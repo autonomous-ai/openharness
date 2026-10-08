@@ -994,6 +994,7 @@ void main() {
       WidgetTester tester,
       Map<String, int> cleaned, {
       Future<PetSheet?> Function(String path)? loadSheet,
+      Future<PetSource> Function(String path)? resolveSource,
     }) async {
       final dial = DialState();
       final controller = DevicesController(
@@ -1008,11 +1009,13 @@ void main() {
       final editor = PetEditor(
         controller: controller,
         deviceKey: controller.devices.single.key,
-        resolveSource: (path) async => PetSource(
-          pngPath: path,
-          name: 'boba',
-          cleanup: () async => cleaned[path] = (cleaned[path] ?? 0) + 1,
-        ),
+        resolveSource:
+            resolveSource ??
+            (path) async => PetSource(
+              pngPath: path,
+              name: 'boba',
+              cleanup: () async => cleaned[path] = (cleaned[path] ?? 0) + 1,
+            ),
         loadSheet: loadSheet ?? (_) async => null,
       );
       return editor;
@@ -1093,6 +1096,55 @@ void main() {
       await tester.pump();
       expect(pet.preview!.id, 'newest');
       expect(pet.current, isTrue);
+      pet.dispose();
+    });
+
+    testWidgets('a reply landing during the debounce keeps the newer choice', (
+      tester,
+    ) async {
+      daemon.previewReply = sheetPreview('boba', petdexRows);
+      final pet = await editor(tester, {});
+      await pet.use('/tmp/a.png');
+      final replies = <Completer<Map<String, dynamic>>>[];
+      daemon.onPreview = (_) {
+        final reply = Completer<Map<String, dynamic>>();
+        replies.add(reply);
+        return reply.future;
+      };
+      pet.choose('working', 'waving');
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(replies.length, 1);
+      pet.choose('working', 'idle');
+      replies[0].complete(sheetPreview('older', petdexRows));
+      await tester.pump();
+      expect(pet.statesOf('idle'), contains('working'));
+      expect(pet.current, isFalse, reason: 'Apply waits for the newer choice');
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(replies.length, 2);
+      expect(
+        (daemon.payloads['pet_preview']!.last['rows'] as Map)['working'],
+        'idle',
+      );
+      replies[1].complete(sheetPreview('newest', petdexRows));
+      await tester.pump();
+      expect(pet.preview!.id, 'newest');
+      expect(pet.current, isTrue);
+      pet.dispose();
+    });
+
+    testWidgets('an unreadable file ends the attempt instead of sticking', (
+      tester,
+    ) async {
+      final pet = await editor(
+        tester,
+        {},
+        resolveSource: (path) async =>
+            throw FileSystemException('Permission denied', path),
+      );
+      await pet.use('/tmp/locked.png');
+      expect(pet.busy, isFalse);
+      expect(pet.editing, isFalse);
+      expect(pet.error, 'Couldn’t read this pet');
       pet.dispose();
     });
 
