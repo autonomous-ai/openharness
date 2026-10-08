@@ -336,7 +336,7 @@ try:
         def context_before_controls():
             heading = tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].rstrip()
             suffix = heading.partition(branch_context)[2]
-            return branch_context in heading and bool(re.fullmatch(r'\s+…\s+×', suffix))
+            return branch_context in heading and bool(re.fullmatch(r'\s+⋮', suffix))
         wait(context_before_controls, 'machine, project, branch and PR align beside the right-hand controls')
         snapshot('panes-zoomed' if target == first else 'panes-remote-zoomed')
         keys('C-b', 'z')
