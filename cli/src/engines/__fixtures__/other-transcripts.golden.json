@@ -1,0 +1,4295 @@
+{
+ "transcripts": [
+  {
+   "id": "lib/__fixtures__/agy-session.jsonl",
+   "sha256": "a6f2108a12a00a5d790fea522d15c8e4d51cf389b5de476dca2e859ef5eee042"
+  },
+  {
+   "id": "lib/__fixtures__/amp-session-queued.jsonl",
+   "sha256": "501efa85952bbe4a88ed883809d963e8362e5d6f448c33b0deccbf153f38925d"
+  },
+  {
+   "id": "lib/__fixtures__/amp-session.jsonl",
+   "sha256": "05b3434721464680e624c2ca8f8d0ef10ebec83f1a83101bfce08b0759325d88"
+  },
+  {
+   "id": "lib/__fixtures__/copilot-session.jsonl",
+   "sha256": "ff3c0f6343a7b6a84543d8563b3ab17515edf69c0a3eb2784d226e396c31b176"
+  },
+  {
+   "id": "lib/__fixtures__/grok-session.jsonl",
+   "sha256": "6f3b9d010cc80b3192d933b420b8d43ee90113ebbfc5aec140a5938486d7b3c4"
+  },
+  {
+   "id": "lib/__fixtures__/muse-session.jsonl",
+   "sha256": "2403b823f1aed04234edc9fbef81d3d512d719836bb50b67a0239111d73c8d9c"
+  },
+  {
+   "id": "lib/__fixtures__/transcript-async-subagents.jsonl",
+   "sha256": "1d0fb2f6f644292b9b2575687e3423eddc98e8a6f415370948b9b501680f3f46"
+  },
+  {
+   "id": "engines/commandcode/normalizer.spec.ts#7b77773a0ceb",
+   "sha256": "7b77773a0ceb7d6f3cbda22c6188461ace4c5b3512c0f3368d12dd134b238a30",
+   "lines": [
+    "{\"type\":\"session\",\"version\":3,\"id\":\"34e1385f-c18a-4f54-bf12-f8f57e151a3d\",\"timestamp\":\"2026-07-28T04:16:39.000Z\",\"cwd\":\"/tmp/cc-probe\"}",
+    "{\"type\":\"message\",\"id\":\"b9b74cd5\",\"parentId\":null,\"timestamp\":\"t1\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"meta\":{\"source\":\"user\",\"messageId\":\"m1\"}}}",
+    "{\"type\":\"message\",\"id\":\"be03e3d9\",\"parentId\":\"b9b74cd5\",\"timestamp\":\"t2\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Simple greeting.\",\"signature\":\"\"},{\"type\":\"text\",\"text\":\"Hi! What can I help you with today?\"}],\"meta\":{\"source\":\"model\",\"messageId\":\"m2\"}}}",
+    "{\"type\":\"message\",\"id\":\"59ec89ec\",\"parentId\":\"be03e3d9\",\"timestamp\":\"t3\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"list the files\"}],\"meta\":{\"source\":\"user\",\"messageId\":\"m3\"}}}",
+    "{\"type\":\"message\",\"id\":\"6c05e6e5\",\"parentId\":\"59ec89ec\",\"timestamp\":\"t4\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"I should run ls.\",\"signature\":\"\"},{\"type\":\"tool_use\",\"id\":\"call_00_U0MkyEAMP9Xu\",\"name\":\"shell_command\",\"input\":{\"command\":\"ls -1\"}}],\"meta\":{\"source\":\"model\",\"messageId\":\"m4\"}}}",
+    "{\"type\":\"message\",\"id\":\"72d9f290\",\"parentId\":\"6c05e6e5\",\"timestamp\":\"t5\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"call_00_U0MkyEAMP9Xu\",\"content\":[{\"type\":\"text\",\"text\":\"a.txt\\nb.txt\"}]}],\"meta\":{\"source\":\"tool\",\"messageId\":\"m5\"}}}",
+    "{\"type\":\"message\",\"id\":\"4c3052c4\",\"parentId\":\"72d9f290\",\"timestamp\":\"t6\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Report them.\",\"signature\":\"\"},{\"type\":\"text\",\"text\":\"a.txt and b.txt\"}],\"meta\":{\"source\":\"model\",\"messageId\":\"m6\"}}}"
+   ]
+  },
+  {
+   "id": "engines/copilot/normalizer.spec.ts#1dd90312ac7b",
+   "sha256": "1dd90312ac7b1af09c70dad00da7cf37552681e3a65eafc22a4a7cf5cdf3b6b4",
+   "lines": [
+    "{\"type\":\"user.message\",\"data\":{\"content\":\"mcp grid web có chưa\"},\"id\":\"u1\",\"parentId\":\"\"}",
+    "{\"type\":\"abort\",\"data\":{\"reason\":\"user_abort\"},\"id\":\"a1\",\"parentId\":\"\"}",
+    "{\"type\":\"abort\",\"data\":{\"reason\":\"user_abort\"},\"id\":\"a1\",\"parentId\":\"\"}"
+   ]
+  },
+  {
+   "id": "engines/copilot/normalizer.spec.ts#4baead2f03ac",
+   "sha256": "4baead2f03acb6488a11e77dfa298779460ff7948961280498dd74a043bc70db",
+   "lines": [
+    "{\"type\":\"user.message\",\"data\":{\"content\":\"mcp grid web có chưa\"},\"id\":\"u1\",\"parentId\":\"\"}",
+    "{\"type\":\"tool.execution_start\",\"data\":{\"toolCallId\":\"t1\",\"toolName\":\"bash\"},\"id\":\"e1\",\"parentId\":\"\"}",
+    "{\"type\":\"abort\",\"data\":{\"reason\":\"user_abort\"},\"id\":\"a1\",\"parentId\":\"\"}"
+   ]
+  },
+  {
+   "id": "engines/copilot/normalizer.spec.ts#923be793a482",
+   "sha256": "923be793a48206101e0b2ce915a99ac2814d25b8cb01fc87f040ecb801eece50",
+   "lines": [
+    "{\"type\":\"user.message\",\"data\":{\"content\":\"mcp grid web có chưa\"},\"id\":\"u1\",\"parentId\":\"\"}",
+    "{\"type\":\"abort\",\"data\":{\"reason\":\"user_abort\"},\"id\":\"a1\",\"parentId\":\"\"}"
+   ]
+  },
+  {
+   "id": "engines/copilot/normalizer.spec.ts#95d75cb4c027",
+   "sha256": "95d75cb4c027d5e94329fd842911b24b0942e760193c8d1ff46ee8f2ea58c2ff",
+   "lines": [
+    "{\"type\":\"user.message\",\"data\":{\"content\":\"mcp grid web có chưa\"},\"id\":\"u1\",\"parentId\":\"\"}",
+    "{\"type\":\"assistant.turn_start\",\"data\":{\"turnId\":\"0\"},\"id\":\"r1\",\"parentId\":\"\"}",
+    "{\"type\":\"abort\",\"data\":{\"reason\":\"user_abort\"},\"id\":\"a1\",\"parentId\":\"\"}"
+   ]
+  },
+  {
+   "id": "engines/copilot/normalizer.spec.ts#cae75cef097a",
+   "sha256": "cae75cef097a64dbacb7fcb44d8e6e11785afde42f6c9044f9e5db7bfc436f77",
+   "lines": [
+    "{\"type\":\"user.message\",\"data\":{\"content\":\"mcp grid web có chưa\"},\"id\":\"u1\",\"parentId\":\"\"}",
+    "{\"type\":\"assistant.turn_start\",\"data\":{\"turnId\":\"0\"},\"id\":\"r1\",\"parentId\":\"\"}"
+   ]
+  },
+  {
+   "id": "engines/cursor/normalizer.spec.ts#558da181d3c4",
+   "sha256": "558da181d3c4e91c283fe92ac735b5bd90c9ff2c1659a271c19a2a719009a7c9",
+   "lines": [
+    "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<timestamp>now</timestamp>\\n<user_query>\\ndelegate\\n</user_query>\"}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Task\",\"input\":{\"description\":\"Inspect\",\"prompt\":\"Inspect it\"}}]}}"
+   ]
+  },
+  {
+   "id": "engines/cursor/normalizer.spec.ts#6ed461f35f5c",
+   "sha256": "6ed461f35f5cf4972498c48ce82567e50fdac5f72a29641dd4df7a81a142b06a",
+   "lines": [
+    "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<timestamp>now</timestamp>\\n<user_query>\\nhi\\n</user_query>\"}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hi - can gi tiep khong?\\n\\n[REDACTED]\"},{\"type\":\"text\",\"text\":\"[REDACTED]\"}]}}"
+   ]
+  },
+  {
+   "id": "engines/cursor/normalizer.spec.ts#81d8549ffc71",
+   "sha256": "81d8549ffc7129d7e1ee439a038eb47e4f04e1e243e432d1a372f346a1def6fb",
+   "lines": [
+    "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<timestamp>now</timestamp>\\n<user_query>\\nfirst\\n</user_query>\"}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"TodoWrite\",\"input\":{\"merge\":false,\"todos\":[{\"id\":\"a\",\"content\":\"A\",\"status\":\"pending\"}]}}]}}",
+    "{\"type\":\"turn_ended\",\"status\":\"success\"}",
+    "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<timestamp>now</timestamp>\\n<user_query>\\nsecond\\n</user_query>\"}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"TodoWrite\",\"input\":{\"merge\":true,\"todos\":[{\"id\":\"a\",\"status\":\"completed\"}]}}]}}",
+    "{\"type\":\"turn_ended\",\"status\":\"success\"}"
+   ]
+  },
+  {
+   "id": "engines/cursor/normalizer.spec.ts#8cf6e475d0ee",
+   "sha256": "8cf6e475d0ee59bfebc1f127946d2f7c9eeed1957e511480648ecaa4df665908",
+   "lines": [
+    "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<timestamp>now</timestamp>\\n<user_query>\\nsearch\\n</user_query>\"}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"WebSearch\",\"input\":{\"search_term\":\"Bitcoin BTC Ethereum ETH price USD today live\",\"explanation\":\"Get current prices.\"}}]}}",
+    "{\"type\":\"turn_ended\",\"status\":\"success\"}"
+   ]
+  },
+  {
+   "id": "engines/cursor/normalizer.spec.ts#efdfd2e099d2",
+   "sha256": "efdfd2e099d2f0a4139517658406b9a400eccbff5f59b6dce2701afd14c2d397",
+   "lines": [
+    "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<timestamp>now</timestamp>\\n<user_query>\\ntodo\\n</user_query>\"}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"TodoWrite\",\"input\":{\"merge\":false,\"todos\":[{\"id\":\"a\",\"content\":\"A\",\"status\":\"in_progress\"},{\"id\":\"b\",\"content\":\"B\",\"status\":\"pending\"}]}}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"TodoWrite\",\"input\":{\"merge\":true,\"todos\":[{\"id\":\"a\",\"status\":\"completed\"},{\"id\":\"b\",\"status\":\"deleted\"}]}}]}}",
+    "{\"type\":\"turn_ended\",\"status\":\"success\"}"
+   ]
+  },
+  {
+   "id": "engines/cursor/normalizer.spec.ts#f051300db4a8",
+   "sha256": "f051300db4a8fdfcfdd7d70bd2f73f27c9e0455635d08138d2c3a3277e246624",
+   "lines": [
+    "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"<timestamp>now</timestamp>\\n<user_query>\\nhi\\n</user_query>\"}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Hi - can gi tiep khong?\\n\\n[REDACTED]\"}]}}",
+    "{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"[REDACTED]\"}]}}"
+   ]
+  },
+  {
+   "id": "engines/muse/normalizer.spec.ts#9a14cf11619e",
+   "sha256": "9a14cf11619ee1a3fe15a5ba58b949966457b717128df51b2d0d5a80e08d58cd",
+   "lines": [
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"started\",\"prompt\":\"go\"}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"assistant_tool_calls_committed\",\"tool_calls\":[{\"call_id\":\"c1\",\"name\":\"subagent_spawn\",\"args\":\"{\\\"command_id\\\":\\\"dup\\\",\\\"task_name\\\":\\\"Report ETH price\\\"}\"}]}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"tool_result_batch_committed\",\"results\":[{\"tool_call_id\":\"c1\",\"text\":\"{\\\"status\\\":\\\"rejected\\\",\\\"reason\\\":\\\"command_id_reused\\\"}\"}]}}}"
+   ]
+  },
+  {
+   "id": "engines/muse/normalizer.spec.ts#a2c3f58d3c15",
+   "sha256": "a2c3f58d3c15f1e6ec0237e39bea16d2873172ae782923f3d1b71000b0c21d43",
+   "lines": [
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"started\",\"prompt\":\"go\"}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"assistant_tool_calls_committed\",\"tool_calls\":[{\"call_id\":\"c1\",\"name\":\"subagent_spawn\",\"args\":\"{\\\"command_id\\\":\\\"cmd-1\\\",\\\"task_name\\\":\\\"Report BTC price\\\"}\"}]}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"tool_result_batch_committed\",\"results\":[{\"tool_call_id\":\"c1\",\"text\":\"{\\\"status\\\":\\\"accepted\\\",\\\"subagent_id\\\":\\\"sub-1\\\"}\"}]}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"assistant_tool_calls_committed\",\"tool_calls\":[{\"call_id\":\"c2\",\"name\":\"subagent_wait\",\"args\":\"{\\\"command_id\\\":\\\"cmd-1\\\",\\\"subagent_id\\\":\\\"sub-1\\\"}\"}]}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"tool_result_batch_committed\",\"results\":[{\"tool_call_id\":\"c2\",\"text\":\"{\\\"status\\\":\\\"ready\\\",\\\"subagent_id\\\":\\\"sub-1\\\",\\\"summary\\\":\\\"BTC is up\\\"}\"}]}}}"
+   ]
+  },
+  {
+   "id": "engines/muse/normalizer.spec.ts#c7fde11095ca",
+   "sha256": "c7fde11095ca376687b18152ca85775a2f7ff63415e3b1242dfc9c702417a86e",
+   "lines": [
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"started\",\"prompt\":\"xin chao\"}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"assistant_tool_calls_committed\",\"tool_calls\":[{\"call_id\":\"c1\",\"name\":\"subagent_spawn\",\"args\":\"{\\\"command_id\\\":\\\"a\\\",\\\"task_name\\\":\\\"never awaited\\\"}\"}]}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"tool_result_batch_committed\",\"results\":[{\"tool_call_id\":\"c1\",\"text\":\"{\\\"status\\\":\\\"accepted\\\",\\\"subagent_id\\\":\\\"sub-1\\\"}\"}]}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"assistant_message_committed\",\"text\":\"Xin chào!\"}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"terminal\",\"terminal\":\"completed\",\"turn_duration_ms\":5586}}}"
+   ]
+  },
+  {
+   "id": "engines/muse/normalizer.spec.ts#cdc1c45e4378",
+   "sha256": "cdc1c45e43785ddd5820a331b9aefdfff4d83528edfe7dc68ae4b3d7ab75727e",
+   "lines": [
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"started\",\"prompt\":\"\"}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"assistant_message_committed\",\"text\":\"Báo giá Bitcoin — 14:02\"}}}",
+    "{\"payload\":{\"kind\":\"run\",\"event\":{\"kind\":\"terminal\",\"terminal\":\"completed\",\"turn_duration_ms\":14000}}}"
+   ]
+  },
+  {
+   "id": "engines/pi/normalizer.spec.ts#74a8b245d519",
+   "sha256": "74a8b245d519166303b5a2afb4e09b0c6ac429b6423a4432675373b5eb4e4735",
+   "lines": [
+    "{\"type\":\"session\",\"version\":3,\"id\":\"019fa2a5-a26d-700c-bf8c-97af19ae3d5f\",\"timestamp\":\"2026-07-27T08:16:31.854Z\",\"cwd\":\"/tmp/pi-probe\"}",
+    "{\"type\":\"model_change\",\"id\":\"45215278\",\"parentId\":null,\"model\":\"minimax/minimax-m3\"}",
+    "{\"type\":\"thinking_level_change\",\"id\":\"1da16955\",\"parentId\":\"45215278\",\"level\":\"medium\"}",
+    "{\"type\":\"message\",\"id\":\"b0ecca48\",\"parentId\":\"1da16955\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"list the files here\"}]}}",
+    "{\"type\":\"message\",\"id\":\"0fc9ca48\",\"parentId\":\"b0ecca48\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"I should run ls.\"},{\"type\":\"toolCall\",\"id\":\"chatcmpl-tool-873e31c30f939d10\",\"name\":\"bash\",\"arguments\":{\"command\":\"ls\"}}],\"stopReason\":\"toolUse\",\"model\":\"minimax/minimax-m3\",\"provider\":\"vibe\"}}",
+    "{\"type\":\"message\",\"id\":\"1a2b3c4d\",\"parentId\":\"0fc9ca48\",\"message\":{\"role\":\"toolResult\",\"toolCallId\":\"chatcmpl-tool-873e31c30f939d10\",\"toolName\":\"bash\",\"content\":[{\"type\":\"text\",\"text\":\"a.txt\\nb.txt\\n\"}],\"isError\":false}}",
+    "{\"type\":\"message\",\"id\":\"9f8e7d6c\",\"parentId\":\"1a2b3c4d\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Files listed.\"},{\"type\":\"text\",\"text\":\"DONE\"}],\"stopReason\":\"stop\",\"model\":\"minimax/minimax-m3\"}}"
+   ]
+  }
+ ],
+ "cases": {
+  "cursor live: lib/__fixtures__/agy-session.jsonl @0/28": {
+   "sha": "08ee953f580d2b8742c4",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/agy-session.jsonl @14/28": {
+   "sha": "176ef4b9053594f61f42",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/agy-session.jsonl @28/28": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "46859141034274c018de",
+   "types": ""
+  },
+  "cursor history: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "6f31fc61c63f039dc882",
+   "types": "|,|,|"
+  },
+  "cursor live: lib/__fixtures__/amp-session-queued.jsonl @0/6": {
+   "sha": "f704aca8b452880a957c",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/amp-session-queued.jsonl @3/6": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/amp-session-queued.jsonl @6/6": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "cursor history: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "8f2a41e2916adbac51b0",
+   "types": "|,|,|"
+  },
+  "cursor live: lib/__fixtures__/amp-session.jsonl @0/7": {
+   "sha": "5ac712561170b424a646",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/amp-session.jsonl @4/7": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/amp-session.jsonl @7/7": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "cursor history: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "0d1103c748c6f5e51834",
+   "types": "|,|,|"
+  },
+  "cursor live: lib/__fixtures__/copilot-session.jsonl @0/32": {
+   "sha": "31f7e29ce196790408f4",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/copilot-session.jsonl @16/32": {
+   "sha": "6cbc59c4e91c0845f43d",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/copilot-session.jsonl @32/32": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "0956d553dfc2c5b12e40",
+   "types": ""
+  },
+  "cursor history: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "4e75d096ec91c4e87d56",
+   "types": "|,|,|"
+  },
+  "cursor live: lib/__fixtures__/grok-session.jsonl @0/29": {
+   "sha": "2a888234f472d7255bdc",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/grok-session.jsonl @15/29": {
+   "sha": "176ef4b9053594f61f42",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/grok-session.jsonl @29/29": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "4534fbb79ae6925c61ea",
+   "types": ""
+  },
+  "cursor history: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "802bb4fc876b7914bac3",
+   "types": "|,|,|"
+  },
+  "cursor live: lib/__fixtures__/muse-session.jsonl @0/277": {
+   "sha": "04f1e6883ebdc087e7a1",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/muse-session.jsonl @139/277": {
+   "sha": "81282676b6aef0df0b7b",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/muse-session.jsonl @277/277": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "d5c2091d0fa5d2b47a3d",
+   "types": ""
+  },
+  "cursor history: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "f8b607fbda99437bb41e",
+   "types": "|,|,|"
+  },
+  "cursor live: lib/__fixtures__/transcript-async-subagents.jsonl @0/14": {
+   "sha": "176ef4b9053594f61f42",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/transcript-async-subagents.jsonl @7/14": {
+   "sha": "5ac712561170b424a646",
+   "types": ""
+  },
+  "cursor live: lib/__fixtures__/transcript-async-subagents.jsonl @14/14": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "18d91f6986e469d1bb48",
+   "types": ""
+  },
+  "cursor history: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "d03172783743c83e6319",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @0/7": {
+   "sha": "5ac712561170b424a646",
+   "types": ""
+  },
+  "cursor live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @4/7": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @7/7": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "cursor history: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "0d1103c748c6f5e51834",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @0/3": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @2/3": {
+   "sha": "576cdf1652450cfbcf15",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @3/3": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "cursor history: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "929ca232966316b97843",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#4baead2f03ac @0/3": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#4baead2f03ac @2/3": {
+   "sha": "576cdf1652450cfbcf15",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#4baead2f03ac @3/3": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "cursor history: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "929ca232966316b97843",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#923be793a482 @0/2": {
+   "sha": "7da674962dda43141e2d",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#923be793a482 @1/2": {
+   "sha": "576cdf1652450cfbcf15",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#923be793a482 @2/2": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "cursor history: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "3cfb67282ca34d8618e7",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @0/3": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @2/3": {
+   "sha": "576cdf1652450cfbcf15",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @3/3": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "cursor history: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "929ca232966316b97843",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#cae75cef097a @0/2": {
+   "sha": "7da674962dda43141e2d",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#cae75cef097a @1/2": {
+   "sha": "576cdf1652450cfbcf15",
+   "types": ""
+  },
+  "cursor live: engines/copilot/normalizer.spec.ts#cae75cef097a @2/2": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "cursor history: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "3cfb67282ca34d8618e7",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#558da181d3c4 @0/2": {
+   "sha": "5c273e9eee5da0282a9a",
+   "types": "turn_started,tool_start"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#558da181d3c4 @1/2": {
+   "sha": "1f09cc90e9935a9a4d45",
+   "types": "turn_started,tool_start"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#558da181d3c4 @2/2": {
+   "sha": "028857e3a4fe479d1886",
+   "types": "turn_started"
+  },
+  "cursor lines alone: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "6ebaea475e3d0c29d6e4",
+   "types": "turn_started,tool_start"
+  },
+  "cursor history: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "838e060e13d75be28246",
+   "types": "user_message,tool_start,tool_end,|,user_message,tool_start,tool_end,|,|"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @0/2": {
+   "sha": "60f1c95975b539265c1a",
+   "types": "turn_started,text_delta"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @1/2": {
+   "sha": "065f19627874ea941d5f",
+   "types": "turn_started,text_delta"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @2/2": {
+   "sha": "01f1e0855404963d8e9b",
+   "types": "turn_started"
+  },
+  "cursor lines alone: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "7e63349473189fc6cfac",
+   "types": "turn_started,text_delta"
+  },
+  "cursor history: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "92dc84a3b6e05617cc46",
+   "types": "user_message,text_delta,|,user_message,text_delta,|,|"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @0/6": {
+   "sha": "3e5abe41042d413882c6",
+   "types": "turn_started,tool_start,tool_end,done,turn_ended,turn_started,tool_start,tool_end,done,turn_ended"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @3/6": {
+   "sha": "3f99aaaa0e80f3f35274",
+   "types": "turn_started,tool_start,tool_end,done,turn_ended"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @6/6": {
+   "sha": "4cd34107c6d63dbdd850",
+   "types": ""
+  },
+  "cursor lines alone: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "6622bcf19d44da111a86",
+   "types": "turn_started,tool_start,tool_end,done,turn_ended,turn_started,tool_start,tool_end,done,turn_ended"
+  },
+  "cursor history: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "b27143679f7d947a130d",
+   "types": "user_message,tool_start,tool_end,done,user_message,tool_start,tool_end,done,|,user_message,tool_start,tool_end,done,|,user_message,tool_start,tool_end,|,|"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @0/3": {
+   "sha": "0c036da79af6a6b78d45",
+   "types": "turn_started,tool_start,tool_end,done,turn_ended"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @2/3": {
+   "sha": "4d390d6ad29d941b1021",
+   "types": "turn_started,tool_end,done,turn_ended"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @3/3": {
+   "sha": "4cd34107c6d63dbdd850",
+   "types": ""
+  },
+  "cursor lines alone: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "7b8b4b4c1fe985f609c2",
+   "types": "turn_started,tool_start,tool_end,done,turn_ended"
+  },
+  "cursor history: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "eac1ea108be7cd6283d9",
+   "types": "user_message,tool_start,tool_end,done,|,user_message,tool_start,tool_end,done,|,|"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @0/4": {
+   "sha": "a580f1f81ac6c2b1023e",
+   "types": "turn_started,tool_start,tool_end,tool_start,tool_end,done,turn_ended"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @2/4": {
+   "sha": "e89decda0416fbec3006",
+   "types": "turn_started,tool_start,tool_end,done,turn_ended"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @4/4": {
+   "sha": "4cd34107c6d63dbdd850",
+   "types": ""
+  },
+  "cursor lines alone: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "70c7d1e795fb9ae77371",
+   "types": "turn_started,tool_start,tool_end,tool_start,tool_end,done,turn_ended"
+  },
+  "cursor history: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "ce5849ff62d674ae2351",
+   "types": "user_message,tool_start,tool_end,tool_start,tool_end,done,|,user_message,tool_start,tool_end,tool_start,tool_end,done,|,|"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#f051300db4a8 @0/3": {
+   "sha": "c0b2a15167ec38da2144",
+   "types": "turn_started,text_delta"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#f051300db4a8 @2/3": {
+   "sha": "71cd445709dc129c7ecd",
+   "types": "turn_started"
+  },
+  "cursor live: engines/cursor/normalizer.spec.ts#f051300db4a8 @3/3": {
+   "sha": "01f1e0855404963d8e9b",
+   "types": "turn_started"
+  },
+  "cursor lines alone: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "c35fbbd596c544b9cd51",
+   "types": "turn_started,text_delta"
+  },
+  "cursor history: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "00ed8c0433b2985d026a",
+   "types": "user_message,text_delta,|,user_message,text_delta,|,|"
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#9a14cf11619e @0/3": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#9a14cf11619e @2/3": {
+   "sha": "576cdf1652450cfbcf15",
+   "types": ""
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#9a14cf11619e @3/3": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "cursor history: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "929ca232966316b97843",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @0/5": {
+   "sha": "0bf36a2594a19706192d",
+   "types": ""
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @3/5": {
+   "sha": "7da674962dda43141e2d",
+   "types": ""
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @5/5": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "cursor history: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "ba1a75af05fa06d0caf3",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#c7fde11095ca @0/5": {
+   "sha": "0bf36a2594a19706192d",
+   "types": ""
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#c7fde11095ca @3/5": {
+   "sha": "7da674962dda43141e2d",
+   "types": ""
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#c7fde11095ca @5/5": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "cursor history: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "ba1a75af05fa06d0caf3",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @0/3": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @2/3": {
+   "sha": "576cdf1652450cfbcf15",
+   "types": ""
+  },
+  "cursor live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @3/3": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "cursor history: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "929ca232966316b97843",
+   "types": "|,|,|"
+  },
+  "cursor live: engines/pi/normalizer.spec.ts#74a8b245d519 @0/7": {
+   "sha": "5ac712561170b424a646",
+   "types": ""
+  },
+  "cursor live: engines/pi/normalizer.spec.ts#74a8b245d519 @4/7": {
+   "sha": "61aff1b2366f5b0dae82",
+   "types": ""
+  },
+  "cursor live: engines/pi/normalizer.spec.ts#74a8b245d519 @7/7": {
+   "sha": "c1bcb57df34532a7f4a2",
+   "types": ""
+  },
+  "cursor lines alone: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "cursor history: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "0d1103c748c6f5e51834",
+   "types": "|,|,|"
+  },
+  "muse live: lib/__fixtures__/agy-session.jsonl @0/28": {
+   "sha": "672423808516f898dd41",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/agy-session.jsonl @14/28": {
+   "sha": "5499f583c8bf48efc0ca",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/agy-session.jsonl @28/28": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "46859141034274c018de",
+   "types": ""
+  },
+  "muse history: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "0283c0a54614982de554",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: lib/__fixtures__/amp-session-queued.jsonl @0/6": {
+   "sha": "1455c4792f0f49c40249",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/amp-session-queued.jsonl @3/6": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/amp-session-queued.jsonl @6/6": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "muse history: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "4aabd6fd9df9d10319b7",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: lib/__fixtures__/amp-session.jsonl @0/7": {
+   "sha": "8a3b7301bb5c0c6e51b8",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/amp-session.jsonl @4/7": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/amp-session.jsonl @7/7": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "muse history: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "5b0447b3a704fc930bdb",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: lib/__fixtures__/copilot-session.jsonl @0/32": {
+   "sha": "76721dffe4eac184da1b",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/copilot-session.jsonl @16/32": {
+   "sha": "1d5d83c03c1f2cdb6593",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/copilot-session.jsonl @32/32": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "0956d553dfc2c5b12e40",
+   "types": ""
+  },
+  "muse history: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "f39fc440a10a5d7d81fe",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: lib/__fixtures__/grok-session.jsonl @0/29": {
+   "sha": "9fe2069d6da572a33e36",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/grok-session.jsonl @15/29": {
+   "sha": "5499f583c8bf48efc0ca",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/grok-session.jsonl @29/29": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "4534fbb79ae6925c61ea",
+   "types": ""
+  },
+  "muse history: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "1b08301319512f88d43f",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: lib/__fixtures__/muse-session.jsonl @0/277": {
+   "sha": "cdf400e112b46bfce32a",
+   "types": "turn_started,turn_ended,turn_started,text_delta,turn_ended,turn_started,tool_start,tool_end,text_delta,turn_ended,turn_started,tool_start,tool_start,turn_ended,turn_started,tool_end,subagent_finished,tool_end,tool_start,tool_start,turn_ended,turn_started,tool_end,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,subagent_finished,subagent_finished,turn_ended,text_delta,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_started,tool_start,tool_start,turn_ended,turn_started,turn_ended,turn_started,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_end,tool_start,tool_start,text_delta,subagent_finished,subagent_finished,turn_ended,tool_end,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,text_delta,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_started,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_ended"
+  },
+  "muse live: lib/__fixtures__/muse-session.jsonl @139/277": {
+   "sha": "d6c845feab4d3255ad2b",
+   "types": "turn_started,turn_ended,turn_started,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_end,tool_start,tool_start,text_delta,subagent_finished,subagent_finished,turn_ended,tool_end,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,text_delta,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_started,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_ended"
+  },
+  "muse live: lib/__fixtures__/muse-session.jsonl @277/277": {
+   "sha": "59d1ba74f904380f32ac",
+   "types": ""
+  },
+  "muse lines alone: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "522aeee8b0bf5be02113",
+   "types": "turn_started,turn_ended,turn_started,text_delta,turn_ended,turn_started,tool_start,tool_end,text_delta,turn_ended,turn_started,tool_start,tool_start,turn_ended,turn_started,tool_end,subagent_finished,tool_end,tool_start,tool_start,turn_ended,turn_started,tool_end,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,subagent_finished,subagent_finished,turn_ended,text_delta,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_started,tool_start,tool_start,turn_ended,turn_started,turn_ended,turn_started,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_end,tool_start,tool_start,text_delta,subagent_finished,subagent_finished,turn_ended,tool_end,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,text_delta,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_started,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_ended"
+  },
+  "muse history: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "f489a25e3f0f92182e19",
+   "types": "user_message,user_message,text_delta,user_message,tool_start,tool_end,text_delta,user_message,tool_start,tool_start,user_message,tool_end,subagent_finished,tool_end,tool_start,tool_start,user_message,tool_end,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,text_delta,subagent_finished,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,tool_start,tool_start,user_message,user_message,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_end,tool_start,tool_start,text_delta,subagent_finished,tool_end,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,text_delta,subagent_finished,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,done,|,user_message,user_message,text_delta,user_message,tool_start,tool_end,text_delta,user_message,tool_start,tool_start,user_message,tool_end,subagent_finished,tool_end,tool_start,tool_start,user_message,tool_end,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,text_delta,subagent_finished,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,tool_start,tool_start,user_message,user_message,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_end,tool_start,tool_start,text_delta,subagent_finished,tool_end,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,text_delta,subagent_finished,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,done,|,user_message,user_message,text_delta,user_message,tool_start,tool_end,text_delta,user_message,tool_start,tool_start,user_message,tool_end,subagent_finished,tool_end,tool_start,tool_start,user_message,tool_end,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_start,tool_end,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,text_delta,subagent_finished,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,tool_start,tool_start,user_message,user_message,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_start,tool_start,tool_end,tool_end,tool_end,tool_start,tool_start,text_delta,subagent_finished,tool_end,tool_end,tool_end,tool_start,tool_start,tool_end,tool_start,tool_end,text_delta,subagent_finished,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,done,|"
+  },
+  "muse live: lib/__fixtures__/transcript-async-subagents.jsonl @0/14": {
+   "sha": "5499f583c8bf48efc0ca",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/transcript-async-subagents.jsonl @7/14": {
+   "sha": "8a3b7301bb5c0c6e51b8",
+   "types": ""
+  },
+  "muse live: lib/__fixtures__/transcript-async-subagents.jsonl @14/14": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "18d91f6986e469d1bb48",
+   "types": ""
+  },
+  "muse history: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "58cb5eb234e6d2b2ab0c",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @0/7": {
+   "sha": "8a3b7301bb5c0c6e51b8",
+   "types": ""
+  },
+  "muse live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @4/7": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @7/7": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "muse history: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "5b0447b3a704fc930bdb",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @0/3": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @2/3": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @3/3": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "muse history: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "d1826d912ac312c113f1",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#4baead2f03ac @0/3": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#4baead2f03ac @2/3": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#4baead2f03ac @3/3": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "muse history: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "d1826d912ac312c113f1",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#923be793a482 @0/2": {
+   "sha": "10912db76d9393beb60d",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#923be793a482 @1/2": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#923be793a482 @2/2": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "muse history: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "a291ff4d312b7cf01a94",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @0/3": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @2/3": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @3/3": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "muse history: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "d1826d912ac312c113f1",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#cae75cef097a @0/2": {
+   "sha": "10912db76d9393beb60d",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#cae75cef097a @1/2": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/copilot/normalizer.spec.ts#cae75cef097a @2/2": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "muse history: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "a291ff4d312b7cf01a94",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#558da181d3c4 @0/2": {
+   "sha": "10912db76d9393beb60d",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#558da181d3c4 @1/2": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#558da181d3c4 @2/2": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "muse history: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "a291ff4d312b7cf01a94",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @0/2": {
+   "sha": "10912db76d9393beb60d",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @1/2": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @2/2": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "muse history: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "a291ff4d312b7cf01a94",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @0/6": {
+   "sha": "1455c4792f0f49c40249",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @3/6": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @6/6": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "muse history: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "4aabd6fd9df9d10319b7",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @0/3": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @2/3": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @3/3": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "muse history: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "d1826d912ac312c113f1",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @0/4": {
+   "sha": "6342d379c7922e08d419",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @2/4": {
+   "sha": "10912db76d9393beb60d",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @4/4": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "050e476d5fe78ffe281a",
+   "types": ""
+  },
+  "muse history: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "f3f190463eafc2cb92a1",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#f051300db4a8 @0/3": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#f051300db4a8 @2/3": {
+   "sha": "a52768a08b5c5d72d145",
+   "types": ""
+  },
+  "muse live: engines/cursor/normalizer.spec.ts#f051300db4a8 @3/3": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "muse history: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "d1826d912ac312c113f1",
+   "types": "done,|,done,|,done,|"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#9a14cf11619e @0/3": {
+   "sha": "c788c0b6fbf636de5acf",
+   "types": "turn_started,tool_start,subagent_finished,tool_end"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#9a14cf11619e @2/3": {
+   "sha": "c7b30e2ee958edf15746",
+   "types": "turn_started,subagent_finished,tool_end"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#9a14cf11619e @3/3": {
+   "sha": "00c2d2e9d3bd8fa23a53",
+   "types": "turn_started"
+  },
+  "muse lines alone: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "a471dece548c3ee27fb8",
+   "types": "turn_started,tool_start,subagent_finished,tool_end"
+  },
+  "muse history: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "9257cf9638a3a744b866",
+   "types": "user_message,tool_start,subagent_finished,tool_end,done,|,user_message,tool_start,subagent_finished,tool_end,done,|,user_message,tool_start,subagent_finished,tool_end,done,|"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @0/5": {
+   "sha": "ec8b0c0b44711b575af1",
+   "types": "turn_started,tool_start,tool_end,tool_start,subagent_finished,tool_end"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @3/5": {
+   "sha": "b6fcc114887fe5f06744",
+   "types": "turn_started,tool_start,subagent_finished,tool_end"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @5/5": {
+   "sha": "00c2d2e9d3bd8fa23a53",
+   "types": "turn_started"
+  },
+  "muse lines alone: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "4839991b192c451c23dc",
+   "types": "turn_started,tool_start,tool_end,tool_start,subagent_finished,tool_end"
+  },
+  "muse history: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "f967a98470bbe27f07f4",
+   "types": "user_message,tool_start,tool_end,tool_start,subagent_finished,tool_end,done,|,user_message,tool_start,tool_end,tool_start,subagent_finished,tool_end,done,|,user_message,tool_start,tool_end,tool_start,subagent_finished,tool_end,done,|"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#c7fde11095ca @0/5": {
+   "sha": "99b19c018b25df472cee",
+   "types": "turn_started,tool_start,tool_end,text_delta,subagent_finished,turn_ended"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#c7fde11095ca @3/5": {
+   "sha": "fa2bad4db6d898635a99",
+   "types": "turn_started,text_delta,subagent_finished,turn_ended"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#c7fde11095ca @5/5": {
+   "sha": "59d1ba74f904380f32ac",
+   "types": ""
+  },
+  "muse lines alone: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "9270e9b51559331e86fd",
+   "types": "turn_started,tool_start,tool_end,text_delta,subagent_finished,turn_ended"
+  },
+  "muse history: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "0fbc05847e25d8bc63b0",
+   "types": "user_message,tool_start,tool_end,text_delta,done,|,user_message,tool_start,tool_end,text_delta,done,|,user_message,tool_start,tool_end,text_delta,done,|"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @0/3": {
+   "sha": "97ac9b99a776d512f008",
+   "types": "turn_started,text_delta,turn_ended"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @2/3": {
+   "sha": "78e482b610868155bc82",
+   "types": "turn_started,turn_ended"
+  },
+  "muse live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @3/3": {
+   "sha": "59d1ba74f904380f32ac",
+   "types": ""
+  },
+  "muse lines alone: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "04287b0b29402609d0fd",
+   "types": "turn_started,text_delta,turn_ended"
+  },
+  "muse history: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "3f95f167237440a14947",
+   "types": "text_delta,done,|,text_delta,done,|,text_delta,done,|"
+  },
+  "muse live: engines/pi/normalizer.spec.ts#74a8b245d519 @0/7": {
+   "sha": "8a3b7301bb5c0c6e51b8",
+   "types": ""
+  },
+  "muse live: engines/pi/normalizer.spec.ts#74a8b245d519 @4/7": {
+   "sha": "e91692ab11051088c394",
+   "types": ""
+  },
+  "muse live: engines/pi/normalizer.spec.ts#74a8b245d519 @7/7": {
+   "sha": "5e025f4448107387230d",
+   "types": ""
+  },
+  "muse lines alone: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "muse history: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "5b0447b3a704fc930bdb",
+   "types": "done,|,done,|,done,|"
+  },
+  "amp live: lib/__fixtures__/agy-session.jsonl @0/28": {
+   "sha": "b64d44da3899e4272823",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/agy-session.jsonl @14/28": {
+   "sha": "2d05ee69acd35b8c7aa9",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/agy-session.jsonl @28/28": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "46859141034274c018de",
+   "types": ""
+  },
+  "amp history: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "9c3a6cec47ed3b1b0611",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: lib/__fixtures__/amp-session-queued.jsonl @0/6": {
+   "sha": "695b49053cba9a13d373",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,text_delta,turn_ended"
+  },
+  "amp live: lib/__fixtures__/amp-session-queued.jsonl @3/6": {
+   "sha": "bee1edaac225b5cb5168",
+   "types": "turn_started,tool_end,text_delta,turn_ended"
+  },
+  "amp live: lib/__fixtures__/amp-session-queued.jsonl @6/6": {
+   "sha": "815e034b4f5c3c4f2b98",
+   "types": ""
+  },
+  "amp lines alone: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "7797788c3b712a18a5c3",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,text_delta,turn_ended"
+  },
+  "amp history: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "cadda9e88c14ac5b75a1",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: lib/__fixtures__/amp-session.jsonl @0/7": {
+   "sha": "a52f3eec258d6aa9fca2",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,text_delta,turn_ended"
+  },
+  "amp live: lib/__fixtures__/amp-session.jsonl @4/7": {
+   "sha": "3fd53f346bf9a872632e",
+   "types": "turn_started,tool_end,text_delta,turn_ended"
+  },
+  "amp live: lib/__fixtures__/amp-session.jsonl @7/7": {
+   "sha": "815e034b4f5c3c4f2b98",
+   "types": ""
+  },
+  "amp lines alone: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "9aecc9514cd06cfc4cc2",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,text_delta,turn_ended"
+  },
+  "amp history: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "9484f26e77cb37ace2ed",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: lib/__fixtures__/copilot-session.jsonl @0/32": {
+   "sha": "a3e2cc1fbc45fd1c5241",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/copilot-session.jsonl @16/32": {
+   "sha": "607d56b7c40c91d609a8",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/copilot-session.jsonl @32/32": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "0956d553dfc2c5b12e40",
+   "types": ""
+  },
+  "amp history: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "d3add4e7c2e00d1875cb",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: lib/__fixtures__/grok-session.jsonl @0/29": {
+   "sha": "c69662a07cd6ff60ee52",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/grok-session.jsonl @15/29": {
+   "sha": "2d05ee69acd35b8c7aa9",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/grok-session.jsonl @29/29": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "4534fbb79ae6925c61ea",
+   "types": ""
+  },
+  "amp history: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "03e94c008c2c8aa92077",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: lib/__fixtures__/muse-session.jsonl @0/277": {
+   "sha": "29ab3f5396874bed9c14",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/muse-session.jsonl @139/277": {
+   "sha": "ec225694c35273b41588",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/muse-session.jsonl @277/277": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "d5c2091d0fa5d2b47a3d",
+   "types": ""
+  },
+  "amp history: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "1dcf3bcbce89e5783c5e",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: lib/__fixtures__/transcript-async-subagents.jsonl @0/14": {
+   "sha": "2d05ee69acd35b8c7aa9",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/transcript-async-subagents.jsonl @7/14": {
+   "sha": "6912037eeac758aa2d7f",
+   "types": ""
+  },
+  "amp live: lib/__fixtures__/transcript-async-subagents.jsonl @14/14": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "18d91f6986e469d1bb48",
+   "types": ""
+  },
+  "amp history: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "c1753bb180c6dd557878",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @0/7": {
+   "sha": "6912037eeac758aa2d7f",
+   "types": ""
+  },
+  "amp live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @4/7": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @7/7": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "amp history: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "e4fad6ccc1fc4a849a4c",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @0/3": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @2/3": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @3/3": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "amp history: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "6ffa4a277dccdbd21b0a",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#4baead2f03ac @0/3": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#4baead2f03ac @2/3": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#4baead2f03ac @3/3": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "amp history: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "6ffa4a277dccdbd21b0a",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#923be793a482 @0/2": {
+   "sha": "c34ce96fa5a0e36f4fe7",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#923be793a482 @1/2": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#923be793a482 @2/2": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "amp history: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "078a74d8ee46a9d0fe4e",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @0/3": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @2/3": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @3/3": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "amp history: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "6ffa4a277dccdbd21b0a",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#cae75cef097a @0/2": {
+   "sha": "c34ce96fa5a0e36f4fe7",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#cae75cef097a @1/2": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/copilot/normalizer.spec.ts#cae75cef097a @2/2": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "amp history: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "078a74d8ee46a9d0fe4e",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#558da181d3c4 @0/2": {
+   "sha": "c34ce96fa5a0e36f4fe7",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#558da181d3c4 @1/2": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#558da181d3c4 @2/2": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "amp history: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "078a74d8ee46a9d0fe4e",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @0/2": {
+   "sha": "c34ce96fa5a0e36f4fe7",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @1/2": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @2/2": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "amp history: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "078a74d8ee46a9d0fe4e",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @0/6": {
+   "sha": "37548f1531c23e2b3071",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @3/6": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @6/6": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "amp history: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "eeebde08f55e75977cb3",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @0/3": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @2/3": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @3/3": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "amp history: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "6ffa4a277dccdbd21b0a",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @0/4": {
+   "sha": "582df350bdad9abcbba9",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @2/4": {
+   "sha": "c34ce96fa5a0e36f4fe7",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @4/4": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "050e476d5fe78ffe281a",
+   "types": ""
+  },
+  "amp history: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "3580810153ff86773b98",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#f051300db4a8 @0/3": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#f051300db4a8 @2/3": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/cursor/normalizer.spec.ts#f051300db4a8 @3/3": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "amp history: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "6ffa4a277dccdbd21b0a",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/muse/normalizer.spec.ts#9a14cf11619e @0/3": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/muse/normalizer.spec.ts#9a14cf11619e @2/3": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/muse/normalizer.spec.ts#9a14cf11619e @3/3": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "amp history: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "6ffa4a277dccdbd21b0a",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @0/5": {
+   "sha": "990594456fe521a79e12",
+   "types": ""
+  },
+  "amp live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @3/5": {
+   "sha": "c34ce96fa5a0e36f4fe7",
+   "types": ""
+  },
+  "amp live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @5/5": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "amp history: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "d9d560fa01191ce9b425",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/muse/normalizer.spec.ts#c7fde11095ca @0/5": {
+   "sha": "990594456fe521a79e12",
+   "types": ""
+  },
+  "amp live: engines/muse/normalizer.spec.ts#c7fde11095ca @3/5": {
+   "sha": "c34ce96fa5a0e36f4fe7",
+   "types": ""
+  },
+  "amp live: engines/muse/normalizer.spec.ts#c7fde11095ca @5/5": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "amp history: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "d9d560fa01191ce9b425",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @0/3": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @2/3": {
+   "sha": "75cfd870b2fe5c26d4ab",
+   "types": ""
+  },
+  "amp live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @3/3": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "amp history: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "6ffa4a277dccdbd21b0a",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "amp live: engines/pi/normalizer.spec.ts#74a8b245d519 @0/7": {
+   "sha": "6912037eeac758aa2d7f",
+   "types": ""
+  },
+  "amp live: engines/pi/normalizer.spec.ts#74a8b245d519 @4/7": {
+   "sha": "ed1ec24728c4d5ba2879",
+   "types": ""
+  },
+  "amp live: engines/pi/normalizer.spec.ts#74a8b245d519 @7/7": {
+   "sha": "53aaa80e6c3d42f6568c",
+   "types": ""
+  },
+  "amp lines alone: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "amp history: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "e4fad6ccc1fc4a849a4c",
+   "types": "user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "grok live: lib/__fixtures__/agy-session.jsonl @0/28": {
+   "sha": "ab4565b873c7ee422d94",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/agy-session.jsonl @14/28": {
+   "sha": "5ce22533e049ccde0adf",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/agy-session.jsonl @28/28": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "46859141034274c018de",
+   "types": ""
+  },
+  "grok history: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "65e165e672bca17371cb",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: lib/__fixtures__/amp-session-queued.jsonl @0/6": {
+   "sha": "26f561c8edf4f1a44fb8",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/amp-session-queued.jsonl @3/6": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/amp-session-queued.jsonl @6/6": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "grok history: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "4b738304eb5f7b0b0c34",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: lib/__fixtures__/amp-session.jsonl @0/7": {
+   "sha": "2784d879ecba3e2235e7",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/amp-session.jsonl @4/7": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/amp-session.jsonl @7/7": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "grok history: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "4d0b59abf1937453614f",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: lib/__fixtures__/copilot-session.jsonl @0/32": {
+   "sha": "d20c07ee4c310f7ac96b",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/copilot-session.jsonl @16/32": {
+   "sha": "98e1e146b7c1ecad69f5",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/copilot-session.jsonl @32/32": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "0956d553dfc2c5b12e40",
+   "types": ""
+  },
+  "grok history: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "bf553ca2d60fef81cd07",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: lib/__fixtures__/grok-session.jsonl @0/29": {
+   "sha": "363aafc2cf02954bef7a",
+   "types": "turn_started,thinking_delta,text_delta,tool_start,tool_start,tool_end,tool_end,thinking_delta,tool_start,subagent_finished,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,turn_ended"
+  },
+  "grok live: lib/__fixtures__/grok-session.jsonl @15/29": {
+   "sha": "beff5e79296ec676c401",
+   "types": "turn_started,subagent_finished,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,turn_ended"
+  },
+  "grok live: lib/__fixtures__/grok-session.jsonl @29/29": {
+   "sha": "c9566c5e2f56d9b79832",
+   "types": ""
+  },
+  "grok lines alone: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "caa0f359be6de44ccbd6",
+   "types": "turn_started,thinking_delta,text_delta,tool_start,tool_start,tool_end,tool_end,thinking_delta,tool_start,subagent_finished,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,turn_ended"
+  },
+  "grok history: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "7ff45585bc3cab194f83",
+   "types": "user_message,thinking_delta,text_delta,tool_start,tool_start,tool_end,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,thinking_delta,text_delta,tool_start,tool_start,tool_end,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,thinking_delta,text_delta,tool_start,tool_start,tool_end,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,done,|"
+  },
+  "grok live: lib/__fixtures__/muse-session.jsonl @0/277": {
+   "sha": "7953fef8a11a6113df37",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/muse-session.jsonl @139/277": {
+   "sha": "74b411e9842c7fd5c1f8",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/muse-session.jsonl @277/277": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "d5c2091d0fa5d2b47a3d",
+   "types": ""
+  },
+  "grok history: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "8a2f414f784e26074f2e",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: lib/__fixtures__/transcript-async-subagents.jsonl @0/14": {
+   "sha": "5ce22533e049ccde0adf",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/transcript-async-subagents.jsonl @7/14": {
+   "sha": "2784d879ecba3e2235e7",
+   "types": ""
+  },
+  "grok live: lib/__fixtures__/transcript-async-subagents.jsonl @14/14": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "18d91f6986e469d1bb48",
+   "types": ""
+  },
+  "grok history: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "609423e99eaeb4e55438",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @0/7": {
+   "sha": "2784d879ecba3e2235e7",
+   "types": ""
+  },
+  "grok live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @4/7": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @7/7": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "grok history: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "4d0b59abf1937453614f",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @0/3": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @2/3": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @3/3": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "grok history: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "077b1897a5afa4819b27",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#4baead2f03ac @0/3": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#4baead2f03ac @2/3": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#4baead2f03ac @3/3": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "grok history: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "077b1897a5afa4819b27",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#923be793a482 @0/2": {
+   "sha": "b2b269dc7f4b20c8448c",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#923be793a482 @1/2": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#923be793a482 @2/2": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "grok history: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "e14b2a1784d9924fabd2",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @0/3": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @2/3": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @3/3": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "grok history: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "077b1897a5afa4819b27",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#cae75cef097a @0/2": {
+   "sha": "b2b269dc7f4b20c8448c",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#cae75cef097a @1/2": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/copilot/normalizer.spec.ts#cae75cef097a @2/2": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "grok history: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "e14b2a1784d9924fabd2",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#558da181d3c4 @0/2": {
+   "sha": "b2b269dc7f4b20c8448c",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#558da181d3c4 @1/2": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#558da181d3c4 @2/2": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "grok history: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "e14b2a1784d9924fabd2",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @0/2": {
+   "sha": "b2b269dc7f4b20c8448c",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @1/2": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @2/2": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "grok history: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "e14b2a1784d9924fabd2",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @0/6": {
+   "sha": "26f561c8edf4f1a44fb8",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @3/6": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @6/6": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "grok history: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "4b738304eb5f7b0b0c34",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @0/3": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @2/3": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @3/3": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "grok history: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "077b1897a5afa4819b27",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @0/4": {
+   "sha": "fc66951397c824703294",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @2/4": {
+   "sha": "b2b269dc7f4b20c8448c",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @4/4": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "050e476d5fe78ffe281a",
+   "types": ""
+  },
+  "grok history: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "289e8a5331874286e496",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#f051300db4a8 @0/3": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#f051300db4a8 @2/3": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/cursor/normalizer.spec.ts#f051300db4a8 @3/3": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "grok history: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "077b1897a5afa4819b27",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/muse/normalizer.spec.ts#9a14cf11619e @0/3": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/muse/normalizer.spec.ts#9a14cf11619e @2/3": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/muse/normalizer.spec.ts#9a14cf11619e @3/3": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "grok history: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "077b1897a5afa4819b27",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @0/5": {
+   "sha": "cd4c01031da31e6b65f1",
+   "types": ""
+  },
+  "grok live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @3/5": {
+   "sha": "b2b269dc7f4b20c8448c",
+   "types": ""
+  },
+  "grok live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @5/5": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "grok history: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "59078897812c23d1bbc5",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/muse/normalizer.spec.ts#c7fde11095ca @0/5": {
+   "sha": "cd4c01031da31e6b65f1",
+   "types": ""
+  },
+  "grok live: engines/muse/normalizer.spec.ts#c7fde11095ca @3/5": {
+   "sha": "b2b269dc7f4b20c8448c",
+   "types": ""
+  },
+  "grok live: engines/muse/normalizer.spec.ts#c7fde11095ca @5/5": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "grok history: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "59078897812c23d1bbc5",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @0/3": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @2/3": {
+   "sha": "44f2a13cb278ef64de51",
+   "types": ""
+  },
+  "grok live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @3/3": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "grok history: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "077b1897a5afa4819b27",
+   "types": "done,|,done,|,done,|"
+  },
+  "grok live: engines/pi/normalizer.spec.ts#74a8b245d519 @0/7": {
+   "sha": "2784d879ecba3e2235e7",
+   "types": ""
+  },
+  "grok live: engines/pi/normalizer.spec.ts#74a8b245d519 @4/7": {
+   "sha": "84c5fb65aa5fd78a3c28",
+   "types": ""
+  },
+  "grok live: engines/pi/normalizer.spec.ts#74a8b245d519 @7/7": {
+   "sha": "87a705aa858c4da81524",
+   "types": ""
+  },
+  "grok lines alone: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "grok history: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "4d0b59abf1937453614f",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: lib/__fixtures__/agy-session.jsonl @0/28": {
+   "sha": "f593986f36989a6a1869",
+   "types": "turn_started,user_message,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_ended,turn_started,user_message,text_delta,turn_ended,turn_started,user_message,tool_start,tool_end,text_delta,tool_start,tool_end,turn_ended,turn_started,user_message,thinking_delta,tool_start,tool_end,text_delta,text_delta,text_delta,subagent_finished,text_delta"
+  },
+  "agy live: lib/__fixtures__/agy-session.jsonl @14/28": {
+   "sha": "a47212e3fddfd10fed7d",
+   "types": "turn_started,tool_end,text_delta,tool_start,tool_end,turn_ended,turn_started,user_message,thinking_delta,tool_start,tool_end,text_delta,text_delta,text_delta,subagent_finished,text_delta"
+  },
+  "agy live: lib/__fixtures__/agy-session.jsonl @28/28": {
+   "sha": "8f765df36f05f8eea68a",
+   "types": "turn_started"
+  },
+  "agy lines alone: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "ab0c789432b1e0ec6c37",
+   "types": "turn_started,user_message,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,turn_ended,turn_started,user_message,text_delta,turn_ended,turn_started,user_message,tool_start,tool_end,text_delta,tool_start,tool_end,turn_ended,turn_started,user_message,thinking_delta,tool_start,tool_end,text_delta,text_delta,text_delta,subagent_finished,text_delta"
+  },
+  "agy history: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "272d5ba77e30f73b082a",
+   "types": "user_message,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,text_delta,user_message,tool_start,tool_end,text_delta,tool_start,tool_end,user_message,thinking_delta,tool_start,tool_end,text_delta,text_delta,text_delta,subagent_finished,text_delta,done,|,user_message,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,text_delta,user_message,tool_start,tool_end,text_delta,tool_start,tool_end,user_message,thinking_delta,tool_start,tool_end,text_delta,text_delta,text_delta,subagent_finished,text_delta,done,|,user_message,tool_start,tool_end,tool_start,tool_end,tool_start,tool_end,text_delta,user_message,text_delta,user_message,tool_start,tool_end,text_delta,tool_start,tool_end,user_message,thinking_delta,tool_start,tool_end,text_delta,text_delta,text_delta,subagent_finished,text_delta,done,|"
+  },
+  "agy live: lib/__fixtures__/amp-session-queued.jsonl @0/6": {
+   "sha": "49a5116cc82f280845c7",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/amp-session-queued.jsonl @3/6": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/amp-session-queued.jsonl @6/6": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "agy history: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "4d3da8e74cbcef183cc7",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: lib/__fixtures__/amp-session.jsonl @0/7": {
+   "sha": "44e01e696b793f6d390b",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/amp-session.jsonl @4/7": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/amp-session.jsonl @7/7": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "agy history: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "2bd80f7f5b88dc26a510",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: lib/__fixtures__/copilot-session.jsonl @0/32": {
+   "sha": "90f95d96eb84b3985ae5",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/copilot-session.jsonl @16/32": {
+   "sha": "05db48d8f5a3aedcfa27",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/copilot-session.jsonl @32/32": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "0956d553dfc2c5b12e40",
+   "types": ""
+  },
+  "agy history: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "4ac7b8c0bcd637373558",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: lib/__fixtures__/grok-session.jsonl @0/29": {
+   "sha": "ebf195bb1c70ccb4b003",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/grok-session.jsonl @15/29": {
+   "sha": "1a54d69d73e3c3a91243",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/grok-session.jsonl @29/29": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "4534fbb79ae6925c61ea",
+   "types": ""
+  },
+  "agy history: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "bf28d1e71bbaf8636514",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: lib/__fixtures__/muse-session.jsonl @0/277": {
+   "sha": "2180364aede7526b59f9",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/muse-session.jsonl @139/277": {
+   "sha": "d3bd4a2f00bfd339c0d1",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/muse-session.jsonl @277/277": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "d5c2091d0fa5d2b47a3d",
+   "types": ""
+  },
+  "agy history: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "8eaab330a3ec6126590e",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: lib/__fixtures__/transcript-async-subagents.jsonl @0/14": {
+   "sha": "1a54d69d73e3c3a91243",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/transcript-async-subagents.jsonl @7/14": {
+   "sha": "44e01e696b793f6d390b",
+   "types": ""
+  },
+  "agy live: lib/__fixtures__/transcript-async-subagents.jsonl @14/14": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "18d91f6986e469d1bb48",
+   "types": ""
+  },
+  "agy history: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "e64a58d50ac4b5b3ef8b",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @0/7": {
+   "sha": "44e01e696b793f6d390b",
+   "types": ""
+  },
+  "agy live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @4/7": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @7/7": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "agy history: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "2bd80f7f5b88dc26a510",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @0/3": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @2/3": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @3/3": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "agy history: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "8f5386d1f1eb7389eb8a",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#4baead2f03ac @0/3": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#4baead2f03ac @2/3": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#4baead2f03ac @3/3": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "agy history: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "8f5386d1f1eb7389eb8a",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#923be793a482 @0/2": {
+   "sha": "0c30b17ae7cf949b2177",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#923be793a482 @1/2": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#923be793a482 @2/2": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "agy history: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "58a1fb940bed661b09a3",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @0/3": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @2/3": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @3/3": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "agy history: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "8f5386d1f1eb7389eb8a",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#cae75cef097a @0/2": {
+   "sha": "0c30b17ae7cf949b2177",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#cae75cef097a @1/2": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/copilot/normalizer.spec.ts#cae75cef097a @2/2": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "agy history: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "58a1fb940bed661b09a3",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#558da181d3c4 @0/2": {
+   "sha": "0c30b17ae7cf949b2177",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#558da181d3c4 @1/2": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#558da181d3c4 @2/2": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "agy history: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "58a1fb940bed661b09a3",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @0/2": {
+   "sha": "0c30b17ae7cf949b2177",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @1/2": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @2/2": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "agy history: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "58a1fb940bed661b09a3",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @0/6": {
+   "sha": "49a5116cc82f280845c7",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @3/6": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @6/6": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "agy history: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "4d3da8e74cbcef183cc7",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @0/3": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @2/3": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @3/3": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "agy history: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "8f5386d1f1eb7389eb8a",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @0/4": {
+   "sha": "cbf0877d225f90cc2e5e",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @2/4": {
+   "sha": "0c30b17ae7cf949b2177",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @4/4": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "050e476d5fe78ffe281a",
+   "types": ""
+  },
+  "agy history: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "1f3fa66bedcd8e666298",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#f051300db4a8 @0/3": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#f051300db4a8 @2/3": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/cursor/normalizer.spec.ts#f051300db4a8 @3/3": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "agy history: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "8f5386d1f1eb7389eb8a",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/muse/normalizer.spec.ts#9a14cf11619e @0/3": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/muse/normalizer.spec.ts#9a14cf11619e @2/3": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/muse/normalizer.spec.ts#9a14cf11619e @3/3": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "agy history: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "8f5386d1f1eb7389eb8a",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @0/5": {
+   "sha": "74143d49a73e3c667009",
+   "types": ""
+  },
+  "agy live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @3/5": {
+   "sha": "0c30b17ae7cf949b2177",
+   "types": ""
+  },
+  "agy live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @5/5": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "agy history: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "1cb18fc4c4d307fd326f",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/muse/normalizer.spec.ts#c7fde11095ca @0/5": {
+   "sha": "74143d49a73e3c667009",
+   "types": ""
+  },
+  "agy live: engines/muse/normalizer.spec.ts#c7fde11095ca @3/5": {
+   "sha": "0c30b17ae7cf949b2177",
+   "types": ""
+  },
+  "agy live: engines/muse/normalizer.spec.ts#c7fde11095ca @5/5": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "agy history: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "1cb18fc4c4d307fd326f",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @0/3": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @2/3": {
+   "sha": "bd076d21f86499331eec",
+   "types": ""
+  },
+  "agy live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @3/3": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "agy history: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "8f5386d1f1eb7389eb8a",
+   "types": "done,|,done,|,done,|"
+  },
+  "agy live: engines/pi/normalizer.spec.ts#74a8b245d519 @0/7": {
+   "sha": "44e01e696b793f6d390b",
+   "types": ""
+  },
+  "agy live: engines/pi/normalizer.spec.ts#74a8b245d519 @4/7": {
+   "sha": "b33eac1de66b91536c55",
+   "types": ""
+  },
+  "agy live: engines/pi/normalizer.spec.ts#74a8b245d519 @7/7": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy lines alone: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "agy history: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "2bd80f7f5b88dc26a510",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: lib/__fixtures__/agy-session.jsonl @0/28": {
+   "sha": "ad3f321d3d0d7e998edb",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/agy-session.jsonl @14/28": {
+   "sha": "3e9ce87a6ac1c7d5c1b9",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/agy-session.jsonl @28/28": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "46859141034274c018de",
+   "types": ""
+  },
+  "copilot history: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "139f5f050a15d4326118",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: lib/__fixtures__/amp-session-queued.jsonl @0/6": {
+   "sha": "4d713e9b87f1d83fc4a2",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/amp-session-queued.jsonl @3/6": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/amp-session-queued.jsonl @6/6": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "copilot history: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "0cc520e97378fe5836bb",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: lib/__fixtures__/amp-session.jsonl @0/7": {
+   "sha": "2c0276c32ae0382d05fe",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/amp-session.jsonl @4/7": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/amp-session.jsonl @7/7": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "copilot history: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "3d888e3209b5e7cdf787",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: lib/__fixtures__/copilot-session.jsonl @0/32": {
+   "sha": "36a04b57849fd4c3e5b9",
+   "types": "turn_started,user_message,tool_start,tool_start,tool_end,tool_end,text_delta,turn_ended,turn_started,user_message,text_delta,tool_start,tool_start,tool_end,tool_end,text_delta"
+  },
+  "copilot live: lib/__fixtures__/copilot-session.jsonl @16/32": {
+   "sha": "6912e8fdb56989a6f44f",
+   "types": "turn_started,user_message,text_delta,tool_start,tool_start,tool_end,tool_end,text_delta"
+  },
+  "copilot live: lib/__fixtures__/copilot-session.jsonl @32/32": {
+   "sha": "fed30573fcfdb8eef0ef",
+   "types": ""
+  },
+  "copilot lines alone: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "fe06bcdcd54c2543e13d",
+   "types": "turn_started,user_message,tool_start,tool_start,tool_end,tool_end,text_delta,turn_ended,turn_started,user_message,text_delta,tool_start,tool_start,tool_end,tool_end,text_delta"
+  },
+  "copilot history: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "423e26f62d39861cfb16",
+   "types": "user_message,tool_start,tool_start,tool_end,tool_end,text_delta,user_message,text_delta,tool_start,tool_start,tool_end,tool_end,text_delta,done,|,user_message,tool_start,tool_start,tool_end,tool_end,text_delta,user_message,text_delta,tool_start,tool_start,tool_end,tool_end,text_delta,done,|,user_message,tool_start,tool_start,tool_end,tool_end,text_delta,user_message,text_delta,tool_start,tool_start,tool_end,tool_end,text_delta,done,|"
+  },
+  "copilot live: lib/__fixtures__/grok-session.jsonl @0/29": {
+   "sha": "498495b4963fba1522e2",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/grok-session.jsonl @15/29": {
+   "sha": "3e9ce87a6ac1c7d5c1b9",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/grok-session.jsonl @29/29": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "4534fbb79ae6925c61ea",
+   "types": ""
+  },
+  "copilot history: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "0fd1c94cca0c829494e2",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: lib/__fixtures__/muse-session.jsonl @0/277": {
+   "sha": "b56edb3bd924f3ee37f1",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/muse-session.jsonl @139/277": {
+   "sha": "efb6c7228c73479a7776",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/muse-session.jsonl @277/277": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "d5c2091d0fa5d2b47a3d",
+   "types": ""
+  },
+  "copilot history: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "2b6adf3813274b3dd06d",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: lib/__fixtures__/transcript-async-subagents.jsonl @0/14": {
+   "sha": "3e9ce87a6ac1c7d5c1b9",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/transcript-async-subagents.jsonl @7/14": {
+   "sha": "2c0276c32ae0382d05fe",
+   "types": ""
+  },
+  "copilot live: lib/__fixtures__/transcript-async-subagents.jsonl @14/14": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "18d91f6986e469d1bb48",
+   "types": ""
+  },
+  "copilot history: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "678185e4bcb2da24c890",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @0/7": {
+   "sha": "2c0276c32ae0382d05fe",
+   "types": ""
+  },
+  "copilot live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @4/7": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @7/7": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "copilot history: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "3d888e3209b5e7cdf787",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @0/3": {
+   "sha": "d51cfd61bb294a408750",
+   "types": "turn_started,user_message,turn_ended"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @2/3": {
+   "sha": "9c6dd843ee3160565182",
+   "types": ""
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @3/3": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "327a069996280cee6117",
+   "types": "turn_started,user_message,turn_ended"
+  },
+  "copilot history: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "497563614e4755c6c03c",
+   "types": "user_message,done,|,user_message,done,|,user_message,done,|"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#4baead2f03ac @0/3": {
+   "sha": "8728d454ae23ba3fcb6b",
+   "types": "turn_started,user_message,tool_start,tool_end,turn_ended"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#4baead2f03ac @2/3": {
+   "sha": "90e376ea3b965f16b30a",
+   "types": "turn_started,tool_end,turn_ended"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#4baead2f03ac @3/3": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "95ac0772622c852e1692",
+   "types": "turn_started,user_message,tool_start,tool_end,turn_ended"
+  },
+  "copilot history: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "89a33f0f514ab9856d92",
+   "types": "user_message,tool_start,done,|,user_message,tool_start,done,|,user_message,tool_start,done,|"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#923be793a482 @0/2": {
+   "sha": "5690ca4e4b4ff946e91e",
+   "types": "turn_started,user_message,turn_ended"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#923be793a482 @1/2": {
+   "sha": "02394ea3b8d9aead4c3c",
+   "types": "turn_started,turn_ended"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#923be793a482 @2/2": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "2dc24fca1a9a16ec889c",
+   "types": "turn_started,user_message,turn_ended"
+  },
+  "copilot history: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "6f0f1b83a9aff21f3970",
+   "types": "user_message,done,|,user_message,done,|,user_message,done,|"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @0/3": {
+   "sha": "62a1e59f3c37063f25f2",
+   "types": "turn_started,user_message,turn_ended"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @2/3": {
+   "sha": "02394ea3b8d9aead4c3c",
+   "types": "turn_started,turn_ended"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @3/3": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "87a910f545c421f11cdf",
+   "types": "turn_started,user_message,turn_ended"
+  },
+  "copilot history: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "497563614e4755c6c03c",
+   "types": "user_message,done,|,user_message,done,|,user_message,done,|"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#cae75cef097a @0/2": {
+   "sha": "a64a26770e9aa813f968",
+   "types": "turn_started,user_message"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#cae75cef097a @1/2": {
+   "sha": "7e63917a3391d6671428",
+   "types": "turn_started"
+  },
+  "copilot live: engines/copilot/normalizer.spec.ts#cae75cef097a @2/2": {
+   "sha": "08943abb01ba6aa1e21c",
+   "types": "turn_started"
+  },
+  "copilot lines alone: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "2816cdc075de134905e7",
+   "types": "turn_started,user_message"
+  },
+  "copilot history: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "6f0f1b83a9aff21f3970",
+   "types": "user_message,done,|,user_message,done,|,user_message,done,|"
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#558da181d3c4 @0/2": {
+   "sha": "2a1c499e939563df30e3",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#558da181d3c4 @1/2": {
+   "sha": "9c6dd843ee3160565182",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#558da181d3c4 @2/2": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "copilot history: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "948194097416f600178d",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @0/2": {
+   "sha": "2a1c499e939563df30e3",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @1/2": {
+   "sha": "9c6dd843ee3160565182",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @2/2": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "copilot history: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "948194097416f600178d",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @0/6": {
+   "sha": "4d713e9b87f1d83fc4a2",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @3/6": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @6/6": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "copilot history: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "0cc520e97378fe5836bb",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @0/3": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @2/3": {
+   "sha": "9c6dd843ee3160565182",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @3/3": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "copilot history: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "2aed6798fb3938071f40",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @0/4": {
+   "sha": "8c462fd638c9d90c31ef",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @2/4": {
+   "sha": "2a1c499e939563df30e3",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @4/4": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "050e476d5fe78ffe281a",
+   "types": ""
+  },
+  "copilot history: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "a880cbff3338d4368bbd",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#f051300db4a8 @0/3": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#f051300db4a8 @2/3": {
+   "sha": "9c6dd843ee3160565182",
+   "types": ""
+  },
+  "copilot live: engines/cursor/normalizer.spec.ts#f051300db4a8 @3/3": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "copilot history: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "2aed6798fb3938071f40",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#9a14cf11619e @0/3": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#9a14cf11619e @2/3": {
+   "sha": "9c6dd843ee3160565182",
+   "types": ""
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#9a14cf11619e @3/3": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "copilot history: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "2aed6798fb3938071f40",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @0/5": {
+   "sha": "3ddb030cfa00a0e9009a",
+   "types": ""
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @3/5": {
+   "sha": "2a1c499e939563df30e3",
+   "types": ""
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @5/5": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "copilot history: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "51a2d04975e0a6a6149c",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#c7fde11095ca @0/5": {
+   "sha": "3ddb030cfa00a0e9009a",
+   "types": ""
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#c7fde11095ca @3/5": {
+   "sha": "2a1c499e939563df30e3",
+   "types": ""
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#c7fde11095ca @5/5": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "copilot history: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "51a2d04975e0a6a6149c",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @0/3": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @2/3": {
+   "sha": "9c6dd843ee3160565182",
+   "types": ""
+  },
+  "copilot live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @3/3": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "copilot history: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "2aed6798fb3938071f40",
+   "types": "done,|,done,|,done,|"
+  },
+  "copilot live: engines/pi/normalizer.spec.ts#74a8b245d519 @0/7": {
+   "sha": "2c0276c32ae0382d05fe",
+   "types": ""
+  },
+  "copilot live: engines/pi/normalizer.spec.ts#74a8b245d519 @4/7": {
+   "sha": "3107941195cf2c1f5fa8",
+   "types": ""
+  },
+  "copilot live: engines/pi/normalizer.spec.ts#74a8b245d519 @7/7": {
+   "sha": "dc8fdeedad48aa21196b",
+   "types": ""
+  },
+  "copilot lines alone: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "copilot history: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "3d888e3209b5e7cdf787",
+   "types": "done,|,done,|,done,|"
+  },
+  "pi live: lib/__fixtures__/agy-session.jsonl @0/28": {
+   "sha": "89af26a51a8bd68e1a6b",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/agy-session.jsonl @14/28": {
+   "sha": "182c35cb9fc95cbf16f0",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/agy-session.jsonl @28/28": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "46859141034274c018de",
+   "types": ""
+  },
+  "pi history: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "e68f4aa8dd19dfdde6a2",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: lib/__fixtures__/amp-session-queued.jsonl @0/6": {
+   "sha": "eccb80dc55aef870d878",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/amp-session-queued.jsonl @3/6": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/amp-session-queued.jsonl @6/6": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "pi history: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "9955880f5a98e86b7810",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: lib/__fixtures__/amp-session.jsonl @0/7": {
+   "sha": "7014a17d6e2f3f5fc8fc",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/amp-session.jsonl @4/7": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/amp-session.jsonl @7/7": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "pi history: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "c20e434b2f1e96f06220",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: lib/__fixtures__/copilot-session.jsonl @0/32": {
+   "sha": "7813274f52bc77244525",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/copilot-session.jsonl @16/32": {
+   "sha": "321d4fde72071b38eaed",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/copilot-session.jsonl @32/32": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "0956d553dfc2c5b12e40",
+   "types": ""
+  },
+  "pi history: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "b05f09b600168b0f1c95",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: lib/__fixtures__/grok-session.jsonl @0/29": {
+   "sha": "728f6529237bbd461558",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/grok-session.jsonl @15/29": {
+   "sha": "182c35cb9fc95cbf16f0",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/grok-session.jsonl @29/29": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "4534fbb79ae6925c61ea",
+   "types": ""
+  },
+  "pi history: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "8cff07045039a9d4a4e9",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: lib/__fixtures__/muse-session.jsonl @0/277": {
+   "sha": "8885049c1374f3ad3ac9",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/muse-session.jsonl @139/277": {
+   "sha": "6c4548cc1238b7ee9aec",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/muse-session.jsonl @277/277": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "d5c2091d0fa5d2b47a3d",
+   "types": ""
+  },
+  "pi history: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "8d74ac3a5ab33f9ebecb",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: lib/__fixtures__/transcript-async-subagents.jsonl @0/14": {
+   "sha": "182c35cb9fc95cbf16f0",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/transcript-async-subagents.jsonl @7/14": {
+   "sha": "7014a17d6e2f3f5fc8fc",
+   "types": ""
+  },
+  "pi live: lib/__fixtures__/transcript-async-subagents.jsonl @14/14": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "18d91f6986e469d1bb48",
+   "types": ""
+  },
+  "pi history: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "c53077a8c63ee7e1d28a",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @0/7": {
+   "sha": "3146afb63f79731b0ffb",
+   "types": "turn_started,thinking_delta,text_delta,turn_ended,turn_started,thinking_delta,thinking_delta,text_delta"
+  },
+  "pi live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @4/7": {
+   "sha": "64e890bc8f353cd46185",
+   "types": "turn_started,thinking_delta,thinking_delta,text_delta"
+  },
+  "pi live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @7/7": {
+   "sha": "2016683a1e9339146482",
+   "types": "turn_started"
+  },
+  "pi lines alone: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "b84c9733eaaa967979ce",
+   "types": "turn_started,thinking_delta,text_delta,turn_ended,turn_started,thinking_delta,thinking_delta,text_delta"
+  },
+  "pi history: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "573c95dbe4ded80bd78c",
+   "types": "user_message,thinking_delta,text_delta,user_message,thinking_delta,thinking_delta,text_delta,done,|,user_message,thinking_delta,thinking_delta,text_delta,done,|,user_message,thinking_delta,text_delta,|,|"
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @0/3": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @2/3": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @3/3": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "pi history: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "168e8606f7c81a4dce19",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#4baead2f03ac @0/3": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#4baead2f03ac @2/3": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#4baead2f03ac @3/3": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "pi history: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "168e8606f7c81a4dce19",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#923be793a482 @0/2": {
+   "sha": "7866663373fb423d5b3e",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#923be793a482 @1/2": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#923be793a482 @2/2": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "pi history: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "a11ca46a085a2e41b652",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @0/3": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @2/3": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @3/3": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "pi history: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "168e8606f7c81a4dce19",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#cae75cef097a @0/2": {
+   "sha": "7866663373fb423d5b3e",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#cae75cef097a @1/2": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/copilot/normalizer.spec.ts#cae75cef097a @2/2": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "pi history: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "a11ca46a085a2e41b652",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#558da181d3c4 @0/2": {
+   "sha": "7866663373fb423d5b3e",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#558da181d3c4 @1/2": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#558da181d3c4 @2/2": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "pi history: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "a11ca46a085a2e41b652",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @0/2": {
+   "sha": "7866663373fb423d5b3e",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @1/2": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @2/2": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "pi history: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "a11ca46a085a2e41b652",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @0/6": {
+   "sha": "eccb80dc55aef870d878",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @3/6": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @6/6": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "pi history: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "9955880f5a98e86b7810",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @0/3": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @2/3": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @3/3": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "pi history: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "168e8606f7c81a4dce19",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @0/4": {
+   "sha": "854c6c7a155605cfa210",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @2/4": {
+   "sha": "7866663373fb423d5b3e",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @4/4": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "050e476d5fe78ffe281a",
+   "types": ""
+  },
+  "pi history: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "40d319e4578d8a457087",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#f051300db4a8 @0/3": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#f051300db4a8 @2/3": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/cursor/normalizer.spec.ts#f051300db4a8 @3/3": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "pi history: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "168e8606f7c81a4dce19",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/muse/normalizer.spec.ts#9a14cf11619e @0/3": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: engines/muse/normalizer.spec.ts#9a14cf11619e @2/3": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/muse/normalizer.spec.ts#9a14cf11619e @3/3": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "pi history: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "168e8606f7c81a4dce19",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @0/5": {
+   "sha": "0e39b8c1dc5c0e866422",
+   "types": ""
+  },
+  "pi live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @3/5": {
+   "sha": "7866663373fb423d5b3e",
+   "types": ""
+  },
+  "pi live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @5/5": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "pi history: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "9d7e2aa354ea1c9ec630",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/muse/normalizer.spec.ts#c7fde11095ca @0/5": {
+   "sha": "0e39b8c1dc5c0e866422",
+   "types": ""
+  },
+  "pi live: engines/muse/normalizer.spec.ts#c7fde11095ca @3/5": {
+   "sha": "7866663373fb423d5b3e",
+   "types": ""
+  },
+  "pi live: engines/muse/normalizer.spec.ts#c7fde11095ca @5/5": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "pi history: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "9d7e2aa354ea1c9ec630",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @0/3": {
+   "sha": "e6df9fc4d2a8c2f192b8",
+   "types": ""
+  },
+  "pi live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @2/3": {
+   "sha": "1b35806d9dfd6ff9a6ce",
+   "types": ""
+  },
+  "pi live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @3/3": {
+   "sha": "38b5d1484dadac850d5b",
+   "types": ""
+  },
+  "pi lines alone: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "pi history: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "168e8606f7c81a4dce19",
+   "types": "done,|,done,|,|"
+  },
+  "pi live: engines/pi/normalizer.spec.ts#74a8b245d519 @0/7": {
+   "sha": "23bfa9d8046718b85225",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,turn_ended"
+  },
+  "pi live: engines/pi/normalizer.spec.ts#74a8b245d519 @4/7": {
+   "sha": "a5af585f17c11d148a57",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,turn_ended"
+  },
+  "pi live: engines/pi/normalizer.spec.ts#74a8b245d519 @7/7": {
+   "sha": "ed233cd50dde4c0ed6b9",
+   "types": ""
+  },
+  "pi lines alone: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "c8a7d49673fec6ed71e1",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,turn_ended"
+  },
+  "pi history: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "28574b6b08480945015b",
+   "types": "user_message,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,done,|,user_message,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,done,|,|,|"
+  },
+  "commandcode live: lib/__fixtures__/agy-session.jsonl @0/28": {
+   "sha": "f72631c2766688e71bac",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/agy-session.jsonl @14/28": {
+   "sha": "9a92bd6574f0f24152ac",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/agy-session.jsonl @28/28": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "46859141034274c018de",
+   "types": ""
+  },
+  "commandcode history: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "0016d35a5f605deb277d",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: lib/__fixtures__/amp-session-queued.jsonl @0/6": {
+   "sha": "ffc9470b8ec92615cd70",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/amp-session-queued.jsonl @3/6": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/amp-session-queued.jsonl @6/6": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "commandcode history: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "a1c71e1d870ecaa6bed4",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: lib/__fixtures__/amp-session.jsonl @0/7": {
+   "sha": "0b96e1c57fb6296ce932",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/amp-session.jsonl @4/7": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/amp-session.jsonl @7/7": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "345d8e01903f2bc6da8a",
+   "types": ""
+  },
+  "commandcode history: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "385854913428103b0ef1",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: lib/__fixtures__/copilot-session.jsonl @0/32": {
+   "sha": "abae10ce37521322ab51",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/copilot-session.jsonl @16/32": {
+   "sha": "f4414e57a809cba5effd",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/copilot-session.jsonl @32/32": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "0956d553dfc2c5b12e40",
+   "types": ""
+  },
+  "commandcode history: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "30856f10fee8f4248293",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: lib/__fixtures__/grok-session.jsonl @0/29": {
+   "sha": "c0226876c8c7b8dd9d6f",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/grok-session.jsonl @15/29": {
+   "sha": "9a92bd6574f0f24152ac",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/grok-session.jsonl @29/29": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "4534fbb79ae6925c61ea",
+   "types": ""
+  },
+  "commandcode history: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "0044f6054c071950e403",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: lib/__fixtures__/muse-session.jsonl @0/277": {
+   "sha": "822a4b9ca971225c659d",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/muse-session.jsonl @139/277": {
+   "sha": "a4095fef0aa76cea5160",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/muse-session.jsonl @277/277": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "d5c2091d0fa5d2b47a3d",
+   "types": ""
+  },
+  "commandcode history: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "35e18cb188fe07ff8aa1",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: lib/__fixtures__/transcript-async-subagents.jsonl @0/14": {
+   "sha": "9a92bd6574f0f24152ac",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/transcript-async-subagents.jsonl @7/14": {
+   "sha": "0b96e1c57fb6296ce932",
+   "types": ""
+  },
+  "commandcode live: lib/__fixtures__/transcript-async-subagents.jsonl @14/14": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "18d91f6986e469d1bb48",
+   "types": ""
+  },
+  "commandcode history: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "82f392963335f4727c0a",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @0/7": {
+   "sha": "d75483e30d3f6ffbc9e9",
+   "types": "turn_started,thinking_delta,thinking_title,text_delta,turn_ended,turn_started,thinking_delta,thinking_title,tool_start,tool_end,thinking_delta,thinking_title,text_delta,turn_ended"
+  },
+  "commandcode live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @4/7": {
+   "sha": "807e9cece56194266d55",
+   "types": "turn_started,thinking_delta,thinking_title,tool_start,tool_end,thinking_delta,thinking_title,text_delta,turn_ended"
+  },
+  "commandcode live: engines/commandcode/normalizer.spec.ts#7b77773a0ceb @7/7": {
+   "sha": "9a2129284fae60bcbeab",
+   "types": ""
+  },
+  "commandcode lines alone: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "9f988d4977bb586ee3ba",
+   "types": "turn_started,thinking_delta,thinking_title,text_delta,turn_ended,turn_started,thinking_delta,thinking_title,tool_start,tool_end,thinking_delta,thinking_title,text_delta,turn_ended"
+  },
+  "commandcode history: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "9e697a2ebd98edf689c4",
+   "types": "user_message,thinking_delta,thinking_title,text_delta,user_message,thinking_delta,thinking_title,tool_start,tool_end,thinking_delta,thinking_title,text_delta,done,|,user_message,thinking_delta,thinking_title,tool_start,tool_end,thinking_delta,thinking_title,text_delta,done,|,user_message,thinking_delta,thinking_title,text_delta,|,|"
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @0/3": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @2/3": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#1dd90312ac7b @3/3": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "commandcode history: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "60a730300b4d3d823d76",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#4baead2f03ac @0/3": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#4baead2f03ac @2/3": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#4baead2f03ac @3/3": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "commandcode history: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "60a730300b4d3d823d76",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#923be793a482 @0/2": {
+   "sha": "4d94ac666e3506bed316",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#923be793a482 @1/2": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#923be793a482 @2/2": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "commandcode history: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "9eac4f354012cbfa07ec",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @0/3": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @2/3": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#95d75cb4c027 @3/3": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "commandcode history: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "60a730300b4d3d823d76",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#cae75cef097a @0/2": {
+   "sha": "4d94ac666e3506bed316",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#cae75cef097a @1/2": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/copilot/normalizer.spec.ts#cae75cef097a @2/2": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "commandcode history: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "9eac4f354012cbfa07ec",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#558da181d3c4 @0/2": {
+   "sha": "4d94ac666e3506bed316",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#558da181d3c4 @1/2": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#558da181d3c4 @2/2": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "commandcode history: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "9eac4f354012cbfa07ec",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @0/2": {
+   "sha": "4d94ac666e3506bed316",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @1/2": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#6ed461f35f5c @2/2": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "803aed073464cef70340",
+   "types": ""
+  },
+  "commandcode history: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "9eac4f354012cbfa07ec",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @0/6": {
+   "sha": "ffc9470b8ec92615cd70",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @3/6": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#81d8549ffc71 @6/6": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "5551588066f9f26ea40b",
+   "types": ""
+  },
+  "commandcode history: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "a1c71e1d870ecaa6bed4",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @0/3": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @2/3": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#8cf6e475d0ee @3/3": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "commandcode history: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "60a730300b4d3d823d76",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @0/4": {
+   "sha": "df1f9001519ce35057fe",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @2/4": {
+   "sha": "4d94ac666e3506bed316",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#efdfd2e099d2 @4/4": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "050e476d5fe78ffe281a",
+   "types": ""
+  },
+  "commandcode history: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "212357429c2e9e6de0c5",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#f051300db4a8 @0/3": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#f051300db4a8 @2/3": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/cursor/normalizer.spec.ts#f051300db4a8 @3/3": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "commandcode history: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "60a730300b4d3d823d76",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#9a14cf11619e @0/3": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#9a14cf11619e @2/3": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#9a14cf11619e @3/3": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "commandcode history: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "60a730300b4d3d823d76",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @0/5": {
+   "sha": "9ad2a1a65be78d9fe726",
+   "types": ""
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @3/5": {
+   "sha": "4d94ac666e3506bed316",
+   "types": ""
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#a2c3f58d3c15 @5/5": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "commandcode history: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "034b4bd25b9ccab9ddd5",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#c7fde11095ca @0/5": {
+   "sha": "9ad2a1a65be78d9fe726",
+   "types": ""
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#c7fde11095ca @3/5": {
+   "sha": "4d94ac666e3506bed316",
+   "types": ""
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#c7fde11095ca @5/5": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "0ff6c50c6261d322e9a1",
+   "types": ""
+  },
+  "commandcode history: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "034b4bd25b9ccab9ddd5",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @0/3": {
+   "sha": "821e08e95357628607ae",
+   "types": ""
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @2/3": {
+   "sha": "e2e550548a70c50d6f49",
+   "types": ""
+  },
+  "commandcode live: engines/muse/normalizer.spec.ts#cdc1c45e4378 @3/3": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "0aedf82d1b3238ca6f18",
+   "types": ""
+  },
+  "commandcode history: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "60a730300b4d3d823d76",
+   "types": "done,|,done,|,|"
+  },
+  "commandcode live: engines/pi/normalizer.spec.ts#74a8b245d519 @0/7": {
+   "sha": "dc6d3084e7d0d548de53",
+   "types": "thinking_delta,thinking_title,thinking_delta,thinking_title,text_delta"
+  },
+  "commandcode live: engines/pi/normalizer.spec.ts#74a8b245d519 @4/7": {
+   "sha": "75016d22610ad432f612",
+   "types": "thinking_delta,thinking_title,thinking_delta,thinking_title,text_delta"
+  },
+  "commandcode live: engines/pi/normalizer.spec.ts#74a8b245d519 @7/7": {
+   "sha": "3638b13e9c18d0e18357",
+   "types": ""
+  },
+  "commandcode lines alone: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "e6c6528cbb9f5597cbd5",
+   "types": "thinking_delta,thinking_title,thinking_delta,thinking_title,text_delta"
+  },
+  "commandcode history: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "745d32ef50b0477d3c41",
+   "types": "thinking_delta,thinking_title,thinking_delta,thinking_title,text_delta,done,|,thinking_delta,thinking_title,thinking_delta,thinking_title,text_delta,done,|,|"
+  },
+  "agy idle: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "143a8f67127b8d1ae1d0",
+   "types": "turn_ended"
+  },
+  "agy idle: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "agy idle: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "b34005bec3770d149b21",
+   "types": ""
+  },
+  "cursor task: lib/__fixtures__/agy-session.jsonl": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: lib/__fixtures__/amp-session-queued.jsonl": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: lib/__fixtures__/amp-session.jsonl": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: lib/__fixtures__/copilot-session.jsonl": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: lib/__fixtures__/grok-session.jsonl": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: lib/__fixtures__/muse-session.jsonl": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: lib/__fixtures__/transcript-async-subagents.jsonl": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/commandcode/normalizer.spec.ts#7b77773a0ceb": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/copilot/normalizer.spec.ts#1dd90312ac7b": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/copilot/normalizer.spec.ts#4baead2f03ac": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/copilot/normalizer.spec.ts#923be793a482": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/copilot/normalizer.spec.ts#95d75cb4c027": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/copilot/normalizer.spec.ts#cae75cef097a": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/cursor/normalizer.spec.ts#558da181d3c4": {
+   "sha": "b4f1cf609f2e6634cb23",
+   "types": "turn_started,tool_start"
+  },
+  "cursor task: engines/cursor/normalizer.spec.ts#6ed461f35f5c": {
+   "sha": "fcf83a28e2d7c91cfa62",
+   "types": "turn_started,tool_start"
+  },
+  "cursor task: engines/cursor/normalizer.spec.ts#81d8549ffc71": {
+   "sha": "eba54c5d22cf59798e71",
+   "types": "tool_start"
+  },
+  "cursor task: engines/cursor/normalizer.spec.ts#8cf6e475d0ee": {
+   "sha": "eba54c5d22cf59798e71",
+   "types": "tool_start"
+  },
+  "cursor task: engines/cursor/normalizer.spec.ts#efdfd2e099d2": {
+   "sha": "eba54c5d22cf59798e71",
+   "types": "tool_start"
+  },
+  "cursor task: engines/cursor/normalizer.spec.ts#f051300db4a8": {
+   "sha": "fcf83a28e2d7c91cfa62",
+   "types": "turn_started,tool_start"
+  },
+  "cursor task: engines/muse/normalizer.spec.ts#9a14cf11619e": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/muse/normalizer.spec.ts#a2c3f58d3c15": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/muse/normalizer.spec.ts#c7fde11095ca": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/muse/normalizer.spec.ts#cdc1c45e4378": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "cursor task: engines/pi/normalizer.spec.ts#74a8b245d519": {
+   "sha": "9e9f7fe80093ab846de3",
+   "types": "tool_start"
+  },
+  "opencode live: @0/6": {
+   "sha": "cf695388b3448fae2821",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,turn_ended,turn_started,thinking_delta,tool_start,tool_end"
+  },
+  "opencode live: @3/6": {
+   "sha": "109df6fe67b340fb57c6",
+   "types": "turn_started,thinking_delta,text_delta,turn_ended,turn_started,thinking_delta,tool_start,tool_end"
+  },
+  "opencode live: @6/6": {
+   "sha": "631a3892afc7280ffee6",
+   "types": "turn_started"
+  },
+  "opencode history": {
+   "sha": "7405b8b7c9c7d5a4bb95",
+   "types": "user_message,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,user_message,thinking_delta,tool_start,tool_end,done,|,user_message,thinking_delta,tool_start,tool_end,done,|,user_message,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,|,|"
+  },
+  "kilo live: @0/6": {
+   "sha": "e4b4b5e472e836c1165e",
+   "types": "turn_started,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,turn_ended,turn_started,thinking_delta,tool_start,tool_end,turn_ended"
+  },
+  "kilo live: @3/6": {
+   "sha": "c011540462d488c1436a",
+   "types": "turn_started,thinking_delta,text_delta,turn_ended,turn_started,thinking_delta,tool_start,tool_end,turn_ended"
+  },
+  "kilo live: @6/6": {
+   "sha": "abacffc5b0790fe5700f",
+   "types": ""
+  },
+  "kilo history": {
+   "sha": "fbe1c14cf90dea50fff8",
+   "types": "user_message,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,user_message,thinking_delta,tool_start,tool_end,done,|,user_message,thinking_delta,tool_start,tool_end,done,|,user_message,thinking_delta,tool_start,tool_end,thinking_delta,tool_start,tool_end,thinking_delta,text_delta,|,|"
+  },
+  "hermes live: @0/6": {
+   "sha": "ec1c40e759fd665ad315",
+   "types": "turn_started,text_delta,tool_start,tool_start,tool_end,text_delta,turn_ended,subagent_finished,subagent_finished,text_delta"
+  },
+  "hermes live: @3/6": {
+   "sha": "0dfec62ad76e6f2d6f83",
+   "types": "text_delta,subagent_finished,subagent_finished,text_delta"
+  },
+  "hermes live: @6/6": {
+   "sha": "82d3762928732a9caab5",
+   "types": ""
+  },
+  "hermes history": {
+   "sha": "ca5da97147eebb92d10f",
+   "types": "user_message,text_delta,tool_start,tool_start,tool_end,text_delta,text_delta,done,|,text_delta,done,|,user_message,text_delta,tool_start,tool_start,tool_end,text_delta,|,|"
+  },
+  "devin live: @0/7": {
+   "sha": "51f816ac33d86a955ad9",
+   "types": "turn_started,tool_start,tool_end,text_delta,turn_ended,turn_started"
+  },
+  "devin live: @4/7": {
+   "sha": "9189896c747d245d17ee",
+   "types": "tool_end,text_delta,turn_ended,turn_started"
+  },
+  "devin live: @7/7": {
+   "sha": "9ec6d79eab37a9e64eb1",
+   "types": ""
+  },
+  "devin history": {
+   "sha": "fcb5b4c0363b7bda0833",
+   "types": "user_message,tool_start,tool_end,text_delta,user_message,done,|,user_message,tool_start,tool_end,text_delta,user_message,done,|,|"
+  }
+ }
+}

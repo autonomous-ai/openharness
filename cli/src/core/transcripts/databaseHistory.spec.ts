@@ -38,6 +38,17 @@ describe('reading a conversation its engine keeps in a database', () => {
     expect(readHermesMessages).toHaveBeenCalledWith('/profiles/work/state.db', 's1')
   })
 
+  it('nothing to read when the engines\' readers could not be loaded', async () => {
+    vi.resetModules()
+    vi.doMock('../../lib/databaseHistory.js', () => { throw new Error('the readers are gone') })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { databaseHistory: lazily } = await import('./databaseHistory.js')
+    expect(await lazily(session('kilo'))!()).toEqual([])
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[engine databaseHistory\] unavailable · /))
+    vi.doUnmock('../../lib/databaseHistory.js')
+    error.mockRestore()
+  })
+
   it('nothing to read for an engine with a transcript file, and nothing read until asked', () => {
     expect(databaseHistory(session('claude'))).toBeUndefined()
     databaseHistory(session('opencode'))

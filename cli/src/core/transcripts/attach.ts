@@ -7,21 +7,9 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md).
  */
-import { AgyNormalizer } from '../../engines/agy/normalizer.js'
-import { agyPaneIdle } from '../../engines/agy/runtimeProfile.js'
-import { AmpNormalizer } from '../../engines/amp/normalizer.js'
 import type { LiveFor } from '../../engines/facets/live.js'
-import { CommandCodeNormalizer } from '../../engines/commandcode/normalizer.js'
-import { CopilotNormalizer, copilotHistoryTurnOpen } from '../../engines/copilot/normalizer.js'
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
-import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
-import { DevinReader } from '../../engines/devin/reader.js'
-import { GrokNormalizer } from '../../engines/grok/normalizer.js'
-import { HermesReader } from '../../engines/hermes/reader.js'
-import { KiloReader } from '../../engines/kilo/reader.js'
-import { MuseNormalizer } from '../../engines/muse/normalizer.js'
-import { OpencodeReader } from '../../engines/opencode/reader.js'
-import { PiNormalizer } from '../../engines/pi/normalizer.js'
+import { isOtherEngine, loadEngine, type InProcessModules } from '../../engines/inProcess.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { pollsQuestions, type QuestionWatcher } from '../../lib/questionController.js'
 import { attachTranscript, type AttachRead } from '../../lib/attachTranscript.js'
@@ -134,6 +122,17 @@ export function createAttach({
     // session of an agent still at work was unbound that way two seconds after a laptop woke (round 29,
     // e2e/clockjump.e2e.ts). A terminal that really is gone is retired by the reconciler's confirmed scans.
     if (await terminalGone(session)) return false
+    // The other engines' code is loaded in this process, and before anything below: the tail starts only at
+    // the end of an attach, so no line reaches its normalizer before it is there (core/transcripts/ingest.ts).
+    // Started as the session entered the registry (engines/inProcess.ts `preloadEngine`), so this rarely
+    // waits. Code that could not load attaches the session with no normalizer or reader: it is followed, and
+    // reads no events, as an engine with no normalizer does.
+    const other = isOtherEngine(session.engine) ? await loadEngine(session.engine) : null
+    if (isOtherEngine(session.engine) && !other) {
+      console.warn(`[agent] ${sid(session.agentId)} attached without its engine's code · engine=${session.engine} · its transcript is not read`)
+    }
+    const engine = <Name extends keyof InProcessModules>(name: Name): InProcessModules[Name] | null =>
+      session.engine === name ? other as InProcessModules[Name] | null : null
     // Taken whichever way this attach goes: a mark is for the next attach of the conversation only.
     const relaunch = relaunchMarks?.take(session.sessionId)
     const relaunchedAt = relaunch?.offset
@@ -289,16 +288,16 @@ export function createAttach({
     } else if (parser) {
       if (!fromEnd) historyTurnOpen = fold((line) => parser.ingest(line).events, () => parser.turnOpen)
       liveParsers.set(session.sessionId, parser)
-    } else if (session.engine === 'cursor') {
-      const normalizer = new CursorNormalizer('live', session.sessionId)
+    } else if (engine('cursor')) {
+      const normalizer = new (engine('cursor')!).CursorNormalizer('live', session.sessionId)
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       cursorNormalizers.set(session.sessionId, normalizer)
       const capture = await captureTerminal(session.agentId, 100)
       if (capture) await runtimeProfiles.ingestPane(session, capture, true)
-    } else if (session.engine === 'opencode') {
+    } else if (engine('opencode')) {
       // OpenCode has no transcript file — poll its SQLite DB. The reader hydrates silently, then
       // streams new activity into the funnel (the same one the file engines use).
-      const reader = new OpencodeReader({
+      const reader = new (engine('opencode')!).OpencodeReader({
         dbPath: dbs.opencode,
         sessionId: session.sessionId,
         onEvents: (events) => emit(session.sessionId, events),
@@ -311,10 +310,10 @@ export function createAttach({
       // round — which is exactly how long it looked broken for.
       const ocPane = await captureTerminal(session.agentId, 100)
       if (ocPane) await runtimeProfiles.ingestPane(session, ocPane, true)
-    } else if (session.engine === 'kilo') {
+    } else if (engine('kilo')) {
       // Kilo is opencode's fork and keeps the same store shape, so it is polled the same way — but from
       // its OWN db and through its own reader, so the two can diverge without one breaking the other.
-      const reader = new KiloReader({
+      const reader = new (engine('kilo')!).KiloReader({
         dbPath: dbs.kilo,
         sessionId: session.sessionId,
         onEvents: (events) => emit(session.sessionId, events),
@@ -322,27 +321,28 @@ export function createAttach({
       })
       kiloReaders.set(session.sessionId, reader)
       await reader.start()
-    } else if (session.engine === 'muse') {
+    } else if (engine('muse')) {
       // Same JSONL tail as claude/pi; only the record shape differs.
-      const normalizer = new MuseNormalizer()
+      const normalizer = new (engine('muse')!).MuseNormalizer()
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       museNormalizers.set(session.sessionId, normalizer)
-    } else if (session.engine === 'amp') {
+    } else if (engine('amp')) {
       // A JSONL tail like claude/muse — except the file is written by the adapter's own Amp plugin,
       // because Amp is the one engine that keeps no conversation on disk.
-      const normalizer = new AmpNormalizer()
+      const normalizer = new (engine('amp')!).AmpNormalizer()
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       ampNormalizers.set(session.sessionId, normalizer)
-    } else if (session.engine === 'grok') {
-      const normalizer = new GrokNormalizer()
+    } else if (engine('grok')) {
+      const normalizer = new (engine('grok')!).GrokNormalizer()
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       grokNormalizers.set(session.sessionId, normalizer)
       const capture = await captureTerminal(session.agentId, 60)
       if (capture) await runtimeProfiles.ingestPane(session, capture, true)
-    } else if (session.engine === 'agy') {
+    } else if (engine('agy')) {
+      const agy = engine('agy')!
       // A JSONL tail like claude/grok. agy announces its model only in the hook payload and its pane
       // footer, so the pane is read once on attach to fill the chip before the first turn.
-      const normalizer = new AgyNormalizer()
+      const normalizer = new agy.AgyNormalizer()
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       agyNormalizers.set(session.sessionId, normalizer)
       const capture = await captureTerminal(session.agentId, 60)
@@ -350,30 +350,31 @@ export function createAttach({
       // agy's transcript has no end-of-turn record - only its Stop hook does - so a fold of a FINISHED
       // conversation still reports the last turn as open, and after a daemon restart nothing is ever
       // coming to close it. The pane is the one place the answer exists; ask it.
-      if (historyTurnOpen && capture && agyPaneIdle(capture)) {
+      if (historyTurnOpen && capture && agy.agyPaneIdle(capture)) {
         normalizer.closeTurn()
         historyTurnOpen = false
       }
-    } else if (session.engine === 'copilot') {
+    } else if (engine('copilot')) {
+      const copilot = engine('copilot')!
       // A JSONL tail like claude/agy. Its turn lifecycle comes from the agentStop hook, not the file —
       // which is exactly why a fold cannot be trusted on its own: `copilot --resume` replays a finished
       // conversation, the fold opens a turn on its last `user.message`, and no hook is coming to close
       // it. Ask the records where the last activity actually ended.
-      const normalizer = new CopilotNormalizer()
+      const normalizer = new copilot.CopilotNormalizer()
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       copilotNormalizers.set(session.sessionId, normalizer)
-      if (historyTurnOpen && !copilotHistoryTurnOpen(lines)) {
+      if (historyTurnOpen && !copilot.copilotHistoryTurnOpen(lines)) {
         normalizer.closeTurn()
         historyTurnOpen = false
       }
-    } else if (session.engine === 'pi') {
-      const normalizer = new PiNormalizer('live')
+    } else if (engine('pi')) {
+      const normalizer = new (engine('pi')!).PiNormalizer('live')
       // Hydrate state silently; never replay history live — except a turn left open, below.
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       piNormalizers.set(session.sessionId, normalizer)
-    } else if (session.engine === 'hermes') {
+    } else if (engine('hermes')) {
       // Hermes has no transcript file — poll its SQLite store, like opencode.
-      const reader = new HermesReader({
+      const reader = new (engine('hermes')!).HermesReader({
         dbPath: await hermesDb(session),
         sessionId: session.sessionId,
         onEvents: (events) => emit(session.sessionId, events),
@@ -381,9 +382,9 @@ export function createAttach({
       })
       hermesReaders.set(session.sessionId, reader)
       await reader.start()
-    } else if (session.engine === 'devin') {
+    } else if (engine('devin')) {
       // Devin has no transcript file either — poll its SQLite store, like hermes/opencode.
-      const reader = new DevinReader({
+      const reader = new (engine('devin')!).DevinReader({
         dbPath: dbs.devin,
         devinHome,
         sessionId: session.sessionId,
@@ -403,8 +404,8 @@ export function createAttach({
       // on Auto until the 5-minute reconcile happened to run — the attach itself said nothing about it.
       const devinPane = await captureTerminal(session.agentId, 60)
       if (devinPane) await runtimeProfiles.ingestPane(session, devinPane, true)
-    } else if (session.engine === 'commandcode') {
-      const normalizer = new CommandCodeNormalizer('live')
+    } else if (engine('commandcode')) {
+      const normalizer = new (engine('commandcode')!).CommandCodeNormalizer('live')
       // Hydrate state silently; never replay history live — except a turn left open, below.
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       commandcodeNormalizers.set(session.sessionId, normalizer)

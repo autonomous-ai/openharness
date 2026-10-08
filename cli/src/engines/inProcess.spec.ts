@@ -111,6 +111,21 @@ describe('the core\'s side', () => {
     expect(inProcess.engineLoaded('screens')).toHaveProperty('legacyScreen')
   })
 
+  it('preloads each engine\'s own code with its pane readers, and hands it to a caller that cannot wait', async () => {
+    const { inProcess, error } = await fresh('counted')
+    expect(inProcess.engineNow('grok', 'a line came')).toBeNull()
+    expect(inProcess.engineNow('grok', 'a line came')).toBeNull()
+    expect(error.mock.calls).toEqual([['[engine grok] a line came before its code was loaded · skipped']])
+    inProcess.preloadEngine('pi')
+    expect(await inProcess.loadEngine('pi')).toHaveProperty('PiNormalizer')
+    expect(inProcess.engineNow('pi', 'a line came')).toHaveProperty('PiNormalizer')
+    vi.doMock('./kilo/inProcess.js', () => { throw new Error('kilo is gone') })
+    expect(await inProcess.loadEngine('kilo')).toBeNull()
+    expect(inProcess.engineNow('kilo', 'a line came')).toBeNull()
+    expect(error).toHaveBeenCalledTimes(2)
+    vi.doUnmock('./kilo/inProcess.js')
+  })
+
   it('reads their panes with their readers, the terminal\'s with the kit, and no other engine\'s', async () => {
     const { inProcess, evaluated } = await fresh('counted')
     expect(await inProcess.inProcessScreen('terminal', 'user@host % ')).toEqual(terminalScreen('user@host % '))
