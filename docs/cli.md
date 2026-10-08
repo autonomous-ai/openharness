@@ -18,6 +18,8 @@ works the same on a headless Linux server; the app is not required on a machine,
 | `harness status` · `harness version` · `harness update [--force]` | Running, pid, machine id, session count · version · update now. |
 | `harness dsh list` · `harness dsh update <owner/name>` | Installed harness package versions and available updates · update one package while preserving its workspaces. |
 | `harness machines [list] [--json]` · `harness machines delete <id>` | This account's machines · remove another machine (never this one). |
+| `harness agents install-missing [--background]` | Install OpenCode, Claude Code, Codex and pi where this computer lacks them, one at a time, OpenCode first; never reinstalls one, puts back one removed since, or retries a failed one within a day (`~/.harness/run/agent-install-state.json`). A JSON line per agent (`already-installed`, `installed`, `failed` or `skipped`, with a `reason`); log `agent-install.log` in the logs folder. The desktop runs it with `--background` on a new user's first run. |
+| `harness agents install <agent>` | Install one agent now, in this terminal: what a harness whose agent is missing runs. Every agent install on this computer holds one lock, so a second waits for the first (up to five minutes; Ctrl-C stops waiting). |
 | `harness pair <code>` · `harness pairings` · `harness unpair <#\|fp\|--all>` | Pair a browser with the code the web client shows; list; unpair. |
 | `harness pair <verb> [--json]` · `harness pair talk <words…>` · `harness pair mcp` | Your paired daemon's control interface (below): read every harness on every machine; talk to the daemon. |
 | `harness remote-password set\|status\|clear` | This machine's persistent password for machine-to-machine links. |

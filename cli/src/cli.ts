@@ -80,6 +80,7 @@ import { DeviceLogStore } from './lib/e2ee/deviceLogStore.js'
 import { TrustGroupStore } from './lib/e2ee/trustGroup.js'
 import { confirm as confirmUpdate, fetchManifest, downloadVerified, canary, stage, semverGt, isLocalDevBuild, type UpdateEntry } from './lib/selfUpdate.js'
 import { managedNodePath } from './lib/nodeRuntime.js'
+import { setHarnessCliScript } from './lib/cliEntry.js'
 import { updateManagedTui } from './tui/manage.js'
 import { ensureHnLauncher, ensureLauncher } from './lib/launchers.js'
 import { ensureManagedGrid, ensureManagedRuntime } from './lib/runtimeInstall.js'
@@ -132,6 +133,12 @@ Machine:
   harness tui                  all of Harness in this terminal: swarms, panes, every machine (⌥O ⌥P ⌥N)
   harness new [agent] [@machine] [folder|name] [-- task]
                                make a harness from a shell: \`harness new\` is claude here; see \`harness new -h\`
+  harness agents install-missing [--background]
+                               install OpenCode, Claude Code, Codex and pi where they are missing, one at
+                               a time, OpenCode first; never reinstalls one, nor puts back one removed since.
+                               --background detaches and returns (what the desktop runs on a first run)
+  harness agents install <agent>
+                               install one agent now, in this terminal, waiting for any other install
   harness machines             list the machines on this account (this computer's is marked)
   harness search <words>       find the conversation on this computer that said them: every turn of
                                every harness, live or stopped (--limit=N, --json)
@@ -217,6 +224,8 @@ function supervisorRow(platform: string): string {
 /** The currently-running script — dist/cli.js when built, src/cli.ts under tsx. */
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
 ensureHnLauncher(SCRIPT_PATH)
+// `harness shell-launch` writes a script that runs this CLI again to install a missing agent.
+setHarnessCliScript(SCRIPT_PATH)
 
 
 // ── login ──────────────────────────────────────────────────────────────────────────────────────
@@ -2597,6 +2606,13 @@ switch (cmd) {
     break
   case 'shell-launch':
     import('./shellLaunch.js').then(({ shellLaunch }) => shellLaunch(rest)).then((code) => { process.exitCode = code }).catch(onError)
+    break
+  case 'agents':
+    // `agents install <agent>` is what a pane whose agent is missing runs; `agents install-missing
+    // --background` what the desktop starts on a first run (lib/agentInstall.ts, lib/agentInstallMissing.ts).
+    import('./lib/agentsCommand.js')
+      .then(({ agentsCommand }) => agentsCommand(rest, { self: [process.execPath, ...process.execArgv, SCRIPT_PATH] }))
+      .then((code) => { process.exitCode = code }).catch(onError)
     break
   case 'tui':
     tuiCommand(rest, { port: env.PORT, dataDir: env.ADAPTER_DATA_DIR, identity: wantedDaemonIdentity }).then((code) => { process.exitCode = code }).catch(onError)

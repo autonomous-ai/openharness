@@ -24,22 +24,9 @@
  * `harness stop`, which waits its turn and then proceeds regardless.
  */
 
-import {
-  closeSync,
-  constants,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'fs'
-import { randomUUID } from 'crypto'
 import { join } from 'path'
 import { env } from '../config/env.js'
-import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processLiveness.js'
-import { secureStateDirectory } from './secureState.js'
+import { ownedLock, type OwnedLockRecord } from './ownedLock.js'
 
 /** `login` is a forced sign-in: the daemon is stopped and the session on disk is about to change
  *  hands, so nothing may start a daemon — on the OLD session — until the new one is written. */
@@ -55,13 +42,17 @@ export interface SpawnLockOwner {
 }
 
 export const SPAWN_LOCK_DIR = join(env.ADAPTER_DATA_DIR, 'adapter.spawn.lock')
-const OWNER_FILE = 'owner.json'
 const POLL_MS = 100
 export const SPAWN_LOCK_WAIT_MS = 45_000
 /** A directory with no owner.json is a crash between mkdir and the O_EXCL write, and one whose
  *  owner.json names no one is a crash or a full disk between that create and the write: windows of
  *  microseconds. Anything older than this with no owner is debris, not a lock. */
 const OWNERLESS_STALE_MS = 5_000
+
+/** The lock's mechanics (ownedLock.ts), shared with the agent install lock. */
+const lock = ownedLock({
+  dir: SPAWN_LOCK_DIR, parent: env.ADAPTER_DATA_DIR, label: 'daemon spawn lock', ownerlessStaleMs: OWNERLESS_STALE_MS,
+})
 
 /**
  * The lock could not be taken. `owner` names a live holder when there is one; `reason` is set instead
@@ -124,10 +115,15 @@ export function describeSpawnLockWaitPlainly(owner: SpawnLockOwner): string {
 let held: { token: string; purpose: SpawnLockPurpose; depth: number } | null = null
 let exitHookInstalled = false
 
-function ownerPath(): string { return join(SPAWN_LOCK_DIR, OWNER_FILE) }
-
-function uid(): number | null {
-  return typeof process.getuid === 'function' ? process.getuid() : null
+function toOwner(record: OwnedLockRecord): SpawnLockOwner {
+  return {
+    pid: record.pid,
+    startMarker: record.startMarker,
+    generationMarker: record.generationMarker,
+    token: record.token,
+    purpose: isPurpose(record.fields.purpose) ? record.fields.purpose : 'start',
+    since: record.since,
+  }
 }
 
 /**
@@ -136,31 +132,8 @@ function uid(): number | null {
  * must NOT take as "free": it is also what a lock mid-creation looks like.
  */
 export function readSpawnLockOwner(): SpawnLockOwner | null {
-  const me = uid()
-  try {
-    const dir = lstatSync(SPAWN_LOCK_DIR)
-    if (!dir.isDirectory() || dir.isSymbolicLink() || (me !== null && dir.uid !== me) || (dir.mode & 0o777) !== 0o700) {
-      throw new Error(`daemon spawn lock ${SPAWN_LOCK_DIR} has an unsafe owner, mode, or type`)
-    }
-    const file = lstatSync(ownerPath())
-    if (!file.isFile() || file.isSymbolicLink() || (me !== null && file.uid !== me) || (file.mode & 0o777) !== 0o600) {
-      throw new Error(`daemon spawn lock owner ${ownerPath()} has an unsafe owner, mode, or type`)
-    }
-    const raw = JSON.parse(readFileSync(ownerPath(), 'utf8')) as Partial<Record<keyof SpawnLockOwner, unknown>>
-    const pid = Number(raw.pid)
-    if (!Number.isSafeInteger(pid) || pid <= 0 || typeof raw.token !== 'string' || !raw.token) return null
-    return {
-      pid,
-      startMarker: typeof raw.startMarker === 'string' ? raw.startMarker : '',
-      generationMarker: typeof raw.generationMarker === 'string' ? raw.generationMarker : undefined,
-      token: raw.token,
-      purpose: isPurpose(raw.purpose) ? raw.purpose : 'start',
-      since: Number.isFinite(Number(raw.since)) ? Number(raw.since) : 0,
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('daemon spawn lock')) throw error
-    return null
-  }
+  const record = lock.read()
+  return record ? toOwner(record) : null
 }
 
 function isPurpose(value: unknown): value is SpawnLockPurpose {
@@ -169,62 +142,16 @@ function isPurpose(value: unknown): value is SpawnLockPurpose {
 
 /** Create the lock for this process. Returns the token, or null when someone else holds it. */
 function tryCreate(purpose: SpawnLockPurpose): string | null {
-  secureStateDirectory(env.ADAPTER_DATA_DIR)
-  const token = randomUUID()
-  let created = false
-  let opened = false
-  try {
-    mkdirSync(SPAWN_LOCK_DIR, { mode: 0o700 })
-    created = true
-    const fd = openSync(ownerPath(), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)
-    opened = true
-    try {
-      const owner: SpawnLockOwner = {
-        pid: process.pid, ...processLockIdentity(process.pid), token, purpose, since: Date.now(),
-      }
-      writeFileSync(fd, JSON.stringify(owner))
-      fsyncSync(fd)
-    } finally { closeSync(fd) }
-    return token
-  } catch (error) {
-    // The owner file is this call's (O_EXCL), so the directory is too, however little of the record
-    // reached the disk. A full disk cut it short on 2026-10-05 (e2e/updateHostile.e2e.ts): left there,
-    // empty, it named no one that could ever let go, and every update, start and stop after it waited
-    // out its 45 s and gave up, long after the space came back.
-    if (opened) rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
-    else if (created) releaseOwnedBy(token)
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-    return null
-  }
+  return lock.tryCreate({ purpose })
 }
 
 function releaseOwnedBy(token: string): void {
-  try {
-    const saved = JSON.parse(readFileSync(ownerPath(), 'utf8')) as { token?: unknown }
-    if (saved.token === token) rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
-  } catch {
-    // A directory we created but never got to write an owner into is ours to remove; anything else
-    // belongs to someone.
-    try {
-      lstatSync(ownerPath())
-    } catch (probe) {
-      if ((probe as NodeJS.ErrnoException).code === 'ENOENT') rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
-    }
-  }
+  lock.releaseOwnedBy(token)
 }
 
 /** Remove a lock whose owner is gone — re-read first so a lock that changed hands meanwhile survives. */
 function reclaimIfStale(owner: SpawnLockOwner): boolean {
-  if (lockOwnerAlive(owner.pid, lockStartMarker(owner))) return false
-  try {
-    const current = readSpawnLockOwner()
-    if (current && current.pid === owner.pid && lockStartMarker(current) === lockStartMarker(owner)
-      && current.token === owner.token && !lockOwnerAlive(owner.pid, lockStartMarker(owner))) {
-      rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
-      return true
-    }
-  } catch { /* changed or vanished under us; let the loop look again */ }
-  return false
+  return lock.reclaimIfStale({ ...owner, fields: owner as unknown as Record<string, unknown> })
 }
 
 /**
@@ -234,16 +161,7 @@ function reclaimIfStale(owner: SpawnLockOwner): boolean {
  * being created, and is left alone.
  */
 function reclaimIfOwnerless(): boolean {
-  try {
-    const dir = lstatSync(SPAWN_LOCK_DIR)
-    let since = dir.mtimeMs
-    try { since = Math.max(since, lstatSync(ownerPath()).mtimeMs) } catch { /* no owner file */ }
-    if (Date.now() - since > OWNERLESS_STALE_MS) {
-      rmSync(SPAWN_LOCK_DIR, { recursive: true, force: true })
-      return true
-    }
-  } catch { /* gone already */ }
-  return false
+  return lock.reclaimIfOwnerless()
 }
 
 function releaseSync(): void {

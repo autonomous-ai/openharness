@@ -7,7 +7,7 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { isTerminalEngine, type AgentEngine, type ProcessEngine } from '../engines/types.js'
 
 /** How to find the executable after the installer returns. */
@@ -156,3 +156,17 @@ export function engineInstallPaths(recipe: EngineInstallRecipe): string[] {
 export const INSTALLABLE_ENGINES: ReadonlySet<AgentEngine> = new Set(
   Object.keys(ENGINE_INSTALL) as AgentEngine[],
 )
+
+/** The vendor names an install line uses (docs/naming-system.md keeps them intact). */
+const VENDOR_NAMES: Readonly<Record<string, string>> = {
+  opencode: 'OpenCode',
+  claude: 'Claude Code',
+  codex: 'Codex',
+  pi: 'pi',
+}
+
+/** What an install line calls the agent: the vendor's name, else the command a person would type. */
+export function engineInstallName(recipe: EngineInstallRecipe): string {
+  const command = basename(recipe.executable.names[0] ?? '')
+  return VENDOR_NAMES[command] ?? (command || 'the agent')
+}

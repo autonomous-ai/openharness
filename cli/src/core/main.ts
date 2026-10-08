@@ -200,6 +200,7 @@ import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
 import { installTimestampedConsole, sid, prepareLogFile, trimLogFile, LOG_CHECK_INTERVAL_MS } from '../lib/log.js'
 import { backendHttpBase } from '../lib/controlPlane.js'
+import { setHarnessCliScript } from '../lib/cliEntry.js'
 
 // Daemon stdout/stderr. Capped at LOG_MAX_BYTES — see prepareLogFile/trimLogFile in lib/log.ts.
 const LOG_FILE = DAEMON_LOG_FILE
@@ -2636,6 +2637,8 @@ const enterSafeMode = (err: unknown): void => {
 /** `harness __run`: the core, as harnessd's master (or `harness start` without one) spawns it. */
 export function runCore(scriptPath: string): void {
   SCRIPT_PATH = scriptPath
+  // A pane's install-if-missing runs this CLI by path (lib/cliEntry.ts).
+  setHarnessCliScript(scriptPath)
   // Inert unless the end-to-end suite asks for its event loop to be held (core/stall.ts).
   startStalls(testFaults(process.env.HARNESSD_TEST_FAULTS))
   // NOT `onError`: a daemon that dies here can never be updated. See `enterSafeMode`.
@@ -2645,5 +2648,6 @@ export function runCore(scriptPath: string): void {
 /** `harness start -f` with `HARNESS_NO_MASTER=1`, and a start under tsx: the core alone, in the process of the command that asked for it. */
 export function runCoreInForeground(session: AuthSession | null, scriptPath: string): Promise<void> {
   SCRIPT_PATH = scriptPath
+  setHarnessCliScript(scriptPath)
   return runForeground(session)
 }

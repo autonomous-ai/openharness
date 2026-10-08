@@ -35,7 +35,9 @@ describe('shell model launch', () => {
     expect(resolve).not.toHaveBeenCalled()
     expect(run.mock.calls[0][0]).toBe('/bin/sh')
     expect(run.mock.calls[0][1].slice(-3)).toEqual(['--model','chosen','a task; $(literal)'])
-    expect(run.mock.calls[0][1][1]).toContain(engineInstallRecipe(engine)!.command)
+    // Installed by this CLI's own `agents install`, which runs the agent's recipe (agentInstall.ts).
+    expect(run.mock.calls[0][1][1]).toContain(` agents install '${engine}' --pane`)
+    expect(engineInstallRecipe(engine)).toBeDefined()
     expect(error).not.toHaveBeenCalled()
   })
   it.each(PROCESS_ENGINES.filter(engine => engine !== 'codex' && engine !== 'claude'))('does not silently ignore a selected route for %s', async (engine) => {
