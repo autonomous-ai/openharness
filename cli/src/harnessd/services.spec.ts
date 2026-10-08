@@ -302,6 +302,17 @@ describe('ServiceSupervisor', () => {
     expect(supervisor.status().map((status) => status.state)).toEqual(['stopped', 'stopped'])
   })
 
+  it('leaves the new reader workers off for old cores that already read inline, and starts only the requested engine', () => {
+    const specs = serviceSpecs({}, SERVICE_HOSTS).filter(spec => spec.name.startsWith('engine-'))
+    expect(specs.map(spec => spec.name)).toEqual(['engine-claude', 'engine-codex'])
+    const supervisor = make(specs)
+    supervisor.start()
+    for (const protocol of [0, 1, 2, 3, 4]) supervisor.unasked(protocol)
+    expect(children).toHaveLength(0)
+    supervisor.want('engine-codex')
+    expect(children.map(child => child.spec.name)).toEqual(['engine-codex'])
+  })
+
   it('starts an experiment\'s process only once the core asks for one of its services, and keeps it like any other', () => {
     const experiment: ServiceSpec = { name: 'experiments', services: ['orchestrator', 'teams'], heapLimitMiB: 256, rssLimitMiB: 512, onDemand: true }
     const supervisor = make([search, experiment])

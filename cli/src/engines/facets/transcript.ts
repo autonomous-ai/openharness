@@ -3,6 +3,8 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import type { TranscriptPager } from '../../lib/transcriptPages.js'
 
 export interface HistoryAsk { limit?: number; before?: string }
+/** The reader receives no mutable agent, process, terminal or turn state. */
+export type TranscriptSession = Pick<RegisteredSession, 'sessionId' | 'transcriptPath' | 'touchedAt' | 'codexHome'>
 export interface HistoryAnswer {
   events: SessionEvent[]
   timestamp: string
@@ -11,6 +13,6 @@ export interface HistoryAnswer {
   staleCursor?: true
 }
 export interface EngineTranscript {
-  lastTurnText(session: RegisteredSession): Promise<LastTurnText | null>
-  historyPage(session: RegisteredSession, ask: HistoryAsk, pages: Pick<TranscriptPager, 'claude' | 'codex'>): Promise<HistoryAnswer>
+  lastTurnText(session: TranscriptSession): Promise<LastTurnText | null>
+  historyPage(session: TranscriptSession, ask: HistoryAsk, pages: Pick<TranscriptPager, 'claude' | 'codex'>): Promise<HistoryAnswer>
 }

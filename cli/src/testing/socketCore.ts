@@ -16,6 +16,7 @@ import { createAgentList, type AgentListDeps } from '../core/agents/list.js'
 import { createAgentUpdate } from '../core/agents/update.js'
 import { createMessageRequest } from '../core/input.js'
 import { createQuestionResponse } from '../core/questions.js'
+import { engineTranscriptFor } from '../engines/transcripts.js'
 import { createHistory } from '../core/transcripts/history.js'
 import { createTerminalRequests, type TerminalRequestDeps } from '../core/terminals/requests.js'
 import { createCancelRequest } from '../core/turns/cancel.js'
@@ -32,6 +33,7 @@ import { tmuxPaneInfo } from '../lib/tmux.js'
  *  harnesses, and a pager of their own. */
 export function bindHistory(socket: BackendSocket): void {
   const history = createHistory({
+    readerFor: engineTranscriptFor,
     resolve: (id) => registry.resolve(id),
     stopped: () => stoppedAgents.list(),
     pages: new TranscriptPager(),

@@ -6,14 +6,17 @@ import { copyFileSync, mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { engineReaderRequests } from './worker/process.js'
+import { createEngineReaders } from '../core/engines/readers.js'
 import { expect, it } from 'vitest'
+import { engineTranscriptFor } from './transcripts.js'
 import { engineFor } from './registry.js'
 import { createHistory } from '../core/transcripts/history.js'
 import { createLastTurnReader } from '../core/transcripts/lastTurn.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
-it('preserves recorded history, cursors and last-turn replies for Claude Code and Codex', async () => {
+it.each(['inline', 'worker'])('preserves recorded history, cursors and last-turn replies for Claude Code and Codex (%s)', async (mode) => {
   const root = mkdtempSync(join(tmpdir(), 'engine-oracle-'))
   const answer: Record<string, unknown> = {}
   try {
@@ -22,7 +25,10 @@ it('preserves recorded history, cursors and last-turn replies for Claude Code an
       copyFileSync(fileURLToPath(new URL(fixture, import.meta.url)), transcriptPath)
       const codexHome = join(root, 'codex-home'); mkdirSync(codexHome, { recursive: true })
       const session = { agentId: 'agent', sessionId: 'session', engine, transcriptPath, touchedAt: 1791374400000, cwd: '/fixture', codexHome } as RegisteredSession
-      const deps = { resolve: () => session, stopped: () => [], pages: new TranscriptPager(), dbs: { opencode: '', kilo: '', devin: '' }, hermesDb: async () => '' }
+      const requests = engineReaderRequests(engine as 'claude' | 'codex')
+      const port = createEngineReaders({ isolated: new Set([`engine-${engine}`]), call: async (_service, type, payload) => await requests[type](JSON.parse(JSON.stringify(payload)), { owner: true, local: true }) })
+      port.connected(`engine-${engine}`)
+      const deps = { readerFor: mode === 'worker' ? port.forEngine : engineTranscriptFor, resolve: () => session, stopped: () => [], pages: new TranscriptPager(), dbs: { opencode: '', kilo: '', devin: '' }, hermesDb: async () => '' }
       const history = createHistory(deps)
       const digest = (value: Record<string, unknown>) => {
         const { timestamp, ...stable } = value

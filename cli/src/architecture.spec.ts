@@ -143,6 +143,8 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
+  // The pilot reader implementations and their host are never loaded by supervised core.
+  /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Envelope|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,

@@ -17,8 +17,9 @@ that stream.
 **The engine interface is being migrated in small batches.** Claude Code and Codex now own their
 launch contracts, history/last-turn readers and hook behavior behind `Engine` (`engine.ts`). `registry.ts`
 selects those engines; `launches.ts` and `hooks.ts` expose their respective facets without loading history
-readers. Hook transport, process binding and event delivery stay with core. These adapters still run in
-the core process: the interface is a code boundary, not a separate worker process. The
+readers. Hook transport, process binding and event delivery stay with core. Claude Code and Codex history/last-turn reads run on demand in supervised workers; the other facets
+still run in core. Explicit inline mode and older masters retain inline readers. See the
+[reader pilot](../../../docs/design/2026-10-07-engine-readers.md) for limits and failure behavior. The
 remaining facets and engines still use the shared paths below. This is an internal interface, not an
 external plugin API. When extending a migrated facet, put engine behavior in its folder and shared
 mechanics in `kit/`. See the [migration design](../../../docs/design/2026-10-05-engine-interface.md)

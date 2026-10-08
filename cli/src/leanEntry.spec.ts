@@ -21,6 +21,8 @@ const CLI_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const ROLES = ['master', 'core', ...KNOWN_SERVICES, 'updater']
 const RUNNER: Record<string, string> = { master: 'masterProcess', core: 'core-coreProcess' }
 for (const name of [...KNOWN_SERVICES, 'updater']) RUNNER[name] = `${name}Process`
+RUNNER['engine-claude'] = 'claudeReaderProcess'
+RUNNER['engine-codex'] = 'codexReaderProcess'
 
 describe('the lean bundle a release carries', () => {
   let scratch = ''
@@ -117,7 +119,7 @@ describe('the lean bundle a release carries', () => {
   it('brings no zod to the master, search, the updater or the edge host', () => {
     expect(hasZod(new Set(files.keys())), 'the bundle still holds zod, for the services whose own code uses it').toBe(true)
     // The edge host's services share one process: zod in any of them would be in all of them.
-    for (const role of ['master', 'search', 'updater', ...SERVICE_HOSTS.edge.services]) expect(hasZod(loads(role)), role).toBe(false)
+    for (const role of ['master', 'search', 'updater', 'engine-claude', 'engine-codex', ...SERVICE_HOSTS.edge.services]) expect(hasZod(loads(role)), role).toBe(false)
   })
 
   it('brings the edge host no node:sqlite until it reads a store some engines keep a conversation in', () => {

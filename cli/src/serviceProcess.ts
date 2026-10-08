@@ -28,6 +28,8 @@ const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater'])
 
 /** Every service this build can run in its own process, and how to load its runner alone. */
 export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new Map<string, () => Promise<Runner>>([
+  ['engine-claude', async () => (await import('./engines/claude/claudeReaderProcess.js')).runClaudeReader],
+  ['engine-codex', async () => (await import('./engines/codex/codexReaderProcess.js')).runCodexReader],
   ['search', async () => (await import('./services/searchProcess.js')).runSearchService],
   ['viewers', async () => (await import('./services/viewersProcess.js')).runViewersService],
   ['workspaces', async () => (await import('./services/workspacesProcess.js')).runWorkspacesService],

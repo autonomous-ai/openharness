@@ -67,6 +67,8 @@ const isTurn = (type: string, agentId: string) => (frame: Frame) => frame.type =
 
 /** A request each service's process answers, as the apps ask it: answered by the service when it is up. */
 const PROBES: Record<string, { type: string; payload: Record<string, unknown> }> = {
+  'engine-claude': { type: 'session_get', payload: { limit: 10 } },
+  'engine-codex': { type: 'session_get', payload: { limit: 10 } },
   gateway: { type: 'e2ee_pairings_list', payload: {} },
   sharing: { type: 'harness_share_list', payload: {} },
   search: { type: 'session_search', payload: { query: 'soak' } },
@@ -79,13 +81,19 @@ const PROBES: Record<string, { type: string; payload: Record<string, unknown> }>
   commandBar: { type: 'command_bar', payload: { request: { prompt: '' } } },
 }
 /** The service names a process's comings and goings are logged under (`[services] <name> connected`). */
-const LINKS: Record<string, string> = { search: 'search', viewers: 'viewers', edge: 'monitor', gateway: 'gateway', models: 'models', devices: 'devices', orchestrator: 'orchestrator', teams: 'teams', commandBar: 'commandBar', sharing: 'sharing' }
-const down = (answer: Record<string, unknown>) => answer.error === 'SERVICE_UNAVAILABLE' || answer.error === 'SERVICE_FAILED' || answer.error === 'GATEWAY_UNAVAILABLE'
+const LINKS: Record<string, string> = { 'engine-claude': 'engine-claude', 'engine-codex': 'engine-codex', search: 'search', viewers: 'viewers', edge: 'monitor', gateway: 'gateway', models: 'models', devices: 'devices', orchestrator: 'orchestrator', teams: 'teams', commandBar: 'commandBar', sharing: 'sharing' }
+const down = (answer: Record<string, unknown>) => answer.error === 'SERVICE_UNAVAILABLE' || answer.error === 'SERVICE_FAILED' || answer.error === 'GATEWAY_UNAVAILABLE' || answer.error === 'ENGINE_UNAVAILABLE' || answer.error === 'ENGINE_STALE_REPLY' || answer.error === 'ENGINE_BUSY'
 
 const acceptable = (name: string, answer: Record<string, unknown>): boolean => answer.error === undefined
   || (name === 'commandBar' && answer.error === 'INVALID_REQUEST')
   || (name === 'sharing' && answer.error === 'HARNESS_NOT_FOUND')
 async function wakeServices(client: LocalClient): Promise<void> {
+  const agents = (await client.request('agents_list', {})).agents as Array<Record<string, unknown>>
+  for (const engine of ['claude', 'codex']) {
+    const agent = agents.find(agent => agent.engine === engine && agent.sessionId)
+    if (!agent) throw new Error(`no ${engine} conversation for the reader probe`)
+    PROBES[`engine-${engine}`].payload.sessionId = agent.id
+  }
   for (const [name, probe] of Object.entries(PROBES)) {
     await until(`${name} to answer its probe`, async () => {
       const answer = await client.request(probe.type, probe.payload, 30_000)
