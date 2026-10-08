@@ -127,6 +127,37 @@ describe('installAgent', () => {
     expect(f.said).toContain('harness: agent-one is installing in the background; agent-two installs after it — waiting')
   })
 
+  // A first harness's OpenCode waited 30 s behind the background's Claude Code, Codex and Pi installs
+  // although OpenCode was already in place (fresh macOS VM, 2026-10-08).
+  it('stops waiting behind another agent\'s install once this agent is in place', async () => {
+    const f = fixture()
+    const holder = holdLock({ purpose: 'background', engine: 'other-agent', name: 'Other' })
+    await heldBy(holder)
+    const running = f.install('fake-agent', { mode: 'pane' })
+    await until(() => f.said.some((line) => line.includes('installs after it')))
+    mkdirSync(dirname(f.at('fake-agent')), { recursive: true })
+    writeFileSync(f.at('fake-agent'), '#!/bin/sh\necho READY\n', { mode: 0o755 })
+    const report = await running
+    expect(report).toMatchObject({ outcome: 'found', path: f.at('fake-agent') })
+    expect(f.ran()).toEqual([])
+    expect(existsSync(join(agentInstallLockDir(), 'owner.json')), 'the holder still has it').toBe(true)
+  })
+
+  it('keeps waiting while the holder installs this same agent, even once its executable appears', async () => {
+    const f = fixture()
+    const holder = holdLock({ purpose: 'background', engine: 'fake-agent', name: 'fake-agent' })
+    await heldBy(holder)
+    let settled = false
+    const running = f.install('fake-agent', { mode: 'pane' }).finally(() => { settled = true })
+    await until(() => f.said.some((line) => line.includes('waiting for it')))
+    mkdirSync(dirname(f.at('fake-agent')), { recursive: true })
+    writeFileSync(f.at('fake-agent'), '#!/bin/sh\necho READY\n', { mode: 0o755 })
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect(settled, 'npm links the executable before it is done').toBe(false)
+    holder.kill('SIGTERM')
+    expect(await running).toMatchObject({ outcome: 'found' })
+  })
+
   it('reports progress while it waits, and gives up past its wait without installing', async () => {
     const f = fixture()
     const holder = holdLock({ purpose: 'pane', engine: 'fake-agent', name: 'fake-agent' })

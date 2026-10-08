@@ -182,6 +182,7 @@ function installEnvironment(recipe: EngineInstallRecipe, PATH: string | undefine
 
 type LockTake =
   | { readonly kind: 'held'; readonly release: () => void; readonly waited: boolean }
+  | { readonly kind: 'present'; readonly path: string }
   | { readonly kind: 'busy'; readonly owner: OwnedLockRecord | null }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'unsafe'; readonly reason: string }
@@ -202,7 +203,14 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((
  */
 async function takeInstallLock(
   fields: Record<string, unknown>,
-  opts: { waitMs: number; signal?: AbortSignal; onWaiting: (owner: OwnedLockRecord) => void; onStillWaiting: (seconds: number) => void },
+  opts: {
+    waitMs: number
+    signal?: AbortSignal
+    onWaiting: (owner: OwnedLockRecord) => void
+    onStillWaiting: (seconds: number) => void
+    /** This agent, if it is in place now (no shell: its install paths and PATH). */
+    present?: () => string | null
+  },
 ): Promise<LockTake> {
   const lock = installLock()
   const started = Date.now()
@@ -229,6 +237,15 @@ async function takeInstallLock(
       return { kind: 'held', release, waited: announced }
     }
     if (owner ? lock.reclaimIfStale(owner) : lock.reclaimIfOwnerless()) continue
+    // One lock serves every agent, so a first harness's OpenCode waited behind the background's
+    // Claude Code, Codex and Pi installs although OpenCode was already in place (fresh macOS VM,
+    // 2026-10-08: 30 s). While another agent is being installed, this one being present means its
+    // own install has finished; while this agent is the one installing, the wait goes on (npm links
+    // the executable before it is done).
+    if (owner && owner.fields.engine !== fields.engine) {
+      const path = opts.present?.()
+      if (path) return { kind: 'present', path }
+    }
     const waited = Date.now() - started
     if (owner && !announced) {
       announced = true
@@ -371,7 +388,12 @@ export async function installAgent(opts: AgentInstallOptions): Promise<AgentInst
         : `harness: ${holder} is installing ${where(owner)}; ${name} installs after it — waiting${stopHint}`)
     },
     onStillWaiting: (seconds) => say(`harness: still waiting for that install (${seconds}s)`),
+    present: () => resolveAgentFast(opts.command, recipe),
   })
+  if (take.kind === 'present') {
+    say(`harness: ${name} is installed`)
+    return { outcome: 'found', path: take.path }
+  }
   if (take.kind === 'interrupted') {
     say(`harness: stopped waiting, so ${pane ? 'the agent was not started' : `${name} was not installed`}.`)
     return { outcome: 'interrupted', reason: 'interrupted' }
