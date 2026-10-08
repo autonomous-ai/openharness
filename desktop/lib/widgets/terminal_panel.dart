@@ -174,6 +174,10 @@ class TerminalPanel extends StatefulWidget {
   final bool readOnly;
   final TerminalNotice? notice;
 
+  /// Drawn over the terminal area (not the header) while set: the pane's own screen for something
+  /// the person should not have to read terminal output for, such as an agent being installed.
+  final Widget? cover;
+
   /// Flips [composerVisible]. Null where there is no composer to toggle.
   final VoidCallback? onToggleComposer;
 
@@ -202,6 +206,7 @@ class TerminalPanel extends StatefulWidget {
     this.composerVisible = false,
     this.readOnly = false,
     this.notice,
+    this.cover,
     this.onToggleComposer,
     this.onClose,
     this.onOpenModels,
@@ -2238,7 +2243,10 @@ class _TerminalPanelState extends State<TerminalPanel>
             // prompt on the first line. Stream-ownership notices below remain
             // overlays over frozen output until control is restored.
             if (widget.notice case final notice?
-                when notice.banner && !_inputBlocked && !_retakingControl)
+                when notice.banner &&
+                    widget.cover == null &&
+                    !_inputBlocked &&
+                    !_retakingControl)
               _ControlBanner.notice(notice),
             Expanded(
               // Any press into the pane's body — the terminal, the band, its
@@ -2391,6 +2399,8 @@ class _TerminalPanelState extends State<TerminalPanel>
                           ],
                         ),
                       ),
+                    if (widget.cover case final cover?)
+                      Positioned.fill(child: cover),
                   ],
                 ),
               ),

@@ -35,6 +35,7 @@ import 'new_agent_dialog.dart';
 import 'new_device_notice.dart' show DeviceListReviewLine, showDeviceListReview;
 import 'delete_agent_dialog.dart';
 import 'restart_agent_action.dart';
+import 'agent_install_cover.dart';
 import 'terminal_panel.dart';
 import 'harness_activity_mark.dart';
 import 'web_pane_panel.dart';
@@ -1571,6 +1572,29 @@ class _PaneContent extends StatelessWidget {
           notifier.zoomedPaneId == null &&
           terminalPaneCount >= 3;
       final TerminalNotice? notice;
+      // An agent that was not on this machine when the pane opened is being installed in it: a
+      // friendly screen covers the installer's output until the agent starts (AgentInstallCover).
+      final installingEngine =
+          agent != null &&
+              agent.engine != null &&
+              (agent.launchState == 'starting' ||
+                  agent.launchState == 'failed') &&
+              machine?.engines[agent.engine!]?.installed == false
+          ? agent.engine
+          : null;
+      final Widget? cover = installingEngine == null
+          ? null
+          : AgentInstallCover(
+              key: ValueKey('install-${agent!.id}'),
+              engine: installingEngine,
+              failed: agent.launchState == 'failed',
+              messageWaiting: notifier.hasFirstMessage(
+                pane.machineId,
+                agent.id,
+              ),
+              onTryAgain: () =>
+                  restartHarness(context, notifier, pane.machineId, agent.id),
+            );
       if (machine == null) {
         notice = terminalNotice(
           label: 'Unavailable',
@@ -1699,6 +1723,7 @@ class _PaneContent extends StatelessWidget {
               agent == null ||
               !agent.terminalAvailable,
           notice: notice,
+          cover: cover,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
           onClose: single && !swarmMode ? null : close,
           onOpenModels: onOpenModels == null
