@@ -20,8 +20,8 @@ class AgentInstallCover extends StatefulWidget {
     this.failed = false,
     this.messageWaiting = false,
     this.onTryAgain,
-    this.expected = const Duration(seconds: 15),
-  });
+    Duration? expected,
+  }) : expected = expected ?? typicalInstall(engine);
 
   final String engine;
 
@@ -34,6 +34,18 @@ class AgentInstallCover extends StatefulWidget {
 
   /// How long an install usually takes; the bar fills towards it and slows near the end.
   final Duration expected;
+
+  /// Measured on a fresh Mac (VM, 2026-10-08): OpenCode 7–12 s, Claude Code 8–13 s, Pi 11 s,
+  /// Codex 11–22 s. Others are guessed from their installers.
+  static Duration typicalInstall(String engine) => Duration(
+    seconds: switch (engine) {
+      'opencode' => 10,
+      'claude' => 12,
+      'pi' => 12,
+      'codex' => 20,
+      _ => 15,
+    },
+  );
 
   @override
   State<AgentInstallCover> createState() => _AgentInstallCoverState();
@@ -143,7 +155,7 @@ class _AgentInstallCoverState extends State<AgentInstallCover>
                   value: _fraction,
                   minHeight: 5,
                   backgroundColor: grid.AppSurface.recess,
-                  color: grid.AppPalette.swarmAccent,
+                  color: grid.AppPalette.accentOnSurface,
                 ),
               ),
               const SizedBox(height: 12),
