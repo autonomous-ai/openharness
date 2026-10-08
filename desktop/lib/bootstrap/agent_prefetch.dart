@@ -8,36 +8,46 @@ import 'dart:io';
 /// OpenCode is the agent a new person without Claude Code or Codex starts on, and on a fresh Mac
 /// its install in the first pane took 11.6 s of the first result's ~47 s (macOS VM, 2026-10-08).
 /// Its installer needs only `curl`, not the Node and Harness CLI that setup is installing, so it
-/// runs beside them. The desktop holds an OpenCode create until it settles
-/// ([AppNotifier.createAgent]); a second run of the same installer is harmless if the wait gives
-/// up (each run unpacks into a temp folder of its own and renames the whole binary into
-/// `~/.opencode/bin`). The command is the CLI's own recipe (`cli/src/lib/engineInstall.ts`).
+/// runs beside them. An OpenCode create waits for it, for at most the rest of a budget counted
+/// from the download's start ([waitFor]); a second run of the same installer after that is
+/// harmless (each run unpacks into a temp folder of its own and renames the whole binary into
+/// `~/.opencode/bin`). The command is the CLI's recipe (`cli/src/lib/engineInstall.ts`, held to it
+/// by `test/agent_prefetch_test.dart`) with `--no-modify-path`: Harness finds `~/.opencode/bin`
+/// itself, and a background download must not put a second OpenCode ahead of one the person
+/// already runs from their shell.
 class AgentPrefetch {
   AgentPrefetch({
     Future<Process> Function(String executable, List<String> arguments)? start,
+    bool Function()? skip,
     bool Function()? installed,
     void Function(String line)? log,
+    DateTime Function()? now,
   }) : _start =
            start ??
            ((executable, arguments) => Process.start(executable, arguments)),
-       _installed = installed ?? _openCodeInstalled,
-       _log = log ?? ((_) {});
+       _skip = skip ?? _alreadyHasAnAgent,
+       _installed = installed ?? _openCodeDownloaded,
+       _log = log ?? ((_) {}),
+       _now = now ?? DateTime.now;
 
-  static const command = 'curl -fsSL https://opencode.ai/install | bash';
+  /// The CLI's recipe line, and what this adds to it.
+  static const recipe = 'curl -fsSL https://opencode.ai/install | bash';
+  static const command = 'set -o pipefail; $recipe -s -- --no-modify-path';
 
   final Future<Process> Function(String executable, List<String> arguments)
   _start;
+  final bool Function() _skip;
   final bool Function() _installed;
   final void Function(String line) _log;
+  final DateTime Function() _now;
   Future<void>? _running;
+  DateTime? _startedAt;
+  bool _settled = false;
 
-  /// Settles when the download has finished either way; null when none was started.
-  Future<void>? get pending => _running;
-
-  /// Starts the download unless OpenCode is already where Harness looks for it. Once per app run.
+  /// Starts the download on a computer new to Harness and its agents. Once per app run.
   void start() {
-    if (_running != null || _installed()) return;
-    final started = DateTime.now();
+    if (_running != null || _skip()) return;
+    final started = _startedAt = _now();
     _running = () async {
       try {
         final process = await _start('/bin/bash', ['-c', command]);
@@ -61,29 +71,67 @@ class AgentPrefetch {
         ]).catchError((_) => <void>[]);
         final code = await process.exitCode;
         await drained;
-        final seconds =
-            DateTime.now().difference(started).inMilliseconds / 1000;
+        final seconds = _now().difference(started).inMilliseconds / 1000;
+        // Judged by the binary, as the CLI judges an install: an exit code alone says nothing
+        // about which half of a pipeline failed.
         _log(
-          code == 0
+          code == 0 && _installed()
               ? 'OpenCode downloaded during setup in ${seconds.toStringAsFixed(1)}s'
-              : 'OpenCode download during setup exited $code after ${seconds.toStringAsFixed(1)}s '
-                    '(the first harness installs it instead): ${tail.join(' | ')}',
+              : 'OpenCode download during setup did not finish (exit $code, '
+                    '${seconds.toStringAsFixed(1)}s); the first harness installs it instead: '
+                    '${tail.join(' | ')}',
         );
       } catch (error) {
         _log('OpenCode download during setup did not start: $error');
+      } finally {
+        _settled = true;
       }
     }();
   }
 
-  /// Where the CLI's recipe finds OpenCode without a login shell: its installer's folder and the two
-  /// Homebrew prefixes. An npm or nvm install elsewhere is found by the daemon's probe instead, and
-  /// downloading a second copy there costs disk, not correctness.
-  static bool _openCodeInstalled() {
-    final home = Platform.environment['HOME'];
+  /// What an OpenCode create waits for: the download, for whatever is left of [budget] since it
+  /// started. Null when there is nothing to wait for — none started, it finished, OpenCode is in
+  /// place, or the budget is spent — so a slow download costs the first create at most [budget]
+  /// and every later one nothing.
+  Future<void>? waitFor(Duration budget) {
+    final running = _running;
+    final since = _startedAt;
+    if (running == null || since == null || _settled || _installed()) {
+      return null;
+    }
+    final left = budget - _now().difference(since);
+    if (left <= Duration.zero) return null;
+    return running.timeout(left, onTimeout: () {});
+  }
+
+  static String? get _home => Platform.environment['HOME'];
+
+  static bool _openCodeDownloaded() {
+    final home = _home;
+    return home != null && File('$home/.opencode/bin/opencode').existsSync();
+  }
+
+  /// Nothing to download for: Harness has run here before (its CLI folder), or the person already
+  /// has an agent. Claude Code or Codex (their folders, which any use of them leaves), or OpenCode
+  /// in any place it installs to or has kept its data in. A false "new" costs a download, so this
+  /// errs towards skipping.
+  static bool _alreadyHasAnAgent() {
+    final home = _home;
+    if (home == null) return true;
     return [
-      if (home != null) '$home/.opencode/bin/opencode',
+      '$home/.harness/cli',
+      '$home/.claude',
+      '$home/.codex',
+      '$home/.opencode/bin/opencode',
+      '$home/.local/bin/opencode',
+      '$home/.bun/bin/opencode',
+      '$home/.config/opencode',
+      '$home/.local/share/opencode',
       '/opt/homebrew/bin/opencode',
       '/usr/local/bin/opencode',
-    ].any((path) => File(path).existsSync());
+    ].any(
+      (path) =>
+          FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
+    );
   }
 }

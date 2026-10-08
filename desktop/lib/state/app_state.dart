@@ -4156,8 +4156,9 @@ class AppNotifier extends ChangeNotifier {
       // a password in Terminal waits on the wizard's Install action.
       var result = await _runProvisioner(install: false);
       if (!result.isReady && _canInstallUnattended(result, mode: null)) {
-        // A computer setting up the Harness CLI is new to Harness: the agent its first harness most
-        // likely runs (OpenCode, unless Claude Code or Codex is signed in) downloads meanwhile.
+        // A computer setting up the Harness CLI for the first time is new to Harness: OpenCode, the
+        // agent its first harness runs unless it has Claude Code or Codex, downloads meanwhile
+        // ([AgentPrefetch.start] decides).
         if (result.plan.any((item) => item.step == EnvironmentStep.harness)) {
           agentPrefetch?.start();
         }
@@ -10950,7 +10951,7 @@ class AppNotifier extends ChangeNotifier {
       // same refusal for an engine that has no such thing (`AGENT_UNSUPPORTED`).
       'agent': ?agent,
     };
-    Future<String?> create() => _create(
+    return _create(
       machineId,
       choices,
       projectFolder: projectFolder,
@@ -10960,19 +10961,10 @@ class AppNotifier extends ChangeNotifier {
       attempt: attempt,
       placement: placement,
     );
-    // OpenCode still downloading beside setup: the pane would start a second install of it. Held
-    // for as long as a download usually takes; past that the pane installs it as it always did.
-    final prefetch =
-        engine == 'opencode' && stateOf(machineId)?.isLocalMachine == true
-        ? agentPrefetch?.pending
-        : null;
-    if (prefetch == null) return create();
-    return prefetch
-        .timeout(agentPrefetchWait, onTimeout: () {})
-        .then((_) => create());
   }
 
-  /// How long an OpenCode create waits for [agentPrefetch]: a download took 7–12 s in the VM runs.
+  /// How long, from its start, an OpenCode create waits for [agentPrefetch]: a download took
+  /// 7–12 s in the VM runs.
   @visibleForTesting
   Duration agentPrefetchWait = const Duration(seconds: 30);
 
@@ -11288,6 +11280,26 @@ class AppNotifier extends ChangeNotifier {
         !machine.isLocalMachine &&
         creation._projectFolder?.isGenerated == true &&
         creation._projectNameRetries < 64;
+    // OpenCode still downloading beside setup ([AgentPrefetch]): the pane would start a second install
+    // of it. Waited for here, once the creation is registered (its tab and split are held), and only
+    // for what is left of [agentPrefetchWait] since the download began.
+    if (!creation.awaitingConfirmation &&
+        choices['engine'] == 'opencode' &&
+        machine.isLocalMachine) {
+      final download = agentPrefetch?.waitFor(agentPrefetchWait);
+      if (download != null) {
+        await download;
+        final moved = creation.background
+            ? null
+            : _creationPlacementError(targetId, split, placement: placement);
+        if (moved != null) return creation._complete(moved);
+        if (_disposed || machineStates[machineId] != machine) {
+          return creation._complete(
+            'The selected machine changed. Choose the machine again.',
+          );
+        }
+      }
+    }
     final operation = creation.awaitingConfirmation
         ? 'agent_create_status'
         : 'agent_create';
