@@ -1,6 +1,7 @@
 """Real Chromium start-page/Connections checks on the disposable OS test disk."""
 import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import shlex
 import shutil
@@ -32,7 +33,11 @@ def overlay(vm, source, result):
                 if path.is_file():
                     target = '/' + str(path.relative_to(root))
                     result['candidates'][target] = {'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
-                    tar.add(path, arcname=target.lstrip('/'))
+                    info = tar.gettarinfo(str(path), target.lstrip('/'))
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = 'root'
+                    with path.open('rb') as handle:
+                        tar.addfile(info, handle)
         copy_file(vm, archive.read_bytes(), '/tmp/home-candidate.tar')
         vm.command('sudo -n tar -xf /tmp/home-candidate.tar -C /')
 
@@ -73,5 +78,23 @@ def exercise(vm, result):
         wait_installer_screen(vm, r'Connect accounts', 'browser-home-restart')
         close_browser(vm)
         result['checks'].append('New Tab and the next browser launch keep the start page without an install or permission prompt')
+    except BaseException:
+        # Inspect only disposable profile extension state, never saved accounts.
+        code = '''import json,pathlib
+out={}
+root=pathlib.Path.home()/'.config/chromium'
+for path in root.glob('*/Preferences'):
+ d=json.loads(path.read_text()).get('extensions',{})
+ out[str(path.relative_to(root))]={'overrides':d.get('chrome_url_overrides'), 'extensions':{k:{field:v.get(field) for field in ['state','disable_reasons','location','manifest']} for k,v in d.get('settings',{}).items()}}
+print(json.dumps(out))'''
+        output, _ = vm.command('python3 -c ' + shlex.quote(code), check=False)
+        (vm.folder / 'home-profile-diagnostic.txt').write_text(output)
+        vm.keys('ctrl', 'l')
+        vm.type_probe('chrome://extensions')
+        vm.keys('ret')
+        wait_installer_screen(vm, r'Extensions', 'home-extensions-diagnostic')
+        vm.keys('ctrl', 't')
+        vm.screenshot('home-second-tab-diagnostic')
+        raise
     finally:
         vm.command('sudo -n nmcli networking on')

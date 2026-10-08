@@ -88,8 +88,9 @@ def stage(source, destination):
     # The distro's supported external-extension mechanism is removable and
     # remembers removal. Do not force-install it or edit profile preferences.
     records = {
-        'usr/share/chromium/extensions/' + extension_id + '.json': {
-            'external_crx': '/' + CRX_TARGET, 'external_version': version,
+        'usr/share/harness-os/browser-home/extension.json': {
+            'extension_id': extension_id,
+            'descriptor': {'external_crx': '/' + CRX_TARGET, 'external_version': version},
         },
         'etc/chromium/native-messaging-hosts/' + HOST + '.json': {
             'name': HOST, 'description': 'Open Harness Connections',
@@ -106,6 +107,9 @@ def stage(source, destination):
     host.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source / 'os/browser_home.py', host)
     host.chmod(0o755)
+    prepare = destination / 'usr/lib/harness-os/browser_profile.py'
+    shutil.copyfile(source / 'os/browser_profile.py', prepare)
+    prepare.chmod(0o755)
     return {'extension_id': extension_id, 'version': version}
 
 

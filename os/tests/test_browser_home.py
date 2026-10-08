@@ -22,6 +22,7 @@ def module(name, path):
 
 host = module('browser_home_host', 'os/browser_home.py')
 payload = module('home_payload', 'os/tools/browser_home_payload.py')
+profile = module('home_profile', 'os/browser_profile.py')
 
 
 def message(data):
@@ -89,9 +90,8 @@ class BrowserHome(unittest.TestCase):
         native = json.loads((self.folder / 'stage/etc/chromium/native-messaging-hosts' /
                             (payload.HOST + '.json')).read_text())
         self.assertEqual(native['allowed_origins'], ['chrome-extension://' + extension_id + '/'])
-        external = json.loads((self.folder / 'stage/usr/share/chromium/extensions' /
-                              (extension_id + '.json')).read_text())
-        self.assertEqual(external['external_version'], version)
+        external = json.loads((self.folder / 'stage/usr/share/harness-os/browser-home/extension.json').read_text())
+        self.assertEqual(external['descriptor']['external_version'], version)
         self.assertFalse((self.folder / 'stage/etc/chromium/policies').exists())
 
     def test_source_changes_or_crx_signature_changes_require_repacking(self):
@@ -109,6 +109,51 @@ class BrowserHome(unittest.TestCase):
         crx.write_bytes(raw)
         with self.assertRaises(subprocess.CalledProcessError):
             payload.verify(folder)
+
+    def test_first_launch_preserves_custom_newtab_in_any_existing_profile(self):
+        package = self.folder / 'extension.json'
+        identity = 'b' * 32
+        package.write_text(json.dumps({'extension_id': identity, 'descriptor': {'external_crx': '/packaged.crx', 'external_version': '1.0'}}))
+        root = self.folder / 'chromium'
+        prefs = root / 'Profile 2/Preferences'
+        prefs.parent.mkdir(parents=True)
+        variants = [
+            {'extensions': {'chrome_url_overrides': {'newtab': [{'entry': 'chrome-extension://' + 'c' * 32 + '/home.html', 'active': True}]}}},
+            {'extensions': {'settings': {'c' * 32: {'manifest': {'chrome_url_overrides': {'newtab': 'index.html'}}}}}},
+        ]
+        for data in variants:
+            raw = json.dumps(data)
+            prefs.write_text(raw)
+            self.assertFalse(profile.prepare(root, package))
+            self.assertFalse((root / 'External Extensions').exists())
+            self.assertEqual(prefs.read_text(), raw)
+        prefs.write_text('{invalid')
+        self.assertFalse(profile.prepare(root, package))
+        self.assertEqual(prefs.read_text(), '{invalid')
+
+    def test_prepare_writes_only_owned_descriptor_and_updates_without_profile_edits(self):
+        package = self.folder / 'extension.json'
+        identity = 'b' * 32
+        descriptor = {'external_crx': '/packaged.crx', 'external_version': '1.0'}
+        package.write_text(json.dumps({'extension_id': identity, 'descriptor': descriptor}))
+        root = self.folder / 'chromium'
+        prefs = root / 'Default/Preferences'
+        prefs.parent.mkdir(parents=True)
+        original = '{"session":{"restore_on_startup":1},"bookmark_bar":{"show_on_all_tabs":true}}'
+        prefs.write_text(original)
+        self.assertTrue(profile.prepare(root, package))
+        target = root / 'External Extensions' / (identity + '.json')
+        self.assertEqual(json.loads(target.read_text()), descriptor)
+        self.assertEqual(prefs.read_text(), original)
+        self.assertTrue(profile.prepare(root, package))
+        descriptor['external_version'] = '1.1'
+        package.write_text(json.dumps({'extension_id': identity, 'descriptor': descriptor}))
+        self.assertTrue(profile.prepare(root, package))
+        self.assertEqual(json.loads(target.read_text()), descriptor)
+        self.assertEqual(prefs.read_text(), original)
+        target.write_text('{"external_crx":"/user-choice.crx"}')
+        self.assertFalse(profile.prepare(root, package))
+        self.assertEqual(target.read_text(), '{"external_crx":"/user-choice.crx"}')
 
 
 if __name__ == '__main__':

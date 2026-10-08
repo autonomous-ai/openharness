@@ -2,8 +2,9 @@
 
 The PC OS packages a small, removable Chromium Manifest V3 extension. It opens on
 New Tab and the browser's default startup, with one action: **Connections**.
-The browser launcher, startup preferences, bookmark bar and explicit URLs stay
-untouched. A user can disable/remove it in `chrome://extensions` or choose another
+The launcher registers it for the local user before opening Chromium, only when
+their existing profiles have no custom New Tab extension. Startup preferences,
+bookmarks and explicit URLs stay untouched. A user can disable/remove it in `chrome://extensions` or choose another
 New Tab extension. Chromium remembers removal across OS updates.
 
 The extension has only `nativeMessaging` permission. It has no background worker,
