@@ -12,6 +12,8 @@ import { copilotSessionForPid, findCopilotTranscript } from '../../engines/copil
 import { findCursorTranscript } from '../../engines/cursor/discovery.js'
 import { cursorDataDir } from '../../engines/cursor/home.js'
 import { findGrokTranscript } from '../../engines/grok/session.js'
+import { continuationOf } from '../../engines/sessionFiles.js'
+import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
@@ -19,7 +21,7 @@ import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
 import { sid } from '../../lib/log.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
-import { claudeContinuation, findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
+import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
 import type { SwarmPromptScopes } from '../../teams/promptScope.js'
@@ -238,22 +240,23 @@ export function createBinding({
       // SessionStart/UserPromptSubmit ever reaches us for it — the agent is left bound to a transcript
       // that has gone quiet forever while the real conversation continues one file over. Checked on
       // the same cadence this reconciler already re-observes every live process, so it costs nothing
-      // extra to ask.
-      if (observed.engine === 'claude' && agent.transcriptPath) {
-        const continuation = await claudeContinuation(agent.transcriptPath)
+      // extra to ask. Its session store declares the marker (`continuation`), read in core with the kit.
+      const store = sessionStoreOf(observed.engine)
+      if (store?.continuation && agent.transcriptPath) {
+        const continuation = await continuationOf(observed.engine, agent.transcriptPath)
         if (!continuation || continuation.sessionId === agent.sessionId
           || registry.has(continuation.sessionId) || isRecentlyDeleted(continuation.sessionId)) return
-        console.log(`[discovery] ${sid(agent.agentId)} claude session continued ${sid(agent.sessionId)} → ${sid(continuation.sessionId)}`)
+        console.log(`[discovery] ${sid(agent.agentId)} ${observed.engine} session continued ${sid(agent.sessionId)} → ${sid(continuation.sessionId)}`)
         const rotated = registry.register({
-          engine: 'claude',
+          engine: observed.engine,
           sessionId: continuation.sessionId,
           transcriptPath: continuation.transcriptPath,
           cwd: observed.cwd,
-          source: 'claude-continuation',
+          source: `${observed.engine}-continuation`,
           runtimes: observed.runtimes,
           primaryRuntimeKey: observed.primaryRuntimeKey,
           processIdentity: observed.processIdentity,
-          hookEvent: 'ClaudeContinuation',
+          hookEvent: `${store.label}Continuation`,
         })
         if (rotated?.isNew) await handleRegistered(rotated.entry, rotated)
         return

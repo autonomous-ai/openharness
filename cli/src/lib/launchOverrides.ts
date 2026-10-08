@@ -17,6 +17,7 @@ import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
 import { ownLoginProviderArgs } from '../engines/launches.js'
 import { namedAgentArgs, supportsNamedAgent } from './engineLaunch.js'
+import { profileEnvironment } from './engineHomes.js'
 import {
   buildGridEngineLaunch,
   gridConflictingEnvToClear,
@@ -265,7 +266,7 @@ async function buildBaseLaunchOverrides(
     return {
       ok: true,
       overrides: {
-        env: { CODEX_HOME: source.codexHome, ...(ownLogin?.env ?? {}) },
+        env: { ...profileEnvironment(engine, source.codexHome), ...(ownLogin?.env ?? {}) },
         extraArgs: [...(ownLogin?.extraArgs ?? [])],
         clearEnv: [],
       },
