@@ -216,6 +216,9 @@ const fields = {
   // `app-*.log`/`cli-*.log`, so one directory holds everything a bug report needs. Not the data dir:
   // `harness.log` there is the daemon's console, and `harness reset` wipes it.
   HARNESS_LOGS_DIR: text(join(adapterRootDir, 'logs')),
+  // The dials' own product-root state: `pets/` holds the custom pet packs and which pack stands for what.
+  // Not daemon data (`harness reset` must not lose a user's pets), and shared by this user's daemons.
+  HARNESS_DEVICES_DIR: text(join(adapterRootDir, 'devices')),
   // Where each daemon on this computer records its data folder and port under the tag it puts on its
   // panes, so an engine's hook reaches the daemon that made its pane whichever daemon installed the hook
   // (lib/hookRoutes.ts). Product-root state, shared by every daemon of this user: not in a data folder.

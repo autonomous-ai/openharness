@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 #include "fw_update.h"
 #include "last_words.h"
+#include "pet_store.h"
 #include "board/board.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -325,6 +326,19 @@ static void send_hello(void)
     // Carried on every greeting so the app's pane opens on what the device holds rather than on what
     // this computer last sent it — which after a reboot, a reset or a second window is not the same.
     msg_settings(&root);
+    // Custom pets: the pack version this build understands (a number, so a later format can say 2), and
+    // these packs are already held, so the daemon sends only what is missing.
+    msg_number(&root, "pets", 1);
+    {
+        char held[PET_STORE_MAX_PACKS][17];
+        const size_t n = pet_store_held(held, PET_STORE_MAX_PACKS);
+        cJSON *ids = msg_array(&root, "petIds");
+        for (size_t i = 0; root && ids && i < n; i++) {
+            cJSON *id = cJSON_CreateString(held[i]);
+            if (!msg_check(&root, id != NULL)) break;
+            if (!cJSON_AddItemToArray(ids, id)) { cJSON_Delete(id); msg_check(&root, false); }
+        }
+    }
     send_json(root);
 }
 
@@ -920,6 +934,7 @@ static void session_up(const cJSON *p)
     }
 }
 
+static void pet_forget_transfer(void);
 static void session_down(const char *why)
 {
     if (!s_session) return;
@@ -951,6 +966,7 @@ static void session_down(const char *why)
     // a serial monitor, which is exactly the situation a dropped session puts them in.
     cable_link_set_log_framing(false);
     fw_update_abort("session down");   // no more slices are coming; the running image is untouched
+    pet_forget_transfer();             // likewise a half-received pet pack; the held packs stay
     ESP_LOGI(TAG, "session down (%s)", why);
     ui_set_connected(false);
 }
@@ -1100,6 +1116,103 @@ static void handle_notifications(const cJSON *p)
         n++;
     }
     ui_notif_replace(rows, n);
+}
+
+// ── custom pets ─────────────────────────────────────────────────────────────────────────────────────
+// A pack arrives as CABLE_TYPE_PET slices on the reader task, like firmware: each slice is acknowledged with
+// `pet.progress`, which is what opens the daemon's credit window (docs/specs/cable-protocol.md §7).
+
+static char     s_pet_id[17];
+static uint32_t s_pet_size, s_pet_written;   // reader task only
+
+static void pet_reply(const char *t, const char *id, const char *reason)
+{
+    cJSON *root = msg(t);
+    if (!root) return;
+    msg_string(&root, "id", id ? id : "");
+    if (reason) msg_string(&root, "reason", reason);
+    send_json(root);
+}
+
+static void pet_forget_transfer(void)
+{
+    s_pet_id[0] = 0;
+    s_pet_size = s_pet_written = 0;
+    pet_store_abort();
+}
+
+static void handle_pet_offer(const cJSON *p)
+{
+    const char *id = str_of(p, "id");
+    const cJSON *size = cJSON_GetObjectItemCaseSensitive(p, "size");
+    const cJSON *crc = cJSON_GetObjectItemCaseSensitive(p, "crc");
+    if (!id || strlen(id) != 16) {
+        pet_reply("pet.error", id, "shape");
+        return;
+    }
+    if (!cJSON_IsNumber(size) || !cJSON_IsNumber(crc) || size->valuedouble <= 22 || size->valuedouble > PET_STORE_MAX_BYTES ||
+        crc->valuedouble < 0 || crc->valuedouble > 4294967295.0) {
+        pet_reply("pet.error", id, "shape");
+        return;
+    }
+    pet_forget_transfer();
+    if (!pet_store_offer(id, (uint32_t)size->valuedouble, (uint32_t)crc->valuedouble)) {
+        // Four other packs held is `busy` (the daemon drops one and offers again); anything else is memory.
+        char held[PET_STORE_MAX_PACKS][17];
+        const size_t n = pet_store_held(held, PET_STORE_MAX_PACKS);
+        bool same = false;
+        for (size_t i = 0; i < n; i++) if (!strcmp(held[i], id)) same = true;
+        bool hex = true;
+        for (int i = 0; i < 16; i++) if (!((id[i] >= '0' && id[i] <= '9') || (id[i] >= 'a' && id[i] <= 'f'))) hex = false;
+        pet_reply("pet.error", id, !hex ? "shape" : n >= PET_STORE_MAX_PACKS && !same ? "busy" : "memory");
+        return;
+    }
+    memcpy(s_pet_id, id, sizeof(s_pet_id) - 1);
+    s_pet_id[16] = 0;
+    s_pet_size = (uint32_t)size->valuedouble;
+    s_pet_written = 0;
+    pet_reply("pet.accept", id, NULL);
+}
+
+static void handle_pet_slice(const uint8_t *data, size_t len)
+{
+    if (!s_pet_id[0] || len == 0) return;
+    if (!pet_store_slice(data, len)) {
+        // The only way a slice fails with an offer open is more bytes than were offered: a shape error.
+        pet_reply("pet.error", s_pet_id, "shape");
+        pet_forget_transfer();
+        return;
+    }
+    s_pet_written += (uint32_t)len;
+    cJSON *root = msg("pet.progress");
+    if (root) {
+        msg_string(&root, "id", s_pet_id);
+        msg_number(&root, "written", (double)s_pet_written);
+        send_json(root);
+    }
+    if (s_pet_written < s_pet_size) return;
+    const int err = pet_store_finish();
+    if (err == 0) { pet_reply("pet.done", s_pet_id, NULL); ui_pets_changed(); }
+    else pet_reply("pet.error", s_pet_id, err == PET_ERR_CRC ? "crc" : err == PET_ERR_VERSION ? "version" : "shape");
+    s_pet_id[0] = 0;
+    s_pet_size = s_pet_written = 0;
+}
+
+static void handle_pet_map(const cJSON *p)
+{
+    const char *all = str_of(p, "all");
+    const char *engines[8], *ids[8];
+    size_t n = 0;
+    const cJSON *map = cJSON_GetObjectItemCaseSensitive(p, "engines");
+    const cJSON *e;
+    cJSON_ArrayForEach(e, map) {
+        if (n >= 8) break;
+        if (!cJSON_IsString(e) || !e->string || !e->valuestring) continue;
+        engines[n] = e->string;
+        ids[n++] = e->valuestring;
+    }
+    pet_store_map(all, engines, ids, n);
+    ui_pets_changed();
 }
 
 static void handle_message(const cJSON *root)
@@ -1313,6 +1426,16 @@ static void handle_message(const cJSON *root)
         return;
     }
 
+    if (strcmp(t, "pet.map") == 0) { handle_pet_map(p); return; }
+    if (strcmp(t, "pet.offer") == 0) { handle_pet_offer(p); return; }
+    if (strcmp(t, "pet.drop") == 0) {
+        const char *did = str_of(p, "id");
+        if (did && !strcmp(did, s_pet_id)) pet_forget_transfer();   // an in-flight id: the daemon abandoned it
+        pet_store_drop(did);
+        ui_pets_changed();
+        return;
+    }
+
     // A message this build has no case for. Counted, never fatal: it means a daemon running ahead of this
     // firmware, which is a version mismatch someone can act on rather than a fault.
     s_unknown++;
@@ -1329,6 +1452,11 @@ static void on_frame(uint8_t version, uint8_t type, const uint8_t *payload, size
         // against: the write blocks the reader for ~16 ms per slice, and nothing drains the port
         // meanwhile — see docs/specs/cable-protocol.md §7.
         fw_update_slice(payload, payload_len);
+        return;
+    }
+    if (type == CABLE_TYPE_PET) {
+        s_last_rx_us = esp_timer_get_time();
+        handle_pet_slice(payload, payload_len);
         return;
     }
     if (type != CABLE_TYPE_JSON) {
