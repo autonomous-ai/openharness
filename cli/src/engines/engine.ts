@@ -1,4 +1,5 @@
 import type { EngineScreen } from './facets/screen.js'
+import type { EngineModelControl } from './facets/modelControl.js'
 import type { ProcessEngine } from './types.js'
 import type { EngineTranscript } from './facets/transcript.js'
 import type { EngineLaunch } from './facets/launch.js'
@@ -15,4 +16,5 @@ export interface Engine {
   readonly live: EngineLive
   readonly runtime: EngineRuntime
   readonly screen: EngineScreen
+  readonly modelControl: EngineModelControl
 }

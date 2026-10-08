@@ -32,6 +32,8 @@ export interface EngineConfig {
   claudeProjectsDir: string
   codexHome: string
   claudeModel?: string
+  /** Pause model commands at a disposable file gate for worker failure tests. */
+  modelControlGate?: boolean
   codexModel?: string
   /** The test's throwaway root: the engine runs no hooks from settings outside it. */
   root: string
@@ -55,6 +57,8 @@ export interface DaemonOptions {
   heapMiB?: number
   /** Models the fake engines report. */
   claudeModel?: string
+  /** Pause model commands at a disposable file gate for worker failure tests. */
+  modelControlGate?: boolean
   codexModel?: string
   /** Boot the core on its own (`__run`) instead of under harnessd's master (`__harnessd`). */
   noMaster?: boolean
@@ -210,7 +214,7 @@ export class IsolatedDaemon {
     await writeFile(join(dirs.home, '.zshrc'), '', { flag: 'a' })
     const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
-      claudeModel: options.claudeModel, codexModel: options.codexModel,
+      claudeModel: options.claudeModel, codexModel: options.codexModel, modelControlGate: options.modelControlGate,
       root, hookLog: join(own, 'fake-engine-hooks.log'),
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
     }

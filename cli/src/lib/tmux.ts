@@ -1377,17 +1377,19 @@ function tmuxDeleteBuffer(name: string): Promise<void> {
  *
  *  A buffer set and deleted is a notification to every control client, which on a tmux before 3.7
  *  crashed the server while one was attaching: the paste waits for none to be (tmuxControlGate.ts). */
-function tmuxPasteText(pane: string, content: string, bracketed: boolean): Promise<boolean> {
-  return inTmuxRoom('notify', () => pasteThroughBuffer(pane, content, bracketed))
+function tmuxPasteText(pane: string, content: string, bracketed: boolean, allowed?: () => boolean): Promise<boolean> {
+  return inTmuxRoom('notify', () => pasteThroughBuffer(pane, content, bracketed, allowed))
 }
 
-async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean): Promise<boolean> {
+async function pasteThroughBuffer(pane: string, content: string, bracketed: boolean, allowed?: () => boolean): Promise<boolean> {
+  if (allowed && !allowed()) return false
   const bufferName = `machinemsg-${process.pid}-${++injectBufferSequence}`
   if (!(await tmuxLoadBuffer(bufferName, bracketed ? neutralizePasteControls(content) : content))) {
     await tmuxDeleteBuffer(bufferName)
     console.error(`[tmux] load-buffer for ${pane} failed`)
     return false
   }
+  if (allowed && !allowed()) { await tmuxDeleteBuffer(bufferName); return false }
   const args = ['paste-buffer', '-t', pane, '-b', bufferName]
   if (bracketed) args.push('-p')
   args.push('-d')
@@ -1415,14 +1417,15 @@ async function pasteThroughBuffer(pane: string, content: string, bracketed: bool
  * from being pressed, and comes back as `{ withheld }`, the text left typed. An engine can open a dialog
  * in that gap, mid-turn, and the Enter would answer it.
  */
-export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promise<string | null>): Promise<boolean | { withheld: string }> {
+export function sendToTmux(pane: string, text: string, beforeEnter?: () => Promise<string | null>, allowed?: () => boolean): Promise<boolean | { withheld: string }> {
   const content = text.replace(/[\r\n]+$/, '') // strip trailing newlines so the submit Enter isn't doubled
   return (async () => {
     const needsSettle = content.length > INJECT_FASTPATH_MAXLEN || /[\r\n]/.test(content)
-    if (!(await tmuxPasteText(pane, content, true))) return false
+    if (!(await tmuxPasteText(pane, content, true, allowed))) return false
     if (needsSettle) await sleep(Math.min(1500, INJECT_PASTE_DELAY_BASE_MS + Math.floor(content.length / 60)))
     const withheld = beforeEnter ? await beforeEnter() : null
     if (withheld) return { withheld }
+    if (allowed && !allowed()) return { withheld: 'terminal control revoked' }
     return tmuxEnter(pane)
   })()
 }
