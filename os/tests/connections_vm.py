@@ -64,7 +64,11 @@ print('Installed Connections CLI, shared local credentials and authenticated dis
         wait_installer_screen(vm, r'Access token', 'connections-token-form', timeout=15)
         vm.keys('esc')
     finally:
-        vm.keys('alt', 'f4')
+        # Use Chromium's own close-window shortcut. Harness deliberately does
+        # not bind Alt+F4; sending it can leave the browser alive or change VT.
+        vm.keys('ctrl', 'shift', 'w')
+        vm.command('for n in $(seq 1 50); do ! pgrep -u "$(id -u)" -x chromium '
+                   '>/dev/null && exit 0; sleep .1; done; exit 1', timeout=10)
         # The helper is on demand, but waits 15 minutes for inactivity. Stop
         # this fixture's helper before the image test records idle RAM.
         pattern = r'^/usr/bin/python3 /usr/lib/harness-os/connections/connections[.]py serve --background$'
