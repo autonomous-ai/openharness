@@ -29,6 +29,11 @@ class PackageIdentity(unittest.TestCase):
             self.assertEqual((destination / 'usr/lib/harness-os/browser_home.py').stat().st_mode & 0o777, 0o755)
             self.assertTrue((destination / 'etc/chromium/native-messaging-hosts/ai.autonomous.harness_home.json').is_file())
             self.assertTrue((destination / 'usr/lib/harness-os/connections/web/index.html').is_file())
+            for name in ('bridge.py', 'catalog.json', 'oauth.py', 'gateway.py', 'agents.py', 'renew.py'):
+                self.assertTrue((destination / 'usr/lib/harness-os/connections' / name).is_file(), name)
+            socket = (destination / 'usr/lib/systemd/user/harness-connections.socket').read_text()
+            self.assertIn('ListenStream=127.0.0.1:51793', socket)
+            self.assertIn('harness-connections.socket', (destination / 'usr/lib/systemd/user/harness-os.target').read_text())
             self.assertTrue((destination / 'usr/share/licenses/harness-os-connections/LICENSE').is_file())
             self.assertIn('harness connections', (destination / 'usr/share/harness-os/connections.md').read_text())
             self.assertIn('/usr/lib/harness-os/connections/connections.py', (destination / 'usr/bin/harness').read_text())

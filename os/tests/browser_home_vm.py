@@ -25,9 +25,10 @@ def overlay(vm, source, result):
         base = Path(temporary)
         root = base / 'root'
         result['browser_home'] = payload.stage(source, root)
-        connections = root / 'usr/lib/harness-os/connections/connections.py'
-        connections.parent.mkdir(parents=True)
-        shutil.copyfile(source / 'os/connectors/connections.py', connections)
+        # The page's imports, catalog and bundled assets must match its entry
+        # point, including when the reusable ISO contains an older connector.
+        shutil.copytree(source / 'os/connectors', root / 'usr/lib/harness-os/connections',
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         archive = base / 'home.tar'
         with tarfile.open(archive, 'w') as tar:
             for path in sorted(root.rglob('*')):
@@ -52,6 +53,13 @@ def helper_stopped(vm):
 def close_browser(vm):
     vm.keys('ctrl', 'shift', 'w')
     vm.command('timeout 10 sh -c \'while pgrep -u "$(id -u)" -x chromium >/dev/null; do sleep .1; done\'')
+
+
+def connected_page(vm, name):
+    # Catalog cards are rendered only after the authenticated API succeeds;
+    # the static page title alone would miss a broken capability handoff.
+    text = wait_installer_screen(vm, r'Ahrefs', name, timeout=30)
+    assert re.search(r'Available', text, re.I), text
 
 
 def preferences(vm, result):
@@ -136,13 +144,13 @@ def exercise(vm, result):
         vm.command('! pgrep -u "$(id -u)" -f ' + shlex.quote(HELPER))
         result['checks'].append('First browser start is the local Harness page offline; temporary preparation and Connections helper are both stopped')
         vm.click_word('browser-home-mouse', 'Connections')
-        wait_installer_screen(vm, r'Connect once', 'browser-home-connections', timeout=30)
+        connected_page(vm, 'browser-home-connections')
         vm.keys('ctrl', 'w')
         wait_installer_screen(vm, r'Harness_', 'browser-home-back')
         helper_stopped(vm)
         # Closing the Connections tab returns to its action. Enter must work too.
         vm.keys('ret')
-        wait_installer_screen(vm, r'Connect once', 'browser-home-keyboard-reopen', timeout=30)
+        connected_page(vm, 'browser-home-keyboard-reopen')
         result['checks'].append('Mouse click and keyboard Enter open authenticated Connections in a new tab; closing it and helper expiry recover without a stale bookmark')
         vm.keys('ctrl', 't')
         wait_installer_screen(vm, r'Harness_', 'browser-home-new-tab')

@@ -1,0 +1,9 @@
+[Unit]
+Description=Connected services for local agents
+Requires=harness-connections.socket
+
+[Service]
+# Adds the stored credential to each agent's MCP request, renewing it first
+# when it is about to expire. Exits after ten quiet minutes.
+ExecStart=/usr/bin/python3 /usr/lib/harness-os/connections/bridge.py
+Restart=on-failure

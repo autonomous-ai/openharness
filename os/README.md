@@ -81,15 +81,13 @@ for requirements and remaining work.
 
 Open **Connections** from the browser's New Tab page, or run `harness connections`.
 The local start page is removable in Chromium's extension settings and preserves
-existing New Tab customizations. Connect GitHub,
-Notion, Linear, Asana or Figma with a personal token, then any local agent can
-use the account through the same CLI. Tokens stay outside projects and agent
-configuration. No Intern hardware or device registration is required.
-
-This preview includes manual-token connections. Browser OAuth and automatic
-token renewal are not available yet. Existing installations receive the feature
-through the OS update channel after publication; no reinstall is needed. See
-[Connections](connectors/README.md) for the exact scope and validation limits.
+existing New Tab customizations. Sign in to a service on the local Connectors page.
+21 services (Linear, Notion, Canva, Atlassian, GitLab,
+Figma…) sign in directly from this computer; GitHub, Slack, Google, Microsoft
+365 and a few others sign in through the Harness account. Claude Code, Codex
+and OpenCode then get each service as an MCP server on a local bridge, which
+adds the credential and renews it before it expires. Tokens stay outside
+projects and agent configuration. See [Connections](connectors/README.md).
 
 ## Design
 

@@ -211,7 +211,11 @@ export function terminalActionRejected(reason: string): {
  * engine can open a dialog between a paste and its Enter (a long or multi-line one waits up to 1.5 s for
  * the engine to take it in, tmux.ts), and that Enter would answer the dialog.
  */
-export interface SubmitOptions { beforeEnter?: () => Promise<string | null> }
+export interface SubmitOptions {
+  beforeEnter?: () => Promise<string | null>
+  /** Synchronous authority fence, checked immediately before paste/Enter dispatch, including queues. */
+  allowed?: () => boolean
+}
 
 /** The text was typed and its Enter not pressed, for `reason`: it waits in the composer, unsent. */
 export function terminalEnterWithheld(reason: string): { state: 'unknown'; dispatch: 'possibly_executed'; reason: string } {

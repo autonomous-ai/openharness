@@ -49,15 +49,17 @@ class ConnectorHelperTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.dir = Path(self.temp.name)
         self.write('google_calendar', {
-            'auth_type': 'oauth', 'access_token': TOKEN, 'refresh_token': 'r', 'refresh': True,
-            'expires_at': int(time.time()) + 3600, 'user_email': 'me@example.com',
-            'scopes': ['https://www.googleapis.com/auth/calendar.events'],
+            'access_token': TOKEN, 'refresh_token': 'r', 'refresh': True, 'source': 'gateway',
+            'expires_at': int(time.time()) + 3600, 'account_name': 'me@example.com',
+            'scope': 'https://www.googleapis.com/auth/calendar.events',
         })
         self.mod = load_module(self.dir)
 
     def write(self, code, entry):
-        path = self.dir / f'{code}_access_tokens.json'
-        path.write_text(json.dumps({'connectors': {code: entry}}))
+        path = self.dir / 'tokens.json'
+        tokens = json.loads(path.read_text()) if path.exists() else {}
+        tokens[code] = entry
+        path.write_text(json.dumps(tokens))
         path.chmod(0o600)
 
     def run_main(self, *argv):
@@ -69,11 +71,11 @@ class ConnectorHelperTests(unittest.TestCase):
     def test_list_names_connector_without_secret(self):
         code, out, _ = self.run_main('list')
         self.assertEqual(code, 0)
-        self.assertIn('google_calendar: connected (me@example.com, oauth)', out)
+        self.assertIn('google_calendar: connected (me@example.com, harness connections call)', out)
         self.assertNotIn(TOKEN, out)
 
     def test_list_reports_unreadable_file_as_verification_failure(self):
-        (self.dir / 'google_calendar_access_tokens.json').write_text('{not json')
+        (self.dir / 'tokens.json').write_text('{not json')
         code, _, err = self.run_main('list')
         self.assertEqual(code, 3)
         self.assertIn('verification failed', err)
@@ -82,9 +84,11 @@ class ConnectorHelperTests(unittest.TestCase):
         code, out, _ = self.run_main('info', 'google_calendar')
         self.assertEqual(code, 0)
         info = json.loads(out)
-        self.assertFalse(info['auto_refresh'], 'Refresh metadata alone does not enable automatic renewal')
-        self.assertFalse(info['expired'])
+        self.assertTrue(info['auto_refresh'], 'The gateway renews a token it issued with a refresh token')
+        self.assertEqual(info['state'], 'connected')
+        self.assertTrue(info['rest_call'])
         self.assertNotIn(TOKEN, out)
+        self.assertNotIn('"r"', out)
 
     def test_call_sends_header_and_encodes_query(self):
         seen = {}
@@ -136,33 +140,18 @@ class ConnectorHelperTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn('Authorization', err)
 
-    def test_google_app_password_is_refused(self):
-        self.write('gmail', {'auth_type': 'pat', 'api_key': 'app-pass', 'credentials': {'email': 'me@example.com'}})
-        code, _, err = self.run_main('call', 'gmail', 'GET', 'https://gmail.googleapis.com/gmail/v1/users/me/messages')
+    def test_an_mcp_server_token_is_not_sent_to_a_rest_api(self):
+        self.write('github', {'access_token': TOKEN, 'source': 'dcr', 'mcp_entry': {'url': 'https://mcp.example/mcp'}})
+        with patch.object(self.mod._OPENER, 'open') as opener:
+            code, _, err = self.run_main('call', 'github', 'GET', 'https://api.github.com/user')
         self.assertEqual(code, 3)
-        self.assertIn('IMAP', err)
+        self.assertIn('MCP server', err)
+        opener.assert_not_called()
 
     def test_not_connected(self):
         code, _, err = self.run_main('call', 'google_drive', 'GET', 'https://www.googleapis.com/drive/v3/files')
         self.assertEqual(code, 3)
         self.assertIn('not connected', err.lower())
-
-    def test_token_param_uses_query_not_header(self):
-        self.write('facebook', {'api_key': TOKEN, 'credentials': {'page_id': '123'}})
-        seen = {}
-
-        def fake_urlopen(req, timeout):
-            seen['url'] = req.full_url
-            seen['auth'] = req.get_header('Authorization')
-            return FakeResponse('{"success": true}')
-
-        with patch.object(self.mod._OPENER, 'open', fake_urlopen):
-            code, out, _ = self.run_main('call', 'facebook', 'DELETE', 'https://graph.facebook.com/v19.0/1_2',
-                                         '--token-param', 'access_token')
-        self.assertEqual(code, 0)
-        self.assertIsNone(seen['auth'])
-        self.assertIn('access_token=' + TOKEN, seen['url'])
-        self.assertNotIn(TOKEN, out)
 
     def test_response_echoing_token_is_scrubbed(self):
         with patch.object(self.mod._OPENER, 'open', lambda req, timeout: FakeResponse(TOKEN)):
@@ -183,7 +172,7 @@ class ConnectorHelperTests(unittest.TestCase):
             code, _, _ = self.run_main('call', 'google_calendar', 'GET', url)
             self.assertEqual(code, 4, url)
 
-    def test_token_param_only_for_facebook(self):
+    def test_token_param_is_refused(self):
         code, _, err = self.run_main('call', 'google_calendar', 'GET', 'https://www.googleapis.com/x',
                                      '--token-param', 'access_token')
         self.assertEqual(code, 2)
@@ -195,7 +184,7 @@ class ConnectorHelperTests(unittest.TestCase):
         self.assertIsNone(handler.redirect_request(req, None, 302, 'Found', {}, 'https://attacker.example/'))
 
     def test_upload_refuses_credentials_and_non_media(self):
-        token_file = self.dir / 'google_calendar_access_tokens.json'
+        token_file = self.dir / 'tokens.json'
         alias = self.dir / 'innocent.jpg'
         alias.symlink_to(token_file)
         for raw in (str(token_file), str(alias), '/root/config/config.json'):
