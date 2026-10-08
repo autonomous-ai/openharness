@@ -4,7 +4,7 @@ import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
-import { inProcessScreen, preloadEngine } from '../engines/inProcess.js'
+import { engineNow, inProcessScreen, preloadEngine } from '../engines/inProcess.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
 import { createNativeControls } from './engines/nativeControls.js'
@@ -49,7 +49,7 @@ import { removePidFileIf, onError } from '../lib/daemonLaunch.js'
 import { ensureTmuxOnPath } from '../lib/tmuxOnPath.js'
 import { AUTH_DIR, AuthSessionManager, clearAuthSession, ensureSignInEpoch, readAuthSession, signInOf, type AuthSession } from '../lib/authSession.js'
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
-import { isTerminalEngine } from '../engines/types.js'
+import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
 import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
@@ -187,7 +187,6 @@ import { isInstalledCopy } from '../lib/installedCopy.js'
 import { managedNodePath } from '../lib/nodeRuntime.js'
 import { type ActivityFrame } from '../lib/turnActivity.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
-import { opencodeMajorVersion } from '../engines/opencode/version.js'
 import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
@@ -1894,11 +1893,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * cannot disagree about it.
    *
    * The other is which OpenCode is installed: v2's TUI exits 1 on v1's `-m` / `--agent`. Cached per
-   * installed file (`engines/opencode/version.ts`), so this costs a `stat` after the first read.
+   * installed file (`engines/opencode/version.ts`), so this costs a `stat` after the first read. Read for an
+   * OpenCode launch alone, by OpenCode's own code: every launch of OpenCode loads it before asking, and is refused
+   * without it (core/agents/create.ts, lib/launchOverrides.ts).
    */
-  const gridLaunchMachine = (): GridLaunchMachine => ({
+  const gridLaunchMachine = (engine: AgentEngine): GridLaunchMachine => ({
     hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR),
-    opencodeMajor: opencodeMajorVersion(),
+    opencodeMajor: engine === 'opencode' ? engineNow('opencode', 'an OpenCode launch was built')?.opencodeMajorVersion() ?? null : null,
   })
 
   /**

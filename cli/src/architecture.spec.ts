@@ -259,8 +259,6 @@ const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
   'lib/sessionSearch/externals/opencode.ts': '(o5) adoption\'s readers',
   'engines/cursor/home.ts': '(o5) adoption\'s readers, through lib/sessionSearch/externals/index.ts',
   'engines/hermes/reader.ts': '(o5) adoption\'s readers',
-  'engines/opencode/sessionModel.ts': '(o6) launch data: retarget\'s session model',
-  'engines/opencode/version.ts': '(o6) launch data: OpenCode\'s version',
   'lib/sessionSearch/externals/pi.ts': '(o5) adoption\'s readers',
 }
 
@@ -295,6 +293,16 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['hookServer.ts', '(o6)'],
   ['core/engines/hooks.ts', '(o6)'],
   ['lib/terminalAgentDiscovery.ts', '(o6)'],
+  // The launches: OpenCode's v2 rule declared, its version probe and session-model writer loaded for OpenCode.
+  ['core/agents/create.ts', '(o6)'],
+  ['core/agents/fork.ts', '(o6)'],
+  ['core/agents/launches.ts', '(o6)'],
+  ['core/agents/retarget.ts', '(o6)'],
+  ['core/agents/restart.ts', '(o6)'],
+  ['lib/launchOverrides.ts', '(o6)'],
+  ['lib/engineLaunch.ts', '(o6)'],
+  ['lib/gridLaunch.ts', '(o6)'],
+  ['lib/subscriptionModel.ts', '(o6)'],
 ]
 
 describe('the daemon\'s shape', () => {
