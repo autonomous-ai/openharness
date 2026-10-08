@@ -22,7 +22,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 
 import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { engineProcessMatch, resumeSessionId } from '../../tmux.js'
-import { forEachLine } from '../transcript.js'
+import { forEachLine } from '../../transcriptReader.js'
 import { absoluteFolder, entries, fileStamp, parseLine, readHead, readJson, readTail, record, text } from './support.js'
 import { type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
 

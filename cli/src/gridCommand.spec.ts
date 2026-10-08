@@ -50,6 +50,11 @@ function answer(stdin) {
     return
   }
   if (process.env.FAKE_GRID_STDOUT) process.stdout.write(process.env.FAKE_GRID_STDOUT)
+  // The refusal envelope the real \`grid\` writes under \`--json\` only (\`cli/json_error.py\`), one
+  // line, BEFORE the interpreter prints the same sentence in plain text on its way out.
+  if (process.env.FAKE_GRID_ENVELOPE && args.includes('--json')) {
+    process.stderr.write(JSON.stringify({ error: { code: null, message: process.env.FAKE_GRID_ENVELOPE, status: 409 } }) + '\\n')
+  }
   // Where the real \`grid\` puts every refusal — see the test that reads it back off the result line.
   if (process.env.FAKE_GRID_STDERR) process.stderr.write(process.env.FAKE_GRID_STDERR)
   process.exitCode = Number(process.env.FAKE_GRID_EXIT || '0')
@@ -343,6 +348,50 @@ describe('harness grid login — an already-signed-in computer', () => {
   }, 20_000)
 })
 
+/**
+ * A computer signed in by QR holds a Harness-issued sign-in (`method: 'qr'`, a token starting
+ * `hna_`). The hand-off used to refuse it before `grid` was asked; the control plane now learns who
+ * holds one from the Harness backend (autonomous-grid ADR 0046), so it goes to `grid` like any other
+ * sign-in and whatever `grid` answers is the answer.
+ */
+describe('harness grid login — a computer signed in by QR', () => {
+  const HARNESS_ISSUED = `hna_${'Q'.repeat(43)}`
+  const seedQrSession = (root: string): void => seedSession(root, { accessToken: HARNESS_ISSUED, method: 'qr' })
+
+  it('hands its Harness-issued sign-in to grid on standard input, as it does an Autonomous token', async () => {
+    const root = tempRoot()
+    seedQrSession(root)
+    const { base } = await signedInBackend()
+
+    const result = await run(root, ['grid', 'login', '--json'], base)
+
+    expect(result.status).toBe(0)
+    expect(ndjson(result.stdout)).toEqual([{ type: 'result', status: 'success', alreadySignedIn: true }])
+    const record = readRecord(root)
+    expect(record.args).toEqual(['login', '--harness', '--json'])
+    expect(record.stdin).toBe(`${HARNESS_ISSUED}\n`)
+  }, 20_000)
+
+  it('reports grid\'s own refusal as grid\'s, after grid was handed the token', async () => {
+    const root = tempRoot()
+    seedQrSession(root)
+    const { base } = await signedInBackend()
+    // What the control plane says while the Harness backend has not yet learned the account's Google
+    // identity (ADR 0046): the refusal that matters for this sign-in, and `grid`'s to word.
+    const refusal = 'Harness hasn\'t confirmed this account\'s Google identity yet, so nothing was changed.\n'
+
+    // 7, not 1: the hand-off's own fallback is 1, so only another code proves grid's is the one carried.
+    const result = await run(root, ['grid', 'login', '--json'], base,
+      { FAKE_GRID_EXIT: '7', FAKE_GRID_STDERR: refusal })
+
+    expect(result.status).toBe(7)
+    const [line] = ndjson(result.stdout)
+    expect(line).toMatchObject({ type: 'result', status: 'error', code: 'GRID_LOGIN_FAILED', detail: refusal.trim() })
+    expect(String(line.message)).not.toContain('harness login --force')
+    expect(readRecord(root).stdin).toBe(`${HARNESS_ISSUED}\n`)
+  }, 20_000)
+})
+
 describe('harness grid login — a signed-out computer', () => {
   it('runs the whole loopback sign-in first, then hands the new token over', async () => {
     const root = tempRoot()
@@ -448,6 +497,42 @@ describe('harness grid login — when the hand-off fails', () => {
     // And a person watching the terminal still sees it where it has always been.
     expect(result.stderr).toContain('cannot sign you in')
   }, 20_000)
+
+  describe('a refusal grid words itself', () => {
+    // What the control plane says while Harness has not yet learned the account's Google identity
+    // (ADR 0046): a sentence that names its own way forward, and so the one thing worth showing.
+    const sentence = 'Harness hasn\'t confirmed this account\'s Google identity yet, so nothing was changed. '
+      + 'Sign in to Harness once with Google, Apple or your email on any device, then try again.'
+
+    it('puts grid\'s sentence in the message, and still carries what grid wrote verbatim', async () => {
+      const root = tempRoot()
+      seedSession(root)
+      const { base } = await signedInBackend()
+
+      const result = await run(root, ['grid', 'login', '--json'], base,
+        { FAKE_GRID_EXIT: '1', FAKE_GRID_ENVELOPE: sentence, FAKE_GRID_STDERR: `${sentence}\n` })
+
+      expect(result.status).toBe(1)
+      const [line] = ndjson(result.stdout)
+      expect(line).toMatchObject({ type: 'result', status: 'error', code: 'GRID_LOGIN_FAILED', message: sentence })
+      // `detail` is the transcript, untouched: the envelope line and the plain sentence, as written.
+      expect(String(line.detail).startsWith('{"error":')).toBe(true)
+      expect(String(line.detail).endsWith(sentence)).toBe(true)
+    }, 20_000)
+
+    it('says it once on the human path, where grid speaks to the terminal itself', async () => {
+      const root = tempRoot()
+      seedSession(root)
+      const { base } = await signedInBackend()
+
+      const result = await run(root, ['grid', 'login'], base,
+        { FAKE_GRID_EXIT: '1', FAKE_GRID_ENVELOPE: sentence, FAKE_GRID_STDERR: `${sentence}\n` })
+
+      expect(result.status).toBe(1)
+      expect(result.stderr.split(sentence)).toHaveLength(2)
+      expect(result.stderr).toContain('`grid login --harness` exited 1.')
+    }, 20_000)
+  })
 
   it('says nothing where the child said nothing, rather than sending empty keys', async () => {
     const root = tempRoot()

@@ -34,6 +34,7 @@ import { parseGrokQuestionPane } from '../engines/grok/askQuestion.js'
 import { locateAgyQuestion } from '../engines/agy/askQuestion.js'
 import { withCopilotSubject } from '../engines/copilot/askQuestion.js'
 import { earlierDialogEnd, PERMISSION_FOOTER_RE, QUESTION_FOOTER_RE } from './dialogEnd.js'
+import { composerState } from './composerScreen.js'
 
 /** Device-facing question shape — byte-for-byte the hosted runtime’s `commanderQuestions()` output. */
 export interface ShapedQuestion {
@@ -180,6 +181,16 @@ function lowest(...found: Array<FoundDialog | null>): PaneView {
  * its own parser rather than more branches in here.
  */
 export function parseEngineQuestionPane(engine: AgentEngine, capture: string): PaneView {
+  if (engine === 'claude' || engine === 'codex') {
+    const found = locateQuestionPane(capture)
+    if (!found) return null
+    // Captures include scrollback. The long chaos run returned to the composer after answering, but
+    // the old dialog still held every prompt as question_open. A full composer BELOW that dialog makes
+    // it history. One above it proves nothing: a newer dialog can have only its last rows visible.
+    const below = capture.split('\n').slice(found.at + 1).join('\n')
+    if (composerState(engine, below) !== 'absent') return null
+    return engine === 'codex' ? withCodexLabels(found.view) : found.view
+  }
   // Devin's two dialogs are told apart by one word in the footer (`↵ select` vs `↵ confirm`), so they can
   // never both match the same dialog; but an answered one of either kind can sit above the live one.
   if (engine === 'devin') return lowest(locateDevinQuestion(capture), asPermission(locateDevinPermission(capture)))
@@ -224,7 +235,6 @@ export function parseEngineQuestionPane(engine: AgentEngine, capture: string): P
     const plain = unframe(capture)
     return lowest(asPermission(locateKiloQuestion(capture)), locateOpencodeReview(plain), locateQuestionPane(plain))
   }
-  if (engine === 'codex') return withCodexLabels(parseQuestionPane(capture))
   return parseQuestionPane(capture)
 }
 

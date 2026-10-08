@@ -25,11 +25,19 @@ questions. Everything else is a service ([../services/AGENTS.md](../services/AGE
 
 - `agents/`: create, fork, restart, retarget, stop, resume, close, discovery, adoption, binding, the list.
 - `transcripts/`: attach (bounded reads from the end), ingest, live tail, relaunch marks, normalizers.
+  Claude Code/Codex live interpretation is injected through `Engine.live`; core keeps parser handles
+  and immutable turn snapshots, never edits their engine state. Supervised Claude Code/Codex parsers
+  run in workers through [the live transport](../../../docs/design/2026-10-07-engine-streams.md).
 - `turns/`: working/idle, the event funnel, cancel, heartbeats, hooks, and `recaps.ts`, the core's whole
   side of the recaps: the turn lifecycle it tells them, and what it reads back.
 - `terminals/`: who controls a pane (the control lease), opening a terminal with a literal argv (`open.ts`),
   and the requests about a terminal itself (`requests.ts`: `terminal_info`, `theme_set`).
-- `engines/`: the engines' hooks.
+- `engines/`: hook coordination, reader ports and live worker coordination. Claude Code/Codex
+  history, last-turn reads, live parsing and runtime profile interpretation/catalogs run in supervised workers; core passes snapshots,
+  validates bounded replies, retains acknowledged cursors and owns binding/turn state. The explicit
+  inline/older-master compatibility path is the only live parser or runtime profile implementation
+  composition in core. Core keeps accepted profiles and control authority; native picker drivers
+  remain to migrate. See [runtime profiles](../../../docs/design/2026-10-08-engine-runtime.md).
 - `input.ts`, `questions.ts`: messages into a pane; an agent's question and its answer.
   `deviceInput.ts`: the pane writer lock every write takes, and a device's queued turns behind it.
   `cardText.ts`: an engine's error, rewritten for a device's card.

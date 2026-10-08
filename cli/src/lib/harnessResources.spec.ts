@@ -51,6 +51,19 @@ not a process`)).toEqual([
     }
   })
 
+  it('still attributes a process whose ps start time moved with the clock, by its start ticks', async () => {
+    const ticked = (agentId: string, pid: number, startTicks: number) =>
+      ({ agentId, processIdentity: { ...agent(agentId, pid).processIdentity, startTicks } })
+    const read = createHarnessResourcesReader(() => [ticked('stepped', 10, 500), ticked('reused', 20, 600)], {
+      sample: async () => [{ ...row(10), start: 'Thu Oct 1 01:00:00 2026' }, { ...row(20), start: 'Thu Oct 1 01:00:00 2026' }],
+      now: () => 10_000, startTicks: (pid) => pid === 10 ? 500 : 601,
+    })
+    expect((await read()).agents).toEqual([
+      { agentId: 'stepped', memoryBytes: 100, processCount: 1, cpuPercent: null },
+      { agentId: 'reused', memoryBytes: null, processCount: null, cpuPercent: null },
+    ])
+  })
+
   it('coalesces concurrent clients, expires cached data and retries failed reads', async () => {
     let now = 10_000
     let finish!: (rows: ResourceProcess[]) => void

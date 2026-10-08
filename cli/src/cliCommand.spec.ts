@@ -75,13 +75,23 @@ function envFor(root: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv 
   }
 }
 
+/**
+ * How long one CLI run may take before it is ended as a hang. Every run here is the CLI itself under tsx:
+ * node, then cli.ts and everything it imports, before the command runs. About 2 s on a quiet Mac; past the
+ * old 15 s for `harness join` in a full unit run under load (12 busy loops, load 110), where it only prints
+ * a refusal. A hang still ends, its group with it; only later.
+ */
+const CLI_RUN_MS = 45_000
+/** A test that makes one such run: room for the run's own deadline and its teardown. */
+const ONE_RUN_TEST_MS = CLI_RUN_MS + 15_000
+
 /** `harness [args]` under a throwaway HOME, to the end. Never blocking this process: a test that also
  *  SERVES the CLI something (a manifest on the loopback) has to keep its own event loop free while the
- *  child asks for it. One that has not ended within 15s is ended, everything it started with it, and
- *  comes back with `timedOut`. */
+ *  child asks for it. One that has not ended within CLI_RUN_MS is ended, everything it started with it,
+ *  and comes back with `timedOut`. */
 async function runAsync(root: string, args: string[], extra: NodeJS.ProcessEnv): Promise<{ status: number | null; stdout: string; stderr: string; timedOut: boolean }> {
   const { status, stdout, stderr, timedOut } = await runs.complete(root, [TSX, CLI_SOURCE, ...args], {
-    cwd: CLI_ROOT, env: envFor(root, extra), label: `harness ${args.join(' ')}`,
+    cwd: CLI_ROOT, env: envFor(root, extra), label: `harness ${args.join(' ')}`, ms: CLI_RUN_MS,
   })
   return { status, stdout, stderr, timedOut }
 }
@@ -169,21 +179,21 @@ describe('CLI login/start command contract', () => {
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('`harness join` has been removed.')
     expect(result.stderr).toContain('`harness login`, then `harness start`')
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 
   it('no longer has an analytics command (usage metering upload was removed)', async () => {
     const result = await run('analytics')
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('Unknown command: analytics')
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 
   it('returns a nonzero status for an unknown command', async () => {
     const result = await run('not-a-command')
 
     expect(result.status).toBe(1)
     expect(result.stderr).toContain('Unknown command: not-a-command')
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 })
 
 describe('the processes this spec starts', () => {
@@ -273,7 +283,7 @@ describe('start --repair beside a running daemon', () => {
     expect(result.stdout).toContain(`installing the Harness grid runtime (9.9.9, ${key})`)
     expect(result.stdout).toContain('already running')
     expect(result.stdout).not.toContain('updated to v')   // no bundle staging beside a live daemon
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 
   it('a plain start beside a running daemon touches nothing', async () => {
     const root = freshRoot()
@@ -286,7 +296,7 @@ describe('start --repair beside a running daemon', () => {
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('already running')
     expect(result.stdout).not.toContain('installing the Harness grid runtime')
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 })
 
 describe('start beside a daemon that serves another account', () => {
@@ -313,7 +323,7 @@ describe('start beside a daemon that serves another account', () => {
     // consulted (start no longer resolves the machine when the session already names one).
     expect(result.status).toBe(1)
     expect(result.stdout + result.stderr).not.toContain('resolve-computer')
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 
   it('starts without the backend: a session that already names its machine never calls it', async () => {
     // Offline is the case this exists for. The backend here is port 1 — refused instantly — and the
@@ -328,7 +338,7 @@ describe('start beside a daemon that serves another account', () => {
     expect(result.stderr).not.toContain('fetch failed')
     expect(result.stdout + result.stderr).not.toContain('resolve-computer')
     expect(result.stdout).toContain('dev mode — running in the foreground')
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 
   it('starts without the backend even when the session has no machine id yet, on the computer id', async () => {
     const root = freshRoot()
@@ -343,7 +353,7 @@ describe('start beside a daemon that serves another account', () => {
 
     expect(result.stdout).toContain('machine id not resolved yet')
     expect(result.stdout).toContain('dev mode — running in the foreground')
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 
   it('leaves one that serves this session alone', async () => {
     const root = freshRoot()
@@ -358,7 +368,7 @@ describe('start beside a daemon that serves another account', () => {
     expect(existsSync(join(root, 'data', 'adapter.pid'))).toBe(true)
     await expect(Promise.race([daemon.exited.then(() => 'exited'), new Promise((r) => setTimeout(() => r('alive'), 300))]))
       .resolves.toBe('alive')
-  }, 20_000)
+  }, ONE_RUN_TEST_MS)
 })
 
 describe('harness service, through the CLI', () => {
@@ -421,5 +431,5 @@ describe('harness service, through the CLI', () => {
     expect(uninstall.stdout).toContain(`no longer runs harnessd`)
     expect(uninstall.stdout).not.toContain('starting it the usual way')
     expect(existsSync(file)).toBe(false)
-  }, 60_000)
+  }, 6 * ONE_RUN_TEST_MS) // six runs, one after another
 })

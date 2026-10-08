@@ -104,9 +104,10 @@ class _Backend {
 
   /// Every append is refused while set: this phone never gets into the log.
   bool refuseAppends = false;
+  String refuseWith = 'FORBIDDEN';
 
   Future<DeviceLogAppendAnswer?> append(DevLogEntry entry) async {
-    if (refuseAppends) return (head: null, error: 'FORBIDDEN');
+    if (refuseAppends) return (head: null, error: refuseWith);
     if (entry.seq != state.head.seq + 1 || entry.prev != state.head.hash) {
       return (head: state.head, error: 'STALE_HEAD');
     }
@@ -120,8 +121,14 @@ class _Api extends FakeApi {
 
   final _Backend backend;
 
+  /// The `self` every read of the log named.
+  final selves = <String?>[];
+
   @override
-  Future<DeviceLogFetched?> deviceKeys(int since) => backend.fetch(since);
+  Future<DeviceLogFetched?> deviceKeys(int since, {String? self}) {
+    selves.add(self);
+    return backend.fetch(since);
+  }
 
   @override
   Future<DeviceLogAppendAnswer?> appendDeviceKey(DevLogEntry entry) =>
@@ -305,6 +312,25 @@ void main() {
     expect(pubs(second.newDevices), [b64e(box3.pub)]);
     // The OS was told once already.
     expect(secondNotices.keys, isEmpty);
+  });
+
+  test('every read of the log names this phone\'s key; too many devices is said until a register lands', () async {
+    await backend.add(box2, 'machine', _mid2, 'box2');
+    backend
+      ..refuseAppends = true
+      ..refuseWith = 'TOO_MANY';
+    final (app, _) = await launch();
+    final me = b64e((await app.viewer.keys.identity()).pub);
+    final api = app.api as _Api;
+    expect(api.selves, isNotEmpty);
+    expect(api.selves.toSet(), {me});
+    expect(app.deviceListTooMany, isTrue);
+
+    backend.refuseAppends = false;
+    await app.deviceLog!.register();
+    await settle();
+    expect(backend.state.active[me], isNotNull);
+    expect(app.deviceListTooMany, isFalse);
   });
 
   test('"It’s mine" on one device holds across a restart', () async {

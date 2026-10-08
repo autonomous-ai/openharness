@@ -14,6 +14,8 @@ export function fakeCore(over: Overrides = {}): CoreApi {
     conversations: { ...CONVERSATIONS_OFF, ...over.conversations },
     terminals: {
       open: vi.fn(TERMINALS_OFF.open),
+      describe: vi.fn(TERMINALS_OFF.describe),
+      visitStatus: vi.fn(TERMINALS_OFF.visitStatus),
       watch: { frame: vi.fn(async () => {}), close: vi.fn(async () => {}), onOutput: vi.fn(() => () => {}) },
       ...over.terminals,
     },

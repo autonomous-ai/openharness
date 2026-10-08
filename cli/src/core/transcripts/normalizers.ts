@@ -1,5 +1,5 @@
 /**
- * Each session's engine state: Claude Code's turn state, and the normalizer (an engine with a
+ * Each session's engine state: a live parser, and the normalizer (an engine with a
  * transcript file) or reader (an engine with a database) that folds every other engine's history.
  * One table instead of fourteen maps, so the questions asked of all of them — does this session have
  * any, is its turn open, forget it, close its turn, stop the pollers — each have one answer.
@@ -11,7 +11,7 @@
  */
 import type { AgyNormalizer } from '../../engines/agy/normalizer.js'
 import type { AmpNormalizer } from '../../engines/amp/normalizer.js'
-import type { CodexNormalizer } from '../../engines/codex/normalizer.js'
+import type { LiveState } from '../../engines/facets/live.js'
 import type { CommandCodeNormalizer } from '../../engines/commandcode/normalizer.js'
 import type { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
@@ -22,12 +22,10 @@ import type { KiloReader } from '../../engines/kilo/reader.js'
 import type { MuseNormalizer } from '../../engines/muse/normalizer.js'
 import type { OpencodeReader } from '../../engines/opencode/reader.js'
 import type { PiNormalizer } from '../../engines/pi/normalizer.js'
-import type { TurnState } from '../../lib/normalize.js'
 
 export function createSessionNormalizers() {
   // Per-session web turn-lifecycle state; the device mirror keeps its own state + recap.
-  const turnStates = new Map<string, TurnState>()
-  const codexNormalizers = new Map<string, CodexNormalizer>()
+  const liveParsers = new Map<string, LiveState>()
   const cursorNormalizers = new Map<string, CursorNormalizer>()
   const opencodeReaders = new Map<string, OpencodeReader>()
   const kiloReaders = new Map<string, KiloReader>()
@@ -43,8 +41,7 @@ export function createSessionNormalizers() {
 
   /** Whether this session's engine state says a turn is open right now, whichever engine it is. */
   const sessionTurnState = (sessionId: string): boolean | undefined =>
-    turnStates.get(sessionId)?.turnOpen
-      ?? codexNormalizers.get(sessionId)?.turnOpen
+    liveParsers.get(sessionId)?.turnOpen
       ?? cursorNormalizers.get(sessionId)?.turnOpen
       ?? opencodeReaders.get(sessionId)?.turnOpen
       ?? kiloReaders.get(sessionId)?.turnOpen
@@ -61,8 +58,7 @@ export function createSessionNormalizers() {
 
   /** Whether any engine state exists for this session: an attach that finds some is not a first one. */
   const hasState = (sessionId: string): boolean =>
-    turnStates.has(sessionId)
-      || codexNormalizers.has(sessionId)
+    liveParsers.has(sessionId)
       || cursorNormalizers.has(sessionId)
       || opencodeReaders.has(sessionId)
       || kiloReaders.has(sessionId)
@@ -78,8 +74,7 @@ export function createSessionNormalizers() {
 
   /** Drop all of a forgotten session's engine state, stopping its database readers' pollers. */
   const forget = (sessionId: string): void => {
-    turnStates.delete(sessionId)
-    codexNormalizers.delete(sessionId)
+    liveParsers.delete(sessionId)
     cursorNormalizers.delete(sessionId)
     opencodeReaders.get(sessionId)?.stop()
     opencodeReaders.delete(sessionId)
@@ -101,9 +96,7 @@ export function createSessionNormalizers() {
   /** Mark the session's turn closed in whichever engine holds it (a cancel). What a closing
    *  normalizer returns is not emitted: a cancel sends no turn end. */
   const closeTurns = (sessionId: string): void => {
-    const st = turnStates.get(sessionId)
-    if (st) st.turnOpen = false
-    codexNormalizers.get(sessionId)?.closeTurn()
+    liveParsers.get(sessionId)?.closeTurn('cancel')
     cursorNormalizers.get(sessionId)?.closeTurn()
     opencodeReaders.get(sessionId)?.closeTurn()
     kiloReaders.get(sessionId)?.closeTurn()
@@ -127,7 +120,7 @@ export function createSessionNormalizers() {
   }
 
   return {
-    turnStates, codexNormalizers, cursorNormalizers, opencodeReaders, kiloReaders, piNormalizers,
+    liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, piNormalizers,
     museNormalizers, ampNormalizers, grokNormalizers, agyNormalizers, copilotNormalizers, hermesReaders,
     devinReaders, commandcodeNormalizers,
     sessionTurnState, sessionTurnOpen, hasState, forget, closeTurns, stopPollers,

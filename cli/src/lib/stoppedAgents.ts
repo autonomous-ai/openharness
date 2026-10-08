@@ -6,6 +6,7 @@ import { env } from '../config/env.js'
 import { isTerminalEngine } from '../engines/types.js'
 import { atomicWriteJson, projectDisplayName, strictPersistedRow, type RegisteredSession } from './registry.js'
 import { readPrivateStateFile, secureStateDirectory } from './secureState.js'
+import { sameProcessIdentity } from './terminalRuntime.js'
 
 const SAFE_ID = /^[a-zA-Z0-9_-]{1,128}$/
 const CATALOG_CACHE_RECORDS = 2048
@@ -116,10 +117,8 @@ export class StoppedAgentStore {
     // A temporarily unbound observation of the SAME process cannot erase a known conversation.
     // A replacement process must earn its own binding; never carry history across PID reuse.
     if (!session.sessionId && previous?.sessionId && previous.engine === session.engine
-      && session.processIdentity && previous.processIdentity
-      && session.processIdentity.pid === previous.processIdentity.pid
-      && session.processIdentity.startMarker === previous.processIdentity.startMarker
-      && session.processIdentity.executable === previous.processIdentity.executable) {
+      && sameProcessIdentity(session.processIdentity, previous.processIdentity)
+      && session.processIdentity!.executable === previous.processIdentity!.executable) {
       session = { ...session, sessionId: previous.sessionId, transcriptPath: previous.transcriptPath,
         boundAt: previous.boundAt, source: previous.source }
     }

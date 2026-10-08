@@ -1,10 +1,12 @@
+import { claudeAttachRules } from '../engines/claude/attach.js'
+import { codexAttachRules } from '../engines/codex/attach.js'
 /**
  * The whole-history attach that `lib/attachTranscript.ts` replaced, kept as the oracle the end-first
  * read is checked against — by the unit suite on synthetic transcripts and by the opt-in real-data
  * suite on this computer's own (`attachTranscript.real.spec.ts`).
  */
 import { CodexNormalizer, codexGoalOf, startsCodexTurn } from '../engines/codex/normalizer.js'
-import { attachTranscript, claudeAttachRules, codexAttachRules } from '../lib/attachTranscript.js'
+import { attachTranscript } from '../lib/attachTranscript.js'
 import { foldTranscript, lineToEvents, newTurnState, TranscriptFold, type LiveEvent } from '../lib/normalize.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { RuntimeProfileManager } from '../lib/runtimeProfile.js'

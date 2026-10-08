@@ -99,6 +99,34 @@ describe('the gateway in its own process', () => {
     await until('the phone to open a new session', async () => { await p.open(10_000); return true }, 60_000, 500)
   }
 
+  it('serves the reported machine list during a gateway restart, and keeps account HTTP outside the core', async () => {
+    const { machine, backend, desk, agentId } = await fresh({ HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '10000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '10000' }, { phone: false })
+    const d = machine.daemon
+    const machines = async () => {
+      const response = await fetch(`http://127.0.0.1:${d.port}/api/machines`, { signal: AbortSignal.timeout(10_000) })
+      return { status: response.status, body: await response.json() as Record<string, any> }
+    }
+    const first = await machines()
+    expect(first.status).toBe(200)
+    expect(first.body.data.machines.some((row: { machineId: string }) => row.machineId === machine.machineId)).toBe(true)
+    expect(backend.seen).toContain('GET /api/machines')
+    const pids = gatewayPids(d)
+    expect(pids.length).toBe(1)
+    for (const pid of pids) process.kill(pid, 'SIGKILL')
+    await until('the gateway link to go away', () => !backend.nodeUp(machine.machineId) && gatewayPids(d).length === 0 || null, 5000, 50)
+    const pairings = await desk.request('e2ee_pairings_list', {}, 5000)
+    expect(pairings).toMatchObject({ error: 'SERVICE_UNAVAILABLE', service: 'gateway', retryable: true })
+    const cached = await machines()
+    expect(cached.status).toBe(200)
+    expect(cached.body.data).toMatchObject({ machines: first.body.data.machines, stale: true, staleSince: expect.any(String) })
+    await deskTurn(desk, agentId, 'the local core works while account HTTP restarts')
+    await until('the gateway to reconnect', () => backend.nodeUp(machine.machineId) || null, 30_000)
+    expect((await machines()).body.data.stale).not.toBe(true)
+    backend.goDown()
+    expect((await machines()).body.data.stale).toBe(true)
+    expect(d.coresStarted()).toBe(1)
+  })
+
   it('carries the phone from a process of its own: sealed both ways, with the core speaking to it in the clear', async () => {
     const { backend, machine, phone, desk, agentId } = await fresh()
     expect(gatewayPids(machine.daemon)).toHaveLength(1)
@@ -232,6 +260,40 @@ describe('the gateway in its own process', () => {
       for (const client of clients.splice(0)) client.close()
       await fleet?.close()
       fleet = undefined
+    })
+
+    it('keeps a remote pane connected when its agent list exceeds the desktop request limit', async () => {
+      const f = await startFleet({ envA: { HARNESSD_SERVICES: 'gateway' } })
+      fleet = f
+      await until('both machines connected to the backend', () => f.backend.nodeUp(f.a.machineId) && f.backend.nodeUp(f.b.machineId), 30_000)
+      const onB = await LocalClient.connect(f.b.daemon, { machineId: f.b.machineId })
+      clients.push(onB)
+      const agentIds: string[] = []
+      for (const index of [0, 1]) {
+        const cwd = join(f.b.daemon.projectsDir, `large-list-${index}`)
+        mkdirSync(cwd, { recursive: true })
+        const created = await onB.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 60_000)
+        expect(created.error, JSON.stringify(created)).toBeUndefined()
+        agentIds.push(created.agent.id)
+        await until('the agent on B to bind', async () => (await row(onB, created.agent.id))?.sessionId || null, 45_000, 500)
+        // Each update fits the desktop request limit; the combined reply does
+        // not, as a real remote machine's larger agent roster did.
+        expect((await onB.request('agent_update', { agentId: created.agent.id, name: `${index}-${'a'.repeat(300 * 1024)}` })).error).toBeUndefined()
+      }
+      const before = connections(f.a.daemon)
+      const viaA = await LocalClient.connect(f.a.daemon, { machineId: f.b.machineId })
+      clients.push(viaA)
+      for (let read = 0; read < 3; read++) {
+        const list = await viaA.request<{ agents: Array<{ id: string }> }>('agents_list', {}, 10_000)
+        expect(Buffer.byteLength(JSON.stringify(list))).toBeGreaterThan(512 * 1024)
+        expect(list.agents.map((agent) => agent.id)).toEqual(expect.arrayContaining(agentIds))
+      }
+      const ended = viaA.next(isTurn('turn_ended', agentIds[0]), 30_000, 'a turn after the large agent list')
+      viaA.send('message', { agentId: agentIds[0], content: 'still connected after the large roster' })
+      await ended
+      expect(viaA.closed).toBe(false)
+      expect(connections(f.a.daemon)).toBe(before)
+      expect(f.a.daemon.coresStarted()).toBe(1)
     })
 
     it('reaches B through A\'s gateway, sealed by it, and opens again once A\'s gateway is back', async () => {

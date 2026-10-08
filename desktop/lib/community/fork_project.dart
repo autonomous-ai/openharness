@@ -6,18 +6,9 @@ import 'package:path/path.dart' as p;
 import '../core/harness_cli_runner.dart';
 import '../core/project_folder.dart';
 import 'fork_link.dart';
+import 'hub_contract.dart';
 
-const communityHarnesses = {
-  'autonomous/blender',
-  'autonomous/marp',
-  'autonomous/typst',
-  'autonomous/circuitjs',
-  'autonomous/godogen',
-  'autonomous/jev-sheets',
-  'autonomous/mujoco',
-  'autonomous/rdkit',
-  'autonomous/strudel',
-};
+final communityHarnesses = hubHarnessMarkers.keys.toSet();
 
 const _communityViewers = {
   'autonomous/web-viewer',
@@ -471,16 +462,11 @@ class ForkProjectImporter {
       }
       final path = file['path'] as String;
       final parts = path.split('/');
-      if (!RegExp(r'^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,179}$').hasMatch(path) ||
+      if (!hubPathPattern.hasMatch(path) ||
           parts.any(
             (s) => s.isEmpty || s == '.' || s == '..' || s.startsWith('.'),
           ) ||
-          parts.any(
-            (s) => RegExp(
-              r'^(harness\.json|agents\.md|claude\.md|session\.md|open-harness\.json|license|readme\.md|con|prn|aux|nul|com[1-9]|lpt[1-9])$',
-              caseSensitive: false,
-            ).hasMatch(s),
-          ) ||
+          parts.any(hubReservedName.hasMatch) ||
           !keys.add(path.toLowerCase())) {
         invalid();
       }
@@ -498,17 +484,7 @@ class ForkProjectImporter {
         !files.containsKey(data['viewerPath'])) {
       invalid();
     }
-    final marker = {
-      'autonomous/blender': 'scenes/hello.py',
-      'autonomous/marp': 'deck.md',
-      'autonomous/typst': 'main.typ',
-      'autonomous/circuitjs': 'circuit.txt',
-      'autonomous/godogen': 'studio.json',
-      'autonomous/jev-sheets': 'sheet.json',
-      'autonomous/mujoco': 'sim/hello.py',
-      'autonomous/rdkit': 'molecules/hello.py',
-      'autonomous/strudel': 'track.strudel',
-    }[data['harnessId']];
+    final marker = hubHarnessMarkers[data['harnessId']];
     if (marker != null && !files.containsKey(marker)) invalid();
     final conversation = data['conversation'];
     if (conversation is! List ||

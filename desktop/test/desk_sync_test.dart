@@ -835,6 +835,46 @@ void main() {
       expect(api.batches, isEmpty, reason: 'canonical geometry never echoes');
     });
 
+    test('a tab this window keeps to itself that the desk also has is listed once', () async {
+      // A draft (a New Tab, untouched) is not the desk's. When the desk has
+      // its id anyway — this window shared it while an agent was being made
+      // in it, and the agent never came — the tab was laid out twice: once in
+      // the desk's order, once where this window had it. Native's tab strip
+      // then trapped on the duplicate id and took the app down (1.2.57).
+      final api = _DeskApi()
+        ..doc = DeskDoc(
+          revision: 1,
+          tabs: [tab('d1', name: 'One', custom: true, agents: ['a1'])],
+        );
+      final app = createApp()..api = api;
+      addTearDown(app.dispose);
+      await app.deskStartForTest();
+      app.newSwarm(draft: true, newTabPage: true);
+      final draft = app.activeSwarmId;
+      expect(app.isDraftSwarm(draft), isTrue);
+
+      for (final revision in [9, 10]) {
+        api.doc = DeskDoc(
+          revision: revision,
+          tabs: [
+            tab('d1', name: 'One', custom: true, agents: ['a1']),
+            tab(draft),
+          ],
+        );
+        await app.handleEventForTest('m', {
+          'type': 'desk_changed',
+          'payload': {'revision': revision},
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(
+          app.swarms.map((s) => s.id),
+          ['d1', draft],
+          reason: 'rev $revision: once, where the desk has it',
+        );
+      }
+    });
+
     test('a document that did not move a tab\'s order leaves this window\'s tiles, sizes and pins alone', () async {
       final api = _DeskApi()
         ..doc = DeskDoc(

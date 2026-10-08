@@ -35,6 +35,7 @@ void main() {
       expect(prefs.uiFamily, isNull);
       expect(prefs.uiSize, 14);
       expect(prefs.shadeInactivePanes, isFalse);
+      expect(prefs.autoRenameTabs, isFalse);
       // Legacy fields remain readable, but no longer control app typography.
     });
 
@@ -126,6 +127,25 @@ void main() {
       await store.setUiSize(19);
       // The window has to repaint on the click, not on the disk.
       expect(store.value.uiSize, 19);
+    });
+  });
+
+  group('Auto rename', () {
+    test('is off until turned on, and stays on across launches', () async {
+      final storage = _FakeStore();
+      final store = AppearancePrefsStore(storage: storage);
+      await store.load();
+      expect(store.value.autoRenameTabs, isFalse);
+
+      await store.setAutoRenameTabs(true);
+      expect(storage.values['harness_auto_rename_tabs'], 'true');
+      final relaunched = AppearancePrefsStore(storage: storage);
+      await relaunched.load();
+      expect(relaunched.value.autoRenameTabs, isTrue);
+
+      await relaunched.reset();
+      expect(storage.values.containsKey('harness_auto_rename_tabs'), isFalse);
+      expect(relaunched.value.autoRenameTabs, isFalse);
     });
   });
 

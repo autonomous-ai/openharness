@@ -4,7 +4,7 @@ import { basename, dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { builtinSqlite } from '../../sqliteRead.js'
+import { builtinSqlite } from '../../sqliteBuiltin.js'
 import { cursorBucket, cursorProvider, cursorSlug, cursorTurnOpen, readChat, type CursorDatabase } from './cursor.js'
 import { entries, scanMemo } from './support.js'
 import type { ProcessView, RunningProcess, ScanContext } from './types.js'

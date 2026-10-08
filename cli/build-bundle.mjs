@@ -68,12 +68,26 @@ const options = {
   logLevel: 'info',
 }
 
+// Both lean builds refer to one asset file. Moving Store setup out of the core must not duplicate the
+// release-owned harnesses in the services' build and the core's legacy inline-service fallback.
+const builtinAssetsName = 'harness-builtin-assets.mjs'
+const builtinAssets = await esbuild.build({
+  ...options, entryPoints: ['src/dsh/bundledFiles.ts'], write: false, logLevel: 'warning',
+})
+const sharedBuiltinAssets = {
+  name: 'shared-builtin-assets',
+  setup(build) {
+    build.onResolve({ filter: /^\.\/bundledFiles\.js$/ }, () => ({ path: `./${builtinAssetsName}`, external: true }))
+  },
+}
+
 // harnessd's master and its services, bundled on their own (src/leanEntry.ts): Node parses all of the
 // file a process starts on, and the whole CLI's cost each of them about 45 MiB at idle. Split, so that a
 // process parses only the files its own code is in: the master never the services', search never the
 // viewers'. Carried inside cli.js, at its end, as a comment Node only skims (scripts/lib/leanBlock.mjs).
 const lean = await esbuild.build({
   ...options,
+  plugins: [sharedBuiltinAssets],
   entryPoints: { harnessd: 'src/leanEntry.ts' },
   outdir: 'lean',
   splitting: true,
@@ -88,6 +102,7 @@ const lean = await esbuild.build({
 // meet in the folder they are written to.
 const leanCore = await esbuild.build({
   ...options,
+  plugins: [sharedBuiltinAssets],
   entryPoints: { 'harnessd-core': 'src/leanCoreEntry.ts' },
   outdir: 'lean',
   splitting: true,
@@ -97,6 +112,7 @@ const leanCore = await esbuild.build({
   logLevel: 'warning',
 })
 const leanFiles = Object.fromEntries(lean.outputFiles.map((file) => [basename(file.path), asciiOnly(file.text)]))
+leanFiles[builtinAssetsName] = asciiOnly(builtinAssets.outputFiles[0].text)
 for (const file of leanCore.outputFiles) {
   const name = basename(file.path)
   if (name in leanFiles) throw new Error(`the core's lean file ${name} has the name of one of the master's and the services'`)

@@ -171,4 +171,23 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'too many devices on the account says so beside the password, with the way to the list',
+    (tester) async {
+      final (app, _) = await pump(tester, _Links(const CliLinkConnectResult()));
+      expect(find.textContaining('too many devices'), findsNothing);
+
+      app.deviceListTooManyForTest = true;
+      await tester.pump();
+      expect(
+        find.text(
+          'This device couldn’t join: your account has too many devices. Remove ones you no longer use.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.textContaining('needs a review'), findsNothing);
+      expect(find.byKey(const ValueKey('device-list-review')), findsOneWidget);
+    },
+  );
 }

@@ -5,12 +5,12 @@ KIWI description with a separately verified Harness session RPM. It includes
 hn, OpenCode with upstream defaults, terminal panes and the optional Chromium
 browser. It selects no GNOME or KDE desktop profile.
 
-This is private installation work, **not an installable Harness release**. Installer
-media, Fedora base-system updates/recovery and physical Apple hardware acceptance remain
-required. A private terminal installer joins the tested stages below; bootable
-installer media is still pending. The image contains no pre-created user or known login password. Never
-flash this raw disk over a Mac's disk or use the PC whole-disk installer on Apple
-Silicon. No public installer metadata or download feed is generated.
+This is private installation work, **not a public Harness release**. Bootable UEFI
+media now joins the stages below into an offline encrypted installation. Fedora
+base-system updates/recovery and physical Apple hardware acceptance remain required.
+The source image contains no pre-created user or known login password. Never flash
+that raw image over a Mac's disk or use the PC whole-disk installer on Apple Silicon.
+No public installer metadata or download feed is generated.
 
 ## Maintained platform foundation
 
@@ -52,7 +52,7 @@ described in the [distribution guidelines](https://asahilinux.org/docs/alt/polic
 This build is the image foundation for that work; it does not invoke either
 installer on the host.
 
-## First boot
+## First boot of the raw development image
 
 The image's first screen asks for **Password** and **Repeat password**, then
 **Start Harness**. It creates `me@harness` through Fedora's account tools and
@@ -101,11 +101,11 @@ read-only recovery of a project. Each boot must have enforcing SELinux and no
 failed system services. Receipts retain input hashes, screenshots, boot journals,
 clean shutdown events, and a final check that the original image is unchanged.
 
-This establishes encrypted-root compatibility, not an installation or encryption
-enrollment flow. The test uses a public fixture password: **never publish its disk
-copies**. A user installer still needs to create a unique encryption key, preserve
-macOS and recovery, and handle interruption before it can offer encrypted installs.
-Physical Apple keyboard, storage and recovery acceptance remain separate.
+This test establishes encrypted-root compatibility; the private installation
+stages below separately cover fresh encryption enrollment, protected partitions
+and interruption recovery. It uses a public fixture password: **never publish its
+disk copies**. Physical Apple keyboard, storage and recovery acceptance remain
+separate.
 
 ## Private installation target
 
@@ -114,8 +114,7 @@ It reads Asahi's firmware-provided EFI partition identity and uses only the
 unallocated space immediately after that partition. It never shrinks, moves,
 formats or removes existing macOS, recovery or other operating-system partitions.
 The prepared gap must hold a 1 GiB boot partition and at least 12 GiB for the
-encrypted root. The private terminal installer uses this module; it is not yet
-packaged into bootable installer media.
+encrypted root. The private terminal installer and bootable media use this module.
 
 Before either GPT entry is written, a plan is atomically saved in a private
 directory on the owning FAT EFI partition. Mount that ESP with root ownership,
@@ -159,9 +158,11 @@ The record is committed before formatting. A retry recognizes only its own
 encryption/filesystem identities; a wrong password or foreign filesystem stops
 the stage. It does not format a missing filesystem after copying has begun.
 
-Root, home and boot files are copied with Unix ownership, hard links, ACLs and
-extended attributes preserved. An interrupted copy can resume from the same
-verified image. Once the copy is complete, a retry does not copy or format again,
+Root and home files are copied with Unix ownership, hard links, ACLs and extended
+attributes preserved. Boot files retain the same metadata except for their
+SELinux labels, which the startup stage regenerates using the installed policy.
+An interrupted copy can resume from the same verified image. Once the copy is
+complete, a retry does not copy or format again,
 so later work stays intact. Existing Asahi EFI files and vendor firmware are left
 in place. Cleanup unmounts only owned paths and never recursively deletes a mount
 directory.
@@ -229,8 +230,8 @@ services. The observer adds only QEMU console and keyboard configuration.
 This does not validate Apple's boot policy, m1n1 handoff, physical hardware or
 recovery from arbitrary power loss. The existing Apple boot chain still needs its
 platform integration and hardware acceptance. The terminal installer below joins
-these stages, but bootable installer media is still pending. Never publish the test
-disk, which contains a known fixture password.
+these stages, and the private bootable media runs that installer. Never publish
+the test disk, which contains a known fixture password.
 
 ## Private terminal installer
 
@@ -277,3 +278,54 @@ OpenCode and two terminals. Protected partition sentinels, image provenance,
 frozen runtime files, SELinux and account configuration remain checked. Screenshots
 and failed attempts are retained. This uses QEMU's firmware and console; physical
 Apple boot, keyboard and pointer acceptance remain separate.
+
+## Private bootable installer media
+
+`os/tools/asahi_media.py` extends the pinned Fedora Asahi KIWI description with a
+small `HarnessInstall` profile. The live system opens **Install Harness** directly.
+It carries the verified raw image inside read-only, zstd-compressed SquashFS; the
+payload is not expanded into RAM. The installed image and its packaged runtime
+remain unchanged. The live system uses the installed image's exact SELinux policy
+so that copying and account enrollment preserve its file labels.
+
+Run **Harness OS private Apple Silicon installer media** with the successful
+private image workflow's run ID and full source commit. The workflow verifies the
+producer, payload, package identity and media contents before retaining the ISO
+and inspection evidence. It does not publish a release or an update feed.
+
+A physical Mac must first have the reference Asahi installer's **UEFI-only**
+environment and reserved free space immediately after its EFI partition. Keep
+macOS and Apple recovery in place. Harness uses only that prepared gap; it does
+not resize APFS or offer the PC installer's whole-disk selection. Follow Asahi's
+[distribution installation guidance](https://asahilinux.org/docs/alt/policy/#installation-procedure)
+for preparation. This prerequisite is separate from the Harness installer and
+remains subject to physical hardware acceptance.
+
+The ISO verifies its payload before modifying the target, completes the encrypted
+installation offline, and offers **Shut down**. The password enrolls both disk
+unlock and `me@harness`; the installed system does not ask for another account
+password. After restarting and unlocking, normal network setup runs when needed,
+followed by the agent workspace.
+
+Run the full native VM journey on Apple Silicon macOS with Homebrew QEMU,
+`fdtput`, `zstd`, Tesseract and Python Pillow installed. Use a verified private ISO,
+its matching inspection receipt and an installer source checkout whose file
+hashes match that ISO:
+
+```sh
+python3 os/tests/asahi_live_vm.py \
+  --iso /path/to/Harness-Asahi-Installer.aarch64-0.0.0.iso \
+  --media-receipt /path/to/inspection/receipt.json \
+  --image /path/to/harness-asahi-private.raw \
+  --fixture /path/to/verified-arm-fixture --fixture-source FULL_FIXTURE_COMMIT \
+  --output os/test-results/asahi-media
+```
+
+The observer boots the actual ISO, drives the installer by keyboard, verifies
+protected partition and EFI bytes, then tests password rejection and successful
+unlock into OpenCode and two terminals. It checks account setup, explicit SELinux
+labels, enforcing policy, frozen runtime integrity and clean shutdowns. QEMU adds
+console/input configuration and rebuilds the installed initramfs for that VM;
+these checks do not establish physical Apple boot policy, m1n1 handoff, recovery,
+or hardware-family support. Resulting test disks contain a public fixture
+password and must not be published.

@@ -14,12 +14,13 @@
  * four database engines: each had its own copy of the same windowing, and they now share one.
  */
 import { stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import type { EngineTranscript } from '../../engines/facets/transcript.js'
+import { EngineReadError } from '../../engines/worker/protocol.js'
+import { transcriptReadIdentity } from './readIdentity.js'
+import { enrichSubagentStats } from '../../engines/kit/history.js'
 import { agyMessagesToEvents } from '../../engines/agy/normalizer.js'
 import { ampMessagesToEvents } from '../../engines/amp/normalizer.js'
 import { ampThreadToEvents, readAmpThread } from '../../engines/amp/threadExport.js'
-import { codexMessagesToEvents } from '../../engines/codex/normalizer.js'
-import { codexSubagentResolverFor } from '../../engines/codex/subagent.js'
 import { commandcodeMessagesToEvents, windowCommandCodeLines } from '../../engines/commandcode/normalizer.js'
 import { copilotMessagesToEvents } from '../../engines/copilot/normalizer.js'
 import { cursorConfigDir, cursorDataDir } from '../../engines/cursor/home.js'
@@ -38,10 +39,10 @@ import { readOpencodeMessages } from '../../engines/opencode/reader.js'
 import { piMessagesToEvents, windowPiLines } from '../../engines/pi/normalizer.js'
 import { sid } from '../../lib/log.js'
 import { lastActivityAt } from '../../lib/agentFrame.js'
-import { messagesToEvents, SubagentStats, windowRawLines, type SessionEvent } from '../../lib/normalize.js'
+import { messagesToEvents, windowRawLines, type SessionEvent } from '../../lib/normalize.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TranscriptPager } from '../../lib/transcriptPages.js'
-import { streamRecords, tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
+import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
 
 export interface HistoryDeps {
   /** The registry's lookup, by agent or session id. */
@@ -49,9 +50,9 @@ export interface HistoryDeps {
   /** The conversations kept as stopped harnesses (lib/stoppedAgents.ts): a stop's, an exited engine's,
    *  and one a restart, a move or a restore had to leave for a new one. */
   stopped: () => readonly RegisteredSession[]
-  /** Claude Code's and Codex's pages, and every transcript's line count: one pager, so the line index it
-   *  keeps for a transcript serves both requests and is not built twice. */
+  /** Line counts, and the explicit inline compatibility path's pages. Isolated readers own their indexes. */
   pages: Pick<TranscriptPager, 'claude' | 'codex' | 'lineCount'>
+  readerFor: (engine: string) => EngineTranscript | undefined
   /** The database engines' stores. */
   dbs: { opencode: string; kilo: string; devin: string }
   /** Hermes keeps a store per profile: the one this session's lives in. */
@@ -102,29 +103,6 @@ export function copilotHistoryPage(lines: string[], paginated: boolean):
   return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
 }
 
-/** Fill in missing sub-agent aggregates on tool_end events by reading the sub-agent's own transcript
- *  (`<session>/subagents/agent-<id>.jsonl`). Async/background launchers only record
- *  `{status:'async_launched', agentId}` in the main transcript — without this join the delegation
- *  card shows "0 tools · worked for 0s" forever. Best-effort per agent; missing files are skipped. */
-async function enrichSubagentStats(events: SessionEvent[], transcriptPath: string): Promise<void> {
-  const subagentsDir = join(transcriptPath.replace(/\.jsonl$/, ''), 'subagents')
-  for (const e of events) {
-    if (e.type !== 'tool_end') continue
-    const sub = e.payload.subagent
-    if (!sub?.agentId || typeof sub.totalToolUseCount === 'number') continue
-    try {
-      // A line at a time: a long sub-agent's transcript is never held whole to count its calls.
-      const file = join(subagentsDir, `agent-${sub.agentId}.jsonl`)
-      const totals = new SubagentStats()
-      await streamRecords(file, 0, (await stat(file)).size, (line) => { totals.push(line) }, () => true)
-      const stats = totals.result()
-      sub.totalToolUseCount = stats.totalToolUseCount
-      if (sub.totalDurationMs === undefined) sub.totalDurationMs = stats.totalDurationMs
-      if (sub.totalTokens === undefined) sub.totalTokens = stats.totalTokens
-    } catch { /* subagent transcript absent (still spawning / pruned) — leave as-is */ }
-  }
-}
-
 /** What a window asks for: `limit` records before the `before` cursor. No limit asks for all of them. */
 interface PageAsk { limit?: number; before?: string }
 
@@ -162,7 +140,7 @@ function databasePage<M>(
   }
 }
 
-export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: HistoryDeps) {
+export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFor }: HistoryDeps) {
   // Devin, OpenCode and Kilo keep one store on this machine. Hermes keeps one per HOME, so its path is
   // the session's own (`hermesDb`) rather than this machine's default.
   const databases = new Map<string, DatabasePage>([
@@ -171,6 +149,8 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: Histor
     ['opencode', databasePage((s) => readOpencodeMessages(dbs.opencode, s.sessionId), opencodeMessagesToEvents, windowOpencodeMessages)],
     ['kilo', databasePage((s) => readKiloMessages(dbs.kilo, s.sessionId), kiloMessagesToEvents, windowKiloMessages)],
   ])
+
+  const lookup = (id: string) => resolve(id) ?? stopped().find((saved) => saved.sessionId === id)
 
   /** The reply to a `session_get` request, for the socket to send as it is. */
   const sessionGet = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
@@ -181,7 +161,7 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: Histor
     // file (that let a caller read any *.jsonl on the computer, incl. unshared claude history /
     // traversal). A kept conversation used to answer NOT_FOUND, so a conversation the daemon had to
     // leave for a new one could no longer be read at all (round 24).
-    const s = resolve(sessionId) ?? stopped().find((saved) => saved.sessionId === sessionId)
+    const s = lookup(sessionId)
     if (!s) return { error: 'NOT_FOUND' }
     // The registry finds an agent by its agent id too, and the reply names the id it was asked by. What
     // is read is the conversation's own, `s.sessionId`: an engine's store, Amp's export and Cursor's task
@@ -204,32 +184,16 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb }: Histor
         oldestCursor: null,
       }
     }
-    if (s.engine === 'claude' || s.engine === 'codex') {
-      // Only the page asked for is read (lib/transcriptPages.ts): the whole history of a long session
-      // is more memory than the daemon has. Without a limit, the newest lines that fit a page, and
-      // the cursor to the rest when they do not all fit — a cursor the full-transcript reply never had.
-      const opts = limit ? { limit, before } : {}
-      const page = s.engine === 'codex'
-        ? await pages.codex(s.transcriptPath, opts)
-        : await pages.claude(s.transcriptPath, opts)
-      const st = await stat(s.transcriptPath).catch(() => null)
-      const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
-      if (page.staleCursor) {
-        return { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true }
-      }
-      const events = s.engine === 'codex'
-        ? codexMessagesToEvents(page.lines, codexSubagentResolverFor(s.codexHome))
-        : messagesToEvents(page.lines)
-      await enrichSubagentStats(events, s.transcriptPath)
-      // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
-      if (limit && before && events[events.length - 1]?.type === 'done') events.pop()
-      return {
-        id: sessionId,
-        title: projectDisplayName(s),
-        events,
-        timestamp,
-        engine: s.engine,
-        ...(limit || page.hasMore ? { hasMore: page.hasMore, oldestCursor: page.oldestCursor } : {}),
+    const reader = readerFor(s.engine)
+    if (reader) {
+      const identity = transcriptReadIdentity(s)
+      try {
+        const { events, timestamp, ...page } = await reader.historyPage(s, { limit, before }, pages)
+        if (transcriptReadIdentity(lookup(sessionId)) !== identity) throw new EngineReadError('ENGINE_STALE_REPLY')
+        return { id: sessionId, title: projectDisplayName(s), events, timestamp, engine: s.engine, ...page }
+      } catch (error) {
+        const failed = error instanceof EngineReadError ? error : new EngineReadError('ENGINE_UNAVAILABLE')
+        return { error: failed.code, retryable: failed.retryable }
       }
     }
     // Read from the end and bounded: these engines have no pages of their own yet, and one huge

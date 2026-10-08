@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connections · Harness</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/page.js" defer></script>
+<body>
+<main>
+  <header><span class="brand">harness<span> / connections</span></span></header>
+  <h1>Connect once.<br>Work with any agent.</h1>
+  <p class="intro">Your connected accounts, available to agents on this computer.</p>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <div id="connections" aria-label="Connected services"></div>
+  <footer>Connections stay on this computer. You choose what each service can access.</footer>
+</main>
+<dialog id="connect-dialog">
+  <form id="connect-form">
+    <h2 id="service-name">Connect</h2>
+    <p>Use a token from your account. <a id="manage-link" target="_blank" rel="noreferrer">Manage permissions ↗</a></p>
+    <label for="token">Access token</label>
+    <input id="token" type="password" autocomplete="off" spellcheck="false" required maxlength="8192">
+    <p id="connect-error" role="status" aria-live="polite"></p>
+    <div class="actions"><button type="button" id="cancel">Cancel</button><button class="primary" id="save" type="submit">Connect</button></div>
+  </form>
+</dialog>
+</body>
+</html>

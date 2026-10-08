@@ -303,7 +303,7 @@ try:
     x, y, w = map(int, value('#{pane_left} #{pane_top} #{pane_width}', second).split())
     def waiting_heading():
         return tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].strip()
-    wait(lambda: re.search(r'\(2\) \?\s+Codex\s+(?:default\s+)?…\s+×$', waiting_heading()), 'long pane names retain their suffix and waiting indicator before the mouse controls')
+    wait(lambda: re.search(r'\(2\) \?\s+…\s+×$', waiting_heading()), 'long pane names retain their suffix and waiting indicator before the mouse controls')
     assert '…' in waiting_heading()
     assert value('#{pane_title}', second) == long_title, 'raw pane title must remain unchanged'
     hn('select-pane', '-t', second, '-T', original_title)
@@ -335,7 +335,7 @@ try:
         def context_before_controls():
             heading = tmux('capture-pane', '-p', '-t', 'test').splitlines()[y - 1][x:x + w].rstrip()
             suffix = heading.partition(branch_context)[2]
-            return branch_context in heading and bool(re.fullmatch(r'\s+(?:Claude Code\s+default\s+)?…\s+×', suffix))
+            return branch_context in heading and bool(re.fullmatch(r'\s+…\s+×', suffix))
         wait(context_before_controls, 'machine, project, branch and PR align beside the right-hand controls')
         snapshot('panes-zoomed' if target == first else 'panes-remote-zoomed')
         keys('C-b', 'z')

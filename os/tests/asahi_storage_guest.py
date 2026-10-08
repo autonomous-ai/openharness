@@ -33,6 +33,27 @@ def payload():
     return storage.Payload('/dev/vdc', inputs['image_sha256'], inputs['source_commit'])
 
 
+def install_copy(password):
+    source = payload()
+    verifications = 0
+    verify = source.verify_pristine
+    def observed():
+        nonlocal verifications
+        verify()
+        verifications += 1
+    source.verify_pristine = observed
+    # Match the installer's outer read-only lifetime across nested stages.
+    # Every independent retry constructs and authenticates a fresh source.
+    with source.open():
+        mounted = (source.root, source.home, source.boot, source.esp)
+        state = storage.install(fixture.PLAN, source, password)
+        assert mounted == (source.root, source.home, source.boot, source.esp)
+        assert all(path.is_dir() for path in mounted)
+        assert verifications == 1
+    assert all(path is None for path in (source.root, source.home, source.boot, source.esp))
+    return state
+
+
 def guard():
     fixture.guard()
     storage.target.platform_esp = lambda: fixture.ESP
@@ -71,7 +92,7 @@ def interrupt_encryption():
             os._exit(76)
         return result
     storage.run = interrupted
-    storage.install(fixture.PLAN, payload(), PASSWORD)
+    install_copy(PASSWORD)
     raise AssertionError('The encryption interruption was not exercised')
 
 
@@ -80,7 +101,7 @@ def interrupt_copy():
     assert header() == evidence['header']
     record = STATE.read_bytes()
     try:
-        storage.install(fixture.PLAN, payload(), 'incorrect-password')
+        install_copy('incorrect-password')
         raise AssertionError('The retry accepted an incorrect disk password')
     except storage.StorageError as error:
         assert 'cryptsetup failed' in str(error)
@@ -114,7 +135,7 @@ def interrupt_copy():
         secret_absent()
         os._exit(77)
     storage.run = stop_during_copy
-    storage.install(fixture.PLAN, payload(), PASSWORD)
+    install_copy(PASSWORD)
     raise AssertionError('The real rsync interruption was not exercised')
 
 
@@ -128,10 +149,17 @@ def verify_copy(state):
         with storage.work_directory() as root, ExitStack() as mounts:
             top = mounts.enter_context(storage.mounted(mapper, root / 'top', 'ro,rescue=nologreplay,subvolid=5'))
             boot = mounts.enter_context(storage.mounted('/dev/vdb5', root / 'boot', 'ro,noload'))
-            for src, dst, excludes in [(source.root, top / 'root', ['/boot/***', '/home/***']),
-                                        (source.home, top / 'home', []), (source.boot, boot, ['/efi/***'])]:
+            separate = ('boot', 'home', 'dev', 'proc', 'sys', 'run')
+            for name in separate:
+                directory = top / 'root' / name
+                assert directory.is_dir() and not directory.is_symlink() and not list(directory.iterdir()), name
+            for src, dst, excludes, filters in [
+                    (source.root, top / 'root', ['/' + name + '/***' for name in separate], []),
+                    (source.home, top / 'home', [], []),
+                    (source.boot, boot, ['/efi/***'], ['--filter=-x system.*', '--filter=-x security.selinux'])]:
                 changes = storage.run('rsync', '-aHAXnci', '--numeric-ids', '--one-file-system', '--delete',
-                                      *('--exclude=' + value for value in excludes), str(src) + '/', str(dst) + '/', timeout=180)
+                                      *filters, *('--exclude=' + value for value in excludes),
+                                      str(src) + '/', str(dst) + '/', timeout=180)
                 assert not changes, changes
             image = json.loads((top / 'root/usr/share/harness-os/image.json').read_text())
             manifest = image['session_package']['files']
@@ -139,7 +167,8 @@ def verify_copy(state):
                 assert fixture.digest(top / 'root' / name) == expected, name
             for name, expected in image['first_boot']['files'].items():
                 assert fixture.digest(top / 'root' / name) == expected['sha256'], name
-            return {'runtime_files_checked': len(manifest), 'source_commit': image['source_commit'],
+            return {'runtime_files_checked': len(manifest), 'empty_mountpoints': list(separate),
+                    'source_commit': image['source_commit'],
                     'root_uuid': storage.probe(mapper)['UUID'], 'boot_uuid': storage.probe('/dev/vdb5')['UUID']}
 
 
@@ -158,7 +187,7 @@ def finish():
     evidence = json.loads(EVIDENCE.read_text())
     assert json.loads(STATE.read_text())['phase'] == 'copying'
     assert header() == evidence['header']
-    state = storage.install(fixture.PLAN, payload(), PASSWORD)
+    state = install_copy(PASSWORD)
     assert state['phase'] == 'copied' and header() == evidence['header']
     evidence['copy_verification'] = verify_copy(state)
     assert evidence['copy_verification']['root_uuid'] == state['root_uuid']
@@ -172,7 +201,7 @@ def finish():
         commands.append(args)
         return command(*args, **kwargs)
     storage.run = observed
-    assert storage.install(fixture.PLAN, payload(), PASSWORD) == state
+    assert install_copy(PASSWORD) == state
     storage.run = command
     assert not any(args[0] in ('rsync', 'mkfs.btrfs', 'mkfs.ext4') or args[:2] == ('cryptsetup', 'luksFormat') for args in commands)
     assert STATE.read_bytes() == record
@@ -182,6 +211,7 @@ def finish():
     fixture.run('umount', fixture.ROOT)
     assert not Path('/dev/mapper/harness-stage-' + state['luks_uuid'].replace('-', '')).exists()
     evidence.update(status='passed', state=state, project_sha256=project,
+                    source_verified_once_per_attempt=True, source_mounts_held_through_copy=True,
                     completed_retry_preserves_work=True, protected_data_unchanged=True,
                     header_unchanged=True, no_secret_in_records=True, mapping_closed=True)
     RESULT.write_text(json.dumps(evidence, indent=2) + '\n')

@@ -145,6 +145,13 @@ describe('formatDeviceList', () => {
     expect(lines).toContain(`  This machine: mbp  ${FP_SELF}  (not registered yet)`)
     expect(lines.join('\n')).not.toContain('(this machine)')
   })
+  it('says why the account refused this machine\'s key', () => {
+    const l = { ...listing(), registerError: 'TOO_MANY' }
+    l.members = l.members.filter((m) => !m.self)
+    const lines = formatDeviceList(l, NOW, { label: 'mbp', fp: FP_SELF })
+    expect(lines).toContain('  ⚠ This account has too many devices — remove unused ones: harness devices remove <fingerprint>')
+    expect(formatDeviceList({ ...l, registerError: 'X' }, NOW, { label: 'mbp', fp: FP_SELF })).toContain("  ⚠ The account refused this computer's key (X) — see the daemon's log")
+  })
   it('prints no header at all without a self row or fallback', () => {
     const l = listing()
     l.members = l.members.filter((m) => !m.self)

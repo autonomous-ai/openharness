@@ -1,6 +1,7 @@
 // Test-only preload. QA needed the core's CPU, not its master's or its children's.
 // Nothing is loaded into production; only the opt-in E2E supplies these settings.
-if (process.argv.includes('__run') && process.env.HARNESS_E2E_PERF_DIR && process.env.HARNESS_E2E_PERF_TOKEN) {
+if ((process.argv.includes('__run') || (process.env.HARNESS_E2E_PERF_READERS === '1'
+  && process.argv.includes('__service') && /^engine-(claude|codex)$/.test(process.env.HARNESSD_SERVICE || ''))) && process.env.HARNESS_E2E_PERF_DIR && process.env.HARNESS_E2E_PERF_TOKEN) {
   const { createServer } = require('node:http')
   const { writeFileSync, renameSync } = require('node:fs')
   const { join } = require('node:path')
