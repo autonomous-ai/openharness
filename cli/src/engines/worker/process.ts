@@ -6,6 +6,7 @@ import { runServiceProcess, type ServiceProcess } from '../../services/process.j
 import type { ServiceProcessOptions } from '../../serviceProcess.js'
 import type { EngineTranscript, HistoryAsk, TranscriptSession } from '../facets/transcript.js'
 import { engineLiveRequests } from './liveRequests.js'
+import { engineScreenRequests } from './screenRequests.js'
 import { engineRuntimeRequests } from './runtimeRequests.js'
 import {
   EngineReadError, record, READER_HISTORY, READER_IN_FLIGHT, READER_LAST_TURN, READER_REPLY_BYTES,
@@ -86,6 +87,6 @@ export interface EngineProcessOptions extends ServiceProcessOptions {
 export function runEngineReader(engine: ReaderEngine, options: EngineProcessOptions): ServiceProcess {
   return (options.run ?? runServiceProcess)({
     name: READER_SERVICES[engine], socketPath: options.socketPath, machineId: options.machineId,
-    token: options.token, requests: options.requests ?? { ...engineReaderRequests(engine), ...engineLiveRequests(engine), ...engineRuntimeRequests(engine) },
+    token: options.token, requests: options.requests ?? { ...engineReaderRequests(engine), ...engineLiveRequests(engine), ...engineRuntimeRequests(engine), ...engineScreenRequests(engine) },
   })
 }

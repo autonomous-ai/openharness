@@ -18,14 +18,16 @@ import { sid } from '../lib/log.js'
 import type { LiveEvent } from '../lib/normalize.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
-import { messageHold, passingHold } from '../lib/messageHold.js'
+import { passingHold } from '../lib/messageHolds.js'
+import type { ScreenReader } from '../lib/screenReader.js'
+import type { ScreenReading } from '../engines/facets/screen.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
-import { teamWriteHold } from '../lib/teamWriteHold.js'
 import type { TerminalControl } from './terminals/control.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
 export interface InputDeps {
+  readScreen: ScreenReader
   resolve: (id: string) => RegisteredSession | undefined
   byAgent: (agentId: string) => RegisteredSession | undefined
   terminal: Pick<TerminalControl, 'captureTerminal' | 'validateTerminal' | 'submitTerminalAction' | 'keyTerminalAction' | 'pinTerminalControl'>
@@ -48,7 +50,7 @@ export interface InputDeps {
   emit: (sessionId: string, events: LiveEvent[]) => void
   /** A prompt is about to be typed, and `capture` is the pane as read right before: what is on it belongs
    *  to the turns before the one it starts (the question watcher's, lib/askQuestion.ts `notePrompt`). */
-  promptTyped?: (session: RegisteredSession, capture: string | null) => void
+  promptTyped?: (session: RegisteredSession, capture: string | null, screen: ScreenReading) => void
 }
 
 /**
@@ -64,8 +66,8 @@ export interface InputDeps {
  * reason. `submitTerminalAction` is called here and nowhere else in this file, and input.spec.ts keeps
  * it so.
  */
-export function messageWriter({ resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped'>) {
-  return async (id: string, text: string, hold?: (session: RegisteredSession, capture: string | null) => string | null): Promise<TerminalActionResult> => {
+export function messageWriter({ readScreen, resolve, terminal: { captureTerminal, validateTerminal, submitTerminalAction }, promptTyped }: Pick<InputDeps, 'resolve' | 'terminal' | 'promptTyped' | 'readScreen'>) {
+  return async (id: string, text: string, hold?: (session: RegisteredSession, screen: ScreenReading | null) => string | null): Promise<TerminalActionResult> => {
     const session = resolve(id)
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
     // The engine first, then its screen. A check of the engine can wait, seconds, for an answer: a probe
@@ -75,16 +77,19 @@ export function messageWriter({ resolve, terminal: { captureTerminal, validateTe
     // not there is refused as a lease is, which the caller asks again.
     if (!await validateTerminal(session)) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
     const capture = await captureTerminal(id)
-    const reason = hold?.(session, capture) ?? messageHold(session.engine, capture)
+    const screen = await readScreen(session, capture)
+    if (!screen) return terminalActionNotStarted(hold?.(session, null) ?? 'screen_unreadable')
+    const reason = hold?.(session, screen) ?? screen.messageHold
     if (reason) return terminalActionNotStarted(reason)
-    promptTyped?.(session, capture)
+    promptTyped?.(session, capture, screen)
     return submitTerminalAction(id, text, {
       beforeEnter: async () => {
         // A read that came back empty, or a composer caught between frames, is asked again for a moment
         // (a re-attach can blank one capture): only what is on screen holds the Enter back, never a
         // read that failed once. Still not read after that, it is held, as nothing says it is safe.
         for (let tries = 1; ; tries++) {
-          const before = messageHold(session.engine, await captureTerminal(id))
+          const next = await readScreen(session, await captureTerminal(id))
+          const before = next ? next.messageHold : 'screen_unreadable'
           if (before === 'popup_open') return null
           if (!before || !passingHold(before) || tries >= ENTER_CHECK_TRIES) return before
           await new Promise((settle) => setTimeout(settle, ENTER_CHECK_RETRY_MS))
@@ -108,6 +113,7 @@ export function sessionInputDeps(
   const writeMessage = messageWriter(deps)
   return {
     beforeSubmit: (id, text, tabId, deliveryId) => teams.prepare(id, text, tabId, deliveryId),
+    readScreen: deps.readScreen,
     getSession: (id) => resolve(id),
     onDelivery: (event) => {
       device()?.delivery(event)
@@ -115,7 +121,8 @@ export function sessionInputDeps(
     },
     beforeTeamWrite: async session => {
       const capture = await captureTerminal(session.agentId)
-      return teamWriteHold(session.engine, capture)
+      const screen = await deps.readScreen(session, capture)
+      return screen ? screen.teamHold : 'team_waiting_unavailable'
     },
     validateRuntime: validateTerminal,
     // Typed into the pane as it stands, a draft or a running turn included, under the pane's write lock.
@@ -123,7 +130,7 @@ export function sessionInputDeps(
     // A team's turn waits for a ready composer, and for its delivery to still hold the pane.
     injectTeam: (id, text, deliveryId) => deviceInput().legacyWrite(id, async () => {
       if (!resolve(id)) return terminalActionNotStarted('team_waiting_unavailable')
-      return writeMessage(id, text, (session, capture) => teamWriteHold(session.engine, capture)
+      return writeMessage(id, text, (session, screen) => (screen ? screen.teamHold : 'team_waiting_unavailable')
         ?? (teams.canWrite(deliveryId) ? null : 'team_waiting_control'))
     }),
     sendKey: (id, key) => deviceInput().legacyWrite(id, () => keyTerminalAction(id, key)),
@@ -166,7 +173,8 @@ export function deviceInputDeps(
     // Whatever a message is not typed into, the Device's waits for it to close, rather than be refused.
     isAwaitingUser: async session => {
       const pane = await captureTerminal(session.agentId)
-      return pane === null || messageHold(session.engine, pane) !== null
+      const screen = await deps.readScreen(session, pane)
+      return pane === null || !screen || screen.messageHold !== null
     },
     acquireControl: id => input().acquireControl(id, { forAnswer: true }),
     legacySubmit: (id, text, deliveryId) => input().submit(id, text, deliveryId),

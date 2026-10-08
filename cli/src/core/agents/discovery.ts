@@ -9,7 +9,7 @@
  */
 import { isTerminalEngine } from '../../engines/types.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
-import type { QuestionWatcher } from '../../lib/askQuestion.js'
+import type { QuestionWatcher } from '../../lib/questionController.js'
 import { sameGridAssignment } from '../../lib/gridAssignment.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'

@@ -45,6 +45,7 @@ const agent = (over: Partial<RegisteredSession> = {}): RegisteredSession => ({
 function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDeps> = {}) {
   const release = vi.fn()
   const deps: RetargetDeps = {
+    readScreen: async (session, capture) => ({ pane: inspectRuntimePane(session.engine, capture ?? ''), question: null, messageHold: null, teamHold: null, activity: null, busy: false, stoppedGoal: false }),
     purgeBusy: vi.fn(() => false),
     tmuxBackend: { clearEnv: vi.fn(async () => ({ state: 'succeeded' })) } as unknown as RetargetDeps['tmuxBackend'],
     registry: {

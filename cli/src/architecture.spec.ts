@@ -143,6 +143,9 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
+  /^engines\/(claude|codex)\/(screen|composer|activity|stoppedGoal)\.ts$/,
+  /^lib\/(askQuestion|runtimeProfileController|composerScreen|teamWriteHold|messageHold|terminalActivity|codexTurnRecovery)\.ts$/,
+  /^engines\/screens\.ts$/,
   // The pilot reader implementations and their host are never loaded by supervised core.
   /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
   /^engines\/(runtime|(claude|codex)\/runtimeProfile)\.ts$/, /^lib\/runtimeProfile\.ts$/,
@@ -213,6 +216,12 @@ describe('the daemon\'s shape', () => {
       'core/engines/runtimeTransport.ts', 'lib/runtimeProfileWire.ts', 'lib/runtimeProfileManager.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
       expect(closureOf(entry).has('lib/runtimeProfile.ts'), entry).toBe(false)
+    }
+  })
+
+  it('screen transport and input authority do not load native screen implementations', () => {
+    for (const entry of ['core/input.ts', 'core/questions.ts', 'core/engines/screens.ts', 'core/engines/screenTransport.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
     }
   })
 

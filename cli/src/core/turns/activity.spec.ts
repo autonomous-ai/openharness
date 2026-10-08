@@ -1,3 +1,4 @@
+import { readInlineScreen } from '../../testing/inlineScreen.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { activityRuntimeKey } from '../../lib/runtimeActivity.js'
@@ -11,6 +12,7 @@ const sessions = new Map([[live.sessionId, live], [idle.sessionId, idle], [shell
 
 function setup(over: Partial<TurnActivityDeps> = {}) {
   const deps: TurnActivityDeps = {
+    readScreen: readInlineScreen,
     terminals: { capture: vi.fn(async () => ({ state: 'succeeded' as const, value: 'screen' })) },
     bySession: (sessionId) => sessions.get(sessionId),
     sessionTurnOpen: (sessionId) => sessionId === 's1',

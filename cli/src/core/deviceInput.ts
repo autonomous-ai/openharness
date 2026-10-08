@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import type { LiveEvent } from '../lib/normalize.js'
-import { isMessageHold } from '../lib/messageHold.js'
+import { isMessageHold } from '../lib/messageHolds.js'
 import { enterWithheldReason, type TerminalActionResult } from '../lib/terminalTypes.js'
 
 const NATIVE = new Set(['claude', 'codex'])
