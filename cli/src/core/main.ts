@@ -138,7 +138,7 @@ import { answerConversationQuery, conversationReads } from './conversationQuerie
 import { createLaunchRequests } from './agents/launches.js'
 import { createAgentList } from './agents/list.js'
 import { createAgentUpdate } from './agents/update.js'
-import { createEngineHooks, installEngineHooks } from './engines/hooks.js'
+import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn } from './engines/hooks.js'
 import { createCursorTaskHooks } from './engines/cursorTasks.js'
 import { databaseHistory } from './transcripts/databaseHistory.js'
 import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
@@ -1862,7 +1862,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   localWsServerRef = localWsServer
   // Every engine's hooks, pointed at the port the local server actually bound (core/engines/hooks.ts).
-  if (!env.DISABLE_HOOK_INSTALL) installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
+  if (!env.DISABLE_HOOK_INSTALL) await installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
 
   // Each transcript line, through its engine's normalizer, into the funnel (core/transcripts/ingest.ts).
   const ingest = createIngest({
@@ -2221,6 +2221,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareApiTools,
     hookPort,
     hooksDisabled: env.DISABLE_HOOK_INSTALL,
+    installOpencodePlugin: installOpencodePluginBeforeSpawn,
     gridLaunchMachine,
     terminalHintMachineName,
     blocksFolder: (cwd) => backend.purgeAgentService?.blocksFolder(cwd),

@@ -9,10 +9,7 @@ import { engineHooks } from '../../engines/hooks.js'
 import { env } from '../../config/env.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
 import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
-import {
-  installAgyHooks, installAmpPlugin, installCommandCodeHooks, installCopilotHooks, installCursorHooks,
-  installDevinHooks, installGrokHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension,
-} from '../../lib/hooks.js'
+import { loadEngine, type InProcessModules } from '../../engines/inProcess.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
@@ -175,6 +172,18 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
   return { resolveHookAgent, onSessionEnd }
 }
 
+/**
+ * OpenCode's plugin, installed again before an OpenCode spawn (core/agents/create.ts): OpenCode may have moved
+ * from 1.x to 2.x under a running daemon, and its new TUI must not find the old server plugin. False when the
+ * other engines' installers could not be loaded.
+ */
+export async function installOpencodePluginBeforeSpawn(port: number): Promise<boolean> {
+  const installers = await loadEngine('hooks')
+  if (!installers) return false
+  installers.installOpencodePlugin(port)
+  return true
+}
+
 export interface InstallEngineHooksOptions {
   /** Only these engines' hooks (`HOOK_INSTALL_ENGINES`); every engine's when absent. */
   only?: ReadonlySet<string> | null
@@ -185,13 +194,38 @@ export interface InstallEngineHooksOptions {
 }
 
 /**
+ * The other engines' installers, in the order they have always run. Their code is loaded only here, once, as
+ * the core starts (engines/inProcess.ts `hooks`), and only when one of them is to be installed.
+ */
+const OTHER_INSTALLERS: Array<[string, (installers: InProcessModules['hooks']) => (port: number) => void]> = [
+  ['cursor', (installers) => installers.installCursorHooks],
+  ['opencode', (installers) => installers.installOpencodePlugin],
+  ['kilo', (installers) => installers.installKiloPlugin],
+  ['pi', (installers) => installers.installPiExtension],
+  // A self-update refreshes plugin files here; running engine processes pick them up according to each
+  // vendor's own plugin reload lifecycle.
+  ['amp', (installers) => installers.installAmpPlugin],
+  ['hermes', (installers) => installers.installHermesHooks],
+  ['devin', (installers) => installers.installDevinHooks],
+  ['commandcode', (installers) => installers.installCommandCodeHooks],
+  ['grok', (installers) => installers.installGrokHooks],
+  ['agy', (installers) => installers.installAgyHooks],
+  ['copilot', (installers) => installers.installCopilotHooks],
+]
+
+/**
  * Install every engine's hooks with the port the local server actually bound.
  *
  * One vendor at a time, each behind its own guard: these write into thirteen different settings
  * files owned by thirteen different CLIs, and one that is malformed, read-only or mid-write is not
  * a reason for the other twelve to go uninstalled — let alone for the daemon not to come up.
+ *
+ * Claude Code's and Codex's first, in line, as before. Then the other engines' installers are loaded, at this
+ * same step, which the caller awaits so that nothing it starts next (a restored pane among them) runs before
+ * their hooks are in place. Installers that could not be loaded are skipped and named, as one that throws is.
+ * Never rejects.
  */
-export function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): void {
+export async function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): Promise<void> {
   const hookStep = (vendor: string, install: () => void): void => {
     if (options.only && !options.only.has(vendor)) return
     try { install() } catch (error) {
@@ -217,17 +251,13 @@ export function installEngineHooks(port: number, options: InstallEngineHooksOpti
   adopt(options.environment ?? process.env)
   void options.loginShell?.then(adopt)
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port))
-  hookStep('cursor', () => installCursorHooks(port))
-  hookStep('opencode', () => installOpencodePlugin(port))
-  hookStep('kilo', () => installKiloPlugin(port))
-  hookStep('pi', () => installPiExtension(port))
-  // A self-update refreshes plugin files here; running engine processes pick them up according to each
-  // vendor's own plugin reload lifecycle.
-  hookStep('amp', () => installAmpPlugin(port))
-  hookStep('hermes', () => installHermesHooks(port))
-  hookStep('devin', () => installDevinHooks(port))
-  hookStep('commandcode', () => installCommandCodeHooks(port))
-  hookStep('grok', () => installGrokHooks(port))
-  hookStep('agy', () => installAgyHooks(port))
-  hookStep('copilot', () => installCopilotHooks(port))
+  const others = OTHER_INSTALLERS.filter(([vendor]) => !options.only || options.only.has(vendor))
+  if (!others.length) return
+  const installers = await loadEngine('hooks')
+  for (const [vendor, installer] of others) {
+    hookStep(vendor, () => {
+      if (!installers) throw new Error('its installer could not be loaded')
+      installer(installers)(port)
+    })
+  }
 }

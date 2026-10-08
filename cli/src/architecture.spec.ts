@@ -230,7 +230,6 @@ const theirs = (file: string): boolean => THEIRS.some((pattern) => pattern.test(
  * reached fails the test, so remove it with the move that ends it. Empty, the core loads none of their code.
  */
 const OTHER_ENGINES_CORE_MAY_REACH: Record<string, string> = {
-  'lib/hooks.ts': '(o2) hook installers',
   'core/engines/cursorTasks.ts': '(o3) transcripts: Cursor\'s Task hooks, built on first use',
   'core/transcripts/databaseHistory.ts': '(o3) transcripts: database history',
   'core/turns/agyBackstop.ts': '(o3) transcripts: agy\'s backstop, built on first use',
@@ -390,6 +389,9 @@ describe('the daemon\'s shape', () => {
     for (const [entry, batch] of FACETS_FREE_OF_THEM) {
       expect([...closureOf(entry).keys()].filter(theirs), `${entry}, free of their code since ${batch}`).toEqual([])
     }
+    // (o2) The start's hook step loads the other engines' installers through the loader. What else it reaches
+    // of theirs (the hook server's Hermes source check, the registry's layouts) leaves in (o6).
+    expect(closureOf('core/engines/hooks.ts').has('lib/hooks.ts'), 'core/engines/hooks.ts loads lib/hooks.ts through engines/inProcess.ts').toBe(false)
     // What an engine declares is data the kit reads: its own walk reaches the kit, the engines' types and the
     // environment, and nothing of any engine's code.
     const contracts = [...closure.keys()].filter((file) => /^engines\/\w+\/contract\.ts$/.test(file))

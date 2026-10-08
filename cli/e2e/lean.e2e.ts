@@ -217,39 +217,54 @@ describe('harnessd\'s master and services lean', () => {
     await agentWorks(off, 'claude')
   })
 
-  it('runs Claude Code and Codex on with the other engines\' pane readers gone from the bundle, and says so once', async () => {
+  it('runs Claude Code and Codex on with the other engines\' code gone from the bundle, and says so once', async () => {
     // A file of the core's that cannot load costs the engines whose code is in it, never the core: the loader
-    // catches it once and their panes read as unreadable (engines/inProcess.ts). Here the file the twelve
-    // engines' pane readers load from is gone, and an Amp agent's session, entering the registry, asks for it.
+    // catches it once (engines/inProcess.ts). Here the files the twelve engines' pane readers and the eleven
+    // installers load from are gone. The start installs Claude Code's and Codex's hooks alone (a daemon under
+    // test installs no other engine's) and so asks for no installer; an Amp agent's session asks for the
+    // readers as it enters the registry, and an OpenCode create asks for its plugin's installer.
     const lean = readLeanBundle(readFileSync(bundle))!
     const files = Object.fromEntries([...lean.files].map(([name, code]) => [name, code.toString('utf8')]))
-    const screens = Object.keys(files).filter((name) => name.startsWith('core-legacyScreen-'))
-    expect(screens).toHaveLength(1)
-    delete files[screens[0]!]
-    const without = join(scratch, 'without-screens', 'cli.js')
+    for (const module of ['legacyScreen', 'hooks']) {
+      const chunk = Object.keys(files).filter((name) => name.startsWith(`core-${module}-`))
+      expect(chunk, module).toHaveLength(1)
+      delete files[chunk[0]!]
+    }
+    const without = join(scratch, 'without-others', 'cli.js')
     mkdirSync(dirname(without), { recursive: true })
     writeFileSync(without, withLean(readFileSync(bundle, 'utf8'), files), { mode: 0o755 })
-    // Amp, as far as the daemon can tell: a program that answers its probes and then waits.
-    const amp = join(scratch, 'without-screens', 'amp')
-    writeFileSync(amp, '#!/bin/sh\ncase "$*" in *--version*|*--help*) echo 0.0.0; exit 0;; esac\necho "amp stand-in"\nexec sleep 600\n', { mode: 0o755 })
-    const d = await fresh({ AMP_PATH: amp }, without)
-    // The core runs from the lean bundle that lacks them, and nothing asked for them as it started.
+    // Amp and OpenCode, as far as the daemon can tell: programs that answer their probes and then wait.
+    const standIn = (name: string, version: string): string => {
+      const path = join(scratch, 'without-others', name)
+      writeFileSync(path, `#!/bin/sh\ncase "$*" in *--version*|*--help*) echo "${version}"; exit 0;; esac\necho "${name} stand-in"\nexec sleep 600\n`, { mode: 0o755 })
+      return path
+    }
+    const d = await fresh({ AMP_PATH: standIn('amp', '0.0.0'), OPENCODE_PATH: standIn('opencode', 'opencode v2.0.18') }, without)
+    // The core runs from the lean bundle that lacks them, Claude Code's and Codex's hooks installed, and nothing
+    // asked for either as it started.
     expect(coreCommand(d)).toMatch(new RegExp(` ${escape(join(d.dataDir, 'lean'))}/[0-9a-f]{16}/${escape(LEAN_CORE_ENTRY)} __run$`))
-    const unavailable = (): number => d.log().match(/\[engine screens\] unavailable · /g)?.length ?? 0
-    expect(unavailable()).toBe(0)
+    expect(claudeHookCommand(d)).toContain('notify.mjs')
+    const unavailable = (module: string): number => d.log().match(new RegExp(`\\[engine ${module}\\] unavailable · `, 'g'))?.length ?? 0
+    expect(unavailable('screens')).toBe(0)
+    expect(unavailable('hooks')).toBe(0)
     const client = await LocalClient.connect(d)
     try {
-      const cwd = join(d.projectsDir, 'lean-amp')
-      mkdirSync(cwd, { recursive: true })
-      const created = await client.request('agent_create', { engine: 'amp', cwd }, 90_000)
+      const cwd = (name: string): string => { const path = join(d.projectsDir, name); mkdirSync(path, { recursive: true }); return path }
+      const created = await client.request('agent_create', { engine: 'amp', cwd: cwd('lean-amp') }, 90_000)
       expect(created.error, JSON.stringify(created)).toBeUndefined()
-      await until('the loader to say the readers are unavailable', () => unavailable() > 0 || null, 30_000, 200)
+      await until('the loader to say the readers are unavailable', () => unavailable('screens') > 0 || null, 30_000, 200)
       expect(d.log()).toMatch(/\[engine screens\] unavailable · .*core-legacyScreen-/)
+      // An OpenCode with no plugin would never tell the daemon its session: refused before any pane opens.
+      // In Ask, which needs no flag the stand-in would be probed for.
+      const refused = await client.request('agent_create', { engine: 'opencode', cwd: cwd('lean-opencode'), permissionMode: 'ask', bypassPermission: false }, 90_000)
+      expect(refused).toMatchObject({ error: 'ENGINE_UNAVAILABLE' })
+      expect(d.log()).toMatch(/\[engine hooks\] unavailable · .*core-hooks-/)
     } finally { client.close() }
     await agentWorks(d, 'claude')
     await agentWorks(d, 'codex')
-    // Said once, for the life of the core, however often the Amp pane was looked at meanwhile.
-    expect(unavailable()).toBe(1)
+    // Each said once, for the life of the core, however often the Amp pane was looked at meanwhile.
+    expect(unavailable('screens')).toBe(1)
+    expect(unavailable('hooks')).toBe(1)
     expect(d.coresStarted()).toBe(1)
   })
 
