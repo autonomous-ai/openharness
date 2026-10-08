@@ -1,9 +1,9 @@
 # Engine runtime profiles
 
-Status: implementation in progress. This continues [engine isolation](2026-10-05-engine-interface.md)
+Status: implemented for Claude Code and Codex. This continues [engine isolation](2026-10-05-engine-interface.md)
 after [live transcript isolation](2026-10-07-engine-streams.md). The supervised Claude Code/Codex profile
 path now executes in workers. Its profile implementations are also excluded from normal core's
-import closure. Final validation, runtime measurements and review remain before this increment ships.
+import closure. This boundary covers runtime profiles; the wider engine migration remains in progress.
 
 ## Ownership
 
@@ -63,7 +63,7 @@ suppression and debounce remain in core. Gateway sessions remain display-only. T
 an older master selects explicit compatibility instead of discovering the missing protocol on a
 user's first request. The wire profile parser no longer imports the runtime manager.
 
-## Remaining before this increment ships
+## Compatibility and validation
 
 The legacy manager takes injected runtime facets. Normal supervised core supplies no Claude/Codex
 facet; explicit inline mode or an older master's capability report loads them through
@@ -76,16 +76,35 @@ Their registry seeds and native config/footer readers remain. Claude commands qu
 or panes no longer change their profiles. Tests replay the recordings and cover these native sources;
 this does not add new engines to the worker migration.
 
-1. Finish validation of the import split and the other-engine regression checks.
-2. Measure paired CPU, RSS and latency for the final implementation, including engine workers.
-3. Validate any further changes, then complete a separate review and automatic ready-PR CI.
+Development evidence: 1,447 core/services tests with 100% coverage in every file; the supervisor
+gate with 100% coverage in every file; 583 focused profile/controller/home/protocol/attach and boundary
+tests; typechecking and architecture checks. Eight selected private daemon/tmux cases passed with fake
+vendor CLIs: Codex model/effort switching, both engines' moved-home catalogs, private-route denial,
+both engines' accepted-profile preservation and pending-evidence recovery while their worker was
+frozen, and both engines' explicit inline profiles/catalogs. The name filter excluded 25 other cases.
+The queue regression also verifies that an expired caller returns while the preceding request remains
+pending, without letting its successor bypass that active request.
 
-Current development evidence: 1,446 core/services tests with 100% coverage in every file; the supervisor
-gate with 100% coverage in every file; 204 focused profile/controller/home/protocol tests; typechecking
-and architecture checks. Six selected private daemon/tmux cases passed with fake vendor CLIs: Codex
-model/effort switching, both engines' moved-home catalogs, private-route denial, and both engines'
-accepted-profile preservation and pending-evidence recovery while their worker was frozen. These are
-development receipts, not a claim that the remaining boundary or full engine goal is complete.
+A paired macOS run compared main `023ae4117` with runtime code `b1000873d`, using Node 22.23.2,
+four agents (two active), two windows, four terminal streams, 1 MiB histories and history requests
+every two seconds. Each phase measured 30 seconds after warmup. CPU is a percentage of one logical
+CPU; RSS below includes core and both engine workers. Master, other services, vendor CLIs and tmux
+are excluded. The engines and backend are disposable local fakes.
+
+| Active workload | Main | Runtime isolation |
+|---|---:|---:|
+| Core + worker CPU | 8.73% | 8.80% |
+| Core + worker mean RSS | 319.30 MiB | 314.61 MiB |
+| Core mean RSS | 140.44 MiB | 141.78 MiB |
+| Core event-loop p99 | 14.01 ms | 14.25 ms |
+| History read p95 | 42.70 ms | 36.12 ms |
+| Fake turn p95 | 6000 ms | 6142 ms |
+| Completed turns | 10 | 10 |
+
+Empty CPU/RSS was 1.07%/90.75 MiB versus 1.16%/89.99 MiB; populated-idle was
+4.17%/306.33 MiB versus 4.02%/306.82 MiB. This is one paired measurement, not a new numerical gate
+or evidence about real model latency. The PR records CI/review evidence separately from these local
+checks and measurements.
 
 Hooks, launch/discovery/resume, input interpretation, and the other boundaries tracked by the engine
 isolation work remain in scope after runtime profiles. This increment does not close the full goal.
