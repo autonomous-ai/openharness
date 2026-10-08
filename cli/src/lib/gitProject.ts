@@ -68,8 +68,14 @@ const isDirectory = (path: string) => stat(path).then(info => info.isDirectory()
  *  Line Tools, `/usr/bin/git` is Apple's stub, and running it opens the "install the command line
  *  developer tools" dialog in front of whatever the person is doing (fresh macOS VM, 2026-10-08). */
 export async function insideGitCheckout(path: string): Promise<boolean> {
-  for (let dir = path; ; dir = dirname(dir)) {
-    if (await stat(join(dir, '.git')).then(() => true, () => false)) return true
+  // From the real path, as git walks it: a link to a repository's subfolder (`~/web` →
+  // `~/mono/packages/web`) is inside that checkout although nothing above the link is.
+  const start = await realpath(path).catch(() => path)
+  for (let dir = start; ; dir = dirname(dir)) {
+    const found = await stat(join(dir, '.git')).then(() => true, (error: NodeJS.ErrnoException) =>
+      // Only "nothing there" rules a checkout out; anything else (EACCES, EIO) is left to git.
+      error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
+    if (found) return true
     if (dirname(dir) === dir) return false
   }
 }

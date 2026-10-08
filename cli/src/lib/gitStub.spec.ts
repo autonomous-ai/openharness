@@ -1,12 +1,15 @@
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { repoState } from './agentHandoff.js'
 import { agentProject } from './agentProject.js'
 import { nameBranchAfterSession } from './branchNaming.js'
+import { insideGitCheckout } from './gitProject.js'
 import { readGitPullRequest } from './gitPullRequest.js'
 import { projectPreview } from './projectPreview.js'
+import type { RegisteredSession } from './registry.js'
+import { inspectWorkspace, inspectWorktree } from './worktreeDeletion.js'
 
 // On a Mac without the Command Line Tools, `/usr/bin/git` is Apple's stub: running it opens the
 // "install the command line developer tools" dialog. A fresh Mac's first harness runs in a folder
@@ -52,10 +55,33 @@ describe('a folder with no .git runs no git', () => {
     expect(await ran()).toBe('')
   })
 
+  it('when Harness Monitor previews deleting it', async () => {
+    const session = { cwd: join(root, 'project') } as RegisteredSession
+    expect(await inspectWorkspace(session, [session])).toMatchObject({ kind: 'folder' })
+    await expect(inspectWorktree(session, [session])).rejects.toThrow(/No separate worktree/)
+    expect(await ran()).toBe('')
+  })
+
   it('when the project picker previews it', async () => {
     const preview = await projectPreview(join(root, 'project'), [root])
     expect(preview).toMatchObject({ path: join(root, 'project') })
     expect(preview).not.toHaveProperty('branch', expect.anything())
     expect(await ran()).toBe('')
+  })
+
+  // The control: the same readers do reach git (this stub) inside a checkout, so the cases above pass
+  // because git was not needed, not because it could not be found.
+  it('but runs it inside a checkout', async () => {
+    await mkdir(join(root, 'repo', '.git'), { recursive: true })
+    await agentProject(join(root, 'repo'))
+    expect(await ran()).toMatch(/rev-parse/)
+  })
+
+  it('and reads a link into a checkout as inside it, as git does', async () => {
+    await mkdir(join(root, 'mono', '.git'), { recursive: true })
+    await mkdir(join(root, 'mono', 'packages', 'web'), { recursive: true })
+    await symlink(join(root, 'mono', 'packages', 'web'), join(root, 'web'))
+    expect(await insideGitCheckout(join(root, 'web'))).toBe(true)
+    expect(await insideGitCheckout(join(root, 'project'))).toBe(false)
   })
 })

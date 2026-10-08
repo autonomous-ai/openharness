@@ -5,6 +5,7 @@ import { lstat, realpath } from 'node:fs/promises'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import { env } from '../config/env.js'
+import { insideGitCheckout } from './gitProject.js'
 import type { RegisteredSession } from './registry.js'
 
 const exec = promisify(execFile)
@@ -32,6 +33,12 @@ export async function inspectWorkspace(s: RegisteredSession, sessions: readonly 
   try {
     if (!path) throw new Error('No working folder')
     path = await realpath(path)
+    // A plain folder, said without git (insideGitCheckout): Harness Monitor's Delete preview asks this
+    // of every harness, and Apple's git stub answered with an install dialog and no "not a git
+    // repository", so the folder read as unverifiable.
+    if (!(await insideGitCheckout(path))) {
+      return { kind: 'folder', path, canDelete: false, reason: 'This folder is not a Git worktree. Its files are kept.' }
+    }
     let root: string
     try { root = await realpath(await git(path, ['rev-parse', '--show-toplevel'])) }
     catch (error) {
@@ -61,6 +68,7 @@ export async function inspectWorkspace(s: RegisteredSession, sessions: readonly 
 
 export async function inspectWorktree(s: RegisteredSession, sessions: readonly RegisteredSession[]): Promise<WorktreeReview> {
   if (!s.cwd) throw new Error('This harness has no working folder.')
+  if (!(await insideGitCheckout(s.cwd))) throw new Error('No separate worktree. This folder is not a Git worktree.')
   const root = await realpath(await git(s.cwd, ['rev-parse', '--show-toplevel']))
   const [folder, marker] = await Promise.all([lstat(root), lstat(join(root, '.git'))])
   const gitDir = await realpath(resolve(root, await git(root, ['rev-parse', '--git-dir'])))
