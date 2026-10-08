@@ -1,5 +1,6 @@
 import Cocoa
 import DiskArbitration
+import Security
 
 /// Offers to move Harness into Applications when it was opened from inside the disk image.
 ///
@@ -37,21 +38,26 @@ enum MoveToApplications {
       if relaunch(installed, ejecting: volume) { exit(0) }
       return
     }
-    if UserDefaults.standard.bool(forKey: declinedKey) { return }
+    // An older Harness an administrator put in /Applications cannot be replaced by a standard
+    // user; asking would end in an error they cannot act on, on every open from the image.
+    if let installed, !FileManager.default.isDeletableFile(atPath: installed.path) {
+      return stepAside(for: others)
+    }
+    if UserDefaults.standard.bool(forKey: declinedKey) { return stepAside(for: others) }
 
     NSApp.activate(ignoringOtherApps: true)
     let alert = NSAlert()
+    let quitsFirst = others.isEmpty ? "" : " The Harness that is open now quits first."
     if installed == nil {
       alert.messageText = "Move Harness to Applications?"
       alert.informativeText = "Harness is running from the disk image. In Applications it stays "
         + "after you eject the disk image or restart, opens from Launchpad and Spotlight, and can "
-        + "update itself."
+        + "update itself." + quitsFirst
       alert.addButton(withTitle: "Move to Applications")
     } else {
       alert.messageText = "Replace the Harness in Applications?"
       alert.informativeText = "Applications has an older or different Harness. This one replaces "
-        + "it, and the old one goes to the Trash."
-        + (others.isEmpty ? "" : " The Harness that is open now quits first.")
+        + "it, and the old one goes to the Trash." + quitsFirst
       alert.addButton(withTitle: "Replace")
     }
     alert.addButton(withTitle: "Not Now")
@@ -63,16 +69,23 @@ enum MoveToApplications {
       if alert.suppressionButton?.state == .on {
         UserDefaults.standard.set(true, forKey: declinedKey)
       }
-      return
+      return stepAside(for: others)
     }
 
     let destination = installed
       ?? applicationsFolder().appendingPathComponent(running.lastPathComponent)
+    var staging: URL?
     do {
-      try quit(others)
       // From the running bundle, which is this app's own even when Gatekeeper translocated it.
-      try install(running, at: destination, bundleID: bundleID)
+      let copy = try stage(running, beside: destination)
+      staging = copy.deletingLastPathComponent()
+      // Only with a whole copy ready does the open Harness have to quit, so a failed copy never
+      // closes it.
+      try quit(others)
+      try place(copy, at: destination, bundleID: bundleID)
+      try? FileManager.default.removeItem(at: staging!)
     } catch {
+      if let staging { try? FileManager.default.removeItem(at: staging) }
       let failed = NSAlert()
       failed.messageText = "Harness could not be moved to Applications"
       failed.informativeText =
@@ -82,6 +95,14 @@ enum MoveToApplications {
       return
     }
     if relaunch(destination, ejecting: volume) { exit(0) }
+  }
+
+  /// Two desktop apps on one daemon fight over it; when Harness is already open elsewhere and this
+  /// copy is not taking its place, that one comes forward and this one quits.
+  private static func stepAside(for others: [NSRunningApplication]) {
+    guard let open = others.first else { return }
+    open.activate(options: [])
+    exit(0)
   }
 
   /// The mounted volume a disk image put the app on, to eject after the move. DiskArbitration
@@ -122,18 +143,27 @@ enum MoveToApplications {
   }
 
   /// A newer version, or this very build. Internal builds carry the next release's version, so
-  /// an equal version is the same build only when the signed resources match too.
+  /// an equal version is the same build only when the code signatures match too: the code
+  /// directory hash covers the runner executable and Info.plist, which CodeResources does not.
   private static func isSameOrNewer(_ installed: URL, than running: URL) -> Bool {
     guard let theirs = version(of: installed), let ours = version(of: running) else { return false }
     switch theirs.compare(ours, options: .numeric) {
     case .orderedDescending: return true
     case .orderedAscending: return false
     case .orderedSame:
-      let seal = "Contents/_CodeSignature/CodeResources"
-      return FileManager.default.contentsEqual(
-        atPath: installed.appendingPathComponent(seal).path,
-        andPath: running.appendingPathComponent(seal).path)
+      guard let theirs = codeHash(of: installed), let ours = codeHash(of: running) else { return true }
+      return theirs == ours
     }
+  }
+
+  private static func codeHash(of app: URL) -> Data? {
+    var code: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code
+    else { return nil }
+    var info: CFDictionary?
+    guard SecCodeCopySigningInformation(code, [], &info) == errSecSuccess,
+          let info = info as? [String: Any] else { return nil }
+    return info[kSecCodeInfoUnique as String] as? Data
   }
 
   /// "1.2.59+412": the marketing version, then the build number, compared numerically.
@@ -155,46 +185,73 @@ enum MoveToApplications {
   /// Asks the other open Harness to quit, so its bundle can be replaced, and waits up to 10 s.
   private static func quit(_ apps: [NSRunningApplication]) throws {
     guard !apps.isEmpty else { return }
+    let pids = apps.map(\.processIdentifier)
     apps.forEach { $0.terminate() }
+    // Polled with kill(0) rather than isTerminated, which LaunchServices updates on a run loop
+    // this app has not started yet.
+    func running() -> Bool { pids.contains { kill($0, 0) == 0 || errno == EPERM } }
     let deadline = Date().addingTimeInterval(10)
-    while apps.contains(where: { !$0.isTerminated }) && Date() < deadline {
-      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-    }
-    if apps.contains(where: { !$0.isTerminated }) {
+    while running() && Date() < deadline { usleep(100_000) }
+    if running() {
       throw failure("The Harness that is already open did not quit. Quit it, then open this one again.")
     }
   }
 
-  /// Copies into a staging folder on the destination's volume and renames it into place, so a
-  /// copy that fails or is interrupted (171 MB from a compressed image) never leaves a partial
-  /// Harness in Applications, and the old one goes to the Trash only once the new one is whole.
-  private static func install(_ source: URL, at destination: URL, bundleID: String) throws {
+  /// Copies into a staging folder on the destination's volume, so a copy that fails or is
+  /// interrupted (171 MB from a compressed image) never leaves a partial Harness in Applications.
+  /// Returns the whole copy, ready to rename into place.
+  private static func stage(_ source: URL, beside destination: URL) throws -> URL {
     let files = FileManager.default
     let folder = destination.deletingLastPathComponent()
     try files.createDirectory(at: folder, withIntermediateDirectories: true)
     let staging = try files.url(
       for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: folder, create: true)
-    defer { try? files.removeItem(at: staging) }
     let copy = staging.appendingPathComponent(destination.lastPathComponent)
-    try files.copyItem(at: source, to: copy)
-    // The person already confirmed opening this download once. A copy that kept the image's
-    // quarantine mark would be translocated again from Applications, where the updater could not
-    // replace it, so a failure here fails the move.
-    let xattr = Process()
-    xattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-    xattr.arguments = ["-d", "-r", "com.apple.quarantine", copy.path]
-    try xattr.run()
-    xattr.waitUntilExit()
-    guard xattr.terminationStatus == 0 else {
-      throw failure("Its download mark could not be cleared (xattr exited \(xattr.terminationStatus)).")
-    }
-    if files.fileExists(atPath: destination.path) {
-      guard Bundle(url: destination)?.bundleIdentifier == bundleID else {
-        throw failure("Applications already has a different app called \(destination.lastPathComponent).")
+    do {
+      try files.copyItem(at: source, to: copy)
+      // The person already confirmed opening this download once. A copy that kept the image's
+      // quarantine mark would be translocated again from Applications, where the updater could
+      // not replace it, so a failure here fails the move.
+      let xattr = Process()
+      xattr.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+      xattr.arguments = ["-d", "-r", "com.apple.quarantine", copy.path]
+      try xattr.run()
+      xattr.waitUntilExit()
+      guard xattr.terminationStatus == 0 else {
+        throw failure("Its download mark could not be cleared (xattr exited \(xattr.terminationStatus)).")
       }
-      try files.trashItem(at: destination, resultingItemURL: nil)
+    } catch {
+      try? files.removeItem(at: staging)
+      throw error
     }
-    try files.moveItem(at: copy, to: destination)
+    return copy
+  }
+
+  /// Renames the staged copy into place. An older Harness there first steps aside under another
+  /// name, so there is never a moment with none installed; it comes back if the new one cannot
+  /// go in, and otherwise goes to the Trash, where it stays recoverable.
+  private static func place(_ copy: URL, at destination: URL, bundleID: String) throws {
+    let files = FileManager.default
+    guard files.fileExists(atPath: destination.path) else {
+      try files.moveItem(at: copy, to: destination)
+      return
+    }
+    guard Bundle(url: destination)?.bundleIdentifier == bundleID else {
+      throw failure("Applications already has a different app called \(destination.lastPathComponent).")
+    }
+    let previous = destination.deletingLastPathComponent().appendingPathComponent(
+      "\(destination.deletingPathExtension().lastPathComponent) (previous).app")
+    if files.fileExists(atPath: previous.path) {
+      try files.trashItem(at: previous, resultingItemURL: nil)
+    }
+    try files.moveItem(at: destination, to: previous)
+    do {
+      try files.moveItem(at: copy, to: destination)
+    } catch {
+      try? files.moveItem(at: previous, to: destination)
+      throw error
+    }
+    try? files.trashItem(at: previous, resultingItemURL: nil)
   }
 
   /// Opens the moved copy once this process is gone, then ejects the image it came from. False
