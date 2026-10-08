@@ -1,6 +1,7 @@
 //! A height-limited finder running in the shell's own PTY, like fzf --height.
 //! No alternate screen, application modal, shell evaluation, or extra executable.
 use std::fs::{File, OpenOptions};
+use std::collections::BTreeSet;
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
@@ -333,11 +334,13 @@ fn tty_position(out: &File) -> io::Result<(u16,u16)> {
 struct Screen {
     out: File, top: u16, height: u16, cols: u16, raw: bool,
     widget: bool, anchor_x: u16, previous: Option<Buffer>,
+    /// The row an erase waits at for the next draw, which writes it inside its synchronized update.
+    erase: Option<u16>,
 }
 impl Screen {
     fn new(out: File, picker: &Picker) -> io::Result<Self> {
         terminal::enable_raw_mode()?;
-        let mut screen=Self {out,top:0,height:0,cols:0,raw:true,widget:false,anchor_x:0,previous:None};
+        let mut screen=Self {out,top:0,height:0,cols:0,raw:true,widget:false,anchor_x:0,previous:None,erase:None};
         let (cols, rows)=terminal::size().unwrap_or((80,24));
         // cursor::position retries reader errors indefinitely. Initialize the
         // event source first so an unusable input descriptor returns to the shell.
@@ -362,7 +365,9 @@ impl Screen {
         // Resizing can bring old rows back from the terminal's reflow buffer,
         // beyond today's picker height. Clearing only the current rectangle
         // leaves those old borders behind (especially with Bash/Readline).
-        if self.height>0 {write!(self.out,"\x1b[{};1H\x1b[J",self.top+1)?;}
+        // The erase waits for the redraw, inside its synchronized update: written now, the
+        // terminal would show the picker blank until the redraw comes.
+        if self.height>0 {self.erase=Some(self.erase.map_or(self.top,|t|t.min(self.top)));}
         Ok(())
     }
     fn resize(&mut self,cols:u16,rows:u16,picker:&Picker)->io::Result<()> {
@@ -377,7 +382,7 @@ impl Screen {
         let lines=valid.map(|v|v.preview.iter().map(|s|Line::raw(clean(s))).collect()).unwrap_or_default();
         let bottom=valid.is_some_and(|v|v.preview_bottom);
         let cursor=paint_list(&mut next,area,picker,loading,failure,lines,bottom);
-        let bytes=render_diff(self.previous.as_ref(),&next,cursor)?;
+        let bytes=render_diff(self.previous.as_ref(),&next,cursor,self.erase.take())?;
         self.out.write_all(&bytes)?;
         self.out.flush()?;
         self.previous=Some(next);
@@ -385,12 +390,43 @@ impl Screen {
     }
 }
 
-fn render_diff(previous:Option<&Buffer>,next:&Buffer,at:Position)->io::Result<Vec<u8>> {
+/// [erase]: the row a clear erases from to the screen's end, first thing in the update.
+fn render_diff(previous:Option<&Buffer>,next:&Buffer,at:Position,erase:Option<u16>)->io::Result<Vec<u8>> {
     let blank=Buffer::empty(next.area);
     let previous=previous.filter(|p|p.area==next.area).unwrap_or(&blank);
     let mut bytes=b"\x1b[?2026h\x1b[?7l\x1b[?25l".to_vec();
+    if let Some(top)=erase {write!(bytes,"\x1b[{};1H\x1b[J",top+1)?;}
     let mut backend=CrosstermBackend::new(&mut bytes);
-    backend.draw(previous.diff(next).into_iter())?;
+    let cells=previous.diff(next);
+    // A row that holds (or held) a cluster the terminal may count otherwise is written whole and
+    // its rest erased, as the main renderer does: a cell-by-cell update there leaves a stale character.
+    let held=|buf:&Buffer,y:u16|(next.area.x..next.area.right()).any(|x|crate::term_out::risky(buf[(x,y)].symbol()));
+    let whole:BTreeSet<u16>=cells.iter().map(|c|c.1).collect::<BTreeSet<_>>().into_iter()
+        .filter(|y|held(next,*y)||held(previous,*y)).collect();
+    backend.draw(cells.into_iter().filter(|c|!whole.contains(&c.1)))?;
+    let width=|c:&ratatui::buffer::Cell|unicode_width::UnicodeWidthStr::width(c.symbol()).max(1) as u16;
+    for y in whole {
+        // Every cell up to its last that is not blank (the erase takes the blanks after it); the
+        // area is the terminal's full width, so the erase reaches nothing of anyone else's.
+        let end=(next.area.x..next.area.right()).rev().find(|x|next[(*x,y)]!=ratatui::buffer::Cell::EMPTY)
+            .map_or(next.area.x,|x|x+width(&next[(x,y)]));
+        let mut row=Vec::new();
+        let mut x=next.area.x;
+        while x<end { row.push((x,y,&next[(x,y)])); x+=width(&next[(x,y)]); }
+        // Each draw places its first cell: after a cluster the terminal may have counted
+        // otherwise, the next cell goes where hn counts it.
+        let mut placed=true;
+        for run in row.split_inclusive(|c|crate::term_out::risky(c.2.symbol())) {
+            backend.draw(run.iter().copied())?;
+            placed=!run.last().is_some_and(|c|crate::term_out::risky(c.2.symbol()));
+        }
+        // A row that reaches the last column needs no erase (the cursor waiting there would take
+        // that column's cell with it).
+        if end<next.area.right() {
+            if !placed||row.is_empty() {write!(backend,"\x1b[{};{}H",y+1,end+1)?;}
+            write!(backend,"\x1b[K")?;
+        }
+    }
     backend.set_cursor_position(at)?;
     write!(bytes,"\x1b[0m\x1b[?25h\x1b[?7h\x1b[?2026l")?;
     Ok(bytes)
@@ -400,7 +436,9 @@ impl Drop for Screen {
         if let Ok(token)=std::env::var("_HN_CONTEXT") {
             let _=write!(self.out,"\x1b]633;hn;{};{};close-picker;\x07",token,uuid::Uuid::new_v4());
         }
-        let _=self.clear();
+        // No redraw follows: the picker's rows are erased at once.
+        let top=self.erase.take().map_or(self.top,|t|t.min(self.top));
+        if self.height>0 {let _=write!(self.out,"\x1b[{};1H\x1b[J",top+1);}
         let y=if self.widget {self.top.saturating_sub(1)} else {self.top};
         let x=if self.widget {self.anchor_x.min(self.cols.saturating_sub(1))} else {0};
         if self.height>0 {let _=write!(self.out,"\x1b[0m\x1b[?2004l\x1b[{};{}H\x1b[?25h",y+1,x+1);}
@@ -1198,16 +1236,74 @@ mod tests {
         let area=Rect::new(0,4,120,18);
         let mut first=Buffer::empty(area);
         let at=crate::ui::inline_fzf(&mut first,area,&mut picker,false,vec![],false);
-        let full=render_diff(None,&first,at).unwrap();
-        let idle=render_diff(Some(&first),&first,at).unwrap();
+        let full=render_diff(None,&first,at,None).unwrap();
+        let idle=render_diff(Some(&first),&first,at,None).unwrap();
         assert!(idle.len()<100&&idle.len()*10<full.len(),"full={} idle={}",full.len(),idle.len());
         picker.move_by(1);
         let mut next=Buffer::empty(area);
         let at=crate::ui::inline_fzf(&mut next,area,&mut picker,false,vec![],false);
-        let moved=render_diff(Some(&first),&next,at).unwrap();
-        assert!(!moved.windows(4).any(|w|w==b"\x1b[2K"),"navigation erased a row");
+        let moved=render_diff(Some(&first),&next,at,None).unwrap();
+        assert!(!moved.windows(3).any(|w|w==b"\x1b[K")&&!moved.windows(4).any(|w|w==b"\x1b[2K"),"navigation erased a row");
         assert!(moved.len()<full.len()/2,"full={} move={}",full.len(),moved.len());
         theme::fzf_reset();
+    }
+    #[test]
+    fn a_row_with_a_risky_symbol_is_written_whole_then_its_rest_erased() {
+        use ratatui::style::Style;
+        let area=Rect::new(0,4,20,3);
+        let mut first=Buffer::empty(area);
+        first.set_string(0,4,"plain",Style::default());
+        first.set_string(0,5,"go ⚡ now",Style::default());
+        let mut next=first.clone();
+        next.set_string(8,5,"x",Style::default()); // a one-cell change on the risky row
+        next.set_string(8,4,"y",Style::default()); // and on a plain row
+        let bytes=render_diff(Some(&first),&next,Position::new(0,4),None).unwrap();
+        let s=String::from_utf8_lossy(&bytes);
+        assert!(!s.contains("\x1b[2K"),"a row is never erased before its text: {s:?}");
+        // Row 5 (screen row 6) from its first column; the cell after ⚡ placed where hn counts it.
+        let row=s.find("\x1b[6;1Hgo ⚡").unwrap_or_else(||panic!("row 5 written whole: {s:?}"));
+        let after=s[row..].find("\x1b[6;6H nox").unwrap_or_else(||panic!("placed after the risky symbol: {s:?}"));
+        assert_eq!(s.matches("\x1b[K").count(),1,"only the risky row is erased: {s:?}");
+        assert!(s.find("\x1b[K").unwrap()>row+after,"its rest erased after its text: {s:?}");
+        assert!(s.contains("\x1b[5;9Hy"),"the plain row stays a cell-by-cell update: {s:?}");
+        // A terminal holding a longer, stale row 5: nothing of it survives.
+        let mut pane=crate::pane::Pane::new(1,"m","a",20,8);
+        pane.feed("\x1b[6;1Hgo ⚡ now STALE".as_bytes());
+        pane.feed(&bytes);
+        use alacritty_terminal::index::{Column,Line};
+        let text:String=(0..16).filter(|x|*x!=4).map(|x|pane.term.grid()[Line(5)][Column(x)].c).collect();
+        assert_eq!(text,"go ⚡ nox       ","{s:?}");
+    }
+    #[test]
+    fn a_ctrl_l_or_resize_redraw_erases_inside_its_synchronized_update() {
+        let path=std::env::temp_dir().join(format!("hn-picker-screen-{}-{}",std::process::id(),uuid::Uuid::new_v4()));
+        let out=OpenOptions::new().create_new(true).read(true).write(true).open(&path).unwrap();
+        let mut screen=Screen{out,top:4,height:6,cols:40,raw:false,widget:false,anchor_x:0,previous:None,erase:None};
+        let mut picker=Picker::new("","");
+        picker.set_rows(vec![Row::new("1","one"),Row::new("2","two")]);
+        // (No items yet: loading.)
+        screen.draw(&mut picker,None,None,true,None).unwrap();
+        let first=std::fs::read(&path).unwrap().len();
+        // Ctrl-L: nothing is written until the redraw, which erases inside its own update.
+        screen.clear().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap().len(),first,"the erase waits for the redraw");
+        screen.draw(&mut picker,None,None,true,None).unwrap();
+        // A resize: erased from the higher of the old and the new top.
+        screen.resize(40,8,&picker).unwrap();
+        let top=screen.top.min(4);
+        screen.draw(&mut picker,None,None,true,None).unwrap();
+        let bytes=std::fs::read(&path).unwrap();
+        drop(screen);
+        let _=std::fs::remove_file(&path);
+        let s=String::from_utf8_lossy(&bytes[first..]);
+        let frames:Vec<&str>=s.split_inclusive("\x1b[?2026l").collect();
+        assert_eq!(frames.len(),2,"{s:?}");
+        for f in &frames {
+            assert!(f.starts_with("\x1b[?2026h")&&f.ends_with("\x1b[?2026l"),"{s:?}");
+            assert_eq!(f.matches("\x1b[J").count(),1,"one erase, inside the update: {s:?}");
+        }
+        assert!(frames[0].contains("\x1b[5;1H\x1b[J"),"{s:?}");
+        assert!(frames[1].contains(&format!("\x1b[{};1H\x1b[J",top+1)),"{s:?}");
     }
     #[test]
     fn paste_is_inserted_at_the_query_cursor_and_fzf_editing_keys_work() {

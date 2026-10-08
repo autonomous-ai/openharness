@@ -16,8 +16,32 @@ pub struct State {
     pub hits: RefCell<Vec<(Rect, Action)>>,
     /// The release of a UI click belongs to that control, even if it opened or dismissed a modal.
     pub pressed: Option<MouseButton>,
+    /// The title cells a pane drag starts from (the line look: only the name; its line resizes).
+    pub grips: RefCell<Vec<(Rect, u64)>>,
+    pub grab: Option<Grab>,
     target: Option<MenuTarget>,
     workspace_open: bool,
+}
+
+/// A pane held by its title. Its release belongs to the header press, as any control's does.
+pub struct Grab {
+    pub pane: u64,
+    from: (u16, u16),
+    /// true once the pointer moved 2 cells: a drag, no longer a click
+    pub live: bool,
+    pub drop: crate::pane_drag::Drop,
+}
+
+impl Grab {
+    /// Whether the pointer at (x, y) makes it a drag: 2 cells from the press along either axis
+    /// (a one-cell diagonal wobble is still a click).
+    pub fn moved(&self, x: u16, y: u16) -> bool { self.live || x.abs_diff(self.from.0).max(y.abs_diff(self.from.1)) >= 2 }
+}
+
+#[cfg(test)]
+impl Grab {
+    /// A drag already under way, over [drop].
+    pub fn live_for_test(pane: u64, drop: crate::pane_drag::Drop) -> Grab { Grab { pane, from: (0, 0), live: true, drop } }
 }
 
 struct MenuTarget {
@@ -28,9 +52,9 @@ struct MenuTarget {
     connection: Option<u64>,
 }
 
-pub fn begin_frame(app: &App) { app.controls.hits.borrow_mut().clear(); }
+pub fn begin_frame(app: &App) { app.controls.hits.borrow_mut().clear(); app.controls.grips.borrow_mut().clear(); }
 
-fn enabled(app: &App) -> bool { app.mouse && !app.headless && !app.options.tmux_look() && !app.read_only() }
+pub(crate) fn enabled(app: &App) -> bool { app.mouse && !app.headless && !app.options.tmux_look() && !app.read_only() }
 
 pub fn register(app: &App, rect: Rect, action: Action) {
     if rect.width > 0 && rect.height > 0 { app.controls.hits.borrow_mut().push((rect, action)); }
@@ -44,16 +68,37 @@ pub fn title_reserve(app: &App, window: usize, pane: u64, width: u16) -> u16 {
 }
 
 /// Return the title's remaining space. The controls never add a row or resize a terminal.
+/// (A pane narrower than 20 columns has no controls, so no grip either: it is not dragged.)
 pub fn title(buf: &mut Buffer, app: &App, pane: u64, rect: Rect, style: Style) -> Rect {
     let reserve = title_reserve(app, app.active, pane, rect.width);
     if reserve == 0 { return rect }
     register(app, rect, Action::Header(pane));
+    app.controls.grips.borrow_mut().push((Rect::new(rect.x, rect.y, rect.width - reserve, 1), pane));
     let quiet = style.remove_modifier(Modifier::BOLD | Modifier::DIM).fg(theme::paint(theme::pane_palette().muted));
     let x = rect.right() - 6;
     buf.set_stringn(x, rect.y, " …  × ", 6, quiet);
     register(app, Rect::new(x, rect.y, 3, 1), Action::PaneMenu(pane));
     register(app, Rect::new(x + 3, rect.y, 3, 1), Action::Close(pane));
     Rect::new(rect.x, rect.y, rect.width - reserve, rect.height)
+}
+
+/// The line look's title is the divider: only its first [width] cells (the name) drag the pane.
+/// (Your own pane-border-format: one that starts with #[align=…] draws no leading cells, so no
+/// grip; one that fills the whole line makes all of it a grip.)
+pub fn name_span(app: &App, pane: u64, width: u16) {
+    let mut grips = app.controls.grips.borrow_mut();
+    let Some(i) = grips.iter().position(|(_, p)| *p == pane) else { return };
+    if width == 0 { grips.remove(i); } else { grips[i].0.width = width.min(grips[i].0.width); }
+}
+
+/// The box and surface looks' header row drags the pane, except where it lies on a divider (the
+/// lower pane's with titles on top, the upper one's below): there only its name does, as in the
+/// line look, and the rest of the row resizes.
+pub fn name_span_on_divider(app: &App, pane: u64, width: u16) {
+    let Some(r) = app.controls.grips.borrow().iter().find(|(_, p)| *p == pane).map(|(r, _)| *r) else { return };
+    // (The window's own bottom edge, the last pane's title below it, divides nothing.)
+    let below = r.y.checked_sub(app.body().y).is_some_and(|y| app.visible_layout_geoms().iter().any(|(_, g)| g.y > y as u32));
+    if below && (r.x..r.right()).all(|x| crate::mouse::over_resize_border(app, x, r.y)) { name_span(app, pane, width) }
 }
 
 /// tmux's status renderer carries these ranges through clipping and alignment. A customized
@@ -122,9 +167,16 @@ pub fn begin_press(app: &mut App, button: MouseButton) {
 pub fn finish_press(app: &mut App, mouse: &MouseEvent) -> bool {
     let Some(button) = app.controls.pressed else { return false };
     match mouse.kind {
-        MouseEventKind::Up(up) if up == button => { app.controls.pressed = None; true }
-        MouseEventKind::Drag(drag) if drag == button => true,
-        MouseEventKind::Down(_) => { app.controls.pressed = None; false }
+        MouseEventKind::Up(up) if up == button => {
+            app.controls.pressed = None;
+            if let Some(grab) = app.controls.grab.take() {
+                // (The zone drawn while it moved goes with it.)
+                if grab.live { app.redraw_all = true; crate::pane_drag::release(app, grab.pane, grab.drop) }
+            }
+            true
+        }
+        MouseEventKind::Drag(drag) if drag == button => { crate::pane_drag::follow(app, mouse.column, mouse.row); true }
+        MouseEventKind::Down(_) => { app.controls.pressed = None; crate::pane_drag::cancel(app); false }
         _ => false,
     }
 }
@@ -149,19 +201,33 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     }
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => if let Some(action) = action {
+            // The title's words drag the pane; the rest of a divider title still resizes (tmux's binding).
+            let grip = match action {
+                Action::Header(pane) => app.controls.grips.borrow().iter().any(|(r, p)| *p == pane && inside(r)).then_some(pane),
+                _ => None,
+            };
             if let Action::Header(pane) = action {
-                if crate::mouse::over_resize_border(app, mouse.column, mouse.row) {
+                if grip.is_none() && crate::mouse::over_resize_border(app, mouse.column, mouse.row) {
                     select_pane(app, pane);
                     return false;
                 }
             }
             begin_press(app, MouseButton::Left);
             activate(app, action, at);
+            if let Some(pane) = grip.filter(|_| !app.tab().zoomed) {
+                app.controls.grab = Some(Grab { pane, from: (mouse.column, mouse.row), live: false, drop: crate::pane_drag::Drop::Nothing });
+            }
             return true;
         },
         MouseEventKind::Down(MouseButton::Right) => {
             let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p) | Action::Close(p)) => Some(p), _ => None };
             if let Some(pane) = pane { begin_press(app, MouseButton::Right); pane_menu(app, pane, at); return true; }
+            // A machine's heading in the side bar: what can be done on it.
+            if let Some(crate::bar::Hit::Machine(machine, _)) = crate::bar::hit_at(app, mouse.column, mouse.row) {
+                begin_press(app, MouseButton::Right);
+                crate::machine_menu::open(app, &machine, at);
+                return true;
+            }
             let tab = crate::bar::hit_at(app, mouse.column, mouse.row).and_then(|hit| match hit { crate::bar::Hit::Window(i) => Some(i), _ => None }).or_else(|| {
                 let top = if app.status_top { 0 } else { app.size.1.saturating_sub(app.status_lines()) };
                 app.status_ranges.iter().find_map(|(row, hit)| {
@@ -304,7 +370,7 @@ pub fn run(app: &mut App, token: &str, verb: &str) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crossterm::event::{Event, KeyModifiers};
     use serde_json::json;
@@ -341,7 +407,7 @@ mod tests {
         }
     }
 
-    fn app(width: u16) -> App {
+    pub(crate) fn app(width: u16) -> App {
         let (sink, _) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(19799, sink, (width, 32));
         app.handed_over = true;
@@ -368,7 +434,7 @@ mod tests {
         app
     }
 
-    fn render(app: &mut App) -> Buffer {
+    pub(crate) fn render(app: &mut App) -> Buffer {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(app.size.0, app.size.1)).unwrap();
         terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
         terminal.backend().buffer().clone()
@@ -382,6 +448,245 @@ mod tests {
 
     fn hit(app: &App, wanted: Action) -> Rect {
         app.controls.hits.borrow().iter().find(|(_, action)| *action == wanted).unwrap_or_else(|| panic!("missing {wanted:?}")).0
+    }
+
+    fn send(app: &mut App, kind: MouseEventKind, x: u16, y: u16) {
+        crate::input::handle(app, Event::Mouse(MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE }));
+    }
+
+    fn grip(app: &App, pane: u64) -> Rect {
+        app.controls.grips.borrow().iter().find(|(_, p)| *p == pane).unwrap_or_else(|| panic!("no grip for {pane}")).0
+    }
+
+    fn live(app: &App) -> bool { app.controls.grab.as_ref().is_some_and(|g| g.live) }
+
+    #[tokio::test]
+    async fn the_drop_zone_follows_the_pointer_and_the_frame_after_release_has_none() {
+        let mut app = app(120);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        app.fit_panes();
+        render(&mut app);
+        let g = grip(&app, 1);
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        let r2 = app.rects.iter().find(|(id, _)| *id == 2).unwrap().1;
+        let (cx, cy) = (r2.x + r2.width / 2, r2.y + r2.height / 2);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), cx, cy);
+        let during = render(&mut app);
+        let row: String = (r2.x..r2.right()).map(|x| during[(x, cy)].symbol()).collect();
+        assert!(row.contains("swap with Task 2"), "{row}");
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), cx, cy);
+        assert!(app.redraw_all, "the release repaints the screen once");
+        assert_eq!(app.tabs[0].panes(), vec![2, 1], "the drop swapped them");
+        assert_eq!(app.tabs[0].focus, Some(1), "the held pane keeps the focus");
+        // the same drop, never dragged: the frame it draws, with no zone
+        let mut swapped = self::app(120);
+        swapped.tabs.truncate(1);
+        swapped.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        swapped.fit_panes();
+        crate::pane_drag::release(&mut swapped, 1, crate::pane_drag::Drop::Swap(2));
+        assert_eq!(render(&mut app), render(&mut swapped), "the frame after the release has no zone");
+    }
+
+    #[tokio::test]
+    async fn a_header_drag_of_two_cells_becomes_a_pane_drag_and_a_short_one_stays_a_click() {
+        let mut app = app(120);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        app.fit_panes(); render(&mut app);
+        let g = grip(&app, 1);
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), g.x + 2, g.y);       // 1 cell: still a click
+        assert!(!live(&app));
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), g.x + 4, g.y + 3);   // 2 or more cells
+        assert!(live(&app));
+        let r2 = app.rects.iter().find(|(id, _)| *id == 2).unwrap().1;
+        let (cx, cy) = (r2.x + r2.width / 2, r2.y + r2.height / 2);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), cx, cy);
+        assert_eq!(app.controls.grab.as_ref().unwrap().drop, crate::pane_drag::Drop::Swap(2));
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), cx, cy);
+        assert!(app.controls.grab.is_none() && app.controls.pressed.is_none());
+        assert_eq!(app.tabs[0].panes(), vec![2, 1], "the drop swapped them");
+        render(&mut app);
+        // a press and release that never moved 2 cells runs nothing
+        let order = app.tabs[0].panes();
+        let g = grip(&app, 1);
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), g.x + 1, g.y);
+        assert_eq!(app.tabs[0].panes(), order);
+    }
+
+    #[tokio::test]
+    async fn the_line_looks_divider_still_resizes_and_only_the_name_drags_the_pane() {
+        for name_drag in [false, true] {
+            let mut app = app(100);
+            app.tabs.truncate(1);
+            app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Vertical);
+            app.options.set("@hn-border", Some("line"), &crate::options::SetFlags { global: true, ..Default::default() }, "", 0).unwrap();
+            app.fit_panes(); render(&mut app);
+            let title = hit(&app, Action::Header(2));
+            let name = grip(&app, 2);
+            assert!(name.width > 0 && name.right() < title.right() - 6, "the grip is the name, not the whole line");
+            let before = app.tab().root.as_ref().unwrap().to_tmux();
+            let x = if name_drag { name.x + 1 } else { name.right() + 1 };
+            send(&mut app, MouseEventKind::Down(MouseButton::Left), x, title.y);
+            send(&mut app, MouseEventKind::Drag(MouseButton::Left), x, title.y + 3);
+            assert_eq!(live(&app), name_drag, "name_drag={name_drag}");
+            send(&mut app, MouseEventKind::Up(MouseButton::Left), x, title.y + 3);
+            let after = app.tab().root.as_ref().unwrap().to_tmux();
+            // the divider part resizes as before; the name part never resizes
+            assert_eq!(after != before, !name_drag, "name_drag={name_drag}");
+        }
+    }
+
+    /// Pane 1 over pane 2, 100 wide, in [look] (`@hn-border box` or `@hn-focus surface`), the
+    /// titles on [status] (pane-border-status top or bottom).
+    fn stacked(look: (&str, &str), status: &str) -> App {
+        let mut app = app(100);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Vertical);
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        app.options.set(look.0, Some(look.1), &global, "", 0).unwrap();
+        app.options.set("pane-border-status", Some(status), &global, "", 0).unwrap();
+        app.fit_panes(); render(&mut app);
+        app
+    }
+
+    #[tokio::test]
+    async fn a_box_or_surface_title_on_a_divider_drags_the_pane_by_its_name_and_resizes_elsewhere() {
+        for look in [("@hn-border", "box"), ("@hn-focus", "surface")] {
+            for status in ["top", "bottom"] {
+                // the title on the divider: the lower pane's when titles are on top, the upper one's below
+                let (pane, other) = if status == "top" { (2, 1) } else { (1, 2) };
+                let probe = stacked(look, status);
+                let (title, name) = (hit(&probe, Action::Header(pane)), grip(&probe, pane));
+                assert!(name.width > 0 && name.right() < title.right() - 6, "{look:?} {status}: the grip is the name, not the whole row");
+                let away = (hit(&probe, Action::Header(other)), grip(&probe, other));
+                assert_eq!(away.1.width, away.0.width - 6, "{look:?} {status}: a title on no divider drags from its whole row");
+                let controls = [hit(&probe, Action::PaneMenu(pane)), hit(&probe, Action::Close(pane))];
+                let before = probe.tab().root.as_ref().unwrap().to_tmux();
+                // 3 rows into its own pane, from each cell of the row
+                let to = if status == "top" { title.y + 3 } else { title.y - 3 };
+                for x in 0..probe.size.0 {
+                    let mut app = stacked(look, status);
+                    for (kind, y) in [(MouseEventKind::Down(MouseButton::Left), title.y), (MouseEventKind::Drag(MouseButton::Left), to), (MouseEventKind::Up(MouseButton::Left), to)] {
+                        send(&mut app, kind, x, y);
+                    }
+                    let resized = app.tab().root.as_ref().unwrap().to_tmux() != before;
+                    let at = ratatui::layout::Position { x, y: title.y };
+                    let kept = name.contains(at) || controls.iter().any(|r| r.contains(at));
+                    assert_eq!(resized, !kept, "{look:?} {status}: cell {x} of the divider title");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_one_cell_diagonal_wobble_on_a_stacked_title_changes_nothing() {
+        for dx in [1i32, -1] {
+            let mut app = stacked(("@hn-border", "box"), "top");
+            let name = grip(&app, 2);
+            let (order, layout) = (app.tabs[0].panes(), app.tab().root.as_ref().unwrap().to_tmux());
+            let (x, y) = (name.x + 1, name.y);
+            let wobble = ((x as i32 + dx) as u16, y - 1);
+            send(&mut app, MouseEventKind::Down(MouseButton::Left), x, y);
+            send(&mut app, MouseEventKind::Drag(MouseButton::Left), wobble.0, wobble.1);
+            assert!(!live(&app), "one cell each way is still a click (dx={dx})");
+            send(&mut app, MouseEventKind::Up(MouseButton::Left), wobble.0, wobble.1);
+            assert_eq!((app.tabs[0].panes(), app.tab().root.as_ref().unwrap().to_tmux()), (order, layout), "dx={dx}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_right_button_or_modifier_held_drag_on_a_grip_is_never_a_pane_drag() {
+        for (button, modifiers) in [(MouseButton::Right, KeyModifiers::NONE), (MouseButton::Left, KeyModifiers::ALT), (MouseButton::Left, KeyModifiers::CONTROL)] {
+            let mut app = app(120);
+            app.tabs.truncate(1);
+            app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+            app.fit_panes(); render(&mut app);
+            let (g, order) = (grip(&app, 1), app.tabs[0].panes());
+            let r2 = app.rects.iter().find(|(id, _)| *id == 2).unwrap().1;
+            let (cx, cy) = (r2.x + r2.width / 2, r2.y + r2.height / 2);
+            for (kind, x, y) in [(MouseEventKind::Down(button), g.x + 1, g.y), (MouseEventKind::Drag(button), g.x + 1, g.y + 3),
+                (MouseEventKind::Drag(button), cx, cy), (MouseEventKind::Up(button), cx, cy)] {
+                crate::input::handle(&mut app, Event::Mouse(MouseEvent { kind, column: x, row: y, modifiers }));
+                assert!(!live(&app), "{button:?} {modifiers:?}");
+            }
+            assert_eq!(app.tabs[0].panes(), order, "{button:?} {modifiers:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_held_pane_that_is_gone_is_let_go() {
+        let mut app = app(100);                       // window 1: pane 1; window 2: pane 2
+        render(&mut app);
+        let g = grip(&app, 1);
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), g.x + 1, g.y + 3);
+        assert!(live(&app));
+        // its window empties mid-drag: the release may never reach the header press
+        app.close_pane(1);
+        render(&mut app);
+        assert!(app.controls.grab.is_none(), "the next frame lets go of a pane that is gone");
+        app.controls.grab = Some(Grab::live_for_test(1, crate::pane_drag::Drop::Swap(2)));
+        crate::pane_drag::follow(&mut app, 5, 5);
+        assert!(app.controls.grab.is_none(), "so does the next move");
+    }
+
+    #[tokio::test]
+    async fn escape_during_a_pane_drag_cancels_it_and_the_release_runs_nothing() {
+        let mut app = app(120);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        app.fit_panes(); render(&mut app);
+        let order = app.tabs[0].panes();
+        let g = grip(&app, 1);
+        let r2 = app.rects.iter().find(|(id, _)| *id == 2).unwrap().1;
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), g.x + 1, g.y + 3);
+        assert!(live(&app));
+        let typed = app.panes[&1].queued.len();
+        crate::input::handle(&mut app, Event::Key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(app.controls.grab.is_none());
+        assert_eq!(app.panes[&1].queued.len(), typed, "a visible drag uses the Escape up");
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), r2.x + 5, r2.y + 5);
+        assert_eq!(app.tabs[0].panes(), order);
+    }
+
+    #[tokio::test]
+    async fn escape_during_an_unmoved_press_lets_go_and_still_reaches_the_program() {
+        let mut app = app(120);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        app.fit_panes(); render(&mut app);
+        let g = grip(&app, 1);
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), g.x + 1, g.y);
+        assert!(app.controls.grab.is_some() && !live(&app));
+        let typed = app.panes[&1].queued.len();
+        crate::input::handle(&mut app, Event::Key(crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(app.panes[&1].queued.len() > typed, "the Escape reaches the program");
+        assert!(app.controls.grab.is_none());
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), g.x + 1, g.y + 3);
+        assert!(!live(&app), "a let-go press does not become a drag");
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), g.x + 1, g.y + 3);
+    }
+
+    #[tokio::test]
+    async fn the_surface_looks_whole_header_row_drags_the_pane() {
+        let mut app = app(100);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Horizontal);
+        app.options.set("@hn-focus", Some("surface"), &crate::options::SetFlags { global: true, ..Default::default() }, "", 0).unwrap();
+        app.fit_panes();
+        let buf = render(&mut app);
+        let title = hit(&app, Action::Header(1));
+        // the blank part of the header, right of the name and left of the … × controls
+        let x = title.right() - 8;
+        assert_eq!(buf[(x, title.y)].symbol(), " ", "this test needs a blank header cell right of the name");
+        send(&mut app, MouseEventKind::Down(MouseButton::Left), x, title.y);
+        send(&mut app, MouseEventKind::Drag(MouseButton::Left), x - 4, title.y + 3);
+        assert!(live(&app), "the surface look drags from the whole header row");
+        send(&mut app, MouseEventKind::Up(MouseButton::Left), x - 4, title.y + 3);
     }
 
     #[tokio::test]
@@ -440,11 +745,13 @@ mod tests {
                 app.options.set("@hn-border", Some("line"), &crate::options::SetFlags { global:true, ..Default::default() }, "", 0).unwrap();
                 app.fit_panes(); render(&mut app);
                 let title = hit(&app, Action::Header(2));
+                // (The line right of the name: the name itself drags the pane.)
+                let col = grip(&app, 2).right() + 1;
                 let before = app.tab().root.as_ref().unwrap().to_tmux();
                 if !controls { app.controls.hits.borrow_mut().clear(); }
                 for (kind, row) in [(MouseEventKind::Down(MouseButton::Left), title.y),
                     (MouseEventKind::Drag(MouseButton::Left), title.y + 3), (MouseEventKind::Up(MouseButton::Left), title.y + 3)] {
-                    crate::input::handle(&mut app, Event::Mouse(MouseEvent { kind, column:title.x + 3, row, modifiers:KeyModifiers::NONE }));
+                    crate::input::handle(&mut app, Event::Mouse(MouseEvent { kind, column:col, row, modifiers:KeyModifiers::NONE }));
                 }
                 let after = app.tab().root.as_ref().unwrap().to_tmux();
                 assert_ne!(after, before, "plain title must keep its resize drag (controls={controls}, top={top})");

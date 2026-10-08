@@ -140,6 +140,11 @@ pub struct Form {
     modes: HashMap<String, String>,
 }
 impl Form {
+    /// Where the form was last drawn, with a side chooser beside it (empty before its first frame).
+    pub(crate) fn drawn_area(&self) -> Rect {
+        if self.child_area.is_empty() { self.area } else { self.area.union(self.child_area) }
+    }
+
     fn project_payload(&self) -> Result<(Option<String>, Value), String> {
         // A confirmed failure may have already made a clone or worktree. Reuse that
         // exact folder until the user explicitly chooses another project/branch.
@@ -2459,6 +2464,27 @@ mod tests {
         assert!(form.child.is_none());
         assert_eq!(form.focus, Field::Task);
         assert_eq!(form.draft.task, format!("{expected}\n"));
+    }
+
+    /// What the settle rewrite keeps as the form's overlay: the form, and the chooser dropped down
+    /// from a field.
+    #[tokio::test]
+    async fn the_drawn_area_takes_in_a_chooser() {
+        let mut app = app();
+        open(&mut app, None, None);
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        let area = Rect::new(0, 0, 150, 42);
+        draw(&mut Buffer::empty(area), area, &mut form);
+        assert_eq!(form.drawn_area(), form.area, "no chooser: the form");
+        form.focus = Field::Project;
+        child(&mut app, &mut form, Choice::Project, "");
+        form.child_active = true;
+        draw(&mut Buffer::empty(area), area, &mut form);
+        assert!(!form.child_area.is_empty(), "the chooser drops down");
+        assert_eq!(form.drawn_area(), form.area.union(form.child_area));
+        form.child = None;
+        draw(&mut Buffer::empty(area), area, &mut form);
+        assert_eq!(form.drawn_area(), form.area, "the chooser closed");
     }
 
     #[tokio::test]

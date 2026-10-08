@@ -73,7 +73,7 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
         return None;
     }
     let page = matches!(form.surface, Surface::Window(_));
-    let crate::settings::Chrome { base, muted, accent, backdrop, selected } = crate::settings::chrome();
+    let crate::settings::Chrome { base, muted, accent, backdrop, selected, .. } = crate::settings::chrome();
     if page {
         panel(buf, body, Style::default().bg(ratatui::style::Color::Reset).fg(ratatui::style::Color::Reset));
     } else { crate::settings::backdrop(buf, body, backdrop); }

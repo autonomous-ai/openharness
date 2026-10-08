@@ -181,10 +181,10 @@ class User:
         def closed():
             return pane not in self.native('list-panes', '-s', '-F', '#{pane_id}').splitlines()
         self.keys('C-b', 'x')
-        self.check(lambda: closed() or '(s)' in self.screen() or 'kill-pane' in self.screen(),
+        self.check(lambda: closed() or '[ Stop ]' in self.screen() or 'kill-pane' in self.screen(),
                    'Stop completes or offers confirmation')
         if not closed():
-            self.keys('s' if '(s)' in self.screen() else 'y')
+            self.keys('s' if '[ Stop ]' in self.screen() else 'y')
         self.check(closed, 'Confirmed Stop removes its pane', 60)
 
     def status(self):
