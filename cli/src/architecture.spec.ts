@@ -143,6 +143,9 @@ const SERVICE_MAY_IMPORT: Record<string, string> = {
 
 /** What is not the core's, by path: each goes to a service or its own process, in the plan's order. */
 const EDGE: RegExp[] = [
+  // The pilot reader implementations and their host are never loaded by supervised core.
+  /^engines\/(worker\/process|transcripts|(claude|codex)\/(transcript|\w+ReaderProcess))\.ts$/,
+  /^engines\/(runtime|(claude|codex)\/runtimeProfile)\.ts$/, /^lib\/runtimeProfile\.ts$/,
   /^gateway\//, /^lib\/e2ee\//, /^cable\//, /^device\//, /^lib\/autonomous-device\//, /^sharing\//, /^teams\//, /^orchestrator\//, /^services\//,
   /^lib\/grid(Attach|Credentials|Derive|Ensure|Envelope|Exec|FleetRpc|Handoff|Install|McpUrl|Models|ModelsPayload|Picture|Presence|Reader|Target|Wake)\.ts$/,
   /^lib\/localModels\.ts$/,
@@ -170,14 +173,6 @@ const EDGE: RegExp[] = [
  * list only shrinks: an entry no longer reached fails the test, so remove it with the move that ends it.
  */
 const CORE_MAY_REACH: Record<string, string> = {
-  'device/machineList.ts': 'the account\'s machine list, which /api/machines answers from and the trust group reads: with the account proxies (step 10)',
-  'dsh/builtins.ts': 'the bundled harnesses are put in place by the core\'s start, which cli.js carries them for anyway; in the Store\'s lean process they cost a second copy (core/main.ts)',
-  'dsh/lock.ts': 'with dsh/builtins.ts',
-  'dsh/registry.ts': 'with dsh/builtins.ts, which checks the bundled harnesses against the catalog\'s entries',
-  'dsh/updates.ts': 'with dsh/builtins.ts',
-  'lib/autonomous-device/localApi.ts': 'the hook server\'s routes for `harness device`, which the core serves: the pairings they answer are the gateway\'s, the receipts the Wi-Fi device\'s service\'s',
-  'lib/sessionSearch/transcript.ts': 'the readers of other engines\' sessions keep this helper: it moves beside them, out of search\'s folder',
-  'services/shell.ts': 'shell setup and launch receipts, in the edge host; only the argv launch stays in the core (#893)',
 }
 
 describe('the daemon\'s shape', () => {
@@ -201,6 +196,24 @@ describe('the daemon\'s shape', () => {
         : /(^|\/)services\//.test(from) || (/(^|\/)(cli|backendSocket|localWsServer)\.js$/.test(from) && !typeOnly)))
       .map(({ file, from }) => `${file} imports ${from}`)
     expect(wrong, 'The core calls services only through CorePorts, and is handed the socket\'s pieces as dependencies (src/core/AGENTS.md).').toEqual([])
+  })
+
+  it('live transcript coordination depends on engine contracts, with neutral folding mechanics', () => {
+    const owners = new Set(['core/transcripts/attach.ts', 'core/transcripts/ingest.ts', 'core/transcripts/normalizers.ts'])
+    const wrong = importsIn('core').filter(({ file, from, typeOnly }) => owners.has(file) && !typeOnly
+      && (/engines\/(claude|codex)\//.test(from) || /lib\/normalize\.js$/.test(from) || /engines\/live\.js$/.test(from)))
+    expect(wrong, 'Inject the live facet; do not construct or edit an engine parser in core.').toEqual([])
+    for (const entry of ['lib/attachTranscript.ts', 'engines/kit/events.ts', 'engines/kit/transcriptFold.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
+    }
+  })
+
+  it('runtime profile authority and wire values load contracts without vendor profile implementations', () => {
+    for (const entry of ['core/engines/runtimeSessions.ts', 'core/engines/runtimeProfiles.ts',
+      'core/engines/runtimeTransport.ts', 'lib/runtimeProfileWire.ts', 'lib/runtimeProfileManager.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
+      expect(closureOf(entry).has('lib/runtimeProfile.ts'), entry).toBe(false)
+    }
   })
 
   it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {

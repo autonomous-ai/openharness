@@ -20,7 +20,7 @@ import {
   resumeSessionId,
   type ProcessRow,
 } from './tmux.js'
-import { processIdentityKey, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
+import { processIdentityKey, processIdentityOf, terminalInstanceId, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type {
   ProcessIdentity,
   TerminalInventoryResult,
@@ -164,7 +164,7 @@ function rootOwner(
     agent: {
       engine,
       cwd: root.cwd,
-      processIdentity: { pid: row.pid, executable: row.executable, startMarker: row.startMarker },
+      processIdentity: processIdentityOf(row),
       args: row.args,
       resumeSessionId: resumeSessionId(engine, row.args),
     },

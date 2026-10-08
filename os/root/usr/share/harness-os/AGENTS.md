@@ -10,6 +10,10 @@ is required.
 
 ## System operations
 
+- For connected services, read `/usr/share/harness-os/connections.md`.
+  `harness connections list --json` discovers this user's connected accounts.
+  Use the shared helper from any agent; keep credentials out of conversations.
+
 - `Super+u` starts the update inside hn. `harness updates` opens its screen;
   click Update to start the same action. No confirmation or password is needed.
   The user timer checks hn and CLI releases and prepares verified downloads.

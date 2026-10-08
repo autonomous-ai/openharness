@@ -25,7 +25,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { agentCommandOwnershipSnapshot } from '../../engineBin.js'
-import { builtinSqlite } from '../../sqliteRead.js'
+import { builtinSqlite } from '../../sqliteBuiltin.js'
 import { argvTokens, engineProcessMatch, resumeSessionId } from '../../tmux.js'
 import { absoluteFolder, entries, fileStamp, parseLine, readJson, readTail, record, text, UUID } from './support.js'
 import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, RunningProcess, ScanContext } from './types.js'

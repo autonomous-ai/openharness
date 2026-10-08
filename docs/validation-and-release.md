@@ -113,6 +113,18 @@ GitHub report a PR unstable, which `make merge-pr` refuses to merge. Once it has
 green, run it on pull requests, make `e2e-summary` required and add it to the evidence
 collector.
 
+For changes to daemon lifetime or process boundaries, select an opt-in soak and chaos workload
+(`cli/e2e/endurance.e2e.ts`). On a Mac, run `SOAK=1 E2E_BUNDLE=1 SOAK_OUT=<folder> npx vitest run
+--config vitest.e2e.config.ts e2e/endurance.e2e.ts` in `cli/`. The defaults are 60 minutes of soak and
+30 minutes of chaos with six agents; `SOAK_MINUTES`, `CHAOS_MINUTES` and `SOAK_AGENTS` select a
+smaller validation workload. Runs of at least 15 chaos minutes require every fault kind and service.
+Windows, terminal streams, all service processes and a fake dial are exercised. Every turn must be
+seen once, in order; the core must never restart; failed services must answer promptly and recover.
+`SOAK_OUT` keeps process samples and JSON reports. Memory/descriptor growth is reported, with null
+for insufficient measurement windows. Set `SOAK_MAX_MIB_PER_HOUR` or `SOAK_MAX_FDS_PER_HOUR` only
+with a measured baseline for the same workload; there is no invented default growth limit. Short
+smoke runs test the harness and failure paths, not long-term memory stability.
+
 For repository process tooling only, `scope=process` runs its Python regression
 tests without installing or building unrelated components. It does not validate
 application changes. Workflow edits also need `actionlint` and a run exercising

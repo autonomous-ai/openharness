@@ -4,8 +4,8 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { copilotOwnLine, forEachLine, lineNormalizer, lineTime, museOwnStream, skipPredicate } from './transcript.js'
-import { TurnCollector, type IndexedTurn } from './turns.js'
+import { copilotOwnLine, forEachLine, lineNormalizer, lineTime, museOwnStream, skipPredicate } from './transcriptReader.js'
+import { TurnCollector, type IndexedTurn } from './sessionSearch/turns.js'
 
 const dirs: string[] = []
 function file(content: string | Buffer): string {

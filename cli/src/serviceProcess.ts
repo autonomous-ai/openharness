@@ -28,6 +28,8 @@ const BESIDE_THE_CORE: ReadonlySet<string> = new Set(['updater'])
 
 /** Every service this build can run in its own process, and how to load its runner alone. */
 export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new Map<string, () => Promise<Runner>>([
+  ['engine-claude', async () => (await import('./engines/claude/claudeReaderProcess.js')).runClaudeReader],
+  ['engine-codex', async () => (await import('./engines/codex/codexReaderProcess.js')).runCodexReader],
   ['search', async () => (await import('./services/searchProcess.js')).runSearchService],
   ['viewers', async () => (await import('./services/viewersProcess.js')).runViewersService],
   ['workspaces', async () => (await import('./services/workspacesProcess.js')).runWorkspacesService],
@@ -35,6 +37,7 @@ export const SERVICE_RUNNERS: ReadonlyMap<string, () => Promise<Runner>> = new M
   ['monitor', async () => (await import('./services/monitorProcess.js')).runMonitorService],
   ['projects', async () => (await import('./services/projectsProcess.js')).runProjectsService],
   ['windowNames', async () => (await import('./services/windowNamesProcess.js')).runWindowNamesService],
+  ['shell', async () => (await import('./services/shellProcess.js')).runShellService],
   ['handoff', async () => (await import('./services/handoffProcess.js')).runHandoffService],
   ['recaps', async () => (await import('./services/recapsProcess.js')).runRecapsService],
   ['store', async () => (await import('./services/storeProcess.js')).runStoreService],

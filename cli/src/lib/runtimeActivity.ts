@@ -4,6 +4,7 @@ import { terminalActivityReading } from './terminalActivity.js'
 import { connectCodexControl, type CodexControl } from './codexSessionLifecycle.js'
 import { codexStoppedGoal } from './codexTurnRecovery.js'
 import { argvTokens, processRows, type ProcessRow } from './tmux.js'
+import { sameProcessIdentity } from './terminalRuntime.js'
 import type { RegisteredSession } from './registry.js'
 import type { ActivityState } from './turnActivity.js'
 
@@ -27,8 +28,8 @@ export class CodexActivityReader {
       this.rowsAt = this.deps.now(); this.rows = this.deps.rows()
     }
     const rows = await this.rows
-    const owner = rows?.find(row => row.pid === session.processIdentity!.pid
-      && row.startMarker === session.processIdentity!.startMarker && row.executable === session.processIdentity!.executable)
+    const owner = rows?.find(row => sameProcessIdentity(row, session.processIdentity)
+      && row.executable === session.processIdentity!.executable)
     if (!owner) return 'unknown'
     const args = argvTokens(owner.args)
     const option = /^node(?:\.exe)?$/.test(basename(args[0] ?? '')) && /(?:^|\/)codex(?:\.js)?$/.test(args[1] ?? '') ? 2 : 1

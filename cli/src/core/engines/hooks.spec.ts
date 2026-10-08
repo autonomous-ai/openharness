@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as hooks from '../../lib/hooks.js'
+import { engineHooks } from '../../engines/hooks.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { dirname } from 'node:path'
@@ -7,6 +8,13 @@ import { env } from '../../config/env.js'
 import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
 
+vi.mock('../../engines/hooks.js', async (real) => {
+  const actual = await real<typeof import('../../engines/hooks.js')>()
+  return { ...actual, engineHooks: {
+    claude: { ...actual.engineHooks.claude, install: vi.fn(), installIn: vi.fn() },
+    codex: { ...actual.engineHooks.codex, install: vi.fn(), installIn: vi.fn() },
+  } }
+})
 vi.mock('../../lib/engineHomes.js', () => ({
   adoptEngineHomes: vi.fn(() => ({ claude: null, codex: null })),
   movedEngineHomes: vi.fn(() => ({ claude: [], codex: [] })),
@@ -14,8 +22,6 @@ vi.mock('../../lib/engineHomes.js', () => ({
 vi.mock('../../lib/terminalAgentDiscovery.js', async (real) => ({ ...await real<object>(), processRows: vi.fn(async () => []) }))
 vi.mock('../../lib/hooks.js', async (real) => ({
   ...await real<object>(),
-  installSessionHooks: vi.fn(),
-  installCodexHooks: vi.fn(),
   installCursorHooks: vi.fn(),
   installOpencodePlugin: vi.fn(),
   installKiloPlugin: vi.fn(),
@@ -295,7 +301,7 @@ describe('which agent a hook belongs to', () => {
 
 describe('installing every engine\'s hooks', () => {
   const installs = [
-    hooks.installSessionHooks, hooks.installCodexHooks, hooks.installCursorHooks, hooks.installOpencodePlugin,
+    engineHooks.claude.install, engineHooks.codex.install, hooks.installCursorHooks, hooks.installOpencodePlugin,
     hooks.installKiloPlugin, hooks.installPiExtension, hooks.installAmpPlugin, hooks.installHermesHooks,
     hooks.installDevinHooks, hooks.installCommandCodeHooks, hooks.installGrokHooks, hooks.installAgyHooks,
     hooks.installCopilotHooks,
@@ -312,17 +318,18 @@ describe('installing every engine\'s hooks', () => {
   it('only the engines asked for (HOOK_INSTALL_ENGINES), the homes they moved included', () => {
     vi.mocked(movedEngineHomes).mockReturnValueOnce({ claude: ['/w/claude'], codex: ['/w/codex'] })
     installEngineHooks(4242, { only: new Set(['codex']), environment: {} })
-    expect(hooks.installCodexHooks).toHaveBeenCalledWith(4242)
-    expect(hooks.installCodexHooks).toHaveBeenCalledWith(4242, '/w/codex')
-    for (const install of installs.filter((one) => one !== hooks.installCodexHooks)) expect(install).not.toHaveBeenCalled()
+    expect(engineHooks.codex.install).toHaveBeenCalledWith(4242)
+    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/w/codex')
+    for (const install of installs.filter((one) => one !== engineHooks.codex.install)) expect(install).not.toHaveBeenCalled()
+    expect(engineHooks.claude.installIn).not.toHaveBeenCalled()
   })
 
   // lib/engineHomes.ts: with CLAUDE_CONFIG_DIR or CODEX_HOME in the person's profile, no agent ever bound.
   it('puts the hooks in every home adopted on an earlier boot, at every start', () => {
     vi.mocked(movedEngineHomes).mockReturnValueOnce({ claude: ['/w/claude'], codex: ['/w/codex'] })
     installEngineHooks(4242, { environment: {} })
-    expect(hooks.installSessionHooks).toHaveBeenCalledWith(4242, '/w/claude/settings.json')
-    expect(hooks.installCodexHooks).toHaveBeenCalledWith(4242, '/w/codex')
+    expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/w/claude')
+    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/w/codex')
   })
 
   it('adopts the homes its own environment moves, then the login shell\'s once that is read, and installs there', async () => {
@@ -334,11 +341,11 @@ describe('installing every engine\'s hooks', () => {
       .mockReturnValueOnce({ claude: null, codex: '/s/codex' })
     installEngineHooks(4242, { environment: own, loginShell: Promise.resolve(shell) })
     expect(adoptEngineHomes).toHaveBeenCalledWith(own, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), codexHome: env.CODEX_HOME })
-    expect(hooks.installSessionHooks).toHaveBeenCalledWith(4242, '/m/claude/settings.json')
+    expect(engineHooks.claude.installIn).toHaveBeenCalledWith(4242, '/m/claude')
     expect(log).toHaveBeenCalledWith('[hooks] engines keep their data elsewhere here: Claude Code in /m/claude')
     await Promise.resolve()
     expect(adoptEngineHomes).toHaveBeenLastCalledWith(shell, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), codexHome: env.CODEX_HOME })
-    expect(hooks.installCodexHooks).toHaveBeenCalledWith(4242, '/s/codex')
+    expect(engineHooks.codex.installIn).toHaveBeenCalledWith(4242, '/s/codex')
     expect(log).toHaveBeenCalledWith('[hooks] engines keep their data elsewhere here: Codex in /s/codex')
   })
 
@@ -350,7 +357,7 @@ describe('installing every engine\'s hooks', () => {
   })
 
   it('one at a time: a vendor whose install throws is skipped and named, and the rest still install', () => {
-    vi.mocked(hooks.installCodexHooks).mockImplementationOnce(() => { throw new Error('config.toml is read-only') })
+    vi.mocked(engineHooks.codex.install).mockImplementationOnce(() => { throw new Error('config.toml is read-only') })
     vi.mocked(hooks.installGrokHooks).mockImplementationOnce(() => { throw 'settings mid-write' })
     installEngineHooks(4242)
     expect(console.warn).toHaveBeenCalledWith('[hooks] codex install skipped · config.toml is read-only')

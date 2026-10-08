@@ -14,6 +14,7 @@ import { createServiceHost } from './core/serviceHost.js'
 import { startCommandBar, type Commands } from './services/commandBar.js'
 import { fakeCore } from './testing/fakeCore.js'
 import { ENGINES } from './engines/types.js'
+import { engineHooks } from './engines/hooks.js'
 
 let server: Server | null = null
 
@@ -75,6 +76,28 @@ async function start(overrides: Partial<HookServerHandlers> = {}) {
 }
 
 describe('process-owned hook server', () => {
+
+  it('honors engine admission before registering or announcing a prompt, including a failed check', async () => {
+    const admit = vi.spyOn(engineHooks.codex, 'admit')
+      .mockReturnValueOnce({ accepted: false, reason: 'codex_subagent' })
+      .mockImplementationOnce(() => { throw new Error('rollout unavailable') })
+    try {
+      const onPromptSubmitted = vi.fn()
+      const { handlers, base, headers } = await start({
+        resolveHookAgent: async () => ({ engine: 'codex', agentId: 'parent' }) as RegisteredSession,
+        onPromptSubmitted,
+      })
+      for (const reason of ['codex_subagent', 'engine_hook_failed']) {
+        const response = await fetch(`${base}/api/hook/session-start`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: 'child', hookEvent: 'UserPromptSubmit' }),
+        })
+        expect(await response.json()).toEqual({ ignored: true, reason })
+      }
+      expect(handlers.onRegistered).not.toHaveBeenCalled()
+      expect(onPromptSubmitted).not.toHaveBeenCalled()
+    } finally { admit.mockRestore() }
+  })
 
   it('runs targeted resolution and rejects a hook without a matching pane engine process', async () => {
     const resolveHookAgent = vi.fn(async () => null)
@@ -406,6 +429,16 @@ describe('knownTranscriptFor', () => {
     expect(knownTranscriptFor({ engine: 'claude', sessionId, transcriptPath: known }, { ...row, transcriptPath: join(root, 'other.jsonl') })).toBe(known)
   })
 
+  it('keeps the announcement if the engine lookup fails', () => {
+    const lookup = vi.spyOn(engineHooks.claude, 'transcriptFor')
+      .mockImplementationOnce(() => { throw new Error('lookup failed') })
+      .mockImplementationOnce(() => { throw 'lookup failed again' })
+    try {
+      expect(knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toBe(announced)
+      expect(knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toBe(announced)
+    } finally { lookup.mockRestore() }
+  })
+
   it.each<[string, Parameters<typeof knownTranscriptFor>[0], RegisteredSession | undefined]>([
     ['another conversation', { engine: 'claude', sessionId: 'other-conversation', transcriptPath: announced }, row],
     ['another engine', { engine: 'codex', sessionId, transcriptPath: announced }, row],
@@ -413,6 +446,7 @@ describe('knownTranscriptFor', () => {
     ['a row whose file is gone', { engine: 'claude', sessionId, transcriptPath: announced }, { ...row, transcriptPath: join(root, 'gone', `${sessionId}.jsonl`) }],
     ['no row', { engine: 'claude', sessionId, transcriptPath: announced }, undefined],
     ['no announcement', { engine: 'claude', sessionId }, row],
+    ['no conversation id', { engine: 'claude', transcriptPath: announced }, row],
   ])('leaves the announcement alone for %s', (_case, body, agent) => {
     expect(knownTranscriptFor(body, agent)).toBe(body.transcriptPath)
   })

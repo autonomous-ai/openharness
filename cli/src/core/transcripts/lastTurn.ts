@@ -9,7 +9,9 @@
  */
 import { lastAgyTurnText } from '../../engines/agy/normalizer.js'
 import { lastAmpTurnText } from '../../engines/amp/normalizer.js'
-import { readLastCodexTurnText } from '../../engines/codex/lastTurn.js'
+import type { EngineTranscript } from '../../engines/facets/transcript.js'
+import { EngineReadError } from '../../engines/worker/protocol.js'
+import { transcriptReadIdentity } from './readIdentity.js'
 import { lastCommandCodeTurnText } from '../../engines/commandcode/normalizer.js'
 import { lastCopilotTurnText } from '../../engines/copilot/normalizer.js'
 import { lastCursorTurnText } from '../../engines/cursor/normalizer.js'
@@ -24,30 +26,39 @@ import { lastMuseTurnText } from '../../engines/muse/normalizer.js'
 import { lastOpencodeTurnText } from '../../engines/opencode/normalizer.js'
 import { readOpencodeMessages } from '../../engines/opencode/reader.js'
 import { lastPiTurnText } from '../../engines/pi/normalizer.js'
-import { lastTurnTextFromRawLines, selectClaudeRecapLine, type LastTurnText } from '../../lib/normalize.js'
+import { lastTurnTextFromRawLines, type LastTurnText } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { tailFileCapped, tailFileUntil } from '../../lib/transcriptTail.js'
+import { tailFileCapped } from '../../lib/transcriptTail.js'
 
 export interface LastTurnDeps {
   bySession: (sessionId: string) => RegisteredSession | undefined
+  readerFor: (engine: string) => EngineTranscript | undefined
   /** The database engines' stores. */
   dbs: { opencode: string; kilo: string; devin: string }
   /** Hermes keeps a store per profile: the one this session's lives in. */
   hermesDb: (s: RegisteredSession) => Promise<string>
 }
 
-export function createLastTurnReader({ bySession, dbs, hermesDb }: LastTurnDeps) {
+export function createLastTurnReader({ bySession, dbs, hermesDb, readerFor }: LastTurnDeps) {
   return async (sessionId: string): Promise<LastTurnText | null> => {
     const s = bySession(sessionId)
     if (!s) return null
+    const reader = readerFor(s.engine)
+    if (reader) {
+      const identity = transcriptReadIdentity(s)
+      try {
+        const answer = await reader.lastTurnText(s)
+        return transcriptReadIdentity(bySession(sessionId)) === identity ? answer : null
+      } catch (error) {
+        console.warn(`[engine ${s.engine}] last turn unavailable · ${error instanceof EngineReadError ? error.code : 'ENGINE_UNAVAILABLE'}`)
+        return null
+      }
+    }
     if (s.engine === 'opencode') return lastOpencodeTurnText(await readOpencodeMessages(dbs.opencode, sessionId))
     if (s.engine === 'kilo') return lastKiloTurnText(await readKiloMessages(dbs.kilo, sessionId))
     if (s.engine === 'hermes') return lastHermesTurnText(await readHermesMessages(await hermesDb(s), sessionId))
     if (s.engine === 'devin') return lastDevinTurnText(await readDevinMessages(dbs.devin, sessionId))
     if (!s.transcriptPath) return null
-    if (s.engine === 'codex') return readLastCodexTurnText(s.transcriptPath)
-    // Its last turn, read backward — not the whole conversation once per turn end.
-    if (s.engine === 'claude') return lastTurnTextFromRawLines(await tailFileUntil(s.transcriptPath, selectClaudeRecapLine))
     // Bounded from the end like every whole read of an engine without pages (lib/transcriptTail.ts):
     // the last turn is at the end, and a transcript past the cap would otherwise be read whole at
     // every turn's end.

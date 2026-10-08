@@ -4,6 +4,8 @@
  * PERF_PROFILE=1 adds node --cpu-prof; PERF_HEAP=1 writes snapshots AFTER measurement windows.
  * PERF_REPORT=<file> writes JSON; raw artifacts stay in its recorded private temporary directory.
  * Run alone. CPU is the core's process CPU (100% = one logical CPU), never the master's/children's.
+ * PERF_READERS=1 additionally measures reader PIDs and history pages every 2 s; totals include them.
+ * PERF_BUNDLE_SOURCE identifies an externally built baseline bundle; its bytes are hashed either way.
  * On macOS set HARNESS_PROCESS_IMAGES_ARTIFACT to a verified local build for release-like discovery.
  */
 import { execFileSync } from 'node:child_process'
@@ -16,6 +18,7 @@ import { describe, expect, it } from 'vitest'
 import { TerminalBinaryKind } from '../src/lib/terminalBinary.js'
 import { LocalClient } from './harness/client.js'
 import { CLI_ROOT, until } from './harness/daemon.js'
+import { harnessdProcesses } from './harness/endurance.js'
 import { startPhoneMachine, type PhoneMachine } from './harness/fleet.js'
 
 const sleep = (ms: number) => new Promise<void>(done => setTimeout(done, ms))
@@ -94,6 +97,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
     const seconds = knob('PERF_SECONDS', 60, 10, 600)
     const warmup = knob('PERF_WARMUP_SECONDS', 20, 0, 120)
     const historyMiB = knob('PERF_HISTORY_MIB', 1, 0, 8)
+    const measureReaders = process.env.PERF_READERS === '1'
     const profile = process.env.PERF_PROFILE === '1'
     const heaps = process.env.PERF_HEAP === '1'
     const bundle = process.env.E2E_BUNDLE_PATH
@@ -109,13 +113,13 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
     const report: Record<string, any> = {
       schema: 1, state: 'running', startedAt: new Date().toISOString(), artifactDir,
       source: { commit: git('rev-parse', 'HEAD'), tree: git('rev-parse', 'HEAD^{tree}'),
-        dirty: Boolean(git('status', '--porcelain')), bundleSha256: sha(bundle), preloadSha256: sha(preload) },
+        dirty: Boolean(git('status', '--porcelain')), bundleSource: process.env.PERF_BUNDLE_SOURCE ?? git('rev-parse', 'HEAD'), bundleSha256: sha(bundle), preloadSha256: sha(preload) },
       machine: { platform: platform(), release: release(), node: process.version, logicalCpus: cpus().length,
         cpu: cpus()[0]?.model, ramBytes: totalmem(), tmux: execFileSync('tmux', ['-V'], { encoding: 'utf8', timeout: 5_000 }).trim() },
-      workload: { agents, active, windows: 2, terminalStreams: 4, seconds, warmup, historyMiB,
+      workload: { readerPageEveryMs: measureReaders ? 2000 : null, agents, active, windows: 2, terminalStreams: 4, seconds, warmup, historyMiB,
         turnDelayMs: '5000 + a unique round offset', inventoryEveryMs: 60_000, heartbeatEveryMs: 5_000, ackEveryMs: 16 },
       instrumentation: { profile, heaps, delayResolutionMs: 10, rssSampleEveryMs: 1_000, cpuPercentBasis: 'one logical CPU',
-        scope: 'core PID only; excludes master, services, engines and tmux', heapPausesOutsideWindows: true },
+        scope: measureReaders ? 'core PID and both reader PIDs; excludes master, other services, engines and tmux' : 'core PID only; excludes master, services, engines and tmux', heapPausesOutsideWindows: true },
       nativeProcessImages: process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
         ? { mode: 'embedded', artifactSha256: sha(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT) } : { mode: 'fallback' },
       limitations: ['Fake engines and a loopback fake backend; no real model latency or token streaming.',
@@ -128,7 +132,7 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
     let corePid: number | null = null
     try {
       machine = await startPhoneMachine({ env: { NODE_OPTIONS: nodeOptions.join(' '),
-        HARNESS_E2E_PERF_DIR: artifactDir, HARNESS_E2E_PERF_TOKEN: token } })
+        HARNESS_E2E_PERF_READERS: measureReaders ? '1' : '0', HARNESS_E2E_PERF_DIR: artifactDir, HARNESS_E2E_PERF_TOKEN: token } })
       const d = machine.machine.daemon
       corePid = d.corePid()
       if (!corePid) throw new Error('no owned core PID')
@@ -138,14 +142,15 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
       await until('the owned core performance probe', () => existsSync(readyFile), 10_000)
       const endpoint = JSON.parse(readFileSync(readyFile, 'utf8')) as { pid: number; port: number }
       expect(endpoint.pid).toBe(corePid)
-      const probe = async (op: string, label: string) => {
-        const response = await fetch(`http://127.0.0.1:${endpoint.port}/${op}`, {
+      const probe = async (op: string, label: string, pid = corePid!) => {
+        const target = pid === corePid ? endpoint : JSON.parse(readFileSync(join(artifactDir, `core-${pid}.json`), 'utf8'))
+        const response = await fetch(`http://127.0.0.1:${target.port}/${op}`, {
           method: 'POST', headers: { 'x-harness-perf-token': token }, body: JSON.stringify({ label }),
           signal: AbortSignal.timeout(op === 'heap' ? 120_000 : 10_000),
         })
         const result = await response.json() as Record<string, any>
         if (!response.ok) throw new Error(`perf ${op}: ${JSON.stringify(result)}`)
-        expect(result.pid).toBe(corePid)
+        expect(result.pid).toBe(pid)
         return result
       }
       await until('signed in to the fake backend', () => machine!.backend.nodeUp(machine!.machine.machineId), 30_000)
@@ -176,7 +181,21 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         const latencies: number[] = []
         let running = true
         let problem: unknown
-        await probe('start', label)
+        const readers = measureReaders ? [...harnessdProcesses(d)].filter(([name]) => name.startsWith('engine-')) : []
+        for (const [, pid] of readers) await until('reader performance probe', () => existsSync(join(artifactDir, `core-${pid}.json`)), 10_000)
+        await Promise.all([probe('start', label), ...readers.map(([, pid]) => probe('start', label, pid))])
+        const readLatencies: number[] = []
+        const reads = (async () => {
+          while (measureReaders && saved.length && running) {
+            await Promise.all(saved.map(async agent => {
+              const at = performance.now()
+              const answer = await client.request('session_get', { sessionId: agent.id, limit: 50 }, 15_000)
+              if (answer.error) throw new Error(`history read: ${JSON.stringify(answer)}`)
+              readLatencies.push(performance.now() - at)
+            }))
+            await sleep(2000)
+          }
+        })().catch(error => { problem ??= error })
         const workers = turns.map(async (_, i) => {
           while (running) {
             const began = performance.now()
@@ -185,11 +204,16 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
             if (running) { turns[i]++; latencies.push(performance.now() - began) }
           }
         })
+        let readerMetrics: Record<string, any>[] = []
         let metrics: Record<string, any>
         try { await sleep(seconds * 1000) }
-        finally { running = false; metrics = await probe('end', label) }
+        finally {
+          running = false
+          const measured = await Promise.all([probe('end', label), ...readers.map(async ([name, pid]) => ({ name, ...await probe('end', label, pid) }))])
+          metrics = measured[0]; readerMetrics = measured.slice(1)
+        }
         const after = windows.map(w => w.stats())
-        await Promise.all(workers)
+        await Promise.all([...workers, reads])
         if (problem) throw problem
         expect(metrics!.cpu.percent).toBeGreaterThanOrEqual(0)
         expect(Number.isFinite(metrics!.cpu.percent)).toBe(true)
@@ -197,7 +221,10 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         expect(metrics!.eventLoop.delaySamples).toBeGreaterThan(0)
         if (turning) for (const count of turns) expect(count).toBeGreaterThan(0)
         latencies.sort((a, b) => a - b)
-        report.phases.push({ ...metrics!, turns, completedTurns: turns.reduce((a, b) => a + b, 0),
+        readLatencies.sort((a, b) => a - b)
+        report.phases.push({ ...metrics!, readers: readerMetrics,
+          historyReads: { count: readLatencies.length, p50Ms: readLatencies[Math.floor(readLatencies.length * .5)] ?? null, p95Ms: readLatencies[Math.floor(readLatencies.length * .95)] ?? null },
+          coreAndReaders: { cpuPercent: metrics!.cpu.percent + readerMetrics.reduce((sum, m) => sum + m.cpu.percent, 0), rssMean: metrics!.memory.rssMean + readerMetrics.reduce((sum, m) => sum + m.memory.rssMean, 0) }, turns, completedTurns: turns.reduce((a, b) => a + b, 0),
           turnLatencyMs: { p50: latencies[Math.floor(latencies.length * .5)] ?? null, p95: latencies[Math.floor(latencies.length * .95)] ?? null },
           windows: after.map((stats, i) => Object.fromEntries(Object.entries(stats).map(([key, value]) =>
             [key, value - before[i][key as keyof ReturnType<PerfWindow['stats']>]]))) })
@@ -229,6 +256,15 @@ describe.runIf(process.env.PERF === '1')('core CPU and memory under a working de
         await Promise.all(saved.slice(i, i + 4).map(agent => turn(agent.id, `!grow ${historyMiB}`)))
       }
       report.transcriptBytes = transcriptBytes(join(d.root, 'claude/projects')) + transcriptBytes(join(d.root, 'codex/sessions'))
+      if (measureReaders) {
+        report.firstHistoryReads = []
+        for (const agent of saved) {
+          const at = performance.now()
+          const answer = await client.request('session_get', { sessionId: agent.id, limit: 50 }, 15_000)
+          expect(answer.error, JSON.stringify(answer)).toBeUndefined()
+          report.firstHistoryReads.push({ engine: agent.engine, ms: performance.now() - at })
+        }
+      }
       await sleep(warmup * 1000)
       await phase('populated-idle', false)
       await phase('active', true)

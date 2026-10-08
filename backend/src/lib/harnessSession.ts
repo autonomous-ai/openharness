@@ -296,6 +296,36 @@ export async function startQrSignIn(
   return { code, pollToken, expiresIn: QR_SIGN_IN_TTL_SEC }
 }
 
+/** How long a box ticket waits for its box: the phone hands it over on the box's own hotspot, and the
+ *  box only spends it once it is on the person's Wi-Fi. */
+export const BOX_TICKET_TTL_SEC = 30 * 60
+
+/**
+ * A QR sign-in already approved by the signed-in phone, for a headless box that has no screen to show
+ * a QR on. The phone passes the poll token (the ticket) to the box over its setup hotspot; the box
+ * spends it with the ordinary `/api/auth/qr/claim`. The code itself is never handed out, and the
+ * answer lock is taken now, so nobody can look the record up or answer it again.
+ */
+export async function issueBoxTicket(userId: string, email: string): Promise<{ ticket: string; expiresIn: number }> {
+  const codeHash = harnessTokenHash(newHarnessToken(HARNESS_QR_PREFIX))
+  const ticket = newHarnessToken(HARNESS_QR_POLL_PREFIX)
+  const record: QrRecord = {
+    pollHash: harnessTokenHash(ticket),
+    label: 'Harness',
+    kind: 'computer',
+    createdAt: Date.now(),
+    status: 'approved',
+    userId,
+    email,
+  }
+  await pub.multi()
+    .set(qrKey(codeHash), JSON.stringify(record), 'EX', BOX_TICKET_TTL_SEC)
+    .set(qrPollKey(record.pollHash), codeHash, 'EX', BOX_TICKET_TTL_SEC)
+    .set(qrLockKey(codeHash), '1', 'EX', BOX_TICKET_TTL_SEC)
+    .exec()
+  return { ticket, expiresIn: BOX_TICKET_TTL_SEC }
+}
+
 export interface QrSignInLookup {
   label: string
   kind: HarnessSessionKind

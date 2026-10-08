@@ -1434,6 +1434,15 @@ pub fn new_shell_with_picker(app: &mut App, focused: Option<(String, String)>, p
     let buffered = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     app.starting_shell = Some(buffered.clone());
     let tab = match &placement { Placement::Fill(id) => id.clone(), Placement::At(at) => at.tab.clone(), _ => app.tab().id.clone() };
+    // A command's own window (Super+u's Updates, Super+w's Wi-Fi) says what is opening while its
+    // terminal starts: the daemon takes about a second, and the empty window's New Harness form
+    // flashed there first, as if the shortcut had opened that instead.
+    if let Some(command) = &command {
+        if let Some(window) = app.tabs.iter_mut().find(|t| t.id == tab && t.root.is_none() && !t.home) {
+            let program = command.split_whitespace().next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+            window.opening = Some(if window.name.is_empty() || window.name == "New Tab" { program } else { window.name.clone() });
+        }
+    }
     app.shell_inputs.insert(tab, buffered.clone());
     // Completion state belongs to this request, including concurrent -d/-P callers.
     let print_new = app.print_new.take();

@@ -10,6 +10,7 @@
  * their processes hold what they need.
  */
 import type { CoreApi, ServiceRequests } from '../core/api.js'
+import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { refreshDshRegistry } from '../dsh/catalog.js'
 import { removeDsh } from '../dsh/install.js'
 import { mutateDsh } from '../dsh/service.js'
@@ -19,18 +20,21 @@ import { dshInstallReply, dshInstallRequest, dshInstallStatus, dshListRows, dshR
 export { STORE_REQUESTS } from '../core/api.js'
 
 export interface StoreDeps {
+  prepare: typeof ensureBundledCoreHarnesses
   refresh: typeof refreshDshRegistry
   remove: typeof removeDsh
   mutate: typeof mutateDsh
   rows: typeof dshListRows
 }
 
-const DEFAULTS: StoreDeps = { refresh: refreshDshRegistry, remove: removeDsh, mutate: mutateDsh, rows: dshListRows }
+const DEFAULTS: StoreDeps = { prepare: ensureBundledCoreHarnesses, refresh: refreshDshRegistry, remove: removeDsh, mutate: mutateDsh, rows: dshListRows }
 
 const internal = (error: unknown): Record<string, unknown> =>
   ({ error: 'INTERNAL', detail: error instanceof Error ? error.message : String(error) })
 
 export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRequests {
+  // Release-owned harnesses follow this build; setup belongs to the Store in either process mode.
+  deps.prepare()
   return {
     dsh_list: () => deps.refresh().then((catalog) => ({ dsh: deps.rows(undefined, catalog) }), internal),
     // The clone under ~/.harness/dsh goes (a linked install loses only its link), and the index forgets

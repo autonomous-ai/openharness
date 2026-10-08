@@ -20,6 +20,7 @@ import {
   sendLiteralToTmux,
   sendToTmux,
   tmuxCaptureArgs,
+  withStartTicks,
 } from './tmux.js'
 import { tmuxControlGate } from './tmuxControlGate.js'
 import { assumeTmuxVersion, resetTmuxVersionCache } from './tmuxVersion.js'
@@ -71,6 +72,17 @@ describe('tmux process primitives', () => {
     vi.restoreAllMocks()
   })
 
+
+  it('adds the start ticks a clock step cannot move on Linux, and nothing elsewhere', () => {
+    const live = parseProcessRow('3998  3992 node            Mon Sep 21 08:15:25 2026 node /home/node/.npm-global/bin/codex')!
+    const gone = parseProcessRow('3999  3992 node            Mon Sep 21 08:15:25 2026 node codex')!
+    const ticksOf = (pid: number) => pid === 3998 ? 26385008 : null
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux')
+    expect(withStartTicks([live, gone], ticksOf)).toEqual([{ ...live, startTicks: 26385008 }, gone])
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('darwin')
+    expect(withStartTicks([live], ticksOf)).toEqual([live])
+    vi.restoreAllMocks()
+  })
 
   it('parses a process whose comm field contains spaces', () => {
     expect(parseProcessRow('4242 100 ⌘ Greeting Thu Jul 30 11:00:03 2026 cmd -r abcdef12-3456-7890-abcd-ef1234567890')).toEqual({

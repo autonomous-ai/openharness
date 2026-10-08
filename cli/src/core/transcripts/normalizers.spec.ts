@@ -1,10 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { TurnState } from '../../lib/normalize.js'
 import { createSessionNormalizers, type SessionNormalizers } from './normalizers.js'
 
 /** Every engine map in the table, in the order a turn's state is looked up. */
 const ENGINE_MAPS = [
-  'codexNormalizers', 'cursorNormalizers', 'opencodeReaders', 'kiloReaders', 'piNormalizers', 'museNormalizers',
+  'liveParsers', 'cursorNormalizers', 'opencodeReaders', 'kiloReaders', 'piNormalizers', 'museNormalizers',
   'ampNormalizers', 'grokNormalizers', 'agyNormalizers', 'copilotNormalizers', 'hermesReaders', 'devinReaders',
   'commandcodeNormalizers',
 ] as const
@@ -23,8 +22,6 @@ describe('the session normalizer table', () => {
   it('has state for a session that any engine map holds, and none for one that none does', () => {
     const table = createSessionNormalizers()
     expect(table.hasState('s')).toBe(false)
-    table.turnStates.set('s', { turnOpen: false } as TurnState)
-    expect(table.hasState('s')).toBe(true)
     for (const map of ENGINE_MAPS) {
       const one = createSessionNormalizers()
       put(one, map, 's', fake())
@@ -33,7 +30,7 @@ describe('the session normalizer table', () => {
     }
   })
 
-  it('reads whether a turn is open from Claude Code\'s state first, then each engine in turn', () => {
+  it('reads whether a turn is open from each parser or reader', () => {
     const table = createSessionNormalizers()
     expect(table.sessionTurnState('s')).toBeUndefined()
     expect(table.sessionTurnOpen('s')).toBe(false)
@@ -43,20 +40,16 @@ describe('the session normalizer table', () => {
       expect(one.sessionTurnState('s'), map).toBe(true)
       expect(one.sessionTurnOpen('s'), map).toBe(true)
     }
-    // The first engine that knows wins, even when it says closed: Claude Code's state before Codex's, Codex
-    // before Cursor, and so on down the list.
-    table.turnStates.set('s', { turnOpen: false } as TurnState)
-    put(table, 'codexNormalizers', 's', fake(true))
+    // A closed live parser is authoritative even when an old reader still reports an open turn.
+    put(table, 'liveParsers', 's', fake(false))
+    put(table, 'cursorNormalizers', 's', fake(true))
     expect(table.sessionTurnState('s')).toBe(false)
-    table.turnStates.delete('s')
-    put(table, 'cursorNormalizers', 's', fake(false))
+    table.liveParsers.delete('s')
     expect(table.sessionTurnState('s')).toBe(true)
   })
 
   it('forgets a session in every map, stopping its database readers, and leaves other sessions alone', () => {
     const table = createSessionNormalizers()
-    table.turnStates.set('s', { turnOpen: true } as TurnState)
-    table.turnStates.set('keep', { turnOpen: true } as TurnState)
     const entries = new Map<EngineMap, Fake>()
     for (const map of ENGINE_MAPS) {
       entries.set(map, fake())
@@ -65,7 +58,6 @@ describe('the session normalizer table', () => {
     }
     table.forget('s')
     expect(table.hasState('s')).toBe(false)
-    expect(table.turnStates.has('keep')).toBe(true)
     for (const map of ENGINE_MAPS) {
       expect(table[map].has('keep'), map).toBe(true)
       expect(entries.get(map)!.stop, map).toHaveBeenCalledTimes(DATABASE_READERS.includes(map) ? 1 : 0)
@@ -75,18 +67,16 @@ describe('the session normalizer table', () => {
 
   it('closes a cancelled turn in every engine', () => {
     const table = createSessionNormalizers()
-    const state = { turnOpen: true } as TurnState
-    table.turnStates.set('s', state)
     const entries = new Map<EngineMap, Fake>()
     for (const map of ENGINE_MAPS) {
       entries.set(map, fake(true))
       put(table, map, 's', entries.get(map)!)
     }
     table.closeTurns('s')
-    expect(state.turnOpen).toBe(false)
     for (const map of ENGINE_MAPS) {
       // Kilo's included: it used to be missed, so a cancelled Kilo agent could go on showing as working.
       expect(entries.get(map)!.closeTurn, map).toHaveBeenCalledTimes(1)
+      if (map === 'liveParsers') expect(entries.get(map)!.closeTurn).toHaveBeenCalledWith('cancel')
     }
     expect(() => table.closeTurns('never-seen')).not.toThrow()
   })

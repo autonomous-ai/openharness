@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it } from 'vitest'
-import { closeSqliteHandles, overrideBuiltinSqlite } from '../../../cli/src/lib/sqliteRead.js'
+import { closeSqliteHandles, overrideBuiltinSqlite } from '../../../cli/src/lib/sqliteBuiltin.js'
 import { NativeMemoryCapture, type CaptureSession } from './capture.js'
 import { CodingMemoryStore } from './store.js'
 import type { Database } from './database.js'

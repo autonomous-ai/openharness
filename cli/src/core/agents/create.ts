@@ -33,7 +33,8 @@ import { writeGridConfigDir } from '../../lib/gridConfigDir.js'
 import { buildGridEngineLaunch, describeGridLaunch, gridConflictingEnvToClear, type GridLaunchMachine, type GridWebSearchStatus } from '../../lib/gridLaunch.js'
 import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/harnessDefaults.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
-import { installCodexHooks, installOpencodePlugin } from '../../lib/hooks.js'
+import { engineHooks } from '../../engines/hooks.js'
+import { installOpencodePlugin } from '../../lib/hooks.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/external.js'
@@ -233,7 +234,7 @@ export function createAgentCreator({
     // THAT folder, not the one `harness login` already installed into — without this, such an agent
     // fires no hook at all (no SessionStart/UserPromptSubmit/Stop) and never streams a single event.
     // Idempotent, so paying this on every create against an already-set-up profile is free.
-    if (codexHome && !hooksDisabled) installCodexHooks(hookPort, codexHome)
+    if (codexHome && !hooksDisabled) engineHooks.codex.installIn(hookPort, codexHome)
     // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
     // not discover our old server plugin; the cached version probe changes with the executable.
     if (engine === 'opencode' && !hooksDisabled) installOpencodePlugin(hookPort)

@@ -24,6 +24,11 @@ class PackageIdentity(unittest.TestCase):
             with patch.object(package, 'validate_runtime', return_value={'source_commit': 'a' * 40}):
                 identity = package.stage(Path(__file__).resolve().parents[2], runtime, destination, 'a' * 40)
             config = destination / 'etc/skel/.config/opencode'
+            self.assertTrue((destination / 'usr/lib/harness-os/connections/connections.py').is_file())
+            self.assertTrue((destination / 'usr/lib/harness-os/connections/web/index.html').is_file())
+            self.assertTrue((destination / 'usr/share/licenses/harness-os-connections/LICENSE').is_file())
+            self.assertIn('harness connections', (destination / 'usr/share/harness-os/connections.md').read_text())
+            self.assertIn('/usr/lib/harness-os/connections/connections.py', (destination / 'usr/bin/harness').read_text())
             self.assertFalse((config / 'AGENTS.md').is_symlink())
             self.assertIn('/usr/share/harness-os/guide.md', (config / 'AGENTS.md').read_text())
             self.assertIn('Super+n', (destination / 'usr/share/harness-os/guide.md').read_text())

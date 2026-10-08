@@ -92,7 +92,7 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
     conversations: CONVERSATIONS_OFF,
     // Terminals are launched by the core alone (the shell service, #893): a service in its own process
     // is refused, never handed a way to start a process outside the core.
-    terminals: { open: TERMINALS_OFF.open, watch: view.watch ?? TERMINALS_OFF.watch },
+    terminals: { ...TERMINALS_OFF, watch: view.watch ?? TERMINALS_OFF.watch },
     machine: UNASKED.machine,
     agents: {
       // The stopped agents are never sent to these services: none of them reads one.

@@ -1,3 +1,5 @@
+import { EngineReadError } from '../../engines/worker/protocol.js'
+import { engineTranscriptFor } from '../../engines/transcripts.js'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -71,7 +73,7 @@ vi.mock('../../engines/cursor/subagent.js', async (real) => ({ ...await real<obj
 vi.mock('../../engines/cursor/home.js', async (real) => ({ ...await real<object>(), cursorConfigDir: vi.fn(() => '/cursor/config'), cursorDataDir: vi.fn(() => '/cursor/data') }))
 vi.mock('../../engines/codex/normalizer.js', async (real) => ({ ...await real<object>(), codexMessagesToEvents: vi.fn((lines: unknown[]) => fake.replay('codex')(lines)) }))
 vi.mock('../../engines/codex/subagent.js', async (real) => ({ ...await real<object>(), codexSubagentResolverFor: vi.fn(() => fake.resolver) }))
-vi.mock('../../lib/normalize.js', async (real) => ({ ...await real<object>(), messagesToEvents: vi.fn(fake.replay('claude')), windowRawLines: vi.fn(fake.windowOf('raw')) }))
+vi.mock('../../engines/claude/normalize.js', async (real) => ({ ...await real<object>(), messagesToEvents: vi.fn(fake.replay('claude')), windowRawLines: vi.fn(fake.windowOf('raw')) }))
 vi.mock('../../lib/agentFrame.js', async (real) => ({ ...await real<object>(), lastActivityAt: vi.fn(async () => Date.parse('2026-10-05T08:45:00.000Z')) }))
 vi.mock('../../lib/transcriptTail.js', async (real) => {
   const actual = await real<typeof import('../../lib/transcriptTail.js')>()
@@ -108,7 +110,7 @@ function transcript(lines: string[], name = 'session.jsonl'): string {
   return file
 }
 
-function setup(s?: RegisteredSession, kept: RegisteredSession[] = []) {
+function setup(s?: RegisteredSession, kept: RegisteredSession[] = [], readerFor = engineTranscriptFor) {
   const pages = {
     claude: vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null)),
     codex: vi.fn(async (_path: string, _opts: { limit?: number; before?: string }) => page([], false, null)),
@@ -118,6 +120,7 @@ function setup(s?: RegisteredSession, kept: RegisteredSession[] = []) {
     resolve: vi.fn((id: string) => (s && (id === s.sessionId || id === s.agentId) ? s : undefined)),
     stopped: vi.fn(() => kept),
     pages,
+    readerFor,
     dbs: { opencode: '/stores/opencode.db', kilo: '/stores/kilo.db', devin: '/stores/sessions.db' },
     hermesDb: vi.fn(async () => '/profiles/work/state.db'),
   }
@@ -541,5 +544,34 @@ describe('asked by agent id', () => {
     await sessionGet({ sessionId: s.agentId, limit: 5 })
     expect(readAmpThread).toHaveBeenNthCalledWith(1, 'T-0123456789abcdef')
     expect(readAmpThread).toHaveBeenNthCalledWith(2, 'T-0123456789abcdef')
+  })
+})
+
+
+describe('history crossing a reader boundary', () => {
+  it('rejects results for a changed or removed binding, including an in-place mutation', async () => {
+    for (const change of ['mutate', 'remove']) {
+      const s = session('claude', { transcriptPath: '/read.jsonl' })
+      let finish!: () => void
+      const waiting = new Promise<void>((r) => { finish = r })
+      const adapter = { historyPage: async () => { await waiting; return { events: [], timestamp: MTIME.toISOString() } }, lastTurnText: async () => null }
+      const h = setup(s, [], () => adapter)
+      const result = h.sessionGet({ sessionId: s.sessionId })
+      if (change === 'mutate') s.transcriptPath = '/replacement.jsonl'
+      else h.deps.resolve.mockReturnValue(undefined)
+      finish()
+      expect(await result).toEqual({ error: 'ENGINE_STALE_REPLY', retryable: true })
+    }
+  })
+
+  it('returns explicit retry guidance and never invokes the inline pager on a failed worker read', async () => {
+    for (const error of [new EngineReadError('ENGINE_REPLY_TOO_LARGE'), new Error('socket failed')]) {
+      const h = setup(session('codex', { transcriptPath: '/read.jsonl' }), [], () => ({
+        historyPage: async () => { throw error }, lastTurnText: async () => null,
+      }))
+      expect(await h.sessionGet({ sessionId: 'codex-session' })).toEqual(error instanceof EngineReadError
+        ? { error: 'ENGINE_REPLY_TOO_LARGE', retryable: false } : { error: 'ENGINE_UNAVAILABLE', retryable: true })
+      expect(h.pages.codex).not.toHaveBeenCalled()
+    }
   })
 })

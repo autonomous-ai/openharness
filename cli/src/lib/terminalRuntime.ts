@@ -26,12 +26,35 @@ export function terminalPlacementKey(runtime: TerminalRuntimeRef): string {
   return terminalRouteKey(runtime)
 }
 
-export function processIdentityKey(engine: string, identity: ProcessIdentity): string {
-  return `${assertKeyPart(engine, 'engine')}${SEP}${identity.pid}${SEP}${assertKeyPart(identity.startMarker, 'process start marker')}`
+function startTicks(identity: ProcessIdentity): number | undefined {
+  return Number.isSafeInteger(identity.startTicks) && identity.startTicks! >= 0 ? identity.startTicks : undefined
 }
 
-export function sameProcessIdentity(a: ProcessIdentity | undefined, b: ProcessIdentity | undefined): boolean {
-  return !!a && !!b && a.pid === b.pid && a.startMarker === b.startMarker
+/** Keyed by the start ticks when known: the marker of the same process moves with the wall clock. */
+export function processIdentityKey(engine: string, identity: ProcessIdentity): string {
+  const ticks = startTicks(identity)
+  const start = ticks === undefined ? assertKeyPart(identity.startMarker, 'process start marker') : `t:${ticks}`
+  return `${assertKeyPart(engine, 'engine')}${SEP}${identity.pid}${SEP}${start}`
+}
+
+/**
+ * pid + start time is a process. The start ticks decide when both sides have them (see
+ * `ProcessIdentity.startTicks`); otherwise the `ps` marker, as before them — which is also how a row
+ * saved before them is matched once, and then saved with them.
+ */
+export function sameProcessIdentity(a: ProcessIdentity | undefined | null, b: ProcessIdentity | undefined | null): boolean {
+  if (!a || !b || a.pid !== b.pid) return false
+  const ticksA = startTicks(a)
+  const ticksB = startTicks(b)
+  return ticksA !== undefined && ticksB !== undefined ? ticksA === ticksB : a.startMarker === b.startMarker
+}
+
+/** The identity a row stands for, without the rest of the row. */
+export function processIdentityOf(row: ProcessIdentity): ProcessIdentity {
+  return {
+    pid: row.pid, executable: row.executable, startMarker: row.startMarker,
+    ...(row.startTicks !== undefined ? { startTicks: row.startTicks } : {}),
+  }
 }
 
 export function sameTerminalPlacement(a: TerminalRuntimeRef, b: TerminalRuntimeRef): boolean {

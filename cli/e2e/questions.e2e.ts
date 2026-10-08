@@ -75,6 +75,26 @@ describe('an agent asks a question', () => {
     client.close()
   })
 
+  it.each(engines)('%s: an answered question in scrollback does not block the next prompt or accept a late answer', async (engine) => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const agent = await create(d, client, engine, `ask-scrollback-${engine}`)
+    const asked = client.next((frame) => frame.type === 'commander_question' && frame.agentId === agent.id, 30_000, 'commander_question')
+    client.send('message', { agentId: agent.id, content: '!askscrollback' })
+    const question = (await asked).payload!
+    const ended = client.next(isTurn('turn_ended', agent.id), 45_000, 'turn_ended')
+    const answers = { [question.questions[0].q]: 'Coffee' }
+    expect((await answer(client, agent.id, question.requestId, answers)).error).toBeUndefined()
+    await ended
+    // Read the same history the daemon reads, proving the old dialog really remains in the capture.
+    const capture = await d.tmux.run('capture-pane', '-p', '-e', '-J', '-S', '-100', '-t', agent.tmuxPane)
+    expect(capture).toContain(engine === 'claude' ? 'Enter to select' : 'enter to submit answer')
+    expect(capture).toContain('you chose Coffee')
+    expect((await answer(client, agent.id, question.requestId, answers)).error).toBe('STALE_QUESTION')
+    await turn(client, agent.id, 'after the answered question in scrollback')
+    client.close()
+  })
+
   it.each(engines)('%s: a permission the agent asks for reaches the window, and Yes there runs the command, No does not', async (engine) => {
     const d = await fresh()
     const client = await LocalClient.connect(d)

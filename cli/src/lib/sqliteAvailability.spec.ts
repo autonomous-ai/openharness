@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { hasSqliteCli, hasSqliteReader, resetSqliteAvailabilityCache, sqlitePreflightMessage } from './sqliteAvailability.js'
-import { overrideBuiltinSqlite } from './sqliteRead.js'
+import { overrideBuiltinSqlite } from './sqliteBuiltin.js'
 
 const dirs: string[] = []
 const realPath = process.env.PATH
