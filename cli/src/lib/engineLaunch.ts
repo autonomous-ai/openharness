@@ -1023,16 +1023,21 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
   const candidates = [names, paths].filter(Boolean).join(' ')
   // `curl … | bash` exits 0 when curl itself fails (bash ran an empty script), so the fallback is
   // decided by whether an executable exists afterwards, not by the first line's status.
+  // Decided first, then run as a top-level command like the first install line: a Ctrl+Z inside a
+  // compound `if` makes zsh drop the rest of it (STOP_PROOF_FUNCTIONS). An install the person ended
+  // with Ctrl-C (130) is not followed by another one.
   const fallback = recipe.fallback ? [
-    'if [ -z "$harness_engine_bin" ]; then',
+    'harness_try_fallback=0',
+    'if [ -z "$harness_engine_bin" ] && [ "$harness_status" -ne 130 ]; then',
     '  hash -r 2>/dev/null || true',
     '  if ! harness_find_engine "$1"; then',
-    `    printf '\\n%s\\n' 'harness: that install did not finish; trying the npm package instead' 'harness: $ ${recipe.fallback.replace(/'/g, "'\\''")}' ''`,
+    '    harness_try_fallback=1',
     '    harness_status=0',
-    `    ${run(recipe.fallback)} || harness_status=$?`,
-    '    harness_resume',
+    `    printf '\\n%s\\n' 'harness: that install did not finish; trying the npm package instead' 'harness: $ ${recipe.fallback.replace(/'/g, "'\\''")}' ''`,
     '  fi',
     'fi',
+    `[ "$harness_try_fallback" -eq 0 ] || ${run(recipe.fallback)} || harness_status=$?`,
+    'harness_resume',
   ] : []
   return [
     'resolve_engine() {',

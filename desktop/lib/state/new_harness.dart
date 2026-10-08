@@ -626,31 +626,32 @@ class NewHarnessController extends ChangeNotifier {
       ? [for (final engine in allEngines) engine.id, kTerminalEngine]
       : selectedHarness?.supportedEngines ??
             [knownHarnessBase[canonicalHarnessId(_harnessId!)] ?? 'claude'];
+  /// The agent this person chose before, as stored, for the current harness;
+  /// null when nothing is remembered.
+  String? get _rememberedChoice => _desktopChoices
+      ? app.agentPreference.successfulLaunch?.engine
+      : app.agentPreference.engineFor(_harnessId) ??
+            (_harnessId == null || _harnessId == app.agentPreference.harness
+                ? app.agentPreference.value
+                : null);
+
   /// Whether [_engine] is this person's own earlier choice rather than the
   /// product default. Only a remembered agent that is gone asks for a
   /// replacement: the default is installed in its pane on Create, and asking a
   /// brand-new user to replace it stopped every first harness on a fresh Mac
-  /// (2026-10-08, "OpenCode is unavailable. Choose an agent.").
-  bool _engineRemembered = false;
+  /// (2026-10-08, "OpenCode is unavailable. Choose an agent."). Read from the
+  /// stored choice where it is used, so it always describes [_engine].
+  bool get _engineRemembered =>
+      !_initialAgentExplicit && _rememberedChoice == _engine;
 
   String _initialEngine(String? requested) {
-    _engineRemembered = false;
     final allowed = compatibleEngines;
-    final remembered =
-        requested ??
-        (_desktopChoices
-            ? app.agentPreference.successfulLaunch?.engine
-            : app.agentPreference.engineFor(_harnessId) ??
-                  (_harnessId == null ||
-                          _harnessId == app.agentPreference.harness
-                      ? app.agentPreference.value
-                      : null));
+    final remembered = requested ?? _rememberedChoice;
     if (remembered != null &&
         (requested != null ||
             !_desktopChoices ||
             allowed.contains(remembered) ||
             _harnessId == app.agentPreference.successfulLaunch?.harnessId)) {
-      _engineRemembered = requested == null;
       return remembered;
     }
     // Nothing remembered: the agent this person already uses, when the

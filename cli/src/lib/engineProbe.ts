@@ -85,6 +85,7 @@ function launchCommand(engine: AgentEngine): string | null {
  */
 export async function probeEngines(
   engines: readonly AgentEngine[] = ENGINES,
+  options: { accounts?: boolean } = {},
 ): Promise<EngineAvailability[]> {
   const results = new Array<EngineAvailability>(engines.length)
   let next = 0
@@ -112,7 +113,9 @@ export async function probeEngines(
         }
       }
       // Lets the New Harness box open on the agent this person already uses (engineAccount.ts).
-      const account = installed && (engine === 'claude' || engine === 'codex')
+      // Only for the caller that shows it (the New Harness box): a login shell's environment, the
+      // Keychain and the project folders are not what an installed-or-not question needs.
+      const account = options.accounts && installed && (engine === 'claude' || engine === 'codex')
         ? await engineAccount(engine).catch(() => null)
         : null
       results[index] = {

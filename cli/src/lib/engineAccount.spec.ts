@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { engineAccount, readLoginShellEnv } from './engineAccount.js'
+import { engineAccount } from './engineAccount.js'
+import { resetLoginShellEnvironmentCache } from './loginShellEnv.js'
 
 const roots: string[] = []
 afterEach(() => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -105,15 +106,21 @@ describe('engineAccount', () => {
   })
 
   // A daemon the app started never sees what the person exports in ~/.zshrc.
-  it('reads which credentials the login shell sets, and the folders, never a credential value', async () => {
+  it('finds a credential the login shell exports, which the daemon itself never read', async () => {
     const root = home()
-    const rc = `export ANTHROPIC_API_KEY=sk-secret-value\nexport CODEX_HOME="${root}/codex home"\n`
+    const rc = 'export ANTHROPIC_API_KEY=sk-secret-value\n'
     // zsh where there is one (macOS), bash otherwise (the Linux CI runner has no zsh).
     for (const file of ['.zshrc', '.bashrc', '.bash_profile']) writeFileSync(join(root, file), rc)
     vi.stubEnv('HOME', root)
     vi.stubEnv('ZDOTDIR', root)
     vi.stubEnv('SHELL', existsSync('/bin/zsh') ? '/bin/zsh' : '/bin/bash')
-    const env = await readLoginShellEnv()
-    expect(env).toEqual({ ANTHROPIC_API_KEY: '1', CODEX_HOME: `${root}/codex home` })
+    vi.stubEnv('ANTHROPIC_API_KEY', '')
+    delete process.env.ANTHROPIC_API_KEY
+    resetLoginShellEnvironmentCache()
+    try {
+      expect((await engineAccount('claude', { home: root, platform: 'linux' })).signedIn).toBe(true)
+    } finally {
+      resetLoginShellEnvironmentCache()
+    }
   })
 })

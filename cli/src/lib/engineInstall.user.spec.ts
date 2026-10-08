@@ -113,6 +113,15 @@ describe('engine installation for a fresh OS user', () => {
     expect(result.stdout).not.toContain('ENGINE_READY:')
   })
 
+  it('does not fall back after an install the person ended with Ctrl-C', () => {
+    const f = fixture()
+    const result = f.run(f.runtime('node-one'), { ...f.recipe, command: 'exit 130', fallback: f.recipe.command })
+    expect(result.status).toBe(1)
+    expect(result.stdout).not.toContain('trying the npm package instead')
+    expect(result.stdout).toContain('the install failed, so the agent was not started')
+    expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(false)
+  })
+
   it('does not run the fallback when the first installer worked', () => {
     const f = fixture()
     const result = f.run(f.runtime('node-one'), { ...f.recipe, fallback: 'exit 9' })

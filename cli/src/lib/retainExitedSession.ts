@@ -40,7 +40,9 @@ export interface RetainExitedSessionDeps {
 }
 
 function wroteTranscript(entry: RegisteredSession): boolean {
-  if (!entry.transcriptPath) return false
+  // An engine that keeps no transcript file (OpenCode, the default) cannot show it wrote nothing,
+  // so its exit is an ending as before, not a failed start.
+  if (!entry.transcriptPath) return true
   try { return statSync(entry.transcriptPath).size > 0 } catch { return false }
 }
 
