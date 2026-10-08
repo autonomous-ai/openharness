@@ -14,7 +14,9 @@
  * shapes too, since they share the wrapper.
  *
  * Paths that differ between machines are written as placeholders (`<home>`, `<data>`, `<daemon-node>`, the
- * one-time file's name). A script is kept once, by its hash, since most shapes differ only in argv, and as
+ * one-time file's name). What the launch says differs by platform (a folder the shell cannot read names macOS's
+ * privacy settings, else the folder's permissions), so every case is recorded on darwin and on linux, with
+ * `process.platform` pinned, whichever machine runs the spec: linux's cases are stored where they differ. A script is kept once, by its hash, since most shapes differ only in argv, and as
  * runs of a table of its distinct lines: the 170 scripts share 243 lines. A command that is the end of its
  * argv is kept as its length. Each case is compared as full text, so a failure shows the script itself.
  *
@@ -111,19 +113,51 @@ function shapes(engine: AgentEngine): Record<string, LaunchCommandOptions | null
 }
 
 interface ArgvRecord { argv?: string[]; command?: string[]; script?: string; throws?: string }
-interface Golden {
+/** One platform's record. */
+interface Cases {
   argv: Record<string, ArgvRecord>
-  scripts: Record<string, string>
   overrides: Record<string, unknown>
   adapters: Record<string, unknown>
 }
+/** darwin's cases, and linux's where they differ, over one table of scripts. */
+interface Golden extends Cases {
+  scripts: Record<string, string>
+  linux: Cases
+}
+type StoredArgv = Record<string, Omit<ArgvRecord, 'command'> & { command?: string[] | number }>
 /** As stored: scripts as runs of `lines`, and a command that ends its argv as its length. */
 interface Stored {
   lines: string[]
   scripts: Record<string, string>
-  argv: Record<string, Omit<ArgvRecord, 'command'> & { command?: string[] | number }>
+  argv: StoredArgv
   overrides: Record<string, unknown>
   adapters: Record<string, unknown>
+  linux: { argv: StoredArgv; overrides: Record<string, unknown>; adapters: Record<string, unknown> }
+}
+
+const PLATFORMS = ['darwin', 'linux'] as const
+type Platform = (typeof PLATFORMS)[number]
+
+/** Runs `run` with `process.platform` reading `platform`, which the launch reads as it builds the script. */
+async function onPlatform<T>(platform: Platform, run: () => T | Promise<T>): Promise<T> {
+  const real = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { ...real, value: platform })
+  try { return await run() } finally { Object.defineProperty(process, 'platform', real) }
+}
+
+/** The cases of `other` whose record differs from `base`'s. */
+function differences<T>(base: Record<string, T>, other: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(other).filter(([name, value]) => JSON.stringify(value) !== JSON.stringify(base[name])))
+}
+
+/** A platform's full record: darwin's, with linux's differences over it. */
+function casesOn(golden: Golden, platform: Platform): Cases {
+  if (platform === 'darwin') return { argv: golden.argv, overrides: golden.overrides, adapters: golden.adapters }
+  return {
+    argv: { ...golden.argv, ...golden.linux.argv },
+    overrides: { ...golden.overrides, ...golden.linux.overrides },
+    adapters: { ...golden.adapters, ...golden.linux.adapters },
+  }
 }
 
 function store(golden: Golden): Stored {
@@ -144,12 +178,15 @@ function store(golden: Golden): Stored {
     }
     scripts[hash] = runs.join(',')
   }
-  const argv = Object.fromEntries(Object.entries(golden.argv).map(([name, value]) => {
+  const compact = (argv: Record<string, ArgvRecord>): StoredArgv => Object.fromEntries(Object.entries(argv).map(([name, value]) => {
     const tail = value.argv && value.command && value.command.length <= value.argv.length
       && JSON.stringify(value.argv.slice(value.argv.length - value.command.length)) === JSON.stringify(value.command)
     return [name, tail ? { ...value, command: value.command!.length } : value]
   }))
-  return { lines, scripts, argv, overrides: golden.overrides, adapters: golden.adapters }
+  return {
+    lines, scripts, argv: compact(golden.argv), overrides: golden.overrides, adapters: golden.adapters,
+    linux: { argv: compact(golden.linux.argv), overrides: golden.linux.overrides, adapters: golden.linux.adapters },
+  }
 }
 
 function load(stored: Stored): Golden {
@@ -157,10 +194,13 @@ function load(stored: Stored): Golden {
     const [from, to = from] = run.split('-').map(Number)
     return Array.from({ length: to! - from! + 1 }, (_, k) => stored.lines[from! + k]!)
   }).join('\n')]))
-  const argv = Object.fromEntries(Object.entries(stored.argv).map(([name, value]) => [name, typeof value.command === 'number'
+  const expand = (argv: StoredArgv): Record<string, ArgvRecord> => Object.fromEntries(Object.entries(argv).map(([name, value]) => [name, typeof value.command === 'number'
     ? { ...value, command: value.argv!.slice(value.argv!.length - value.command) }
     : value as ArgvRecord]))
-  return { argv, scripts, overrides: stored.overrides, adapters: stored.adapters }
+  return {
+    argv: expand(stored.argv), scripts, overrides: stored.overrides, adapters: stored.adapters,
+    linux: { argv: expand(stored.linux.argv), overrides: stored.linux.overrides, adapters: stored.linux.adapters },
+  }
 }
 
 /** One case a line, so a re-record's diff names the cases it changed. */
@@ -170,7 +210,10 @@ function serialize(stored: Stored): string {
     + `"scripts": {\n${block(Object.entries(stored.scripts))}\n},\n`
     + `"argv": {\n${block(Object.entries(stored.argv))}\n},\n`
     + `"overrides": {\n${block(Object.entries(stored.overrides))}\n},\n`
-    + `"adapters": {\n${block(Object.entries(stored.adapters))}\n}\n}\n`
+    + `"adapters": {\n${block(Object.entries(stored.adapters))}\n},\n`
+    + `"linux": {\n"argv": {\n${block(Object.entries(stored.linux.argv))}\n},\n`
+    + `"overrides": {\n${block(Object.entries(stored.linux.overrides))}\n},\n`
+    + `"adapters": {\n${block(Object.entries(stored.linux.adapters))}\n}\n}\n}\n`
 }
 
 let root = ''
@@ -215,9 +258,10 @@ const posixRunner = (): string => existsSync('/bin/dash') ? '/bin/dash' : '/bin/
 
 function placeholders(text: string): string {
   const node = baseNode(process.execPath)
+  // Quoted, as every script quotes them: a Node in /usr/bin must not turn `/usr/bin/env` into a placeholder.
   return text
-    .split(node).join('<daemon-node>')
-    .split(dirname(node)).join('<daemon-node-dir>')
+    .split(`'${node}'`).join("'<daemon-node>'")
+    .split(`'${dirname(node)}'`).join("'<daemon-node-dir>'")
     .split(dataDir).join('<data>')
     .split(root).join('<root>')
     .split(homedir()).join('<home>')
@@ -430,8 +474,16 @@ function adapterCases(): Record<string, unknown> {
 describe('every launch hands tmux what it did before Claude Code and Codex declared their launches', () => {
   it('argv, scripts, relaunch overrides and harness adapter flags match the record', async () => {
     const scripts: Record<string, string> = {}
-    const actual: Golden = { argv: argvCases(scripts), scripts: {}, overrides: await overridesCases(), adapters: adapterCases() }
-    actual.scripts = Object.fromEntries(Object.entries(scripts).sort(([a], [b]) => a.localeCompare(b)))
+    const run = (platform: Platform): Promise<Cases> => onPlatform(platform, async () => ({
+      argv: argvCases(scripts), overrides: await overridesCases(), adapters: adapterCases(),
+    }))
+    const darwin = await run('darwin')
+    const linux = await run('linux')
+    const actual: Golden = {
+      ...darwin,
+      scripts: Object.fromEntries(Object.entries(scripts).sort(([a], [b]) => a.localeCompare(b))),
+      linux: { argv: differences(darwin.argv, linux.argv), overrides: differences(darwin.overrides, linux.overrides), adapters: differences(darwin.adapters, linux.adapters) },
+    }
     if (RECORD) {
       writeFileSync(GOLDEN, serialize(store(actual)))
       return
@@ -439,16 +491,21 @@ describe('every launch hands tmux what it did before Claude Code and Codex decla
     const golden = load(JSON.parse(readFileSync(GOLDEN, 'utf8')) as Stored)
     // The stored form loses nothing.
     expect(load(store(actual))).toEqual(actual)
-    // Compared piece by piece, so a failure names the case.
-    expect(Object.keys(actual.argv).sort()).toEqual(Object.keys(golden.argv).sort())
-    for (const [name, value] of Object.entries(golden.argv)) {
-      const got = actual.argv[name]!
-      expect({ ...got, script: got.script && actual.scripts[got.script] }, name).toEqual({ ...value, script: value.script && golden.scripts[value.script] })
+    // Compared piece by piece, so a failure names the platform and the case.
+    for (const platform of PLATFORMS) {
+      const got = casesOn(actual, platform)
+      const want = casesOn(golden, platform)
+      expect(Object.keys(got.argv).sort(), platform).toEqual(Object.keys(want.argv).sort())
+      for (const [name, value] of Object.entries(want.argv)) {
+        const mine = got.argv[name]!
+        expect({ ...mine, script: mine.script && actual.scripts[mine.script] }, `${platform} · ${name}`)
+          .toEqual({ ...value, script: value.script && golden.scripts[value.script] })
+      }
+      for (const [name, value] of Object.entries(want.overrides)) expect(got.overrides[name], `${platform} · ${name}`).toEqual(value)
+      expect(Object.keys(got.overrides).sort(), platform).toEqual(Object.keys(want.overrides).sort())
+      expect(got.adapters, platform).toEqual(want.adapters)
     }
     expect(actual.scripts).toEqual(golden.scripts)
-    for (const [name, value] of Object.entries(golden.overrides)) expect(actual.overrides[name], name).toEqual(value)
-    expect(Object.keys(actual.overrides).sort()).toEqual(Object.keys(golden.overrides).sort())
-    expect(actual.adapters).toEqual(golden.adapters)
   }, 120_000)
 
   it('records no machine-specific path', () => {
