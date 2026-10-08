@@ -58,6 +58,56 @@ describe('asynchronous question evidence', () => {
     expect(release).toHaveBeenCalledTimes(2)
   })
 
+  describe('a native step that failed', () => {
+    const question = { kind: 'question' as const, question: 'Drink?', multi: false, typeRow: null,
+      rows: [{ number: '1', label: 'Tea', checked: false }, { number: '2', label: 'Coffee', checked: false }] }
+    const answer = { agentId: 'agent', answers: { 'Drink?': 'Coffee' } }
+    const run = async (failure: 'refused' | 'uncertain' | undefined, views: PaneView[], applies = [false]) => {
+      const current = row(), release = vi.fn(), sendKey = vi.fn(async () => true), sendText = vi.fn(async () => true)
+      const apply = vi.fn(async () => false)
+      for (const value of applies) apply.mockResolvedValueOnce(value)
+      const readQuestion = vi.fn(async (): Promise<PaneView> => views.at(-1)!)
+      for (const view of views) readQuestion.mockResolvedValueOnce(view)
+      const controller = new AskQuestionController({ getSession: () => current, capture: async () => capture, readQuestion, sendKey, sendText,
+        acquireControl: () => release, wait: async () => {}, questionControlFor: () => ({ apply, failure: () => failure }) })
+      const result = await controller.answer(answer)
+      expect(sendKey).not.toHaveBeenCalled(); expect(sendText).not.toHaveBeenCalled()
+      expect(release).toHaveBeenCalledOnce()
+      return { result, apply }
+    }
+
+    it('says busy, with nothing typed, when the step was refused before any write', async () => {
+      expect((await run('refused', [question])).result).toEqual({ ok: false, error: 'ANSWER_BUSY', detail: expect.stringContaining('Nothing was typed') })
+    })
+
+    it('reports the answer taken when a step that wrote failed and the dialog then closed', async () => {
+      // Found by the chaos run: the worker was killed after the last key, and the answer was reported failed.
+      const { result, apply } = await run('uncertain', [question, null])
+      expect(result).toEqual({ ok: true })
+      expect(apply).toHaveBeenCalledOnce()
+    })
+
+    it('types nothing more, and reports it stuck, when a step that wrote failed and the dialog stayed', async () => {
+      const { result, apply } = await run('uncertain', [question])
+      expect(result).toMatchObject({ ok: false, error: 'ANSWER_FAILED', detail: 'The question did not take the answer.' })
+      expect(apply).toHaveBeenCalledOnce()
+    })
+
+    it('keeps the old failure when the port does not say why', async () => {
+      expect((await run(undefined, [question])).result).toMatchObject({ ok: false, error: 'ANSWER_FAILED', detail: expect.stringContaining('could not be typed') })
+    })
+
+    it('checks the pane once after an uncertain submit of the review: gone is submitted, still there is not', async () => {
+      const review: PaneView = { kind: 'review', submitRow: '1' }
+      expect((await run('uncertain', [question, review, null], [true, false])).result).toEqual({ ok: true })
+      const stayed = await run('uncertain', [question, review, review], [true, false])
+      expect(stayed.result).toMatchObject({ ok: false, error: 'ANSWER_FAILED', detail: 'The answers could not be submitted.' })
+      expect(stayed.apply).toHaveBeenCalledTimes(2)
+      expect((await run('refused', [question, review], [true, false])).result).toMatchObject({ error: 'ANSWER_BUSY' })
+      expect((await run(undefined, [question, review], [true, false])).result).toMatchObject({ detail: 'The answers could not be submitted.' })
+    })
+  })
+
   it('keeps a previously announced question while the screen reader is unavailable', async () => {
     vi.useFakeTimers()
     const current = row(), onQuestion = vi.fn(), onQuestionGone = vi.fn()

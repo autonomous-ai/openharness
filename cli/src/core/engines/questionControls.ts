@@ -5,7 +5,7 @@ import { questionControlAction, questionControlEnvelope, questionControlStep, qu
   QUESTION_CONTROL_APPLY, QUESTION_CONTROL_CAPABILITIES, QUESTION_CONTROL_HOST, QUESTION_CONTROL_IN_FLIGHT,
   QUESTION_CONTROL_QUERY_MS, QUESTION_CONTROL_VERSION, QUESTION_CONTROL_WAIT_MS, QUESTION_CONTROL_WRITES } from '../../engines/worker/questionControlProtocol.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import type { QuestionControlFor } from '../../lib/questionControl.js'
+import type { QuestionControlFor, QuestionStepFailure } from '../../lib/questionControl.js'
 import { boundedControl, createControlTransport, type ControlTransportDeps } from './controlTransport.js'
 
 export interface QuestionControlsDeps extends ControlTransportDeps {
@@ -21,6 +21,8 @@ interface Grant {
   allowed(): boolean
   pending: boolean
   writes: number
+  /** Writes handed to the terminal: any one of them may have gone in, whatever the step's outcome. */
+  dispatched: number
 }
 
 /** The worker navigates one approved step; it never receives the pending answer map or a pane locator. */
@@ -45,6 +47,7 @@ export function createQuestionControls(deps: QuestionControlsDeps) {
       // The approved text goes in once: typed a second time it would be a different answer from the one approved.
       if (action.kind === 'text') grant.text = undefined
       grant.pending = true
+      grant.dispatched++
       try {
         const value = await boundedControl(action.kind === 'text'
           ? deps.text(grant.session.agentId, action.text, grant.allowed)
@@ -60,13 +63,17 @@ export function createQuestionControls(deps: QuestionControlsDeps) {
     const bound = transport.bind(registered)
     if (!bound) return undefined
     const { session, engine, service, isolated, run } = bound
-    return { apply: async step => {
+    let failure: QuestionStepFailure | undefined
+    return { failure: () => failure, apply: async step => {
       const token = randomBytes(32).toString('hex')
+      let admitted: Grant | undefined
+      failure = undefined
       try {
         return await run(QUESTION_CONTROL_WAIT_MS, async (allowed, call) => {
           if (!questionControlStep(step)) throw unavailable()
           const value = structuredClone(step)
-          grants.set(token, { service, session, text: questionStepText(value), allowed: () => allowed() && grants.has(token), pending: false, writes: 0 })
+          admitted = { service, session, text: questionStepText(value), allowed: () => allowed() && grants.has(token), pending: false, writes: 0, dispatched: 0 }
+          grants.set(token, admitted)
           if (isolated) await call(QUESTION_CONTROL_APPLY, { step: value, token })
           else {
             const control = deps.inline(engine)
@@ -76,8 +83,12 @@ export function createQuestionControls(deps: QuestionControlsDeps) {
           if (!grant || grant.pending) throw unavailable()
           return true
         })
-      } catch { return false }
-      finally { grants.delete(token) }
+      } catch {
+        // A step that dispatched nothing typed nothing; one that dispatched a write may have answered (found by
+        // the chaos run: the worker killed after the last key, the dialog closed, and the answer was reported failed).
+        failure = admitted && admitted.dispatched > 0 ? 'uncertain' : 'refused'
+        return false
+      } finally { grants.delete(token) }
     } }
   }
   return { forSession, answer, connected: transport.connected, disconnected: transport.disconnected }

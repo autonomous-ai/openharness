@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { EngineQuestionControl, QuestionControlHost, QuestionStep } from '../../engines/facets/questionControl.js'
 import { engineQuestionControlRequests } from '../../engines/worker/questionControlRequests.js'
-import { QUESTION_CONTROL_CAPABILITIES, QUESTION_CONTROL_HOST, QUESTION_CONTROL_WAIT_MS } from '../../engines/worker/questionControlProtocol.js'
+import { QUESTION_CONTROL_CAPABILITIES, QUESTION_CONTROL_HOST, QUESTION_CONTROL_IN_FLIGHT, QUESTION_CONTROL_WAIT_MS } from '../../engines/worker/questionControlProtocol.js'
 import { createQuestionControls } from './questionControls.js'
 
 const denied = { version: 1, error: 'ANSWER_FAILED' }
@@ -130,6 +130,42 @@ describe('question-control authority', () => {
     })
     expect(await s.port().apply({ kind: 'text', row, text: 'My answer' })).toBe(false)
     expect(s.deps.text).toHaveBeenCalledOnce()
+  })
+
+  it('says why a step failed: refused when it typed nothing, uncertain once a write had gone out', async () => {
+    const s = setup(), port = s.port()
+    expect(await port.apply(step)).toBe(true)
+    expect(port.failure!()).toBeUndefined()
+    s.native.apply = vi.fn(async () => false)
+    expect(await port.apply(step)).toBe(false)
+    expect(port.failure!()).toBe('refused')
+    s.native.apply = vi.fn(async () => {
+      expect(await s.request({ kind: 'key', key: '2' })).toEqual({ version: 1, value: true })
+      throw new Error('worker killed after the key')
+    })
+    expect(await port.apply(step)).toBe(false)
+    expect(port.failure!()).toBe('uncertain')
+    // A write the terminal refused was still handed to it.
+    s.deps.key.mockResolvedValueOnce(false)
+    s.native.apply = vi.fn(async () => { await s.request({ kind: 'key', key: '2' }); return true })
+    expect(await port.apply(step)).toBe(false)
+    expect(port.failure!()).toBe('uncertain')
+    // A step refused by the broker before it was admitted typed nothing.
+    expect(await port.apply({ kind: 'select', row: { ...row, number: 'C-c' } } as never)).toBe(false)
+    expect(port.failure!()).toBe('refused')
+  })
+
+  it('refuses a step past its engine\'s capacity as typing nothing', async () => {
+    const s = setup(), gate = deferred<boolean>()
+    s.native.apply = vi.fn(() => gate.promise)
+    const ports = Array.from({ length: QUESTION_CONTROL_IN_FLIGHT }, () => s.port())
+    const held = ports.map(port => port.apply(step))
+    await vi.waitFor(() => expect(s.native.apply).toHaveBeenCalledTimes(QUESTION_CONTROL_IN_FLIGHT))
+    const extra = s.port()
+    expect(await extra.apply(step)).toBe(false)
+    expect(extra.failure!()).toBe('refused')
+    gate.resolve(true)
+    expect(await Promise.all(held)).toEqual(Array(QUESTION_CONTROL_IN_FLIGHT).fill(true))
   })
 
   it('limits a granted step and revokes it after excess keys', async () => {

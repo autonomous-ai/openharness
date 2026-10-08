@@ -9,7 +9,10 @@ export const QUESTION_CONTROL_APPLY = 'engine_question_control_apply'
 export const QUESTION_CONTROL_HOST = 'engine.questionControl'
 export const QUESTION_CONTROL_WAIT_MS = 30_000
 export const QUESTION_CONTROL_QUERY_MS = 5_000
-export const QUESTION_CONTROL_IN_FLIGHT = 4
+// One step per agent's dialog at a time (the controller drives one answer per terminal). Four refused two of
+// six Claude Code agents answered at once in the question workload (e2e/perf.e2e.ts, PERF_QUESTIONS=1), which
+// the inline path never did; sixteen covers a machine's agents and still bounds the worker.
+export const QUESTION_CONTROL_IN_FLIGHT = 16
 export const QUESTION_CONTROL_WRITES = 128
 export const questionControlEnvelope = (payload: Record<string, unknown>, names: string[]) => controlEnvelope(payload, QUESTION_CONTROL_VERSION, names)
 const digit = (value: unknown): value is string => typeof value === 'string' && /^[1-9]\d?$/.test(value)

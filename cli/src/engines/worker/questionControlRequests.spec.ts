@@ -5,7 +5,7 @@ import { createQuestionControl as codex } from '../codex/questionControl.js'
 import { engineQuestionControlRequests } from './questionControlRequests.js'
 import { createQuestionControlHost } from './questionControlHost.js'
 import { questionControlStep, questionControlAction, QUESTION_CONTROL_APPLY as APPLY, QUESTION_CONTROL_CAPABILITIES as CAP,
-  QUESTION_CONTROL_QUERY_MS, QUESTION_CONTROL_WAIT_MS } from './questionControlProtocol.js'
+  QUESTION_CONTROL_IN_FLIGHT, QUESTION_CONTROL_QUERY_MS, QUESTION_CONTROL_WAIT_MS } from './questionControlProtocol.js'
 
 const row = { number: '2', label: 'Coffee', checked: false }
 const step: QuestionStep = { kind: 'select', row, enterSubmits: true }
@@ -100,10 +100,10 @@ describe('private question-control worker', () => {
   it('refuses overflow without queueing and aborts pending work when core disconnects', async () => {
     const s = setup(), closed = new AbortController()
     s.control.apply = vi.fn(() => new Promise<boolean>(() => {}))
-    const pending = Array.from({ length: 4 }, () => s.requests[APPLY](request, asker, closed.signal))
+    const pending = Array.from({ length: QUESTION_CONTROL_IN_FLIGHT }, () => s.requests[APPLY](request, asker, closed.signal))
     expect(await s.requests[APPLY](request, asker)).toEqual(denied)
     closed.abort()
-    expect(await Promise.all(pending)).toEqual(Array(4).fill(denied))
+    expect(await Promise.all(pending)).toEqual(Array(QUESTION_CONTROL_IN_FLIGHT).fill(denied))
     expect(s.deps.recycle).not.toHaveBeenCalled()
   })
 })

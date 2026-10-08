@@ -1,5 +1,5 @@
 import type { QuestionStep } from '../engines/facets/questionControl.js'
-import type { QuestionControlFor, QuestionControlSession } from './questionControl.js'
+import type { QuestionControlFor, QuestionControlSession, QuestionStepFailure } from './questionControl.js'
 import type { RegisteredSession } from './registry.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { ShapedQuestion, QuestionRow, QuestionView, ReviewView, PaneView } from '../engines/facets/screen.js'
@@ -110,6 +110,8 @@ const STALE_GONE: QuestionAnswerResult = { ok: false, error: 'STALE_QUESTION', d
 const failed = (detail: string): QuestionAnswerResult => ({ ok: false, error: 'ANSWER_FAILED', detail })
 const KEYS_FAILED = failed('The answer could not be typed into the agent\'s terminal.')
 const STUCK = failed('The question did not take the answer.')
+// Nothing was typed: the engine's worker had no room for the step, or was not there to take it.
+const BUSY: QuestionAnswerResult = { ok: false, error: 'ANSWER_BUSY', detail: 'The agent could not take the answer just now. Nothing was typed. Try again.' }
 
 export interface AskQuestionDeps {
   questionControlFor: QuestionControlFor
@@ -241,7 +243,16 @@ export class AskQuestionController {
     native?: QuestionControlSession,
   ): Promise<QuestionAnswerResult> {
     const wait = this.deps.wait ?? sleep
-    const apply = (step: QuestionStep) => native ? native.apply(step).catch(() => false) : this.applyLegacyStep(terminalTarget, engine, step, wait)
+    // 'uncertain': a key had gone to the terminal before the engine's worker failed. The pane decides on the next
+    // read (the dialog gone: the answer went in); nothing is typed again, since the port stays bound to that worker.
+    const apply = async (step: QuestionStep): Promise<'done' | 'failed' | QuestionStepFailure> => {
+      if (!native) return await this.applyLegacyStep(terminalTarget, engine, step, wait) ? 'done' : 'failed'
+      if (await native.apply(step).catch(() => false)) return 'done'
+      return native.failure?.() ?? 'failed'
+    }
+    const notEntered = (outcome: Awaited<ReturnType<typeof apply>>): QuestionAnswerResult | null =>
+      outcome === 'refused' ? BUSY : outcome === 'failed' ? KEYS_FAILED : null
+    let submitUncertain = false
     const used = new Set<string>()
     const reviewedComplete = () => !reviewed || used.size === reviewed.expectedQuestions!.length
     let lastQuestion = ''
@@ -278,7 +289,15 @@ export class AskQuestionController {
         // answered somewhere else — submitting would send answers this person never gave.
         if (answered === 0) return STALE_GONE
         if (!reviewedComplete()) return STALE_CHANGED
-        return await apply({ kind: 'review', key: view.submitRow }) ? { ok: true } : failed('The answers could not be submitted.')
+        if (submitUncertain) return failed('The answers could not be submitted.')
+        const outcome = await apply({ kind: 'review', key: view.submitRow })
+        if (outcome === 'done') return { ok: true }
+        if (outcome === 'refused') return BUSY
+        if (outcome === 'failed') return failed('The answers could not be submitted.')
+        // Read the pane once more: the review gone is the form submitted.
+        submitUncertain = true
+        await wait(STEP_MS)
+        continue
       }
       // Mid-repaint the question line can read blank for a capture (see parseQuestionPane). Neither its id
       // nor its text can be checked against a blank, so look again rather than judge the dialog by it.
@@ -336,7 +355,8 @@ export class AskQuestionController {
         if (!expected?.canText || view.permission || view.multi || !view.typeRow ||
             !picked.value.trim() || Buffer.byteLength(picked.value, 'utf8') > 1200 ||
             /[\x00-\x09\x0b-\x1f\x7f]/.test(picked.value)) return failed('The text answer cannot be entered into this question.')
-        if (!await apply({ kind: 'text', row: view.typeRow, text: picked.value })) return KEYS_FAILED
+        const typed = notEntered(await apply({ kind: 'text', row: view.typeRow, text: picked.value }))
+        if (typed) return typed
         continue
       }
 
@@ -349,18 +369,21 @@ export class AskQuestionController {
         const rows = reviewed ? view.rows.filter(row => row.checked !== labels.includes(row.label))
           : labels.map(label => matchRow(view.rows, label)).filter((row): row is QuestionRow => !!row && !row.checked)
         const freeText = !reviewed && !rows.length && view.typeRow ? { row: view.typeRow, text: picked.value } : undefined
-        if (!await apply({ kind: 'multiple', rows, ...(freeText ? { freeText } : {}) })) return KEYS_FAILED
+        const toggled = notEntered(await apply({ kind: 'multiple', rows, ...(freeText ? { freeText } : {}) }))
+        if (toggled) return toggled
         continue
       }
 
       const row = reviewed ? view.rows.find(row => row.label === picked.value) ?? null : matchRow(view.rows, picked.value)
       if (row) {
-        if (!await apply({ kind: 'select', row, enterSubmits: view.enterSubmits })) return KEYS_FAILED
+        const selected = notEntered(await apply({ kind: 'select', row, enterSubmits: view.enterSubmits }))
+        if (selected) return selected
         continue
       }
       if (reviewed) return failed('That answer matches no option.')
       if (!view.typeRow) { console.warn(`[question] no option matched "${picked.value.slice(0, 40)}" and no free-text row`); return failed('That answer matches no option.') }
-      if (!await apply({ kind: 'text', row: view.typeRow, text: picked.value })) return KEYS_FAILED
+      const typed = notEntered(await apply({ kind: 'text', row: view.typeRow, text: picked.value }))
+      if (typed) return typed
     }
     return STUCK
   }

@@ -131,7 +131,8 @@ describe('engine question-control workers', () => {
     const failed = await interrupted
     expect(failed.result.error, JSON.stringify(failed)).toBe('ANSWER_FAILED')
     expect(failed.ms).toBeLessThan(signal === 'SIGKILL' ? 5_000 : 15_000)
-    // An answer while there is no worker is refused at once, and nothing is typed inline in its place.
+    // An answer while there is no worker fails at once (its screen is read in that worker too, so the question
+    // cannot be read), and nothing is typed inline in its place.
     const outage = await answer(c, agent, requestId, shaped, spec.second)
     expect(outage.error, JSON.stringify(outage)).toBe('ANSWER_FAILED')
     expect(workerPid(d, engine)).toBe(worker)

@@ -30,7 +30,7 @@ Question grants allow only finite key operations and the exact text approved for
 No capture, registry or general core-query capability is granted. Requests and replies have strict
 private v1 envelopes and a 1 MiB ceiling; text is limited to 32 KiB and excludes terminal control
 characters other than newline. Existing reviewed voice answers retain their stricter 1,200-byte rule.
-Each engine admits four concurrent steps, each with a 30-second deadline, at most 128 writes and
+Each engine admits sixteen concurrent steps (one per agent's dialog), each with a 30-second deadline, at most 128 writes and
 one outstanding host request. A host query has a five-second deadline. Worker deadlines recycle
 that worker, never core.
 
