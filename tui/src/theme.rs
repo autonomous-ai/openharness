@@ -537,7 +537,7 @@ fn pane_palette_for(native: Option<(Color, Color)>) -> PanePalette {
 /// fzf's colours — its dark256 default, or what `--color=light|16|bw` in `$FZF_DEFAULT_OPTS` asks
 /// for (and bw under NO_COLOR), so a list here looks like fzf does on this terminal.
 #[derive(Clone)]
-pub struct Fzf { pub reverse: bool, pub unicode: bool, pub pointer_char: String, pub marker_char: String, pub marker_multi: [String; 3], pub prompt_text: String, pub bg_plus: Color, pub hl: Color, pub prompt: Color, pub bw: bool, pub pal: fzfcolor::Palette }
+pub struct Fzf { pub reverse: bool, pub unicode: bool, pub pointer_char: String, pub marker_char: String, pub marker_multi: [String; 3], pub prompt_text: String, pub hl: Color, pub prompt: Color, pub pal: fzfcolor::Palette }
 
 impl Fzf {
     /// The border (and --border's glyphs) and the scrollbar: each its own slot.
@@ -689,7 +689,7 @@ fn fzf_base() -> &'static Fzf {
             marker_char,
             // (Its first line only, as fzf's firstLine keeps it.)
             prompt_text: prompt.map(|p| p.split('\n').next().unwrap_or("").to_string()).unwrap_or_else(|| "> ".into()),
-            bg_plus: pal.current.style().bg.unwrap_or(Color::Reset), hl: fg(pal.matched), prompt: fg(pal.prompt), bw: !pal.colored, pal,
+            hl: fg(pal.matched), prompt: fg(pal.prompt), pal,
         }
     })
 }

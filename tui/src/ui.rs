@@ -688,7 +688,7 @@ mod os_welcome_tests {
                     for action in ["Install Harness", "Try without installing", "Wi-Fi", "Super+b"] {
                         assert!(!text.contains(action), "ordinary hn must not offer {action}: {text}");
                     }
-                    assert!(text.contains("Task") || text.contains("What task should"), "{text}");
+                    assert!(text.contains("Task") || text.contains("What should it do?"), "{text}");
                 } else if live {
                     assert!(text.contains("Enter  Install Harness"), "{text}");
                     assert!(text.contains("t      Try without installing"), "{text}");

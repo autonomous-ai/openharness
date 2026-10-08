@@ -26,7 +26,7 @@ use ratatui::{
 };
 use serde_json::{Value, json};
 use std::{collections::HashMap, time::Duration};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 pub use view::draw;
 
 #[derive(Clone, Debug)]
@@ -190,20 +190,20 @@ impl Form {
             && data::git(&self.git)
             && self.draft.worktree.unwrap_or(true)
     }
-    fn blocked(&self, field: Field) -> Option<&str> {
+    fn blocked(&self, field: Field) -> Option<String> {
         if self.local_only && matches!(field, Field::Branch | Field::Worktree | Field::Create) && self.draft.what.engine != "terminal" {
-            Some("Start the Harness daemon first")
+            Some("Start the Harness daemon first".into())
         } else if field == Field::Task && !task::supported(&self.draft.what.engine) && self.draft.task.trim().is_empty() {
-            Some("Not available for this agent")
+            Some(format!("Not available for {}", self.draft.what.label))
         } else if matches!(field, Field::Branch | Field::Worktree) {
             if self.git_loading {
-                Some("Checking Git…")
+                Some("Checking Git…".into())
             } else if self.git["error"] == "OFFLINE" {
-                Some("Waiting for machine…")
+                Some("Waiting for machine…".into())
             } else if self.git["error"].is_string() {
-                Some("Could not read Git · Enter to retry")
+                Some("Could not read Git · Enter to retry".into())
             } else if !data::git(&self.git) || self.draft.what.engine == "terminal" {
-                Some("Not a Git repository")
+                Some("Not a Git repository".into())
             } else {
                 None
             }
@@ -328,7 +328,7 @@ impl Form {
             } else {
                 label.into()
             },
-            self.blocked(field).map(str::to_string).unwrap_or(value),
+            self.blocked(field).unwrap_or(value),
         )
     }
 }
@@ -438,6 +438,14 @@ pub fn open(app: &mut App, machine: Option<String>, cwd: Option<String>) {
     {
         let mut form = app.new_harness_draft.take().unwrap();
         form.surface = Surface::Dialog;
+        // A draft reopened to go on writing starts on its task, no chooser open. (One whose
+        // launch failed keeps Start in focus: Enter retries it.)
+        if !form.starting && form.attempt.is_none() {
+            if task::supported(&form.draft.what.engine) && form.error.is_empty() { form.focus = Field::Task; }
+            form.child = None;
+            form.child_active = false;
+            form.trail.clear();
+        }
         resolve_launch_machine(app, &mut form);
         refresh_form(app, &mut form);
         app.modal = Some(Modal::NewHarness(form));
@@ -1358,10 +1366,24 @@ fn choose(app: &mut App, form: &mut Form) {
     }
     form.child_active = false;
     form.trail.clear();
-    form.focus = Field::Create;
+    // (Chosen from the task, by `@ : %`: back to writing it.)
+    if form.focus != Field::Task { form.focus = Field::Create; }
     form.error.clear();
     refresh_form(app, form);
     sync_git(app, form, false);
+}
+/// `@ : %` typed where a word starts in the task: the chooser of that scope (the shell composer's
+/// `@ computer`, `: project`, `% model`). Inside a word each is a letter.
+fn scope_choice(form: &Form, ch: char) -> Option<Choice> {
+    let task = &form.draft.task;
+    let before = task.get(..form.task_editor.cursor).unwrap_or(task);
+    if !before.chars().next_back().is_none_or(char::is_whitespace) { return None }
+    match ch {
+        '@' => Some(Choice::Machine(None)),
+        ':' => Some(Choice::Project),
+        '%' if form.fields().contains(&Field::Model) => Some(Choice::Model),
+        _ => None,
+    }
 }
 fn back(app: &mut App, form: &mut Form) -> bool {
     if form.child_active {
@@ -1434,7 +1456,17 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
         return welcome::activate(app, form);
     }
     let mut launch = false;
-    if !form.child_active && form.focus == Field::Task {
+    let scope = match key.code {
+        KeyCode::Char(ch) if !form.child_active && form.focus == Field::Task
+            && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && form.blocked(Field::Task).is_none() => scope_choice(&form, ch),
+        _ => None,
+    };
+    if let Some(kind) = scope {
+        // The chooser drops down under the task; Esc leaves the task as it was.
+        child(app, &mut form, kind, "");
+        form.child_active = true;
+    } else if !form.child_active && form.focus == Field::Task {
         match key.code {
             KeyCode::Tab | KeyCode::BackTab => {
                 form.move_by(match key.code { KeyCode::Up | KeyCode::BackTab => -1, _ => 1 });
@@ -1931,6 +1963,94 @@ mod tests {
         }
     }
 
+    fn press(app: &mut App, code: KeyCode) {
+        let Some(Modal::NewHarness(form)) = app.modal.take() else { panic!() };
+        key(app, form, KeyEvent::new(code, KeyModifiers::NONE));
+    }
+    fn form_of(app: &App) -> &Form {
+        let Some(Modal::NewHarness(form)) = &app.modal else { panic!() };
+        form
+    }
+
+    #[tokio::test]
+    async fn a_chooser_drops_down_under_its_field_in_the_panels_style() {
+        let _l = crate::term_out::colours_lock();
+        let mut app = app();
+        open(&mut app, None, Some("/home/dev/project".into()));
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        form.focus = Field::Project;
+        child(&mut app, &mut form, Choice::Project, "");
+        let body = Rect::new(0, 0, 120, 36);
+        draw(&mut Buffer::empty(body), body, &mut form);
+        assert!(form.child_area.is_empty(), "arrowing onto a field drops nothing down");
+        form.child_active = true;
+        let mut buf = Buffer::empty(body);
+        draw(&mut buf, body, &mut form);
+        let at = form.hits.iter().find(|(_, f)| *f == Field::Project).unwrap().0;
+        assert_eq!(form.child_area.y, at.y + 1, "right under the Project row");
+        assert_eq!(form.child_area.intersection(form.area), form.child_area, "inside the form: no side panel");
+        assert!(form.task_area.intersection(form.child_area).is_empty(), "never over the Task line");
+        assert_eq!(buf[(form.child_area.x + 1, form.child_area.y)].symbol(), "›", "the query line first");
+        let rule: String = (form.child_area.x + 1..form.child_area.right() - 1).map(|x| buf[(x, form.child_area.y + 1)].symbol()).collect();
+        assert!(rule.contains('/') && rule.ends_with('─'), "the count rule: {rule}");
+        let keys: String = (form.child_area.x..form.child_area.right()).map(|x| buf[(x, form.child_area.bottom() - 1)].symbol()).collect();
+        assert!(keys.contains("↑↓ move") && keys.contains("esc back"), "the keys line: {keys}");
+        let c = crate::settings::chrome();
+        let (y, _) = form.child.as_ref().unwrap().picker.row_at[0];
+        // (Under NO_COLOR the chosen row has no band, only a modifier.)
+        assert_eq!(buf[(form.child_area.x + 3, y)].bg, c.selected.bg.unwrap_or(ratatui::style::Color::Reset), "the chosen row on the panel's band");
+        assert!(buf[(form.child_area.x + 3, y)].modifier.contains(c.selected.add_modifier));
+    }
+
+    #[tokio::test]
+    async fn at_colon_percent_in_the_task_open_their_choosers() {
+        let mut app = app();
+        open(&mut app, None, Some("/home/dev/project".into()));
+        for ch in "fix the login ".chars() { press(&mut app, KeyCode::Char(ch)); }
+        press(&mut app, KeyCode::Char('@'));
+        let f = form_of(&app);
+        assert_eq!(f.child.as_ref().map(|c| c.kind.clone()), Some(Choice::Machine(None)));
+        assert!(f.child_active);
+        assert_eq!(f.draft.task, "fix the login ", "the @ is not typed into the task");
+        press(&mut app, KeyCode::Esc);
+        let f = form_of(&app);
+        assert!(f.child.is_none());
+        assert_eq!((f.focus, f.draft.task.as_str()), (Field::Task, "fix the login "));
+        press(&mut app, KeyCode::Char('%'));
+        assert_eq!(form_of(&app).child.as_ref().map(|c| c.kind.clone()), Some(Choice::Model));
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char(':'));
+        assert_eq!(form_of(&app).child.as_ref().map(|c| c.kind.clone()), Some(Choice::Project));
+        // The dropdown opens under the task, its text still in view.
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        let body = Rect::new(0, 0, 120, 36);
+        draw(&mut Buffer::empty(body), body, &mut form);
+        assert_eq!(form.child_area.y, form.task_area.bottom());
+        app.modal = Some(Modal::NewHarness(form));
+        press(&mut app, KeyCode::Esc);
+        for ch in "a@b".chars() { press(&mut app, KeyCode::Char(ch)); }
+        assert!(form_of(&app).child.is_none());
+        assert_eq!(form_of(&app).draft.task, "fix the login a@b", "inside a word it is a letter");
+    }
+
+    #[tokio::test]
+    async fn a_task_the_agent_cannot_take_names_it_and_a_reopened_form_is_on_the_task() {
+        let mut app = app();
+        open(&mut app, None, Some("/home/dev/project".into()));
+        let Some(Modal::NewHarness(mut form)) = app.modal.take() else { panic!() };
+        set_engine(&mut form, "terminal");
+        form.draft.what.label = "Terminal".into();
+        assert_eq!(form.blocked(Field::Task).as_deref(), Some("Not available for Terminal"));
+        set_engine(&mut form, "codex");
+        form.focus = Field::Model;
+        app.modal = Some(Modal::NewHarness(form));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.modal.is_none());
+        open(&mut app, None, None);
+        let f = form_of(&app);
+        assert_eq!((f.focus, f.child.is_none(), f.child_active), (Field::Task, true, false));
+    }
+
     #[tokio::test]
     async fn local_shell_entry_does_not_override_the_registered_launch_machine() {
         let mut app = app();
@@ -2246,7 +2366,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compact_form_and_side_choosers_stay_anchored_at_every_terminal_size() {
+    async fn compact_form_and_dropdown_choosers_stay_anchored_at_every_terminal_size() {
         let mut app = app();
         open(&mut app, None, None);
         let Some(Modal::NewHarness(mut form)) = app.modal.take() else {
@@ -2260,7 +2380,10 @@ mod tests {
                 let mut anchor = None;
                 for engine in ["claude", "codex", "terminal"] {
                     set_engine(&mut form, engine);
-                    for chooser in [None, Some(Choice::Agent), Some(Choice::Clone), Some(Choice::Path), None] {
+                    let choosers = [None, Some(Choice::Agent), Some(Choice::Clone), Some(Choice::Path), None];
+                    // (Under the task, and under a field below it.)
+                    for (focus, chooser) in [Field::Task, Field::Agent].into_iter().flat_map(|f| choosers.clone().map(|c| (f, c))) {
+                        form.focus = focus;
                         if let Some(kind) = chooser {
                             let text = "/home/dev/项目";
                             child(&mut app, &mut form, kind, text);
@@ -2295,19 +2418,14 @@ mod tests {
                                 assert_eq!(form.area.intersection(area), form.area);
                             }
                             if form.child_area.width > 0 {
+                                assert!(active, "a chooser drops down only when entered");
                                 assert_eq!(form.child_area.intersection(area), form.child_area);
-                                assert_eq!(form.child_area.y, form.area.y);
-                                if form.child_area.x == form.area.x {
-                                    assert!(active, "narrow previews must leave the form visible");
-                                    assert_eq!(form.child_area, form.area);
-                                } else {
-                                    assert_eq!(form.child_area.x, form.area.right() + 2);
-                                    assert!(form.child_area.width >= 32);
+                                assert_eq!(form.child_area.intersection(form.area), form.child_area, "inside the form: no side panel");
+                                if form.child_area != form.area && focus != Field::Task {
+                                    assert!(form.task_area.intersection(form.child_area).is_empty(), "over the task in {area:?}");
                                 }
                             }
-                            if width >= 80 && height >= 24
-                                && (form.child_area.is_empty() || form.child_area.x > form.area.x)
-                            {
+                            if width >= 80 && height >= 24 && form.child_area != form.area {
                                 assert_eq!(form.hits.len(), form.fields().len(), "all settings stay visible");
                             }
                         }

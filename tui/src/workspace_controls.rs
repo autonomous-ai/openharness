@@ -531,7 +531,7 @@ mod tests {
                 assert!(app.home_visible());
                 let buf = render(&mut app);
                 let text: String = buf.content().iter().map(|c| c.symbol()).collect();
-                assert!(text.contains("New Harness") && text.contains("What task should this agent work on?") && text.contains("New Terminal"));
+                assert!(text.contains("New Harness") && text.contains("What should it do?") && text.contains("New Terminal"));
                 assert!(!text.contains("machines connected"));
             }
         }

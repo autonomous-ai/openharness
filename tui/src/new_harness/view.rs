@@ -72,17 +72,13 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
         return None;
     }
     let page = matches!(form.surface, Surface::Window(_));
-    let crate::settings::Chrome { base, muted, accent, backdrop, .. } = crate::settings::chrome();
+    let crate::settings::Chrome { base, muted, accent, backdrop, selected } = crate::settings::chrome();
     if page {
         panel(buf, body, Style::default().bg(ratatui::style::Color::Reset).fg(ratatui::style::Color::Reset));
     } else { crate::settings::backdrop(buf, body, backdrop); }
     // Only the terminal's size changes this anchor. Task wrapping, history, and choosers do not.
     let r = crate::settings::area(body, crate::settings::PanelSize::Form, if page { 28 } else { HEIGHT });
     let (x, y, form_w, form_h) = (r.x, r.y, r.width, r.height);
-    let side_w = body.right().saturating_sub(r.right() + 4).min(60);
-    let side = side_w >= 32;
-    let child_w = if side { side_w } else { form_w };
-    let child_h = if side { body.bottom().saturating_sub(y + 1).min(22).max(form_h.min(22)) } else { form_h };
     let spacious = if page { form_h >= 27 } else { form_h >= HEIGHT };
     let task_h = if spacious { 3 } else if page && form_h >= 21 { 2 } else { 1 };
     let mut task_cursor = None;
@@ -94,7 +90,31 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
         .min(r.bottom().saturating_sub(fields_y + 1 + u16::from(spacious)).max(1));
     let footer_y = r.bottom().saturating_sub(footer_h + u16::from(spacious));
     form.area = r;
-    if form.child.is_none() || side || !form.child_active {
+    let capacity = footer_y.saturating_sub(fields_y);
+    let mut row: u16 = 0;
+    let mut recent_header = None;
+    let rows: Vec<_> = form.fields().into_iter().map(|field| {
+        if spacious && matches!(field, Field::Branch | Field::Create) { row += 1; }
+        if page && field == Field::Browse {
+            if spacious { row += 1; }
+            recent_header = Some(row);
+        }
+        let at = row;
+        row += if field == Field::Task { task_h } else if page && field == Field::Browse { 2 } else { 1 };
+        (at, field)
+    }).collect();
+    let focus = rows.iter().find(|(_, field)| *field == form.focus).map(|(row, _)| *row).unwrap_or(0);
+    let skip = focus.saturating_sub(capacity.saturating_sub(1));
+    // An entered chooser drops down under its field (under the task's text when `@ : %` opened
+    // it there). Where too few rows are left it covers the form, as it always did when narrow.
+    let under = rows.iter().find(|(row, field)| *field == form.focus && *row >= skip && *row < skip + capacity)
+        .map(|(row, field)| {
+            let fy = fields_y + row - skip;
+            fy + if *field == Field::Task { task_h.min(footer_y.saturating_sub(fy)) } else { 1 }
+        });
+    let chooser = form.child.as_ref().filter(|_| form.child_active)
+        .map(|c| under.and_then(|at| dropdown(c, x + 1, at, form_w - 2, r.bottom() - 1)).unwrap_or(r));
+    if chooser != Some(r) {
         panel(buf, r, base);
         if form_h >= 9 {
             let title = if page { if form.first_run { "Welcome to Harness" } else { "New Window" } } else { "New Harness" };
@@ -103,21 +123,6 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
                 put(buf, x + 3, y + 2, form_w - 6, "Start a task. Your agent takes it from here.", muted);
             }
         }
-        let capacity = footer_y.saturating_sub(fields_y);
-        let mut row: u16 = 0;
-        let mut recent_header = None;
-        let rows: Vec<_> = form.fields().into_iter().map(|field| {
-            if spacious && matches!(field, Field::Branch | Field::Create) { row += 1; }
-            if page && field == Field::Browse {
-                if spacious { row += 1; }
-                recent_header = Some(row);
-            }
-            let at = row;
-            row += if field == Field::Task { task_h } else if page && field == Field::Browse { 2 } else { 1 };
-            (at, field)
-        }).collect();
-        let focus = rows.iter().find(|(_, field)| *field == form.focus).map(|(row, _)| *row).unwrap_or(0);
-        let skip = focus.saturating_sub(capacity.saturating_sub(1));
         if let Some(row) = recent_header.filter(|row| *row >= skip && *row < skip + capacity) {
             put(buf, x + 3, fields_y + row - skip, form_w.saturating_sub(12), &form.recent_status, muted);
         }
@@ -157,16 +162,14 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
                     put(buf, value_x + name_width, fy, suffix_width, &suffix, st);
                 } else { put(buf, value_x, fy, value_width, &format!("@ {}", form.machine_label), st); }
             } else if let Field::Recent(i) = field {
-                let st = if active {
-                    if theme::fzf().bw { st.add_modifier(Modifier::REVERSED) }
-                    else { st.bg(theme::fzf().bg_plus) }
-                } else { st };
+                // The chosen row as the panel's lists mark it, as the welcome page's Recent does.
+                let st = if active { selected } else { st };
                 if active { panel(buf, Rect::new(x + 3, fy, form_w - 6, 1), st); }
                 if let Some((title, detail)) = form.recent_labels.get(i) {
                     let room = form_w - 6;
                     let detail_w = if room >= 42 { (detail.width() as u16).min(22) } else { 0 };
                     put(buf, x + 3, fy, room.saturating_sub(detail_w + u16::from(detail_w > 0)), title, st);
-                    if detail_w > 0 { put(buf, r.right() - 3 - detail_w, fy, detail_w, detail, if active { accent } else { muted }); }
+                    if detail_w > 0 { put(buf, r.right() - 3 - detail_w, fy, detail_w, detail, if active { st.remove_modifier(Modifier::BOLD) } else { muted }); }
                 }
             } else if !action { put(buf, value_x, fy, value_width, &value, st); }
             form.hits.push((Rect::new(x + 1, fy, form_w - 2, height), field));
@@ -190,140 +193,64 @@ pub fn draw(buf: &mut Buffer, body: Rect, form: &mut Form) -> Option<Position> {
             }
         }
     }
-    if !side && !form.child_active {
-        return task_cursor;
+    match chooser {
+        Some(at) => draw_child(buf, at, form).or(task_cursor),
+        None => task_cursor,
     }
-    let r = Rect::new(if side { x + form_w + 2 } else { x }, y, child_w, child_h);
-    draw_child(buf, r, form).or(task_cursor)
+}
+
+/// The rows [c] wants: the query, the count rule, its list (a group's heading and the blank before
+/// it count too) and the keys line, at most 12 — a path or a name being typed, the query and keys.
+fn wanted(c: &Child) -> u16 {
+    if c.kind.editing() { return 2 }
+    let p = &c.picker;
+    let (mut lines, mut last) = (0, None);
+    for (i, _) in &p.visible {
+        let group = p.rows[*i].group.as_deref().filter(|_| p.query.is_empty());
+        if group.is_some() && group != last { lines += 1 + usize::from(lines > 0) }
+        last = group;
+        lines += 1;
+    }
+    (3 + lines.max(1)).min(12) as u16
+}
+
+/// Where an entered chooser drops down: at (x, y), [width] wide, as tall as it wants down to
+/// [bottom]; None when fewer rows are left than its list (or its query and keys) needs.
+pub(super) fn dropdown(c: &Child, x: u16, y: u16, width: u16, bottom: u16) -> Option<Rect> {
+    let room = bottom.saturating_sub(y);
+    (room >= if c.kind.editing() { 2 } else { 4 } && width > 0).then(|| Rect::new(x, y, width, wanted(c).min(room)))
 }
 
 pub(super) fn draw_child(buf: &mut Buffer, r: Rect, form: &mut Form) -> Option<Position> {
     let Some(c) = &mut form.child else { return None };
-    let crate::settings::Chrome { base, muted, accent, .. } = crate::settings::chrome();
+    let chrome = crate::settings::chrome();
     form.child_area = r;
-    panel(buf, r, base);
-    let query_x = r.x + 4;
-    let query_y = r.y + 2;
-    let query_w = r.width.saturating_sub(6) as usize;
-    put(buf, r.x + 2, query_y, 1, "›", accent);
-    let chars: Vec<_> = c.picker.query.chars().collect();
-    let at = c.picker.qcursor.min(chars.len());
-    let mut from = at;
-    let mut width = 0;
-    while from > 0 && width + chars[from - 1].width().unwrap_or(0) < query_w {
-        from -= 1;
-        width += chars[from].width().unwrap_or(0);
+    panel(buf, r, chrome.base);
+    // The command panel's pieces, as the shell composer draws them: the query, the count rule,
+    // the list and the keys line (a chooser's own error in its place).
+    let (x, w) = (r.x + 1, r.width.saturating_sub(2));
+    let ghost = c.picker.placeholder.clone();
+    let (at, _) = crate::settings::query_line(buf, &c.picker, x, r.y, w, &ghost, &chrome);
+    let ky = r.bottom() - 1;
+    if form.error.is_empty() {
+        let keys: &[(&str, &str)] = if c.kind.editing() { &[("enter", "choose"), ("esc", "back")] } else { &[("↑↓", "move"), ("enter", "choose"), ("esc", "back")] };
+        if ky > r.y { crate::settings::keys_line(buf, keys, x, ky, w, &chrome) }
+    } else if ky > r.y {
+        put(buf, x, ky, w, &form.error, chrome.base.patch(theme::fg(theme::DANGER)));
     }
-    let query: String = chars[from..].iter().collect();
-    put(
-        buf,
-        query_x,
-        query_y,
-        query_w as u16,
-        if query.is_empty() {
-            &c.picker.placeholder
-        } else {
-            &query
-        },
-        if query.is_empty() { muted } else { base },
-    );
     c.picker.row_at.clear();
-    if !c.kind.editing() {
-        // Project's blank line between folder actions and recents occupies a display row too.
-        // Reserve it in the scroll window so the selected item cannot hide under the footer.
-        let separated = c.kind == Choice::Project && c.picker.query.is_empty()
-            && c.picker.visible.windows(2).any(|pair| {
-                !c.picker.rows[pair[0].0].id.starts_with("at:")
-                    && c.picker.rows[pair[1].0].id.starts_with("at:")
-            });
-        let rows = r.height.saturating_sub(6 + u16::from(separated)) as usize;
-        c.picker.page_rows.set(rows as i64);
-        c.picker.scroll = c
-            .picker
-            .scroll
-            .min(c.picker.cursor)
-            .max(c.picker.cursor.saturating_sub(rows.saturating_sub(1)));
-        if c.picker.visible.is_empty() {
-            put(
-                buf,
-                r.x + 3,
-                r.y + 3,
-                r.width - 6,
-                c.picker.busy.as_deref().unwrap_or(&c.picker.empty),
-                muted,
-            );
-        }
-        let mut separator = 0;
-        for (row, (index, _)) in c
-            .picker
-            .visible
-            .iter()
-            .enumerate()
-            .skip(c.picker.scroll)
-            .take(rows)
-        {
-            if c.kind == Choice::Project
-                && c.picker.query.is_empty()
-                && c.picker.rows[*index].id.starts_with("at:")
-                && row > 0
-                && !c.picker.rows[c.picker.visible[row - 1].0]
-                    .id
-                    .starts_with("at:")
-            {
-                separator = 1;
-            }
-            let at_y = r.y + 4 + (row - c.picker.scroll) as u16 + separator;
-            if at_y >= r.bottom() - 2 {
-                break;
-            }
-            let selected = row == c.picker.cursor;
-            put(
-                buf,
-                r.x + 1,
-                at_y,
-                1,
-                if selected { "›" } else { " " },
-                accent,
-            );
-            put(
-                buf,
-                r.x + 3,
-                at_y,
-                r.width - 6,
-                &c.picker.rows[*index].label,
-                if c.picker.rows[*index].disabled {
-                    muted
-                } else if selected {
-                    accent
-                } else {
-                    base
-                },
-            );
-            c.picker.row_at.push((at_y, row));
-        }
-        let total = c.picker.visible.len();
-        if total > rows && rows > 0 {
-            let thumb = (rows * rows / total).max(1);
-            let top = (rows - thumb) * c.picker.scroll / (total - rows);
-            for dy in top..top + thumb {
-                put(buf, r.right() - 2, r.y + 4 + dy as u16, 1, "│", muted);
-            }
+    if !c.kind.editing() && r.height >= 4 {
+        let total = c.picker.total_rows.unwrap_or_else(|| c.picker.rows.iter().filter(|r| !r.disabled).count());
+        // While it loads, the rule ends in what it waits for, as the shell composer's does.
+        let wait = c.picker.busy.as_ref().map(|b| format!("{} {b}", theme::spinner(0)));
+        let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(w / 2));
+        crate::settings::count_rule(buf, c.picker.visible.len(), total, None, x, r.y + 1, w - room, &chrome);
+        if let Some(t) = wait { put(buf, x + w - room + 1, r.y + 1, room.saturating_sub(1), &t, chrome.muted); }
+        let list = Rect::new(x, r.y + 2, w, r.height - 3);
+        c.picker.page_rows.set(list.height as i64);
+        if c.picker.busy.is_none() || !c.picker.visible.is_empty() {
+            crate::settings::list_from(buf, &mut c.picker, list, &chrome, true, false);
         }
     }
-    let hint = if !form.error.is_empty() {
-        &form.error
-    } else {
-        c.picker.busy.as_deref().unwrap_or(if form.child_active {
-            "Enter select · Esc back"
-        } else {
-            "Enter or → to choose"
-        })
-    };
-    put(buf, r.x + 2, r.bottom() - 2, r.width - 4, hint, muted);
-    form.child_active.then(|| {
-        Position::new(
-            query_x + (width as u16).min(r.width.saturating_sub(7)),
-            query_y,
-        )
-    })
+    form.child_active.then_some(Position::new(at.x.min(r.right().saturating_sub(1)), at.y))
 }

@@ -103,8 +103,14 @@ pub(super) fn draw(buf: &mut Buffer, app: &App, body: Rect, form: &mut Form) -> 
         .style(chrome.base).border_style(if form.focus == Field::Task { accent } else { muted })
         .render(task_box, buf);
     form.task_area = Rect::new(x + 3, y + 1, width - 6, task_box.height - 3);
-    let cursor = form.task_editor.draw(buf, form.task_area, &form.draft.task,
-        form.focus == Field::Task && !form.child_active && !form.starting && form.attempt.is_none(), chrome.base, chrome.muted);
+    // An agent that takes no task says so where the task goes, as the form page does.
+    let cursor = if let Some(blocked) = form.blocked(Field::Task) {
+        view::put(buf, form.task_area.x, form.task_area.y, form.task_area.width, &blocked, chrome.muted);
+        None
+    } else {
+        form.task_editor.draw(buf, form.task_area, &form.draft.task,
+            form.focus == Field::Task && !form.child_active && !form.starting && form.attempt.is_none(), chrome.base, chrome.muted)
+    };
     let action = if form.starting || form.attempt.is_some() { form.describe(Field::Create).0 } else { "New Harness".into() };
     let button = format!("[ {action} ]");
     let button_w = (button.width() as u16).min(width - 6);
@@ -119,6 +125,7 @@ pub(super) fn draw(buf: &mut Buffer, app: &App, body: Rect, form: &mut Form) -> 
         let style = if form.blocked(chip.field).is_some() { muted } else { plain };
         control(buf, form, Rect::new(x + chip.x, y, chip.width, 1), chip.field, &chip.text, style, accent);
     }
+    let chips_y = y;
     y += settings_h;
     let live_error = task::error(&form.draft.what.engine, &form.draft.task);
     let error = if form.error.is_empty() { live_error.as_deref().unwrap_or("") } else { &form.error };
@@ -183,14 +190,12 @@ pub(super) fn draw(buf: &mut Buffer, app: &App, body: Rect, form: &mut Form) -> 
     }
     control(buf, form, Rect::new(x, footer_y, 12, 1), Field::Terminal, "New Terminal", muted, accent);
 
-    if form.child.is_some() {
-        let side_w = body.right().saturating_sub(rect.right() + 3).min(60);
-        let side = side_w >= 32;
-        if side || form.child_active {
-            let child = Rect::new(if side { rect.right() + 2 } else { x }, controls_y,
-                if side { side_w } else { width }, body.bottom().saturating_sub(controls_y).min(22));
-            return view::draw_child(buf, child, form).or_else(|| (!form.child_active).then_some(cursor).flatten());
-        }
+    // An entered chooser drops down under the settings row, the task box above it still in view;
+    // where too few rows are left it covers the page from the controls down.
+    if let Some(c) = form.child.as_ref().filter(|_| form.child_active) {
+        let child = view::dropdown(c, x, chips_y + 1, width.min(60), body.bottom()).unwrap_or_else(||
+            Rect::new(x, controls_y, width, body.bottom().saturating_sub(controls_y).min(22)));
+        return view::draw_child(buf, child, form);
     }
     cursor
 }
