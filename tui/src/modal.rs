@@ -95,7 +95,8 @@ pub enum PromptKind {
     Tree { pane: u64, ask: crate::tree::Ask },
 }
 
-/// A line typed in the status line, tmux-style: `(rename-window) name`, `:split-window -h`.
+/// A line typed: tmux's in the status line (`(rename-window) name`, `:split-window -h`), hn's own
+/// in a dialog ([Prompt::dialog]).
 #[derive(Clone, Debug)]
 pub struct Prompt {
     pub kind: PromptKind,
@@ -112,11 +113,35 @@ pub struct Prompt {
     pub vi_normal: bool,
     /// What C-w last cut (prompt_saved): C-y puts it back before the newest paste buffer.
     pub saved: Option<String>,
+    /// hn's own questions ([Prompt::dialog]): the input's label, the line above it, whether the
+    /// keys are on the buttons (Tab) and which one is chosen (0 Cancel, 1 the action).
+    pub field: String,
+    pub body: String,
+    pub buttons: bool,
+    pub chosen: usize,
 }
 
 impl Prompt {
     pub fn status(kind: PromptKind, label: &str, initial: &str) -> Prompt {
-        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, saved: None }
+        Prompt { kind, title: String::new(), label: label.to_string(), hint: String::new(), value: initial.to_string(), secret: false, cursor: initial.chars().count(), history_at: None, vi_normal: false, saved: None, field: String::new(), body: String::new(), buttons: false, chosen: 1 }
+    }
+
+    /// hn's own questions are dialogs; tmux's (command-prompt, choose-tree's) keep the status line.
+    pub fn dialog(&self) -> bool {
+        matches!(self.kind, PromptKind::RenameTab { .. } | PromptKind::RenameHarness { .. } | PromptKind::Send | PromptKind::Broadcast | PromptKind::Answer { .. } | PromptKind::Message { .. })
+    }
+
+    /// The dialog's `[ Cancel ]  [ Rename ]` (Send, Broadcast, Answer), the chosen button only
+    /// while the keys are on them.
+    pub fn row(&self) -> crate::buttons::Row {
+        let action = match self.kind {
+            PromptKind::RenameTab { .. } | PromptKind::RenameHarness { .. } => "Rename",
+            PromptKind::Broadcast => "Broadcast",
+            PromptKind::Answer { .. } => "Answer",
+            _ => "Send",
+        };
+        let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
+        crate::buttons::Row { buttons: vec![button("Cancel"), button(action)], chosen: if self.buttons { self.chosen } else { usize::MAX }, hint: crate::buttons::KEYS.into() }
     }
 }
 
@@ -148,6 +173,8 @@ pub struct Menu {
     /// Harness menus reflow from their original labels when the terminal changes size.
     /// Explicit tmux display-menu coordinates keep tmux's existing behavior.
     pub responsive: Option<Box<crate::workspace_menu::Layout>>,
+    /// A confirmation's buttons, drawn on the row under the notes.
+    pub buttons: Option<crate::workspace_menu::Buttons>,
 }
 
 /// What a completion menu completes: the prompt, the words its items stand for, the flag they
@@ -182,6 +209,7 @@ pub const ENGINES: [&str; 15] = ["claude", "codex", "opencode", "cursor", "pi", 
 /// The palette's commands: (id, title, keys, hint, group).
 pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("account", "Account / sign in…", "", "connect computers, sync your workspace and add your phone", "General"),
+    ("signout", "Sign out", "", "leave your Harness account here — harnesses on this computer keep running", "General"),
     ("open", "Harnesses…", "⌥P", "every harness on every machine", "Harness"),
     ("projects", "Projects…", "⌥O", "a project, then one of its harnesses", "Harness"),
     ("models", "Models…", "⌥I", "local, shared, subscriptions, APIs — use one on this harness", "Harness"),
@@ -213,12 +241,13 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("find", "Find in pane…", "⌥⇧F", "search this pane's history", "Panes"),
     // (Not "keyboard": `keyb` is Keybinds.)
     ("copy-mode", "Copy mode", "⌥V", "move over the pane's text, select and copy", "Panes"),
-    ("machines", "Machines", "⌥M", "", "Machines"),
+    // (The machines and what runs on each; Connect machines… is where one is linked, its password
+    // asked — the one way in: a separate "Connect a computer…" only went there.)
+    ("machines", "List machines", "⌥M", "your machines and the harnesses on each", "Machines"),
     ("store", "Harness store", "⌥S", "", "Machines"),
     // ── machines & devices ──
-    ("connect-machine", "Connect a computer…", "", "a computer not linked yet, with its remote password", "Machines"),
+    ("devices", "Connect machines…", "", "link a machine, this computer's password, your machines and links", "Machines"),
     ("add-phone", "Add phone…", "", "a QR code your phone scans to sign in and pair", "Machines"),
-    ("devices", "Machines…", "", "this computer's password, your machines, links, add a machine", "Machines"),
     ("hardware-devices", "Devices…", "", "Harness hardware, brightness, sound and voice language", "Machines"),
     // (hn itself: how it looks, its keys, and closing it.)
     ("theme", "Appearance…", "", "theme, status bar, borders, focus, layout — settings", "Settings & help"),
@@ -764,8 +793,14 @@ pub fn theme_options(app: &App, section: &str) -> Vec<Row> {
             [("box", "on", "every pane its own box"), ("line", "off", "tmux's lines between panes")]
                 .iter().map(|(v, label, hint)| opt(format!("border_style:{v}"), label, cur == *v, hint)).collect() }
         "tab" => { let cur = tab_active_of(app);
+            // (`pane`, an older tui.toml's word, is `short`.)
+            let named = match o.get("@hn-window-name", "", None).as_deref() { Some("full") => "full", Some("tmux") => "tmux", _ => "short" };
+            let short = format!("names cut to {} columns, as tmux's", crate::options::TAB_NAME_COLS);
             [("star", "star", "the current tab is marked *"), ("filled", "filled", "the current tab is filled (inverted)")]
-                .iter().map(|(v, label, hint)| opt(format!("window_active:{v}"), label, cur == *v, hint)).collect() }
+                .iter().map(|(v, label, hint)| opt(format!("window_active:{v}"), label, cur == *v, hint))
+                .chain([("short", "short names", short.as_str()), ("full", "full names", "each tab's whole name")]
+                    .iter().map(|(v, label, hint)| opt(format!("window_name:{v}"), label, named == *v, hint)))
+                .collect() }
         "autorename" => { let cur = if o.auto_rename() { "on" } else { "off" };
             [("on", "a window with a repo is named for it and its work, by a small model, in the background (Harness TUI LMStudio)"),
              ("off", "windows keep the names they have")]
@@ -909,7 +944,9 @@ mod theme_row_tests {
         let a0 = app();
         let tab_rows = theme_options(&a0, "tab");
         let tab_ids: Vec<&str> = tab_rows.iter().map(|r| r.id.as_str()).collect();
-        assert_eq!(tab_ids, vec!["window_active:star", "window_active:filled"]);
+        // (How long a tab's name is shown is in the same section: short, the default, or full.)
+        assert_eq!(tab_ids, vec!["window_active:star", "window_active:filled", "window_name:short", "window_name:full"]);
+        assert!(tab_rows[2].lead.iter().any(|s| s.content.contains('✓')), "short names by default");
         // The mark follows the option in use.
         let mut a1 = app();
         let global = crate::options::SetFlags { global: true, ..Default::default() };

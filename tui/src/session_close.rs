@@ -148,7 +148,8 @@ fn begin(app: &mut App, panes: Vec<u64>, title: &str, return_to_shell: bool) {
 }
 
 fn showing(app: &App, id: &str) -> bool {
-    matches!(&app.modal, Some(Modal::Menu(m)) if m.items.iter().any(|i| i.command == format!("close-harness -x {id}")))
+    let cancel = format!("close-harness -x {id}");
+    matches!(&app.modal, Some(Modal::Menu(m)) if m.buttons.as_ref().is_some_and(|b| b.actions.contains(&cancel)))
 }
 
 fn show(app: &mut App, message: &str, confirm: bool) -> bool {
@@ -160,20 +161,28 @@ fn show(app: &mut App, message: &str, confirm: bool) -> bool {
     if confirm {
         let remaining: Vec<_> = op.targets.iter().filter(|t| !t.closed).collect();
         for t in remaining.iter().take(room.saturating_sub(1)) {
-            let state = match t.activity.as_str() {
-                "idle" => "Idle", "working" => "Working", "needs_input" => "Waiting for input", "draft" => "Unsent text", _ => "Activity unknown",
-            };
-            items.push(menu::note(&format!("{state} · {}", t.name)));
+            // (What it is doing, said as a sentence.)
+            let name = &t.name;
+            items.push(menu::note(&match t.activity.as_str() {
+                "idle" => format!("{name} is idle."),
+                "working" => format!("{name} is still working."),
+                "needs_input" => format!("{name} is waiting for your input."),
+                "draft" => format!("{name} has text you haven't sent."),
+                _ => format!("Not sure what {name} is doing right now."),
+            }));
         }
         let shown = items.len();
         if remaining.len() > shown { items.push(menu::note(&format!("and {} more", remaining.len() - shown))); }
         if op.shells && items.len() < room { items.push(menu::note("The terminal and its running commands will end.")); }
     }
     if !message.is_empty() { items.push(menu::note(message)); }
-    let cancel = items.len();
-    items.push(menu::item(if matches!(op.stage, Stage::Failed | Stage::Stop) { "Back" } else { "Cancel" }, "Escape", format!("close-harness -x {id}")));
-    if confirm { items.push(menu::item("Stop", "s", format!("close-harness -y {id}"))); }
-    menu::open(app, &title, items, None, Some(cancel))
+    let button = |label: &str, key| crate::buttons::Button { label: label.into(), key };
+    let mut buttons = vec![button(if matches!(op.stage, Stage::Failed | Stage::Stop) { "Back" } else { "Cancel" }, None)];
+    if confirm { buttons.push(button("Stop", Some('s'))); }
+    // (One button, Back: nothing to move between.)
+    let hint = if confirm { crate::buttons::KEYS } else { "" };
+    let row = crate::buttons::Row { buttons, chosen: 0, hint: hint.into() };
+    menu::open_buttons(app, &title, items, row, vec![format!("close-harness -x {id}"), format!("close-harness -y {id}")])
 }
 
 fn fail(app: &mut App, message: String) {
@@ -426,6 +435,43 @@ mod tests {
             assert_eq!(modes(&app), ["inspect"]);
             assert!(app.panes.contains_key(&1));
         }
+    }
+
+    #[tokio::test]
+    async fn right_then_enter_stops_and_the_buttons_are_one_row_model() {
+        let mut app = app();
+        pane(&mut app, 1);
+        answer(&mut app, "inspect", json!({"activity":"working"}));
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("no confirmation") };
+        let b = m.buttons.as_ref().expect("a button row");
+        assert_eq!(b.row.buttons.iter().map(|x| x.label.as_str()).collect::<Vec<_>>(), ["Cancel", "Stop"]);
+        assert_eq!(b.row.chosen, 0, "a destructive action starts on Cancel");
+        key(&mut app, KeyCode::Right);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(modes(&app), ["inspect", "now"]);
+    }
+
+    #[tokio::test]
+    async fn every_way_out_of_the_buttons_cancels_and_other_keys_do_nothing() {
+        let press = |app: &mut App, code, mods| crate::input::modal_key(app, KeyEvent::new(code, mods));
+        let ask = || { let mut app = app(); pane(&mut app, 1); answer(&mut app, "inspect", json!({"activity":"working"})); app };
+        for (code, mods) in [(KeyCode::Esc, KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::NONE),
+            (KeyCode::Char('c'), KeyModifiers::CONTROL), (KeyCode::Char('g'), KeyModifiers::CONTROL)] {
+            let mut app = ask();
+            press(&mut app, code, mods);
+            assert!(app.modal.is_none(), "{code:?} {mods:?} leaves the dialog");
+            assert!(app.session_close.operation.is_none(), "{code:?} {mods:?} must not leave the close pending");
+            assert_eq!(modes(&app), ["inspect"], "{code:?} {mods:?} stops nothing");
+        }
+        let mut app = ask();
+        for (code, mods) in [(KeyCode::Char('j'), KeyModifiers::NONE), (KeyCode::Char('k'), KeyModifiers::NONE), (KeyCode::Char('q'), KeyModifiers::CONTROL),
+            (KeyCode::Tab, KeyModifiers::NONE), (KeyCode::BackTab, KeyModifiers::SHIFT)] {
+            press(&mut app, code, mods);
+            assert!(matches!(app.modal, Some(Modal::Menu(_))), "{code:?} keeps the dialog");
+            assert_eq!(modes(&app), ["inspect"]);
+        }
+        let Some(Modal::Menu(m)) = &app.modal else { unreachable!() };
+        assert_eq!(m.buttons.as_ref().unwrap().row.chosen, 0, "Tab then Shift-Tab returns to Cancel");
     }
 
     #[tokio::test]

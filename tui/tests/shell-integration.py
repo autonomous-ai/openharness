@@ -18,6 +18,9 @@ import urllib.parse
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = '8c73ea55-683a-4207-a9aa-ab8a9e813bea'
 REQUEST = re.compile(rb'\x1b\]633;hn;([^;]+);([^;]+);([^;]+);([^\x07]*)\x07')
+PICKED = b'\x1b]633;picked\x07'
+# Removes the progress line's two rows and returns to the row it started on.
+ERASE = b'\r\x1b[2K\x1b[1A\x1b[2K\x1b[1A'
 AGENTS = ('codex', 'claude', 'cursor-agent', 'opencode', 'pi', 'hermes', 'cmd', 'devin', 'muse', 'amp', 'kilo', 'grok', 'agy', 'copilot')
 
 class Shell:
@@ -31,8 +34,14 @@ class Shell:
             path.write_text('#!/usr/bin/env python3\nimport os,sys,json\nwith open(os.environ["CALLS"],"a") as f: f.write(json.dumps(sys.argv)+"\\n")\n')
             path.chmod(0o755)
         picker=binpath/'native-picker'
-        picker.write_text('#!/bin/sh\n[ -f "$HOME/picker-choice" ] || exit 130\ncat "$HOME/picker-choice"\n')
+        # With picker-mark, it also marks on the terminal the moment the choice is made.
+        picker.write_text('#!/bin/sh\n[ -f "$HOME/picker-choice" ] || exit 130\n'
+                          '[ ! -f "$HOME/picker-mark" ] || printf \'\\033]633;picked\\007\' >&2\ncat "$HOME/picker-choice"\n')
         picker.chmod(0o755)
+        # With slow-od, making a request id takes a while (a busy machine).
+        od=binpath/'od'
+        od.write_text('#!/bin/sh\n[ ! -f "$HOME/slow-od" ] || sleep 3\nexec /usr/bin/od "$@"\n')
+        od.chmod(0o755)
         for rc in ('.zshenv', '.zprofile', '.zshrc', '.zlogin', '.bashrc'):
             text = f"printf '%s\\n' '{rc}' >> \"$STARTUP\"\n"
             if rc in ('.zshrc', '.bashrc'):
@@ -52,6 +61,11 @@ class Shell:
         bootstrap = (ROOT / 'src/shell_bootstrap.sh').read_text().replace('@INTEGRATION@', (ROOT / 'src/shell_integration.sh').read_text())
         self.pid, self.fd = pty.fork()
         if not self.pid:
+            # A terminal (tmux too) starts its shell with default signals. A runner
+            # started with `&` ignores SIGINT, and a shell can never trap a signal
+            # ignored on entry, so Ctrl-C could not cancel anything.
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            signal.signal(signal.SIGQUIT, signal.SIG_DFL)
             os.chdir(root)
             env = {k:v for k,v in os.environ.items() if k in ('LANG','LC_ALL','TZ')}
             env.update(HOME=str(root), SHELL=shell, PATH=str(binpath)+':/usr/bin:/bin:/usr/sbin:/sbin', _HN_CLI=str(binpath/'harness'),
@@ -110,7 +124,8 @@ class Shell:
         os.close(self.fd)
 
 with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
-    for shell in ('/bin/zsh',os.environ.get('HN_SHELL_TEST_BASH','/bin/bash')):
+    # An empty HN_SHELL_TEST_ZSH skips zsh (a machine with only a bash 5).
+    for shell in filter(None,(os.environ.get('HN_SHELL_TEST_ZSH','/bin/zsh'),os.environ.get('HN_SHELL_TEST_BASH','/bin/bash'))):
         for custom in (False,True):
             root=Path(tmp)/(Path(shell).name+str(custom)); root.mkdir()
             print('starting',shell,custom,flush=True)
@@ -139,6 +154,89 @@ with tempfile.TemporaryDirectory(prefix='hn-shell-test-') as tmp:
                     s.read_until(b'READY> ')
                     s.send('M\r')
                     s.result(b'DRAFT_LMRIGHT')
+                # A computer that never answers: the widget says at once what it waits
+                # for, Ctrl-C gives the prompt back with the line unchanged, and the
+                # next pick is served.
+                # The wait starts once the choice is made, not while the picker starts.
+                (root/'picker-choice').write_text('host\nGone\n')
+                (root/'picker-mark').touch()
+                s.send("printf 'GONE_%s\\n' LRIGHT")
+                s.send('\x02'*5+'\x10')
+                seen=s.read_until(PICKED).split(PICKED,1)[1]
+                t0=time.monotonic()
+                (root/'picker-mark').unlink()
+                if not REQUEST.search(seen): seen+=s.read_until(REQUEST)
+                first=REQUEST.search(seen)
+                assert first[3]==b'host-inline' and base64.b64decode(first[4])==b'Gone'
+                progress='Opening a shell on Gone… Ctrl-C to cancel'.encode()
+                if progress not in seen: seen+=s.read_until(progress,seconds=1)
+                assert time.monotonic()-t0<1,'the progress line came too late'
+                time.sleep(.3)    # nobody answers: the line must stay as it is meanwhile
+                s.send('\x03')
+                t0=time.monotonic()
+                said=s.read_until(b'READY> ',seconds=1)
+                assert time.monotonic()-t0<1,'Ctrl-C did not give the prompt back within 1 s'
+                assert re.search(rb'633;hn;'+TOKEN.encode()+b';'+re.escape(first[2])+b';cancel;',said),'the request was not cancelled'
+                # The rows the progress line added are gone again: only the prompt is left.
+                assert ERASE in said.split(b'cancel;',1)[1],('the progress line was left behind',said)
+                s.send('M\r')
+                s.result(b'GONE_LMRIGHT')       # the line is exactly what it was
+                # Right after it, another choice is served (the TUI freed the picker),
+                # and the progress line names this computer as such.
+                (root/'picker-choice').write_text('host\nlocal\n')
+                s.send('\x10')
+                seen=s.read_until(REQUEST)
+                match=REQUEST.search(seen)
+                assert match[3]==b'host-inline' and match[2]!=first[2]
+                if b'Ctrl-C to cancel' not in seen: seen+=s.read_until(b'Ctrl-C to cancel')
+                assert 'Opening a shell on this computer… Ctrl-C to cancel'.encode() in seen,seen
+                s.reply(match); done=s.read_until(b'READY> ')
+                assert ERASE in done,('the progress line was left behind',done)
+                if shell.endswith('zsh'):
+                    # The widget's localtraps ends with it: a user function's trap still holds after it.
+                    s.send("[[ -o localtraps ]] && printf 'LT_%s\\n' ON || printf 'LT_%s\\n' OFF\r")
+                    said=s.read_until(LT:=re.compile(rb'[\r\n]LT_(ON|OFF)\r?\n'))
+                    assert LT.search(said)[1]==b'OFF',('LOCAL_TRAPS leaked into the shell',said)
+                    if b'READY> ' not in said[LT.search(said).end():]: s.read_until(b'READY> ')
+                # The widget keeps its saved trap to itself.
+                s.send("[ -z \"${_hn_saved_int+x}\" ] && printf 'SV_%s\\n' CLEAN || printf 'SV_%s\\n' LEAKED\r")
+                said=s.read_until(SV:=re.compile(rb'[\r\n]SV_(CLEAN|LEAKED)\r?\n'))
+                assert SV.search(said)[1]==b'CLEAN',('the widget left _hn_saved_int behind',said)
+                if b'READY> ' not in said[SV.search(said).end():]: s.read_until(b'READY> ')
+                # Ctrl-C while the request is still being made says Cancelled, not a failure.
+                (root/'slow-od').touch()
+                (root/'picker-choice').write_text('host\nGone\n')
+                s.send('\x10')
+                s.read_until(b'Ctrl-C to cancel')
+                time.sleep(.3)    # od is running now
+                s.send('\x03')
+                said=s.read_until(b'Cancelled.',seconds=2)
+                assert b'Could not create' not in said,said
+                # zsh draws the prompt before its message; bash after it.
+                if shell.endswith('bash') and b'READY> ' not in said.split(b'Cancelled.',1)[1]: s.read_until(b'READY> ')
+                (root/'slow-od').unlink()
+                if not custom:
+                    # An answer that comes just as the shell gives up is used, not
+                    # reported as missing. (picker-ready gives up after 5 s.)
+                    s.send("_hn_request picker-ready; printf 'RC_%s\\n' $?\r")
+                    late=REQUEST.search(s.read_until(REQUEST))
+                    assert late[3]==b'picker-ready'
+                    s.read_until(re.compile(rb'633;hn;'+TOKEN.encode()+b';'+re.escape(late[2])+b';cancel;'),seconds=8)
+                    s.reply(late,'JUST_IN_TIME\n')
+                    said=s.read_until(RC:=re.compile(rb'[\r\n]RC_(\d+)\r?\n'),seconds=3)
+                    assert b'JUST_IN_TIME' in said and RC.search(said)[1]==b'0' and b'did not answer' not in said,said
+                    if b'READY> ' not in said[RC.search(said).end():]: s.read_until(b'READY> ')
+                # The widget's own Ctrl-C guard must not drop the user's INT trap.
+                s.send("trap 'echo MINE' INT\r"); s.read_until(b'READY> ')
+                s.send('\x10')
+                match=REQUEST.search(s.read_until(REQUEST))
+                s.reply(match); s.read_until(b'READY> ')
+                show='trap' if shell.endswith('zsh') else 'trap -p INT'
+                s.send("printf 'TRAP_%s\\n' BEGIN; "+show+"; printf 'TRAP_%s\\n' END\r")
+                kept=s.read_until(re.compile(rb'\nTRAP_END'))
+                assert b'echo MINE' in kept.split(b'TRAP_BEGIN',2)[-1],('the INT trap was lost',kept)
+                if b'READY> ' not in kept.rsplit(b'TRAP_END',1)[1]: s.read_until(b'READY> ')
+                s.send("trap - INT\r"); s.read_until(b'READY> ')
                 (root/'picker-choice').unlink()
                 (root/'picker-choice').write_text('sessions\nexternal:local:missing\n')
                 s.send('\x10')

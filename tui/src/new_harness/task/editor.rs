@@ -182,7 +182,9 @@ impl Editor {
         if self.free_scroll { self.scroll = self.scroll.min(rows.len().saturating_sub(area.height as usize)); }
         else { self.scroll = self.scroll.min(row).max(row.saturating_sub(area.height as usize - 1)); }
         if text.is_empty() {
-            view::put(buf, area.x, area.y, area.width, "What task should this agent work on?", muted);
+            // The scopes `@ : %` open, whole ones only, as the panel's query line shows its own.
+            let ghost = crate::settings::whole_parts("What should it do?   @ computer   : project   % model", area.width);
+            view::put(buf, area.x, area.y, area.width, &ghost, muted);
         } else {
             for (dy, line) in rows.iter().skip(self.scroll).take(area.height as usize).enumerate() {
                 view::put(buf, area.x, area.y + dy as u16, area.width, &line.text.replace('\t', "    "), base);
@@ -198,6 +200,18 @@ mod tests {
     use super::*;
     fn key(editor: &mut Editor, text: &mut String, code: KeyCode, modifiers: KeyModifiers) {
         assert!(editor.key(text, KeyEvent::new(code, modifiers), 8));
+    }
+    #[test]
+    fn the_empty_task_names_its_scopes_whole() {
+        let ghost = |w: u16| {
+            let area = Rect::new(0, 0, w, 1);
+            let mut buf = Buffer::empty(area);
+            Editor::default().draw(&mut buf, area, "", false, Style::default(), Style::default());
+            (0..w).map(|x| buf[(x, 0)].symbol()).collect::<String>().trim_end().to_string()
+        };
+        assert_eq!(ghost(60), "What should it do?   @ computer   : project   % model");
+        assert_eq!(ghost(40), "What should it do?   @ computer");
+        assert_eq!(ghost(20), "What should it do?");
     }
     #[test]
     fn editing_never_splits_a_grapheme_and_paste_preserves_newlines() {

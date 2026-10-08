@@ -5,6 +5,7 @@
 //! `#[fill=…]`, `#[push-default]` / `#[pop-default]` — laid out and trimmed as tmux does.
 
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -279,6 +280,23 @@ pub fn format_draw(expanded: &str, base: Style, avail: u16) -> (Vec<(String, Sty
 pub fn format_draw_over(expanded: &str, base: Style, avail: u16) -> Vec<Option<(String, Style)>> {
     const GAP: &str = "\u{1}";
     format_draw_on(expanded, base, avail, GAP).0.into_iter().map(|c| (c.0 != GAP).then_some(c)).collect()
+}
+
+/// format_draw_over as a `Line` of at most [avail] columns: a span for each run of one style,
+/// [under] (what is there already: a box's rule, its surface) where it writes nothing, and
+/// nothing after its last character.
+pub fn format_line(expanded: &str, base: Style, avail: u16, under: (&str, Style)) -> Line<'static> {
+    let mut cells = format_draw_over(expanded, base, avail);
+    while matches!(cells.last(), Some(None)) { cells.pop(); }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (symbol, style) in cells.into_iter().map(|c| c.unwrap_or_else(|| (under.0.to_string(), under.1))) {
+        if symbol.is_empty() { continue }   // a wide character's second column: its span has it
+        match spans.last_mut() {
+            Some(last) if last.style == style => last.content.to_mut().push_str(&symbol),
+            _ => spans.push(Span::styled(symbol, style)),
+        }
+    }
+    Line::from(spans)
 }
 
 /// format_width: the columns a format's text takes — its #[…] styles none, ## one.
