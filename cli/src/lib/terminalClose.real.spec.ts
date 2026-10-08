@@ -1,4 +1,5 @@
 import { screenFor } from '../engines/screens.js'
+import { inlineNativeControls } from '../testing/inlineNativeControls.js'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
@@ -62,7 +63,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     const stop = createStopAgentService({ registry, stoppedAgents,
       restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: backend,
       agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
-      forgetSession: id => registry.removeAgent(id), markDeleted() {}, clearDeleted() {},
+      forgetSession: id => registry.removeAgent(id), markDeleted() {}, clearDeleted() {}, stopNative: inlineNativeControls().stop,
     })
     close = new CloseAgentService({ registry, stop, changed() {},
       activity: async session => inspectCloseActivity(session, await control.captureTerminal(session.agentId), undefined, false),

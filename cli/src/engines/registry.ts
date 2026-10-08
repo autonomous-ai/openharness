@@ -3,6 +3,7 @@ import { questionControl as codexQuestionControl } from './codex/questionControl
 import { screen as claudeScreen } from './claude/screen.js'
 import { submission as claudeSubmission } from './claude/submission.js'
 import { submission as codexSubmission } from './codex/submission.js'
+import { nativeControl as codexNativeControl } from './codex/nativeControl.js'
 import { modelControl as claudeModelControl } from './claude/modelControl.js'
 import { modelControl as codexModelControl } from './codex/modelControl.js'
 import { screen as codexScreen } from './codex/screen.js'
@@ -19,7 +20,7 @@ import { runtime as codexRuntime } from './codex/runtimeProfile.js'
 /** Only the migrated engines. Others keep their existing handlers until their own small batch. */
 const engines = {
   claude: { name: 'claude', launch: engineLaunches.claude, transcript: claudeTranscript, hooks: engineHooks.claude, live: claudeLive, runtime: claudeRuntime, screen: claudeScreen, modelControl: claudeModelControl, questionControl: claudeQuestionControl, submission: claudeSubmission },
-  codex: { name: 'codex', launch: engineLaunches.codex, transcript: codexTranscript, hooks: engineHooks.codex, live: codexLive, runtime: codexRuntime, screen: codexScreen, modelControl: codexModelControl, questionControl: codexQuestionControl, submission: codexSubmission },
+  codex: { name: 'codex', launch: engineLaunches.codex, transcript: codexTranscript, hooks: engineHooks.codex, live: codexLive, runtime: codexRuntime, screen: codexScreen, modelControl: codexModelControl, questionControl: codexQuestionControl, submission: codexSubmission, nativeControl: codexNativeControl },
 } satisfies Record<string, Engine>
 type MigratedEngine = keyof typeof engines
 export function engineFor(name: string | null | undefined): Engine | undefined {

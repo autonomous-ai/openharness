@@ -21,6 +21,7 @@ export interface LifecycleDeps {
   tmuxBackend: StopAgentServiceDeps['tmuxBackend'] & ResumeAgentServiceDeps['tmuxBackend']
   agentReconciler: StopAgentServiceDeps['agentReconciler']
   forgetSession: StopAgentServiceDeps['forgetSession']
+  stopNative: StopAgentServiceDeps['stopNative']
   markDeleted: typeof markDeletedFn
   clearDeleted: typeof clearDeletedFn
   sessionCheckpoints: SessionCheckpointStore
@@ -41,7 +42,7 @@ export interface LifecycleDeps {
 }
 
 export function createAgentLifecycle({
-  registry, stoppedAgents, restartJobs, tmuxBackend, agentReconciler, forgetSession, markDeleted, clearDeleted,
+  registry, stoppedAgents, restartJobs, tmuxBackend, agentReconciler, forgetSession, markDeleted, clearDeleted, stopNative,
   sessionCheckpoints, mirror, sessionSearch, send, pinnedControls, retainExitedSession, announceSession,
   relaunchOverrides, prepareSessionResume, refreshGridWebSearch, attachDsh, attachSession, relaunchMarks,
 }: LifecycleDeps) {
@@ -53,7 +54,7 @@ export function createAgentLifecycle({
   const stopJobs = new Map<string, Promise<void>>()
   const stopAgent = createStopAgentService({
     registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
-    forgetSession, markDeleted, clearDeleted,
+    forgetSession, markDeleted, clearDeleted, stopNative,
   })
   const purgeAgentService = new PurgeAgentService({
     live: id => registry.byAgent(id), sessions: () => [...registry.list(), ...stoppedAgents.list()],

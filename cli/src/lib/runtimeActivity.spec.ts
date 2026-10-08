@@ -1,6 +1,7 @@
 import { readInlineScreen } from '../testing/inlineScreen.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CodexActivityReader, RuntimeActivityReader } from './runtimeActivity.js'
+import { RuntimeActivityReader } from './runtimeActivity.js'
+import { composedCodex } from '../testing/inlineNativeControls.js'
 import { registry, type RegisteredSession } from './registry.js'
 
 function session(): RegisteredSession {
@@ -16,7 +17,8 @@ function control() {
   const close = vi.fn()
   const rows = vi.fn(async () => [{ ...row.processIdentity!, parentPid: 1, args: 'codex resume conversation' }])
   const connect = vi.fn(async () => ({ request, close }))
-  const reader = new CodexActivityReader({ connect, rows, now: () => now })
+  // Codex's activity, read by its own control (in its worker) on the conversation the core identified.
+  const reader = composedCodex({ connect, rows, now: () => now })
   return { reader, row, request, close, rows, connect, advance: () => { now += 60_001 } }
 }
 describe('Codex activity RPC', () => {

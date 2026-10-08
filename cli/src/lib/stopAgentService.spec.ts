@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { stopSharedCodexSession } from './codexSessionLifecycle.js'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
 import { stoppedAgents } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
-vi.mock('./codexSessionLifecycle.js', () => ({ stopSharedCodexSession: vi.fn(async () => {}) }))
 vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: vi.fn(async session => session) }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
 let row: RegisteredSession
@@ -20,6 +18,7 @@ beforeEach(() => {
     tmuxBackend: { kill: vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const })) },
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: vi.fn(id => registry.removeAgent(id)), markDeleted: vi.fn(), clearDeleted: vi.fn(),
+    stopNative: vi.fn(async () => {}),
   }
   vi.mocked(terminateDeletedAgent).mockResolvedValue('gone')
 })
@@ -208,7 +207,7 @@ it('keeps the newer hook binding that arrives during capture', async () => {
 
 it('checks cancellation at the shared-server boundary and never signals after a failure there', async () => {
   let current = true
-  vi.mocked(stopSharedCodexSession).mockImplementationOnce(async (_row, guard) => {
+  vi.mocked(deps.stopNative).mockImplementationOnce(async (_row, guard) => {
     expect(guard()).toBe(true); current = false; expect(guard()).toBe(false)
     throw new Error('shared server could not stop')
   })

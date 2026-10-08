@@ -9,7 +9,7 @@ export interface SnapshotMethod<A> {
   /** The payload's own fields; `version` and the link's `requestId` are always allowed beside them. */
   fields: readonly string[]
   accepts(payload: Record<string, unknown>): boolean
-  answer(adapter: A, payload: Record<string, unknown>): unknown
+  answer(adapter: A, payload: Record<string, unknown>): unknown | Promise<unknown>
   valid(answer: unknown, payload: Record<string, unknown>): boolean
 }
 
@@ -50,7 +50,8 @@ export function snapshotRequests<A>(spec: SnapshotSpec<A>): ServiceRequests {
       return await Promise.race([deadline, (async () => {
         const adapter = await (loaded ??= spec.load().catch(error => { loaded = null; throw error }))
         if (closed?.aborted) return failure('ENGINE_UNAVAILABLE')
-        const answer = method.answer(adapter, payload)
+        const answer = await method.answer(adapter, payload)
+        if (closed?.aborted) return failure('ENGINE_UNAVAILABLE')
         const reply = { version: spec.version, answer }
         if (Buffer.byteLength(JSON.stringify(reply)) > spec.replyBytes) return failure('ENGINE_REPLY_TOO_LARGE')
         return method.valid(answer, payload) ? reply : failure('ENGINE_INVALID_REPLY')

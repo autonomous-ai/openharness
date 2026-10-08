@@ -1,6 +1,27 @@
+/**
+ * The stop of a shared Codex conversation, end to end inside one process: the core's broker (rows, identity,
+ * the grant's answers) with Codex's own control in process. These are the recorded cases of the former
+ * lib/codexSessionLifecycle.ts, unchanged: the move into the worker keeps every outcome and message.
+ */
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { stopSharedCodexSession, type CodexStopDeps } from './codexSessionLifecycle.js'
-import { registry, type RegisteredSession } from './registry.js'
+import { createNativeControl, type CodexControl } from '../../engines/codex/nativeControl.js'
+import { sessionCodexHome } from '../../lib/engineHomes.js'
+import { registry, type RegisteredSession } from '../../lib/registry.js'
+import { argvTokens, type ProcessRow } from '../../lib/tmux.js'
+import { createNativeControls } from './nativeControls.js'
+
+interface CodexStopDeps {
+  daemonIdentity(home: string): Promise<{ pid: number; processStartTime: string } | null>
+  rows(): Promise<ProcessRow[] | null>
+  connect(home: string): Promise<CodexControl>
+}
+/** The former entry point, composed of the pieces it was split into. */
+function stopSharedCodexSession(session: RegisteredSession, current: () => boolean, deps: CodexStopDeps,
+  confirmUnusedConversation?: (session: RegisteredSession) => Promise<boolean>): Promise<void> {
+  const control = createNativeControl({ connect: deps.connect, daemonIdentity: deps.daemonIdentity, now: () => 0 })
+  return createNativeControls({ call: async () => ({ error: 'SERVICE_UNAVAILABLE' }), handles: () => false, inline: () => control,
+    rows: deps.rows, home: sessionCodexHome, argv: argvTokens }).stop(session, current, confirmUnusedConversation)
+}
 let row: RegisteredSession
 let deps: CodexStopDeps
 let request: ReturnType<typeof vi.fn<(method: string, params?: Record<string, unknown>) => Promise<any>>>
