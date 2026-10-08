@@ -75,14 +75,14 @@ def preferences(vm, result):
     def ordinary_page(name):
         vm.command('hn-browser')
         text = wait_installer_screen(vm, r'Google', name, timeout=30)
-        assert not re.search(r'Connections', text, re.I), text
+        assert not re.search(r'Harness_', text, re.I), text
         close_browser(vm)
 
     choose('disabled')
     ordinary_page('browser-home-disabled')
     choose('enabled')
     vm.command('hn-browser')
-    wait_installer_screen(vm, r'Connections', 'browser-home-enabled')
+    wait_installer_screen(vm, r'Harness_', 'browser-home-enabled')
     close_browser(vm)
     choose('removed')
     ordinary_page('browser-home-removed')
@@ -108,8 +108,9 @@ def exercise(vm, result):
     try:
         vm.command('hn-browser')
         # The small subtitle can be split into separate OCR regions at the VM's
-        # resolution. The visible action label is distinct and read consistently.
-        wait_installer_screen(vm, r'Connections', 'browser-home-offline', timeout=45)
+        # resolution. The Harness wordmark is distinct and read consistently; Connections can
+        # also appear as a recently visited shortcut on Chromium's default page.
+        wait_installer_screen(vm, r'Harness_', 'browser-home-offline', timeout=45)
         vm.command('! pgrep -u "$(id -u)" -f ' + shlex.quote(r'^/usr/lib/chromium/chromium .*--headless'))
         vm.command('test ! -S "/run/user/$(id -u)/harness-browser-start/ready"')
         vm.command('! pgrep -u "$(id -u)" -f ' + shlex.quote(HELPER))
@@ -117,18 +118,18 @@ def exercise(vm, result):
         vm.click_word('browser-home-mouse', 'Connections')
         wait_installer_screen(vm, r'Connect once', 'browser-home-connections', timeout=30)
         vm.keys('ctrl', 'w')
-        wait_installer_screen(vm, r'Connections', 'browser-home-back')
+        wait_installer_screen(vm, r'Harness_', 'browser-home-back')
         helper_stopped(vm)
         # Closing the Connections tab returns to its action. Enter must work too.
         vm.keys('ret')
         wait_installer_screen(vm, r'Connect once', 'browser-home-keyboard-reopen', timeout=30)
         result['checks'].append('Mouse click and keyboard Enter open authenticated Connections in a new tab; closing it and helper expiry recover without a stale bookmark')
         vm.keys('ctrl', 't')
-        wait_installer_screen(vm, r'Connections', 'browser-home-new-tab')
+        wait_installer_screen(vm, r'Harness_', 'browser-home-new-tab')
         close_browser(vm)
         helper_stopped(vm)
         vm.command('hn-browser')
-        wait_installer_screen(vm, r'Connections', 'browser-home-restart')
+        wait_installer_screen(vm, r'Harness_', 'browser-home-restart')
         close_browser(vm)
         result['checks'].append('New Tab and the next browser launch keep the start page without an install or permission prompt')
         preferences(vm, result)
