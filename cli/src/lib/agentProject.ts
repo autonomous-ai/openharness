@@ -3,6 +3,7 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
+import { insideGitCheckout } from './gitProject.js'
 
 const exec = promisify(execFile)
 export type AgentProject = {
@@ -36,6 +37,9 @@ export function canonicalRepository(raw: string | null): string | null {
 
 /** Bounded subprocesses, no shell, network, or repository mutation. */
 async function runGit(cwd: string, args: string[]): Promise<string | null> {
+  // Every agent's folder is read here as it starts, and a fresh Mac's first harness runs in a
+  // folder with no `.git`: git's own answer there (exit 128), without running Apple's git stub.
+  if (!(await insideGitCheckout(cwd))) throw Object.assign(new Error('not a Git checkout'), { code: 128 })
   const environment = { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (environment as NodeJS.ProcessEnv)[key]
   const { stdout } = await exec('git', ['-C', cwd, ...args], {

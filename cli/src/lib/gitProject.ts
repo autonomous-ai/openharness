@@ -63,8 +63,11 @@ const worktrees = (path: string) => git(path, ['worktree', 'list', '--porcelain'
 const real = (path: string) => realpath(path).catch(() => normalize(path))
 const isDirectory = (path: string) => stat(path).then(info => info.isDirectory(), () => false)
 
-/** Whether `path` or a folder above it holds `.git`: a directory, or the file a linked worktree has. */
-async function insideGitCheckout(path: string): Promise<boolean> {
+/** Whether `path` or a folder above it holds `.git`: a directory, or the file a linked worktree has.
+ *  Checked before any `git` runs in a folder that may not be a checkout: on a Mac without the Command
+ *  Line Tools, `/usr/bin/git` is Apple's stub, and running it opens the "install the command line
+ *  developer tools" dialog in front of whatever the person is doing (fresh macOS VM, 2026-10-08). */
+export async function insideGitCheckout(path: string): Promise<boolean> {
   for (let dir = path; ; dir = dirname(dir)) {
     if (await stat(join(dir, '.git')).then(() => true, () => false)) return true
     if (dirname(dir) === dir) return false

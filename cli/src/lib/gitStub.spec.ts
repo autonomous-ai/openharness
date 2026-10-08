@@ -1,0 +1,49 @@
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { agentProject } from './agentProject.js'
+import { readGitPullRequest } from './gitPullRequest.js'
+import { projectPreview } from './projectPreview.js'
+
+// On a Mac without the Command Line Tools, `/usr/bin/git` is Apple's stub: running it opens the
+// "install the command line developer tools" dialog. A fresh Mac's first harness runs in a folder
+// with no `.git`, and the daemon read it with git as the harness started (fresh macOS VM,
+// 2026-10-08). A `git` on PATH that records being run stands in for the stub.
+describe('a folder with no .git runs no git', () => {
+  let root: string
+  let calls: string
+  let path: string | undefined
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'harness-git-stub-')))
+    calls = join(root, 'git-calls')
+    await mkdir(join(root, 'bin'))
+    await writeFile(join(root, 'bin', 'git'), `#!/bin/sh\necho "$*" >> '${calls}'\nexit 1\n`)
+    await chmod(join(root, 'bin', 'git'), 0o755)
+    await mkdir(join(root, 'project'))
+    path = process.env.PATH
+    process.env.PATH = `${join(root, 'bin')}:${path}`
+  })
+  afterEach(async () => {
+    process.env.PATH = path
+    await rm(root, { recursive: true, force: true })
+  })
+  const ran = () => readFile(calls, 'utf8').catch(() => '')
+
+  it('when an agent starts there', async () => {
+    expect((await agentProject(join(root, 'project'))).root).toBeNull()
+    expect(await ran()).toBe('')
+  })
+
+  it('when its pane is read for a pull request', async () => {
+    expect(await readGitPullRequest(join(root, 'project'))).toEqual({ status: 'unavailable' })
+    expect(await ran()).toBe('')
+  })
+
+  it('when the project picker previews it', async () => {
+    const preview = await projectPreview(join(root, 'project'), [root])
+    expect(preview).toMatchObject({ path: join(root, 'project') })
+    expect(preview).not.toHaveProperty('branch', expect.anything())
+    expect(await ran()).toBe('')
+  })
+})

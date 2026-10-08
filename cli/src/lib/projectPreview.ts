@@ -4,6 +4,7 @@ import { constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
+import { insideGitCheckout } from './gitProject.js'
 import { withinRoots } from './pathContainment.js'
 
 const exec = promisify(execFile)
@@ -33,7 +34,10 @@ export async function projectPreview(path: string, knownRoots: string[] = []) {
       }
       if (++seen >= 200) break
     }
+    // Any folder the picker previews, a checkout or not (insideGitCheckout).
+    const checkout = await insideGitCheckout(target)
     const git = async (args: string[]) => {
+      if (!checkout) return undefined
       try {
         return (await exec('git', ['--no-optional-locks', '-c', 'core.fsmonitor=false', '-C', target, ...args], {
           timeout: 2000, maxBuffer: 32 * 1024,
