@@ -48,8 +48,9 @@ before this change. It covers 43 states each file can be in: none, empty, malfor
 only, our old hook, ours current, duplicates, mixed, symlinked, dangling, read-only, unreadable,
 private, a folder, and a leftover temporary file. Each installs twice through `installIn`, and 7 of them
 through the default home too. It keeps every file's bytes, mode and symlink, the log lines and what
-threw. It passes unchanged against the kit, and so does a seeded run of 1,000 generated files per
-engine recorded the same way. Changing any one of the contract's fields fails it.
+threw. It passes unchanged against the kit. So does a seeded run, not committed, of 500 generated files
+per engine through both entry points, recorded from the former installers the same way. Flipping any one
+of the differences in the table above fails it.
 
 **Kept as they were, not fixed here:**
 - Claude Code replaces a settings file it cannot read or parse, the person's other settings with it.
