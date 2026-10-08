@@ -399,18 +399,26 @@ def overlay_dismiss_journey(alpha):
     print('PASS workspace: overlay dismissal and pane actions consume the complete mouse click', flush=True)
 
 
-def title_drag_journey(alpha, beta):
+def title_drag_journey(alpha, beta, look='line'):
     original = value('#{window_layout}')
     border = hn('show', '-gv', '@hn-border', ok=False)
-    hn('set', '-g', '@hn-border', 'line')
+    hn('set', '-g', '@hn-border', look)
     hn('select-layout', 'even-vertical')
     x, top = map(int, value('#{pane_left} #{pane_top}', beta).split())
-    wait(lambda: 'Beta task' in screen().splitlines()[top - 1], 'lower title is painted at its divider')
+    # The line look's title is the divider row above the pane; the box look's frame, with the title
+    # in it, sits on that same row.
+    corner = {'line': '─', 'box': '┌'}[look]
+    wait(lambda: 'Beta task' in screen().splitlines()[top - 1] and corner in screen().splitlines()[top - 1],
+         f'lower {look} title is painted at its divider')
     before = len(api()['inputs'])
+    # The line right of the name (the name itself drags the pane).
+    line = screen().splitlines()[top - 1]
+    col = next(c for c in range(line.index('Beta task') + len('Beta task') + 1, x + int(value('#{pane_width}', beta)) - 7)
+               if line[c] == '─')
     for code, row, ending in [(0, top - 1, 'M'), (32, top + 1, 'M'), (0, top + 1, 'm')]:
-        raw = f'\x1b[<{code};{x + 5};{row + 1}{ending}'.encode()
+        raw = f'\x1b[<{code};{col + 1};{row + 1}{ending}'.encode()
         tmux('send-keys', '-H', '-t', TARGET, *[f'{b:02x}' for b in raw])
-    wait(lambda: int(value('#{pane_top}', beta)) == top + 2, 'dragging the plain title resizes its divider')
+    wait(lambda: int(value('#{pane_top}', beta)) == top + 2, f'dragging the {look} title beside its name resizes its divider')
     assert len(api()['inputs']) == before, 'title drag must not reach the terminal program'
     hn('select-layout', original)
     if border:
@@ -420,7 +428,86 @@ def title_drag_journey(alpha, beta):
     hn('select-pane', '-t', alpha)
     wait(lambda: value('#{window_layout}') == original, 'restore layout after title drag')
     wait(lambda: painted_workspace(alpha, beta), 'restored layout paints both pane titles')
-    print('PASS workspace: plain title divider drags retain tmux resize behavior', flush=True)
+    print(f'PASS workspace: {"plain" if look == "line" else look} title divider drags retain tmux resize behavior', flush=True)
+
+
+def pane_drag_journey(alpha, beta):
+    original = value('#{window_layout}')
+    border = hn('show', '-gv', '@hn-border', ok=False)
+    hn('set', '-g', '@hn-border', 'box')
+    hn('select-pane', '-t', alpha)
+
+    def box(pane):
+        return tuple(map(int, value('#{pane_left} #{pane_top} #{pane_width} #{pane_height}', pane).split()))
+
+    def name_cell(pane, name):
+        # The name in the pane's header, above its first row (the box frame adds one), once painted there.
+        x, y, w, _ = box(pane)
+        lines = screen().splitlines()
+        for row in range(y - 1, max(y - 4, -1), -1):
+            index = lines[row].find(name) if row < len(lines) else -1
+            if index >= 0 and x - 1 <= width(lines[row][:index]) <= x + w:
+                return width(lines[row][:index]) + 2, row
+        return None
+
+    def held(pane, name):
+        wait(lambda: name_cell(pane, name), f'{name} title is painted over its pane')
+        return name_cell(pane, name)
+
+    def drag(start, end):
+        (sx, sy), (ex, ey) = start, end
+        for code, x, y, ending in [(0, sx, sy, 'M'), (32, sx + 2, sy + 1, 'M'), (32, ex, ey, 'M'), (0, ex, ey, 'm')]:
+            raw = f'\x1b[<{code};{x + 1};{y + 1}{ending}'.encode()
+            tmux('send-keys', '-H', '-t', TARGET, *[f'{b:02x}' for b in raw])
+
+    def ids(*target):
+        return hn('list-panes', *target, '-F', '#{pane_id}').splitlines()
+
+    before = len(api()['inputs'])
+    x, y, w, h = box(beta)
+    drag(held(alpha, 'Alpha task'), (x + w // 2, y + h // 2))
+    wait(lambda: ids() == [beta, alpha], 'dropping on the middle of Beta swaps the two panes')
+    assert value('#{pane_active}', alpha) == '1', 'the held pane keeps the focus after a swap'
+    hn('select-pane', '-t', beta)
+    x, y, w, h = box(beta)
+    drag(held(alpha, 'Alpha task'), (x + w // 2, y + h - 2))
+    wait(lambda: box(alpha)[0] == box(beta)[0] and box(alpha)[1] > box(beta)[1],
+         "dropping on Beta's bottom quarter puts Alpha below it")
+    assert value('#{pane_active}', alpha) == '1', 'the held pane is focused where it lands'
+    print('PASS workspace: dropping a pane by its name swaps it or puts it beside another', flush=True)
+
+    # A tab: Beta in a window of its own is dropped on this window's name in the status bar.
+    hn('swap-pane', '-s', alpha, '-t', beta)
+    hn('select-layout', original)
+    number = value('#{window_index}', alpha)
+    hn('break-pane', '-d', '-n', 'Dragged', '-s', beta)
+    hn('select-window', '-t', 'Dragged')
+
+    def tab():
+        # The status bar's " N:name" cell of this window (the clock's "10:17" is not one).
+        lines = screen().splitlines()
+        for row in range(len(lines) - 1, len(lines) - 3, -1):
+            if (index := lines[row].find(f' {number}:')) >= 0:
+                return width(lines[row][:index]) + 3, row
+        return None
+    wait(lambda: value('#{window_name}') == 'Dragged' and tab(), f'the status bar shows tab {number}')
+    drag(held(beta, 'Beta task'), tab())
+    wait(lambda: beta in ids('-t', f':{number}'), f'dropping on the tab moves Beta into window {number}')
+    wait(lambda: 'Dragged' not in hn('list-windows', '-F', '#{window_name}').splitlines(),
+         'the window Beta left, with no pane, closes')
+    assert value('#{window_index}') == number and value('#{pane_active}', beta) == '1', \
+        'the view follows the held pane into its window, focused there'
+    assert ids('-t', f':{number}') == [alpha, beta], ids('-t', f':{number}')
+    assert len(api()['inputs']) == before, ('a pane drag must not reach the terminal program', api()['inputs'][before:])
+    hn('select-layout', original)
+    if border:
+        hn('set', '-g', '@hn-border', border)
+    else:
+        hn('set', '-gu', '@hn-border')
+    hn('select-pane', '-t', alpha)
+    wait(lambda: value('#{window_layout}') == original, 'restore layout after pane drags')
+    wait(lambda: painted_workspace(alpha, beta), 'restored layout paints both pane titles')
+    print('PASS workspace: dropping a pane on a tab moves it into that window', flush=True)
 
 
 mock = None
@@ -470,6 +557,11 @@ try:
     if '--title-drag' in sys.argv:
         api({'action': 'terminal-mouse'})
         title_drag_journey(alpha, beta)
+        title_drag_journey(alpha, beta, 'box')
+        sys.exit(0)
+    if '--pane-drag' in sys.argv:
+        api({'action': 'terminal-mouse'})
+        pane_drag_journey(alpha, beta)
         sys.exit(0)
 
     machine_prompt_journey()
@@ -631,6 +723,8 @@ try:
     api({'action': 'terminal-mouse'})
     overlay_dismiss_journey(alpha)
     title_drag_journey(alpha, beta)
+    title_drag_journey(alpha, beta, 'box')
+    pane_drag_journey(alpha, beta)
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
     before = len(api()['inputs'])
     click(x + 4, y + 4)

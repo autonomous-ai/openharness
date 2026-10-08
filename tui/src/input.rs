@@ -24,6 +24,14 @@ pub fn handle(app: &mut App, event: CEvent) {
         // A key is the session's activity (session_update_activity): a script's command with no -t
         // goes to the session used last.
         CEvent::Key(key) if key.kind != KeyEventKind::Release => {
+            // Escape lets go of a held pane (and is used up only when a drag was showing); the
+            // release that follows still belongs to the header press.
+            if key.code == KeyCode::Esc {
+                if let Some(live) = app.controls.grab.as_ref().map(|g| g.live) {
+                    crate::pane_drag::cancel(app);
+                    if live { return }
+                }
+            }
             let now = crate::app::epoch_secs();
             // (This client used now: a shell's command with no target comes here — each second.)
             if now != app.session_activity { crate::ipc::mark_active() }
@@ -3994,5 +4002,18 @@ mod tests {
         assert_eq!(picker.theme_in.as_deref(), Some("theme"), "Enter opened the section");
         assert!(picker.rows.iter().all(|r| r.id.starts_with("theme:")), "the section's options show");
         assert!(picker.rows.iter().any(|r| r.lead.iter().any(|s| s.content.as_ref() == "✓ ")), "the current option is marked");
+    }
+
+    /// Focus-in and a resize each ask the main loop for a full repaint: `redraw_all`, one flag the
+    /// loop takes once per pass, so requests in one pass are one repaint.
+    #[test]
+    fn focus_in_and_a_resize_ask_for_a_repaint() {
+        let (sink, _) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(19789, sink, (100, 30));
+        for event in [CEvent::FocusGained, CEvent::Resize(100, 30)] {
+            app.redraw_all = false;
+            handle(&mut app, event.clone());
+            assert!(app.redraw_all, "{event:?}");
+        }
     }
 }

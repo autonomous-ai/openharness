@@ -191,6 +191,7 @@ fn box_set(lines: &str) -> (&'static str, &'static str, &'static str, &'static s
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     crate::workspace_controls::begin_frame(app);
+    crate::pane_drag::let_go_if_gone(app);
     theme::begin_animation_frame(app.options.animations());
     app.renumber();
     // automatic-rename as of this frame: a pane that went into a mode ([tmux]) or out of one is
@@ -232,6 +233,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // The status bar down a side, and the tabs over the panes beside it.
     crate::bar::draw(buf, app);
     if let Some(Modal::DisplayPanes { .. }) = &app.modal { display_panes(buf, app) }
+    crate::pane_drag::draw(buf, app);
     let search_busy = app.said_due.is_some() || app.said_pending > 0;
     let msg_style = app.message_style();
     if let Some(Modal::Picker { kind, mut picker }) = app.modal.take_if(|m| matches!(m, Modal::Picker { kind, .. } if crate::settings::is_panel(kind))) {
@@ -287,7 +289,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     // (Not under @hn-look tmux unless @hn-hint-time asks for it: tmux shows nothing after the prefix.)
     let hints = !(app.options.tmux_look() && app.options.get("@hn-hint-time", "", None).is_none());
-    if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) }
+    let hinted = if hints && app.prefix && app.prefix_at.map(|t| t.elapsed() >= Duration::from_millis(app.keymap.hint_ms)).unwrap_or(false) { which_key(buf, app, body) } else { None };
     // `set -g status off`: no status line — a prompt or a message still borrows the last row.
     let hidden = app.status_lines() == 0;
     let speaking = matches!(&app.modal, Some(Modal::Prompt(p)) if !p.dialog()) || matches!(app.modal, Some(Modal::Confirm { .. })) || app.toast.as_ref().map(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms())).unwrap_or(false);
@@ -297,8 +299,33 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(Modal::Menu(m)) = &app.modal { menu(buf, app, m) }
     if let Some(Modal::NewHarness(form)) = &mut app.modal { cursor = crate::new_harness::draw(buf, body, form); }
     if let Some(pos) = draw_prompt(buf, app) { cursor = Some(pos) }
+    app.overlay_drawn = overlay_area(app, area, body, status, hinted);
     if let Some(pos) = cursor { frame.set_cursor_position(pos) }
     crate::devices::cancel_unfit(app);
+}
+
+/// Where this frame drew an overlay, for the settle rewrite: one that is gone or no longer covers
+/// the cells it did may have left some kept wrongly (see `app::settle_due`). [hints]: the prefix's
+/// key hints, when drawn.
+fn overlay_area(app: &App, screen: Rect, body: Rect, status: Rect, hints: Option<Rect>) -> Option<Rect> {
+    let spoken = app.toast.as_ref().is_some_and(|(_, _, at)| at.elapsed() < Duration::from_millis(app.toast_ms()));
+    let area = match &app.modal {
+        Some(Modal::Picker { picker, .. }) => Some(picker.screen_area.get()),
+        // (Drawn clipped to the screen: a box placed past its edge. A confirmation's box is two rows
+        // taller, for its blank row and its buttons.)
+        Some(Modal::Menu(m)) if m.buttons.is_some() => Some(crate::workspace_menu::dialog_box(m).intersection(screen)),
+        Some(Modal::Menu(m)) => Some(Rect::new(m.x, m.y, m.width + 4, m.items.len() as u16 + 2).intersection(screen)),
+        Some(Modal::NewHarness(form)) => Some(form.drawn_area()),
+        Some(Modal::Popup { x, y, width, height, .. }) => Some(Rect::new(*x, *y, *width, *height).intersection(screen)),
+        // (hn's own questions are dialogs over the panes; tmux's prompts take the status line.)
+        Some(Modal::Prompt(p)) if p.dialog() => prompt_layout(app).map(|(r, _)| r),
+        Some(Modal::Prompt(_)) | Some(Modal::Confirm { .. }) => Some(status),
+        Some(Modal::DisplayPanes { .. }) => Some(body),
+        Some(Modal::Copy { .. }) | None if spoken => Some(status),
+        Some(Modal::Copy { .. }) | None => None,
+    };
+    let area = area.filter(|r| r.width > 0 && r.height > 0);
+    match (area, hints.filter(|r| r.width > 0 && r.height > 0)) { (Some(a), Some(h)) => Some(a.union(h)), (a, h) => a.or(h) }
 }
 
 /// tmux's menu (menu_draw_cb, screen_write_menu, screen_write_box): a box width + 4 wide at its
@@ -417,8 +444,8 @@ fn confirmation<'a>(m: &crate::modal::Menu, row: &'a crate::buttons::Row, lines:
 
 /// A pause after the prefix: every key that can come next, from the live table (your binds too),
 /// in a box over the bottom of the window — tmux's keys, with the hint zellij users praise.
-fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
-    if body.width < 16 || body.height < 4 { return }
+fn which_key(buf: &mut Buffer, app: &App, body: Rect) -> Option<Rect> {
+    if body.width < 16 || body.height < 4 { return None }
     let mut items: Vec<(String, String)> = Vec::new();
     let mut digits = false;
     for b in &app.keymap.prefix_table {
@@ -472,6 +499,7 @@ fn which_key(buf: &mut Buffer, app: &App, body: Rect) {
         let room = col_w - key_w - 3;
         buf.set_stringn(x + key_w as u16 + 1, y, clip(what, room), room, Style::default().fg(pal.foreground).bg(pal.surface));
     }
+    Some(area)
 }
 
 
@@ -575,7 +603,9 @@ fn pane_chrome(buf: &mut Buffer, app: &App) {
         let marker = if app.marked == Some(*id) { "◆" } else { " " };
         if title.width > 0 { if let Some(cell) = buf.cell_mut((title.x, title.y)) { cell.set_symbol(marker).set_style(style); } }
         let text = Rect::new(title.x + 1.min(title.width), title.y, title.width.saturating_sub(2), 1);
-        title_line(buf, app, *id, text, style);
+        let name = title_line(buf, app, *id, text, style);
+        // (The whole header row drags the pane, but for its name only where it is a divider.)
+        crate::workspace_controls::name_span_on_divider(app, *id, name);
     }
 }
 
@@ -603,7 +633,9 @@ fn borders(buf: &mut Buffer, app: &App, body: Rect) {
         let style = border_style(app, t.active);
         let (x, y) = (body.x + t.x as u16, body.y + t.y as u16);
         for (k, g) in t.fill.iter().enumerate() { if let Some(cell) = buf.cell_mut((x + k as u16, y)) { cell.set_symbol(g).set_style(style); } }
-        title_line(buf, app, t.pane, Rect::new(x, y, t.width as u16, 1), style);
+        let name = title_line(buf, app, t.pane, Rect::new(x, y, t.width as u16, 1), style);
+        // (Only the name drags the pane: the line after it is the divider, which resizes.)
+        crate::workspace_controls::name_span(app, t.pane, name);
     }
 }
 
@@ -635,15 +667,18 @@ fn border_style(app: &App, active: bool) -> Style {
 /// name, its state symbol, and as far as the pane is wide, its project and branch), drawn as
 /// screen_redraw_make_pane_status draws it — format_draw over the border, so #[align=right],
 /// #[align=centre] and #[fill] place it as tmux does, the border showing wherever the format
-/// writes nothing.
-fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
-    if area.width == 0 { return }
+/// writes nothing. Returns how many leading cells the format drew (the name).
+fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) -> u16 {
+    if area.width == 0 { return 0 }
     let area = crate::workspace_controls::title(buf, app, id, area, style);
-    let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return };
+    let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return 0 };
     let expanded = crate::format::expand(app, &fmt, app.active, Some(id), true);
-    for (i, cell) in crate::draw::format_draw_over(&expanded, style, area.width).into_iter().enumerate() {
+    let cells = crate::draw::format_draw_over(&expanded, style, area.width);
+    let drawn = cells.iter().position(|c| c.is_none()).unwrap_or(cells.len()) as u16;
+    for (i, cell) in cells.into_iter().enumerate() {
         if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((area.x + i as u16, area.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
     }
+    drawn
 }
 
 // ── box panes ──
@@ -684,6 +719,8 @@ fn boxes(buf: &mut Buffer, app: &App) {
         let cells = crate::draw::format_draw_over(&expanded, words, t.width);
         // ` title `: a blank after the words where the line would run on.
         let end = cells.iter().position(|c| c.is_none()).unwrap_or(cells.len());
+        // (The whole header row drags the pane, but for its name only where it is a divider.)
+        crate::workspace_controls::name_span_on_divider(app, id, end as u16);
         for (i, cell) in cells.into_iter().enumerate() {
             if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((t.x + i as u16, t.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
         }
@@ -3253,6 +3290,73 @@ mod theme_render_tests {
         assert!(matches!(kind, PickerKind::Commands), "{s}");
         assert_eq!(picker.current_id().as_deref(), Some("cmd:theme"));
         assert_eq!(picker.screen_area.get(), at, "back in the palette's place");
+    }
+
+    /// A panel whose rows drop from 10 to 2 is smaller in the next frame: the cells it covered
+    /// before are owed one settle rewrite; the same panel again, or a bigger one, owes none.
+    #[test]
+    fn a_panel_that_shrinks_or_closes_owes_one_settle_rewrite() {
+        let t0 = std::time::Instant::now();
+        let mut app = app();
+        let open = |app: &mut App, n: usize| {
+            let mut picker = Picker::new("layout", "");
+            picker.set_rows((0..n).map(|i| crate::picker::Row::new(&format!("r{i}"), &format!("row {i}"))).collect());
+            app.modal = Some(Modal::Picker { kind: PickerKind::Layout, picker });
+        };
+        assert_eq!(app.overlay_drawn, None);
+        open(&mut app, 10);
+        screen(&mut app);
+        let ten = app.overlay_drawn.expect("a panel was drawn");
+        open(&mut app, 10);
+        screen(&mut app);
+        assert_eq!(crate::app::settle_due(Some(ten), app.overlay_drawn, 5, None, t0), None, "the same panel");
+        open(&mut app, 2);
+        screen(&mut app);
+        let two = app.overlay_drawn.expect("a panel was drawn");
+        assert!(two.height < ten.height, "{two:?} {ten:?}");
+        assert_eq!(crate::app::settle_due(Some(ten), Some(two), 5, None, t0), Some(t0), "10 rows down to 2");
+        assert_eq!(crate::app::settle_due(Some(two), Some(ten), 5, None, t0), None, "2 up to 10 covers what it did");
+        app.modal = None;
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, None);
+        assert_eq!(crate::app::settle_due(Some(two), app.overlay_drawn, 5, None, t0), Some(t0), "closed");
+    }
+
+    /// The rect kept for the settle rewrite is where the frame drew: a menu or popup placed past
+    /// the screen's edge is clipped to it, as drawn; the prefix's key hints are an overlay too.
+    #[test]
+    fn the_overlay_rect_is_on_the_screen_and_takes_in_the_key_hints() {
+        let mut app = app();
+        let whole = Rect::new(0, 0, 150, 42);
+        let items = (0..3).map(|i| modal::MenuItem { label: format!("item {i}"), key: String::new(), command: String::new(), disabled: false, separator: false }).collect();
+        app.modal = Some(Modal::Menu(modal::Menu { title: "m".into(), items, choice: None, x: 140, y: 40, width: 20, stay_open: false, no_mouse: false, mouse: None, tree: None, complete: None, responsive: None, buttons: None }));
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, Some(Rect::new(140, 40, 10, 2)), "the menu, clipped to the screen");
+        // A confirmation's box is two rows taller than a menu's (its blank row and buttons); hn's
+        // own question is a dialog over the panes, not the status line.
+        let button = |label: &str| crate::buttons::Button { label: label.into(), key: None };
+        let row = crate::buttons::Row { buttons: vec![button("Cancel"), button("Stop")], chosen: 0, hint: String::new() };
+        assert!(crate::workspace_menu::open_buttons(&mut app, "Close Tab", vec![crate::workspace_menu::note("Working")], row, vec!["x".into(), "y".into()]));
+        screen(&mut app);
+        let Some(Modal::Menu(m)) = &app.modal else { panic!("the confirmation") };
+        assert_eq!(app.overlay_drawn, Some(crate::workspace_menu::dialog_box(m)));
+        app.modal = None;
+        crate::input::run(&mut app, "rename-tab");
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, prompt_layout(&app).map(|(r, _)| r));
+        assert!(app.overlay_drawn.is_some_and(|r| r.y < app.body().bottom()), "over the panes");
+        app.modal = None;
+        app.modal = Some(Modal::Popup { pane: 999, x: 130, y: 35, width: 40, height: 20, border: true, title: String::new(), look: Default::default() });
+        screen(&mut app);
+        assert_eq!(app.overlay_drawn, Some(Rect::new(130, 35, 20, 7)), "the popup, clipped to the screen");
+        assert!(app.overlay_drawn.is_some_and(|r| r.intersection(whole) == r));
+        app.modal = None;
+        app.prefix = true;
+        app.prefix_at = Some(std::time::Instant::now() - Duration::from_secs(5));
+        let s = screen(&mut app);
+        let hints = app.overlay_drawn.unwrap_or_else(|| panic!("the key hints are an overlay:\n{s}"));
+        let body = app.body();
+        assert_eq!((hints.x, hints.width, hints.bottom()), (body.x, body.width, body.bottom()), "{hints:?} {body:?}");
     }
 
     // ── tabs ──

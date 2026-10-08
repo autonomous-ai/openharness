@@ -295,8 +295,22 @@ def scenario(mode, port, read_only=False):
             # The shared identities, not the saved tmux IDs, decide placement.
             start(peer=True)
             wait(lambda: names(peer=True) == desk_names(), 'reopened client follows shared order')
+            # A pane dropped on another's bottom quarter (join-pane -v): the open peer stacks them too.
+            (source, upper), (target, lower) = [r[:2] for r in placed()[:2]]
+
+            def stacked(peer=False):
+                cells = {r[1]: (int(r[2]), int(r[3])) for r in placed(peer)}
+                a, b = cells.get(upper), cells.get(lower)
+                return bool(a and b) and a[0] == b[0] and a[1] > b[1]
+
+            def order(peer=False):
+                return [r.split('|')[1] for r in hn('list-panes', '-F', '#{pane_id}|#{pane_title}', peer=peer).splitlines()]
+            hn('join-pane', '-v', '-s', source, '-t', target)
+            wait(stacked, 'join-pane stacks the dropped pane below its target')
+            wait(lambda: order() == desk_names(), 'join-pane publishes pane order')
+            wait(lambda: stacked(peer=True) and order(peer=True) == desk_names(), 'the peer shows the joined layout')
             hn('kill-server', peer=True, ok=False)
-            print('PASS normal: fresh client agrees with desktop after reorder', flush=True)
+            print('PASS normal: fresh client agrees with desktop after reorder, and follows a join-pane', flush=True)
 
         # The reported case: a two-pane window, with the desktop serializing only
         # presets/sizes and dropping hn's native geometry a few seconds later.
