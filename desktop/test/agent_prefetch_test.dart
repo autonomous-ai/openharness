@@ -204,6 +204,38 @@ void main() {
       install.finish(0);
     });
 
+    group('a computer that already has an agent engine', () {
+      late Directory home;
+      setUp(() => home = Directory.systemTemp.createTempSync('prefetch-home-'));
+      tearDown(() => home.deleteSync(recursive: true));
+      void touch(String path) =>
+          File('${home.path}/$path')..createSync(recursive: true);
+
+      test('a bare home has none', () {
+        expect(
+          AgentPrefetch.alreadyHasAnAgent(home.path, prefixes: const []),
+          isFalse,
+        );
+      });
+      for (final path in [
+        '.local/bin/claude',
+        '.local/bin/codex',
+        '.claude/settings.json',
+        '.codex/config.toml',
+        '.nvm/versions/node/v22.1.0/bin/codex',
+        '.opencode/bin/opencode',
+        '.harness/cli/cli.js',
+      ]) {
+        test('~/$path counts', () {
+          touch(path);
+          expect(
+            AgentPrefetch.alreadyHasAnAgent(home.path, prefixes: const []),
+            isTrue,
+          );
+        });
+      }
+    });
+
     test('its recipe is the CLI recipe for OpenCode, and lands where the CLI looks for it', () {
       final cli = File('../cli/src/lib/engineInstall.ts').readAsStringSync();
       final block = cli.substring(

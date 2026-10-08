@@ -25,7 +25,7 @@ class AgentPrefetch {
   }) : _start =
            start ??
            ((executable, arguments) => Process.start(executable, arguments)),
-       _skip = skip ?? _alreadyHasAnAgent,
+       _skip = skip ?? (() => alreadyHasAnAgent(_home)),
        _installed = installed ?? _openCodeDownloaded,
        _log = log ?? ((_) {}),
        _now = now ?? DateTime.now;
@@ -112,26 +112,50 @@ class AgentPrefetch {
   }
 
   /// Nothing to download for: Harness has run here before (its CLI folder), or the person already
-  /// has an agent. Claude Code or Codex (their folders, which any use of them leaves), or OpenCode
-  /// in any place it installs to or has kept its data in. A false "new" costs a download, so this
-  /// errs towards skipping.
-  static bool _alreadyHasAnAgent() {
-    final home = _home;
+  /// has an agent engine. The owner's rule (2026-10-08): only download OpenCode when there is no
+  /// agent engine yet. So Claude Code or Codex installed counts even if never signed in or run:
+  /// their folders, their programs where their installers and Homebrew put them, and npm installs
+  /// under nvm. OpenCode counts anywhere it installs to or has kept its data in. A false "new" costs
+  /// a download, so this errs towards skipping.
+  static bool alreadyHasAnAgent(
+    String? home, {
+    List<String> prefixes = const ['/opt/homebrew/bin', '/usr/local/bin'],
+  }) {
     if (home == null) return true;
+    final programs = [
+      for (final name in const ['claude', 'codex', 'opencode']) ...[
+        '$home/.local/bin/$name',
+        for (final prefix in prefixes) '$prefix/$name',
+        ..._nvmBins(home).map((bin) => '$bin/$name'),
+      ],
+    ];
     return [
       '$home/.harness/cli',
       '$home/.claude',
       '$home/.codex',
+      '$home/.claude/local/claude',
       '$home/.opencode/bin/opencode',
-      '$home/.local/bin/opencode',
       '$home/.bun/bin/opencode',
       '$home/.config/opencode',
       '$home/.local/share/opencode',
-      '/opt/homebrew/bin/opencode',
-      '/usr/local/bin/opencode',
+      ...programs,
     ].any(
       (path) =>
           FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound,
     );
+  }
+
+  /// `~/.nvm/versions/node/<version>/bin`: where `npm install -g` puts Claude Code and Codex for
+  /// someone on nvm, whose login shell Harness does not run here.
+  static Iterable<String> _nvmBins(String home) {
+    final versions = Directory('$home/.nvm/versions/node');
+    try {
+      return versions
+          .listSync(followLinks: false)
+          .whereType<Directory>()
+          .map((version) => '${version.path}/bin');
+    } on FileSystemException {
+      return const [];
+    }
   }
 }
