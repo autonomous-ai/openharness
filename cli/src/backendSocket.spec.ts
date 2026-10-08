@@ -13,6 +13,7 @@ import { wholeHistoryPage } from './core/transcripts/history.js'
 import { grokMessagesToEvents } from './engines/grok/normalizer.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
 import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
+import { classifyGridAssignment } from './lib/gridAssignment.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
@@ -3317,10 +3318,10 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
 describe('a move onto a grid model asks models where it goes', () => {
   /** A daemon whose models is a stub, asked over a local frame. Where the move goes, grid's set-up before
    *  it and the prewarm after it are the models service's (services/models.spec.ts). */
-  function daemon(moveTarget: ModelsPort['moveTarget'] | null) {
+  function daemon(moveTarget: ModelsPort['moveTarget'] | null, apiTarget: ModelsPort['apiTarget'] = () => Promise.reject(new Error('no APIs'))) {
     const socket = relaySocket('token')
     const moved = vi.fn()
-    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved, apiTarget: () => Promise.reject(new Error('no APIs')) })
+    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved, apiTarget })
     const retargeted = vi.fn(async (_request: { agentId: string; grid: unknown }) => ({ ok: true as const }))
     socket.onRetargetAgent = retargeted
     const frames: Array<Record<string, unknown>> = []
@@ -3366,6 +3367,36 @@ describe('a move onto a grid model asks models where it goes', () => {
       const d = daemon(down)
       expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
         .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'Models are unavailable. Try again.' })
+      expect(d.retargeted).not.toHaveBeenCalled()
+      await d.done()
+    }
+  })
+
+  const API = { networkId: 'api:router', networkName: 'Router', baseUrl: 'https://router.fixture.invalid/v1', apiKey: 'fixture-key', model: 'vendor/model-a' }
+
+  it("a move onto a saved API's model: the launch models read, its endpoint recognised from then on, no grid started", async () => {
+    const apiTarget = vi.fn(async () => ({ target: API, apiBase: API.baseUrl }))
+    const d = daemon(vi.fn(), apiTarget)
+    const env = { ANTHROPIC_BASE_URL: 'https://router.fixture.invalid', ANTHROPIC_MODEL: 'vendor/model-a' }
+    expect(classifyGridAssignment('claude', env)).toBeNull()
+    expect(await d.ask('agent_retarget', { agentId: 'a1', apiConnection: 'router', apiModel: ' vendor/model-a ' })).toMatchObject({ retargeted: true })
+    expect(apiTarget).toHaveBeenCalledWith({ connectionId: 'router', model: 'vendor/model-a' })
+    expect(d.retargeted).toHaveBeenCalledWith({ agentId: 'a1', grid: API })
+    // Read in models' process: only the answer's endpoint can teach the core's grid assignment.
+    expect(classifyGridAssignment('claude', env)).toEqual({ baseUrl: 'https://router.fixture.invalid', model: 'vendor/model-a' })
+    expect(d.moved).not.toHaveBeenCalled()
+    await d.done()
+  })
+
+  it('a saved API that cannot be used says why in models\' words; models down or off says so; nothing moves', async () => {
+    const refused = daemon(vi.fn(), async () => ({ detail: 'This API is not saved. Add it in Models → APIs.' }))
+    expect(await refused.ask('agent_retarget', { agentId: 'a1', apiConnection: 'gone', apiModel: 'vendor/model-a' }))
+      .toMatchObject({ error: 'API_UNAVAILABLE', detail: 'This API is not saved. Add it in Models → APIs.' })
+    expect(refused.retargeted).not.toHaveBeenCalled()
+    await refused.done()
+    for (const d of [daemon(vi.fn(), async () => { throw new Error('models is down') }), daemon(null)]) {
+      expect(await d.ask('agent_retarget', { agentId: 'a1', apiConnection: 'router', apiModel: 'vendor/model-a' }))
+        .toMatchObject({ error: 'API_UNAVAILABLE', detail: 'The models service is not running, so this API cannot be used now. Try again in a moment.' })
       expect(d.retargeted).not.toHaveBeenCalled()
       await d.done()
     }

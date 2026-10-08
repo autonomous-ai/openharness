@@ -49,13 +49,50 @@ answers `SERVICE_UNAVAILABLE` at once. The launch then fails with the feature's 
 An agent on its own login, with no package, asks no service. A grid assignment that cannot be read is unknown,
 and the row keeps what it had, as a failed process read does today.
 
+A launch someone is waiting on (create, retarget, restart, fork, the socket's API selection) is refused at once.
+A launch nobody asked for, a restore, is never refused for a service: the agent is **held** until the service is
+ready (next section).
+
+## Held until the service is ready
+
+The owner's bar is safe, reliable and dependable. A restore after a reboot must bring every agent back, and the core
+must report ready on time whatever a service does. Built once, generically (`core/agents/heldLaunches.ts`,
+`lib/restoreAgents.ts`). (L3) reuses it for the Store.
+
+- **(a) Readiness never waits on a service.** The boot's restore launches agents on their own login as before. An
+  agent whose launch asks a service (`needs`: a grid or a saved API asks `models`) is not launched then: it is put in
+  a pane of its own, in the boot's one registry transaction, running only a line that says what it waits for
+  (`heldPaneArgv`), and its row's launch is `{ state: 'held', service, detail }`. After `coreLink.ready()` a second
+  pass launches the held agents into those panes (`respawn`), outside any registry transaction.
+- **(b) A service that cannot be asked never fails an agent.** A launch that answers `unavailable: 'models'` (core
+  `gridLaunchThrough`, via `launchOverrides.ts`) holds the agent instead of failing it. Held is never `failed`, never
+  skipped by the next restore, and never archived by discovery: its pane is alive and runs no engine, and the row is
+  inactive. It is launched when the service connects (serviceLinks `connected` → `restoreHeld(service)`), unless the
+  person stopped or closed it meanwhile (the row is then gone or no longer held). A person's restart of a held agent
+  launches it now (`restart.ts` → `restartHeld`).
+- **(c) One pass, one deadline.** After the first unavailable answer in a pass, every later agent that needs the
+  same service is held without asking. A pass waits on a service at most once, for that call's bound.
+- **Why a pane, not no pane.** Every registry row must keep a pane (`strictPersistedRow`), and an older release reads
+  the same file after a rollback. A held row that kept its dead pane id could collide with a pane the new tmux server
+  hands out (`%0` again), and the registry would refuse to save. A waiting pane opened in the boot's transaction
+  cannot collide, keeps discovery from retiring the row, and shows the person the reason.
+- **What an older app shows.** It reads an unknown launch state as ready, so a held agent shows offline with its
+  waiting pane. The reason is in the pane and in the row (`launch.detail`).
+- **Proof.** `lib/restoreAgents.spec.ts` (held at boot without asking, launched into its pane outside a transaction,
+  one ask per pass, never skipped or archived, a fresh relaunch held), `core/agents/heldLaunches.spec.ts` (the boot
+  gate, passes by service, one at a time, restart, stopped or closed meanwhile), and end to end
+  (`e2e/serviceProcesses.e2e.ts`): two grid agents across a reboot with models killed, and with models hung. The core
+  reports ready within 15 s, both agents are held, never failed or archived, and both come back with their
+  conversations once models is there. `HARNESSD_TEST_HOLD_CONNECT` holds a service off the core while a file
+  exists, for those tests.
+
 ## Sub-batches
 
 | | Scope | Leaves the core |
 | --- | --- | --- |
 | **(L1) Grid and API launches** | `ModelsPort` gains the grid launch and the API target. Callers: create, every relaunch (restart, resume, restore, fork), retarget's check before it touches the pane, and the socket's `api` selection. | the grid launch builders, `gridWebMcp.ts`, `apiModels.ts`: about 1,750 lines |
-| **(L2) Grid assignment and the saved APIs** | Discovery, restart and retarget ask models for the assignments of a pass's processes in one call. The saved APIs' endpoints, and the instructions an agent's folder gets when any are saved, are models' to keep, told to the core so a launch on the engine's own login still asks models nothing. | `gridAssignment.ts`, `apiConnections.ts`, `apiInstructions.ts`: about 490 lines |
-| **(L3) DSH launches** | `StorePort` gains the DSH launch. Callers: create (materialize, then the env and args), every relaunch, fork. The request's package check reads the installed index, a small file the core keeps reading. | `dsh/runtime.ts`, `materialize.ts`, `shell.ts` and most of `manifest.ts`: about 700 lines |
+| **(L2) Grid assignment** | Discovery, restart and retarget ask models for the assignments of the processes that carry grid-launch markers, in one call a pass. The saved APIs' endpoints are models'. The saved-API instructions stay in the core. | most of `gridAssignment.ts`: about 290 lines |
+| **(L3) DSH launches** | `StorePort` gains the DSH launch. Callers: create (materialize, then the env and args), every relaunch, fork. The core keeps the installed index and its checks. | `dsh/runtime.ts`, `materialize.ts`, `shell.ts`: about 500 lines |
 
 Each sub-batch is its own PR, stacked, each green on its own.
 
@@ -91,7 +128,13 @@ sides keep their lines.
 - **Down is a refusal.** `core/agents/launch.ts` `gridLaunchThrough` turns anything but an answer into
   `GRID_UNAVAILABLE` (`API_UNAVAILABLE` for a saved API): "The models service is not running, so claude cannot be
   put on Home grid. Try again in a moment." The socket's `api` selection answers `API_UNAVAILABLE` likewise. A
-  launch with no grid never asks, so it never starts models (on demand) either.
+  launch with no grid never asks, so it never starts models (on demand) either. The refusal names the service
+  (`unavailable: 'models'`), which a restore reads to hold the agent instead (above).
+- **From the review.**
+  - A create of a harness on a grid asks models before the workspace is laid out or trusted, so a refused create
+    leaves the folder as it was.
+  - `GRID_CONFLICTING_ENV_VARS` is pinned to what the contracts set, with each exception named.
+  - A socket spec fails if the API selection loses the target or the endpoint it remembers.
 - **What the core still remembers.** A saved API's endpoint an answer carries is added to the core's grid
   assignment (`rememberApiBase`), as when the core read the store itself. The store stays in the core until (L2).
 - **Proof.** The golden (`engines/launchShapes.golden.spec.ts`, recorded first from the former code) passes
@@ -105,57 +148,70 @@ sides keep their lines.
   `gridWebMcp.ts` (446), `apiModels.ts` (171) and `codingContext.ts` (12) left; `gridLaunchWire.ts` (473) came
   in. `architecture.spec.ts` lists the three as edge files.
 
-## (L2) and (L3), as designed after (L1)
+## (L2) and (L3): decisions, and where the work stands
 
-Each has a choice the owner or the coordinator should confirm before it is built.
+The owner's decisions, through the coordinator. Line count is "just a number"; what matters is a good
+architecture: safe, reliable, dependable.
 
-### (L2) Grid assignment and the saved APIs
+### (L3) Harness packages (DSH): next
 
-- **Ask only for a process that could be on a grid.** Discovery reads every agent's process each pass, and models
-  is started on demand. So the core asks models (`ModelsPort.gridAssignments`, one call per pass) only for a
-  process that carries what a grid launch writes:
-  - the engine's endpoint variable;
-  - Pi's config folder or OpenCode's config file;
-  - a `model_providers.….base_url` argument.
+- **Decided.**
+  - A restore of a harness agent goes through the held mechanism above with `service: 'store'`. The core never
+    waits for the Store before it is ready. An agent the Store cannot prepare is never launched unprepared: it is
+    held, with the reason, and launched once the Store says it is ready (the Store's `prepared` notice,
+    core/storeLink.ts, or its `connected`), unless the person stopped or closed it. A manual restart works too.
+  - The coordinator's earlier "wait up to 30 s for the Store at boot" is superseded by rule (a): the wait moves to the
+    pass after ready.
+  - Pin the never-launched-unprepared rule with a spec, and add an e2e with the Store killed.
+- **Recorded.** The golden, from the code as it stood after (L1), is on branch `claude-recovery/launch-port-dsh`
+  (pushed, no PR): `engines/dshLaunchShapes.golden.spec.ts` and its fixture. It has 61 cases (create 27, relaunch 25,
+  fork 9) across the harness adapters, with the workspace files and their bytes, folder trust, the init asked for,
+  logs and refusals. It gives the same result run after run and under `TZ=UTC TMPDIR=/tmp`.
+  - **Re-record it before L3's move.** Its commit came before two changes on this PR: `create.ts` now asks models
+    before it lays a workspace out, and restore defers service launches. Rebase that branch on this PR's head, run
+    `RECORD_DSH_LAUNCH_SHAPES_GOLDEN=1`, and check that the only differences are those two (the DSH + grid create's
+    log order).
+- **Design for the move, already drafted.** It is not on any branch; rebuild it from this list.
+  - `dsh/launchWire.ts` (core): `DshMaterializeRequest/Answer`, `DshLaunchRequest/Answer` (with `forkOf` and `thrown`,
+    the text a relaunch always gave), and `dshUnavailable(name)`. Make that refusal carry `unavailable: 'store'`, as
+    `gridUnavailable` carries `'models'`.
+  - `StorePort { dshMaterialize, dshLaunch }`, `STORE_FALLBACKS` (`later(FAIL)`), `STORE_OFF`, and `store` in
+    `CorePorts`. `LONG_ANSWERS.store.dshMaterialize = 6 min`: the init is given 5.
+  - `services/storeLaunch.ts` (`storeLaunchPort`, built on `materializeWorkspace`, `forkRuntimeKey` and
+    `prepareHarnessLaunch`). `services/storeProcess.ts` answers it as port calls (`dshMaterializeRequestIn`,
+    `dshLaunchRequestIn`). `startStoreInCore(core, ports)` fills `ports.store` in-process. `core/storeLink.ts` gains
+    `port` (`dshMaterializeAnswerIn`, `dshLaunchAnswerIn`) and `onReady`.
+  - `core/agents/dshThrough.ts`: `materialize` and `launch` (unavailable → `DSH_UNAVAILABLE`), and `relaunch` for
+    `launchOverrides.ts`, whose `dshLaunch` dep becomes async. A refusal ends the launch. Keep the
+    not-installed log line in the core.
+  - `create.ts`, `fork.ts` and `main.ts` ask through it. `incompatibleHarnessEngine` moves to `dsh/compatibility.ts`.
+    `harnessLaunchOrRefusal` goes. `adapters.ts` stays in the core: `scm/scmProjects.ts` reads
+    `PROJECT_INSTRUCTION_FILES`.
+  - Restore: `needs: (entry) => entry.gridLaunch ? 'models' : entry.dsh ? 'store' : null`. A grid harness needs both:
+    hold for `models` first. Then wire `storeLink.onReady` → `restoreHeld('store')`.
+  - Proof: the golden passes unchanged, with every Store answer crossing the wire as JSON. Mutations; 100% core; the
+    e2e with the Store killed (its process is the viewers', `harnessd-viewers`).
 
-  Those names are declared in the wire and pinned to the classifier. Any other process is on no grid, which is
-  what the classifier answers today, so discovery of agents on their own login never starts models. Only the
-  variables the classifier reads are sent, never a key. If models is down, the answer is unknown (`undefined`),
-  and the row keeps its assignment, as a failed process read does today.
-- **Choice: no cache.** A process's environment cannot change, but the saved APIs that make an endpoint count can.
-  Today every pass classifies again, so an agent already on an API saved later is recognised. To stay identical,
-  the answer is not cached, so models stays started while an agent runs on a grid, or with its own
-  `ANTHROPIC_BASE_URL`. Caching by process would let it sleep, at the cost of that recognition.
-- **The saved APIs' endpoints are models'.** The core stops reading `connections.json` at start and stops
-  remembering endpoints (`rememberApiBase` leaves with the classifier).
-- **Choice: API instructions.** Every non-terminal launch writes the saved-API instructions into the agent's folder
-  when any API is saved (`apiInstructions.ts`). Moved to models, either:
-  - the core asks models only when `connections.json` exists, so users who never saved an API never start models
-    at launch; a launch while models is down goes ahead without the instructions and logs the warning it logs
-    today; or
-  - the instructions stay in the core, which keeps reading the list of saved APIs (no keys) for this.
+### (L2) Grid assignment: after (L3)
 
-### (L3) Harness packages (DSH)
-
-- **A Store port.** The Store runs beside the viewers, always on. It gains two port calls:
-  - `dshMaterialize({ dsh, workspace, engine, account })` (create only): the template and the init. It answers
-    what it laid out and its warnings, which the core logs and uses for folder trust as today. Bound: the init's
-    5 minutes plus a margin, in `LONG_ANSWERS`.
-  - `dshLaunch({ dsh, workspace, engine, key, account, forkOf })`: the session's runtime, its env and its args.
-    Callers: create, every relaunch and fork.
-- **What the core keeps.**
-  - The installed index (`installed.ts`), and from `manifest.ts` the checks it makes before asking: the id's
-    shape, the engines a package supports, a pinned permission mode.
-  - `compatibility.ts`, and the session variables a launch clears (`launch.ts`).
-- **What leaves.** `runtime.ts`, `materialize.ts`, `shell.ts`, `adapters.ts`, and `dshLaunch`: about 560 lines.
-  `PROJECT_INSTRUCTION_FILES`, which `scm/scmProjects.ts` reads, moves beside it.
-- **Errors.** `DSH_UNAVAILABLE`: "The Store is not running, so Blender cannot be prepared for this agent. Try again
-  in a moment."
-- **Choice: restore at boot.** Restoring a harness agent now asks the Store. Today the core waits 5 s for the Store
-  at boot and then restores anyway. Proposed: wait up to 30 s when harness agents are to be restored. One the
-  Store still cannot prepare stays stopped, with the reason.
-- **Proof.**
-  - A DSH launch shapes golden first: create, relaunch and fork across the harness adapters, the workspace's files
-    with their bytes, the logs and every refusal.
-  - End to end, the Store's host killed: plain launches work; a harness create or restart is refused at once; once
-    the Store is back, it works.
+- **Decided.**
+  - **No cache.** Keep today's recognition exactly: every pass classifies again. Models staying up while a grid agent
+    exists is fine, because those agents need it anyway.
+  - **Ask models only for processes that carry grid-launch markers.** These are the engine's endpoint variable
+    (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL` for Hermes, `GROK_MODELS_BASE_URL`, `COPILOT_PROVIDER_BASE_URL`), Pi's
+    `PI_CODING_AGENT_DIR`, OpenCode's `OPENCODE_CONFIG`, or a `model_providers.….base_url` argument. Any other
+    process is on no grid, which is what the classifier answers today. Declare the markers in the wire and pin them
+    to the classifier with a spec. Send only the variables the classifier reads, never a key.
+  - **Never wait, never clear.** If models is down or slow, discovery and binding go ahead without waiting. The
+    assignment shows as unknown (`undefined`) or keeps its last known value; it is never cleared. Spec both.
+  - **The saved-API instructions stay in the core,** which reads the list of saved APIs (no keys). A launch never
+    depends on models for them and gains no new silent failure. Nothing changes there beyond what the port needs.
+- **Next steps.**
+  - `ModelsPort.gridAssignments(processes)`, one call a discovery pass, restart and retarget (`probeGridAssignment`
+    callers: `lib/terminalAgentDiscovery.ts`, `core/agents/restart.ts`, `core/agents/retarget.ts`), bounded by the call's
+    wait.
+  - The saved APIs' endpoints (`rememberApiBase`, `rememberSavedApis`, the socket's and `gridLaunchThrough`'s
+    `apiBase`) move to models with the classifier.
+  - A golden of every assignment shape first, from the former code (env, argv, Pi's and OpenCode's config files, a
+    saved API's endpoint, the router id), then the move. Specs for down and slow models, and an e2e with models
+    killed during discovery.

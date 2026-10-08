@@ -147,8 +147,8 @@ export function createAgentCreator({
     let dshLabel: string | undefined
     /** What the harness is told about the signed-in account (its private grid), not left to guess. */
     let dshAccount: DshAccount = {}
+    const installed = dsh ? installedDsh(dsh) : undefined
     if (dsh) {
-      const installed = installedDsh(dsh)
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is not installed on this machine` }
       if (installed.manifest.kind === 'viewer') return { ok: false, error: 'INVALID_DSH', detail: `${dsh} is a viewer package, not an agent` }
       const refusal = incompatibleHarnessEngine(dsh, installed.manifest, engine)
@@ -162,10 +162,23 @@ export function createAgentCreator({
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'TMUX_TOO_OLD_FOR_DSH', detail }
       }
+    }
+    // A grid is the user's answer to "where should this run", so every way of not honouring it is a
+    // refusal rather than a fallback — an agent silently started on the engine's own login spends the
+    // wrong account and looks identical to one that worked. Asked of models before a harness's workspace is
+    // laid out or trusted: a create refused here leaves the folder as it was.
+    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: gridLaunchMachine() }) : null
+    if (built && !built.ok) {
+      console.warn(`[agent] create ${engine} refused · ${built.detail}`)
+      return { ok: false, error: built.error, detail: built.detail }
+    }
+    if (dsh) {
+      // Checked above: a harness that is not installed was refused before models was asked.
+      const harness = installed!
       // The Model Manager is grid in use, however it was made (the Store, New Harness, `harness new`, the
       // models picker): grid is set up before the workspace asks it which grid is this account's.
       const ensureGrid = gridSetup()
-      if (installed.id === MODEL_MANAGER_ID && ensureGrid) {
+      if (harness.id === MODEL_MANAGER_ID && ensureGrid) {
         const setUp = await setUpWithin(() => ensureGrid({ ownGrid: true }), MODEL_MANAGER_GRID_WAIT_MS)
         if (setUp === 'pending') console.log(`[dsh] ${dsh} · grid is still being set up; the agent waits for it with \`harness grid setup\``)
       }
@@ -175,7 +188,7 @@ export function createAgentCreator({
         // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
         const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
           (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
-        const materialized = await materializeWorkspace(installed, cwd, dshAccount, engine)
+        const materialized = await materializeWorkspace(harness, cwd, dshAccount, engine)
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
         // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
@@ -192,22 +205,14 @@ export function createAgentCreator({
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label, dshAccount, null))
+      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(harness, cwd, engine, label, dshAccount, null))
       if (!prepared.ok) return prepared
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
-      dshLabel = installed.manifest.name
+      dshLabel = harness.manifest.name
     }
-    // A grid is the user's answer to "where should this run", so every way of not honouring it is a
-    // refusal rather than a fallback — an agent silently started on the engine's own login spends the
-    // wrong account and looks identical to one that worked.
     let gridLaunch: { env: Record<string, string>; args: string[]; webSearch: GridWebSearchStatus } | undefined
-    if (grid) {
-      const built = await buildGridLaunch({ engine, override: grid, machine: gridLaunchMachine() })
-      if (!built.ok) {
-        console.warn(`[agent] create ${engine} refused · ${built.detail}`)
-        return { ok: false, error: built.error, detail: built.detail }
-      }
+    if (grid && built?.ok) {
       if (!(await tmuxSupportsSessionEnv())) {
         const detail = `this machine's tmux is older than `
           + `${TMUX_SESSION_ENV_MIN.major}.${TMUX_SESSION_ENV_MIN.minor}, which is the first version that can `

@@ -101,8 +101,9 @@ describe('a grid launch, as the core asks the models service for it', () => {
 
   it('refuses at once, naming the grid or the API, when models is down or answers nothing usable', async () => {
     const down = gridLaunchThrough(() => ({ gridLaunch: async () => { throw new Error('SERVICE_UNAVAILABLE') } }))
+    // `unavailable` names the service, so a restore holds the agent for it rather than failing it.
     expect(await down(request())).toEqual({
-      ok: false, error: 'GRID_UNAVAILABLE',
+      ok: false, error: 'GRID_UNAVAILABLE', unavailable: 'models',
       detail: 'The models service is not running, so claude cannot be put on Home grid. Try again in a moment.',
     })
     expect(await down(request(api))).toMatchObject({ ok: false, error: 'API_UNAVAILABLE', detail: expect.stringContaining('on OpenRouter') })

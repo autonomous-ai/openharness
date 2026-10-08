@@ -164,6 +164,17 @@ describe('creating an agent', () => {
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 
+    it('for a harness on a grid models cannot build: asked first, so the folder is left as it was', async () => {
+      vi.mocked(installedDsh).mockReturnValue(installed() as never)
+      const grid = { networkId: 'g1', networkName: 'Home', baseUrl: 'http://g', model: 'm' }
+      const { create } = setup()
+      buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
+      expect(await create(request({ dsh: 'blender', grid }))).toEqual({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down' })
+      expect(materializeWorkspace).not.toHaveBeenCalled()
+      expect(preTrustClaudeProject).not.toHaveBeenCalled()
+      vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
+    })
+
     it('for a grid it cannot honour: refused by the launch, a tmux too old, or a config it cannot write', async () => {
       const grid = { networkId: 'g1', networkName: 'Home', baseUrl: 'http://g', model: null }
       const { create } = setup()

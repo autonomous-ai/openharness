@@ -346,7 +346,8 @@ export interface GridEngineLaunch {
  *
  * The list is deliberately OUR OWN vars rather than a survey of every provider an engine supports.
  * Enumerating those is unbounded and would go stale silently; these are the ones the contracts use, so
- * this list can be right about them (lib/gridLaunch.spec.ts holds it to them).
+ * this list can be right about them: lib/gridLaunch.spec.ts holds it to what the contracts set, each exception
+ * named.
  */
 export const GRID_CONFLICTING_ENV_VARS: readonly string[] = [
   'ANTHROPIC_API_KEY',
@@ -402,7 +403,7 @@ export interface GridLaunchRequest {
  */
 export type GridLaunchAnswer =
   | { ok: true; launch: GridEngineLaunch; override: GridLaunchOverride; apiBase?: string }
-  | { ok: false; error: string; detail: string; apiBase?: string }
+  | { ok: false; error: string; detail: string; apiBase?: string; unavailable?: string }
 
 /**
  * Why a launch has no web search, in the daemon log's words — for the two answers the contracts decide
@@ -433,12 +434,14 @@ export function describeGridLaunch(
     + (reason ? ` (${reason})` : '')
 }
 
-/** Why a grid launch could not be built when the models service is not there to build it. */
-export function gridUnavailable(engine: AgentEngine, override: GridLaunchOverride): { ok: false; error: string; detail: string } {
+/** Why a grid launch could not be built when the models service is not there to build it. `unavailable` names
+ *  the service, so a restore holds the agent for it rather than failing it (lib/restoreAgents.ts). */
+export function gridUnavailable(engine: AgentEngine, override: GridLaunchOverride): { ok: false; error: string; detail: string; unavailable: 'models' } {
   return {
     ok: false,
     error: isApiLaunch(override) ? 'API_UNAVAILABLE' : 'GRID_UNAVAILABLE',
     detail: `The models service is not running, so ${engine} cannot be put on ${override.networkName}. Try again in a moment.`,
+    unavailable: 'models',
   }
 }
 

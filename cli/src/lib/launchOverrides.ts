@@ -54,9 +54,10 @@ export interface LaunchOverrides {
   sessionModel?: string
 }
 
+/** A refusal names the service that could not be asked (`unavailable`) when that is all that stopped it. */
 export type LaunchOverridesResult =
   | { ok: true; overrides: LaunchOverrides }
-  | { ok: false; error: string; detail: string }
+  | { ok: false; error: string; detail: string; unavailable?: string }
 
 export interface LaunchOverridesDeps {
   /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
@@ -138,10 +139,10 @@ export async function validateLaunchOverrides(
   deps: Pick<LaunchOverridesDeps, 'tmuxSupportsSessionEnv' | 'machine' | 'gridLaunch'>,
   engine: AgentEngine,
   source: LaunchSource,
-): Promise<{ ok: true } | { ok: false; error: string; detail: string }> {
+): Promise<{ ok: true } | { ok: false; error: string; detail: string; unavailable?: string }> {
   if (!source.gridLaunch) return { ok: true }
   const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine() })
-  if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
+  if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
   return tmuxRefusal(deps, engine, source.gridLaunch)
 }
 
@@ -241,7 +242,7 @@ async function buildBaseLaunchOverrides(
     // Built once, by the models service, with a saved API's endpoint and key as saved now: a removed API is
     // refused first, then an engine that cannot be pointed there, then a tmux that cannot set the variables.
     const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(), refresh: true })
-    if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
+    if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
     const tmux = await tmuxRefusal(deps, engine, built.override)
     if (!tmux.ok) return tmux
     const env: Record<string, string> = { ...built.launch.env }

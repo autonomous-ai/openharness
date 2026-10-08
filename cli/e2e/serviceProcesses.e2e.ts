@@ -9,7 +9,8 @@
  * (or parks it, when it keeps crashing), every service in it connected again.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -415,6 +416,71 @@ describe('models in its own process', () => {
     }, 60_000, 500)
     expect(d.coresStarted()).toBe(1)
     client.close()
+  })
+
+  /**
+   * Two grid agents, then a reboot with models held off the core (`HARNESSD_TEST_HOLD_CONNECT`): running, and not
+   * there. `meanwhile` does to its process what the test is about. The core comes up ready at once, both agents wait
+   * held in panes that say why, never failed and never archived, and both come back once models is there.
+   */
+  async function heldAtBoot(meanwhile: (d: IsolatedDaemon) => Promise<void>, env: Record<string, string> = {}): Promise<void> {
+    const holdDir = mkdtempSync(join(tmpdir(), 'models-hold-'))
+    const hold = join(holdDir, 'hold')
+    try {
+      const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}`, HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '500', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env })
+      let client = await LocalClient.connect(d)
+      const grid = { networkId: 'net-e2e', networkName: 'e2e-grid', baseUrl: 'https://fixture.invalid/g/net-e2e/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
+      const agents = [await createOn(d, client, 'claude', 'held-claude', grid), await createOn(d, client, 'codex', 'held-codex', grid)]
+      client.close()
+      // A reboot, with models up but held off the core this time.
+      writeFileSync(hold, '')
+      await d.stop()
+      await d.tmux.run('kill-server')
+      const asked = Date.now()
+      await d.start()
+      // Ready without asking models anything: the old restore waited on it before saying so.
+      expect(Date.now() - asked).toBeLessThan(15_000)
+      client = await LocalClient.connect(d)
+      for (const agent of agents) {
+        const held = await until(`${agent.engine} held`, async () => {
+          const now = await row(client, agent.id)
+          return now?.launch?.state === 'held' ? now : null
+        }, 30_000, 250)
+        expect(held).toMatchObject({ status: 'offline', launch: { state: 'held', service: 'models', detail: expect.stringContaining('Waiting for the models service') } })
+      }
+      await meanwhile(d)
+      // The pass after ready could not ask models (it is not there): both still held, neither failed nor archived.
+      await until('the held pass to give up on models', () => /\[restore\] held · every service · launched 0 of 2 · 2 still waiting/.test(d.log()) || null, 60_000, 250)
+      for (const agent of agents) expect((await row(client, agent.id))?.launch).toMatchObject({ state: 'held' })
+      expect(d.log()).not.toContain('could not build its launch')
+      // Models there at last: both come back, on their grid, with their conversations.
+      rmSync(hold)
+      for (const agent of agents) {
+        await until(`${agent.engine} back on its grid`, async () => {
+          const now = await row(client, agent.id)
+          return now?.status === 'active' && now.sessionId === agent.sessionId && now.launch?.state === 'ready' ? now : null
+        }, 90_000, 500)
+      }
+      await turn(client, agents[0]!.id, 'back once models was there')
+      expect(d.log()).not.toContain('[safe-mode]')
+      client.close()
+    } finally { rmSync(holdDir, { recursive: true, force: true }) }
+  }
+
+  it('killed at boot: the core is ready at once, both grid agents wait held, never failed or archived, and come back once models is up', async () => {
+    await heldAtBoot(async (d) => {
+      const before = await until('models to be running, held off', () => modelsPids(d).length ? modelsPids(d) : null, 30_000, 200)
+      for (const pid of before) process.kill(pid, 'SIGKILL')
+      await until('the master to start models again', () => modelsPids(d).some((pid) => !before.includes(pid)) || null, 30_000, 200)
+    })
+  })
+
+  it('hung at boot: the core is ready within its deadline all the same, and the agents come back once models is', async () => {
+    await heldAtBoot(async (d) => {
+      const before = await until('models to be running, held off', () => modelsPids(d).length ? modelsPids(d) : null, 30_000, 200)
+      for (const pid of before) process.kill(pid, 'SIGSTOP')
+      await until('the master to find models hung and start it again', () => modelsPids(d).some((pid) => !before.includes(pid)) || null, 60_000, 200)
+    }, { HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '3000' })
   })
 
   it('hung, it is killed by the master\'s heartbeat watch and started again; the core never waits on it', async () => {

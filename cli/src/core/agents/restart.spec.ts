@@ -65,6 +65,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
     refreshGridWebSearch: vi.fn() as never,
     liveBypassPermission: vi.fn(async () => true),
     paneSwapDeps: vi.fn(() => ({ swap: true })) as never,
+    restartHeld: vi.fn(() => null),
     ...over,
   }
   return { deps, state, tmuxBackend, restart: createAgentRestarter(deps) }
@@ -82,6 +83,15 @@ describe('restarting an agent', () => {
       expect(await setup(agent(), { stopJobs: new Map([['a1', Promise.resolve()]]) }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(agent(), { pinnedControls: new Set(['a1']) }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(null).restart('a1')).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })
+    })
+
+    it('for an agent held for a service, its launch, now, with nothing of a swap touched', async () => {
+      const launched = { ok: true as const, session: agent(), resumed: true }
+      const run = setup(agent({ processIdentity: undefined, tmuxPane: '%4' } as Partial<RegisteredSession>), { restartHeld: vi.fn(() => Promise.resolve(launched)) })
+      expect(await run.restart('a1')).toBe(launched)
+      expect(run.deps.restartHeld).toHaveBeenCalledWith('a1')
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(run.tmuxBackend.respawn).not.toHaveBeenCalled()
     })
 
     it('for an agent with no tmux pane, or no tmux at all', async () => {

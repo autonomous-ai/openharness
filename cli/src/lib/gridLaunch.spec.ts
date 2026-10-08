@@ -7,6 +7,7 @@ import {
   contractEnvVarNames,
   describeGridLaunch,
   gridCapableEngines,
+  GRID_CONFLICTING_ENV_VARS,
   gridConflictingEnvToClear,
   gridProviderId,
   gridEnvVarNames,
@@ -367,6 +368,22 @@ describe('the lists the core declares for every launch (lib/gridLaunchWire.ts), 
 
   it('names, for every engine, the variables its contract sets on the fullest launch it can get', () => {
     for (const engine of ENGINES) expect(gridEnvVarNames(engine), engine).toEqual(contractEnvVarNames(engine))
+  })
+
+  it('clears every variable a contract points an engine with, and the inherited vendor key no contract sets', () => {
+    // Each exception with its reason: a contract that gains a variable fails here until it is placed.
+    const NOT_A_DESTINATION = {
+      // A window size the launch tells Claude Code, not where it sends anything.
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: 'a hint',
+      // Each engine's own config pointer, written by that engine's launch into the daemon's own folder.
+      OPENCODE_CONFIG: 'its own config file',
+      PI_CODING_AGENT_DIR: 'its own config folder',
+    }
+    // Set by no contract, and what outranks a grid when inherited (the module doc's first measurement).
+    const INHERITED_ONLY = ['ANTHROPIC_API_KEY']
+    const set = new Set(contractEngines().flatMap((engine) => contractEnvVarNames(engine)))
+    const expected = [...set].filter((name) => !Object.hasOwn(NOT_A_DESTINATION, name)).concat(INHERITED_ONLY)
+    expect([...GRID_CONFLICTING_ENV_VARS].sort()).toEqual(expected.sort())
   })
 })
 
