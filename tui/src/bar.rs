@@ -43,8 +43,12 @@ pub enum Hit {
     Pane(usize, u64),
     /// A window (by index): select it — its heading, or an entry under a machine.
     Window(usize),
-    /// A machine's heading: its first window, if it has one.
-    Machine(Option<usize>),
+    /// A machine's heading (its id, and its first window, if it has one).
+    Machine(String, Option<usize>),
+    /// A harness on a machine (machine, agent) open in no window here: open it.
+    Harness(String, String),
+    /// `+ N more` under a machine: its harnesses, all of them.
+    More(String),
     /// `«` folds the bar to a rail, `»` opens it again.
     Fold,
     Unfold,
@@ -63,6 +67,9 @@ pub struct State {
     pub scroll: [usize; 2],
     /// How far each list can scroll, as last drawn.
     pub max_scroll: [usize; 2],
+    /// The entry each list showed first, as last drawn: rows coming or going above it (a roster
+    /// arriving) leave it where it was.
+    pub top: [Option<Hit>; 2],
     /// Where each place was drawn, for the mouse.
     pub hits: Vec<(Rect, Hit)>,
     /// The focus the lists last followed (the window's id and its pane): when it moves, its
@@ -300,8 +307,23 @@ fn window_entries(app: &App, c: &Colours, width: u16) -> Vec<Entry> {
     out
 }
 
+/// The harness rows under a machine, at most this many, then `+ N more`.
+const HARNESS_ROWS: usize = 3;
+
+/// A harness on a machine that no window here shows: `├─ ? name` (its mark, when it has one, as a
+/// window row's), after [prefix].
+fn harness_entry(app: &App, c: &Colours, width: u16, a: &crate::fleet::Agent, prefix: &str) -> Entry {
+    let (glyph, colour) = mark(Some(app.fleet.state_of(a)), c, app.tick);
+    let mut spans = vec![(prefix.to_string(), Style::default().fg(c.muted))];
+    let mut used = 1 + 2 + prefix.width();
+    if glyph != " " { spans.push((format!("{glyph} "), Style::default().fg(colour))); used += 2 }
+    spans.push((cut(&a.name, (width as usize).saturating_sub(used)), Style::default().fg(c.soft)));
+    Entry { rows: vec![(1, spans)], right: None, hit: Hit::Harness(a.machine_id.clone(), a.id.clone()), current: false }
+}
+
 /// The machines, each with the windows that have a pane on it (a window on several machines
-/// under each; one with no pane yet, this computer's).
+/// under each; one with no pane yet, this computer's), then — on a machine that is ready — its
+/// harnesses no window here shows, the latest first, three of them and `+ N more`.
 fn machine_entries(app: &App, c: &Colours, width: u16) -> Vec<Entry> {
     let windows: Vec<usize> = (0..app.tabs.len()).collect();
     // Each window's machines: its panes', in order (none yet: this computer's).
@@ -320,9 +342,28 @@ fn machine_entries(app: &App, c: &Colours, width: u16) -> Vec<Entry> {
     let mut out = Vec::new();
     for id in machines {
         let mine: Vec<usize> = windows.iter().copied().filter(|i| on[*i].contains(&id)).collect();
-        out.push(Entry { rows: vec![(1, machine_spans(app, c, &id, width))], right: None, hit: Hit::Machine(mine.first().copied()), current: false });
-        let n = mine.len();
-        for (k, i) in mine.into_iter().enumerate() { out.push(window_entry(app, c, width, i, Some(if k + 1 == n { "└─ " } else { "├─ " }))) }
+        let machine = app.fleet.machine(&id);
+        let mut harnesses: Vec<&crate::fleet::Agent> = if machine.is_some_and(|m| m.usable()) {
+            app.fleet.agents.values().filter(|a| a.machine_id == id && a.status != "stopped" && a.engine != "terminal" && app.find_pane(&id, &a.id).is_none()).collect()
+        } else { Vec::new() };
+        harnesses.sort_by(|a, b| b.recency().cmp(&a.recency()).then_with(|| a.name.cmp(&b.name)));
+        let more = harnesses.len().saturating_sub(HARNESS_ROWS);
+        harnesses.truncate(HARNESS_ROWS);
+        // (Away: said at the right, the name cut before it.)
+        let offline = machine.is_some_and(|m| !m.online()) && id != app.fleet.local_id;
+        let right = offline.then(|| ("offline".to_string(), Style::default().fg(c.muted)));
+        let heading = machine_spans(app, c, &id, if offline { width.saturating_sub(8) } else { width });
+        out.push(Entry { rows: vec![(1, heading)], right, hit: Hit::Machine(id.clone(), mine.first().copied()), current: false });
+        // Its windows, its harnesses, `+ N more`: one tree, the last of them `└─`.
+        let n = mine.len() + harnesses.len() + usize::from(more > 0);
+        let prefix = |k: usize| if k + 1 == n { "└─ " } else { "├─ " };
+        let windows = mine.len();
+        for (k, i) in mine.into_iter().enumerate() { out.push(window_entry(app, c, width, i, Some(prefix(k)))) }
+        for (k, a) in harnesses.into_iter().enumerate() { out.push(harness_entry(app, c, width, a, prefix(windows + k))) }
+        if more > 0 {
+            let spans = vec![(prefix(n - 1).to_string(), Style::default().fg(c.muted)), (format!("+ {more} more"), Style::default().fg(c.muted))];
+            out.push(Entry { rows: vec![(1, spans)], right: None, hit: Hit::More(id.clone()), current: false });
+        }
     }
     out
 }
@@ -435,9 +476,16 @@ pub fn draw(buf: &mut Buffer, app: &mut App) {
 fn scroll_list(app: &mut App, which: usize, entries: &[Entry], area: Rect, follow: bool) {
     let max = max_scroll(entries, area.height);
     app.bar.max_scroll[which] = max;
-    let mut s = app.bar.scroll[which].min(max);
+    let mut s = app.bar.scroll[which];
+    // Rows that came or went above the first one shown (a roster arriving) do not move the list:
+    // that entry stays first — the nearest of its kind, as a window is under several machines.
+    if let Some(top) = app.bar.top[which].as_ref().filter(|h| !follow && entries.get(s).is_none_or(|e| e.hit != **h)) {
+        if let Some(i) = entries.iter().enumerate().filter(|(_, e)| e.hit == *top).map(|(i, _)| i).min_by_key(|i| i.abs_diff(s)) { s = i }
+    }
+    s = s.min(max);
     if follow { if let Some(t) = entries.iter().rposition(|e| e.current) { s = reveal(entries, area.height, s, t) } }
     app.bar.scroll[which] = s;
+    app.bar.top[which] = entries.get(s).map(|e| e.hit.clone());
 }
 
 /// The bar folded to a rail: a number and a glyph for each pane of the current window, a rule,
@@ -485,9 +533,12 @@ pub fn click(app: &mut App, hit: Hit) {
             if i != app.active { select(app, i) }
             crate::commands::execute(app, &format!("select-pane -t {}", crate::pane::tag(id)))
         }
-        Hit::Window(i) | Hit::Machine(Some(i)) => { if i < app.tabs.len() { select(app, i) } }
+        Hit::Window(i) | Hit::Machine(_, Some(i)) => { if i < app.tabs.len() { select(app, i) } }
         Hit::Fold | Hit::Unfold => { app.bar.folded = hit == Hit::Fold; app.redraw_all = true; app.fit_panes() }
-        Hit::Machine(None) | Hit::Separator | Hit::Windows | Hit::Machines => {}
+        // (Open here already — a slow attach clicked twice: open-harness goes to its window.)
+        Hit::Harness(m, a) => crate::commands::execute(app, &format!("open-harness -s {}", crate::tmuxconf::quote_word(&format!("{m}:{a}")))),
+        Hit::More(m) => crate::devices::open_machine_list(app, &m),
+        Hit::Machine(_, None) | Hit::Separator | Hit::Windows | Hit::Machines => {}
     }
 }
 
@@ -499,11 +550,13 @@ pub fn wheel(app: &mut App, hit: Hit, up: bool) {
     let in_machines = app.bar.hits.iter().any(|(r, h)| *h == Hit::Machines && r.intersection(rect) == rect && rect.area() > 0);
     let k = match hit {
         Hit::Windows => 0,
-        Hit::Machines | Hit::Machine(_) | Hit::Fold => 1,
+        Hit::Machines | Hit::Machine(..) | Hit::Harness(..) | Hit::More(_) | Hit::Fold => 1,
         Hit::Window(_) | Hit::Pane(..) => usize::from(in_machines),
         Hit::Separator | Hit::Unfold => return,
     };
     app.bar.scroll[k] = step(app.bar.scroll[k], app.bar.max_scroll[k]);
+    // (Moved on purpose: the next draw keeps the entry it now starts at.)
+    app.bar.top[k] = None;
 }
 
 /// The separator dragged to column [x]: the bar's width follows it.
@@ -728,8 +781,8 @@ mod tests {
         assert_eq!((app.active, app.focused()), (0, Some(3)));
         // The machine `lab`'s heading: its first window. A click in a pane is not the bar's.
         let _ = screen(&mut app);
-        let (r, _) = app.bar.hits.iter().find(|(_, h)| *h == Hit::Machine(Some(0))).cloned().unwrap();
-        assert_eq!(hit_at(&app, r.x + 3, r.y), Some(Hit::Machine(Some(0))));
+        let (r, _) = app.bar.hits.iter().find(|(_, h)| matches!(h, Hit::Machine(m, Some(0)) if m == "lab")).cloned().unwrap();
+        assert_eq!(hit_at(&app, r.x + 3, r.y), Some(Hit::Machine("lab".into(), Some(0))));
         assert!(!mouse(&mut app, &ev(MouseEventKind::Down(MouseButton::Left), 60, 10)));
         // `«` folds the bar and `»` opens it.
         let _ = screen(&mut app);
@@ -907,5 +960,117 @@ mod tests {
             assert_eq!(f[2].y as i32 - f[1].bottom() as i32, gap_down, "between, down {at}");
             assert_eq!((f[0].bottom(), f[2].bottom()), (canvas.bottom(), canvas.bottom()), "bottom edge {at}");
         } }
+    }
+
+    // ── each machine's harnesses ──
+
+    /// The bar app of `app((120, 50), "left")` plus the machine `grid` (named `grid-dev`, Ready)
+    /// with [n] harnesses that are open in no window here.
+    fn with_grid(n: usize) -> App {
+        let mut app = app((120, 50), "left");
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "grid".into(), name: "grid-dev".into(), local: false, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        let rows: Vec<_> = (0..n).map(|i| json!({"id": format!("g{i}"), "name": format!("Grid task {i}"), "engine": "codex"})).collect();
+        app.fleet.merge_roster("grid", &rows);
+        app
+    }
+
+    /// Draw, then the first bar rect whose hit [want] accepts.
+    fn rect_of(app: &mut App, want: impl Fn(&Hit) -> bool) -> Rect {
+        let _ = screen(app);
+        app.bar.hits.iter().find(|(_, h)| want(h)).map(|(r, _)| *r).expect("that entry is drawn")
+    }
+
+    /// A left press on that entry (three columns in, on its first row).
+    fn click_on(app: &mut App, want: impl Fn(&Hit) -> bool) {
+        let r = rect_of(app, want);
+        assert!(mouse(app, &ev(MouseEventKind::Down(MouseButton::Left), r.x + 3, r.y)));
+    }
+
+    fn harness(m: &str, a: &str) -> Hit { Hit::Harness(m.into(), a.into()) }
+
+    #[test]
+    fn a_machine_lists_its_harnesses_not_open_here_three_then_more() {
+        let mut app = with_grid(5);
+        let (s, _) = screen(&mut app);
+        assert!(s.contains("grid-dev"), "{s}");
+        // (Equal recency: the name decides, so the first three are 0, 1, 2.)
+        assert!(s.contains("├─ Grid task 0") && s.contains("├─ Grid task 2"), "{s}");
+        assert!(!s.contains("Grid task 3"), "three rows at most: {s}");
+        assert!(s.contains("└─ + 2 more"), "the last of the tree:\n{s}");
+        assert!(app.bar.hits.iter().any(|(_, h)| *h == Hit::More("grid".into())));
+        // Not for a machine that is not Ready (`lab`: offline, a roster of two): none — and it
+        // says it is offline, at the right of its heading.
+        assert!(!app.bar.hits.iter().any(|(_, h)| matches!(h, Hit::Harness(m, _) if m == "lab")));
+        assert!(s.lines().any(|l| l.contains(" · lab") && l.contains("offline")), "{s}");
+        // Three or fewer: no `+ N more`, the last harness closes the tree.
+        let mut app = with_grid(2);
+        let (s, _) = screen(&mut app);
+        assert!(s.contains("└─ Grid task 1") && !s.contains("more"), "{s}");
+    }
+
+    #[test]
+    fn a_harness_open_in_a_window_here_is_shown_once() {
+        let mut app = with_grid(5);
+        let mut tab = Tab::new("Grid task 0");
+        tab.root = Some(Node::new(5, 40, 20));
+        tab.focus = Some(5);
+        let mut pane = Pane::new(5, "grid", "g0", 40, 20);
+        pane.phase = Phase::Live;
+        app.panes.insert(5, pane);
+        app.tabs.push(tab);
+        app.fit_panes();
+        let _ = screen(&mut app);
+        // (Its window's row is in both lists; as a harness row it is not drawn.)
+        assert!(!app.bar.hits.iter().any(|(_, h)| *h == harness("grid", "g0")));
+        assert!(app.bar.hits.iter().any(|(_, h)| *h == harness("grid", "g1")));
+        // A stopped harness, or a terminal, is not listed.
+        app.fleet.merge_roster("grid", &[json!({"id": "g1", "name": "Grid task 1", "engine": "codex", "status": "stopped"}), json!({"id": "t", "name": "zsh", "engine": "terminal"})]);
+        let _ = screen(&mut app);
+        assert!(!app.bar.hits.iter().any(|(_, h)| *h == harness("grid", "g1") || *h == harness("grid", "t")), "{:?}", app.bar.hits);
+        assert!(app.bar.hits.iter().any(|(_, h)| *h == harness("grid", "g2")), "the next one takes its row");
+    }
+
+    #[tokio::test]
+    async fn clicking_a_harness_row_opens_it_and_more_opens_the_machines_list() {
+        let mut app = with_grid(5);
+        click_on(&mut app, |h| *h == harness("grid", "g1"));
+        assert!(app.find_pane("grid", "g1").is_some(), "open-harness ran");
+        // Again (a slow attach): the same window, not a second one.
+        let windows = app.tabs.len();
+        crate::commands::execute(&mut app, "open-harness -s grid:g1");
+        assert_eq!(app.tabs.len(), windows);
+        click_on(&mut app, |h| *h == Hit::More("grid".into()));
+        assert!(matches!(&app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Open { machine: Some(m), .. }, .. }) if m == "grid"));
+    }
+
+    #[tokio::test]
+    async fn a_machine_id_with_a_space_still_opens_its_harness() {
+        let mut app = app((120, 50), "left");
+        app.fleet.machines.push(crate::fleet::Machine { shared: false, id: "my box".into(), name: "my box".into(), local: false, status: "online".into(), reach: crate::fleet::Reach::Ready });
+        app.fleet.merge_roster("my box", &[json!({"id": "b1", "name": "Box task", "engine": "codex"})]);
+        click_on(&mut app, |h| *h == harness("my box", "b1"));
+        assert!(app.find_pane("my box", "b1").is_some(), "quoted as the command reads it");
+    }
+
+    #[test]
+    fn a_roster_arriving_keeps_the_scroll_on_the_same_entry() {
+        let mut app = with_grid(2);
+        // (16 rows: both lists still drawn, five rows of machines for eight entries.)
+        app.size.1 = 16;
+        let _ = screen(&mut app);
+        assert!(app.bar.max_scroll[1] >= 2, "a height where the machines list scrolls: {}", app.bar.max_scroll[1]);
+        // Down past this computer's heading and its window, onto `lab`.
+        wheel(&mut app, Hit::Machines, false);
+        wheel(&mut app, Hit::Machines, false);
+        let top = |app: &mut App| { let _ = screen(app); app.bar.top[1].clone() };
+        let before = top(&mut app);
+        assert_eq!(before, Some(Hit::Machine("lab".into(), Some(0))), "lab's heading first");
+        // This computer gets harnesses no window shows: rows above the first one shown.
+        let mut rows = vec![json!({"id": "a1", "name": "fix login", "engine": "claude"}), json!({"id": "a2", "name": "tests", "engine": "codex"})];
+        rows.extend((0..3).map(|i| json!({"id": format!("n{i}"), "name": format!("New {i}"), "engine": "codex"})));
+        app.fleet.merge_roster("local", &rows);
+        let scroll = app.bar.scroll[1];
+        assert_eq!(top(&mut app), before, "the first entry shown is the same one");
+        assert!(app.bar.scroll[1] > scroll, "its index moved down with the rows above it");
     }
 }

@@ -267,7 +267,7 @@ mod tests {
         app.options.set("@hn-status-bar", Some("left"), &crate::options::SetFlags { global: true, ..Default::default() }, "", 0).unwrap();
         app.fit_panes();
         render(&mut app);
-        let (heading, _) = app.bar.hits.iter().find(|(_, h)| matches!(h, crate::bar::Hit::Machine(_)))
+        let (heading, _) = app.bar.hits.iter().find(|(_, h)| matches!(h, crate::bar::Hit::Machine(..)))
             .expect("this test needs a machine heading in the side bar").clone();
         assert_eq!(drop_target(&app, 1, heading.x, heading.y), Drop::Nothing);
     }

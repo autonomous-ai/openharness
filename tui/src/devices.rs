@@ -1091,15 +1091,20 @@ fn machine_action(app: &mut App, rest: &str) {
         "connect" => { switch(app, View::Connect); if let Some(p) = picker_mut(app) { p.select(&format!("m:{machine}")) } start_link(app, machine, name) }
         "open" => {
             app.devices.sub = None;
-            let kind = PickerKind::Open { filter: crate::modal::Filter::All, machine: Some(machine), project: None };
-            let (title, placeholder) = crate::modal::launcher_title(app, &kind);
-            let mut next = Picker::new(title, placeholder);
-            next.prefixed = true;
-            crate::input::fill(app, &kind, &mut next);
-            app.modal = Some(Modal::Picker { kind, picker: next });
+            open_machine_list(app, &machine);
         }
         _ => {}
     }
+}
+
+/// [machine]'s harnesses: the Open list on it ("Open its harnesses").
+pub(crate) fn open_machine_list(app: &mut App, machine: &str) {
+    let kind = PickerKind::Open { filter: crate::modal::Filter::All, machine: Some(machine.to_string()), project: None };
+    let (title, placeholder) = crate::modal::launcher_title(app, &kind);
+    let mut next = Picker::new(title, placeholder);
+    next.prefixed = true;
+    crate::input::fill(app, &kind, &mut next);
+    app.modal = Some(Modal::Picker { kind, picker: next });
 }
 
 // ── rows ─────────────────────────────────────────────────────────────────────
