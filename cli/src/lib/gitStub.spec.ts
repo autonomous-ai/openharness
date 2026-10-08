@@ -2,7 +2,9 @@ import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { repoState } from './agentHandoff.js'
 import { agentProject } from './agentProject.js'
+import { nameBranchAfterSession } from './branchNaming.js'
 import { readGitPullRequest } from './gitPullRequest.js'
 import { projectPreview } from './projectPreview.js'
 
@@ -31,12 +33,22 @@ describe('a folder with no .git runs no git', () => {
   const ran = () => readFile(calls, 'utf8').catch(() => '')
 
   it('when an agent starts there', async () => {
-    expect((await agentProject(join(root, 'project'))).root).toBeNull()
+    expect((await agentProject(join(root, 'project')))?.root).toBeNull()
     expect(await ran()).toBe('')
   })
 
   it('when its pane is read for a pull request', async () => {
     expect(await readGitPullRequest(join(root, 'project'))).toEqual({ status: 'unavailable' })
+    expect(await ran()).toBe('')
+  })
+
+  it('when its agent gets a name and its branch would be renamed', async () => {
+    expect(await nameBranchAfterSession(join(root, 'project'), 'Make a small web page')).toBeNull()
+    expect(await ran()).toBe('')
+  })
+
+  it('when Change agent hands its conversation on', async () => {
+    expect(await repoState(join(root, 'project'))).toBe('none')
     expect(await ran()).toBe('')
   })
 
