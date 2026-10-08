@@ -28,6 +28,12 @@ writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec ${quote(tmuxBinary)} -L ${quot
 for (const key of Object.keys(process.env)) {
   if (/^(HARNESS|CODEX|CLAUDE|ANTHROPIC|OPENAI)_/.test(key) || key === 'CLAUDECODE') delete process.env[key]
 }
+// A home of the fixture's own, for the tmux server and every shell and engine it starts. With the person's,
+// the shell a fixture pane keeps after its engine exits wrote the commands typed into it to their real
+// ~/.zsh_history (two `printf 'SURVIVING_SHELL_…'` lines per run, found 2026-10-08). macOS's /etc/zshrc puts
+// zsh's history in ${ZDOTDIR:-$HOME}, so both point here; HISTFILE covers a bash.
+const home = join(root, 'home'); mkdirSync(home)
+Object.assign(process.env, { HOME: home, ZDOTDIR: home, HISTFILE: join(home, '.shell_history') })
 Object.assign(process.env, {
   PATH: `${bin}:${process.env.PATH}`, ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'),
   ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'), HARNESS_AUTH_DIR: join(root, 'auth'), DSH_DIR: join(root, 'dsh'),
