@@ -666,8 +666,11 @@ pub fn list_from(buf: &mut Buffer, picker: &mut Picker, r: Rect, c: &Chrome, det
     let n = r.height as usize;
     if n == 0 { picker.row_at = row_at; return }
     if picker.visible.is_empty() {
-        // (A list says what its emptiness means — "no harnesses yet" — where it can.)
-        let empty = if picker.empty.is_empty() || !picker.query.is_empty() { "Nothing matches".to_string() } else { picker.empty.clone() };
+        // (A list says what its emptiness means — "no harnesses yet" — where it can. A query only
+        // hides it when there were rows to filter: a list with none — a composer's request that
+        // failed, a directory it could not read — still says why while a query is typed.)
+        let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
+        let empty = if picker.empty.is_empty() || (!picker.query.is_empty() && total > 0) { "Nothing matches".to_string() } else { picker.empty.clone() };
         put(buf, r.x + 2, if bottom_up { r.bottom() - 1 } else { r.y }, r.width.saturating_sub(2), &empty, c.muted);
         picker.row_at = row_at;
         return;

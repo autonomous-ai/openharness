@@ -2551,7 +2551,12 @@ fn inline_panel(buf: &mut Buffer, area: Rect, picker: &mut Picker, busy: bool, u
     let (at, _) = crate::settings::query_line(buf, picker, x, qy, w, &ghost, &c);
     let total = picker.total_rows.unwrap_or_else(|| picker.rows.iter().filter(|r| !r.disabled).count());
     // While it waits on something the rule ends in the usual spinner (and what is being waited for).
-    let wait = busy.then(|| if picker.status.is_empty() { theme::spinner(0).to_string() } else { format!("{} {}", theme::spinner(0), picker.status) });
+    // A flash (a failed request being retried) says itself there in the status's place, as the fzf
+    // frame's info line does.
+    let said = picker.flash.as_ref().map_or(picker.status.as_str(), |f| f.0.as_str());
+    let wait = if busy {
+        Some(if said.is_empty() { theme::spinner(0).to_string() } else { format!("{} {}", theme::spinner(0), said) })
+    } else { picker.flash.as_ref().map(|f| f.0.clone()) };
     let room = wait.as_ref().map_or(0, |t| (t.width() as u16 + 1).min(w / 2));
     crate::settings::count_rule(buf, picker.visible.len(), total, None, x, ry, w - room, &c);
     if let Some(t) = wait { crate::settings::put(buf, x + w - room + 1, ry, room.saturating_sub(1), &t, c.muted); }

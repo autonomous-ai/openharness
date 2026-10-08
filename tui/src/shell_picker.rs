@@ -1121,17 +1121,22 @@ mod tests {
         // An error that ends in "…" is still an error: once the retries are
         // spent it stops spinning. During the 2 s retry gaps the spinner turns.
         let message="Office went to sleep…";
-        for (failures,spins) in [(1,true),(3,true),(4,false)] {
-            let mut picker=Picker::new("","");configure(&mut picker,false);
-            let empty=picker.empty.clone();
-            let loading=is_loading(true,&picker.status,Some(failures));
-            assert_eq!(loading,spins,"{failures}");
-            let mut buf=Buffer::empty(area);
-            theme::begin_animation_frame(true);
-            paint_list(&mut buf,area,&mut picker,loading,Some(message),vec![],false);
-            assert_eq!(theme::needs_animation_frame(),spins,"{failures}");
-            assert!(text(&buf).contains(message),"{failures}: the message is not shown");
-            assert!(picker.flash.is_none() && picker.empty==empty,"the message is not left on the picker");
+        // The fzf frame and the composer's panel both say it, a typed query too.
+        for (panel,query) in [(false,""),(true,""),(true,"gpt")] {
+            for (failures,spins) in [(1,true),(3,true),(4,false)] {
+                let mut picker=Picker::new("","");configure(&mut picker,false);
+                if panel {compose_scope_with(&mut picker,"model",true);}
+                picker.query=query.into();picker.qend();
+                let empty=picker.empty.clone();
+                let loading=is_loading(true,&picker.status,Some(failures));
+                assert_eq!(loading,spins,"{failures}");
+                let mut buf=Buffer::empty(area);
+                theme::begin_animation_frame(true);
+                paint_list(&mut buf,area,&mut picker,loading,Some(message),vec![],false);
+                assert_eq!(theme::needs_animation_frame(),spins,"{panel} {failures}");
+                assert!(text(&buf).contains(message),"{panel} {query:?} {failures}: the message is not shown");
+                assert!(picker.flash.is_none() && picker.empty==empty,"the message is not left on the picker");
+            }
         }
         theme::fzf_reset();
     }
