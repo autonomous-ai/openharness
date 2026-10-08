@@ -2,6 +2,6 @@
 # Use the current display environment even from a long-lived agent or SSH pane.
 # Chromium remains sandboxed and is started only by an explicit browser request.
 if [ -f /usr/lib/harness-os/browser_profile.py ]; then
-  /usr/bin/python3 /usr/lib/harness-os/browser_profile.py "$@"
+  exec /usr/bin/python3 /usr/lib/harness-os/browser_profile.py "$@"
 fi
 exec systemd-run --user --quiet --collect /usr/bin/chromium --ozone-platform=wayland --start-maximized --no-first-run --no-default-browser-check "$@"

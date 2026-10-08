@@ -5,6 +5,7 @@ Only our supported external-extension descriptor is written. Browser preferences
 bookmarks, acknowledgement/disable records and other extensions are read-only.
 """
 import json
+from contextlib import contextmanager
 import fcntl
 import os
 from pathlib import Path
@@ -36,29 +37,37 @@ def pristine(root):
             not any(root.glob('*/Secure Preferences')))
 
 
-def prime(root, *, deadline_seconds=8):
-    """Let a new profile finish installing its page before opening a window.
-
-    Only a browser we start in an unused profile is controlled here. CDP stays
-    on private child pipes, never a listening port. Ordinary launches and every
-    existing profile skip this one-time step entirely.
-    """
-    endpoint = startup_socket()
-    browser = None
-    lock = None
-    bound = False
-    try:
-        endpoint.parent.mkdir(mode=0o700, parents=False, exist_ok=True)
-        lock = (endpoint.parent / 'lock').open('a')
-        limit = time.monotonic() + deadline_seconds + 5  # Include other caller's cleanup.
+@contextmanager
+def startup_guard(timeout=20):
+    """All launcher requests wait until an owned primer has fully closed."""
+    directory = startup_socket().parent
+    directory.mkdir(mode=0o700, parents=False, exist_ok=True)
+    with (directory / 'lock').open('a') as lock:
+        limit = time.monotonic() + timeout
         while True:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
                 if time.monotonic() >= limit:
-                    return False
-                time.sleep(.05)
+                    raise TimeoutError('Browser is still starting. Try again.')
+                time.sleep(.02)
+        yield directory
+
+
+def prime(root, *, deadline_seconds=8):
+    """Let a new profile finish installing its page before opening a window.
+
+    Only a browser we start in an unused profile is controlled here. CDP stays
+    on private child pipes, never a listening port. Ordinary launches and every
+    existing profile skip this one-time step entirely. Caller holds startup_guard
+    until this child is closed and the normal launch has been handed off.
+    """
+    endpoint = startup_socket()
+    browser = None
+    bound = False
+    try:
+        endpoint.parent.mkdir(mode=0o700, parents=False, exist_ok=True)
         if not pristine(root):
             return False
         endpoint.unlink(missing_ok=True)
@@ -72,7 +81,8 @@ def prime(root, *, deadline_seconds=8):
                 '/bin/sh', '-c',
                 'exec /usr/bin/chromium --headless --no-first-run '
                 '--no-default-browser-check --remote-debugging-pipe '
-                'about:blank 3<&0 4>&1',
+                '--user-data-dir="$1" about:blank 3<&0 4>&1',
+                'harness-browser-start', str(root),
             ], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, start_new_session=True)
             ready.settimeout(deadline_seconds)
@@ -112,8 +122,6 @@ def prime(root, *, deadline_seconds=8):
                 endpoint.unlink(missing_ok=True)
             except OSError:
                 pass
-        if lock is not None:
-            lock.close()
 
 
 def read_json(path):
@@ -184,14 +192,34 @@ def prepare(root, package=PACKAGE):
         return False  # An optional start page must never prevent browsing.
 
 
+def launch(args, *, execute=None, lock_timeout=20):
+    command = ['systemd-run', '--user', '--quiet', '--collect', '/usr/bin/chromium',
+               '--ozone-platform=wayland', '--start-maximized', '--no-first-run',
+               '--no-default-browser-check', *args]
+    if execute is None:
+        execute = lambda command: subprocess.run(command, check=False).returncode
+    try:
+        with startup_guard(lock_timeout) as directory:
+            started = directory / 'launched'
+            # Custom profile launches belong to their caller. They still wait
+            # behind preparation, including explicit paths to the default profile.
+            if not os.environ.get('CHROME_USER_DATA_DIR') and not any(
+                    arg == '--user-data-dir' or arg.startswith('--user-data-dir=') for arg in args):
+                config = Path(os.environ.get('CHROME_CONFIG_HOME') or os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
+                root = config / 'chromium'
+                if (prepare(root) and not args and not started.exists() and
+                        not (config / 'chromium-flags.conf').exists() and not any(
+                            os.environ.get(key) for key in ['CHROME_CONFIG_HOME', 'XDG_CONFIG_HOME'])):
+                    prime(root)
+            # Prevent another primer while the normal browser is still creating
+            # its profile. The marker is private to this user's current login.
+            started.touch(mode=0o600, exist_ok=True)
+            return execute(command)
+    except OSError as error:
+        # In particular, never forward a URL into a primer after a lock timeout.
+        print(str(error), file=sys.stderr)
+        return 1
+
+
 if __name__ == '__main__':
-    # Custom profile launches belong to their caller. Chromium's usual profile
-    # and XDG configuration are the only defaults provisioned here.
-    if not os.environ.get('CHROME_USER_DATA_DIR') and not any(
-            arg == '--user-data-dir' or arg.startswith('--user-data-dir=') for arg in sys.argv[1:]):
-        config = Path(os.environ.get('CHROME_CONFIG_HOME') or os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
-        root = config / 'chromium'
-        if (prepare(root) and len(sys.argv) == 1 and
-                not (config / 'chromium-flags.conf').exists() and not any(
-                    os.environ.get(key) for key in ['CHROME_CONFIG_HOME', 'XDG_CONFIG_HOME'])):
-            prime(root)
+    sys.exit(launch(sys.argv[1:]))

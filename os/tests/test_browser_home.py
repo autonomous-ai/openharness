@@ -7,6 +7,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest.mock import Mock, patch
 
@@ -243,12 +244,59 @@ class BrowserHome(unittest.TestCase):
         child = Mock(stdin=io.BytesIO(), stdout=io.BytesIO())
         child.poll.return_value = None
         def start(*args, **kwargs):
+            self.assertEqual(args[0][-1], str(root))
             profile.installed()
             return child
         with patch.object(profile, 'startup_socket', return_value=endpoint), patch.object(profile.subprocess, 'Popen', side_effect=start):
             self.assertTrue(profile.prime(root))
         child.wait.assert_called_once_with(timeout=3)
         self.assertFalse(endpoint.exists())
+
+    def test_url_arriving_during_preparation_waits_and_is_not_lost(self):
+        runtime = tempfile.TemporaryDirectory(prefix='hn-home-', dir='/tmp')
+        self.addCleanup(runtime.cleanup)
+        endpoint = Path(runtime.name) / 'ready'
+        preparing, finish, requested = threading.Event(), threading.Event(), threading.Event()
+        calls, outcomes = [], []
+        def prime(root):
+            preparing.set()
+            return finish.wait(2)
+        def execute(args):
+            self.assertTrue(finish.is_set())
+            calls.append(args)
+            return 0
+        def second():
+            requested.set()
+            outcomes.append(profile.launch(['https://example.test/'], execute=execute))
+        with patch.object(profile, 'startup_socket', return_value=endpoint), patch.object(profile, 'prepare', return_value=True), patch.object(profile, 'prime', side_effect=prime), patch.dict(profile.os.environ, {}, clear=True):
+            first = threading.Thread(target=lambda: outcomes.append(profile.launch([], execute=execute)))
+            later = threading.Thread(target=second)
+            first.start()
+            try:
+                self.assertTrue(preparing.wait(1))
+                later.start()
+                self.assertTrue(requested.wait(1))
+                self.assertEqual(calls, [])
+            finally:
+                finish.set()
+                first.join(3)
+                if later.ident is not None:
+                    later.join(3)
+            self.assertFalse(first.is_alive())
+            self.assertFalse(later.is_alive())
+        self.assertEqual(outcomes, [0, 0])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][-1], 'https://example.test/')
+
+    def test_lock_timeout_never_forwards_a_url_to_temporary_browser(self):
+        runtime = tempfile.TemporaryDirectory(prefix='hn-home-', dir='/tmp')
+        self.addCleanup(runtime.cleanup)
+        endpoint = Path(runtime.name) / 'ready'
+        execute = Mock()
+        with patch.object(profile, 'startup_socket', return_value=endpoint), patch.object(profile.sys, 'stderr', io.StringIO()):
+            with profile.startup_guard():
+                self.assertEqual(profile.launch(['https://example.test/'], execute=execute, lock_timeout=.01), 1)
+        execute.assert_not_called()
 
 
 if __name__ == '__main__':
