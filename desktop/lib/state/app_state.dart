@@ -34,7 +34,6 @@ import '../auth/sign_in_client.dart';
 import '../auth/sign_in_provider.dart';
 import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
-import '../core/harness_cli_runner.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
@@ -4210,12 +4209,6 @@ class AppNotifier extends ChangeNotifier {
     bool quiet = false,
   }) async {
     final provisioner = environmentProvisioner ?? EnvironmentProvisioner();
-    final installsHarness =
-        install &&
-        mode != EnvironmentSetupMode.manual &&
-        (resumeFrom ?? environmentReadiness).plan.any(
-          (item) => item.step == EnvironmentStep.harness,
-        );
     final result = await provisioner.ensureReady(
       onProgress: (value) {
         if (quiet &&
@@ -4246,7 +4239,6 @@ class AppNotifier extends ChangeNotifier {
       mode: mode,
     );
     environmentReadiness = result;
-    if (installsHarness && result.isReady) _harnessInstalledThisLaunch = true;
     return result;
   }
 
@@ -4956,18 +4948,8 @@ class AppNotifier extends ChangeNotifier {
         );
     }
     _startDaemonSupervision(discovery);
-    _installMissingAgents();
   }
 
-  bool _agentsInstallStarted = false;
-
-  /// A new user's first harness waited for its agent to install in the pane (OpenCode ~15 s, longer
-  /// for Claude Code and Codex). On the run that installed Harness, once this computer's daemon is
-  /// up, the CLI installs whichever of the default agents are missing, in the background and
-  /// OpenCode first
-  /// (`harness engines install-missing`); a harness started meanwhile waits for that install rather
-  /// than running its own. Once per launch. An older CLI without the command answers an error,
-  /// which is only logged.
   /// Settings › Devices could not see the local network. Without a paired
   /// robot the daemon-owner check never tests the LAN (it is what raises the
   /// macOS prompt), so a daemon started from a terminal would stay refused it
@@ -4982,34 +4964,6 @@ class AppNotifier extends ChangeNotifier {
     final probe = await _discovery.ensureRunning();
     final pid = probe.pid;
     if (probe.ready && pid != null) await guard.recheck(pid);
-  }
-
-  /// This launch installed Harness on this computer: a new user's first run.
-  bool _harnessInstalledThisLaunch = false;
-
-  void _installMissingAgents() {
-    // Only on the run that installed Harness here, which is a new user's first
-    // and never a "Manual setup" (that installs nothing unattended). An
-    // existing user who updates the app is not given four agents they never
-    // asked for, nor one they removed long ago.
-    if (!_harnessInstalledThisLaunch) return;
-    if (_agentsInstallStarted || kUnderTest || viewer != null) return;
-    _agentsInstallStarted = true;
-    unawaited(() async {
-      try {
-        final result = await HarnessCliRunner().run([
-          'engines',
-          'install-missing',
-          '--background',
-        ]);
-        appLog.info(
-          'agents',
-          'background install: ${'${result.stdout}'.trim()} ${'${result.stderr}'.trim()}'.trim(),
-        );
-      } catch (error) {
-        appLog.warn('agents', 'background install did not start: $error');
-      }
-    }());
   }
 
   /// One line per probe STATE the gate lands in, never per tick: this gate was silent, and the one
