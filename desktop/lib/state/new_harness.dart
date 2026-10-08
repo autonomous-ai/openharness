@@ -668,6 +668,22 @@ class NewHarnessController extends ChangeNotifier {
     return allowed.first;
   }
 
+  /// What the chosen machine said of an agent, for the end of its row in the
+  /// picker. A new user could not tell the Claude Code they had installed from
+  /// thirteen agents they did not (fresh macOS VM, 2026-10-08). Null while the
+  /// machine has not said, and for packages and the terminal.
+  String? agentStatus(String id) {
+    if (isHarnessId(id) || isTerminalEngine(id)) return null;
+    final engines = _machine?.engines;
+    if (engines == null || !engines.loaded) return null;
+    final engine = engines[id];
+    if (engine == null) return null;
+    if (engine.installed) {
+      return engine.signedIn == false ? 'Needs sign-in' : 'Installed';
+    }
+    return engine.installable ? 'Installs on start' : null;
+  }
+
   /// Claude Code or Codex, installed and signed in on the chosen machine; the
   /// one used most recently when both are. Null until the machine has said.
   String? _accountAgent() {

@@ -794,6 +794,26 @@ void main() {
     });
   });
 
+  test('the picker says which agents are installed, need a sign-in, or install on start', () async {
+    final fixture = _Fixture();
+    fixture.connection.replies['engines_probe'] = (_) => {
+      'engines': [
+        {'engine': 'opencode', 'installed': false, 'installable': true},
+        {'engine': 'claude', 'installed': true, 'signedIn': false},
+        {'engine': 'codex', 'installed': true, 'signedIn': true},
+        {'engine': 'cursor', 'installed': false},
+      ],
+    };
+    final box = NewHarnessController(fixture.app, machineId: 'm', folder: '/work/repo');
+    addTearDown(box.dispose);
+    await _settle();
+    expect(box.agentStatus('opencode'), 'Installs on start');
+    expect(box.agentStatus('claude'), 'Needs sign-in');
+    expect(box.agentStatus('codex'), 'Installed');
+    expect(box.agentStatus('cursor'), isNull);
+    expect(box.agentStatus('terminal'), isNull);
+  });
+
   test('a remembered agent that is no longer installed still asks for a replacement', () async {
     final fixture = _Fixture();
     fixture.connection.replies['engines_probe'] = (_) => {

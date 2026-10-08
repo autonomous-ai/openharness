@@ -3523,6 +3523,9 @@ class NewHarnessFormState extends State<NewHarnessForm> {
         ? option.why
         : box.field == NewHarnessField.machine
         ? _machineNote(option.id)
+        : box.field == NewHarnessField.harness ||
+              box.field == NewHarnessField.agent
+        ? box.agentStatus(option.id)
         : null;
     final showDetail = _showsDetail(option);
     final unlinked = _unlinked(option);
