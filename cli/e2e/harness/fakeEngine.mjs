@@ -16,7 +16,8 @@
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
 // interrupt then writes the tool's aborted output before the turn's end, as the CLIs do), `!ask` asks the person which drink they would like in the engine's own
-// dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
+// dialog and answers with their choice (`!askmany`, Claude Code: which toppings, a multiSelect question
+// of six), `!permit <command>` asks permission to run a command the way
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
@@ -56,7 +57,7 @@
 // child in the same process group and terminal (`codexWrapper`).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -650,9 +651,55 @@ export async function run(engine, config = {}, { native = false } = {}) {
   let notes = ''
   const QUESTION = 'Which drink would you like?'
   const CHOICES = [['Tea', 'Lighter, steeped leaves.'], ['Coffee', 'Stronger, roasted beans.']]
+  // `!askmany` (Claude Code): one multiSelect question, drawn as Claude Code draws one
+  // (__fixtures__/question-multi.txt and question-review.txt). A digit toggles its row, Tab moves on
+  // to the Submit tab's review, whose 1 submits the checked rows and 2 goes back; Esc cancels.
+  const MANY = 'Which toppings do you want?'
+  const TOPPINGS = [['Cheese', 'Melted and savory.'], ['Ham', 'Salty cured meat.'], ['Basil', 'Fresh herb, aromatic.'],
+    ['Olives', 'Briny and dark.'], ['Onion', 'Sweet once cooked.'], ['Peppers', 'Crisp and bright.']]
+  // Every key a dialog takes, one per line (`question-keys-<engine>` in the test's root): what reached the
+  // engine, whoever typed it. A test can arm `question-keys-<engine>.signal`, `{ pid, signal, after, delayMs? }`:
+  // once `after` keys in all have reached a dialog, the engine signals that process before it acts on the
+  // key, and leaves `.fired` beside it. That is how a test stops an engine worker between two keystrokes of
+  // one answer, exactly, rather than whenever its own poll happens to notice the first.
+  const questionKeys = join(config.root, `question-keys-${engine}`)
+  const keyName = (key) => key.startsWith('\x1b[200~') ? `paste:${key.slice(6).replace(/\x1b\[201~$/, '')}`
+    : ({ '\r': 'Enter', '\n': 'Enter', '\t': 'Tab', '\x1b': 'Escape', '\x1b[A': 'Up', '\x1b[B': 'Down' })[key] ?? key
+  const noteDialogKey = (key) => {
+    appendFileSync(questionKeys, `${keyName(key)}\n`)
+    const armed = `${questionKeys}.signal`
+    if (!existsSync(armed)) return
+    let trigger
+    try { trigger = JSON.parse(readFileSync(armed, 'utf8')) } catch { return }
+    const count = readFileSync(questionKeys, 'utf8').split('\n').filter(Boolean).length
+    if (count < trigger.after) return
+    renameSync(armed, `${questionKeys}.fired`)
+    const fire = () => {
+      let outcome = 'sent'
+      try { process.kill(trigger.pid, trigger.signal) } catch (error) { outcome = String(error?.code ?? error) }
+      appendFileSync(`${questionKeys}.fired`, `\n${JSON.stringify({ count, outcome })}\n`)
+    }
+    // `delayMs`: a moment later instead, once the worker has heard that the key went in.
+    if (trigger.delayMs) setTimeout(fire, trigger.delayMs)
+    else fire()
+  }
   const drawDialog = () => {
     const rule = '─'.repeat(60)
     const mark = (i, on) => (dialog.cursor === i ? on : ' ')
+    if (dialog.kind === 'many') {
+      const lines = dialog.review
+        ? [rule, '←  ☒ Toppings  ✔ Submit  →', '', 'Review your answers', '', ` ● ${MANY}`,
+            `   → ${TOPPINGS.filter((_, i) => dialog.checked.has(i)).map(([label]) => label).join(', ')}`, '',
+            'Ready to submit your answers?', '', `${mark(0, '❯')} 1. Submit answers`, `${mark(1, '❯')} 2. Cancel`]
+        : [rule, '←  ☐ Toppings  ✔ Submit  →', '', MANY, '',
+            ...TOPPINGS.flatMap(([label, description], i) => [`${mark(i, '❯')} ${i + 1}. [${dialog.checked.has(i) ? '✔' : ' '}] ${label}`, `  ${description}`]),
+            `${mark(TOPPINGS.length, '❯')} ${TOPPINGS.length + 1}. [ ] Type something`, '     Submit', rule,
+            `  ${TOPPINGS.length + 2}. Chat about this`, '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
+      eraseDialog()
+      process.stdout.write(`\r\n${lines.join('\r\n')}\r\n`)
+      dialog.drawn = lines.length + 1
+      return
+    }
     // A permission prompt, as the CLIs draw one (__fixtures__/permission-claude.txt, permission-codex.txt).
     const command = dialog.command
     const lines = dialog.kind === 'permit' ? (engine === 'claude'
@@ -690,12 +737,35 @@ export async function run(engine, config = {}, { native = false } = {}) {
   const dialogKeys = (chunk) => {
     for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
       if (!dialog) return
+      noteDialogKey(key)
       const settle = (choice) => {
         // An old dialog can survive in tmux scrollback after a redraw/resize, as in the chaos run.
         // Keep the whole frame for that acceptance case; the composer below it is the live screen.
         if (dialog.keepInScrollback) process.stdout.write('\r\n')
         else eraseDialog()
         const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice)
+      }
+      if (dialog.kind === 'many') {
+        // A paste is dropped, as in Claude Code's other dialogs; Enter on a row toggles it.
+        if (key.startsWith('\x1b[200~')) continue
+        const rows = dialog.review ? 2 : TOPPINGS.length
+        if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog(); continue }
+        if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog(); continue }
+        if (key === '\x1b') { settle(null); continue }
+        if (dialog.review) {
+          const row = key === '\r' || key === '\n' ? dialog.cursor : /^[12]$/.test(key) ? Number(key) - 1 : -1
+          if (row === 0) settle(TOPPINGS.filter((_, i) => dialog.checked.has(i)).map(([label]) => label).join(', '))
+          else if (row === 1) { dialog.review = false; dialog.cursor = 0; drawDialog() }
+          continue
+        }
+        const toggle = key === '\r' || key === '\n' ? dialog.cursor : /^[1-9]$/.test(key) ? Number(key) - 1 : -1
+        if (toggle >= 0 && toggle < rows) {
+          dialog.cursor = toggle
+          if (dialog.checked.has(toggle)) dialog.checked.delete(toggle)
+          else dialog.checked.add(toggle)
+          drawDialog()
+        } else if (key === '\t') { dialog.review = true; dialog.cursor = 0; drawDialog() }
+        continue
       }
       const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
       if (key.startsWith('\x1b[200~')) {
@@ -1253,6 +1323,22 @@ export async function run(engine, config = {}, { native = false } = {}) {
         say(`• ${QUESTION} → ${choice}\r\n`)
       }
       await finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'askmany') {
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+      const choice = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'many', cursor: 0, checked: new Set(), review: false, drawn: 0, resolve }; drawDialog() })
+      if (choice === null) {
+        say('(question cancelled)\r\n')
+        await finish('(question cancelled)')
+        return
+      }
+      const questions = [{ question: MANY, header: 'Toppings', multiSelect: true, options: TOPPINGS.map(([label, description]) => ({ label, description })) }]
+      const id = `toolu_${turn}`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_q`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }], stop_reason: 'tool_use' } })
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `User has answered your questions: "${MANY}"="${choice}"` }] } })
+      say(`⏺ User answered Claude's questions:\r\n  ⎿  · ${MANY} → ${choice}\r\n`)
+      await finish(`you chose ${choice || 'nothing'}`)
       return
     }
     if (engine === 'codex' && directive?.[1] === 'askasync') {

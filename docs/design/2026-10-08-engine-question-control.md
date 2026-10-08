@@ -53,10 +53,21 @@ messages, wrong service/token, exact-text enforcement, limits, aborts, timeouts,
 late writes and immutable reviewed answers. Model-control tests exercise the extracted shared
 transport without changing its contract.
 
+`cli/e2e/engineQuestionControl.e2e.ts` runs the routed path on a real private daemon. The fake engine
+signals the worker the moment a chosen keystroke of one step reaches it, so each stop lands inside the
+step: Claude Code's worker killed or frozen between two toggles of a multi-select, and Codex's between
+the digit and its Enter. The answer fails as ANSWER_FAILED, as does one sent while no worker runs
+(nothing is typed inline instead), no later key of the step reaches the pane after the worker is gone
+or replaced, the other engine's agent finishes a turn and core answers requests during the outage, core
+never restarts, and a different new answer then succeeds. A worker frozen past the step's deadline is
+woken with its next key due, and core refuses that key. Explicit inline mode answers end to end, and a
+window's `engine_question_control_*` or `engine.questionControl` request is refused even while a worker
+holds a live grant.
+
 The handoff checkpoint must retain actual receipts and distinguish passing checks from missing
-evidence. Before merge, finish new real-daemon worker-interruption cases and a paired question-workload
-CPU/RSS/latency comparison, review the final source, and complete automatic CLI CI. Existing question
-E2E uses private homes, tmux and deterministic CLI fixtures, not real model accounts.
+evidence. Before merge, finish a paired question-workload CPU/RSS/latency comparison, review the final
+source, and complete automatic CLI CI. Question E2E uses private homes, tmux and deterministic CLI
+fixtures, not real model accounts.
 
 The full extraction remains incomplete: submission verification, hooks and their installers/admission,
 launch/discovery/resume, and native control connections still need migration and a final import/runtime
