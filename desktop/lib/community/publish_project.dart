@@ -54,7 +54,8 @@ Future<Map<String, dynamic>> buildPublicationDraft({
           ]
         : conversation,
     if (previous['forkedFrom'] is String) 'forkedFrom': previous['forkedFrom'],
-    if (cover != null && cover.length <= hubMaxCoverChars) 'cover': cover,
+    if (selection.pictured && cover != null && cover.length <= hubMaxCoverChars)
+      'cover': cover,
     'contextNote': [
       _conversationNote(conversation, tail),
       if (selection.pictured) 'The output is a picture of your viewer, taken just now. A fork opens the real thing.',

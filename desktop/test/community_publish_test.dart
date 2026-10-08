@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/community/hub_return.dart';
 import 'package:harness/community/publish_conversation.dart';
+import 'package:harness/community/publish_files.dart';
 import 'package:harness/community/publish_project.dart';
 
 void main() {
@@ -138,7 +139,7 @@ void main() {
     await expectLater(
       build(),
       throwsA(
-        isA<FormatException>().having(
+        isA<NeedsOutput>().having(
           (e) => e.message,
           'message',
           contains('preview.html is still the original'),
@@ -192,6 +193,37 @@ void main() {
         '<h1>My own page</h1>',
       );
       expect(own['contextNote'], isNot(contains('a picture of your viewer')));
+    },
+  );
+  test(
+    'passes over an unchanged original page to the new preview.html',
+    () async {
+      const original = '<h1>Moonlight</h1>';
+      await file('index.html', original);
+      await file('preview.html', '<h1>My review</h1>');
+      await file(
+        'OPEN-HARNESS.json',
+        jsonEncode({
+          'viewerPath': 'index.html',
+          'files': [
+            {'path': 'index.html', 'content': original},
+          ],
+        }),
+      );
+      final draft = await buildPublicationDraft(
+        folder: root.path,
+        title: 'Mine',
+        engine: 'codex',
+        viewerPicture: 'SNAPSHOT',
+      );
+      expect(draft['viewerPath'], 'preview.html');
+      expect(
+        (draft['files'] as List).firstWhere(
+          (f) => f['path'] == 'preview.html',
+        )['content'],
+        '<h1>My review</h1>',
+      );
+      expect(draft, isNot(contains('cover')));
     },
   );
   test('leaves out what does not fit and names it, keeping the output and the harness source', () async {

@@ -27,11 +27,11 @@ export async function getStarter(id: string): Promise<OpenHarness | null> {
   return { ...summary, viewerPath, files, conversation: starterConversation(id) };
 }
 
-export async function getPublicHarness(id: string): Promise<OpenHarness | null> {
+export async function getPublicHarness(id: string, timeoutMs = 8000): Promise<OpenHarness | null> {
   const starter = await getStarter(id);
   if (starter) return starter;
   if (!/^[a-f0-9-]{36}$/.test(id)) return null;
-  const response = await fetch(`${communityApiOrigin()}/api/community/harnesses/${id}`, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+  const response = await fetch(`${communityApiOrigin()}/api/community/harnesses/${id}`, { cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error('Community service unavailable.');
   const body = await response.json();

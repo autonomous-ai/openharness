@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import PublishPage from './page';
+import { readDraft } from '@/lib/community/drafts';
 
 vi.mock('@/lib/community/drafts', async importActual => ({ ...await importActual<typeof import('@/lib/community/drafts')>(), readDraft: vi.fn(async () => undefined), saveDraft: vi.fn(async () => {}) }));
 const mocks = vi.hoisted(() => ({ request: vi.fn(), push: vi.fn(), headers: vi.fn() }));
@@ -76,5 +77,20 @@ describe('explicit publication', () => {
     expect(screen.queryByText(/The Hub shows what a session made/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
     expect(screen.getByRole('button', { name: 'Publish harness' })).toBeEnabled();
+  });
+  it('still knows a fork\'s original output after a reload or a sign-in', async () => {
+    vi.mocked(readDraft).mockResolvedValueOnce({ ...project, originalOutput: project.files[0].content } as never);
+    render(<PublishPage />);
+    expect(await screen.findByText(/index.html is still the original/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /I have permission/ }));
+    expect(screen.getByRole('button', { name: 'Publish harness' })).toBeDisabled();
+  });
+  it('refuses a large file by its size, without reading it', async () => {
+    render(<PublishPage />); await act(async () => {});
+    const read = vi.fn();
+    const model = Object.assign(new File([new Uint8Array(2_400_000)], 'model.glb'), { webkitRelativePath: 'project/model.glb', arrayBuffer: read });
+    fireEvent.change(screen.getByLabelText('Choose project folder'), { target: { files: [model] } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('model.glb is over 3 MB as sent');
+    expect(read).not.toHaveBeenCalled();
   });
 });

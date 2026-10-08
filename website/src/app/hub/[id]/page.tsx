@@ -14,7 +14,8 @@ const validId = (id: string) => /^starter-[a-z-]+$/.test(id) || /^[a-f0-9-]{36}$
  */
 const readHarness = cache(async (id: string): Promise<OpenHarness | null> => {
   if (!validId(id)) return null;
-  return getPublicHarness(id).catch(() => null);
+  // A slow backend must not hold the page: past this, the browser loads the harness itself.
+  return getPublicHarness(id, 2500).catch(() => null);
 });
 
 /** The page draws only the output; the other files reach a fork through its own routes. */

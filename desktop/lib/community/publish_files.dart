@@ -42,7 +42,7 @@ class ProjectSelection {
 }
 
 class _Candidate {
-  _Candidate(this.path, this.file) : page = null;
+  _Candidate(this.path, File this.file) : page = null;
   _Candidate.page(this.path, String this.page) : file = null;
   final String path;
   final File? file;
@@ -52,18 +52,50 @@ class _Candidate {
   bool get binary =>
       hubBinaryExtensions.contains(p.extension(path).toLowerCase());
   int get depth => '/'.allMatches(path).length;
+
+  String? _read;
+  bool _wasRead = false;
+
+  /// What the Hub would receive, measured without reading: bytes on disk for text (exact for
+  /// UTF-8), base64 length for a binary file.
+  Future<int> sentBytes() async {
+    if (page != null) return utf8.encode(page!).length;
+    final length = await file!.length();
+    return binary ? (length + 2) ~/ 3 * 4 : length;
+  }
+
+  /// The file as the Hub stores it, read once, or null when text is not UTF-8.
+  Future<String?> content() async {
+    if (page != null) return page;
+    if (_wasRead) return _read;
+    _wasRead = true;
+    final bytes = await file!.readAsBytes();
+    if (binary) return _read = base64Encode(bytes);
+    try {
+      return _read = utf8.decode(bytes);
+    } on FormatException {
+      return null;
+    }
+  }
+}
+
+/// The project has no page of its own to show, or only the original's. With a picture of the
+/// viewer, publishing can still go ahead; without one, the message says what to ask the agent for.
+class NeedsOutput extends FormatException {
+  const NeedsOutput(super.message);
 }
 
 /// Local project files only. No daemon state, hidden files, credentials files, links, installed
 /// dependencies, or native engine session identifiers are exported.
 ///
 /// The output is chosen first and the harness's own source second; the rest are added shallowest
-/// first while they fit. A file that does not fit is named, never a reason to publish nothing.
+/// first while they fit. A file that does not fit is named, never a reason to publish nothing, and
+/// is never read: a size on disk says enough.
 ///
-/// The output is [viewer] (the page a fork was published with) or else `preview.html`. Any other
-/// page is never assumed: an app's `index.html` usually needs files the Hub's sandbox cannot load.
-/// A page still as it is in [original] (the fork's files as they arrived) shows the original, not
-/// this version. Without a page of its own, the output is [picture], a page showing the viewer.
+/// The output is [viewer] (the page a fork was published with), or else `preview.html`, skipping a
+/// page still as it is in [original] (the fork's files as they arrived), which shows the original.
+/// Any other page is never assumed: an app's `index.html` usually needs files the Hub's sandbox
+/// cannot load. Without a page of its own, the output is [picture], a page showing the viewer.
 Future<ProjectSelection> selectProjectFiles(
   String folder, {
   String? marker,
@@ -73,24 +105,18 @@ Future<ProjectSelection> selectProjectFiles(
 }) async {
   final root = Directory(await Directory(folder).resolveSymbolicLinks());
   final (candidates, scannedAll) = await _candidates(root);
-  var output = _output(candidates, viewer);
-  final unchanged =
-      output != null &&
-      original.containsKey(output.path) &&
-      await _content(output) == original[output.path];
-  if (output == null || unchanged) {
-    if (picture == null) {
-      throw FormatException(
-        unchanged
-            ? '${output.path} is still the original\'s and has none of your changes. '
-                  'Ask your agent to update it to show the current result, then publish again.'
-            : 'The Hub shows what a session made. Ask your agent for a preview.html that runs on '
-                  'its own (for a review, a page presenting it), then publish again.',
-      );
-    }
-    output = _Candidate.page('preview.html', picture);
-  }
-  final shown = output;
+  final (own, stale) = await _output(candidates, viewer, original);
+  final shown =
+      own ??
+      (picture == null
+          ? throw NeedsOutput(
+              stale != null
+                  ? '${stale.path} is still the original\'s and has none of your changes. '
+                        'Ask your agent to update it to show the current result, then publish again.'
+                  : 'The Hub shows what a session made. Ask your agent for a preview.html that runs '
+                        'on its own (for a review, a page presenting it), then publish again.',
+            )
+          : _Candidate.page('preview.html', picture));
   final rest =
       candidates.where((c) => c.path != shown.path && c.path != marker).toList()
         ..sort(
@@ -105,15 +131,12 @@ Future<ProjectSelection> selectProjectFiles(
   final files = <Map<String, String>>[], leftOut = <String>[];
   var size = 0;
   for (final candidate in ordered) {
-    final content = await _content(candidate);
     // The snapshot limit is in bytes; one file's is in characters, as the backend counts each.
-    final weight = content == null ? 0 : utf8.encode(content).length;
-    final fits =
-        content != null &&
-        files.length < hubMaxFiles &&
-        content.length <= hubMaxFileChars &&
-        size + weight <= hubMaxProjectChars;
-    if (!fits) {
+    final weight = await candidate.sentBytes();
+    final room =
+        files.length < hubMaxFiles && size + weight <= hubMaxProjectChars;
+    final content = room ? await candidate.content() : null;
+    if (content == null || content.length > hubMaxFileChars) {
       if (candidate == shown) {
         throw FormatException(
           '${shown.path} is too large to publish. Keep the preview under 3 MB.',
@@ -139,29 +162,25 @@ Future<ProjectSelection> selectProjectFiles(
   );
 }
 
-/// The page readers see: the one this project was published with, or else its preview.html.
-_Candidate? _output(List<_Candidate> candidates, String? viewer) {
-  for (final name in [?viewer, 'preview.html']) {
+/// The page readers see, and the original's page passed over on the way, if any.
+Future<(_Candidate?, _Candidate?)> _output(
+  List<_Candidate> candidates,
+  String? viewer,
+  Map<String, String> original,
+) async {
+  _Candidate? stale;
+  for (final name in {?viewer, 'preview.html'}) {
     final page = candidates
-        .where((c) => c.path == name && c.path.endsWith('.html'))
+        .where((c) => c.path == name && name.endsWith('.html'))
         .firstOrNull;
-    if (page != null) return page;
+    if (page == null) continue;
+    if (original.containsKey(name) && await page.content() == original[name]) {
+      stale ??= page;
+      continue;
+    }
+    return (page, stale);
   }
-  return null;
-}
-
-/// The file as the Hub stores it, or null when a text file is not UTF-8 or too large to read.
-Future<String?> _content(_Candidate candidate) async {
-  final file = candidate.file;
-  if (file == null) return candidate.page;
-  if (await file.length() > hubMaxFileChars) return null;
-  final bytes = await file.readAsBytes();
-  if (candidate.binary) return base64Encode(bytes);
-  try {
-    return utf8.decode(bytes);
-  } on FormatException {
-    return null;
-  }
+  return (null, stale);
 }
 
 Future<(List<_Candidate>, bool)> _candidates(Directory root) async {

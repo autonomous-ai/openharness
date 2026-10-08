@@ -53,6 +53,11 @@ describe('community navigation', () => {
     render(<Feed />);
     await screen.findByRole('button', { name: 'More harnesses' });
     expect(screen.queryByRole('link', { name: 'Open Blue hour' })).not.toBeInTheDocument();
+    // A search finds them at once: there is nothing to scroll past.
+    fireEvent.click(screen.getByRole('button', { name: 'Search harnesses' }));
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'melody' } });
+    expect(screen.getByRole('link', { name: 'Open Blue hour' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
     request.mockResolvedValueOnce({ harnesses: [{ ...sample, id: 'second', title: 'Second' }], nextCursor: null, following: [], stats: {}, signedIn: true });
     fireEvent.click(screen.getByRole('button', { name: 'More harnesses' }));
     await screen.findByRole('link', { name: 'Open Blue hour' });

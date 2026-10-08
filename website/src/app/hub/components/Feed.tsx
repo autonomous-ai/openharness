@@ -29,8 +29,9 @@ const matches = (item: HarnessSummary, query: string) => `${item.title} ${item.d
 export default function Feed({ following = false, mine = false }: { following?: boolean; mine?: boolean }) {
   const { posts, follows, stats, cursor, error, likeError, signedOut, busy, more, load, like } = useFeed({ following, mine });
   const [query, setQuery] = useState(''), [search, setSearch] = useState(false);
-  // Starters follow the last page: drawn sooner, every page loaded while scrolling would land above them.
-  const starters = mine || cursor ? [] : following ? starterHarnesses.filter(item => follows.includes(item.authorId)) : starterHarnesses;
+  // Starters follow the last page: drawn sooner, every page loaded while scrolling would land above
+  // them. A search or a failed page shows them at once: there is nothing to scroll past.
+  const starters = mine || (cursor && !query && !error) ? [] : following ? starterHarnesses.filter(item => follows.includes(item.authorId)) : starterHarnesses;
   const visible = [...posts, ...starters].filter(item => matches(item, query));
   return <><Header following={following} mine={mine} onSearch={() => { setSearch(value => !value); setQuery(''); }} />
     <main className={`${styles.wrap} ${styles.feed}`}>

@@ -16,9 +16,13 @@ const viewerSettle = Duration(milliseconds: 1500);
 /// Chrome, or null when it cannot: no viewer yet, no Chrome on that machine, or no connection.
 /// This is how a native result (a Typst PDF, a Blender model) reaches the Hub as a picture.
 Future<String?> captureViewer(
-  ViewerSurfaceRequest request, {
+  ViewerSurfaceRequest send, {
   Duration settle = viewerSettle,
+  Duration timeout = const Duration(seconds: 10),
 }) async {
+  // A picture is a convenience: a slow machine gives up rather than holding Publish.
+  Future<Map<String, dynamic>> request(Map<String, dynamic> payload) =>
+      send(payload).timeout(timeout);
   final id =
       'hub-publish-${Random.secure().nextInt(1 << 32).toRadixString(16)}';
   Map<String, dynamic> frame() => {

@@ -17,7 +17,7 @@ function fromBundle(bundle: HubDraft): PublishDraft {
     engine: communityEngines.includes(bundle.engine || '') ? bundle.engine! : 'Codex',
     harnessId: bundle.harnessId, files: bundle.files || [], viewerPath: bundle.viewerPath || 'preview.html',
     conversation: bundle.conversation?.length ? bundle.conversation : fresh.conversation,
-    forkedFrom: bundle.forkedFrom, cover: bundle.cover, contextNote: bundle.contextNote || '',
+    forkedFrom: bundle.forkedFrom, cover: bundle.cover, contextNote: bundle.contextNote || '', originalOutput: bundle.originalOutput,
   };
 }
 

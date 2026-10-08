@@ -2,7 +2,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { communityRequest } from '@/lib/community/client';
-import { missingMarker } from '@/lib/community/contract';
+import { communityLimits, missingMarker } from '@/lib/community/contract';
 import { validateDraft } from '@/lib/community/drafts';
 import { previewDocument } from '@/lib/community/preview';
 import { outsideResources } from '@/lib/community/outputCheck';
@@ -39,7 +39,7 @@ export default function PublishPage() {
     try { await action(); } catch (e) { setError(e instanceof Error ? e.message : fallback); }
   }
   const importBundle = (file: File) => attempt(async () => {
-    if (file.size > 6_000_000) throw new Error('Keep the project under 6 MB.');
+    if (file.size > communityLimits.snapshotBytes) throw new Error('Keep the project under 6 MB.');
     const bundle = validateDraft(JSON.parse(await file.text()));
     applyBundle(bundle); update({ originalOutput: originalOutput(bundle) }); setConfirmed(false); setError('');
   }, 'This bundle could not be read.');
@@ -49,7 +49,7 @@ export default function PublishPage() {
     replaceProject({ files: folder.files, viewerPath: folder.viewerPath, ...origin, ...(folder.origin ? { originalOutput: output } : {}) });
   }, 'Could not read the project files.');
   const importOutput = (file: File) => attempt(async () => {
-    if (file.size > 3_000_000) throw new Error('Keep the self-contained HTML output under 3 MB.');
+    if (file.size > communityLimits.fileChars) throw new Error('Keep the self-contained HTML output under 3 MB.');
     const content = await file.text();
     replaceProject({ files: [...draft.files.filter(f => f.path !== draft.viewerPath), { path: draft.viewerPath, content }] });
   }, 'Could not read the output.');

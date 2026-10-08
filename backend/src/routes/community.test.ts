@@ -10,6 +10,7 @@ const db = vi.hoisted(() => {
         const filter = value as Record<string, unknown>
         if ('in' in filter) return (filter.in as unknown[]).includes(row[key])
         if ('gt' in filter) return (row[key] as Date) > (filter.gt as Date)
+        if ('isSet' in filter || 'not' in filter) return (!filter.isSet || row[key] !== undefined) && (!('not' in filter) || row[key] !== filter.not)
         return matches(row, filter)
       }
       return row[key] === value
@@ -136,7 +137,12 @@ describe('publications and access', () => {
     const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0])
     const id = await publish('alice', { ...sample, cover: `data:image/png;base64,${bytes.toString('base64')}` } as typeof sample)
     const address = `/api/community/harnesses/${id}/cover`
-    expect((await call('GET', 'harnesses')).json().data.harnesses[0].cover).toBe(address)
+    const bare = await publish('alice')
+    const feed = (await call('GET', 'harnesses')).json().data.harnesses
+    expect(feed.find((row: { id: string }) => row.id === id).cover).toBe(address)
+    expect(feed.find((row: { id: string }) => row.id === bare)).not.toHaveProperty('cover')
+    // The feed never reads a cover's bytes, only whether there is one.
+    expect(db.communityHarness.findMany.mock.calls.every(([query]) => !query?.select?.cover)).toBe(true)
     expect((await call('GET', `harnesses/${id}`)).json().data.harness.cover).toBe(address)
     // An <img> sends no environment header, so the cover does not depend on it.
     const cover = await call('GET', `harnesses/${id}/cover`, undefined, undefined, 'stag')

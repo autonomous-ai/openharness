@@ -105,18 +105,21 @@ export async function communityRoutes(app: FastifyInstance): Promise<void> {
     const follows = req.user ? await prisma.communityFollow.findMany({ where: { autonomousEnv, userId: req.user.sub }, select: { authorId: true } }) : []
     const rows = await prisma.communityHarness.findMany({
       where: { autonomousEnv, deletedAt: null, ...(req.query.following === 'true' ? { authorId: { in: follows.map(row => row.authorId) } } : {}), ...(req.query.mine === 'true' ? { authorId: req.user!.sub } : {}) },
-      select: { id: true, title: true, description: true, category: true, engine: true, harnessId: true, authorId: true, authorName: true, cover: true, forkedFrom: true, createdAt: true },
+      select: { id: true, title: true, description: true, category: true, engine: true, harnessId: true, authorId: true, authorName: true, forkedFrom: true, createdAt: true },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 31,
       ...(req.query.cursor ? { cursor: { id: req.query.cursor }, skip: 1 } : {}),
     })
-    const ids = [...rows.slice(0, 30).map(row => row.id), ...communityStarters]
-    const [likes, comments, liked] = await Promise.all([
+    const page = rows.slice(0, 30), ids = [...page.map(row => row.id), ...communityStarters]
+    const [likes, comments, liked, covered] = await Promise.all([
       prisma.communityLike.groupBy({ by: ['harnessId'], where: { autonomousEnv, harnessId: { in: ids } }, _count: { _all: true } }),
       prisma.communityComment.groupBy({ by: ['harnessId'], where: { autonomousEnv, harnessId: { in: ids } }, _count: { _all: true } }),
       req.user ? prisma.communityLike.findMany({ where: { autonomousEnv, userId: req.user.sub, harnessId: { in: ids } }, select: { harnessId: true } }) : [],
+      // Which have a cover, without reading one: a page of them is megabytes of base64.
+      prisma.communityHarness.findMany({ where: { id: { in: page.map(row => row.id) }, cover: { isSet: true, not: null } }, select: { id: true } }),
     ])
+    const withCover = new Set(covered.map(row => row.id))
     const stats = Object.fromEntries(ids.map(id => [id, { likes: likes.find(row => row.harnessId === id)?._count._all ?? 0, comments: comments.find(row => row.harnessId === id)?._count._all ?? 0, liked: liked.some(row => row.harnessId === id) }]))
-    sendSuccess(reply, { harnesses: rows.slice(0, 30).map(withCoverPath), stats, signedIn: !!req.user, nextCursor: rows.length > 30 ? rows[29].id : null, following: follows.map(row => row.authorId) })
+    sendSuccess(reply, { harnesses: page.map(row => withCoverPath({ ...row, cover: withCover.has(row.id) ? 'set' : null })), stats, signedIn: !!req.user, nextCursor: rows.length > 30 ? rows[29].id : null, following: follows.map(row => row.authorId) })
   })
 
   app.get<{ Params: z.infer<typeof params> }>('/api/community/harnesses/:id', { preHandler: validateParams(params) }, async (req, reply) => {

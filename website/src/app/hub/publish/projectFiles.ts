@@ -15,9 +15,12 @@ export const originalOutput = (bundle: HubDraft) => bundle.files?.find(file => f
 
 function base64(bytes: Uint8Array): string {
   let raw = '';
-  for (const byte of bytes) raw += String.fromCharCode(byte);
+  for (let at = 0; at < bytes.length; at += 0x8000) raw += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
   return btoa(raw);
 }
+
+/** A file's size as sent, known before reading it: base64 for binary, at least its characters for text. */
+const sentSize = (file: File, encoded: boolean) => encoded ? Math.ceil(file.size / 3) * 4 : file.size;
 
 /** A chosen project folder as the Hub stores it: portable files only, measured as they will be sent. */
 export async function readProjectFolder(selected: Iterable<File>, preferredViewer: string): Promise<ProjectFolder> {
@@ -35,6 +38,9 @@ export async function readProjectFolder(selected: Iterable<File>, preferredViewe
     if (!portable.test(path)) continue;
     if (files.length === communityLimits.files) throw new Error(`Choose up to ${communityLimits.files} portable files.`);
     const encoded = binary.test(path);
+    // Refused by size before it is read: a large model or video would otherwise freeze the tab.
+    if (encoded && sentSize(file, encoded) > communityLimits.fileChars) throw new Error(`${path} is over 3 MB as sent. ${sentNote}`);
+    if (size + sentSize(file, encoded) > communityLimits.projectBytes) throw new Error(`Keep the project under 6 MB as sent. ${sentNote}`);
     const content = encoded ? base64(new Uint8Array(await file.arrayBuffer())) : await file.text();
     if (content.length > communityLimits.fileChars) throw new Error(`${path} is over 3 MB as sent. ${sentNote}`);
     size += new TextEncoder().encode(content).length;

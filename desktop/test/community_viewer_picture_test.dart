@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/community/viewer_picture.dart';
 
@@ -31,6 +33,19 @@ void main() {
       isNull,
     );
   });
+
+  test(
+    'a viewer that does not answer is given up on, not waited for',
+    () async {
+      final never = Completer<Map<String, dynamic>>();
+      final picture = await captureViewer(
+        (payload) => payload['op'] == 'close' ? Future.value({}) : never.future,
+        settle: Duration.zero,
+        timeout: const Duration(milliseconds: 20),
+      );
+      expect(picture, isNull);
+    },
+  );
 
   test('a poster page carries the picture and escapes the title', () {
     final page = viewerPosterPage('<Lamp> & "light"', 'AAAA');
