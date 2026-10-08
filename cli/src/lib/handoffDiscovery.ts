@@ -14,8 +14,9 @@ import { SQLITE_BACKED_ENGINES } from './sqliteRead.js'
 export interface DiscoveryDeps {
   /** Engines other than Claude: the born, unique session of a process (sessionRepair findLiveSession). */
   findLiveSession(engine: AgentEngine, cwd: string, startedAtMs: number, opts: { bornOnly: true; pid: number; codexHome?: string }): Promise<RepairedSession | null>
-  /** Claude: the session its per-process record names, or null. Never a scan of the project folder. */
-  claudeProcessSession(pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null>
+  /** An engine that keeps a per-process record (Claude Code): the session it names, or null. Never a scan of its
+   *  store. */
+  processSession(engine: AgentEngine, pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null>
   /** The agent has a live pane (not a stopped copy). */
   isLive(agentId: string): boolean
   /** Another agent, running or stopped, already holds this session. Must answer true when it cannot tell. */
@@ -38,7 +39,7 @@ export function sessionDiscovery(deps: DiscoveryDeps): (session: RegisteredSessi
   async function find(session: RegisteredSession, cwd: string, pid: number, startedAt: number): Promise<TurnSource | null> {
     try {
       const found = session.engine === 'claude'
-        ? await deps.claudeProcessSession(pid, cwd, startedAt)
+        ? await deps.processSession(session.engine, pid, cwd, startedAt)
         : await deps.findLiveSession(session.engine, cwd, startedAt, { bornOnly: true, pid, codexHome: session.codexHome ?? undefined })
       const path = found?.transcriptPath
       if (!found || !found.sessionId || !path || isSubagentTranscript(path)) return null
@@ -107,7 +108,7 @@ export interface HandoffWiring {
   }
   databaseHistory: HandoffDeps['readHistory']
   findLiveSession: DiscoveryDeps['findLiveSession']
-  claudeProcessSession: DiscoveryDeps['claudeProcessSession']
+  processSession: DiscoveryDeps['processSession']
   isRecentlyDeleted(sessionId: string): boolean
   findResumedTranscript: NonNullable<HandoffDeps['findTranscript']>
   validTranscriptPath(engine: AgentEngine, path: string, codexHome?: string): boolean
@@ -128,7 +129,7 @@ export function handoffProviderDeps(w: HandoffWiring): HandoffDeps {
     // certain. Never a fork, never a database engine, never one another agent holds.
     discoverSession: sessionDiscovery({
       findLiveSession: w.findLiveSession,
-      claudeProcessSession: w.claudeProcessSession,
+      processSession: w.processSession,
       isLive: (id) => !!w.registry.byAgent(id),
       ownedByOther: (sid, id) => ownedByOther({
         bySession: (s) => w.registry.bySession(s), stoppedIds: () => w.stopped.ids(), stopped: (s) => w.stopped.get(s),
