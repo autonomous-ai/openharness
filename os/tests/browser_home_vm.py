@@ -71,6 +71,7 @@ def preferences(vm, result):
                     (vm.folder / ('browser-choice-' + action + suffix)).write_bytes(vm.read_file(path.removesuffix('.json') + suffix))
                 except Exception:
                     pass
+        return json.loads(vm.read_file(path))
 
     def ordinary_page(name):
         vm.command('hn-browser')
@@ -84,10 +85,22 @@ def preferences(vm, result):
     vm.command('hn-browser')
     wait_installer_screen(vm, r'Harness_', 'browser-home-enabled')
     close_browser(vm)
-    choose('removed')
+    # Chromium requires its visible native confirmation when removing another
+    # extension, even if management.uninstall requests showConfirmDialog:false.
+    # Remove is the dialog's default OK action; send real keyboard confirmation.
+    vm.command('hn-browser chrome://extensions/')
+    wait_installer_screen(vm, r'start\s+page', 'browser-home-extension-card')
+    vm.click_word('browser-home-remove-action', 'Remove')
+    confirmation = wait_installer_screen(vm, r'Cancel', 'browser-home-remove-confirm')
+    assert re.search(r'Remove', confirmation, re.I), confirmation
+    vm.keys('ret')
+    wait_installer_screen(vm, r'(?s)\A(?!.*(?:start\s+page|Cancel)).*Extensions',
+                          'browser-home-extension-removed')
+    close_browser(vm)
+    identity = result['browser_home']['extension_id']
+    assert identity not in {item['id'] for item in choose('inspect')['extensions']}
     ordinary_page('browser-home-removed')
     ordinary_page('browser-home-removed-again')
-    identity = result['browser_home']['extension_id']
     vm.command('test -f ' + shlex.quote('/home/me/.config/chromium/External Extensions/' + identity + '.json'))
     result['checks'].append('Disabling, re-enabling and removing through Chromium management persist across ordinary browser launches, even with the OS descriptor present')
 
@@ -105,6 +118,7 @@ def preferences(vm, result):
 def exercise(vm, result):
     vm.command('! pgrep -u "$(id -u)" -x chromium')
     vm.command('sudo -n nmcli networking off')
+    failed = False
     try:
         vm.command('hn-browser')
         # The small subtitle can be split into separate OCR regions at the VM's
@@ -134,6 +148,7 @@ def exercise(vm, result):
         result['checks'].append('New Tab and the next browser launch keep the start page without an install or permission prompt')
         preferences(vm, result)
     except BaseException:
+        failed = True
         # Inspect only disposable profile extension state, never saved accounts.
         code = '''import json,pathlib
 out={}
@@ -142,14 +157,22 @@ for path in root.glob('*/Preferences'):
  d=json.loads(path.read_text()).get('extensions',{})
  out[str(path.relative_to(root))]={'overrides':d.get('chrome_url_overrides'), 'extensions':{k:{field:v.get(field) for field in ['state','disable_reasons','location','manifest']} for k,v in d.get('settings',{}).items()}}
 print(json.dumps(out))'''
-        output, _ = vm.command('python3 -c ' + shlex.quote(code), check=False)
-        (vm.folder / 'home-profile-diagnostic.txt').write_text(output)
-        vm.keys('ctrl', 'l')
-        vm.type_probe('chrome://extensions')
-        vm.keys('ret')
-        wait_installer_screen(vm, r'Harness start page', 'home-extensions-diagnostic')
-        vm.keys('ctrl', 't')
-        vm.screenshot('home-second-tab-diagnostic')
+        try:
+            output, _ = vm.command('python3 -c ' + shlex.quote(code), check=False)
+            (vm.folder / 'home-profile-diagnostic.txt').write_text(output)
+        except Exception as error:
+            result.setdefault('diagnostic_errors', []).append(str(error))
+        try:
+            # Capture the actual failure without typing into a potentially closed
+            # browser or replacing the original error with an OCR timeout.
+            vm.screenshot('home-failure')
+        except Exception as error:
+            result.setdefault('diagnostic_errors', []).append(str(error))
         raise
     finally:
-        vm.command('sudo -n nmcli networking on')
+        try:
+            vm.command('sudo -n nmcli networking on')
+        except Exception as error:
+            if not failed:
+                raise
+            result.setdefault('diagnostic_errors', []).append(str(error))

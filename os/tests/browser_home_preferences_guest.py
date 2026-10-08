@@ -81,7 +81,7 @@ def management(chrome, expression, session):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['disabled', 'enabled', 'removed', 'custom'])
+    parser.add_argument('action', choices=['disabled', 'enabled', 'inspect', 'custom'])
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     assert subprocess.check_output(['lsblk', '-dn', '-o', 'SERIAL', '/dev/vda'], text=True).strip() == 'HN_OS_TEST'
@@ -105,18 +105,14 @@ def main():
                 'chrome_url_overrides': {'newtab': 'index.html'}}))
             (fixture / 'index.html').write_text('<!doctype html><title>New Tab</title><h1>CUSTOM TAB</h1>')
             result['custom_id'] = chrome.call('Extensions.loadUnpacked', {'path': str(fixture)})['id']
-        elif args.action == 'removed':
-            management(chrome, 'chrome.management.uninstall(' + json.dumps(identity) + ', {showConfirmDialog:false}, ', session)
-        else:
+        elif args.action in ('disabled', 'enabled'):
             management(chrome, 'chrome.management.setEnabled(' + json.dumps(identity) + ', ' +
                        ('true' if args.action == 'enabled' else 'false') + ', ', session)
         result['extensions'] = management(chrome, 'chrome.management.getAll(', session)
         installed = {item['id']: item for item in result['extensions']}
-        if args.action == 'removed':
-            assert identity not in installed
-        elif args.action == 'custom':
+        if args.action == 'custom':
             assert installed[result['custom_id']]['enabled']
-        else:
+        elif args.action in ('disabled', 'enabled'):
             assert installed[identity]['enabled'] == (args.action == 'enabled')
     args.output.write_text(json.dumps(result, indent=2) + '\n')
 
