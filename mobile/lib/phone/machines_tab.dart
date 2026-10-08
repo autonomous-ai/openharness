@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
@@ -71,6 +72,14 @@ class MachinesTab extends StatelessWidget {
                         weight: FontWeight.w600,
                       ),
                     ),
+                  ),
+                  // What a pull on the list does, for whoever does not know to pull — or has
+                  // nothing to pull: the empty and failed states draw no list.
+                  _RefreshButton(
+                    busy:
+                        notifier.machinesRefreshing || notifier.machinesLoading,
+                    trailing: !large,
+                    onPressed: () => unawaited(notifier.retryMachines()),
                   ),
                   // Large, this is the home screen while no computer is ready — locked, or off —
                   // and nothing else on it leads to Settings or Sign out. Pushed (small), it came
@@ -223,4 +232,113 @@ class _Body extends StatelessWidget {
   /// state can lose the rename or the removal.
   void _open(BuildContext context, MachineState state) =>
       openMachineActions(context, notifier, state.machine.machineId);
+}
+
+/// The list read again — what a pull does ([AppNotifier.retryMachines]) — as a glyph beside
+/// Settings.
+///
+/// While a read the person asked for is running ([busy]) the glyph turns and a press does nothing;
+/// it keeps its ink rather than greying out, because it is working, not unavailable — the rail's
+/// reload says the same (`AppIconButton.spinning`). The deaf poll's own reads do not turn it: every
+/// few seconds, that would be a glyph that never stops.
+class _RefreshButton extends StatefulWidget {
+  const _RefreshButton({
+    required this.busy,
+    required this.trailing,
+    required this.onPressed,
+  });
+
+  final bool busy;
+
+  /// Last in its row, with no Settings after it (the list pushed from Settings): the glyph sits on
+  /// the right gutter, in Settings' own box. Otherwise it stands left of Settings, which keeps its
+  /// place on the gutter.
+  final bool trailing;
+
+  final VoidCallback onPressed;
+
+  @override
+  State<_RefreshButton> createState() => _RefreshButtonState();
+}
+
+class _RefreshButtonState extends State<_RefreshButton>
+    with SingleTickerProviderStateMixin {
+  /// One turn — the rail's reload's (`AppIconButton`).
+  static const Duration _spinPeriod = Duration(milliseconds: 900);
+
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: _spinPeriod,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.busy) _spin.repeat();
+  }
+
+  @override
+  void didUpdateWidget(_RefreshButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.busy == oldWidget.busy) return;
+    if (widget.busy) {
+      _spin.repeat();
+    } else {
+      // The turn under way lands upright instead of freezing at whatever angle the reply arrived:
+      // a glyph stopped askew reads as stuck.
+      _spin
+          .animateTo(1, duration: _spinPeriod * (1 - _spin.value))
+          .whenComplete(() {
+            if (mounted && !widget.busy) _spin.value = 0;
+          });
+    }
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      enabled: !widget.busy,
+      label: 'Refresh',
+      excludeSemantics: true,
+      child: GestureDetector(
+        key: const ValueKey('machines-refresh'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          if (widget.busy) return;
+          HapticFeedback.selectionClick();
+          widget.onPressed();
+        },
+        // A thumb's 44. Beside Settings the glyph keeps to the box's right edge: Settings' box
+        // already leaves room left of its own glyph, and centred here the two sat a button apart.
+        child: SizedBox(
+          width: widget.trailing ? 52 : 44,
+          height: 44,
+          child: Padding(
+            padding: EdgeInsets.only(
+              right: widget.trailing ? Tty.origin - 2 : 2,
+            ),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: RotationTransition(
+                turns: _spin,
+                child: Icon(
+                  LucideIcons.refreshCw300,
+                  size: 20,
+                  color: tty.faint,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

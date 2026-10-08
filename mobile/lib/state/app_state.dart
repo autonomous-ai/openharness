@@ -2368,6 +2368,8 @@ class AppNotifier extends ChangeNotifier {
       // beats the cache parse it was dialled ahead of. See [_adoptConnection].
       if (isNew) _adoptConnection(state);
     }
+    // A machine come or gone changes how often the deaf poll reads — one asleep or several.
+    _retuneDeafPoll();
     _autoConnectAndLoadMachines();
     // The list that just landed is what the NEXT launch starts from. Never
     // awaited: it is a hint for a future run and must not add a disk write to
@@ -6114,6 +6116,7 @@ class AppNotifier extends ChangeNotifier {
     unawaited(_pool?.closeMachine(machineId));
     machineStates.remove(machineId);
     machines.removeWhere((m) => m.machineId == machineId);
+    _retuneDeafPoll();
     expandedMachines.remove(machineId);
     if (selectedMachineId == machineId) selectedMachineId = null;
     if (pendingPairing?.machineId == machineId) pendingPairing = null;
@@ -6683,6 +6686,8 @@ class AppNotifier extends ChangeNotifier {
     final machineId = machine.machine.machineId;
     final wasOnline = machine.nodeOnline;
     machine.nodeOnline = online;
+    // Asleep or awake decides how often a phone with nothing connected reads the list again.
+    if (wasOnline != online) _retuneDeafPoll();
 
     if (!online) {
       _markSessionsUnreachable(
@@ -8373,20 +8378,90 @@ class AppNotifier extends ChangeNotifier {
   @visibleForTesting
   Duration deafMachineListInterval = const Duration(seconds: 20);
 
+  /// The same read, when the account's ONLY machine is asleep. Switched on, it shows up here on its
+  /// own within this — the computer the person is standing at, waiting to see it come back.
+  @visibleForTesting
+  Duration asleepMachineListInterval = const Duration(seconds: 4);
+
+  /// The same read, when every one of SEVERAL machines is asleep.
+  @visibleForTesting
+  Duration asleepMachinesListInterval = const Duration(seconds: 8);
+
   Timer? _deafMachineListTimer;
   Future<void>? _machineReread;
 
+  /// The interval [_deafMachineListTimer] was set to, and the time since — so [_retuneDeafPoll] can
+  /// tell when that interval no longer fits, and how much of it has already gone.
+  Duration? _deafPollInterval;
+  final Stopwatch _deafPollSince = Stopwatch();
+
+  /// How long the deaf poll waits between two reads: [asleepMachineListInterval] when the account's
+  /// one machine is asleep, [asleepMachinesListInterval] when every one of several is, and
+  /// [deafMachineListInterval] otherwise — no machine at all, or one that is on but not connected
+  /// (still connecting, or waiting for its password).
+  ///
+  /// "Asleep" is what its row on the Computers screen says (`phoneMachineStatusOf`): the machine
+  /// reported off. A machine with no state yet counts as not asleep — the slower, safer interval.
+  Duration _deafPollIntervalNow() {
+    if (machines.isEmpty) return deafMachineListInterval;
+    for (final machine in machines) {
+      if (machineStates[machine.machineId]?.nodeOnline != false) {
+        return deafMachineListInterval;
+      }
+    }
+    return machines.length == 1
+        ? asleepMachineListInterval
+        : asleepMachinesListInterval;
+  }
+
   void _startDeafPoll() {
     if (_disposed || status != AppStatus.authenticated) return;
-    _deafMachineListTimer ??= Timer.periodic(
-      deafMachineListInterval,
-      (_) => _rereadMachinesWhileDeaf(),
-    );
+    if (_deafMachineListTimer != null) return;
+    final interval = _deafPollIntervalNow();
+    _setDeafPoll(interval, firstIn: interval);
+  }
+
+  /// One read [firstIn] from now, then one every interval the machines call for at the time of each
+  /// — see [_deafPollIntervalNow]. A timer set again after every read rather than a periodic one,
+  /// because the interval follows the machines.
+  void _setDeafPoll(Duration interval, {required Duration firstIn}) {
+    _deafMachineListTimer?.cancel();
+    _deafPollInterval = interval;
+    _deafPollSince
+      ..reset()
+      ..start();
+    late final Timer timer;
+    timer = Timer(firstIn < Duration.zero ? Duration.zero : firstIn, () {
+      _rereadMachinesWhileDeaf();
+      // Stopped meanwhile — paused, signed out, disposed — or set again already: nothing to do.
+      if (_disposed || !identical(_deafMachineListTimer, timer)) return;
+      final next = _deafPollIntervalNow();
+      _setDeafPoll(next, firstIn: next);
+    });
+    _deafMachineListTimer = timer;
+  }
+
+  /// The machines changed (one went to sleep or woke, or the list itself changed): a poll running at
+  /// an interval that no longer fits is set to the one that does, counting the wait already spent.
+  ///
+  /// ⚠️ Without this the new interval would only take over after the old one ran out: on launch the
+  /// poll can start before the machine list has landed — so at [deafMachineListInterval] — and a
+  /// computer asleep from the start would be read again only after those 20 seconds.
+  void _retuneDeafPoll() {
+    final current = _deafPollInterval;
+    if (_disposed || _deafMachineListTimer == null || current == null) return;
+    final interval = _deafPollIntervalNow();
+    if (interval == current) return;
+    _setDeafPoll(interval, firstIn: interval - _deafPollSince.elapsed);
   }
 
   void _stopDeafPoll() {
     _deafMachineListTimer?.cancel();
     _deafMachineListTimer = null;
+    _deafPollInterval = null;
+    _deafPollSince
+      ..stop()
+      ..reset();
   }
 
   /// A phone that hears nothing reads the machine list again: the computer the person is signing in on
