@@ -79,8 +79,10 @@ for requirements and remaining work.
 
 ## Connected accounts
 
-Run `harness connections` to open the local Connectors page and sign in to a
-service in the browser. 21 services (Linear, Notion, Canva, Atlassian, GitLab,
+Open **Connections** from the browser's New Tab page, or run `harness connections`.
+The local start page is removable in Chromium's extension settings and preserves
+existing New Tab customizations. Sign in to a service on the local Connectors page.
+21 services (Linear, Notion, Canva, Atlassian, GitLab,
 Figma…) sign in directly from this computer; GitHub, Slack, Google, Microsoft
 365 and a few others sign in through the Harness account. Claude Code, Codex
 and OpenCode then get each service as an MCP server on a local bridge, which

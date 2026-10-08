@@ -6,7 +6,8 @@ grant access here. Never copy tokens between machines, into chat or into
 project files, and never read the files under
 `~/.local/share/harness-os/connections`.
 
-`harness connections list --json` lists this computer's connections. Open
+`harness connections list --json` lists this computer's connections. On the PC
+OS, choose **Connections** from the browser's New Tab page, or open
 `harness connections` when the user needs to connect or disconnect an account;
 `harness connections connect CODE` does the same sign-in from a terminal.
 

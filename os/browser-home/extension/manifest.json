@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Harness start page",
+  "version": "1.0.2",
+  "description": "Connections for the agents on this computer.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsQQ+0kwD+hEd/GjjkVYhJBiB4wMc5yc/rZTaWRCo9kI8nZ9etPXyRoIXIhH/9NJ/TgKH2edapAwzzX3Z9FIs6bZqf3O+kYveflmOLKyg+UVnRup9SrKejAtMyKKpjcOsxbhy2vNS9/sA/TEOLAiMBHGXJedD4xdGYvH8BcomuduyWLF8z3BIsOUqQK98Y+pswVu8m+D5tJFt8Wswlr3cqM5N+8wEMiIrmDnZSeNgjCX5KkxtxNhMXfcRiY9s3OterHwzJdMUvdIuDEKIJyEdtea1bl0h3tcTWyoNADmELfGv2OUIuE6Wikj/a183R/RwD5avGjU73mFp7lrsahOfQwIDAQAB",
+  "permissions": [
+    "nativeMessaging"
+  ],
+  "background": {
+    "service_worker": "installed.js"
+  },
+  "chrome_url_overrides": {
+    "newtab": "index.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+  }
+}
