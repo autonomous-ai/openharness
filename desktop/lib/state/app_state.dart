@@ -34,6 +34,7 @@ import '../auth/sign_in_client.dart';
 import '../auth/sign_in_provider.dart';
 import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
+import '../bootstrap/agent_prefetch.dart';
 import '../bootstrap/environment_provisioner.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
@@ -798,8 +799,7 @@ class AppNotifier extends ChangeNotifier {
               // their second session, robots or not (fresh macOS VM, 2026-10-08). Without a paired
               // robot nothing here needs the LAN, so it is not tested.
               final paired = (await cli.list())['devices'];
-              if (!_localNetworkWanted &&
-                  (paired is! List || paired.isEmpty)) {
+              if (!_localNetworkWanted && (paired is! List || paired.isEmpty)) {
                 return null;
               }
               await cli.discover();
@@ -814,6 +814,10 @@ class AppNotifier extends ChangeNotifier {
         )
       : null;
   final EnvironmentProvisioner? environmentProvisioner;
+
+  /// OpenCode downloaded beside a fresh computer's setup (see [AgentPrefetch]). Null under test
+  /// unless a test passes one, so nothing there runs `curl`.
+  final AgentPrefetch? agentPrefetch;
   final DesktopUpdater? desktopUpdater;
   @visibleForTesting
   final WsConn Function(String machineId)? connectionForTest;
@@ -2971,6 +2975,7 @@ class AppNotifier extends ChangeNotifier {
     this.localManualFixture,
     this.localCliDiscovery,
     this.environmentProvisioner,
+    AgentPrefetch? agentPrefetch,
     this.desktopUpdater,
     this.connectionForTest,
     SignInClient? cliLogin,
@@ -2985,7 +2990,12 @@ class AppNotifier extends ChangeNotifier {
     AgentUnread? agentUnread,
     SystemNotifications? systemNotifications,
     this.experimentalSettingsTransport,
-  }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
+  }) : agentPrefetch =
+           agentPrefetch ??
+           (kUnderTest
+               ? null
+               : AgentPrefetch(log: (line) => appLog.info('setup', line))),
+       alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
        systemNotifications =
            systemNotifications ?? notify_system.systemNotifications,
@@ -4146,6 +4156,12 @@ class AppNotifier extends ChangeNotifier {
       // a password in Terminal waits on the wizard's Install action.
       var result = await _runProvisioner(install: false);
       if (!result.isReady && _canInstallUnattended(result, mode: null)) {
+        // A computer setting up the Harness CLI for the first time is new to Harness: OpenCode, the
+        // agent its first harness runs unless it has Claude Code or Codex, downloads meanwhile
+        // ([AgentPrefetch.start] decides).
+        if (result.plan.any((item) => item.step == EnvironmentStep.harness)) {
+          agentPrefetch?.start();
+        }
         status = AppStatus.preparingEnvironment;
         result = await _installUnattended(result);
       }
@@ -6625,8 +6641,7 @@ class AppNotifier extends ChangeNotifier {
   /// screen stay — as a missed `machines_changed` push would. For a screen
   /// waiting on a computer this window has no connection to hear that push
   /// through: an account with none connected yet (the browser's connect page).
-  Future<void> rereadMachines() =>
-      _rereadMachinesInBackground(pushed: false);
+  Future<void> rereadMachines() => _rereadMachinesInBackground(pushed: false);
 
   Future<void> _rereadMachinesInBackground({required bool pushed}) async {
     if (_disposed || status != AppStatus.authenticated) return;
@@ -6743,7 +6758,8 @@ class AppNotifier extends ChangeNotifier {
     });
     try {
       await _pool?.closeMachine(machineId);
-      if (machineStates[machineId] case final current?) _connectMachine(current);
+      if (machineStates[machineId] case final current?)
+        _connectMachine(current);
       settle();
       return await done.future;
     } finally {
@@ -10150,7 +10166,8 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// Turns notifications on from the offer, asking the system's permission.
-  Future<void> acceptNotificationOffer() => systemNotifications.setEnabled(true);
+  Future<void> acceptNotificationOffer() =>
+      systemNotifications.setEnabled(true);
 
   /// What clicking a banner does: show that agent, wherever it is.
   ///
@@ -10946,6 +10963,11 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
+  /// How long, from its start, an OpenCode create waits for [agentPrefetch]: a download took
+  /// 7–12 s in the VM runs.
+  @visibleForTesting
+  Duration agentPrefetchWait = const Duration(seconds: 30);
+
   /// A Claude Code or Codex conversation Harness did not start, opened as a
   /// harness that resumes it, in its own folder (Cmd-P, `ExternalSessionRef`).
   /// The machine refuses one open elsewhere, already a harness, or whose folder
@@ -11258,6 +11280,26 @@ class AppNotifier extends ChangeNotifier {
         !machine.isLocalMachine &&
         creation._projectFolder?.isGenerated == true &&
         creation._projectNameRetries < 64;
+    // OpenCode still downloading beside setup ([AgentPrefetch]): the pane would start a second install
+    // of it. Waited for here, once the creation is registered (its tab and split are held), and only
+    // for what is left of [agentPrefetchWait] since the download began.
+    if (!creation.awaitingConfirmation &&
+        choices['engine'] == 'opencode' &&
+        machine.isLocalMachine) {
+      final download = agentPrefetch?.waitFor(agentPrefetchWait);
+      if (download != null) {
+        await download;
+        final moved = creation.background
+            ? null
+            : _creationPlacementError(targetId, split, placement: placement);
+        if (moved != null) return creation._complete(moved);
+        if (_disposed || machineStates[machineId] != machine) {
+          return creation._complete(
+            'The selected machine changed. Choose the machine again.',
+          );
+        }
+      }
+    }
     final operation = creation.awaitingConfirmation
         ? 'agent_create_status'
         : 'agent_create';
@@ -11408,7 +11450,8 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
-    if (choices['prompt'] case final String prompt when prompt.trim().isNotEmpty) {
+    if (choices['prompt'] case final String prompt
+        when prompt.trim().isNotEmpty) {
       _firstMessages[(machineId, agent.id)] = prompt;
     }
     _upsertAgent(machine, agent);
