@@ -591,7 +591,10 @@ fn title_line(buf: &mut Buffer, app: &App, id: u64, area: Rect, style: Style) {
     let area = crate::workspace_controls::title(buf, app, id, area, style);
     let Some(fmt) = app.options.get("pane-border-format", &app.tab().id, Some(id)) else { return };
     let expanded = crate::format::expand(app, &fmt, app.active, Some(id), true);
-    for (i, cell) in crate::draw::format_draw_over(&expanded, style, area.width).into_iter().enumerate() {
+    let cells = crate::draw::format_draw_over(&expanded, style, area.width);
+    // (Only the name drags the pane: the line after it is the divider, which resizes.)
+    crate::workspace_controls::name_span(app, id, cells.iter().position(|c| c.is_none()).unwrap_or(cells.len()) as u16);
+    for (i, cell) in cells.into_iter().enumerate() {
         if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((area.x + i as u16, area.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
     }
 }

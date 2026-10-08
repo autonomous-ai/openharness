@@ -397,8 +397,11 @@ def title_drag_journey(alpha, beta):
     x, top = map(int, value('#{pane_left} #{pane_top}', beta).split())
     wait(lambda: 'Beta task' in screen().splitlines()[top - 1], 'lower title is painted at its divider')
     before = len(api()['inputs'])
+    # The line right of the name (the name itself drags the pane).
+    col = next(c for c in range(x + width('Beta task') + 2, x + int(value('#{pane_width}', beta)) - 7)
+               if screen().splitlines()[top - 1][c] == '─')
     for code, row, ending in [(0, top - 1, 'M'), (32, top + 1, 'M'), (0, top + 1, 'm')]:
-        raw = f'\x1b[<{code};{x + 5};{row + 1}{ending}'.encode()
+        raw = f'\x1b[<{code};{col + 1};{row + 1}{ending}'.encode()
         tmux('send-keys', '-H', '-t', TARGET, *[f'{b:02x}' for b in raw])
     wait(lambda: int(value('#{pane_top}', beta)) == top + 2, 'dragging the plain title resizes its divider')
     assert len(api()['inputs']) == before, 'title drag must not reach the terminal program'

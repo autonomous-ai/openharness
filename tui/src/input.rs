@@ -24,6 +24,11 @@ pub fn handle(app: &mut App, event: CEvent) {
         // A key is the session's activity (session_update_activity): a script's command with no -t
         // goes to the session used last.
         CEvent::Key(key) if key.kind != KeyEventKind::Release => {
+            // Escape lets go of a held pane (and is used up only when a drag was showing); the
+            // release that follows still belongs to the header press.
+            if key.code == KeyCode::Esc {
+                if let Some(live) = app.controls.grab.as_ref().map(|g| g.live) { crate::pane_drag::cancel(app); if live { return } }
+            }
             let now = crate::app::epoch_secs();
             // (This client used now: a shell's command with no target comes here — each second.)
             if now != app.session_activity { crate::ipc::mark_active() }

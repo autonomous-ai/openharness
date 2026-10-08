@@ -44,6 +44,8 @@ pub fn drop_target(app: &App, src: u64, x: u16, y: u16) -> Drop {
 }
 
 /// The cells that show [drop]: the zone of the target pane (a side half or the whole pane) or the tab's cells.
+// (Until the frame draws the zone.)
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn zone(app: &App, drop: &Drop) -> Option<Rect> {
     let pane = |id: &u64| app.rects.iter().find(|(i, _)| i == id).map(|(_, r)| *r);
     match drop {
@@ -60,6 +62,23 @@ pub fn zone(app: &App, drop: &Drop) -> Option<Rect> {
         }),
         Drop::Tab(tab) => app.tabs.iter().position(|t| t.id == *tab).and_then(|i| tab_cell(app, i)),
     }
+}
+
+/// The held pane follows the pointer: a drag once it moved 2 cells from the press, a click until then.
+pub fn follow(app: &mut App, x: u16, y: u16) {
+    let Some(grab) = &app.controls.grab else { return };
+    let (pane, (fx, fy)) = (grab.pane, grab.from);
+    let live = grab.live || x.abs_diff(fx) + y.abs_diff(fy) >= 2;
+    let drop = if live { drop_target(app, pane, x, y) } else { Drop::Nothing };
+    if let Some(grab) = &mut app.controls.grab { grab.live = live; grab.drop = drop; }
+}
+
+/// What releasing pane [src] over [drop] does.
+pub fn release(_app: &mut App, _src: u64, _drop: Drop) {}
+
+/// Escape: the pane is let go where it was.
+pub fn cancel(app: &mut App) {
+    if app.controls.grab.take().is_some_and(|g| g.live) { app.redraw_all = true; }
 }
 
 #[cfg(test)]
