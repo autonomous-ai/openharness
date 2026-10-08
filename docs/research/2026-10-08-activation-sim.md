@@ -173,6 +173,15 @@ vendor binaries, so their real login screens appear.
     installed one. Moving a copy out of Downloads was dropped: it raised macOS's "access files in your
     Downloads folder" prompt, and the website only hands out the `.dmg`.
 
+### Where first-run setup time goes
+
+23. Measured in the R2 VM, back to back on the same network, `install.sh --desktop` in an empty home:
+    main 23 s (Node 187 MB unpacked, the CLI, and grid 19 MB), #1047 11 s (no grid). In the R2 app
+    run on main, the app opened at 19:35:21, the CLI answered at 19:35:50, the daemon was up 3 s later
+    and the agent probe 3 s after that: about 35 s from opening to the New Harness box, of which
+    #1047 removes ~12 s. Bundling Node and the CLI in the app would save the remaining ~11 s, at the
+    cost of a larger universal app and signing an embedded Node; not worth it before #1047 ships.
+
 ## Next
 
 - Merge #1047, then #1052 (rebased on main) and #1061; release desktop and CLI.
@@ -180,7 +189,7 @@ vendor binaries, so their real login screens appear.
   it saves ~10–25 s on the first harness. Options in the PR: the desktop holds a create until that
   agent's install finished (no pane lock), npm-prefix plus per-agent locks, or drop it.
 - Still open: closing the window quits the app (product decision); first-run telemetry for signed-out
-  users; bundling Node and the CLI in the app to cut ~40 s of setup.
+  users; bundling Node and the CLI in the app (~11 s once #1047 ships, finding 23).
 
 ## Fixes
 
