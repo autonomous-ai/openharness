@@ -389,21 +389,26 @@ def overlay_dismiss_journey(alpha):
     print('PASS workspace: overlay dismissal and pane actions consume the complete mouse click', flush=True)
 
 
-def title_drag_journey(alpha, beta):
+def title_drag_journey(alpha, beta, look='line'):
     original = value('#{window_layout}')
     border = hn('show', '-gv', '@hn-border', ok=False)
-    hn('set', '-g', '@hn-border', 'line')
+    hn('set', '-g', '@hn-border', look)
     hn('select-layout', 'even-vertical')
     x, top = map(int, value('#{pane_left} #{pane_top}', beta).split())
-    wait(lambda: 'Beta task' in screen().splitlines()[top - 1], 'lower title is painted at its divider')
+    # The line look's title is the divider row above the pane; the box look's frame, with the title
+    # in it, sits on that same row.
+    corner = {'line': '─', 'box': '┌'}[look]
+    wait(lambda: 'Beta task' in screen().splitlines()[top - 1] and corner in screen().splitlines()[top - 1],
+         f'lower {look} title is painted at its divider')
     before = len(api()['inputs'])
     # The line right of the name (the name itself drags the pane).
-    col = next(c for c in range(x + width('Beta task') + 2, x + int(value('#{pane_width}', beta)) - 7)
-               if screen().splitlines()[top - 1][c] == '─')
+    line = screen().splitlines()[top - 1]
+    col = next(c for c in range(line.index('Beta task') + len('Beta task') + 1, x + int(value('#{pane_width}', beta)) - 7)
+               if line[c] == '─')
     for code, row, ending in [(0, top - 1, 'M'), (32, top + 1, 'M'), (0, top + 1, 'm')]:
         raw = f'\x1b[<{code};{col + 1};{row + 1}{ending}'.encode()
         tmux('send-keys', '-H', '-t', TARGET, *[f'{b:02x}' for b in raw])
-    wait(lambda: int(value('#{pane_top}', beta)) == top + 2, 'dragging the plain title resizes its divider')
+    wait(lambda: int(value('#{pane_top}', beta)) == top + 2, f'dragging the {look} title beside its name resizes its divider')
     assert len(api()['inputs']) == before, 'title drag must not reach the terminal program'
     hn('select-layout', original)
     if border:
@@ -413,7 +418,7 @@ def title_drag_journey(alpha, beta):
     hn('select-pane', '-t', alpha)
     wait(lambda: value('#{window_layout}') == original, 'restore layout after title drag')
     wait(lambda: painted_workspace(alpha, beta), 'restored layout paints both pane titles')
-    print('PASS workspace: plain title divider drags retain tmux resize behavior', flush=True)
+    print(f'PASS workspace: {"plain" if look == "line" else look} title divider drags retain tmux resize behavior', flush=True)
 
 
 def pane_drag_journey(alpha, beta):
@@ -542,6 +547,7 @@ try:
     if '--title-drag' in sys.argv:
         api({'action': 'terminal-mouse'})
         title_drag_journey(alpha, beta)
+        title_drag_journey(alpha, beta, 'box')
         sys.exit(0)
     if '--pane-drag' in sys.argv:
         api({'action': 'terminal-mouse'})
@@ -703,6 +709,7 @@ try:
     api({'action': 'terminal-mouse'})
     overlay_dismiss_journey(alpha)
     title_drag_journey(alpha, beta)
+    title_drag_journey(alpha, beta, 'box')
     pane_drag_journey(alpha, beta)
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
     before = len(api()['inputs'])

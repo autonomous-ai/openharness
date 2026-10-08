@@ -526,7 +526,9 @@ fn pane_chrome(buf: &mut Buffer, app: &App) {
         let marker = if app.marked == Some(*id) { "◆" } else { " " };
         if title.width > 0 { if let Some(cell) = buf.cell_mut((title.x, title.y)) { cell.set_symbol(marker).set_style(style); } }
         let text = Rect::new(title.x + 1.min(title.width), title.y, title.width.saturating_sub(2), 1);
-        title_line(buf, app, *id, text, style);   // (the whole header row drags the pane)
+        let name = title_line(buf, app, *id, text, style);
+        // (The whole header row drags the pane, but for its name only where it is a divider.)
+        crate::workspace_controls::name_span_on_divider(app, *id, name);
     }
 }
 
@@ -640,6 +642,8 @@ fn boxes(buf: &mut Buffer, app: &App) {
         let cells = crate::draw::format_draw_over(&expanded, words, t.width);
         // ` title `: a blank after the words where the line would run on.
         let end = cells.iter().position(|c| c.is_none()).unwrap_or(cells.len());
+        // (The whole header row drags the pane, but for its name only where it is a divider.)
+        crate::workspace_controls::name_span_on_divider(app, id, end as u16);
         for (i, cell) in cells.into_iter().enumerate() {
             if let Some((ch, cs)) = cell { if let Some(c) = buf.cell_mut((t.x + i as u16, t.y)) { c.set_symbol(if ch.is_empty() { " " } else { &ch }); c.set_style(cs); } }
         }

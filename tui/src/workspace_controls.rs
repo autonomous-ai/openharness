@@ -84,6 +84,16 @@ pub fn name_span(app: &App, pane: u64, width: u16) {
     if width == 0 { grips.remove(i); } else { grips[i].0.width = width.min(grips[i].0.width); }
 }
 
+/// The box and surface looks' header row drags the pane, except where it lies on a divider (the
+/// lower pane's with titles on top, the upper one's below): there only its name does, as in the
+/// line look, and the rest of the row resizes.
+pub fn name_span_on_divider(app: &App, pane: u64, width: u16) {
+    let Some(r) = app.controls.grips.borrow().iter().find(|(_, p)| *p == pane).map(|(r, _)| *r) else { return };
+    // (The window's own bottom edge, the last pane's title below it, divides nothing.)
+    let below = r.y.checked_sub(app.body().y).is_some_and(|y| app.visible_layout_geoms().iter().any(|(_, g)| g.y > y as u32));
+    if below && (r.x..r.right()).all(|x| crate::mouse::over_resize_border(app, x, r.y)) { name_span(app, pane, width) }
+}
+
 /// tmux's status renderer carries these ranges through clipping and alignment. A customized
 /// status format keeps ownership of every cell unless it opts in with #{hn_controls}.
 pub fn status(app: &App) -> String {
@@ -513,6 +523,48 @@ pub(crate) mod tests {
             let after = app.tab().root.as_ref().unwrap().to_tmux();
             // the divider part resizes as before; the name part never resizes
             assert_eq!(after != before, !name_drag, "name_drag={name_drag}");
+        }
+    }
+
+    /// Pane 1 over pane 2, 100 wide, in [look] (`@hn-border box` or `@hn-focus surface`), the
+    /// titles on [status] (pane-border-status top or bottom).
+    fn stacked(look: (&str, &str), status: &str) -> App {
+        let mut app = app(100);
+        app.tabs.truncate(1);
+        app.tabs[0].root.as_mut().unwrap().split(1, 2, crate::layout::Dir::Vertical);
+        let global = crate::options::SetFlags { global: true, ..Default::default() };
+        app.options.set(look.0, Some(look.1), &global, "", 0).unwrap();
+        app.options.set("pane-border-status", Some(status), &global, "", 0).unwrap();
+        app.fit_panes(); render(&mut app);
+        app
+    }
+
+    #[tokio::test]
+    async fn a_box_or_surface_title_on_a_divider_drags_the_pane_by_its_name_and_resizes_elsewhere() {
+        for look in [("@hn-border", "box"), ("@hn-focus", "surface")] {
+            for status in ["top", "bottom"] {
+                // the title on the divider: the lower pane's when titles are on top, the upper one's below
+                let (pane, other) = if status == "top" { (2, 1) } else { (1, 2) };
+                let probe = stacked(look, status);
+                let (title, name) = (hit(&probe, Action::Header(pane)), grip(&probe, pane));
+                assert!(name.width > 0 && name.right() < title.right() - 6, "{look:?} {status}: the grip is the name, not the whole row");
+                let away = (hit(&probe, Action::Header(other)), grip(&probe, other));
+                assert_eq!(away.1.width, away.0.width - 6, "{look:?} {status}: a title on no divider drags from its whole row");
+                let controls = [hit(&probe, Action::PaneMenu(pane)), hit(&probe, Action::Close(pane))];
+                let before = probe.tab().root.as_ref().unwrap().to_tmux();
+                // 3 rows into its own pane, from each cell of the row
+                let to = if status == "top" { title.y + 3 } else { title.y - 3 };
+                for x in 0..probe.size.0 {
+                    let mut app = stacked(look, status);
+                    for (kind, y) in [(MouseEventKind::Down(MouseButton::Left), title.y), (MouseEventKind::Drag(MouseButton::Left), to), (MouseEventKind::Up(MouseButton::Left), to)] {
+                        send(&mut app, kind, x, y);
+                    }
+                    let resized = app.tab().root.as_ref().unwrap().to_tmux() != before;
+                    let at = ratatui::layout::Position { x, y: title.y };
+                    let kept = name.contains(at) || controls.iter().any(|r| r.contains(at));
+                    assert_eq!(resized, !kept, "{look:?} {status}: cell {x} of the divider title");
+                }
+            }
         }
     }
 
