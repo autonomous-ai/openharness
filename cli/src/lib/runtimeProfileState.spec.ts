@@ -71,6 +71,23 @@ describe('another engine whose code could not be loaded', () => {
 })
 
 describe('late optional profile observations', () => {
+  it.each(['cancel', 'finish'] as const)('does not revive a forgotten state when late control cleanup calls %s', async end => {
+    const cleanup = vi.fn(() => { throw new Error('optional cleanup failed') })
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(engineNow).mockReturnValue({ createRuntimeProfileReader: () => ({
+      engine: 'cursor', pane: () => false, forget: cleanup,
+    }) } as never)
+    const manager = new RuntimeProfileState(() => undefined), agent = session('cursor')
+    manager.ingestPane(agent, '')
+    manager.forget(agent.sessionId)
+    if (end === 'cancel') manager.cancelControl(agent.sessionId)
+    else manager.finishControl(agent)
+    await Promise.resolve()
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith(agent.sessionId)
+    expect(console.warn).toHaveBeenCalledOnce()
+    manager.forget(agent.sessionId)
+  })
+
   it('keeps newer control flags even when neither a value nor the control object changes', async () => {
     let finish!: (effort: string) => void
     const manager = new RuntimeProfileState(() => ({ ...claudeRuntime,
