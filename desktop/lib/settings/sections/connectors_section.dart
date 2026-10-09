@@ -258,19 +258,26 @@ class _ConnectorTile extends StatelessWidget {
             children: [
               ConnectorMark(code: card.code, name: card.name),
               const SizedBox(width: 10),
-              Flexible(
-                child: Text(card.name, overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+              // The name and its badge take the row; the action keeps to the right edge.
+              Expanded(
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(card.name, overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700)),
+                    ),
+                    if (connected) ...[
+                      const SizedBox(width: 8),
+                      Flexible(child: badge(card.account.isEmpty ? 'Signed in' : card.account, theme.colorScheme.primary)),
+                    ],
+                    if (card.state == 'reconnect') ...[
+                      const SizedBox(width: 8),
+                      badge('Reconnect', Colors.amber),
+                    ],
+                  ],
+                ),
               ),
-              if (connected) ...[
-                const SizedBox(width: 8),
-                Flexible(child: badge(card.account.isEmpty ? 'Signed in' : card.account, theme.colorScheme.primary)),
-              ],
-              if (card.state == 'reconnect') ...[
-                const SizedBox(width: 8),
-                badge('Reconnect', Colors.amber),
-              ],
-              const Spacer(),
+              const SizedBox(width: 8),
               if (waiting)
                 Text('Waiting for sign-in…', style: theme.textTheme.labelSmall?.copyWith(color: muted))
               else if (card.connected) ...[
