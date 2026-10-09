@@ -33,6 +33,11 @@ class LocalCliEndpoint {
   /// does. False means remote machines and the profile are unavailable for now, nothing more.
   final bool backendOnline;
 
+  /// Whether this computer is signed in to an account, as the daemon reads its sign-in right now
+  /// (`/api/status.signedIn`); null from a daemon too old to say. A sign-in or sign-out made somewhere
+  /// else on this computer — hn, a terminal — shows here first (AppNotifier `_followDaemonAccount`).
+  final bool? signedIn;
+
   /// Older daemons report local working folders in status before they support
   /// project metadata in agent frames. This snapshot never describes a peer.
   final Map<String, AgentProject> agentProjects;
@@ -55,6 +60,7 @@ class LocalCliEndpoint {
     required this.terminalProtocolVersion,
     this.machineId,
     this.backendOnline = true,
+    this.signedIn,
     this.agentProjects = const {},
     this.socketPath,
     this.scanning = false,
@@ -668,6 +674,7 @@ class LocalCliDiscovery {
             ? machineId
             : null,
         backendOnline: backendOnline,
+        signedIn: body['signedIn'] is bool ? body['signedIn'] as bool : null,
         agentProjects: _localAgentProjects(
           body['sessions'],
           identity.environment,

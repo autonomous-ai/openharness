@@ -5181,6 +5181,7 @@ class AppNotifier extends ChangeNotifier {
 
   void _updateLocalProjectSnapshot(LocalCliEndpoint endpoint) {
     if (_disposed) return;
+    _followDaemonAccount(endpoint);
     // Every five seconds the daemon answers ready: the one steady witness that this computer's
     // machine is up, whatever a timeout or a missed probe said. It used to skip a row whose endpoint
     // had been cleared — the very row that needed it.
@@ -5237,6 +5238,115 @@ class AppNotifier extends ChangeNotifier {
   /// Deliberately says nothing about WHY. The daemon clears its session identically whether the
   /// machine was deleted from another machine or the SSO token simply expired, and guessing between
   /// them in the copy would sometimes be wrong. Signing in again is the answer to both.
+  /// A sign-in or sign-out made somewhere else on this computer — hn, a terminal's `harness login` or
+  /// `harness logout` — that this window has not seen. The daemon says which on every ready probe
+  /// (`/api/status.signedIn`), and the window follows it as it does its own: a guest window takes the
+  /// sign-in ([_adoptSignInFromElsewhere]), a signed-in one becomes a guest ([_signedOutAtRuntime]).
+  /// It used to learn the account only at launch and from its own buttons, so a sign-in from hn left
+  /// Settings › Account saying "Not signed in" over a daemon that was signed in.
+  ///
+  /// Only on the CLI's own word (`harness auth status`), which owns the sign-in; asked at most every
+  /// [_daemonAccountRecheck] while the two disagree, and never during this window's own sign-in or out.
+  void _followDaemonAccount(LocalCliEndpoint endpoint) {
+    final daemonSignedIn = endpoint.signedIn;
+    if (daemonSignedIn == null ||
+        viewer != null ||
+        signingIn ||
+        signingOut ||
+        _followingDaemonAccount ||
+        status != AppStatus.authenticated) {
+      return;
+    }
+    final disagree = daemonSignedIn ? isGuest : signedIn;
+    if (!disagree) return;
+    final now = DateTime.now();
+    if (_daemonAccountCheckedAt case final at?
+        when now.difference(at) < _daemonAccountRecheck) {
+      return;
+    }
+    _daemonAccountCheckedAt = now;
+    unawaited(
+      daemonSignedIn
+          ? _adoptSignInFromElsewhere()
+          : _followSignOutFromElsewhere(),
+    );
+  }
+
+  static const _daemonAccountRecheck = Duration(seconds: 30);
+  DateTime? _daemonAccountCheckedAt;
+  bool _followingDaemonAccount = false;
+
+  /// This computer was signed in elsewhere while this window was a guest: it ends as this window's own
+  /// [login] does — the account's workspace built on the daemon the sign-in restarted.
+  Future<void> _adoptSignInFromElsewhere() async {
+    _followingDaemonAccount = true;
+    int? revision;
+    try {
+      final confirmed = await cliLogin.checkStatus();
+      if (_disposed ||
+          !confirmed.loggedIn ||
+          !isGuest ||
+          signingIn ||
+          signingOut) {
+        return;
+      }
+      revision = _invalidateAuthWork();
+      _closedHistory.clear();
+      _monitorHarnesses.clear();
+      _lastError = null;
+      status = AppStatus.bootstrapping;
+      notifyListeners();
+      if (_workspaceCleanup case final cleanup?) {
+        await cleanup;
+        if (!_authWorkCurrent(revision)) return;
+      }
+      signedIn = true;
+      await _finishBootstrapSignedIn();
+      if (!_authWorkCurrent(revision) || status != AppStatus.authenticated) {
+        return;
+      }
+      _guestDeskRestorePending = false;
+    } catch (error) {
+      debugPrint('AppNotifier: following a sign-in made elsewhere: $error');
+      if (revision != null && _authWorkCurrent(revision)) {
+        status = AppStatus.authenticated;
+      }
+    } finally {
+      _followingDaemonAccount = false;
+      if (!_disposed) notifyListeners();
+    }
+  }
+
+  /// This computer was signed out elsewhere (hn, `harness logout`): this window becomes a guest, as it
+  /// does when the account is lost under it.
+  Future<void> _followSignOutFromElsewhere() async {
+    _followingDaemonAccount = true;
+    try {
+      final confirmed = await cliLogin.checkStatus();
+      if (_disposed ||
+          confirmed.loggedIn ||
+          !signedIn ||
+          signingIn ||
+          signingOut) {
+        return;
+      }
+      _signedOutAtRuntime(_signedOutMessage);
+    } catch (error) {
+      debugPrint('AppNotifier: following a sign-out made elsewhere: $error');
+    } finally {
+      _followingDaemonAccount = false;
+    }
+  }
+
+  /// Lets the next probe ask the CLI at once, as [_daemonAccountRecheck] later would.
+  @visibleForTesting
+  void debugForgetDaemonAccountCheckForTest() => _daemonAccountCheckedAt = null;
+
+  /// Feeds [endpoint] to the daemon-account follower, as a ready probe does.
+  @visibleForTesting
+  void followDaemonAccountForTest(LocalCliEndpoint endpoint) =>
+      _followDaemonAccount(endpoint);
+
   static const _signedOutMessage =
       'You were signed out on this computer. This computer\'s agents keep '
       'running; sign in again to reach your other machines.';
