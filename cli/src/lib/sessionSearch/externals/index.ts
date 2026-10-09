@@ -109,7 +109,8 @@ export function externalProviders(paths: ExternalPaths = externalPaths()): Exter
     loaded('grok', 'grok', (code) => code.grokProvider({ home: paths.grokHome })),
     loaded('copilot', 'copilot', (code) => code.copilotProvider({ home: paths.copilotHome })),
     loaded('opencode', 'opencode', (code) => code.opencodeProvider({ engine: 'opencode', dbPath: paths.opencodeDb })),
-    loaded('kilo', 'kilo', (code) => code.opencodeProvider({ engine: 'kilo', dbPath: paths.kiloDb })),
+    // These stores share a reader. Loading it must not make Kilo's runtime entry depend on OpenCode.
+    loaded('kilo', 'opencode', (code) => code.opencodeProvider({ engine: 'kilo', dbPath: paths.kiloDb })),
     loaded('hermes', 'hermes', (code) => code.hermesProvider({ root: paths.hermesRoot })),
     loaded('devin', 'devin', (code) => code.devinProvider({ home: paths.devinHome })),
     loaded('pi', 'pi', (code) => code.piProvider({ agentDir: paths.piAgentDir, ...(paths.piSessionDir ? { sessionDir: paths.piSessionDir } : {}) })),

@@ -60,6 +60,17 @@ describe('runtime profile routing', () => {
     expect(t.read).not.toHaveBeenCalled()
   })
 
+  it.each([false, true])('routes a profile capture with its authority intact (worker: %s)', async isolated => {
+    const t = setup(isolated), capture = vi.fn(async () => 'vendor pane')
+    const inline = vi.spyOn(t.local, 'capturePane').mockResolvedValue('vendor pane')
+    expect(await t.profiles.capturePane(t.session, capture)).toBe('vendor pane')
+    if (isolated) {
+      expect(capture).toHaveBeenCalledWith(t.session.agentId, undefined)
+      expect(t.read).toHaveBeenCalledWith('codex', expect.anything(), { kind: 'pane', text: 'vendor pane' })
+      expect(inline).not.toHaveBeenCalled()
+    } else expect(inline).toHaveBeenCalledWith(t.session, capture, undefined, false)
+  })
+
   it('stages compact evidence atomically and rejects frames from unsupported workers', async () => {
     const t = setup(), { profiles: p, session: s } = t
     const stage = p.beginHydrate(s)

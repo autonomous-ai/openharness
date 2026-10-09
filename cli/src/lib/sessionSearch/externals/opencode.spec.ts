@@ -414,7 +414,7 @@ describe('OpenCode owners', () => {
   const view = (rows: Array<Partial<RunningProcess> & { pid: number; args: string }>): ProcessView => ({
     list: async () => rows.map((row) => ({ ppid: 1, executable: row.args.split(' ')[0], ...row })),
     openFiles: async () => new Map(),
-    openFilesOf: async () => new Map(),
+    cwds: async () => new Map(), openFilesOf: async () => new Map(),
     alive: () => true,
   })
 

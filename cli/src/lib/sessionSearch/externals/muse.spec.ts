@@ -62,7 +62,7 @@ function scanner(provider: ExternalProvider, excluded: string[] = []) {
 
 const row = (pid: number, executable: string, args: string): RunningProcess => ({ pid, ppid: 1, executable, args })
 const view = (rows: RunningProcess[]): ProcessView => ({
-  list: async () => rows, openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true,
+  list: async () => rows, openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true,
 })
 
 describe('readMuseHead', () => {

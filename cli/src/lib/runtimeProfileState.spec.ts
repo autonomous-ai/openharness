@@ -10,6 +10,7 @@ import { RuntimeProfileManager } from './runtimeProfile.js'
 import { parseRuntimeProfile } from './runtimeProfileWire.js'
 import { engineNow, loadEngine, OTHER_ENGINES } from '../engines/inProcess.js'
 import type { InlineRuntimeContext } from '../engines/facets/inlineRuntime.js'
+import { createTerminalControl } from '../core/terminals/control.js'
 
 // A test may say an engine's code could not be loaded.
 vi.mock('../engines/inProcess.js', async (real) => {
@@ -71,6 +72,42 @@ describe('another engine whose code could not be loaded', () => {
 })
 
 describe('late optional profile observations', () => {
+  it.each(['binding', 'process', 'route', 'confirmation', 'forget', 'unchanged'] as const)(
+    'fences a pane through the promise handoff to its profile consumer: %s', async change => {
+      const agent = { ...session('claude'), active: true, boundAt: 1, runtimes: [{ backend: 'tmux' as const, paneId: '%1' }],
+        processIdentity: { pid: 7, startMarker: 'before', executable: 'claude' } }
+      const manager = new RuntimeProfileState(() => ({ ...claudeRuntime, pane: ({ state }, text) => { state.model = text } }), () => agent)
+      manager.hydrate(agent, [])
+      let finish!: (value: { state: 'succeeded'; value: string }) => void
+      const backend = { capture: vi.fn(() => new Promise<{ state: 'succeeded'; value: string }>(resolve => { finish = resolve })) }
+      const terminal = createTerminalControl({ resolve: () => agent, terminals: backend as never })
+      const pending = manager.capturePane(agent, terminal.captureTerminal, 60, true)
+      finish({ state: 'succeeded', value: 'captured-model' })
+      // Runs after captureTerminal's own guard, but before its awaiting profile consumer resumes.
+      queueMicrotask(() => {
+        if (change === 'binding') { agent.sessionId = 'new-conversation'; agent.boundAt++ }
+        if (change === 'process') agent.processIdentity.startMarker = 'after'
+        if (change === 'route') agent.runtimes[0]!.paneId = '%2'
+        if (change === 'confirmation') manager.confirmEffort(agent.sessionId, 'high')
+        if (change === 'forget') manager.forget(agent.sessionId)
+      })
+      expect(await pending).toBe(change === 'unchanged' ? 'captured-model' : null)
+      expect(manager.getState(agent.sessionId).model === 'captured-model').toBe(change === 'unchanged')
+      manager.forget('conversation'); manager.forget(agent.sessionId)
+    },
+  )
+
+  it('does not capture for an unbound or detached profile, or ingest an empty pane', async () => {
+    const agent = session('claude'), capture = vi.fn(async () => null)
+    const manager = new RuntimeProfileState(() => claudeRuntime, () => agent)
+    expect(await manager.capturePane({ ...agent, sessionId: '' }, capture)).toBeNull()
+    expect(await manager.capturePane({ ...agent, boundAt: 2 }, capture)).toBeNull()
+    expect(capture).not.toHaveBeenCalled()
+    expect(await manager.capturePane(agent, capture)).toBeNull()
+    expect(capture).toHaveBeenCalledOnce()
+    manager.forget(agent.sessionId)
+  })
+
   it.each(['explicit read', 'confirmation'] as const)('does not let a queued refresh supersede a newer %s', async newer => {
     const config = vi.fn(async ({ state }: InlineRuntimeContext) => { state.effort = 'low'; return true })
     const module = { createRuntimeProfileReader: () => ({ engine: 'commandcode', target: () => null, config,
@@ -152,6 +189,9 @@ describe('late optional profile observations', () => {
   })
 
   it('treats a repeated confirmation as newer authority than a pending config or transcript stage', async () => {
+    // One frozen millisecond: the repeated confirmation stamps observedAt again, and a clock that
+    // ticked in between failed the comparison below on CI (observedAt 1 ms apart, 2026-10-09).
+    vi.useFakeTimers({ toFake: ['Date'] })
     let finish!: (effort: string) => void
     const manager = new RuntimeProfileState(() => ({ ...claudeRuntime,
       configuredEffort: () => new Promise<string>(resolve => { finish = resolve }),

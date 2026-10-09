@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connectors · Harness</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/page.js" defer></script>
+<body>
+<main>
+  <header>
+    <h1>Connectors</h1>
+    <p class="intro">Connect your agents to tools outside this computer: a tracker, a design tool, a web service.</p>
+  </header>
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Search connectors" autocomplete="off" spellcheck="false" aria-label="Search connectors">
+    <button id="reload" class="icon" type="button" title="Refresh" aria-label="Refresh">↻</button>
+    <button id="add" class="primary" type="button">+ Add custom</button>
+  </div>
+  <div class="pills" role="tablist">
+    <button id="browse" class="pill selected" type="button" role="tab" aria-selected="true">Browse</button>
+    <button id="connected" class="pill" type="button" role="tab" aria-selected="false">Connected</button>
+  </div>
+  <p id="signed-out" class="hint-line" hidden>GitHub, Slack, Google and a few more sign in through your Harness account. Run <code>harness login</code>, then refresh to connect them.</p>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <div id="sections"><p class="empty">Loading connectors…</p></div>
+  <footer>Accounts stay on this computer and are shared by every agent you run here. Disconnecting stops Harness from using an account; revoke it in the service's settings to remove it everywhere.</footer>
+</main>
+<dialog id="custom-dialog">
+  <form id="custom-form">
+    <h2>Add custom</h2>
+    <p>A remote MCP server. If it asks you to sign in, Harness opens the service's sign-in page.</p>
+    <label for="custom-name">Name</label>
+    <input id="custom-name" required maxlength="64" autocomplete="off" spellcheck="false">
+    <label for="custom-url">Remote MCP server URL</label>
+    <input id="custom-url" type="url" required maxlength="2048" placeholder="https://example.com/mcp" autocomplete="off" spellcheck="false">
+    <details>
+      <summary>Advanced</summary>
+      <label for="custom-headers">Headers (Name: value, one per line)</label>
+      <textarea id="custom-headers" rows="3" placeholder="Authorization: Bearer …" spellcheck="false"></textarea>
+    </details>
+    <p id="custom-error" class="error" role="status" aria-live="polite"></p>
+    <div class="actions"><button type="button" id="custom-cancel">Cancel</button><button class="primary" id="custom-save" type="submit">Continue</button></div>
+  </form>
+</dialog>
+<dialog id="confirm-dialog">
+  <form id="confirm-form">
+    <h2 id="confirm-title">Disconnect</h2>
+    <p>Agents on this computer stop using this account. To revoke it everywhere, use the service's settings.</p>
+    <div class="actions"><button type="button" id="confirm-cancel">Cancel</button><button class="danger" type="submit">Disconnect</button></div>
+  </form>
+</dialog>
+</body>
+</html>

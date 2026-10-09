@@ -8,7 +8,7 @@ import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from 
 
 process.env.TZ = 'UTC'
 const golden = fileURLToPath(new URL('./__fixtures__/external-shapes.golden.json', import.meta.url))
-const quiet: ProcessView = { list: async () => [], openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
+const quiet: ProcessView = { list: async () => [], openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
 
 it('preserves external lists, exact ownership, conservative busy answers and core admission on both platforms', async () => {
   const root = mkdtempSync(join(tmpdir(), 'external-shapes-'))

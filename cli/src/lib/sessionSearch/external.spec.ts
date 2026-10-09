@@ -58,7 +58,7 @@ describe('ExternalSessions', () => {
   })
 })
 
-const quiet: ProcessView = { list: async () => [], openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
+const quiet: ProcessView = { list: async () => [], openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
 
 describe('OpenSessions', () => {
   function open(providers: ExternalProvider[], extra: Partial<ConstructorParameters<typeof OpenSessions>[0]> = {}) {

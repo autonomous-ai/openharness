@@ -53,7 +53,7 @@ describe('where each engine keeps its conversations', () => {
 })
 
 describe('the other engines\' readers, loaded on first use', () => {
-  const none: ProcessView = { list: async () => [], openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
+  const none: ProcessView = { list: async () => [], openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
   const missing = '/nonexistent/adoption-root'
   const paths = () => externalPaths({ CURSOR_CONFIG_DIR: missing, CURSOR_DATA_DIR: missing, OPENCODE_DB: `${missing}/opencode.db`, KILO_DB: `${missing}/kilo.db`, PI_CODING_AGENT_DIR: missing })
 
@@ -66,10 +66,10 @@ describe('the other engines\' readers, loaded on first use', () => {
     await cursor.owners!(none)
     await cursor.busy!({ pid: 1, record: '' })
     expect(vi.mocked(loadEngine).mock.calls).toEqual([['cursor']])
-    // Kilo's reader is OpenCode's, loaded with Kilo's code; Claude Code's and Codex's are declared, and load nothing.
+    // Kilo explicitly asks OpenCode's shared store reader; its own runtime entry stays independent.
     vi.mocked(loadEngine).mockClear()
     for (const engine of ['kilo', 'claude', 'codex']) await providers.find((provider) => provider.engine === engine)!.owners!(none)
-    expect(vi.mocked(loadEngine).mock.calls).toEqual([['kilo']])
+    expect(vi.mocked(loadEngine).mock.calls).toEqual([['opencode']])
   })
 
   it('lists nothing and holds nothing open for an engine whose code could not be loaded', async () => {

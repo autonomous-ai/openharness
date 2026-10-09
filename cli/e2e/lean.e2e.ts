@@ -130,6 +130,10 @@ describe('harnessd\'s master and services lean', () => {
     // service with MODULE_NOT_FOUND until the master itself restarted. The lean bundle is only ever an
     // optimisation.
     const d = await fresh()
+    // Core readiness deliberately precedes service readiness. This case removes a RUNNING
+    // bundle, not one a freshly spawned service is still importing for the first time.
+    await until('the services to finish importing the test bundle',
+      () => SERVICES.every(name => d.log().includes(`[service ${name}] connected to the core`)) || null, 30_000, 100)
     const ours = /\[harnessd\] services run from (\S+), as this master does/.exec(d.log())![1]
     rmSync(dirname(ours), { recursive: true })
     const search = servicePids(d).get('search')!

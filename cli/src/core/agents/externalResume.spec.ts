@@ -1,10 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { externalReservations, type ExternalResumeIntent } from '../../lib/externalResume.js'
 import { externalUnavailable, type ExternalSessionAnswer, type ExternalSessionRequest } from '../../lib/externalSessionWire.js'
 import type { RegisteredSession } from '../../lib/registry.js'
+import { claudeProvider } from '../../lib/sessionSearch/externals/claude.js'
+import type { ProcessView, RunningProcess } from '../../lib/sessionSearch/externals/types.js'
+import { createExternalSessions } from '../../services/externalSessions.js'
 import { createExternalResumes, type ExternalResumeDeps } from './externalResume.js'
 import { stopExternalOwner } from './externalOwner.js'
 vi.mock('./externalOwner.js', () => ({ stopExternalOwner: vi.fn(async () => false) }))
@@ -460,4 +463,38 @@ it('does not admit a conversation acquired externally while its final pane probe
   expect(test.rows.get(id)?.externalResume?.phase).toBe('waiting')
   expect(test.rows.get(id)?.sessionId).toBe('')
   expect(test.deps.launch).not.toHaveBeenCalled()
+})
+
+it('launches a conversation held behind a record-less Claude in its folder once that process goes, and never waits on one elsewhere', async () => {
+  // CLI 0.3.70: "[restore] held · search · launched 0 of 4 · 4 still waiting" behind two old TUIs with no record.
+  // The real search reader answers here, over a private Claude home and a fake process table.
+  const home = mkdtempSync(join(tmpdir(), 'external-resume-claude-'))
+  try {
+    const project = join(home, 'project'), elsewhere = join(home, 'elsewhere'), conversation = '33333333-3333-4333-8333-333333333333'
+    mkdirSync(project); mkdirSync(elsewhere); mkdirSync(join(home, 'projects', 'project'), { recursive: true })
+    writeFileSync(join(home, 'projects', 'project', `${conversation}.jsonl`), JSON.stringify({
+      type: 'user', sessionId: conversation, cwd: project, entrypoint: 'cli', message: { role: 'user', content: 'Fixture' } }) + '\n')
+    const tui = (pid: number): RunningProcess => ({ pid, ppid: 1, executable: 'claude', args: 'claude --append-system-prompt "be brief"', started: 1 })
+    let processes = [tui(201), tui(202)]
+    const cwds = new Map([[201, elsewhere], [202, project]])
+    const reader = createExternalSessions({ providers: [claudeProvider({ projectsDir: join(home, 'projects'), home })], generation: () => null,
+      open: { ttys: async () => new Map(), harnessTtys: async () => new Set(), view: (): ProcessView => {
+        const listed = processes
+        return { list: async () => listed, alive: pid => listed.some(row => row.pid === pid), openFiles: async () => new Map(),
+          openFilesOf: async () => new Map(), cwds: async pids => new Map([...cwds].filter(([pid]) => pids.includes(pid))) }
+      } } })
+    const test = setup(); test.inspect.mockImplementation(request => reader.inspect(request))
+    const id = await test.stage({ resumeSessionId: conversation, cwd: project })
+    await test.controller.settled()
+    expect(test.rows.get(id)).toMatchObject({ launch: { state: 'held', service: 'search', detail: "The conversation's current owner could not be verified." },
+      externalResume: { phase: 'waiting' } })
+    expect(test.deps.launch).not.toHaveBeenCalled()
+    // The one in the conversation's folder quits; the one elsewhere runs on and holds nothing here.
+    processes = [tui(201)]
+    await vi.advanceTimersByTimeAsync(2000); await test.controller.settled()
+    expect(test.rows.get(id)).toMatchObject({ sessionId: conversation, cwd: project, resumeOnly: true, externalResume: { phase: 'admitted' } })
+    expect(test.deps.launch).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(4000)
+    expect(test.deps.launch).toHaveBeenCalledOnce()
+  } finally { rmSync(home, { recursive: true, force: true }) }
 })

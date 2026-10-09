@@ -42,10 +42,11 @@ export interface AdoptionContract {
    * folder, naming its pid and conversation; a record whose pid now runs another engine, or a process that started
    * after the record says (past `slackMs`), is someone else's. `open`: the session file a process of these
    * `commands` holds open, its conversation the id the file's name holds; a server's (an app's or an editor's) is
-   * never stopped from here.
+   * never stopped from here. A live process with no record says at most, in its arguments, the conversation it
+   * started on: the engine's resume flags (`resumeArgs`, lib/tmux.ts) or one of `sessionFlags`.
    */
   owners:
-    | { records: { folder: string; suffix: string; pid: string; id: string; started: string; slackMs: number } }
+    | { records: { folder: string; suffix: string; pid: string; id: string; started: string; slackMs: number; sessionFlags?: readonly string[] } }
     | { open: { commands: readonly string[]; id: RegExp; contains: string; servers: { executable: RegExp; args: RegExp; subcommands: readonly string[] } } }
   /**
    * Whether the owner is mid-turn. `record`: its record's `field` says (no record: it ended, so not). `tail`: the

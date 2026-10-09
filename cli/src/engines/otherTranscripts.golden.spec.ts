@@ -221,6 +221,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
   const announceTurnAborted = (...args: unknown[]): void => { out.push(['aborted', ...args]) }
   const attach = core.createAttach({
     liveFor: () => undefined,
+    resolve: () => session,
     terminalGone: async () => false,
     normalizers,
     watcher: {
@@ -233,6 +234,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
     runtimeProfiles: {
       transcriptFields: () => [], beginHydrate: () => ({ ingest: () => {}, commit: () => {} }), hydrate: () => {},
       ingestConfig: async () => {}, ingestPane: () => false,
+      capturePane: async () => pane,
     } as never,
     captureTerminal: async () => pane,
     emit: emit as never,

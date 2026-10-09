@@ -1742,8 +1742,9 @@ int main(int argc, char **argv) {
     tap(1200,233,220); tap(1400,233,220); assert(!stops); // double/triple are one intent
     s.active=1; input_cancel();
     assert(!strcmp(target,"a") && !strcmp(s.voice_target,"Deploy latest firmware"));
-    tap(2400,233,220); assert(stops==1);
-    tap(3200,233,422); assert(s.view==VOICE && s.voice_open && stops==1);
+    // Anywhere on the glass finishes the recording, not just the pet: (233,422) is below its old box.
+    tap(2400,233,422); assert(stops==1);
+    assert(s.view==VOICE && s.voice_open);
     dispatch((action_t){.kind=A_VOICE_ABORT}); // Finish the fixture's pending host reply.
     tap(4000,233,220); assert(starts==2 && !strcmp(target,"b"));
 

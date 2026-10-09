@@ -135,6 +135,9 @@ flutter:
     - assets/models.svg
     - assets/harnesses.svg
     - assets/engine-icons/
+    # Settings ▸ Connectors' service icons, copied from the CLI's
+    # (cli/scripts/connector-assets.mjs, with lib/connectors/connector_icons.dart).
+    - assets/connector-icons/
     - assets/store/
     - assets/store/projects/
     - assets/store/covers/

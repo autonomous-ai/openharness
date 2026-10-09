@@ -21,16 +21,18 @@ const fakes = vi.hoisted(() => {
   const made: Array<{ kind: string; args: unknown[]; instance: Record<string, any> }> = []
   const normalizer = (kind: string) => class {
     turnOpen = false
+    turnRevision = 0
     thinkingPrefix = ''
     args: unknown[]
     constructor(...args: unknown[]) { this.args = args; made.push({ kind, args, instance: this as Record<string, any> }) }
     ingest(line: string) {
+      this.turnRevision++
       const record = JSON.parse(line || '{}') as { events?: unknown[]; open?: boolean; close?: boolean }
       if (record.open) this.turnOpen = true
       if (record.close) this.turnOpen = false
       return record.events ?? []
     }
-    closeTurn() { this.turnOpen = false; return [] }
+    closeTurn() { this.turnRevision++; this.turnOpen = false; return [] }
   }
   const reader = (kind: string) => class {
     turnOpen = false
@@ -59,6 +61,7 @@ vi.mock('../../engines/hermes/reader.js', async (real) => ({ ...await real<objec
 vi.mock('../../engines/devin/reader.js', async (real) => ({ ...await real<object>(), DevinReader: fakes.reader('devin') }))
 
 const dirs: string[] = []
+const bindings = new Map<string, RegisteredSession>()
 const transcript = (lines: unknown[] = []): string => {
   const dir = mkdtempSync(join(tmpdir(), 'core-attach-'))
   dirs.push(dir)
@@ -66,8 +69,11 @@ const transcript = (lines: unknown[] = []): string => {
   writeFileSync(file, lines.map((line) => typeof line === 'string' ? line : JSON.stringify(line)).join('\n') + (lines.length ? '\n' : ''))
   return file
 }
-const session = (engine: string, transcriptPath?: string, over: Partial<RegisteredSession> = {}): RegisteredSession =>
-  ({ agentId: `${engine}-agent`, sessionId: `${engine}-s`, engine, transcriptPath, ...over }) as RegisteredSession
+const session = (engine: string, transcriptPath?: string, over: Partial<RegisteredSession> = {}): RegisteredSession => {
+  const value = { agentId: `${engine}-agent`, sessionId: `${engine}-s`, engine, transcriptPath, ...over } as RegisteredSession
+  bindings.set(value.agentId, value)
+  return value
+}
 
 // Each engine's code is loaded in this process before an attach folds; a test may say it could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
@@ -85,6 +91,7 @@ function setup(over: Partial<AttachDeps> = {}) {
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   const deps: AttachDeps = {
     liveFor,
+    resolve: id => bindings.get(id),
     terminalGone: vi.fn(async () => false),
     normalizers,
     watcher: { addSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
@@ -94,9 +101,14 @@ function setup(over: Partial<AttachDeps> = {}) {
       transcriptFields: vi.fn(() => []),
       beginHydrate: vi.fn(() => profile),
       hydrate: vi.fn(),
-      ingestConfig: vi.fn(async () => {}),
-      ingestPane: vi.fn(),
-    } as unknown as AttachDeps['runtimeProfiles'],
+      ingestConfig: vi.fn(async () => false),
+      ingestPane: vi.fn(() => false),
+      capturePane: vi.fn(async (session, capture, lines, silent) => {
+        const text = await capture(session.agentId, lines)
+        if (text) await deps.runtimeProfiles.ingestPane(session, text, silent)
+        return text
+      }),
+    } as AttachDeps['runtimeProfiles'],
     captureTerminal: vi.fn(async () => 'pane'),
     emit: vi.fn(),
     announceTurnAborted: vi.fn(),
@@ -178,6 +190,7 @@ describe('attaching a session', () => {
     vi.useRealTimers()
     fakes.made.length = 0
     fakes.copilotOpen.value = true
+    bindings.clear()
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 
@@ -646,6 +659,67 @@ describe('attaching a session', () => {
       expect(made('copilot')[1].turnOpen).toBe(true)
       expect(vi.mocked(run.deps.emit).mock.calls.filter((call) => call[2]?.resumed).map((call) => call[0])).toEqual(['agy-2', 'copilot-2'])
     })
+
+    it('closes an idle agy history turn even when newer profile evidence discards the chip update', async () => {
+      const run = setup({ settled: vi.fn() })
+      vi.mocked(run.deps.captureTerminal).mockResolvedValue(IDLE_AGY)
+      vi.mocked(run.deps.runtimeProfiles.capturePane).mockImplementationOnce(async (_session, capture, lines) => {
+        await capture('agy-agent', lines)
+        return null
+      })
+      await run.attach.attachSession(session('agy', transcript([{ events: [started()], open: true }])))
+      expect(made('agy')[0].turnOpen).toBe(false)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.deps.settled).toHaveBeenCalledExactlyOnceWith('agy-s')
+    })
+
+    it.each(['binding', 'forgotten', 'new turn', 'later binding', 'later normalizer', 'later turn'] as const)(
+      'does not close or replay agy history after %s supersedes its capture', async change => {
+        const run = setup({ settled: vi.fn() }), s = session('agy', transcript([{ events: [started()], open: true }]))
+        let finish!: (value: string) => void
+        vi.mocked(run.deps.captureTerminal).mockReturnValueOnce(new Promise<string>(resolve => { finish = resolve }))
+        const mutate = () => {
+          if (change.includes('binding')) bindings.set(s.agentId, { ...s, boundAt: 2 })
+          if (change === 'forgotten' || change === 'later normalizer') run.normalizers.agyNormalizers.delete(s.sessionId)
+          if (change.includes('turn')) made('agy')[0].ingest(JSON.stringify({ open: true }))
+        }
+        if (change.startsWith('later')) vi.mocked(run.deps.runtimeProfiles.capturePane).mockImplementationOnce(async (_s, capture) => {
+          await capture(s.agentId)
+          queueMicrotask(mutate)
+          return null
+        })
+        const pending = run.attach.attachSession(s)
+        await vi.waitFor(() => expect(run.deps.captureTerminal).toHaveBeenCalled())
+        const normalizer = made('agy')[0], close = vi.spyOn(normalizer, 'closeTurn')
+        if (!change.startsWith('later')) mutate()
+        finish(change.startsWith('later') ? 'working\n  esc to cancel' : IDLE_AGY)
+        await pending
+        expect(close).not.toHaveBeenCalled()
+        expect(run.deps.emit).not.toHaveBeenCalled()
+        expect(run.deps.settled).not.toHaveBeenCalled()
+      },
+    )
+
+    it.each(['new turn', 'binding', 'forgotten'] as const)(
+      'keeps captured agy history fenced through watcher installation: %s', async change => {
+        for (const pane of [IDLE_AGY, 'working\n  esc to cancel']) {
+          const run = setup({ settled: vi.fn() }), s = session('agy', transcript([{ events: [started()], open: true }]))
+          vi.mocked(run.deps.captureTerminal).mockResolvedValue(pane)
+          let finish!: () => void
+          vi.mocked(run.deps.watcher.addSession).mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+          const pending = run.attach.attachSession(s)
+          await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalled())
+          const normalizer = run.normalizers.agyNormalizers.get(s.sessionId)!
+          if (change === 'new turn') normalizer.ingest(JSON.stringify({ open: true }))
+          if (change === 'binding') bindings.set(s.agentId, { ...s, boundAt: 2 })
+          if (change === 'forgotten') run.normalizers.agyNormalizers.delete(s.sessionId)
+          finish()
+          await pending
+          expect(run.deps.emit, pane).not.toHaveBeenCalled()
+          expect(run.deps.settled, pane).not.toHaveBeenCalled()
+        }
+      },
+    )
 
     it('tells the recaps when the last turn was already over at attach, never for one open or killed', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})

@@ -22,6 +22,29 @@ export interface StoreHomes {
 
 const listings = new WeakMap<StoreHomes, { at: number; homes: string[] }>()
 
+/** Fresh evidence for admission. An incomplete profile list cannot authorize a profile binding. */
+export async function readStoreHomes(declared: StoreHomes, defaultHome: string): Promise<{ homes: string[]; complete: boolean }> {
+  const homes = [defaultHome]
+  let complete = true
+  try {
+    const entries = await readdir(join(defaultHome, declared.profiles), { withFileTypes: true })
+    if (entries.length > declared.max) complete = false
+    for (const entry of entries.slice(0, declared.max)) {
+      if (!entry.isDirectory()) continue
+      const home = join(defaultHome, declared.profiles, entry.name)
+      try {
+        if ((await stat(declared.store(home))).isFile()) homes.push(home)
+        else complete = false
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') complete = false
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') complete = false
+  }
+  return { homes, complete }
+}
+
 /** Every home, the default first. */
 export async function listStoreHomes(declared: StoreHomes, defaultHome: string): Promise<string[]> {
   const now = Date.now()

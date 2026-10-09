@@ -34,7 +34,7 @@ function setup() {
   normalizers.liveParsers.set(session.sessionId, oldParser)
   const hold = { offset: statSync(path).size, expired: false, release: vi.fn() }
   const emit = vi.fn(), addSession = vi.fn(async () => {})
-  const attach = createAttach({ liveFor, normalizers, runtimeProfiles: profiles,
+  const attach = createAttach({ liveFor, normalizers, runtimeProfiles: profiles, resolve: () => session,
     terminalGone: async () => false, watcher: { hold: async () => hold, tails: () => true, addSession },
     cursorDiscovery: { add: async () => {} }, device: () => undefined,
     captureTerminal: async () => null, emit, announceTurnAborted: vi.fn(),

@@ -86,6 +86,8 @@ export function createRuntimeProfiles({ local, handles, resolve, transport }: Ru
     ingestPane(session: RegisteredSession, text: string, silent = false): boolean | Promise<boolean> {
       return handles(session.engine) ? observe(session, { kind: 'pane', text }, silent) : local.ingestPane(session, text, silent)
     },
+    capturePane: (session: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
+      historyLines?: number, silent = false) => forSession(session).capturePane(session, capture, historyLines, silent),
     ingestConfig(session: RegisteredSession, silent = false): Promise<boolean> {
       return handles(session.engine) ? observe(session, { kind: 'config' }, silent) : local.ingestConfig(session, silent)
     },

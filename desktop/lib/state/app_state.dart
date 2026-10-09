@@ -1106,23 +1106,23 @@ class AppNotifier extends ChangeNotifier {
     SetupDownloads.none,
   );
 
-  /// How long the agent downloads beside setup usually take from their start: OpenCode 13.5 s,
-  /// then Codex and Claude Code once setup's Node is in place, 47 s in all (fresh macOS VM,
-  /// 2026-10-09). The tour counts down from it.
+  /// How long OpenCode's download beside setup usually takes from its start (11–13 s on a fresh
+  /// macOS VM, 2026-10-09). The tour counts down from it.
   @visibleForTesting
-  static const agentDownloadsExpected = Duration(seconds: 50);
+  static const agentDownloadsExpected = Duration(seconds: 15);
 
-  /// The longest the tour waits for them, as long as a create waits ([agentPrefetchWait]): 287 MB
-  /// take about four minutes at 10 Mbit/s, and a pane that gave up sooner would run its own npm
-  /// install into the prefix the download is still writing.
+  /// The longest the tour waits for OpenCode, as long as a create waits ([agentPrefetchWait]).
   @visibleForTesting
   static const agentDownloadsCap = Duration(minutes: 10);
 
   Timer? _agentDownloadsTick;
 
   /// Feeds [setupDownloads] from [agentPrefetch] once it has started: pending at once, so the tour
-  /// cannot open before the downloads are counted, and done when they settle or [agentDownloadsCap]
-  /// passes.
+  /// cannot open before OpenCode is in place, and done when OpenCode has settled or
+  /// [agentDownloadsCap] passes. Codex and Claude Code go on downloading after the tour: their panes
+  /// open at once and wait for them under the CLI's install line (`waitsForDownload`), which opens
+  /// Harness 10–15 s sooner than waiting for all three (the owner, 2026-10-09: "boot into harness
+  /// right away with 3 panes… downloading then jump into their default screen").
   void _publishAgentDownloads() {
     final prefetch = agentPrefetch;
     if (prefetch == null || !prefetch.started || _agentDownloadsTick != null) {
@@ -1140,7 +1140,9 @@ class AppNotifier extends ChangeNotifier {
       final progress = prefetch.progress.value;
       final elapsed = DateTime.now().difference(began);
       final lines = [agentDownloadsLine(progress)];
-      if (progress.finished || elapsed >= agentDownloadsCap) {
+      if (progress.finished ||
+          progress.settled.contains('opencode') ||
+          elapsed >= agentDownloadsCap) {
         stop();
         setupDownloads.value = SetupDownloads(lines: lines);
         return;
@@ -8551,6 +8553,28 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
+  /// The `connectors` request to [machineId]'s daemon: its connected services
+  /// (Settings → Connectors). Never carries a token either way.
+  Future<Map<String, dynamic>> connectors(
+    String machineId,
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final machine = stateOf(machineId);
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      throw StateError('Reconnect this computer to manage its connections.');
+    }
+    final connection = _conn(machineId);
+    if (!connection.isReady) {
+      throw StateError('Reconnect this computer to manage its connections.');
+    }
+    return connection.request('connectors', payload: payload, timeout: timeout);
+  }
+
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
     String modelId, {
@@ -11382,7 +11406,8 @@ class AppNotifier extends ChangeNotifier {
         creation._projectNameRetries < 64;
     // An agent still downloading beside setup ([AgentPrefetch]): the pane would start a second install
     // of it. Waited for here, once the creation is registered (its tab and split are held), and only
-    // for what is left of [agentPrefetchWait] since that download began.
+    // for what is left of [agentPrefetchWait] since that download began. A CLI whose pane waits for
+    // the download itself shows it in the pane instead, once the pane can see it.
     final prefetchedEngine = choices['engine'];
     if (!creation.awaitingConfirmation &&
         prefetchedEngine is String &&
@@ -11390,6 +11415,7 @@ class AppNotifier extends ChangeNotifier {
       final download = agentPrefetch?.waitFor(
         prefetchedEngine,
         agentPrefetchWait,
+        paneWaits: machine.engines[prefetchedEngine]?.waitsForDownload == true,
       );
       if (download != null) {
         await download;

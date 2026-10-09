@@ -5,14 +5,14 @@ import json
 from pathlib import Path
 import re
 import shlex
-import shutil
 import tarfile
 import tempfile
 
 from footprint_vm import copy_file
 from install_first import wait_installer_screen
 
-HELPER = r'^/usr/bin/python3 /usr/lib/harness-os/connections/connections[.]py serve --background$'
+# The Connectors page `harness connections` starts (the CLI's, in the image's runtime).
+HELPER = r' connections serve --background$'
 
 
 def overlay(vm, source, result):
@@ -25,10 +25,6 @@ def overlay(vm, source, result):
         base = Path(temporary)
         root = base / 'root'
         result['browser_home'] = payload.stage(source, root)
-        # The page's imports, catalog and bundled assets must match its entry
-        # point, including when the reusable ISO contains an older connector.
-        shutil.copytree(source / 'os/connectors', root / 'usr/lib/harness-os/connections',
-                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         archive = base / 'home.tar'
         with tarfile.open(archive, 'w') as tar:
             for path in sorted(root.rglob('*')):

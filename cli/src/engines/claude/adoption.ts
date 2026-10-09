@@ -24,6 +24,9 @@ export const adoption: AdoptionContract = {
   },
   // A running Claude Code keeps `<home>/sessions/<pid>.json` naming its session and saying `idle` between turns:
   // the owner and its state, exactly. `ps` gives a start to the second, and Claude stamps its record a moment after.
-  owners: { records: { folder: record!.folder, suffix: record!.suffix, pid: record!.pid, id: record!.id, started: 'startedAt', slackMs: 2_000 } },
+  // `--session-id <uuid>` starts a conversation under that id, so a process with no record has it open as surely
+  // as one that resumed it.
+  owners: { records: { folder: record!.folder, suffix: record!.suffix, pid: record!.pid, id: record!.id, started: 'startedAt', slackMs: 2_000,
+    sessionFlags: ['--session-id'] } },
   busy: { record: { field: 'status', busy: 'busy', idle: 'idle' } },
 }

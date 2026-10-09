@@ -6,7 +6,4 @@
 export { KiloReader, readKiloMessages } from './reader.js'
 export { kiloMessagesToEvents, lastKiloTurnText, windowKiloMessages } from './normalizer.js'
 export { kiloFooterModelId, parseKiloModelsOutput } from './runtimeProfile.js'
-// Its adoption reader, which Kilo shares with OpenCode: their stores are one shape.
-export { opencodeProvider } from '../../lib/sessionSearch/externals/opencode.js'
-
 export { createRuntimeProfileReader } from './profileReader.js'
