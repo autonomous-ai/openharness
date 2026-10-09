@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../core/local_key_value_store.dart';
+import '../core/models.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../logging/app_log.dart';
@@ -231,28 +232,52 @@ class FirstArrival {
   ) async {
     String? firstTab;
     for (final tab in tabs) {
-      String? tabId;
-      for (final session in tab) {
-        // The first tab is the empty one the person is looking at; the second is a new one.
-        final placement = tabId == null && firstTab != null
-            ? HarnessPlacement.newTab
-            : HarnessPlacement.currentTab;
+      Future<bool> resume(ArrivalSession session, String? tabId) async {
         final (:error, :refusal) = await app.resumeConversation(
           machineId,
           engine: session.engine,
           folder: session.cwd,
           sessionId: session.sessionId,
           name: session.title.isEmpty ? null : session.title,
-          swarmId: tabId ?? (firstTab == null ? app.activeSwarmId : null),
-          placement: placement,
+          swarmId: tabId,
+          // The first tab is the empty one the person is looking at; the second is a new one.
+          placement: tabId == null
+              ? HarnessPlacement.newTab
+              : HarnessPlacement.currentTab,
         );
         if (error != null) {
           // Started since it was listed, or its folder went: the rest still open.
           _log('first arrival: $session not opened: ${refusal ?? error}');
-          continue;
         }
-        tabId ??= app.activeSwarmId;
+        return error == null;
       }
+
+      // One at a time until one has the tab, then the rest together, so one slow first start
+      // (Codex's took 9.4 s on a fresh Mac) holds back nothing beside it.
+      String? tabId = firstTab == null ? app.activeSwarmId : null;
+      var rest = tab;
+      while (rest.isNotEmpty) {
+        final opened = await resume(rest.first, tabId);
+        rest = rest.skip(1).toList();
+        if (opened) {
+          tabId = app.activeSwarmId;
+          break;
+        }
+      }
+      if (tabId == null || (firstTab == null && app.panes.isEmpty)) continue;
+      await Future.wait([for (final session in rest) resume(session, tabId)]);
+      _arrange(
+        app,
+        tabId,
+        tab,
+        // A resumed agent learns its session id once its transcript is found, which can be after
+        // this; until then it carries the title it was opened with as its name.
+        (agent, session) =>
+            agent.sessionId == session.sessionId ||
+            (session.title.isNotEmpty &&
+                agent.engine == session.engine &&
+                agent.name == session.title),
+      );
       firstTab ??= tabId;
     }
     if (firstTab == null) return false;
@@ -281,9 +306,7 @@ class FirstArrival {
       return false;
     }
     final tabId = app.activeSwarmId;
-    TerminalPane? lead;
-    for (final engine in plan.fresh) {
-      final before = {for (final pane in app.allPanes) pane.id};
+    Future<void> start(String engine) async {
       final error = await app.createAgent(
         machineId,
         engine: engine,
@@ -292,25 +315,26 @@ class FirstArrival {
         swarmId: tabId,
         placement: HarnessPlacement.currentTab,
       );
-      if (error != null) {
-        _log('first arrival: $engine not started: $error');
-        continue;
+      if (error != null) _log('first arrival: $engine not started: $error');
+      // OpenCode the full height on the left, the other two stacked on the right. Applied as soon
+      // as the third pane is in, not before: adding a pane resets the tab's layout for that count.
+      if (plan.fresh.length == 3 &&
+          app.activeSwarmId == tabId &&
+          app.panes.length == 3) {
+        app.setPreset(3, PanePreset.mainLeft);
       }
-      lead ??= app.allPanes
-          .where((pane) => !before.contains(pane.id))
-          .firstOrNull;
     }
-    if (lead == null) return false;
+
+    // The lead first, so it has the first place; the others together, so Codex's slow first start
+    // does not hold Claude Code back.
+    await start(plan.fresh.first);
+    await Future.wait([for (final engine in plan.fresh.skip(1)) start(engine)]);
+    _arrange(app, tabId, plan.fresh, (agent, engine) => agent.engine == engine);
+    final panes = app.swarms.where((tab) => tab.id == tabId).firstOrNull?.panes;
+    if (panes == null || panes.isEmpty) return false;
     _show(app, tabId);
-    final count =
-        app.swarms.where((tab) => tab.id == tabId).firstOrNull?.panes.length ??
-        0;
-    // OpenCode the full height on the left, the other two stacked on the right.
-    if (count == 3 && app.activeSwarmId == tabId) {
-      app.setPreset(3, PanePreset.mainLeft);
-    }
-    app.focusPane(lead.id);
-    if (plan.typesStarterTask) {
+    final lead = panes.first;
+    if (plan.typesStarterTask && _engineOf(app, lead) == plan.fresh.first) {
       unawaited(
         typeWhenReady(lead, starterTask, wait: starterWait).then(
           (typed) => _log(
@@ -322,6 +346,37 @@ class FirstArrival {
       );
     }
     return true;
+  }
+
+  static Agent? _agentOf(AppNotifier app, TerminalPane pane) => app
+      .stateOf(pane.machineId)
+      ?.agents
+      .where((agent) => agent.id == pane.agentId)
+      .firstOrNull;
+
+  static String? _engineOf(AppNotifier app, TerminalPane pane) =>
+      _agentOf(app, pane)?.engine;
+
+  /// Puts [tabId]'s panes in [order]: panes started together land in the order they answered.
+  /// A pane [matches] no entry for stays where it is.
+  static void _arrange<T>(
+    AppNotifier app,
+    String tabId,
+    List<T> order,
+    bool Function(Agent agent, T entry) matches,
+  ) {
+    if (app.activeSwarmId != tabId) return;
+    for (var slot = 0; slot < order.length; slot++) {
+      final panes = app.panes;
+      if (slot >= panes.length) return;
+      final wanted = panes.skip(slot).where((pane) {
+        final agent = _agentOf(app, pane);
+        return agent != null && matches(agent, order[slot]);
+      }).firstOrNull;
+      if (wanted != null && wanted.id != panes[slot].id) {
+        app.reorderPane(wanted.id, panes[slot].id);
+      }
+    }
   }
 
   void _show(AppNotifier app, String tabId) {
