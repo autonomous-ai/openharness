@@ -28,4 +28,30 @@ This change does not claim that every native lookup is bounded yet. Strict proce
 
 The existing synchronous compatibility readers remain for registry/history callers, and the shared saved-home catalog still uses its legacy synchronous loader. Bounding that catalog read is a remaining prerequisite for a fully bounded native lookup path; the per-lookup home/probe cap here does not claim otherwise. Runtime cost is measured with the same private native corpus and Node toolchain on both trees using `cli/scripts/handoff-2026-10-08/identity-cost.ts`; line count is not an acceptance metric.
 
-The [cost record](2026-10-09-bounded-identity-cost.json) compares the former production tree at `62cc1cc4343b05c7c800f614ba9254f7cadf7990` with the corrected implementation at `3ff5f3ac77292253c000a82e67341a6029d145d4`. Three interleaved processes per source/workload perform ten lookups each. The corpus includes 160 ordinary files, 420 files for incomplete-pool behavior, and 64 known homes for empty-home probe cost. These measure a warm filesystem cache; process peak RSS includes setup and module import, while lookup latency/CPU exclude them. This is a reference measurement of the safety cost, not a new numerical acceptance threshold.
+The [cost record](2026-10-09-bounded-identity-cost.json) compares the former production tree at `62cc1cc4343b05c7c800f614ba9254f7cadf7990` with the corrected implementation at `cc6470abef447662b6a790a7fc32e9b49b66efb0`. Three interleaved processes per source/workload perform ten lookups each. The corpus includes 160 ordinary files, 420 files for incomplete-pool behavior, and 64 known homes for empty-home probe cost. These measure a warm filesystem cache; process peak RSS includes setup and module import, while lookup latency/CPU exclude them. This is a reference measurement of the safety cost, not a new numerical acceptance threshold.
+
+## Validation and measured cost
+
+The final production change is `9d79c4607`; `40b30bbbd` only canonicalizes private test paths on macOS. Integration with main `576ae7246` changes Desktop and TUI only. No CLI/Store validation input or production behavior changed in that integration.
+
+- Core/services: 1,930 tests, 100% per-file coverage (receipt `20261009T133531.927972Z-92550`).
+- Master: 265 passed, one existing skip, 100% per-file coverage; types and 244 affected identity/architecture tests passed (receipt `20261009T133800.424067Z-8569`).
+- Resume: 313 tests and 100% coverage, run alone (receipt `20261009T134355.238968Z-36854`, 48.5 seconds).
+- Bundled private lifecycle: six selected tests passed, including incomplete native identity, manual start/resume, and Codex tmux-crash resume (receipt `20261009T133531.927972Z-92550`, 67.4 seconds). Twenty tests outside those selected lanes were skipped.
+- All 18 deliberate wiring mutations failed by assertion after a passing unchanged baseline. All three former-code golden artifacts remain unchanged.
+- Cost comparison: 24 interleaved processes, 14.2 seconds (receipt `20261009T134506.715167Z-47079`).
+
+The initial final-production run exposed a macOS-only test fixture path mismatch and an unrelated existing master-test flake: its polling reader observed an incomplete JSON log append. The fixture correction, affected specs, types and full master coverage gate passed on rerun. Passing core and bundled e2e evidence is retained because the intervening correction changed only test paths. A mistyped resume receipt argument stopped the runner before tests; the corrected invocation passed.
+
+Latency below pools all 30 lookups per source/workload. CPU is per ten lookups; RSS is process peak including imports and corpus setup.
+
+| Workload | Former median / p95 ms | Candidate median / p95 ms | Former / candidate CPU ms | Former / candidate RSS MiB |
+| --- | --- | --- | --- | --- |
+| pool | 36.06 / 42.83 | 55.31 / 65.37 | 506–508 / 776–833 | 101.7–103.7 / 99.0–104.3 |
+| process | 0.34 / 1.45 | 0.69 / 2.26 | 5–5 / 10–10 | 94.2–94.8 / 92.4–94.0 |
+| limit | 86.53 / 101.22 | 12.72 / 14.91 | 1206–1219 / 179–184 | 105.2–105.8 / 100.8–105.3 |
+| homes | 0.39 / 1.82 | 5.61 / 7.81 | 8–9 / 84–85 | 90.8–91.8 / 96.9–98.3 |
+
+The 160-file pool and exact process lookups keep the same answer. The 420-file case changes from an unsafe absence to an explicit hold. The 64-home case checks every claim and revalidates the selected one instead of stopping at the first claim; that completeness accounts for the added work. These are local reference measurements, not guarantees or new performance gates.
+
+For this follow-up, implementation and diagnosis ran from approximately 12:48 to 13:38 UTC on October 9; validation overlapped that work and finished at 13:45, including the final isolated resume lane and cost measurement. Independent review and CI waiting are tracked separately in the PR, followed by merge time. Publication is excluded: no release is authorized. The overall daemon-separation request began at 23:26 UTC on October 8; this follow-up is one part of that work, not its total duration.
