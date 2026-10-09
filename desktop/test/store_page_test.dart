@@ -1304,7 +1304,8 @@ void main() {
       expect(find.text('1 result'), findsOneWidget);
       await tester.enterText(_key('store-search'), 'autonomous');
       await tester.pumpAndSettle();
-      expect(find.text('2 results'), findsOneWidget);
+      // The two catalog harnesses and Devices, which ships with Harness.
+      expect(find.text('3 results'), findsOneWidget);
       await tester.enterText(_key('store-search'), '  ');
       await tester.pumpAndSettle();
       expect(

@@ -13,27 +13,14 @@ import 'swarm_state_test.dart' show MemoryStore, createApp;
 void main() {
   for (final composerInBox in [false, true]) {
     testWidgets(
-      'Devices stays hidden until enabled and owns focus (composerInBox=$composerInBox)',
+      'Devices is there without an experiment and owns focus (composerInBox=$composerInBox)',
       (tester) async {
         newHarnessOpensInBox = composerInBox;
         addTearDown(() => newHarnessOpensInBox = false);
         final storage = MemoryStore();
         final app = createApp(store: storage);
-        app.experimentalFeatures.bind(
-          'u1',
-          transport: MemoryExperimentalTransport(storage),
-        );
-        await app.experimentalFeatures.refresh();
         await mount(tester, app);
         final button = find.byKey(const ValueKey('swarm-devices-button'));
-        expect(button, findsNothing);
-        app.openDevices();
-        expect(app.activeSwarm.isDevices, isFalse);
-        await app.experimentalFeatures.set(
-          ExperimentalFeature.devicesTab,
-          true,
-        );
-        await tester.pumpAndSettle();
         expect(button, findsOneWidget);
         expect(
           tester.getCenter(button).dx,
@@ -85,48 +72,11 @@ void main() {
         );
         expect(left.right, lessThan(right.left));
         expect(left.width / (left.width + right.width), closeTo(.7, .01));
-        await app.experimentalFeatures.set(
-          ExperimentalFeature.devicesTab,
-          false,
-        );
-        await tester.pumpAndSettle();
-        expect(button, findsNothing);
-        expect(app.swarms.any((s) => s.isDevices), isFalse);
-        expect(find.text('Add your first device'), findsNothing);
-        await app.experimentalFeatures.set(
-          ExperimentalFeature.devicesTab,
-          true,
-        );
-        app.openDevices();
-        await tester.pumpAndSettle();
-        app.currentUser = const CurrentUserProfile(
-          id: 'u2',
-          email: 'u2@example.test',
-        );
-        await tester.pumpAndSettle();
-        expect(button, findsNothing);
-        expect(app.swarms.any((s) => s.isDevices), isFalse);
-        expect(find.text('Add your first device'), findsNothing);
         await tester.pumpWidget(const SizedBox());
         app.dispose();
       },
     );
   }
-
-  test(
-    'a saved Devices tab cannot appear when the experiment is off',
-    () async {
-      final storage = MemoryStore();
-      await PaneLayoutStore(storage: storage).saveSwarms([
-        Swarm(id: 'devices', name: 'Devices', kind: 'devices'),
-        Swarm(id: 'work', name: 'Work'),
-      ], 'devices');
-      final app = createApp(store: storage);
-      await app.restorePaneLayoutForTest();
-      expect(app.swarms.any((s) => s.isDevices), isFalse);
-      app.dispose();
-    },
-  );
 
   test(
     'restoring a Devices tab reserves chat before its conversation loads',
@@ -136,12 +86,6 @@ void main() {
         Swarm(id: 'devices', name: 'Devices', kind: 'devices'),
       ], 'devices');
       final app = createApp(store: storage);
-      app.experimentalFeatures.bind(
-        'u1',
-        transport: MemoryExperimentalTransport(storage),
-      );
-      await app.experimentalFeatures.refresh();
-      await app.experimentalFeatures.set(ExperimentalFeature.devicesTab, true);
       await app.restorePaneLayoutForTest();
       final tab = app.swarms.singleWhere((tab) => tab.isDevices);
       expect(tab.panes, hasLength(2));
@@ -152,19 +96,15 @@ void main() {
     },
   );
 
-  test(
-    'older servers keep existing experiments working with Devices unavailable',
-    () async {
-      final store = ExperimentalFeaturesStore(pollInterval: Duration.zero);
-      store.bind('u1', transport: _OldServer());
-      await store.refresh();
-      expect(store.loaded, isTrue);
-      expect(store.enabled(ExperimentalFeature.shareButton), isTrue);
-      expect(store.enabled(ExperimentalFeature.devicesTab), isFalse);
-      expect(store.isAvailable(ExperimentalFeature.devicesTab), isFalse);
-      store.dispose();
-    },
-  );
+  test('a server still sending the retired devices_tab flag keeps experiments working', () async {
+    final store = ExperimentalFeaturesStore(pollInterval: Duration.zero);
+    store.bind('u1', transport: _OldServer());
+    await store.refresh();
+    expect(store.loaded, isTrue);
+    expect(store.error, isNull);
+    expect(store.enabled(ExperimentalFeature.shareButton), isTrue);
+    store.dispose();
+  });
 }
 
 class _OldServer implements ExperimentalSettingsTransport {
@@ -172,7 +112,11 @@ class _OldServer implements ExperimentalSettingsTransport {
   Future<Map<String, dynamic>> read() async => {
     'accountId': 'u1',
     'revision': 1,
-    'features': {'focus_bar_creature': false, 'share_button': true},
+    'features': {
+      'focus_bar_creature': false,
+      'share_button': true,
+      'devices_tab': false,
+    },
   };
   @override
   Future<Map<String, dynamic>> write(

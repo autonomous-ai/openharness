@@ -15,11 +15,6 @@ enum ExperimentalFeature {
     'share_button',
     'Share button',
     'Show Share in the top-right corner of the workspace.',
-  ),
-  devicesTab(
-    'devices_tab',
-    'Devices tab',
-    'Manage your Harness devices. Show Devices next to Harness Store and in its catalog. Off by default.',
   );
 
   const ExperimentalFeature(this.id, this.label, this.description);
@@ -27,7 +22,6 @@ enum ExperimentalFeature {
   bool get available => switch (this) {
     focusBarCreature => !kIsWeb && !kViewerMode,
     shareButton => true,
-    devicesTab => !kIsWeb && !kViewerMode,
   };
 }
 
@@ -142,10 +136,7 @@ class ExperimentalFeaturesStore extends ChangeNotifier {
         revision < 0 ||
         features is! Map ||
         ExperimentalFeature.values.any(
-          (feature) =>
-              features[feature.id] is! bool &&
-              !(feature == ExperimentalFeature.devicesTab &&
-                  !features.containsKey(feature.id)),
+          (feature) => features[feature.id] is! bool,
         )) {
       throw const FormatException('Invalid account settings');
     }
