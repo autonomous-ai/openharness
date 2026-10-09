@@ -34,7 +34,6 @@ Map<String, dynamic> _preview() => {
     'listening': [_png],
     'sending': [_png],
     'asking': [_png, _png, _png],
-    'relaxing': [_png, _png],
   },
   'stepMs': {
     'small': 200,
@@ -42,7 +41,6 @@ Map<String, dynamic> _preview() => {
     'listening': 160,
     'sending': 160,
     'asking': 90,
-    'relaxing': 120,
   },
 };
 
@@ -652,7 +650,6 @@ void main() {
         'listening': 'waving',
         'sending': 'waving',
         'asking': 'waiting',
-        'relaxing': 'idle',
       });
       expect(sent.last['path'], sent.first['path']);
       expect(inCard('waving', 'Listening'), findsOneWidget);
@@ -905,6 +902,58 @@ void main() {
       expect(chipOn(tester, 'relaxing'), isTrue);
     });
 
+    testWidgets('Relaxing follows Rest until it is chosen, then stays put', (
+      tester,
+    ) async {
+      daemon.previewReply = sheetPreview('boba', petdexRows);
+      // The daemon: a Relaxing row that was not sent follows Rest.
+      daemon.onPreview = (payload) async {
+        final rows = Map<String, String>.from(payload['rows'] as Map);
+        rows['relaxing'] ??= rows['rest']!;
+        return sheetPreview('boba-x', petdexRows, mapping: rows);
+      };
+      await build(tester);
+      daemon.onPreview = null;
+      await tester.tap(find.text('Choose file…'));
+      await tester.pumpAndSettle();
+      daemon.onPreview = (payload) async {
+        final rows = Map<String, String>.from(payload['rows'] as Map);
+        rows['relaxing'] ??= rows['rest']!;
+        return sheetPreview('boba-x', petdexRows, mapping: rows);
+      };
+      expect(chipOn(tester, 'relaxing'), isFalse);
+      await tester.tap(card('review'));
+      await tester.pump();
+      await tester.tap(chip('rest'));
+      await tester.pump();
+      // Relaxing follows at once, before the new preview is back.
+      expect(chipOn(tester, 'relaxing'), isTrue);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      var sent = daemon.payloads['pet_preview']!.last['rows'] as Map;
+      expect(sent['rest'], 'review');
+      expect(sent.containsKey('relaxing'), isFalse);
+      expect(chipOn(tester, 'relaxing'), isTrue);
+
+      // Chosen explicitly: sent from then on, and Rest no longer moves it.
+      await tester.tap(card('waving'));
+      await tester.pump();
+      await tester.tap(chip('relaxing'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      sent = daemon.payloads['pet_preview']!.last['rows'] as Map;
+      expect(sent['relaxing'], 'waving');
+      await tester.tap(card('running'));
+      await tester.pump();
+      await tester.tap(chip('rest'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      sent = daemon.payloads['pet_preview']!.last['rows'] as Map;
+      expect(sent['rest'], 'running');
+      expect(sent['relaxing'], 'waving');
+      expect(chipOn(tester, 'relaxing'), isFalse);
+    });
+
     testWidgets('a card’s badges stay on one line, the rest as +n', (
       tester,
     ) async {
@@ -989,7 +1038,8 @@ void main() {
       await tester.tap(find.text('Choose file…'));
       await tester.pumpAndSettle();
       final first = daemon.payloads['pet_preview']!.single;
-      expect(first['rows'], guess);
+      // Relaxing follows Rest until chosen: the guess is sent without it.
+      expect(first['rows'], {...guess}..remove('relaxing'));
       expect(first['name'], 'hero');
       expect(
         find.text(
@@ -1007,10 +1057,10 @@ void main() {
       expect(title(tester), 'Row 4');
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pumpAndSettle();
-      expect(daemon.payloads['pet_preview']!.last['rows'], {
-        ...guess,
-        'working': 'waving',
-      });
+      expect(
+        daemon.payloads['pet_preview']!.last['rows'],
+        {...guess, 'working': 'waving'}..remove('relaxing'),
+      );
       expect(
         daemon.payloads['pet_preview']!.last['path'],
         '/tmp/hero-sheet.png',
@@ -1112,7 +1162,6 @@ void main() {
         'listening': 'review',
         'sending': 'waving',
         'asking': 'idle',
-        'relaxing': 'idle',
       });
       expect(pet.current, isTrue);
       expect(pet.preview!.id, 'boba-2');
