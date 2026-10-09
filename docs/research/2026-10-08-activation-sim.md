@@ -469,6 +469,22 @@ times on the starter task (`opencode run -m <model>`, a fresh folder and home ea
 The slow runs were the default model under load at that moment. Pinning another model would risk
 a first session failing when OpenCode changes its free list, for no steady gain.
 
+**Where a new user's first 30 s go** (final main, fresh VM, from the app's and CLI's logs, 2026-10-09):
+
+| After opening | Step |
+|---|---|
+| +4 s | app launched |
+| +7 s | tmux in place (managed runtime) |
+| +7 → +20 s | Harness's Node runtime and the CLI downloaded and installed: the longest step |
+| +15 s / +18 s | OpenCode downloaded (10.4 s, in parallel) / its first run done |
+| +22 → +25 s | `harness start`: the daemon is ready |
+| +27 → +30 s | the first workspace planned (1.9 s) and its three panes opened (4.5 s) |
+
+OpenCode is off the critical path, so finishing it in its pane as Codex and Claude Code do would
+gain nothing. The one large step is the Node runtime and the CLI. Shipping them in the app would
+save about 13 s, against the documented choice that `install.sh` alone installs them
+(desktop/CLAUDE.md). That is the owner's decision. Everything else left is 1–4 s.
+
 **Rig note:** the VM has no developer tools, so it raises Apple's dialog for anything that runs
 `git`. Returning users of Claude Code or Codex have them, so a dialog seen there is the rig's, not
 theirs.
