@@ -43,7 +43,8 @@ for index, (name, path, old, new, golden, pattern) in enumerate(mutations, 1):
         raise RuntimeError(f'{name}: expected one source anchor, got {original.count(old)}')
     file.write_text(original.replace(old, new))
     try:
-        run = subprocess.run(['node', 'node_modules/vitest/vitest.mjs', 'run', golden, '-t', pattern, '--maxWorkers=1'],
+        run = subprocess.run(['node', 'node_modules/vitest/vitest.mjs', 'run', golden, '-t', pattern, '--maxWorkers=1',
+                              '--testTimeout=15000', '--hookTimeout=45000'],
                              cwd=cli, env=env, capture_output=True, text=True, timeout=150)
         output = run.stdout + run.stderr
         (logs / f'{index:02d}.log').write_text(output)

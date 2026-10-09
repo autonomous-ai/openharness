@@ -71,6 +71,28 @@ describe('another engine whose code could not be loaded', () => {
 })
 
 describe('late optional profile observations', () => {
+  it.each(['explicit read', 'confirmation'] as const)('does not let a queued refresh supersede a newer %s', async newer => {
+    const config = vi.fn(async ({ state }: InlineRuntimeContext) => { state.effort = 'low'; return true })
+    const module = { createRuntimeProfileReader: () => ({ engine: 'commandcode', target: () => null, config,
+      pane: ({ state, refreshConfig }: InlineRuntimeContext) => { state.model = 'model'; refreshConfig() },
+    }) }
+    vi.mocked(engineNow).mockReturnValue(module as never)
+    vi.mocked(loadEngine).mockResolvedValue(module as never)
+    const manager = new RuntimeProfileState(() => undefined), agent = session('commandcode')
+    manager.ingestPane(agent, 'model', true)
+    if (newer === 'explicit read') {
+      await manager.ingestConfig(agent, true)
+      expect(config).toHaveBeenCalledOnce()
+      expect(manager.getState(agent.sessionId).effort).toBe('low')
+    } else {
+      manager.confirmEffort(agent.sessionId, 'high')
+      await Promise.resolve()
+      expect(config).not.toHaveBeenCalled()
+      expect(manager.getState(agent.sessionId).effort).toBe('high')
+    }
+    manager.forget(agent.sessionId)
+  })
+
   it.each(['cancel', 'finish'] as const)('does not revive a forgotten state when late control cleanup calls %s', async end => {
     const cleanup = vi.fn(() => { throw new Error('optional cleanup failed') })
     vi.spyOn(console, 'warn').mockImplementation(() => {})

@@ -16,6 +16,9 @@ let commandcodeHome = ''
 async function loadRuntimeProfile() {
   vi.resetModules()
   process.env.COMMANDCODE_HOME = commandcodeHome
+  // The daemon's attach loads native interpretation before delivering transcript records.
+  const { loadEngine } = await import('../engines/inProcess.js')
+  await loadEngine('commandcode')
   return import('./runtimeProfile.js')
 }
 

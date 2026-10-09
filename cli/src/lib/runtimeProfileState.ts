@@ -103,9 +103,11 @@ export class RuntimeProfileState {
     const identity = readIdentity(session)
     return { session, state, control: this.controls.get(session.sessionId),
       refreshConfig: (override) => {
+        const read = this.configReads.get(state), revision = this.version(state)
         // Finish accepting the synchronous observation before starting its dependent config read.
         queueMicrotask(() => {
-          if (this.states.get(session.sessionId) === state && this.currentSession(session, identity)) {
+          if (this.states.get(session.sessionId) === state && this.currentSession(session, identity)
+            && this.configReads.get(state) === read && this.version(state) === revision) {
             void this.ingestConfig(session, override ?? silent).catch(() => undefined)
           }
         })
