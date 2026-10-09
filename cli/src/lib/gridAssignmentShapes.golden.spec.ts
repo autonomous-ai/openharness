@@ -72,7 +72,7 @@ it('keeps every assignment and saved-API instruction shape on both platforms', a
       }
       await assignment('opencode/missing-file', 'opencode', { OPENCODE_CONFIG: join(dir, 'missing.json') })
       for (const engine of gridCapableEngines()) for (const model of [null, 'chosen']) {
-        const built = buildGridEngineLaunch(engine, { networkId: 'home', networkName: 'Home', baseUrl: relay, apiKey: 'fake-grid-key', model },
+        const built = buildGridEngineLaunch(engine, { networkId: 'home', networkName: 'Home', baseUrl: relay, apiKey: 'fake-grid-key', ...(model === null ? {} : { model }) },
           { hermesSystemManaged: false, opencodeMajor: 2 })
         if (!built.ok) { out[`${engine}/launch-roundtrip/${model}`] = built; continue }
         const env = { ...built.launch.env }
