@@ -30,32 +30,42 @@ interface StateWaiter {
 
 const EFFORTS = RUNTIME_EFFORTS
 const CHANGE_DEBOUNCE_MS = 120
-const stateKey = (state: RuntimeState): string => JSON.stringify([state.model, state.effort, state.mode, state.cliVersion])
 const readIdentity = (session: RegisteredSession): string => JSON.stringify([session.agentId, session.sessionId,
   session.engine, session.cwd, session.transcriptPath, session.codexHome, session.hermesHome,
-  session.model, session.cliVersion, session.boundAt])
+  session.model, session.cliVersion, session.boundAt, session.tmuxPane, session.primaryRuntimeKey, session.runtimes])
 const copyControl = (control: RuntimeControl | undefined): RuntimeControl | undefined => control && {
   ...control, target: { ...control.target },
 }
 
 export class RuntimeProfileState {
-  constructor(private readonly runtimeFor: RuntimeFor) {}
+  constructor(private readonly runtimeFor: RuntimeFor,
+    private readonly resolve?: (agentId: string) => RegisteredSession | undefined) {}
   private readonly states = new Map<string, RuntimeState>()
   private readonly controls = new Map<string, RuntimeControl>()
   private readonly waiters = new Map<string, Set<StateWaiter>>()
   private readonly changeTimers = new Map<string, NodeJS.Timeout>()
   private readonly readers = new Map<string, InlineRuntimeReader>()
   private readonly failedReaders = new Set<string>()
-  private readonly versions = new WeakMap<RuntimeState, { key: string }>()
+  private readonly versions = new WeakMap<RuntimeState, number>()
   private readonly configReads = new WeakMap<RuntimeState, object>()
   private suppressNotifications = 0
   onChanged: ((sessionId: string) => void) | null = null
 
-  private version(state: RuntimeState): object {
-    const key = stateKey(state)
-    let version = this.versions.get(state)
-    if (!version || version.key !== key) { version = { key }; this.versions.set(state, version) }
-    return version
+  private version(state: RuntimeState): number { return this.versions.get(state) ?? 0 }
+  private accepted(state: RuntimeState): void { this.versions.set(state, this.version(state) + 1) }
+  private currentSession(session: RegisteredSession, identity = readIdentity(session)): RegisteredSession | undefined {
+    const current = this.resolve ? this.resolve(session.agentId) : session
+    return current && readIdentity(current) === identity && readIdentity(session) === identity ? current : undefined
+  }
+
+  private observe(context: InlineRuntimeContext): InlineRuntimeContext {
+    // A repeated authoritative value is still newer evidence. Track writes, not value differences;
+    // ignored transcript records must not starve a pending config read during a long answer.
+    const track = <T extends object>(value: T): T => new Proxy(value, { set: (target, key, next) => {
+      this.accepted(context.state)
+      return Reflect.set(target, key, next)
+    } })
+    return { ...context, state: track(context.state), control: context.control && track(context.control) }
   }
 
   private keep(engine: string, module: { createRuntimeProfileReader?: () => InlineRuntimeReader }): InlineRuntimeReader | null {
@@ -90,18 +100,19 @@ export class RuntimeProfileState {
 
   private context(session: RegisteredSession, silent: boolean): InlineRuntimeContext {
     const state = this.state(session.sessionId)
+    const identity = readIdentity(session)
     return { session, state, control: this.controls.get(session.sessionId),
       refreshConfig: (override) => {
         // Finish accepting the synchronous observation before starting its dependent config read.
         queueMicrotask(() => {
-          if (this.states.get(session.sessionId) === state) void this.ingestConfig(session, override ?? silent).catch(() => undefined)
+          if (this.states.get(session.sessionId) === state && this.currentSession(session, identity)) {
+            void this.ingestConfig(session, override ?? silent).catch(() => undefined)
+          }
         })
       } }
   }
 
   private observed(session: RegisteredSession, before: string | null, silent: boolean): boolean {
-    const state = this.states.get(session.sessionId)
-    if (state) this.version(state)
     const after = this.selectedModel(session)
     this.wake(session.sessionId)
     if (!silent && this.suppressNotifications === 0 && before !== after && !this.controls.has(session.sessionId)) this.scheduleChanged(session.sessionId)
@@ -109,21 +120,27 @@ export class RuntimeProfileState {
   }
 
   ingest(session: RegisteredSession, rawLine: string, silent = false): boolean {
+    const current = this.currentSession(session)
+    if (!current) return false
+    session = current
     let raw: Record<string, unknown> | null
     try { raw = record(JSON.parse(rawLine)) } catch { return false }
     if (!raw) return false
     const before = this.selectedModel(session)
     const runtime = this.runtimeFor(session.engine)
-    const context = this.context(session, silent)
+    const context = this.observe(this.context(session, silent))
     if (runtime) runtime.transcript(context, raw)
     else this.readerNow(session.engine)?.transcript?.(context, raw)
     return this.observed(session, before, silent)
   }
 
   ingestPane(session: RegisteredSession, paneText: string, silent = false): boolean {
+    const current = this.currentSession(session)
+    if (!current) return false
+    session = current
     const before = this.selectedModel(session)
     const runtime = this.runtimeFor(session.engine)
-    const context = this.context(session, silent)
+    const context = this.observe(this.context(session, silent))
     const text = stripAnsi(paneText)
     if (runtime) runtime.pane(context, text)
     else if (this.readerNow(session.engine)?.pane?.(context, text) === false) return false
@@ -131,13 +148,13 @@ export class RuntimeProfileState {
   }
 
   async ingestConfig(session: RegisteredSession, silent = false): Promise<boolean> {
-    if (this.unbound(session.sessionId)) return false
+    if (this.unbound(session.sessionId) || !this.currentSession(session)) return false
     const state = this.state(session.sessionId), version = this.version(state)
     const identity = readIdentity(session), token = {}
     const control = this.controls.get(session.sessionId)
     this.configReads.set(state, token)
     const current = () => this.states.get(session.sessionId) === state && this.version(state) === version
-      && this.configReads.get(state) === token && readIdentity(session) === identity
+      && this.configReads.get(state) === token && !!this.currentSession(session, identity)
       && this.controls.get(session.sessionId) === control
     const runtime = this.runtimeFor(session.engine)
     const reader = runtime ? null : await this.reader(session.engine)
@@ -152,6 +169,7 @@ export class RuntimeProfileState {
     if (!current()) return false
     Object.assign(state, context.state)
     if (control) Object.assign(control, context.control)
+    this.accepted(state)
     return this.observed(session, before, silent)
   }
 
@@ -164,32 +182,57 @@ export class RuntimeProfileState {
   }
 
   hydrate(session: RegisteredSession, rawLines: string[]): void {
-    if (this.unbound(session.sessionId)) return
+    if (this.unbound(session.sessionId) || !this.currentSession(session)) return
     this.states.set(session.sessionId, freshState(session))
     for (const line of rawLines) this.ingest(session, line, true)
   }
 
-  beginHydrate(session: RegisteredSession): { ingest(rawLine: string): void; commit(): void } {
+  beginHydrate(session: RegisteredSession): {
+    ingest(rawLine: string): void
+    commit(): void
+    config?(): Promise<void>
+    commitWith?(install: () => boolean): boolean
+  } {
     const previous = this.state(session.sessionId), version = this.version(previous)
     const identity = readIdentity(session), control = this.controls.get(session.sessionId)
     const stagedSession = { ...session }, stagedControl = copyControl(control)
     const staged = freshState(session)
+    let committed = false, failed = false
+    const current = () => !committed && !failed && !this.unbound(session.sessionId)
+      && this.states.get(session.sessionId) === previous && this.version(previous) === version
+      && !!this.currentSession(session, identity) && this.controls.get(session.sessionId) === control
+    const commitWith = (install: () => boolean): boolean => {
+      if (!current() || !install()) return false
+      committed = true
+      this.currentSession(session, identity)!.cliVersion = stagedSession.cliVersion
+      if (control) Object.assign(control, stagedControl)
+      this.states.set(session.sessionId, staged)
+      this.wake(session.sessionId)
+      return true
+    }
     return {
       ingest: (rawLine) => {
+        if (!current()) return
         let raw: Record<string, unknown> | null
         try { raw = record(JSON.parse(rawLine)) } catch { return }
         if (!raw) return
         this.runtimeFor(stagedSession.engine)?.transcript({ session: stagedSession, state: staged, control: stagedControl }, raw)
       },
-      commit: () => {
-        if (this.unbound(session.sessionId) || this.states.get(session.sessionId) !== previous
-          || this.version(previous) !== version || readIdentity(session) !== identity
-          || this.controls.get(session.sessionId) !== control) return
-        session.cliVersion = stagedSession.cliVersion
-        if (control) Object.assign(control, stagedControl)
-        this.states.set(session.sessionId, staged)
-        this.wake(session.sessionId)
+      config: async () => {
+        if (!current()) return
+        try {
+          const runtime = this.runtimeFor(stagedSession.engine)
+          if (runtime?.configuredEffort) {
+            staged.effort = await runtime.configuredEffort(stagedSession)
+            staged.observedAt = Date.now()
+          } else if (!runtime) {
+            const reader = await this.reader(stagedSession.engine)
+            if (current()) await reader?.config?.({ session: stagedSession, state: staged, control: stagedControl, refreshConfig: () => {} })
+          }
+        } catch (error) { failed = true; throw error }
       },
+      commitWith,
+      commit: () => { commitWith(() => true) },
     }
   }
 
@@ -255,7 +298,7 @@ export class RuntimeProfileState {
     const state = this.state(sessionId)
     state.effort = effort
     state.observedAt = Date.now()
-    this.version(state)
+    this.accepted(state)
     const control = this.controls.get(sessionId)
     if (control) control.effortConfirmed = control.target.effort === effort
     this.wake(sessionId)
@@ -266,7 +309,7 @@ export class RuntimeProfileState {
     state.model = target.model
     state.effort = target.effort
     state.observedAt = Date.now()
-    this.version(state)
+    this.accepted(state)
     const control = this.controls.get(target.sessionId)
     if (control?.target.id === target.id) {
       control.modelConfirmed = true
@@ -292,12 +335,20 @@ export class RuntimeProfileState {
     const timer = this.changeTimers.get(sessionId)
     if (timer) clearTimeout(timer)
     this.changeTimers.delete(sessionId)
-    for (const reader of this.readers.values()) reader.forget?.(sessionId)
     for (const waiter of this.waiters.get(sessionId) ?? []) {
       clearTimeout(waiter.timer)
       waiter.resolve(false)
     }
     this.waiters.delete(sessionId)
+    // Native cleanup is optional and cannot interrupt the caller's eager tail/input/turn cleanup.
+    const readers = [...this.readers.values()]
+    queueMicrotask(() => {
+      if (this.states.has(sessionId)) return
+      for (const reader of readers) {
+        try { reader.forget?.(sessionId) }
+        catch (error) { console.warn(`[runtime-profile] ${reader.engine} cleanup failed:`, error instanceof Error ? error.message : String(error)) }
+      }
+    })
   }
 
   async modelsForSessions(sessions: RegisteredSession[]): Promise<RuntimeModelOption[]> {

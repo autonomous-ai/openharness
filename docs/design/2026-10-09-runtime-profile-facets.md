@@ -27,11 +27,18 @@ profile intact. State confirmation and cleanup need no reader. A failed factory 
 reported once and remains unavailable for that owner's lifetime.
 
 Configuration reads and staged transcript hydration publish only against the same
-session identity, state object, state version and control transaction. Configuration
+current registry row, session identity, state object, state revision and control transaction. Configuration
 also checks the latest read token. Native-home changes, newer observations, another
 hydration, control changes and forget discard stale answers. Interpretation uses
 copies; a staged read cannot expose a CLI version or confirmation before commit.
-A dependent config refresh starts after its synchronous observation is accepted.
+A repeated confirmation or same-value observation still advances the revision;
+ignored records do not. A dependent config refresh starts after its synchronous
+observation is accepted and is dropped if the registry replaces its row.
+Inline transcript attachment reads config into the staged profile, then installs
+the parser and profile in one synchronous commit after the final tail-hold check.
+Expiry, failure or newer evidence keeps both the previous parser and its profile.
+Forget completes core state, timer and waiter cleanup before optional native
+cleanup runs; a broken reader cannot interrupt the caller's session cleanup.
 These are safety corrections found while extracting the former implementation,
 covered by regressions that failed before the publication checks were added.
 

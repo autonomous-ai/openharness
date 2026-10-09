@@ -624,7 +624,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
   const runtimeProfiles = createRuntimeProfiles({
-    local: new RuntimeProfileState(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
+    local: new RuntimeProfileState(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine), id => registry.resolve(id)),
     handles: isolatedRuntime,
     resolve: id => registry.resolve(id), transport: runtimeTransport })
   const questionControls = createQuestionControls({

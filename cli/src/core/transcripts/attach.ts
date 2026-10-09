@@ -231,7 +231,6 @@ export function createAttach({
         return handover.hold ? keepLiveNormalizer('could not reach its engine worker') : true
       }
       if (handover.hold?.expired) { remote.discard(prepared); return keepLiveNormalizer('outlasted its hold on the tail') }
-      if (!profileHydration.commitWith) profileHydration.commit()
       fromEnd = { next: prepared.page.cursor.offset, records: prepared.records, content: prepared.content }
       handover.next = fromEnd.next
       historyTurnOpen = !live && prepared.state.handle.turnOpen
@@ -245,6 +244,7 @@ export function createAttach({
       const live = replayLive && handover.hold === null
       const stream = new TranscriptFold(fromEndFold.ingest, fromEndFold.turnOpen, live)
       const profile = runtimeProfiles.beginHydrate(session)
+      profileHydration = profile
       const read = await attachTranscript(session.transcriptPath, fromEndFold.rules, {
         // Ids named for this window cannot repeat ones another fold of the session sent.
         start: (span) => parser!.windowStart(span.turnFrom),
@@ -255,7 +255,8 @@ export function createAttach({
       if (handover.hold && (read.failed || handover.hold.expired)) {
         return keepLiveNormalizer(read.failed ? 'could not read the transcript' : 'outlasted its hold on the tail')
       }
-      profile.commit()
+      try { await profile.config?.() }
+      catch { return keepLiveNormalizer('could not read its runtime profile') }
       fromEnd = read
       handover.next = read.next
       historyTurnOpen = take(stream.finish())
@@ -289,10 +290,14 @@ export function createAttach({
         remote!.discard(prepared); remote!.retry(session)
         return keepLiveNormalizer('was superseded while reading')
       }
+      if (!profileHydration?.commitWith) profileHydration?.commit()
       liveParsers.set(session.sessionId, prepared.state.handle)
     } else if (parser) {
       if (!fromEnd) historyTurnOpen = fold((line) => parser.ingest(line).events, () => parser.turnOpen)
-      liveParsers.set(session.sessionId, parser)
+      const install = () => { liveParsers.set(session.sessionId, parser); return true }
+      if (profileHydration?.commitWith) {
+        if (!profileHydration.commitWith(install)) return keepLiveNormalizer('was superseded while reading')
+      } else { install(); profileHydration?.commit() }
     } else if (engine('cursor')) {
       const normalizer = new (engine('cursor')!).CursorNormalizer('live', session.sessionId)
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)

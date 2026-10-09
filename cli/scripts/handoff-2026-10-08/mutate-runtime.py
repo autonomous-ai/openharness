@@ -15,7 +15,7 @@ mutations = [
     ('pi footer ignored', reader('pi'), 'pi.parsePiFooterProfile(paneText)', 'null', observations, 'pi: every pane'),
     ('grok footer ignored', reader('grok'), 'grok.parseGrokFooterProfile(paneText)', 'null', observations, 'grok: every pane'),
     ('agy footer ignored', reader('agy'), 'agy.parseAgyFooterProfile(paneText)', 'null', observations, 'agy: every pane'),
-    ('devin footer ignored', reader('devin'), 'devin.devinFooterModel(paneText)', 'null', observations, 'devin: every pane'),
+    ('devin footer ignored', reader('devin'), 'devin.devinFooterModel(paneText)', 'null', observations, 'resolves OpenCode'),
     ('hermes status ignored', reader('hermes'), 'hermes.hermesStatusModel(paneText)', 'null', observations, 'hermes: every pane'),
     ('commandcode banner ignored', reader('commandcode'), 'commandcode.commandcodeBannerModel(paneText)', 'null', observations, 'commandcode: every pane'),
     ('opencode catalog disconnected', reader('opencode'), 'opencode.opencodeFooterModelId(paneText, this.opencodeCatalogCache?.entries ?? [])', 'opencode.opencodeFooterModelId(paneText, [])', observations, 'resolves OpenCode'),

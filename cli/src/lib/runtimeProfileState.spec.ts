@@ -22,7 +22,7 @@ const session = (engine: RegisteredSession['engine']): RegisteredSession => ({
   agentId: 'agent', sessionId: 'conversation', engine, model: 'registered-model', cliVersion: '1.0.0',
   cwd: '/tmp', transcriptPath: '/tmp/profile-recording.jsonl',
 } as RegisteredSession)
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.mocked(engineNow).mockReset(); vi.mocked(loadEngine).mockReset() })
 // The other engines' profile readers load as one of their sessions enters the registry (engines/inProcess.ts
 // `preloadEngine`): before any pane of theirs is read, as here.
 beforeAll(async () => { for (const engine of OTHER_ENGINES) await loadEngine(engine) })
@@ -71,6 +71,75 @@ describe('another engine whose code could not be loaded', () => {
 })
 
 describe('late optional profile observations', () => {
+  it('keeps newer control flags even when neither a value nor the control object changes', async () => {
+    let finish!: (effort: string) => void
+    const manager = new RuntimeProfileState(() => ({ ...claudeRuntime,
+      transcript: ({ control }, raw) => { if (raw.confirm && control) control.modelConfirmed = true },
+      configuredEffort: () => new Promise<string>(resolve => { finish = resolve }),
+    })), agent = session('claude')
+    manager.hydrate(agent, [])
+    manager.confirmEffort(agent.sessionId, 'high')
+    manager.beginControl(agent, { sessionId: agent.agentId, engine: agent.engine, model: 'new-model', effort: 'high' })
+    const pending = manager.ingestConfig(agent)
+    manager.ingest(agent, '{"confirm":true}')
+    finish('low')
+    await pending
+    expect(await manager.waitForProfile(agent.sessionId, 10)).toBe(true)
+    expect(manager.getState(agent.sessionId).effort).toBe('high')
+    manager.forget(agent.sessionId)
+  })
+
+  it('treats a repeated confirmation as newer authority than a pending config or transcript stage', async () => {
+    let finish!: (effort: string) => void
+    const manager = new RuntimeProfileState(() => ({ ...claudeRuntime,
+      configuredEffort: () => new Promise<string>(resolve => { finish = resolve }),
+    })), agent = session('claude')
+    manager.hydrate(agent, [])
+    manager.confirmEffort(agent.sessionId, 'high')
+    const pending = manager.ingestConfig(agent)
+    manager.confirmEffort(agent.sessionId, 'high')
+    finish('low')
+    expect(await pending).toBe(false)
+    expect(manager.getState(agent.sessionId).effort).toBe('high')
+    const stage = manager.beginHydrate(agent)
+    const before = manager.getState(agent.sessionId)
+    manager.confirmEffort(agent.sessionId, 'high')
+    stage.commit()
+    expect(manager.getState(agent.sessionId)).toEqual(before)
+  })
+
+  it('keeps a same-value pane observation ahead of a pending config answer', async () => {
+    let finish!: (effort: string) => void
+    const manager = new RuntimeProfileState(() => ({ ...claudeRuntime,
+      pane: ({ state }) => { state.effort = 'high' },
+      configuredEffort: () => new Promise<string>(resolve => { finish = resolve }),
+    })), agent = session('claude')
+    manager.hydrate(agent, [])
+    manager.confirmEffort(agent.sessionId, 'high')
+    const pending = manager.ingestConfig(agent)
+    manager.ingestPane(agent, 'same evidence', true)
+    finish('low')
+    expect(await pending).toBe(false)
+    expect(manager.getState(agent.sessionId).effort).toBe('high')
+  })
+
+  it('finishes core waiters and every optional cleanup despite a throwing reader', async () => {
+    const later = vi.fn()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(engineNow).mockImplementation(engine => ({ createRuntimeProfileReader: () => ({
+      engine, target: () => null, forget: engine === 'cursor' ? () => { throw new Error('broken cleanup') } : later,
+    }) }) as never)
+    const manager = new RuntimeProfileState(() => undefined), agent = session('cursor')
+    manager.ingestPane(agent, '', true)
+    manager.ingestPane(session('grok'), '', true)
+    manager.beginControl(agent, { id: 'target', sessionId: agent.sessionId, engine: agent.engine, model: 'wanted', effort: 'high' })
+    const waiting = manager.waitForModel(agent.sessionId, 100)
+    expect(() => manager.forget(agent.sessionId)).not.toThrow()
+    expect(await waiting).toBe(false)
+    expect(later).toHaveBeenCalledWith(agent.sessionId)
+    expect(manager.getState(agent.sessionId).model).toBeNull()
+  })
+
   it('cannot commit a staged transcript after forget or newer live evidence', () => {
     for (const forget of [true, false]) {
       const manager = new RuntimeProfileManager(), agent = session('codex')
