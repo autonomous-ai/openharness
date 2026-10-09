@@ -222,6 +222,15 @@ export function createBinding({
     const authority = paneReadIdentity(agent)
     const current = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
       && paneReadIdentity(registry.byProcess(observed.engine, observed.processIdentity)) === authority
+    // Only native reads are contained here. A rejected lookup cannot end the serial
+    // discovery/readiness pass or bind an unwritten session as if evidence were absent.
+    const read = async <T>(work: () => Promise<T>): Promise<{ value: T } | null> => {
+      try { return { value: await work() } }
+      catch (error) {
+        if (current()) console.log(`[discovery] ${sid(agent.agentId)} binding held · ${error instanceof Error ? error.message : error}`)
+        return null
+      }
+    }
     const mayClaim = (id: string): boolean => {
       if (isRecentlyDeleted(id)) return false
       const owner = registry.bySession(id)
@@ -240,9 +249,13 @@ export function createBinding({
     if (agent.resumeOnly && agent.launch && agent.launch.state !== 'ready') return
     if (agent.sessionId) {
       if (observed.engine === 'copilot') {
-        const next = await processSessionOf('copilot', homes.copilot, observed.processIdentity.pid)
+        const process = await read(() => processSessionOf('copilot', homes.copilot, observed.processIdentity.pid))
+        if (!process) return
+        const next = process.value
         if (!next || next === agent.sessionId || isRecentlyDeleted(next)) return
-        const transcript = await transcriptOf('copilot', homes.copilot, next)
+        const located = await read(() => transcriptOf('copilot', homes.copilot, next))
+        if (!located) return
+        const transcript = located.value
         if (!current() || !mayClaim(next)) return
         console.log(`[discovery] ${sid(agent.agentId)} switched copilot session ${sid(agent.sessionId)} → ${sid(next)} (/resume)`)
         const rotated = registry.register({
@@ -268,7 +281,9 @@ export function createBinding({
       // extra to ask. Its session store declares the marker (`continuation`), read in core with the kit.
       const store = sessionStoreOf(observed.engine)
       if (store?.continuation && agent.transcriptPath) {
-        const continuation = await continuationOf(observed.engine, agent.transcriptPath)
+        const located = await read(() => continuationOf(observed.engine, agent.transcriptPath!))
+        if (!located) return
+        const continuation = located.value
         if (!continuation || continuation.sessionId === agent.sessionId
           || registry.has(continuation.sessionId) || isRecentlyDeleted(continuation.sessionId)) return
         if (!current()) return
@@ -296,11 +311,13 @@ export function createBinding({
     let source = 'terminal-resume'
     if (sessionId) {
       if (!mayClaim(sessionId)) return
-      transcriptPath = observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'agy' || observed.engine === 'copilot'
-        ? await ownTranscript(observed.engine, sessionId, observed.cwd) ?? undefined
+      const located = await read(async () => observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'agy' || observed.engine === 'copilot'
+        ? await ownTranscript(observed.engine, sessionId!, observed.cwd) ?? undefined
         : observed.engine === 'claude' || observed.engine === 'codex'
-          ? await findResumedTranscript(observed.engine, sessionId, { codexHome: agent.codexHome ?? undefined }) ?? undefined
-          : undefined
+          ? await findResumedTranscript(observed.engine, sessionId!, { codexHome: agent.codexHome ?? undefined }) ?? undefined
+          : undefined)
+      if (!located) return
+      transcriptPath = located.value
       // The registry refuses a claude/codex session without its file, so a resume of a transcript this
       // machine does not have is not a session — the hook that follows the user's next prompt will say.
       if ((observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'claude' || observed.engine === 'codex')
@@ -315,16 +332,13 @@ export function createBinding({
       if (!Number.isFinite(startedAtMs)) return
       // agy cannot be found by directory — its repair reads the presence lock the process holds open.
       //
-      const found = await findLiveSession(observed.engine, observed.cwd, startedAtMs, {
+      const located = await read(() => findLiveSession(observed.engine, observed.cwd, startedAtMs, {
         bornOnly: true,
         pid: observed.processIdentity.pid,
         codexHome: agent.codexHome ?? undefined,
-      }).catch(error => {
-        // A native store can be unreadable or exceed a safe identity bound. That holds this
-        // process alone; rejecting onObserved would abort the serial discovery/readiness pass.
-        console.log(`[discovery] ${sid(agent.agentId)} binding held · ${error instanceof Error ? error.message : error}`)
-        return null
-      })
+      }))
+      if (!located) return
+      const found = located.value
       if (!found || registry.has(found.sessionId) || isRecentlyDeleted(found.sessionId)) return
       sessionId = found.sessionId
       transcriptPath = found.transcriptPath
