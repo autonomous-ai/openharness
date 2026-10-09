@@ -1,3 +1,5 @@
+import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
+import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
 /**
  * The boundary the services stand on (docs/design/2026-10-03-harnessd.md, "The core boundary"):
  * `CoreApi` is what a service may ask of the core, and `CorePorts` is what the core asks of services.
@@ -106,7 +108,15 @@ export const CONVERSATIONS_OFF: ConversationReads = {
   transcriptOk: async () => false,
 }
 
+export interface UsagePort {
+  read(target: AgentUsageTarget): Promise<Record<string, unknown>>
+  stop(): void
+}
+export const USAGE_FALLBACKS: PortFallbacks<UsagePort> = { read: later(FAIL), stop: undefined }
+
 export interface CoreApi {
+  /** Last aggregate observation, never a transcript read. Optional for services that do not ask. */
+  usage?: (target: AgentUsageTarget) => Promise<AgentTokenUsage | null>
   /** The daemon's data folder; a service keeps its own files in it. */
   dataDir: string
   terminals: TerminalsPort
@@ -715,6 +725,8 @@ export interface ModelsPort {
    * itself (docs/design/2026-10-08-launch-port.md).
    */
   gridLaunch(request: GridLaunchRequest): Promise<GridLaunchAnswer>
+  /** Fresh process evidence, batched; core never waits for it to discover or bind a session. */
+  gridAssignments(processes: readonly GridAssignmentProcess[]): Promise<GridAssignmentAnswer[]>
   /** Where an agent moved onto a saved API's model sends its inference: the key travels only into its launch. The
    *  sentence a person reads when the API cannot be used. */
   apiTarget(request: { connectionId: string; model: string }): Promise<{ target: GridLaunchOverride; apiBase: string } | { detail: string }>
@@ -738,7 +750,7 @@ export interface ModelsPort {
  */
 export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
   ensure: later(FAIL), annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
-  gridLaunch: later(FAIL), apiTarget: later(FAIL), privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
+  gridAssignments: later(FAIL), gridLaunch: later(FAIL), apiTarget: later(FAIL), privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
 }
 
 /** What the core calls while `ports.models` is null (models is off): its fallbacks' answers. */
@@ -749,6 +761,7 @@ export const MODELS_OFF: ModelsPort = {
   launchTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   moveTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   moved: () => {},
+  gridAssignments: () => Promise.reject(new ServiceUnavailableError('models')),
   gridLaunch: () => Promise.reject(new ServiceUnavailableError('models')),
   apiTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   privateGridName: async () => null,
@@ -1297,6 +1310,7 @@ export const STORE_OFF: StorePort = {
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
+  usage: UsagePort | null
   store: StorePort | null
   search: SearchPort | null
   viewers: ViewersPort | null
@@ -1312,7 +1326,7 @@ export interface CorePorts {
 }
 
 export function emptyPorts(): CorePorts {
-  return { store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
 }
 
 export interface CoreApiDeps {

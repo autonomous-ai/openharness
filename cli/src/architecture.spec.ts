@@ -196,9 +196,11 @@ const EDGE: RegExp[] = [
   // The grid and saved-API launch builders are models': the core asks it for a launch (ModelsPort.gridLaunch) and keeps
   // only the wire it checks one with and the lists every launch reads (lib/gridLaunchWire.ts), so a launch on the
   // engine's own login loads none of them (docs/design/2026-10-08-launch-port.md, (L1)).
-  /^lib\/(gridLaunch|gridWebMcp|apiModels)\.ts$/,
+  /^lib\/(gridLaunch|gridWebMcp|apiModels|gridAssignment|apiConnections)\.ts$/,
   // The change-agent handoff reads and redacts history and runs git: the edge host owns that work.
   /^lib\/agentHandoff\.ts$/,
+  // Usage owns all aggregate readers and ledgers. Core reads validated wire snapshots only.
+  /^lib\/(agentTokenUsage|agentOutputStats|sessionWork)\.ts$/,
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
   // remote viewers' proxy, and the shaping of what goes up the link.
   /^lib\/(remoteRelay|terminalP2p|stunSelect|remoteViewerProxy|deviceRecentTrim|commanderReplay)\.ts$/,

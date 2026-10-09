@@ -252,7 +252,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 
@@ -266,6 +266,7 @@ describe('the core API services stand on', () => {
     await expect(MODELS_OFF.launchTarget({ model: 'm', grid: 'mine' })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.moveTarget({ gridName: null, model: 'm' })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.lists()).rejects.toThrow('the models service is unavailable')
+    await expect(MODELS_OFF.gridAssignments([])).rejects.toThrow('the models service is unavailable')
     // A launch on a grid or a saved API is refused while models is off (core/agents/launch.ts `gridLaunchThrough`).
     await expect(MODELS_OFF.gridLaunch({ engine: 'claude', override: launch, machine: { hermesSystemManaged: false } })).rejects.toThrow('the models service is unavailable')
     await expect(MODELS_OFF.apiTarget({ connectionId: 'openrouter', model: 'm' })).rejects.toThrow('the models service is unavailable')

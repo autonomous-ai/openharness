@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { prepareResume } from '../../engines/launchPrep.js'
-import { rememberApiBase } from '../../lib/gridAssignment.js'
 import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps } from '../../lib/launchOverrides.js'
@@ -10,7 +9,6 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { createLaunchHelpers, gridLaunchThrough, type LaunchHelperDeps } from './launch.js'
 
 vi.mock('../../engines/launchPrep.js', async (real) => ({ ...await real<object>(), prepareResume: vi.fn(() => ({ repairedItems: 0 })) }))
-vi.mock('../../lib/gridAssignment.js', async (real) => ({ ...await real<object>(), rememberApiBase: vi.fn() }))
 vi.mock('../../lib/engineLaunch.js', async (real) => ({ ...await real<object>(), dropPermissionFlagIfUnsupported: vi.fn() }))
 // OpenCode's version is its own code, loaded for an OpenCode relaunch alone; a test may say it could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
@@ -118,13 +116,11 @@ describe('a grid launch, as the core asks the models service for it', () => {
   const api: GridLaunchOverride = { networkId: 'api:openrouter', networkName: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'k', model: 'q' }
   const request = (override = grid): GridLaunchRequest => ({ engine: 'claude', override, machine: { hermesSystemManaged: false } })
 
-  it("hands back models' answer as it is, and remembers a saved API's endpoint it read", async () => {
+  it("hands back models' answer as it is, including saved API details owned by models", async () => {
     const built: GridLaunchAnswer = { ok: true, launch: { env: {}, args: [], webSearch: 'on' }, override: grid }
     expect(await gridLaunchThrough(() => ({ gridLaunch: async () => built }))(request())).toBe(built)
-    expect(rememberApiBase).not.toHaveBeenCalled()
     const refused: GridLaunchAnswer = { ok: false, error: 'API_UNAVAILABLE', detail: 'OpenRouter was removed.', apiBase: 'https://openrouter.ai/api/v1' }
     expect(await gridLaunchThrough(() => ({ gridLaunch: async () => refused }))(request(api))).toBe(refused)
-    expect(rememberApiBase).toHaveBeenCalledWith('https://openrouter.ai/api/v1')
   })
 
   it('refuses at once, naming the grid or the API, when models is down or answers nothing usable', async () => {
@@ -137,6 +133,5 @@ describe('a grid launch, as the core asks the models service for it', () => {
     expect(await down(request(api))).toMatchObject({ ok: false, error: 'API_UNAVAILABLE', detail: expect.stringContaining('on OpenRouter') })
     // A port that is not there at all (models off) is the same refusal, not a throw out of the launch.
     expect(await gridLaunchThrough(() => { throw new Error('no port') })(request())).toMatchObject({ error: 'GRID_UNAVAILABLE' })
-    expect(rememberApiBase).not.toHaveBeenCalled()
   })
 })

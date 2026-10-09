@@ -80,6 +80,31 @@ if [ "$DO_BUILD" -eq 1 ]; then
   command -v npm >/dev/null 2>&1 || { echo "error: npm not found (needed for the bundle step; use --no-build to skip)" >&2; exit 1; }
 fi
 
+# --- Step 0: dependencies, when the manifest or a lock is newer than what node_modules holds ---
+# A pull that adds a dependency otherwise fails the bundle with "Could not resolve", far from the cause.
+# The checkout keeps the manager it was installed with: pnpm's node_modules carries .pnpm, npm's carries
+# .package-lock.json. Both installs are frozen, so this never rewrites a lockfile.
+deps_stale() {
+  local stamp="$1" f
+  [ -e "$stamp" ] || return 0
+  for f in package.json package-lock.json pnpm-lock.yaml; do
+    [ -e "$ADAPTER_DIR/$f" ] && [ "$ADAPTER_DIR/$f" -nt "$stamp" ] && return 0
+  done
+  return 1
+}
+if [ "$DO_BUILD" -eq 1 ]; then
+  if [ -d "$ADAPTER_DIR/node_modules/.pnpm" ]; then
+    if deps_stale "$ADAPTER_DIR/node_modules/.modules.yaml"; then
+      if command -v pnpm >/dev/null 2>&1; then PNPM=(pnpm); else PNPM=(npx -y pnpm@10); fi
+      echo ">> dependencies changed — ${PNPM[*]} install --frozen-lockfile"
+      ( cd "$ADAPTER_DIR" && "${PNPM[@]}" install --frozen-lockfile )
+    fi
+  elif deps_stale "$ADAPTER_DIR/node_modules/.package-lock.json"; then
+    echo ">> dependencies changed — npm ci"
+    ( cd "$ADAPTER_DIR" && npm ci --no-audit --no-fund )
+  fi
+fi
+
 # --- Step 1: bundle, labelled <published-core>-dev.<sha>[.dirty] ---
 # The core matches the release so `harness version`/`status` read sensibly next to prod, and the
 # `-dev.` suffix is load-bearing, not decoration: it is what shouldAutoUpdate() (lib/selfUpdate.ts)

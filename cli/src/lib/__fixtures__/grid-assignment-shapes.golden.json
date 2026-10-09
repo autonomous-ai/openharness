@@ -1,0 +1,928 @@
+{
+  "darwin": {
+    "claude/plain": null,
+    "claude/provider-argument": null,
+    "codex/plain": null,
+    "codex/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "cursor/plain": null,
+    "cursor/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "opencode/plain": null,
+    "opencode/provider-argument": null,
+    "pi/plain": null,
+    "pi/provider-argument": null,
+    "hermes/plain": null,
+    "hermes/provider-argument": null,
+    "commandcode/plain": null,
+    "commandcode/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "devin/plain": null,
+    "devin/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "muse/plain": null,
+    "muse/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "amp/plain": null,
+    "amp/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "kilo/plain": null,
+    "kilo/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/plain": null,
+    "grok/provider-argument": null,
+    "agy/plain": null,
+    "agy/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "copilot/plain": null,
+    "copilot/provider-argument": null,
+    "terminal/plain": null,
+    "terminal/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "claude/env//": null,
+    "claude/env//chosen": null,
+    "claude/env//Auto": null,
+    "claude/env//aUtO": null,
+    "claude/env/ /": null,
+    "claude/env/ /chosen": null,
+    "claude/env/ /Auto": null,
+    "claude/env/ /aUtO": null,
+    "claude/env/not-a-url/": null,
+    "claude/env/not-a-url/chosen": null,
+    "claude/env/not-a-url/Auto": null,
+    "claude/env/not-a-url/aUtO": null,
+    "claude/env/https://other.example/v1/": null,
+    "claude/env/https://other.example/v1/chosen": null,
+    "claude/env/https://other.example/v1/Auto": null,
+    "claude/env/https://other.example/v1/aUtO": null,
+    "claude/env/https://grid.example/relayish/v1/": null,
+    "claude/env/https://grid.example/relayish/v1/chosen": null,
+    "claude/env/https://grid.example/relayish/v1/Auto": null,
+    "claude/env/https://grid.example/relayish/v1/aUtO": null,
+    "claude/env/https://grid.example/g/home/relay/v1/": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "claude/env/https://grid.example/g/home/relay/v1/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "claude/env/https://grid.example/g/home/relay/v1/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "claude/env/https://grid.example/g/home/relay/v1/aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "claude/env/ https://grid.example/g/home/relay/v1 /": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "claude/env/ https://grid.example/g/home/relay/v1 /chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "claude/env/ https://grid.example/g/home/relay/v1 /Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "claude/env/ https://grid.example/g/home/relay/v1 /aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "hermes/env//": null,
+    "hermes/env//chosen": null,
+    "hermes/env//Auto": null,
+    "hermes/env//aUtO": null,
+    "hermes/env/ /": null,
+    "hermes/env/ /chosen": null,
+    "hermes/env/ /Auto": null,
+    "hermes/env/ /aUtO": null,
+    "hermes/env/not-a-url/": null,
+    "hermes/env/not-a-url/chosen": null,
+    "hermes/env/not-a-url/Auto": null,
+    "hermes/env/not-a-url/aUtO": null,
+    "hermes/env/https://other.example/v1/": null,
+    "hermes/env/https://other.example/v1/chosen": null,
+    "hermes/env/https://other.example/v1/Auto": null,
+    "hermes/env/https://other.example/v1/aUtO": null,
+    "hermes/env/https://grid.example/relayish/v1/": null,
+    "hermes/env/https://grid.example/relayish/v1/chosen": null,
+    "hermes/env/https://grid.example/relayish/v1/Auto": null,
+    "hermes/env/https://grid.example/relayish/v1/aUtO": null,
+    "hermes/env/https://grid.example/g/home/relay/v1/": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "hermes/env/https://grid.example/g/home/relay/v1/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "hermes/env/https://grid.example/g/home/relay/v1/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "hermes/env/https://grid.example/g/home/relay/v1/aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "hermes/env/ https://grid.example/g/home/relay/v1 /": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "hermes/env/ https://grid.example/g/home/relay/v1 /chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "hermes/env/ https://grid.example/g/home/relay/v1 /Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "hermes/env/ https://grid.example/g/home/relay/v1 /aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "grok/env//": null,
+    "grok/env//chosen": null,
+    "grok/env//Auto": null,
+    "grok/env//aUtO": null,
+    "grok/env/ /": null,
+    "grok/env/ /chosen": null,
+    "grok/env/ /Auto": null,
+    "grok/env/ /aUtO": null,
+    "grok/env/not-a-url/": null,
+    "grok/env/not-a-url/chosen": null,
+    "grok/env/not-a-url/Auto": null,
+    "grok/env/not-a-url/aUtO": null,
+    "grok/env/https://other.example/v1/": null,
+    "grok/env/https://other.example/v1/chosen": null,
+    "grok/env/https://other.example/v1/Auto": null,
+    "grok/env/https://other.example/v1/aUtO": null,
+    "grok/env/https://grid.example/relayish/v1/": null,
+    "grok/env/https://grid.example/relayish/v1/chosen": null,
+    "grok/env/https://grid.example/relayish/v1/Auto": null,
+    "grok/env/https://grid.example/relayish/v1/aUtO": null,
+    "grok/env/https://grid.example/g/home/relay/v1/": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "argv-model"
+    },
+    "grok/env/https://grid.example/g/home/relay/v1/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "grok/env/https://grid.example/g/home/relay/v1/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/env/https://grid.example/g/home/relay/v1/aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/env/ https://grid.example/g/home/relay/v1 /": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "argv-model"
+    },
+    "grok/env/ https://grid.example/g/home/relay/v1 /chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "grok/env/ https://grid.example/g/home/relay/v1 /Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/env/ https://grid.example/g/home/relay/v1 /aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "copilot/env//": null,
+    "copilot/env//chosen": null,
+    "copilot/env//Auto": null,
+    "copilot/env//aUtO": null,
+    "copilot/env/ /": null,
+    "copilot/env/ /chosen": null,
+    "copilot/env/ /Auto": null,
+    "copilot/env/ /aUtO": null,
+    "copilot/env/not-a-url/": null,
+    "copilot/env/not-a-url/chosen": null,
+    "copilot/env/not-a-url/Auto": null,
+    "copilot/env/not-a-url/aUtO": null,
+    "copilot/env/https://other.example/v1/": null,
+    "copilot/env/https://other.example/v1/chosen": null,
+    "copilot/env/https://other.example/v1/Auto": null,
+    "copilot/env/https://other.example/v1/aUtO": null,
+    "copilot/env/https://grid.example/relayish/v1/": null,
+    "copilot/env/https://grid.example/relayish/v1/chosen": null,
+    "copilot/env/https://grid.example/relayish/v1/Auto": null,
+    "copilot/env/https://grid.example/relayish/v1/aUtO": null,
+    "copilot/env/https://grid.example/g/home/relay/v1/": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "copilot/env/https://grid.example/g/home/relay/v1/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "copilot/env/https://grid.example/g/home/relay/v1/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "copilot/env/https://grid.example/g/home/relay/v1/aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "copilot/env/ https://grid.example/g/home/relay/v1 /": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "copilot/env/ https://grid.example/g/home/relay/v1 /chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "copilot/env/ https://grid.example/g/home/relay/v1 /Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "copilot/env/ https://grid.example/g/home/relay/v1 /aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "codex/argv/": null,
+    "codex/argv/-c model_providers.other.base_url=https://grid.example/g/home/relay/v1": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "codex/argv/-c model_providers.other.base_url=\"https://grid.example/g/home/relay/v1\" -m chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "codex/argv/-c model_providers.other.base_url=\"https://grid.example/g/home/relay/v1\" -m Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "codex/argv/-c model_providers.grid.base_url=\"bad\" -m chosen": null,
+    "pi/broken/": null,
+    "pi/broken/--model grid/chosen": null,
+    "pi/broken/--model grid/Auto": null,
+    "pi/broken/--model other/chosen": null,
+    "pi/absent/": null,
+    "pi/absent/--model grid/chosen": null,
+    "pi/absent/--model grid/Auto": null,
+    "pi/absent/--model other/chosen": null,
+    "pi/wrong/": null,
+    "pi/wrong/--model grid/chosen": null,
+    "pi/wrong/--model grid/Auto": null,
+    "pi/wrong/--model other/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "pi/direct/": null,
+    "pi/direct/--model grid/chosen": null,
+    "pi/direct/--model grid/Auto": null,
+    "pi/direct/--model other/chosen": null,
+    "pi/valid/": null,
+    "pi/valid/--model grid/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "pi/valid/--model grid/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "pi/valid/--model other/chosen": null,
+    "pi/missing-file": null,
+    "opencode/broken": null,
+    "opencode/absent": null,
+    "opencode/many": null,
+    "opencode/noModel": null,
+    "opencode/manyModels": null,
+    "opencode/direct": null,
+    "opencode/model": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "opencode/router": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "opencode/missing-file": null,
+    "claude/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay",
+      "model": null
+    },
+    "claude/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay",
+      "model": "chosen"
+    },
+    "codex/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "codex/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "opencode/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "opencode/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "hermes/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "hermes/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "grok/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "pi/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "pi/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "copilot/launch-roundtrip/null": {
+      "ok": false,
+      "error": "GRID_MODEL_REQUIRED",
+      "detail": "copilot will not start against a grid without a model. Pick one for Home and try again."
+    },
+    "copilot/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "saved/before-save": null,
+    "saved/list": [
+      {
+        "id": "saved",
+        "provider": "custom",
+        "name": "Saved",
+        "baseUrl": "https://saved.example/inference/v1",
+        "keyEnv": "SAVED_API_KEY",
+        "authHeader": "Authorization",
+        "authPrefix": "Bearer"
+      }
+    ],
+    "saved/anthropic": {
+      "baseUrl": "https://saved.example/inference",
+      "model": "chosen"
+    },
+    "saved/openai": {
+      "baseUrl": "https://saved.example/inference/v1",
+      "model": "chosen"
+    },
+    "instructions/claude": {
+      "AGENTS.md": "# Existing rules\n",
+      "CLAUDE.md": "<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/codex": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/cursor": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/opencode": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/pi": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/hermes": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/commandcode": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/devin": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/muse": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/amp": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/kilo": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/grok": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/agy": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/copilot": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/terminal": {
+      "AGENTS.md": "# Existing rules\n"
+    },
+    "instructions/gemini": {
+      "AGENTS.md": "# Existing rules\n",
+      "GEMINI.md": "<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "saved/after-removal": {
+      "baseUrl": "https://saved.example/inference/v1",
+      "model": "chosen"
+    },
+    "instructions/no-saved-api": [],
+    "instructions/unreadable": "Saved APIs could not be read. Your keys have not been changed.",
+    "saved/unreadable": {
+      "baseUrl": "https://saved.example/inference/v1",
+      "model": "chosen"
+    }
+  },
+  "linux": {
+    "claude/plain": null,
+    "claude/provider-argument": null,
+    "codex/plain": null,
+    "codex/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "cursor/plain": null,
+    "cursor/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "opencode/plain": null,
+    "opencode/provider-argument": null,
+    "pi/plain": null,
+    "pi/provider-argument": null,
+    "hermes/plain": null,
+    "hermes/provider-argument": null,
+    "commandcode/plain": null,
+    "commandcode/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "devin/plain": null,
+    "devin/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "muse/plain": null,
+    "muse/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "amp/plain": null,
+    "amp/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "kilo/plain": null,
+    "kilo/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/plain": null,
+    "grok/provider-argument": null,
+    "agy/plain": null,
+    "agy/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "copilot/plain": null,
+    "copilot/provider-argument": null,
+    "terminal/plain": null,
+    "terminal/provider-argument": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "claude/env//": null,
+    "claude/env//chosen": null,
+    "claude/env//Auto": null,
+    "claude/env//aUtO": null,
+    "claude/env/ /": null,
+    "claude/env/ /chosen": null,
+    "claude/env/ /Auto": null,
+    "claude/env/ /aUtO": null,
+    "claude/env/not-a-url/": null,
+    "claude/env/not-a-url/chosen": null,
+    "claude/env/not-a-url/Auto": null,
+    "claude/env/not-a-url/aUtO": null,
+    "claude/env/https://other.example/v1/": null,
+    "claude/env/https://other.example/v1/chosen": null,
+    "claude/env/https://other.example/v1/Auto": null,
+    "claude/env/https://other.example/v1/aUtO": null,
+    "claude/env/https://grid.example/relayish/v1/": null,
+    "claude/env/https://grid.example/relayish/v1/chosen": null,
+    "claude/env/https://grid.example/relayish/v1/Auto": null,
+    "claude/env/https://grid.example/relayish/v1/aUtO": null,
+    "claude/env/https://grid.example/g/home/relay/v1/": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "claude/env/https://grid.example/g/home/relay/v1/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "claude/env/https://grid.example/g/home/relay/v1/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "claude/env/https://grid.example/g/home/relay/v1/aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "claude/env/ https://grid.example/g/home/relay/v1 /": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "claude/env/ https://grid.example/g/home/relay/v1 /chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "claude/env/ https://grid.example/g/home/relay/v1 /Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "claude/env/ https://grid.example/g/home/relay/v1 /aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "hermes/env//": null,
+    "hermes/env//chosen": null,
+    "hermes/env//Auto": null,
+    "hermes/env//aUtO": null,
+    "hermes/env/ /": null,
+    "hermes/env/ /chosen": null,
+    "hermes/env/ /Auto": null,
+    "hermes/env/ /aUtO": null,
+    "hermes/env/not-a-url/": null,
+    "hermes/env/not-a-url/chosen": null,
+    "hermes/env/not-a-url/Auto": null,
+    "hermes/env/not-a-url/aUtO": null,
+    "hermes/env/https://other.example/v1/": null,
+    "hermes/env/https://other.example/v1/chosen": null,
+    "hermes/env/https://other.example/v1/Auto": null,
+    "hermes/env/https://other.example/v1/aUtO": null,
+    "hermes/env/https://grid.example/relayish/v1/": null,
+    "hermes/env/https://grid.example/relayish/v1/chosen": null,
+    "hermes/env/https://grid.example/relayish/v1/Auto": null,
+    "hermes/env/https://grid.example/relayish/v1/aUtO": null,
+    "hermes/env/https://grid.example/g/home/relay/v1/": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "hermes/env/https://grid.example/g/home/relay/v1/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "hermes/env/https://grid.example/g/home/relay/v1/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "hermes/env/https://grid.example/g/home/relay/v1/aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "hermes/env/ https://grid.example/g/home/relay/v1 /": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "hermes/env/ https://grid.example/g/home/relay/v1 /chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "hermes/env/ https://grid.example/g/home/relay/v1 /Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "hermes/env/ https://grid.example/g/home/relay/v1 /aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "grok/env//": null,
+    "grok/env//chosen": null,
+    "grok/env//Auto": null,
+    "grok/env//aUtO": null,
+    "grok/env/ /": null,
+    "grok/env/ /chosen": null,
+    "grok/env/ /Auto": null,
+    "grok/env/ /aUtO": null,
+    "grok/env/not-a-url/": null,
+    "grok/env/not-a-url/chosen": null,
+    "grok/env/not-a-url/Auto": null,
+    "grok/env/not-a-url/aUtO": null,
+    "grok/env/https://other.example/v1/": null,
+    "grok/env/https://other.example/v1/chosen": null,
+    "grok/env/https://other.example/v1/Auto": null,
+    "grok/env/https://other.example/v1/aUtO": null,
+    "grok/env/https://grid.example/relayish/v1/": null,
+    "grok/env/https://grid.example/relayish/v1/chosen": null,
+    "grok/env/https://grid.example/relayish/v1/Auto": null,
+    "grok/env/https://grid.example/relayish/v1/aUtO": null,
+    "grok/env/https://grid.example/g/home/relay/v1/": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "argv-model"
+    },
+    "grok/env/https://grid.example/g/home/relay/v1/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "grok/env/https://grid.example/g/home/relay/v1/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/env/https://grid.example/g/home/relay/v1/aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/env/ https://grid.example/g/home/relay/v1 /": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "argv-model"
+    },
+    "grok/env/ https://grid.example/g/home/relay/v1 /chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "grok/env/ https://grid.example/g/home/relay/v1 /Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/env/ https://grid.example/g/home/relay/v1 /aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "copilot/env//": null,
+    "copilot/env//chosen": null,
+    "copilot/env//Auto": null,
+    "copilot/env//aUtO": null,
+    "copilot/env/ /": null,
+    "copilot/env/ /chosen": null,
+    "copilot/env/ /Auto": null,
+    "copilot/env/ /aUtO": null,
+    "copilot/env/not-a-url/": null,
+    "copilot/env/not-a-url/chosen": null,
+    "copilot/env/not-a-url/Auto": null,
+    "copilot/env/not-a-url/aUtO": null,
+    "copilot/env/https://other.example/v1/": null,
+    "copilot/env/https://other.example/v1/chosen": null,
+    "copilot/env/https://other.example/v1/Auto": null,
+    "copilot/env/https://other.example/v1/aUtO": null,
+    "copilot/env/https://grid.example/relayish/v1/": null,
+    "copilot/env/https://grid.example/relayish/v1/chosen": null,
+    "copilot/env/https://grid.example/relayish/v1/Auto": null,
+    "copilot/env/https://grid.example/relayish/v1/aUtO": null,
+    "copilot/env/https://grid.example/g/home/relay/v1/": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "copilot/env/https://grid.example/g/home/relay/v1/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "copilot/env/https://grid.example/g/home/relay/v1/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "copilot/env/https://grid.example/g/home/relay/v1/aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "copilot/env/ https://grid.example/g/home/relay/v1 /": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "copilot/env/ https://grid.example/g/home/relay/v1 /chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "copilot/env/ https://grid.example/g/home/relay/v1 /Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "copilot/env/ https://grid.example/g/home/relay/v1 /aUtO": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "aUtO"
+    },
+    "codex/argv/": null,
+    "codex/argv/-c model_providers.other.base_url=https://grid.example/g/home/relay/v1": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "codex/argv/-c model_providers.other.base_url=\"https://grid.example/g/home/relay/v1\" -m chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "codex/argv/-c model_providers.other.base_url=\"https://grid.example/g/home/relay/v1\" -m Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "codex/argv/-c model_providers.grid.base_url=\"bad\" -m chosen": null,
+    "pi/broken/": null,
+    "pi/broken/--model grid/chosen": null,
+    "pi/broken/--model grid/Auto": null,
+    "pi/broken/--model other/chosen": null,
+    "pi/absent/": null,
+    "pi/absent/--model grid/chosen": null,
+    "pi/absent/--model grid/Auto": null,
+    "pi/absent/--model other/chosen": null,
+    "pi/wrong/": null,
+    "pi/wrong/--model grid/chosen": null,
+    "pi/wrong/--model grid/Auto": null,
+    "pi/wrong/--model other/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "pi/direct/": null,
+    "pi/direct/--model grid/chosen": null,
+    "pi/direct/--model grid/Auto": null,
+    "pi/direct/--model other/chosen": null,
+    "pi/valid/": null,
+    "pi/valid/--model grid/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "pi/valid/--model grid/Auto": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "pi/valid/--model other/chosen": null,
+    "pi/missing-file": null,
+    "opencode/broken": null,
+    "opencode/absent": null,
+    "opencode/many": null,
+    "opencode/noModel": null,
+    "opencode/manyModels": null,
+    "opencode/direct": null,
+    "opencode/model": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "opencode/router": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "opencode/missing-file": null,
+    "claude/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay",
+      "model": null
+    },
+    "claude/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay",
+      "model": "chosen"
+    },
+    "codex/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "codex/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "opencode/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "opencode/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "hermes/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "hermes/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "grok/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": null
+    },
+    "grok/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "pi/launch-roundtrip/null": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "Auto"
+    },
+    "pi/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "copilot/launch-roundtrip/null": {
+      "ok": false,
+      "error": "GRID_MODEL_REQUIRED",
+      "detail": "copilot will not start against a grid without a model. Pick one for Home and try again."
+    },
+    "copilot/launch-roundtrip/chosen": {
+      "baseUrl": "https://grid.example/g/home/relay/v1",
+      "model": "chosen"
+    },
+    "saved/before-save": null,
+    "saved/list": [
+      {
+        "id": "saved",
+        "provider": "custom",
+        "name": "Saved",
+        "baseUrl": "https://saved.example/inference/v1",
+        "keyEnv": "SAVED_API_KEY",
+        "authHeader": "Authorization",
+        "authPrefix": "Bearer"
+      }
+    ],
+    "saved/anthropic": {
+      "baseUrl": "https://saved.example/inference",
+      "model": "chosen"
+    },
+    "saved/openai": {
+      "baseUrl": "https://saved.example/inference/v1",
+      "model": "chosen"
+    },
+    "instructions/claude": {
+      "AGENTS.md": "# Existing rules\n",
+      "CLAUDE.md": "<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/codex": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/cursor": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/opencode": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/pi": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/hermes": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/commandcode": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/devin": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/muse": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/amp": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/kilo": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/grok": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/agy": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/copilot": {
+      "AGENTS.md": "# Existing rules\n\n<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "instructions/terminal": {
+      "AGENTS.md": "# Existing rules\n"
+    },
+    "instructions/gemini": {
+      "AGENTS.md": "# Existing rules\n",
+      "GEMINI.md": "<!-- harness:apis -->\n## Saved APIs\n\nThe user can save API connections in Harness → Models → APIs on this computer.\nRun `harness api list --json` to discover the current connections; the list contains no keys.\nUse `harness api request <id> <path> --method POST --data @request.json` for JSON APIs,\nor `harness api run <id> -- <command> [args]` for a provider SDK/tool. The latter supplies\nthe connection's documented key variable and HARNESS_API_BASE_URL to that tool only.\nUse these APIs when needed for the user's task. Never print, paste, or save API keys in a project.\nAdding an API does not change this harness's model or subscription.\n"
+    },
+    "saved/after-removal": {
+      "baseUrl": "https://saved.example/inference/v1",
+      "model": "chosen"
+    },
+    "instructions/no-saved-api": [],
+    "instructions/unreadable": "Saved APIs could not be read. Your keys have not been changed.",
+    "saved/unreadable": {
+      "baseUrl": "https://saved.example/inference/v1",
+      "model": "chosen"
+    }
+  }
+}

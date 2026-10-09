@@ -1,0 +1,1222 @@
+{
+  "darwin": {
+    "cold": {},
+    "scan": [
+      {
+        "sessionId": "tip",
+        "engine": "hermes",
+        "cwd": "<fixture>/darwin/work",
+        "origin": "terminal",
+        "title": "",
+        "mtime": 400,
+        "transcriptPath": "<fixture>/darwin/work/tip.jsonl",
+        "aliases": [
+          "root",
+          "first"
+        ],
+        "launchArgs": [
+          "-p",
+          "work"
+        ]
+      },
+      {
+        "sessionId": "duplicate",
+        "engine": "hermes",
+        "cwd": "<fixture>/darwin/work",
+        "origin": "terminal",
+        "title": "",
+        "mtime": 200,
+        "transcriptPath": "<fixture>/darwin/work/duplicate.jsonl"
+      },
+      {
+        "sessionId": "first",
+        "engine": "claude",
+        "cwd": "<fixture>/darwin/work",
+        "origin": "terminal",
+        "title": "true",
+        "mtime": 100,
+        "transcriptPath": "<fixture>/darwin/work/first.jsonl"
+      }
+    ],
+    "alias": {
+      "sessionId": "tip",
+      "engine": "hermes",
+      "cwd": "<fixture>/darwin/work",
+      "origin": "terminal",
+      "title": "",
+      "mtime": 400,
+      "transcriptPath": "<fixture>/darwin/work/tip.jsonl",
+      "aliases": [
+        "root",
+        "first"
+      ],
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "collision": {
+      "sessionId": "first",
+      "engine": "claude",
+      "cwd": "<fixture>/darwin/work",
+      "origin": "terminal",
+      "title": "true",
+      "mtime": 100,
+      "transcriptPath": "<fixture>/darwin/work/first.jsonl"
+    },
+    "lastGood": [
+      {
+        "sessionId": "tip",
+        "engine": "hermes",
+        "cwd": "<fixture>/darwin/work",
+        "origin": "terminal",
+        "title": "",
+        "mtime": 400,
+        "transcriptPath": "<fixture>/darwin/work/tip.jsonl",
+        "aliases": [
+          "root",
+          "first"
+        ],
+        "launchArgs": [
+          "-p",
+          "work"
+        ]
+      },
+      {
+        "sessionId": "duplicate",
+        "engine": "hermes",
+        "cwd": "<fixture>/darwin/work",
+        "origin": "terminal",
+        "title": "",
+        "mtime": 200,
+        "transcriptPath": "<fixture>/darwin/work/duplicate.jsonl"
+      },
+      {
+        "sessionId": "first",
+        "engine": "claude",
+        "cwd": "<fixture>/darwin/work",
+        "origin": "terminal",
+        "title": "true",
+        "mtime": 100,
+        "transcriptPath": "<fixture>/darwin/work/first.jsonl"
+      }
+    ],
+    "logs": [
+      "[search] hermes sessions not read: store unavailable",
+      "[search] hermes sessions not read: store unavailable",
+      "[search] hermes sessions not read: store unavailable"
+    ],
+    "missing": null,
+    "busy/claude": false,
+    "busy/codex": true,
+    "busy/grok": true,
+    "busy/pi": true,
+    "free/open": {},
+    "free/owner": null,
+    "free/working": false,
+    "free/null": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": null,
+      "busy": false,
+      "launchArgs": []
+    },
+    "free/idle": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": null,
+      "busy": false,
+      "launchArgs": []
+    },
+    "free/now": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": null,
+      "busy": false,
+      "launchArgs": []
+    },
+    "free/wait": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": null,
+      "busy": false,
+      "launchArgs": []
+    },
+    "free/heldBy": "free",
+    "terminal/open": {
+      "conversation": "terminal"
+    },
+    "terminal/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record"
+    },
+    "terminal/working": false,
+    "terminal/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_IN_TERMINAL",
+      "detail": "It is open in Claude in a terminal. Moving it here quits it there."
+    },
+    "terminal/idle": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": false,
+      "launchArgs": []
+    },
+    "terminal/now": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": false,
+      "launchArgs": []
+    },
+    "terminal/wait": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": false,
+      "launchArgs": []
+    },
+    "terminal/heldBy": "same",
+    "busy/open": {
+      "conversation": "terminal"
+    },
+    "busy/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record"
+    },
+    "busy/working": true,
+    "busy/null": {
+      "ok": false,
+      "error": "SESSION_BUSY_IN_TERMINAL",
+      "detail": "Claude is working on it in a terminal."
+    },
+    "busy/idle": {
+      "ok": false,
+      "error": "SESSION_BUSY_IN_TERMINAL",
+      "detail": "Claude is working on it in a terminal."
+    },
+    "busy/now": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": true,
+      "launchArgs": []
+    },
+    "busy/wait": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": true,
+      "launchArgs": []
+    },
+    "busy/heldBy": "same",
+    "unknown-busy/open": {
+      "conversation": "terminal"
+    },
+    "unknown-busy/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record"
+    },
+    "unknown-busy/working": null,
+    "unknown-busy/null": {
+      "ok": false,
+      "error": "SESSION_BUSY_IN_TERMINAL",
+      "detail": "Claude is working on it in a terminal."
+    },
+    "unknown-busy/idle": {
+      "ok": false,
+      "error": "SESSION_BUSY_IN_TERMINAL",
+      "detail": "Claude is working on it in a terminal."
+    },
+    "unknown-busy/now": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": true,
+      "launchArgs": []
+    },
+    "unknown-busy/wait": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": true,
+      "launchArgs": []
+    },
+    "unknown-busy/heldBy": "same",
+    "app/open": {
+      "conversation": "app"
+    },
+    "app/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": null,
+      "record": "/fixture/record"
+    },
+    "app/working": null,
+    "app/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "app/idle": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "app/now": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "app/wait": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "app/heldBy": "other",
+    "args-only/open": {
+      "conversation": "maybe"
+    },
+    "args-only/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record",
+      "fromArgs": true
+    },
+    "args-only/working": null,
+    "args-only/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "args-only/idle": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "args-only/now": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "args-only/wait": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "args-only/heldBy": "other",
+    "harness/open": {
+      "conversation": "harness"
+    },
+    "harness/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record",
+      "harness": true
+    },
+    "harness/working": null,
+    "harness/null": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "harness/idle": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "harness/now": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "harness/wait": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "harness/heldBy": "other",
+    "unverified/open": {
+      "conversation": "maybe"
+    },
+    "unverified/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record",
+      "unverified": true
+    },
+    "unverified/working": null,
+    "unverified/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "unverified/idle": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "unverified/now": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "unverified/wait": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "unverified/heldBy": "other",
+    "no-tty/open": {
+      "conversation": "app"
+    },
+    "no-tty/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": null,
+      "record": "/fixture/record"
+    },
+    "no-tty/working": null,
+    "no-tty/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "no-tty/idle": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "no-tty/now": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "no-tty/wait": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "no-tty/heldBy": "other",
+    "archived/open": {},
+    "archived/owner": null,
+    "archived/working": false,
+    "archived/null": {
+      "ok": false,
+      "error": "SESSION_ARCHIVED",
+      "detail": "Codex archived this conversation. Run `codex unarchive conversation` in a terminal, then open it here."
+    },
+    "archived/idle": {
+      "ok": false,
+      "error": "SESSION_ARCHIVED",
+      "detail": "Codex archived this conversation. Run `codex unarchive conversation` in a terminal, then open it here."
+    },
+    "archived/now": {
+      "ok": false,
+      "error": "SESSION_ARCHIVED",
+      "detail": "Codex archived this conversation. Run `codex unarchive conversation` in a terminal, then open it here."
+    },
+    "archived/wait": {
+      "ok": false,
+      "error": "SESSION_ARCHIVED",
+      "detail": "Codex archived this conversation. Run `codex unarchive conversation` in a terminal, then open it here."
+    },
+    "archived/heldBy": "free",
+    "gone-folder/open": {},
+    "gone-folder/owner": null,
+    "gone-folder/working": false,
+    "gone-folder/null": {
+      "ok": false,
+      "error": "SESSION_FOLDER_GONE",
+      "detail": "The folder it ran in is gone: <fixture>/missing"
+    },
+    "gone-folder/idle": {
+      "ok": false,
+      "error": "SESSION_FOLDER_GONE",
+      "detail": "The folder it ran in is gone: <fixture>/missing"
+    },
+    "gone-folder/now": {
+      "ok": false,
+      "error": "SESSION_FOLDER_GONE",
+      "detail": "The folder it ran in is gone: <fixture>/missing"
+    },
+    "gone-folder/wait": {
+      "ok": false,
+      "error": "SESSION_FOLDER_GONE",
+      "detail": "The folder it ran in is gone: <fixture>/missing"
+    },
+    "gone-folder/heldBy": "free",
+    "owned/open": {},
+    "owned/owner": null,
+    "owned/working": false,
+    "owned/null": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "owned/idle": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "owned/now": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "owned/wait": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "owned/heldBy": "free",
+    "saved-alias/open": {},
+    "saved-alias/owner": null,
+    "saved-alias/working": false,
+    "saved-alias/null": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "saved-alias/idle": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "saved-alias/now": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "saved-alias/wait": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "saved-alias/heldBy": "free",
+    "profile/open": {},
+    "profile/owner": null,
+    "profile/working": false,
+    "profile/null": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Named conversation",
+      "owner": null,
+      "busy": false,
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "profile/idle": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Named conversation",
+      "owner": null,
+      "busy": false,
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "profile/now": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Named conversation",
+      "owner": null,
+      "busy": false,
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "profile/wait": {
+      "ok": true,
+      "cwd": "<fixture>/darwin/work",
+      "title": "Named conversation",
+      "owner": null,
+      "busy": false,
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "profile/heldBy": "free",
+    "wrongEngine": {
+      "ok": false,
+      "error": "INVALID_ENGINE",
+      "detail": "This is a claude conversation."
+    },
+    "notFound": {
+      "ok": false,
+      "error": "SESSION_NOT_FOUND",
+      "detail": "This conversation is no longer on this machine."
+    }
+  },
+  "linux": {
+    "cold": {},
+    "scan": [
+      {
+        "sessionId": "tip",
+        "engine": "hermes",
+        "cwd": "<fixture>/linux/work",
+        "origin": "terminal",
+        "title": "",
+        "mtime": 400,
+        "transcriptPath": "<fixture>/linux/work/tip.jsonl",
+        "aliases": [
+          "root",
+          "first"
+        ],
+        "launchArgs": [
+          "-p",
+          "work"
+        ]
+      },
+      {
+        "sessionId": "duplicate",
+        "engine": "hermes",
+        "cwd": "<fixture>/linux/work",
+        "origin": "terminal",
+        "title": "",
+        "mtime": 200,
+        "transcriptPath": "<fixture>/linux/work/duplicate.jsonl"
+      },
+      {
+        "sessionId": "first",
+        "engine": "claude",
+        "cwd": "<fixture>/linux/work",
+        "origin": "terminal",
+        "title": "true",
+        "mtime": 100,
+        "transcriptPath": "<fixture>/linux/work/first.jsonl"
+      }
+    ],
+    "alias": {
+      "sessionId": "tip",
+      "engine": "hermes",
+      "cwd": "<fixture>/linux/work",
+      "origin": "terminal",
+      "title": "",
+      "mtime": 400,
+      "transcriptPath": "<fixture>/linux/work/tip.jsonl",
+      "aliases": [
+        "root",
+        "first"
+      ],
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "collision": {
+      "sessionId": "first",
+      "engine": "claude",
+      "cwd": "<fixture>/linux/work",
+      "origin": "terminal",
+      "title": "true",
+      "mtime": 100,
+      "transcriptPath": "<fixture>/linux/work/first.jsonl"
+    },
+    "lastGood": [
+      {
+        "sessionId": "tip",
+        "engine": "hermes",
+        "cwd": "<fixture>/linux/work",
+        "origin": "terminal",
+        "title": "",
+        "mtime": 400,
+        "transcriptPath": "<fixture>/linux/work/tip.jsonl",
+        "aliases": [
+          "root",
+          "first"
+        ],
+        "launchArgs": [
+          "-p",
+          "work"
+        ]
+      },
+      {
+        "sessionId": "duplicate",
+        "engine": "hermes",
+        "cwd": "<fixture>/linux/work",
+        "origin": "terminal",
+        "title": "",
+        "mtime": 200,
+        "transcriptPath": "<fixture>/linux/work/duplicate.jsonl"
+      },
+      {
+        "sessionId": "first",
+        "engine": "claude",
+        "cwd": "<fixture>/linux/work",
+        "origin": "terminal",
+        "title": "true",
+        "mtime": 100,
+        "transcriptPath": "<fixture>/linux/work/first.jsonl"
+      }
+    ],
+    "logs": [
+      "[search] hermes sessions not read: store unavailable",
+      "[search] hermes sessions not read: store unavailable",
+      "[search] hermes sessions not read: store unavailable"
+    ],
+    "missing": null,
+    "busy/claude": false,
+    "busy/codex": true,
+    "busy/grok": true,
+    "busy/pi": true,
+    "free/open": {},
+    "free/owner": null,
+    "free/working": false,
+    "free/null": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": null,
+      "busy": false,
+      "launchArgs": []
+    },
+    "free/idle": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": null,
+      "busy": false,
+      "launchArgs": []
+    },
+    "free/now": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": null,
+      "busy": false,
+      "launchArgs": []
+    },
+    "free/wait": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": null,
+      "busy": false,
+      "launchArgs": []
+    },
+    "free/heldBy": "free",
+    "terminal/open": {
+      "conversation": "terminal"
+    },
+    "terminal/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record"
+    },
+    "terminal/working": false,
+    "terminal/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_IN_TERMINAL",
+      "detail": "It is open in Claude in a terminal. Moving it here quits it there."
+    },
+    "terminal/idle": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": false,
+      "launchArgs": []
+    },
+    "terminal/now": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": false,
+      "launchArgs": []
+    },
+    "terminal/wait": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": false,
+      "launchArgs": []
+    },
+    "terminal/heldBy": "same",
+    "busy/open": {
+      "conversation": "terminal"
+    },
+    "busy/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record"
+    },
+    "busy/working": true,
+    "busy/null": {
+      "ok": false,
+      "error": "SESSION_BUSY_IN_TERMINAL",
+      "detail": "Claude is working on it in a terminal."
+    },
+    "busy/idle": {
+      "ok": false,
+      "error": "SESSION_BUSY_IN_TERMINAL",
+      "detail": "Claude is working on it in a terminal."
+    },
+    "busy/now": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": true,
+      "launchArgs": []
+    },
+    "busy/wait": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": true,
+      "launchArgs": []
+    },
+    "busy/heldBy": "same",
+    "unknown-busy/open": {
+      "conversation": "terminal"
+    },
+    "unknown-busy/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record"
+    },
+    "unknown-busy/working": null,
+    "unknown-busy/null": {
+      "ok": false,
+      "error": "SESSION_BUSY_IN_TERMINAL",
+      "detail": "Claude is working on it in a terminal."
+    },
+    "unknown-busy/idle": {
+      "ok": false,
+      "error": "SESSION_BUSY_IN_TERMINAL",
+      "detail": "Claude is working on it in a terminal."
+    },
+    "unknown-busy/now": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": true,
+      "launchArgs": []
+    },
+    "unknown-busy/wait": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Indexed title",
+      "owner": {
+        "pid": 7,
+        "engine": "claude",
+        "tty": "/dev/fixture-terminal",
+        "record": "/fixture/record"
+      },
+      "busy": true,
+      "launchArgs": []
+    },
+    "unknown-busy/heldBy": "same",
+    "app/open": {
+      "conversation": "app"
+    },
+    "app/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": null,
+      "record": "/fixture/record"
+    },
+    "app/working": null,
+    "app/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "app/idle": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "app/now": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "app/wait": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "app/heldBy": "other",
+    "args-only/open": {
+      "conversation": "maybe"
+    },
+    "args-only/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record",
+      "fromArgs": true
+    },
+    "args-only/working": null,
+    "args-only/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "args-only/idle": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "args-only/now": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "args-only/wait": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "args-only/heldBy": "other",
+    "harness/open": {
+      "conversation": "harness"
+    },
+    "harness/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record",
+      "harness": true
+    },
+    "harness/working": null,
+    "harness/null": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "harness/idle": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "harness/now": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "harness/wait": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "harness/heldBy": "other",
+    "unverified/open": {
+      "conversation": "maybe"
+    },
+    "unverified/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": "/dev/fixture-terminal",
+      "record": "/fixture/record",
+      "unverified": true
+    },
+    "unverified/working": null,
+    "unverified/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "unverified/idle": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "unverified/now": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "unverified/wait": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It may be open in Claude in a terminal. Close it there, then open it here."
+    },
+    "unverified/heldBy": "other",
+    "no-tty/open": {
+      "conversation": "app"
+    },
+    "no-tty/owner": {
+      "pid": 7,
+      "engine": "claude",
+      "tty": null,
+      "record": "/fixture/record"
+    },
+    "no-tty/working": null,
+    "no-tty/null": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "no-tty/idle": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "no-tty/now": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "no-tty/wait": {
+      "ok": false,
+      "error": "SESSION_OPEN_ELSEWHERE",
+      "detail": "It is open in Claude's app or an editor. Close it there, then open it here."
+    },
+    "no-tty/heldBy": "other",
+    "archived/open": {},
+    "archived/owner": null,
+    "archived/working": false,
+    "archived/null": {
+      "ok": false,
+      "error": "SESSION_ARCHIVED",
+      "detail": "Codex archived this conversation. Run `codex unarchive conversation` in a terminal, then open it here."
+    },
+    "archived/idle": {
+      "ok": false,
+      "error": "SESSION_ARCHIVED",
+      "detail": "Codex archived this conversation. Run `codex unarchive conversation` in a terminal, then open it here."
+    },
+    "archived/now": {
+      "ok": false,
+      "error": "SESSION_ARCHIVED",
+      "detail": "Codex archived this conversation. Run `codex unarchive conversation` in a terminal, then open it here."
+    },
+    "archived/wait": {
+      "ok": false,
+      "error": "SESSION_ARCHIVED",
+      "detail": "Codex archived this conversation. Run `codex unarchive conversation` in a terminal, then open it here."
+    },
+    "archived/heldBy": "free",
+    "gone-folder/open": {},
+    "gone-folder/owner": null,
+    "gone-folder/working": false,
+    "gone-folder/null": {
+      "ok": false,
+      "error": "SESSION_FOLDER_GONE",
+      "detail": "The folder it ran in is gone: <fixture>/missing"
+    },
+    "gone-folder/idle": {
+      "ok": false,
+      "error": "SESSION_FOLDER_GONE",
+      "detail": "The folder it ran in is gone: <fixture>/missing"
+    },
+    "gone-folder/now": {
+      "ok": false,
+      "error": "SESSION_FOLDER_GONE",
+      "detail": "The folder it ran in is gone: <fixture>/missing"
+    },
+    "gone-folder/wait": {
+      "ok": false,
+      "error": "SESSION_FOLDER_GONE",
+      "detail": "The folder it ran in is gone: <fixture>/missing"
+    },
+    "gone-folder/heldBy": "free",
+    "owned/open": {},
+    "owned/owner": null,
+    "owned/working": false,
+    "owned/null": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "owned/idle": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "owned/now": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "owned/wait": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "owned/heldBy": "free",
+    "saved-alias/open": {},
+    "saved-alias/owner": null,
+    "saved-alias/working": false,
+    "saved-alias/null": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "saved-alias/idle": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "saved-alias/now": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "saved-alias/wait": {
+      "ok": false,
+      "error": "SESSION_IN_HARNESS",
+      "detail": "This conversation is already a harness here."
+    },
+    "saved-alias/heldBy": "free",
+    "profile/open": {},
+    "profile/owner": null,
+    "profile/working": false,
+    "profile/null": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Named conversation",
+      "owner": null,
+      "busy": false,
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "profile/idle": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Named conversation",
+      "owner": null,
+      "busy": false,
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "profile/now": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Named conversation",
+      "owner": null,
+      "busy": false,
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "profile/wait": {
+      "ok": true,
+      "cwd": "<fixture>/linux/work",
+      "title": "Named conversation",
+      "owner": null,
+      "busy": false,
+      "launchArgs": [
+        "-p",
+        "work"
+      ]
+    },
+    "profile/heldBy": "free",
+    "wrongEngine": {
+      "ok": false,
+      "error": "INVALID_ENGINE",
+      "detail": "This is a claude conversation."
+    },
+    "notFound": {
+      "ok": false,
+      "error": "SESSION_NOT_FOUND",
+      "detail": "This conversation is no longer on this machine."
+    }
+  }
+}

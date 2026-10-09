@@ -4,7 +4,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentEvents, type AgentEventDeps, type AnnounceSink } from './events.js'
 
 const agent = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
-  ({ agentId: 'a1', sessionId: 's1', engine: 'claude', cwd: '/work/app', ...over }) as RegisteredSession
+  ({ agentId: 'a1', sessionId: 's1', engine: 'claude', cwd: '/work/app', transcriptPath: '/work/session.jsonl', registeredAt: 1, ...over }) as RegisteredSession
 
 function sink() {
   const app: Array<{ type: string; payload: Record<string, unknown> }> = []
@@ -83,7 +83,7 @@ describe('agent events', () => {
 
   it('refreshes a live agent on the app alone when its token usage moves', async () => {
     const out = sink()
-    events({}, out.socket).onTokenUsageChanged({ agentId: 'a1', sessionId: 's1', engine: 'claude' })
+    events({}, out.socket).onTokenUsageChanged(agent({ agentId: 'a1', sessionId: 's1', engine: 'claude' }))
     await settle()
     expect(out.app.map((frame) => frame.type)).toEqual(['agent_synced'])
     expect(out.dial).toEqual([])
@@ -91,7 +91,16 @@ describe('agent events', () => {
 
   it('leaves a live agent whose pane is not available yet alone', async () => {
     const out = sink()
-    events({ terminalAvailable: () => false }, out.socket).onTokenUsageChanged({ agentId: 'a1', sessionId: 's1', engine: 'claude' })
+    events({ terminalAvailable: () => false }, out.socket).onTokenUsageChanged(agent({ agentId: 'a1', sessionId: 's1', engine: 'claude' }))
+    await settle()
+    expect(out.app).toEqual([])
+  })
+
+  it('does not publish an old usage target after a path, profile, fork or registration change', async () => {
+    const out = sink()
+    const announce = events({}, out.socket)
+    for (const old of [{ transcriptPath: '/older' }, { cwd: '/older' }, { codexHome: '/older' },
+      { registeredAt: 0 }, { forkedFrom: { agentId: 'parent', name: 'Parent' } }]) announce.onTokenUsageChanged(agent(old))
     await settle()
     expect(out.app).toEqual([])
   })
@@ -100,12 +109,12 @@ describe('agent events', () => {
     const out = sink()
     const saved = agent({ agentId: 'a2', sessionId: 's2' })
     const announce = events({ stopped: (agentId) => agentId === 'a2' ? saved : null }, out.socket)
-    announce.onTokenUsageChanged({ agentId: 'a2', sessionId: 's2', engine: 'claude' })
+    announce.onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
     // Another session of the same agent, or an engine it no longer runs: not this record.
-    announce.onTokenUsageChanged({ agentId: 'a2', sessionId: 'older', engine: 'claude' })
-    announce.onTokenUsageChanged({ agentId: 'a2', sessionId: 's2', engine: 'codex' })
+    announce.onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 'older', engine: 'claude' }))
+    announce.onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'codex' }))
     // The live agent's earlier session: not live, and not archived either.
-    announce.onTokenUsageChanged({ agentId: 'a1', sessionId: 'older', engine: 'claude' })
+    announce.onTokenUsageChanged(agent({ agentId: 'a1', sessionId: 'older', engine: 'claude' }))
     await settle()
     expect(out.published).toEqual(['a2'])
     expect(out.app).toEqual([])
@@ -114,11 +123,11 @@ describe('agent events', () => {
   it('shrugs off a stopped record that is being removed, or a publish that fails', async () => {
     const out = sink()
     events({ stopped: () => { throw new Error('archive moved') } }, out.socket)
-      .onTokenUsageChanged({ agentId: 'a2', sessionId: 's2', engine: 'claude' })
+      .onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
     out.failPublish()
     const saved = agent({ agentId: 'a2', sessionId: 's2' })
-    events({ stopped: () => saved }, out.socket).onTokenUsageChanged({ agentId: 'a2', sessionId: 's2', engine: 'claude' })
-    events({ stopped: () => saved }).onTokenUsageChanged({ agentId: 'a2', sessionId: 's2', engine: 'claude' })
+    events({ stopped: () => saved }, out.socket).onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
+    events({ stopped: () => saved }).onTokenUsageChanged(agent({ agentId: 'a2', sessionId: 's2', engine: 'claude' }))
     await settle()
     expect(out.published).toEqual(['a2'])
   })

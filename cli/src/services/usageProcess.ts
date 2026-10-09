@@ -1,3 +1,5 @@
+import { join } from 'node:path'
+import { createAgentUsage } from './agentUsage.js'
 /**
  * Account usage in its own process (`harness __service usage`, in the edge host): `usage_read`, the same
  * handler as in the core's process (services/usage.ts). It asks the core nothing. Its two vendor round
@@ -19,11 +21,13 @@ export interface UsageServiceOptions {
 }
 
 export function runUsageService(options: UsageServiceOptions): ServiceProcess {
-  return (options.run ?? runServiceProcess)({
+  const reader = createAgentUsage(join(options.dataDir, 'agent-token-usage'))
+  const service = (options.run ?? runServiceProcess)({
     name: 'usage',
     socketPath: options.socketPath,
     machineId: options.machineId,
     token: options.token,
-    requests: (options.start ?? startUsage)(processCoreApi(options.dataDir, 'usage')),
+    requests: { ...(options.start ?? startUsage)(processCoreApi(options.dataDir, 'usage')), agentUsage: payload => reader.read(payload) },
   })
+  return { stop: () => { service.stop(); reader.stop() } }
 }

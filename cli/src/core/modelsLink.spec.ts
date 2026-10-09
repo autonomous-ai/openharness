@@ -100,6 +100,15 @@ describe('models in its own process, as the core reaches it', () => {
       await expect(setup().port.moveTarget({ gridName: null, model: 'm' })).rejects.toBeInstanceOf(ServiceUnavailableError)
     })
 
+    it('checks the entire assignment batch before returning it', async () => {
+      const processes = [{ key: 'a', engine: 'claude' as const, env: { ANTHROPIC_BASE_URL: RELAY }, args: '' }]
+      const assignments = [{ key: 'a', assignment: { baseUrl: RELAY, model: null } }]
+      const { port, call } = setup({ gridAssignments: { assignments } })
+      expect(await port.gridAssignments(processes)).toEqual(assignments)
+      expect(call).toHaveBeenCalledWith('gridAssignments', { processes })
+      await expect(setup({ gridAssignments: {} }).port.gridAssignments(processes)).rejects.toBeInstanceOf(ServiceUnavailableError)
+    })
+
     it("a grid or saved-API launch, as models built it and checked as far as the core hands it on; unavailable when it is not one", async () => {
       const request = { engine: 'claude' as const, override: LAUNCH, machine: { hermesSystemManaged: false }, refresh: true }
       const launch = { env: { ANTHROPIC_MODEL: 'Small-Q4' }, args: ['--x'], webSearch: 'on', sessionModel: 'grid/Small-Q4' }

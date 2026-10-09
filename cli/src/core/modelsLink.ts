@@ -1,3 +1,4 @@
+import { gridAssignmentAnswersIn } from '../lib/gridAssignmentWire.js'
 /**
  * Models in its own process, as the core reaches it (`HARNESSD_SERVICES=models`; the process's side is
  * services/modelsProcess.ts).
@@ -125,6 +126,11 @@ export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'cli
       return { detail: typeof answer.detail === 'string' && answer.detail ? answer.detail : 'Could not read this machine\'s grid endpoint.' }
     },
     moved: (launch) => tell({ kind: 'moved', launch }),
+    gridAssignments: async (processes) => {
+      const assignments = gridAssignmentAnswersIn((await ask('gridAssignments', { processes })).assignments, processes)
+      if (!assignments) throw new ServiceUnavailableError('models')
+      return assignments
+    },
     gridLaunch: async (request) => {
       const answer = gridLaunchAnswerIn(await ask('gridLaunch', { ...request }))
       if (!answer) throw new ServiceUnavailableError('models')
