@@ -313,6 +313,29 @@ it.each([new Error('reader failed'), 'reader failed'])('contains a late reader r
   vi.useRealTimers()
 })
 
+it.each(['terminal probe', 'import'] as const)('does not replay twice when a held loader resolves during a newer attach\'s %s', async phase => {
+  const code = await loadEngine('cursor')
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  let loaded!: () => void, probed!: () => void
+  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { loaded = () => resolve(code) }))
+  const run = setup({ readerLoadWaitMs: 20 })
+  const event = started('once')
+  const s = session('cursor', transcript([{ events: [event] }]))
+  const first = run.attach.attachSession(s, false, true)
+  await vi.advanceTimersByTimeAsync(20); expect(await first).toBe(true)
+  if (phase === 'terminal probe') vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { probed = () => resolve(false) }))
+  const second = run.attach.attachSession(s, false, true)
+  await vi.advanceTimersByTimeAsync(0)
+  loaded()
+  await vi.advanceTimersByTimeAsync(0)
+  if (phase === 'terminal probe') probed()
+  expect(await second).toBe(true)
+  await vi.waitFor(() => expect(run.attach.attaches.attaching()).toEqual([]))
+  expect(run.deps.watcher.addSession).toHaveBeenCalledOnce()
+  expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(s.sessionId, [event])
+  expect(made('cursor')).toHaveLength(1)
+})
+
 describe('attaching a session whose engine\'s code could not be loaded', () => {
   it('holds interpretation without a normalizer or tail, says why, and preserves the binding', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

@@ -24,6 +24,7 @@ mutations = [
     ('binding publication waits on reader', 'src/core/agents/bind.ts', '      stoppedAgents.save(entry)', '      await attachSession(entry); stoppedAgents.save(entry)', bind),
     ('target claim not rechecked', 'src/core/agents/bind.ts', 'if (!current() || !mayClaim(sessionId)) return', 'if (!current()) return', bind),
     ('changed path joins obsolete reader', 'src/lib/attachTracker.ts', 'if (!reset && pending.identity === identity)', 'if (!reset)', attach),
+    ('newer reader keeps obsolete retry', 'src/core/transcripts/readerLoads.ts', '      held.delete(sessionId)\n      let loading', '      // broken: old retry retained\n      let loading', attach),
     ('missing reader starts a tail', 'src/core/transcripts/attach.ts', 'its reader is unavailable or still loading`)\n      return true', 'its reader is unavailable or still loading`)\n      // broken: interpretation proceeds', attach),
     ('binding waits on optional attachment', 'src/core/agents/bind.ts', 'followRegistered(result.entry, result)', 'await handleRegistered(result.entry, result)', bind),
 ]

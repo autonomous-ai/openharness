@@ -7,9 +7,13 @@ const LOADING = Symbol('reader still loading')
 export function createReaderLoads(waitMs = LOAD_WAIT_MS) {
   const imports = new Map<OtherEngine, Promise<InProcessModules[OtherEngine] | null>>()
   const retrying = new Set<OtherEngine>()
-  const held = new Map<string, { engine: OtherEngine; identity: string; retry: () => void }>()
+  const held = new Map<string, { engine: OtherEngine; identity: string; retry: (stillHeld: () => boolean) => Promise<unknown> }>()
   return {
-    async read(engine: OtherEngine, sessionId: string, identity: string, current: () => boolean, retry: () => void) {
+    async read(engine: OtherEngine, sessionId: string, identity: string, current: () => boolean,
+      retry: (stillHeld: () => boolean) => Promise<unknown>) {
+      // A newer attempt owns this import's result. A late callback from an earlier hold must not
+      // force a second fold behind it (Cursor would replay its first turn twice).
+      held.delete(sessionId)
       let loading = imports.get(engine)
       if (!loading) { loading = loadEngine(engine); imports.set(engine, loading) }
       let timer!: ReturnType<typeof setTimeout>
@@ -30,8 +34,9 @@ export function createReaderLoads(waitMs = LOAD_WAIT_MS) {
           retrying.delete(engine)
           for (const [id, pending] of held) {
             if (pending.engine !== engine) continue
-            held.delete(id)
-            if (module) pending.retry()
+            if (!module) { held.delete(id); continue }
+            const stillHeld = () => held.get(id) === pending
+            void pending.retry(stillHeld).finally(() => { if (stillHeld()) held.delete(id) })
           }
         })
       }

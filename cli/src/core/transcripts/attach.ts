@@ -132,8 +132,8 @@ export function createAttach({
     // Bound only the wait for optional code, before any interpretation writes. A late import gets one
     // fenced retry; a missing import holds the transcript intact until an update or restart fixes it.
     const other = isOtherEngine(session.engine) ? await readerLoads.read(
-      session.engine, session.sessionId, paneReadIdentity(session), current, () => {
-        if (current()) void attachSession(session, true, replayCursorFromStart, replayFromStart).catch(error => console.error(
+      session.engine, session.sessionId, paneReadIdentity(session), current, async stillHeld => {
+        if (current()) await attachSession(session, true, replayCursorFromStart, replayFromStart, stillHeld).catch(error => console.error(
           `[agent] ${sid(session.agentId)} reader retry failed: ${error instanceof Error ? error.message : error}`))
       }) : null
     if (!current()) return false
@@ -539,6 +539,7 @@ export function createAttach({
     reset = false,
     replayCursorFromStart = false,
     replayFromStart = false,
+    retryCurrent?: () => boolean,
   ): Promise<boolean> => {
     const authority = paneReadIdentity(session)
     const current = () => paneReadIdentity(resolve(session.agentId)) === authority
@@ -552,6 +553,8 @@ export function createAttach({
         `[cursor-discovery] lookup failed: ${error instanceof Error ? error.message : error}`))
     }
     return attaches.attach(session, reset, async () => {
+      // A normal attach may have taken the import's result while this retry waited for its slot.
+      if (retryCurrent && !retryCurrent()) return false
       // A tail an attach holds (a Claude Code or Codex reset, see attachSessionNow) is released only
       // here, after the whole attach — the new normalizer installed and any open turn said to be open —
       // so delivery resumes into it, in order. Released on every exit, however the attach ends.

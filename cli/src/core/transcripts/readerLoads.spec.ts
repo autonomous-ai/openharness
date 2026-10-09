@@ -13,7 +13,7 @@ function deferred() {
 
 it('returns available or missing code without a delayed retry', async () => {
   vi.useFakeTimers()
-  const readers = createReaderLoads(), retry = vi.fn()
+  const readers = createReaderLoads(), retry = vi.fn(async () => {})
   vi.mocked(loadEngine).mockResolvedValueOnce({ marker: 'loaded' } as never).mockResolvedValueOnce(null)
   expect(await readers.read('cursor', 'c', 'c1', () => true, retry)).toEqual({ marker: 'loaded' })
   expect(await readers.read('grok', 'g', 'g1', () => true, retry)).toBeNull()
@@ -23,7 +23,7 @@ it('returns available or missing code without a delayed retry', async () => {
 
 it('bounds a stalled import and coalesces repeated attempts to one current retry per session', async () => {
   vi.useFakeTimers()
-  const readers = createReaderLoads(20), code = deferred(), obsolete = vi.fn(), retry = vi.fn(), other = vi.fn()
+  const readers = createReaderLoads(20), code = deferred(), obsolete = vi.fn(async () => {}), retry = vi.fn(async () => {}), other = vi.fn(async () => {})
   vi.mocked(loadEngine).mockReturnValueOnce(code.promise).mockReturnValueOnce(new Promise(() => {}))
   const first = readers.read('cursor', 'c', 'c1', () => true, obsolete)
   await vi.advanceTimersByTimeAsync(20); expect(await first).toBeNull()
@@ -41,7 +41,7 @@ it('bounds a stalled import and coalesces repeated attempts to one current retry
 
 it.each(['forget', 'supersede', 'revoked before deadline', 'missing import'] as const)('does not retry after %s', async outcome => {
   vi.useFakeTimers()
-  const readers = createReaderLoads(20), code = deferred(), retry = vi.fn()
+  const readers = createReaderLoads(20), code = deferred(), retry = vi.fn(async () => {})
   vi.mocked(loadEngine).mockReturnValueOnce(code.promise)
   const reading = readers.read('cursor', 'c', 'c1', () => outcome !== 'revoked before deadline', retry)
   await vi.advanceTimersByTimeAsync(20); await reading
