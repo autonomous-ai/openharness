@@ -375,3 +375,28 @@ it('ignores a late preparation exception after shutdown', async () => {
   expect(test.rows.get(id)?.externalResume?.phase).toBe('waiting')
   expect(test.deps.launch).not.toHaveBeenCalled()
 })
+
+it.each(['idle', 'wait'] as const)('does not signal a turn that starts during the pane probe under %s consent', async takeOver => {
+  const test = setup(), pane = defer<boolean>()
+  test.inspect.mockImplementation(async request => held(request, false))
+  vi.mocked(test.deps.waiting).mockResolvedValueOnce(true).mockReturnValueOnce(pane.promise)
+  const id = await test.stage({ takeOver })
+  await vi.waitFor(() => expect(test.deps.waiting).toHaveBeenCalledTimes(2))
+  test.inspect.mockImplementation(async request => held(request, true))
+  pane.resolve(true); await test.controller.settled()
+  expect(test.rows.get(id)?.externalResume).toMatchObject({ phase: 'quitting' })
+  expect(test.rows.get(id)?.externalResume?.signal).toBeUndefined()
+  expect(test.deps.launch).not.toHaveBeenCalled()
+})
+
+it('does not admit a conversation acquired externally while its final pane probe waits', async () => {
+  const test = setup(), pane = defer<boolean>()
+  vi.mocked(test.deps.waiting).mockResolvedValueOnce(true).mockReturnValueOnce(pane.promise)
+  const id = await test.stage()
+  await vi.waitFor(() => expect(test.deps.waiting).toHaveBeenCalledTimes(2))
+  test.inspect.mockImplementation(async request => held(request, false))
+  pane.resolve(true); await test.controller.settled()
+  expect(test.rows.get(id)?.externalResume?.phase).toBe('waiting')
+  expect(test.rows.get(id)?.sessionId).toBe('')
+  expect(test.deps.launch).not.toHaveBeenCalled()
+})

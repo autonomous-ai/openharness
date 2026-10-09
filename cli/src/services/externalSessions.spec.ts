@@ -21,6 +21,31 @@ function fixture() {
   return { claim, provider, view, options, generation, reader: createExternalSessions(options) }
 }
 
+it.each(['terminal', 'activity'] as const)('rejects same-PID conversation changes during the %s read', async point => {
+  const f = fixture()
+  let finish!: () => void
+  const gate = new Promise<void>(resolve => { finish = resolve })
+  vi.mocked(f.provider.owners!).mockResolvedValue([f.claim])
+  if (point === 'terminal') f.options.open.ttys.mockImplementation(async () => { await gate; return new Map([[7, '/dev/fixture-terminal']]) })
+  else vi.mocked(f.provider.busy!).mockImplementation(async () => { await gate; return false })
+  const answer = f.reader.inspect(target)
+  await vi.waitFor(() => expect(point === 'terminal' ? f.options.open.ttys : f.provider.busy).toHaveBeenCalled())
+  vi.mocked(f.provider.owners!).mockResolvedValue([{ ...f.claim, sessionId: 'another-conversation' }])
+  finish()
+  expect(await answer).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
+})
+
+it.each(['record', 'contender', 'app'] as const)('rejects %s owner evidence that changes while activity is read', async change => {
+  const f = fixture()
+  vi.mocked(f.provider.owners!).mockResolvedValue([f.claim])
+  vi.mocked(f.provider.busy!).mockImplementation(async () => {
+    vi.mocked(f.provider.owners!).mockResolvedValue(change === 'record' ? [{ ...f.claim, record: '/other-record' }]
+      : change === 'app' ? [{ ...f.claim, app: true }] : [f.claim, { ...f.claim, pid: 8 }])
+    return false
+  })
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
+})
+
 it('supplies fresh metadata and ownership without a SQLite index, preserving canonical aliases', async () => {
   const f = fixture()
   expect(await f.reader.inspect(target)).toMatchObject({ ok: true, session: { title: 'Indexed title' }, owner: null, busy: false })
