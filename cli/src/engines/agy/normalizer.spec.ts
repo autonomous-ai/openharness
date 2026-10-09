@@ -179,11 +179,11 @@ describe('agy normalizer, over a real recorded session', () => {
     const initial = normalizer.turnRevision
     normalizer.ingest('not json')
     expect(normalizer.turnRevision).toBe(initial)
-    normalizer.ingest(step({ type: 'USER_INPUT', content: 'hello' }))
+    normalizer.ingest(JSON.stringify({ type: 'USER_INPUT', content: 'hello' }))
     const captured = normalizer.turnRevision
     expect(captured).toBeGreaterThan(initial)
     normalizer.closeTurn()
-    normalizer.ingest(step({ type: 'USER_INPUT', content: 'hello' }))
+    normalizer.ingest(JSON.stringify({ type: 'USER_INPUT', content: 'hello' }))
     expect(normalizer.turnOpen).toBe(true)
     expect(normalizer.turnRevision).toBeGreaterThan(captured)
     const reopened = normalizer.turnRevision
