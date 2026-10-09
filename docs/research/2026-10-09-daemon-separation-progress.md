@@ -144,9 +144,40 @@ times will be recorded after the CI correction is reviewed and validated.
 
 ## Added core follow-ups
 
+Item 6 completed as `a9895b02c` at 06:23:02 UTC. Independent review approved
+`3af878758` against `79c658faa`; [automatic CI](https://github.com/autonomous-ai/openharness/actions/runs/37892739470)
+passed all selected checks and `ci/required`. Final receipt
+`20261009T061719.342956Z-78031` passed typecheck, core/harnessd at per-file 100%,
+and 622 directly affected tests including architecture and both unchanged goldens.
+The broader preceding run passed 1,780 tests with seven existing skips. Full
+reader/model/lean/crash lanes passed 28 selected cases; the final rebuilt lean
+bundle passed its two cases. The final queue correction changes only dependent
+Command Code refresh ordering, covered by the real config and batch regressions.
+
+Matched final measurement `20261009T061834.097319Z-84262` passed in 69.7 seconds:
+empty/idle/active CPU 0.75/1.65/6.81%, mean RSS 81.2/95.7/98.9 MiB, event-loop
+p95 12.07/12.07/12.06 ms, and two-turn latency p95 6.979 seconds. The baseline
+above was 0.75/1.65/6.91%, 81.2/95.1/98.8 MiB and 6.976 seconds, on the same
+toolchain and workload. These are short core-only observations, not a new limit.
+
+Runtime timing: golden committed 05:26:02; implementation/review corrections
+continued through 06:16; final review approved at 06:17. Local checks ended about
+06:18. Measurement ran 06:18:47–06:19:44; CI finished 06:21:19. The merge helper
+ran 06:22:48–06:23:02 and verified the full tested tree. Golden commit through
+merge took 57 minutes; total request elapsed was 6 hours 56 minutes 21 seconds.
+Validation, implementation and review overlap; waiting and merge are separate.
+Publication remains zero.
+
 Pane profile polling also needs a session/route snapshot taken before capture:
 the entry-time check cannot reject an older screen if the same registry object
 changed in place during the capture. This pre-existing limitation is independent
 of the runtime extraction's config and staged-history publication checks.
 
-The owner reported that two panes of the same agent started in one millisecond fail. Onboarding avoids it today; the fix belongs in core. The current session-label generator contains only the engine and a millisecond timestamp, so concurrent same-engine creates can collide. Reproduce with a pinned clock, fix the shared label generation, and verify two isolated panes can start together. This is not blocking the completed usage separation.
+The owner reported that two panes of the same agent started in one millisecond
+fail. Onboarding avoids it today. Regressions committed in `be3ed36e1` reproduce
+both the duplicate label and a real tmux `duplicate session` failure with two
+concurrent private panes. The shared generator now appends a random UUID to the
+existing engine/timestamp prefix, avoiding same-clock collisions across calls,
+daemon processes and restarts. Discovery still accepts both old and new names;
+existing panes are neither renamed nor removed. All native fixtures use private
+homes, shell history and sockets. Final validation and review are pending.

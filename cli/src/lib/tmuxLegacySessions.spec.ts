@@ -71,13 +71,13 @@ describe('adoptLegacyHarnessSessions', () => {
     const adopted = await adoptLegacyHarnessSessions(owned, 1_800_000_000_000)
 
     expect(adopted).toEqual([
-      { from: 'claude-1787912296587', to: 'harness-claude-1800000000000', paneId: '%13' },
-      { from: 'codex-1787549944131', to: 'harness-codex-1800000000001', paneId: '%1' },
+      { from: 'claude-1787912296587', to: expect.stringMatching(/^harness-claude-1800000000000-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/), paneId: '%13' },
+      { from: 'codex-1787549944131', to: expect.stringMatching(/^harness-codex-1800000000001-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/), paneId: '%1' },
     ])
     expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual([
       'list-panes -a -F #{pane_id}|#{pane_pid}|#{session_name}|#{pane_current_path}|#{@harness_daemon}',
-      'rename-session -t =claude-1787912296587 harness-claude-1800000000000',
-      'rename-session -t =codex-1787549944131 harness-codex-1800000000001',
+      `rename-session -t =claude-1787912296587 ${adopted[0]!.to}`,
+      `rename-session -t =codex-1787549944131 ${adopted[1]!.to}`,
     ])
   })
 
