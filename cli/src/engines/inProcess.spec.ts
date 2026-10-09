@@ -94,6 +94,18 @@ async function fresh(screens: 'counted' | 'broken') {
 }
 
 describe('the core\'s side', () => {
+  it('loads Kilo runtime code when the shared adoption reader cannot load', async () => {
+    vi.doMock('../lib/sessionSearch/externals/opencode.js', () => { throw new Error('adoption chunk unavailable') })
+    try {
+      const { inProcess } = await fresh('counted')
+      expect(await inProcess.loadEngine('opencode')).toBeNull()
+      const kilo = await inProcess.loadEngine('kilo')
+      expect(kilo).not.toBeNull()
+      expect(kilo).toHaveProperty('KiloReader')
+      expect(inProcess.engineNow('kilo', 'a pane was read')).toHaveProperty('createRuntimeProfileReader')
+    } finally { vi.doUnmock('../lib/sessionSearch/externals/opencode.js') }
+  })
+
   it('names the twelve engines besides Claude Code, Codex and the terminal', () => {
     expect(ENGINES.filter(isOtherEngine)).toEqual(ENGINES.filter((engine) => !['claude', 'codex', 'terminal'].includes(engine)))
     expect(OTHER_ENGINES).toHaveLength(12)
