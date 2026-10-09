@@ -87,9 +87,18 @@ export class PetStore {
         source = await readFile(join(this.dir, `${id}.png`))
       } catch { /* no source kept: the pack is all there is */ }
       if (source) {
-        const { pack: fresh } = buildPack(source, (await this.rows(id)) ?? undefined, version)
-        if (version === PACK_VERSION) await writeAtomic(join(this.dir, `${id}.hpet`), fresh)
-        return fresh
+        try {
+          const { pack: fresh } = buildPack(source, (await this.rows(id)) ?? undefined, version)
+          // The kept source must make the pack it is named for: never overwrite or hand out another pet's bytes.
+          if (fresh.subarray(6, 14).toString('hex') !== id) throw new Error(`rebuilt pack is ${fresh.subarray(6, 14).toString('hex')}, not ${id}`)
+          if (version === PACK_VERSION) await writeAtomic(join(this.dir, `${id}.hpet`), fresh)
+          return fresh
+        } catch (err) {
+          // The pack on disk still serves a dial that reads its version or newer; only an older dial than the file
+          // has nothing to be given.
+          if (pack[4] > version) throw err
+          console.error(`[pets] could not rebuild ${id} as version ${version}, using the stored version ${pack[4]}: ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
     }
     return pack

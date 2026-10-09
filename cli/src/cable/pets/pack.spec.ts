@@ -122,6 +122,7 @@ describe('pack', () => {
       f.cells[1] = 1 + (n % 200)
       return f
     })
+    p.working = { ...p.working, frames: p.frames.map((_, n) => n) } // in use by a scene other than relaxing: no scene to drop
     expect(PACK_MAX_BYTES).toBe(1_048_576)
     try {
       encodePack(p, ID)
@@ -131,6 +132,45 @@ describe('pack', () => {
       expect((e as PetSheetError).code).toBe('TOO_BIG')
       expect((e as PetSheetError).message).toMatch(/^This pet is \d+\.\d MB; the limit is 1 MB$/)
     }
+  })
+
+  it('version 2 over 1 MB that fits as version 1 is written with an empty relaxing scene', () => {
+    const noisy = (n: number): IndexedFrame => {
+      const cells = new Uint8Array(192 * 208)
+      for (let i = 0; i < cells.length; i++) cells[i] = 1 + ((i * 7 + n) % 3)
+      cells[1] = 1 + (n % 200)
+      return { cols: 192, rows: 208, cell: 1, cells }
+    }
+    // `m` noisy frames play the scenes the first 3 frames of relaxing come after.
+    const make = (m: number): ConvertedPet => {
+      const p = fixture()
+      p.frames = Array.from({ length: m + 3 }, (_, n) => noisy(n))
+      p.small.loops = { idle: [0], done: [0], asking: [0] }
+      p.working = { ...p.working, frames: Array.from({ length: m }, (_, n) => n) }
+      p.listening = { ...p.listening, frames: [0] }
+      p.sending = { ...p.sending, frames: [0] }
+      p.failed = { ...p.failed, frames: [0] }
+      p.relaxing = { ...p.relaxing, frames: [m, m + 1, m + 2] }
+      return p
+    }
+    let m = 1
+    while (encodePack(make(m), ID, 1).length <= PACK_MAX_BYTES) {
+      try {
+        const full = encodePack(make(m), ID, 2)
+        if (decodePack(full).relaxing.frames.length === 0) break
+      } catch { break }
+      m++
+    }
+    const p = make(m)
+    const v1 = encodePack(p, ID, 1)
+    expect(v1.length).toBeLessThanOrEqual(PACK_MAX_BYTES)
+    const v2 = encodePack(p, ID, 2)
+    expect(v2[4]).toBe(2)
+    expect(v2.length).toBeLessThanOrEqual(PACK_MAX_BYTES)
+    expect(decodePack(v2).relaxing.frames).toEqual([])
+    expect(decodePack(v2).working.frames).toEqual(p.working.frames)
+    // A pet that fits whole keeps its relaxing scene.
+    expect(decodePack(encodePack(make(1), ID, 2)).relaxing.frames).toEqual([1, 2, 3])
   })
 
   it('vector: encodePack(fixture, version 1) equals test/vectors/pet_min.hpet', () => {

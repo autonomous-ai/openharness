@@ -103,7 +103,7 @@ describe('pet requests', () => {
     expect(reply).toMatchObject({ ok: true, id: expect.stringMatching(/^[0-9a-f]{16}$/), warnings: expect.any(Array), stepMs: { small: 120 } })
     expect(reply.bytes).toBeGreaterThan(0)
     expect(reply.colours).toBeGreaterThan(0)
-    for (const scene of ['small', 'working', 'listening', 'sending', 'relaxing']) {
+    for (const scene of ['small', 'working', 'listening', 'sending']) {
       expect(reply.frames[scene].length).toBeGreaterThan(0)
       for (const url of reply.frames[scene]) {
         expect(url).toMatch(PNG_URL)
@@ -112,9 +112,9 @@ describe('pet requests', () => {
       }
       expect(reply.stepMs[scene]).toBeGreaterThan(0)
     }
-    expect(Object.keys(reply.frames).sort()).toEqual(['asking', 'listening', 'relaxing', 'sending', 'small', 'working'])
+    expect(Object.keys(reply.frames).sort()).toEqual(['asking', 'listening', 'sending', 'small', 'working'])
     expect(reply.name).toBe('sheet')
-    expect(reply.stepMs).toEqual({ small: 120, asking: 120, working: 120, listening: 120, sending: 120, relaxing: 120 })
+    expect(reply.stepMs).toEqual({ small: 120, asking: 120, working: 120, listening: 120, sending: 120 })
   })
   it('pet_preview with a name stores it, sanitized: control characters stripped, trimmed, cut to 40; empty falls back to the file name', async () => {
     const { service, sheet } = await fixture()
@@ -164,7 +164,7 @@ describe('pet requests', () => {
     expect(calm.ok).toBe(true)
     expect(calm.rows).toEqual({ ...DEFAULT_ROWS_IDLE, relaxing: 'running' })
     expect(calm.id).not.toBe(plain.id)
-    expect(calm.frames.relaxing).toHaveLength(2)
+    expect(calm.frames.relaxing).toBeUndefined()
     expect(await harnessDevicesRequest(service, 'pet_preview', { path: sheet, rows: { relaxing: 'sideways' } })).toEqual({ error: 'BAD_PET_REQUEST' })
   })
   it('pet_preview refuses an unknown row name and explains an empty chosen row', async () => {

@@ -71,14 +71,27 @@ function packRows(f: IndexedFrame): { packed: number[]; at: number[] } {
   return { packed, at }
 }
 
+// A version 2 pack that would pass the size limit is written with an empty relaxing scene (no frames: the dial plays
+// no relaxing scene) rather than refused, so a pet that fit as version 1 still fits. Only if that is too big as well
+// does it fail, as version 1 would.
 export function encodePack(pet: ConvertedPet, id: Uint8Array, version: number = PACK_VERSION): Buffer {
+  try {
+    return encodePackExact(pet, id, version)
+  } catch (err) {
+    if (version !== 2 || !(err instanceof PetSheetError) || err.code !== 'TOO_BIG') throw err
+    const bare = { ...pet, relaxing: { frames: [], stepMs: 0, dx: 0, dy: 0 } } as ConvertedPet
+    return encodePackExact(bare, id, version, true)
+  }
+}
+
+function encodePackExact(pet: ConvertedPet, id: Uint8Array, version: number, dropUnused = false): Buffer {
   if (id.length !== 8) throw new Error('A pet id is 8 bytes')
   if (version !== 1 && version !== 2) throw new Error(`Unsupported pet pack version ${version}`)
   const scenes = scenesOf(version)
   // Version 1 has no relaxing scene, and convertPet adds the frames only that scene uses last: leaving them out
   // keeps every other frame index, so a version 1 pack is byte for byte what it was before relaxing existed.
   let frames = pet.frames
-  if (version === 1) {
+  if (version === 1 || dropUnused) {
     const used = [...Object.values(pet.small.loops).flat(), ...scenes.flatMap((name) => pet[name].frames)]
     frames = frames.slice(0, Math.max(-1, ...used) + 1)
   }

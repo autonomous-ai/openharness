@@ -300,6 +300,26 @@ describe('PetStore', () => {
     expect((await store.pack(a.id, 1))[4]).toBe(2)
   })
 
+  it('a version 2 rebuild that cannot be made falls back to the stored older pack; a source of another pet never replaces it', async () => {
+    const a = await store.prepare(await source(97))
+    const file = join(dir, `${a.id}.hpet`)
+    const v1 = await store.pack(a.id, 1)
+    await writeFile(file, v1) // the pack on disk is version 1
+    // A source that no longer parses: the stored version 1 is handed out as it is.
+    await writeFile(join(dir, `${a.id}.png`), Buffer.from('not a png'))
+    expect(await store.pack(a.id, 2)).toEqual(v1)
+    // A source that makes another pet: not written over the stored pack, and the stored pack is served.
+    await writeFile(join(dir, `${a.id}.png`), sheetPng(98))
+    expect(await store.pack(a.id, 2)).toEqual(v1)
+    expect(await readFile(file)).toEqual(v1)
+    // The stored pack is newer than the dial reads and cannot be remade: that is an error.
+    await writeFile(file, await store.pack(a.id, 2).catch(() => v1))
+    const v2 = Buffer.from(v1)
+    v2[4] = 2
+    await writeFile(file, v2)
+    await expect(store.pack(a.id, 1)).rejects.toThrow()
+  })
+
   it('a sidecar from before relaxing has it follow the rest row', async () => {
     const a = await store.prepare(await source(96))
     await writeFile(join(dir, `${a.id}.json`), JSON.stringify({ name: 'old', rows: { rest: 'idle', working: 'running', listening: 'idle', sending: 'idle', asking: 'idle' } }))
