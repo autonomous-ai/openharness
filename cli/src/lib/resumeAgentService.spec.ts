@@ -14,6 +14,8 @@ import { checkSessionRuntime, clearPaneRemainOnExit, resolvePaneEngineProcess, t
 import { buildEngineLaunchArgv, dropPermissionFlagIfUnsupported, refusePermissionFlagIfUnsupported } from './engineLaunch.js'
 import { enginePathOverride } from './engineBin.js'
 import { installedDsh } from '../dsh/installed.js'
+import { createLaunchHelpers } from '../core/agents/launch.js'
+import { createLaunchAuthority } from '../core/agents/launchAuthority.js'
 
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn() }))
 vi.mock('./tmuxAgentDiscovery.js', () => ({ listTmuxPanes: vi.fn() }))
@@ -85,6 +87,21 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); for (const row of registry.list()) registry.removeAgent(row.agentId); rmSync(dir, { recursive: true, force: true }) })
 
 describe('production resume handler', () => {
+  it('composes stopped resume with real launch preparation before any live row exists', async () => {
+    const apiNotes = vi.fn()
+    const helpers = createLaunchHelpers({
+      authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: id => deps.restartJobs.revision(id), cancelled: id => deps.stopJobs.has(id) }),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
+        tmuxSupportsSessionEnv: async () => true, writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(), readCodexConfig: () => null },
+    })
+    deps.relaunchOverrides = helpers.relaunchOverrides
+    expect(registry.byAgent(saved.agentId)).toBeUndefined()
+    expect(await start()).toMatchObject({ ok: true, resumed: true, session: { agentId: saved.agentId, sessionId: saved.sessionId } })
+    expect(apiNotes).toHaveBeenCalledWith(dir, 'codex')
+    expect(create).toHaveBeenCalledOnce()
+  })
+
   it.each(['auto', 'ask'])('resumes the same conversation with an explicit %s permission choice', async permissionMode => {
     rewrite({ engine: 'opencode', permissionMode: permissionMode === 'auto' ? 'ask' : 'auto' })
     vi.mocked(deps.relaunchOverrides).mockResolvedValue({ ok: true, overrides: {

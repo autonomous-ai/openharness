@@ -172,8 +172,9 @@ export async function buildLaunchOverrides(
   engine: AgentEngine,
   source: LaunchSource,
   configKey: string,
+  current: () => boolean = () => true,
 ): Promise<LaunchOverridesResult> {
-  const prepared = await prepareLaunchOverrides(deps, engine, source, configKey)
+  const prepared = await prepareLaunchOverrides(deps, engine, source, configKey, current)
   return prepared.ok ? prepared.commit() : prepared
 }
 
@@ -184,10 +185,14 @@ export async function prepareLaunchOverrides(
   engine: AgentEngine,
   source: LaunchSource,
   configKey: string,
+  current: () => boolean = () => true,
 ): Promise<LaunchPreparationResult> {
+  const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
+  if (!current()) return changed
   source = structuredClone(source)
   const machine = { ...deps.machine(engine) }
   const base = await prepareBaseLaunchOverrides({ ...deps, machine: () => machine }, engine, source, configKey)
+  if (!current()) return changed
   if (!base.ok) return base
   if (source.dsh && !source.cwd) return { ok: false, error: 'DSH_WORKSPACE_MISSING', detail: `${source.dsh} has no saved workspace` }
   let dsh: Extract<DshLaunchAnswer, { ok: true }>['launch'] | undefined
@@ -198,14 +203,20 @@ export async function prepareLaunchOverrides(
     } catch (error) {
       return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: String(error) }
     }
+    if (!current()) return changed
     if (!prepared) return { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${source.dsh} is not installed on this machine` }
     if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
       ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}),
       ...(prepared.holdScope ? { holdScope: prepared.holdScope } : {}) }
     dsh = prepared.launch
   }
+  let committed = false
   return { ok: true, commit: async () => {
+    if (!current()) return changed
+    if (committed) return { ok: false, error: 'LAUNCH_PREPARATION_USED', detail: 'Launch preparation must be requested again before another attempt.' }
+    committed = true
     const written = await base.commit()
+    if (!current()) return changed
     if (!written.ok) return written
     let overrides = written.overrides
     if (dsh) {

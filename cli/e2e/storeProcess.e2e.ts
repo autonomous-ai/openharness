@@ -49,10 +49,10 @@ const connected = (d: IsolatedDaemon) => d.log().split('[services] store connect
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)
     .find((agent) => agent.id === agentId)
-async function create(d: IsolatedDaemon, client: LocalClient, folder: string, dsh?: string, engine: 'claude' | 'codex' = 'claude'): Promise<Record<string, any>> {
+async function create(d: IsolatedDaemon, client: LocalClient, folder: string, dsh?: string, engine: 'claude' | 'codex' = 'claude', codexHome?: string): Promise<Record<string, any>> {
   const cwd = join(d.projectsDir, folder)
   mkdirSync(cwd, { recursive: true })
-  const created = await client.request('agent_create', { engine, cwd, bypassPermission: true, ...(dsh ? { dsh } : {}) }, 90_000)
+  const created = await client.request('agent_create', { engine, cwd, bypassPermission: true, ...(dsh ? { dsh } : {}), ...(codexHome ? { codexHome } : {}) }, 90_000)
   expect(created.error, JSON.stringify(created)).toBeUndefined()
   return until(`${folder} to bind`, async () => {
     const found = await row(client, created.agent.id)
@@ -142,7 +142,9 @@ describe('the Store in its own process, beside the viewers', () => {
     const d = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '3000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
     let client = await LocalClient.connect(d)
     expect(await client.request('dsh_install', { url: repository(d) }, 180_000)).toMatchObject({ ok: true })
-    const agents = [await create(d, client, 'held-claude', HARNESS), await create(d, client, 'held-codex', HARNESS, 'codex')]
+    const profile = join(d.root, 'held-codex-profile')
+    mkdirSync(profile)
+    const agents = [await create(d, client, 'held-claude', HARNESS), await create(d, client, 'held-codex', HARNESS, 'codex', profile)]
     const stopped = await create(d, client, 'stop-while-store-is-held', HARNESS)
     for (const agent of [...agents, stopped]) await turn(client, agent.id, 'before the reboot')
     const hold = join(d.root, 'hold-store')
@@ -151,6 +153,19 @@ describe('the Store in its own process, beside the viewers', () => {
     client.close()
     await d.stop()
     await d.tmux.run('kill-server')
+    // Make pending instruction/profile work observable. Neither a Store outage nor a held retry
+    // may perform it before the package preparation succeeds. Every path is private to this daemon.
+    const instructionFiles = [join(d.projectsDir, 'held-claude', 'CLAUDE.md'), join(d.projectsDir, 'held-codex', 'AGENTS.md')]
+    const instructionsBefore = instructionFiles.map(file => readFileSync(file, 'utf8'))
+    const profileHooks = join(profile, 'hooks.json')
+    const profileBefore = JSON.stringify({ fixtureOwner: 'preserve' })
+    writeFileSync(profileHooks, profileBefore)
+    const apiDir = join(d.dataDir, 'api-connections')
+    mkdirSync(apiDir, { recursive: true })
+    writeFileSync(join(apiDir, 'connections.json'), JSON.stringify({ version: 1, connections: [{
+      id: 'fixture', provider: 'fixture', name: 'Fixture API', baseUrl: 'http://127.0.0.1:9/v1',
+      keyEnv: 'FIXTURE_API_KEY', authHeader: 'Authorization', authPrefix: 'Bearer', apiKey: 'fixture-key',
+    }] }), { mode: 0o600 })
     const started = Date.now()
     await d.start()
     expect(Date.now() - started).toBeLessThan(15_000)
@@ -173,6 +188,8 @@ describe('the Store in its own process, beside the viewers', () => {
     expect(refused).toMatchObject({ error: 'DSH_UNAVAILABLE' })
     expect(readdirSync(cwd)).toEqual([])
     for (const agent of agents) expect(await row(client, agent.id)).toMatchObject({ launch: { state: 'held' } })
+    expect(instructionFiles.map(file => readFileSync(file, 'utf8'))).toEqual(instructionsBefore)
+    expect(readFileSync(profileHooks, 'utf8')).toBe(profileBefore)
     rmSync(hold)
     for (const agent of agents) {
       await until('the prepared package resumes its conversation', async () => {
@@ -181,6 +198,8 @@ describe('the Store in its own process, beside the viewers', () => {
       }, 90_000, 250)
       await turn(client, agent.id, 'after Store recovery')
     }
+    for (const file of instructionFiles) expect(readFileSync(file, 'utf8')).toContain('<!-- harness:apis -->')
+    expect(readFileSync(profileHooks, 'utf8')).toContain('SessionStart')
     expect(await row(client, stopped.id)).toMatchObject({ status: 'stopped', sessionId: stopped.sessionId })
     expect(d.log()).not.toContain('could not build its launch')
     expect(d.coresStarted()).toBe(2)

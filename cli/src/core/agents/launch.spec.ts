@@ -26,6 +26,7 @@ const session = (over: Partial<RegisteredSession> = {}): RegisteredSession =>
 
 function setup() {
   const deps: LaunchHelperDeps = {
+    authority: () => () => true,
     prepareApiTools: vi.fn(),
     launchOverridesDeps: { marker: 'deps' } as unknown as LaunchOverridesDeps,
     setGridLaunch: vi.fn(() => true),
@@ -36,6 +37,44 @@ function setup() {
 
 describe('relaunch helpers', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it('rejects preparation that was already revoked before dispatch', async () => {
+    const { deps } = setup()
+    deps.authority = () => () => false
+    expect(await createLaunchHelpers(deps).relaunchOverrides(session())).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(buildLaunchOverrides).not.toHaveBeenCalled()
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
+  })
+
+  it('keeps the caller authority separate and does not write after a cancelled preparation reply', async () => {
+    const { deps, helpers } = setup()
+    expect(await helpers.relaunchOverrides(session(), session(), () => false)).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(buildLaunchOverrides).not.toHaveBeenCalled()
+    vi.mocked(buildLaunchOverrides).mockResolvedValueOnce({ ok: false, error: 'AGENT_CHANGED', detail: 'revoked' })
+    expect(await helpers.relaunchOverrides(session())).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
+    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+  })
+
+  it.each(['service', 'SCM'] as const)('a Stop or rebind during %s cannot redirect deferred instructions', async stage => {
+    const { deps } = setup()
+    let allowed = true
+    deps.authority = () => () => allowed
+    const row = session()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    if (stage === 'service') vi.mocked(buildLaunchOverrides).mockImplementationOnce(async () => { await gate; return { ok: true } as never })
+    else vi.mocked(prepareInstructionWrites).mockImplementationOnce(async () => { await gate })
+    const result = createLaunchHelpers(deps).relaunchOverrides(row)
+    await vi.waitFor(() => expect(stage === 'service' ? buildLaunchOverrides : prepareInstructionWrites).toHaveBeenCalled())
+    row.cwd = '/replacement'; row.engine = 'codex'
+    allowed = false
+    release()
+    expect(await result).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+    if (stage === 'service') expect(prepareInstructionWrites).not.toHaveBeenCalled()
+    else expect(prepareInstructionWrites).toHaveBeenCalledExactlyOnceWith('/work')
+  })
 
   it.each(['store', 'models'])('leaves instruction files alone while %s is unavailable', async unavailable => {
     const { deps, helpers } = setup()
@@ -62,10 +101,10 @@ describe('relaunch helpers', () => {
     expect(deps.prepareApiTools).toHaveBeenCalledWith('/work', 'claude')
     expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({
       dsh: 'blender', dshRuntime: null, cwd: '/work', agent: 'reviewer', gridLaunch: null,
-    }), 'a1')
+    }), 'a1', expect.any(Function))
     const grid = { networkId: 'grid-1', networkName: 'Home grid' }
     await helpers.relaunchOverrides(session({ dsh: undefined, dshRuntime: undefined, agent: undefined } as Partial<RegisteredSession>), { gridLaunch: grid } as never)
-    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ dsh: null, agent: null, gridLaunch: grid }), 'a1')
+    expect(buildLaunchOverrides).toHaveBeenLastCalledWith(deps.launchOverridesDeps, 'claude', expect.objectContaining({ dsh: null, agent: null, gridLaunch: grid }), 'a1', expect.any(Function))
   })
 
   it('records the web-search decision a relaunch made, when it made one', () => {

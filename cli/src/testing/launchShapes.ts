@@ -91,6 +91,7 @@ export function launchShapes(world: LaunchWorld) {
     dshLaunch: dshLaunch.relaunch,
   }
   const helpers = createLaunchHelpers({
+    authority: () => () => true,
     prepareApiTools, launchOverridesDeps,
     setGridLaunch: world.setGridLaunch as never, setTail: () => {},
   })

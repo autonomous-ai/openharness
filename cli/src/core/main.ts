@@ -125,6 +125,7 @@ import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
+import { createLaunchAuthority } from './agents/launchAuthority.js'
 import { AgentRestartCoordinator } from '../lib/restartAgent.js'
 import { createPaneOperations } from './agents/paneOperations.js'
 import { createRestoreLaunch } from './agents/restoreLaunch.js'
@@ -425,6 +426,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   let externalResumes: ReturnType<typeof createExternalResumes> | null = null
   let searchGeneration = 0
   let restoreCancelled = (_agentId: string): boolean => false
+  let launchCancelled = (_agentId: string): boolean => false
   let restoreOnly: ((only: ReadonlySet<string>) => Promise<RestoreSummary>) | null = null
   const heldLaunches = createHeldLaunches({
     registry,
@@ -1972,6 +1974,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
   // pass below, which calls these for every pane it rebuilds.
   const launchHelpers = createLaunchHelpers({
+    authority: createLaunchAuthority({ byAgent: id => registry.byAgent(id), revision: restoreRevision, cancelled: id => launchCancelled(id) }),
     prepareApiTools,
     launchOverridesDeps,
     setGridLaunch: (agentId, launch) => registry.setGridLaunch(agentId, launch),
@@ -2353,6 +2356,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     relaunchMarks,
   })
   const stopJobs = lifecycle.stopJobs
+  launchCancelled = id => stopJobs.has(id)
   restoreCancelled = (agentId) => stopJobs.has(agentId) || pinnedControls.has(agentId) || (restartJobs.operation(agentId) !== undefined && restartJobs.operation(agentId) !== 'restart')
   binding.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId) || stopJobs.has(agentId))
   const stopAgent = lifecycle.stopAgent

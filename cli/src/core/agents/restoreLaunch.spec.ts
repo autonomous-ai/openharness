@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import { createRestoreLaunch } from './restoreLaunch.js'
+import { createLaunchHelpers } from './launch.js'
+import { createLaunchAuthority } from './launchAuthority.js'
 
 const entry = { agentId: 'agent', sessionId: 'conversation', cwd: '/workspace' } as RegisteredSession
 const built: Extract<LaunchOverridesResult, { ok: true }> = { ok: true, overrides: { env: {}, extraArgs: [], clearEnv: [] } }
@@ -17,6 +19,50 @@ const setup = () => {
 }
 
 describe('restore preparation keeps session authority in core', () => {
+  it.each(['dead process', 'terminal fallback', 'fresh fallback'] as const)('composes preparation for a legitimate %s projection', async projection => {
+    const live = { ...entry, engine: 'claude', active: true, launch: { state: 'ready' },
+      processIdentity: { pid: 42, startMarker: 'old' }, runtimes: [{ backend: 'tmux', paneId: '%7' }],
+    } as RegisteredSession
+    const requested = structuredClone(live)
+    if (projection === 'dead process') live.processIdentity = null
+    if (projection === 'terminal fallback') { requested.engine = 'terminal'; requested.sessionId = '' }
+    if (projection === 'fresh fallback') live.launch = { state: 'starting' }
+    const apiNotes = vi.fn()
+    const helpers = createLaunchHelpers({
+      authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
+        tmuxSupportsSessionEnv: async () => true, writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(), readCodexConfig: () => null },
+    })
+    const { deps } = setup()
+    const build = createRestoreLaunch({ ...deps, relaunchOverrides: helpers.relaunchOverrides })
+    expect(await build(requested, { current: () => true })).toEqual({ argv: ['engine'] })
+    expect(apiNotes).toHaveBeenCalledWith('/workspace', requested.engine)
+    expect(deps.launch).toHaveBeenCalledWith(requested, {}, expect.any(Object), expect.any(Object))
+  })
+
+  it('a richer dispatch fence cancels restore without failing or publishing the replacement', async () => {
+    const live = { ...entry, engine: 'claude', dsh: 'fixture/tools', active: true, processIdentity: null,
+      runtimes: [{ backend: 'tmux', paneId: '%7' }],
+    } as RegisteredSession
+    const apiNotes = vi.fn()
+    const helpers = createLaunchHelpers({
+      authority: createLaunchAuthority({ byAgent: () => live, revision: () => 1, cancelled: () => false }),
+      prepareApiTools: apiNotes, setGridLaunch: vi.fn(), setTail: vi.fn(),
+      launchOverridesDeps: { machine: () => ({ hermesSystemManaged: false }), gridLaunch: vi.fn(),
+        tmuxSupportsSessionEnv: async () => true, writeGridConfigDir: vi.fn(), installCodexHooks: vi.fn(), readCodexConfig: () => null,
+        dshLaunch: async () => { live.permissionMode = 'ask'; return { ok: true, launch: { env: {}, args: [] } } } },
+    })
+    const { deps } = setup()
+    const build = createRestoreLaunch({ ...deps, relaunchOverrides: helpers.relaunchOverrides })
+    expect(await build(structuredClone(live), { current: () => true })).toEqual({ cancelled: true })
+    expect(live.permissionMode).toBe('ask')
+    expect(apiNotes).not.toHaveBeenCalled()
+    expect(deps.prepareSessionResume).not.toHaveBeenCalled()
+    expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
+    expect(deps.launch).not.toHaveBeenCalled()
+  })
+
   it.each([undefined, 'conversation'])('applies confirmed preparation only to the current owner: resume %s', async resumeSessionId => {
     const { deps, build } = setup()
     expect(await build(entry, { resumeSessionId, current: () => true })).toEqual({ argv: ['engine'] })

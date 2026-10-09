@@ -35,6 +35,26 @@ function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
 }
 
 describe('buildLaunchOverrides — a relaunch comes back where the agent was', () => {
+  it.each(['before', 'models', 'Store', 'commit', 'write'] as const)('revocation at %s cannot apply a stale preparation', async stage => {
+    let allowed = stage !== 'before'
+    const { d, calls } = deps({
+      gridLaunch: async request => {
+        if (stage === 'models') allowed = false
+        return gridLaunchInProcess()(request)
+      },
+      dshLaunch: async () => {
+        if (stage === 'Store') allowed = false
+        return { ok: true, launch: { env: {}, args: [] } }
+      },
+      writeGridConfigDir: async () => { calls.push('write'); if (stage === 'write') allowed = false; return '/fixture/config' },
+    })
+    const prepared = await prepareLaunchOverrides(d, 'pi', { gridLaunch: GRID, dsh: 'fixture/tools', cwd: '/workspace' }, 'agent-1', () => allowed)
+    if (stage === 'commit') allowed = false
+    const result = prepared.ok ? await prepared.commit() : prepared
+    expect(result).toMatchObject({ error: 'AGENT_CHANGED' })
+    expect(calls).toEqual(stage === 'write' ? ['write'] : [])
+  })
+
   it.each(['pi', 'codex'] as const)('does not alter %s configuration when the Store cannot prepare its harness', async engine => {
     const refusal = { ok: false as const, error: 'DSH_UNAVAILABLE', detail: 'Preparation is unconfirmed.', unavailable: 'store' as const, holdScope: 'workspace' as const }
     const { d, calls } = deps({ dshLaunch: async () => refusal })
@@ -73,6 +93,8 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     } })
     expect(calls).toEqual(['writeConfig:agent-1'])
     expect(machine).toHaveBeenCalledExactlyOnceWith('opencode')
+    expect(await prepared.commit()).toMatchObject({ error: 'LAUNCH_PREPARATION_USED' })
+    expect(calls).toHaveLength(1)
   })
 
   it('rebuilds a grid launch from the persisted override: env with the key, argv, and the vendor variables to clear', async () => {

@@ -27,7 +27,7 @@ export interface ResumeAgentServiceDeps {
   pinnedControls: { has(agentId: string): boolean }
   retainExitedSession(session: RegisteredSession, paneAlive: boolean): void
   announceSession(session: RegisteredSession): void
-  relaunchOverrides(session: RegisteredSession): Promise<LaunchOverridesResult>
+  relaunchOverrides(session: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
   prepareSessionResume(session: RegisteredSession): void
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
   clearDeleted(agentId: string): void
@@ -211,7 +211,7 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         token = stoppedAgents.beginResume(agentId)
         if (!token) token = retakeStaleReservation(agentId)
         if (!token) return resumeUnconfirmed
-        const built = await relaunchOverrides(saved)
+        const built = await relaunchOverrides(saved, saved, current)
         if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
         if (!current()) return resumeChanged
         if (resumeSessionId) {
