@@ -18,6 +18,8 @@ afterEach(() => {
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+const installLog = (home: string) => readFileSync(join(home, '.harness/logs/install-codex.log'), 'utf8')
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'harness-user-engine-'))
   roots.push(root)
@@ -98,9 +100,11 @@ describe('engine installation for a fresh OS user', () => {
       const f = fixture()
       const result = f.run(f.runtime('node-one'), { ...f.recipe, command, fallback: f.recipe.command })
       expect(result.status, result.stdout + result.stderr).toBe(0)
-      expect(result.stdout).toContain('trying the npm package instead')
+      // The pane shows a bar while it installs; what happened is in the install log.
+      expect(installLog(f.home)).toContain('trying the npm package instead')
       expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
       expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(true)
+      expect(readdirSync(join(f.home, '.harness/logs')).filter((file) => file.endsWith('.rc'))).toEqual([])
     })
   }
 
@@ -108,8 +112,9 @@ describe('engine installation for a fresh OS user', () => {
     const f = fixture()
     const result = f.run(f.runtime('node-one'), { ...f.recipe, command: 'true', fallback: 'exit 9' })
     expect(result.status).toBe(1)
+    // The end of the log, under the friendly view's one-line verdict.
+    expect(result.stdout).toContain('Codex could not be installed.')
     expect(result.stdout).toContain('trying the npm package instead')
-    expect(result.stdout).toContain('the install failed, so the agent was not started')
     expect(result.stdout).not.toContain('ENGINE_READY:')
   })
 
@@ -118,7 +123,8 @@ describe('engine installation for a fresh OS user', () => {
     const result = f.run(f.runtime('node-one'), { ...f.recipe, command: 'exit 130', fallback: f.recipe.command })
     expect(result.status).toBe(1)
     expect(result.stdout).not.toContain('trying the npm package instead')
-    expect(result.stdout).toContain('the install failed, so the agent was not started')
+    expect(installLog(f.home)).not.toContain('trying the npm package instead')
+    expect(result.stdout).toContain('Codex could not be installed.')
     expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(false)
   })
 

@@ -1059,7 +1059,7 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
   // which counts as 130 so no fallback follows.
   const quiet = (line: string) => '( ( ' + run(line) + '; printf %s $? >"$harness_install_rc" ) 2>&1 | '
     + `${shellSingleQuote(runtimeNode)} -e ${shellSingleQuote(INSTALL_PROGRESS_JS)} ${shellSingleQuote(label)} ${seconds} "$harness_install_log" ${friendly?.messageWaiting ? 1 : 0}`
-    + '; exit "$(cat "$harness_install_rc" 2>/dev/null || echo 130)" )'
+    + '; harness_rc="$(cat "$harness_install_rc" 2>/dev/null || echo 130)"; rm -f "$harness_install_rc"; exit "$harness_rc" )'
   const candidates = [names, paths].filter(Boolean).join(' ')
   // `curl … | bash` exits 0 when curl itself fails (bash ran an empty script), so the fallback is
   // decided by whether an executable exists afterwards, not by the first line's status.
@@ -1074,6 +1074,8 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     '    harness_try_fallback=1',
     '    harness_status=0',
     `    [ "$harness_quiet" -eq 1 ] || printf '\\n%s\\n' 'harness: that install did not finish; trying the npm package instead' 'harness: $ ${recipe.fallback.replace(/'/g, "'\\''")}' ''`,
+    // The friendly view keeps it in the log, which a failure shows the end of.
+    ...(friendly ? [`    [ "$harness_quiet" -eq 0 ] || printf '%s\\n' 'harness: that install did not finish; trying the npm package instead' >>"$harness_install_log"`] : []),
     '  fi',
     'fi',
     `[ "$harness_try_fallback" -eq 0 ] || [ "$harness_quiet" -eq 1 ] || ${run(recipe.fallback)} || harness_status=$?`,
@@ -1113,7 +1115,8 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     'harness_quiet=0',
     ...(friendly ? [
       'harness_install_log="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
-      'harness_install_rc="${TMPDIR:-/tmp}/harness-install-$$.rc"',
+      // Beside the log rather than in a temporary folder: nothing machine-specific in the script.
+      'harness_install_rc="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
       `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "$HOME/.harness/logs" 2>/dev/null && harness_quiet=1`,
     ] : []),
     'if ! harness_find_engine "$1"; then',
