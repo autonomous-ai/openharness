@@ -25,3 +25,23 @@ Final review found that lexical normalization of `bridge/../home` could skip a s
 Independent review approved production `fb3e02387` against main `a847441e5` with no remaining blockers. The final production run passed 1,942 core tests, 375 focused tests, 28 private bundled e2e cases and 57 private tmux tests (15 installed-vendor rows excluded). The harnessd gate failed one existing test because its polling reader parsed an incomplete appended JSON line; it now uses that suite's established complete-line reader. This was a test fixture race, not a passing gate. The selected final gates are rerun after that test-only correction.
 
 All 26 fault variants subsequently assertion-failed after a green baseline. The added descriptor test replaces and restores an ordinary ancestor directory around both opens: it proves the descriptor check independently of the alias check, which had also caught the earlier fixture. The production source remains exactly the independently approved implementation; these final changes add regression coverage and fix the observed JSONL fixture race. E2e/tmux evidence still covers identical production source and test lanes.
+
+## Matched runtime cost and final local acceptance
+
+The [raw comparison](2026-10-09-exact-resume-cost.json) records three interleaved fresh processes per source/workload, ten lookups each, on Node 22.23.2 and macOS x64. Former main is `a847441e566cf9c34c960bbd43a5ec8b3ff83e10`; current source is `fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea`. The former checkout's complete CLI/Store trees were verified identical to that main. Private fixture setup and imports are excluded from lookup CPU/latency; process peak RSS includes them. The embedded driver reproduces all cases. Measurements ran without other local validation from 17:03:05 to 17:03:28 UTC. They are reference measurements, not Linux measurements or numerical performance gates.
+
+| Workload | Median lookup, former → current (ms) | Median CPU per 10 lookups (ms) | Median process peak RSS (MiB) | Current result |
+|---|---:|---:|---:|---|
+| One Claude transcript | 0.17 → 0.89 | 2.56 → 11.84 | 96.46 → 96.18 | exact |
+| One Codex transcript | 0.12 → 1.08 | 1.82 → 15.13 | 93.68 → 95.11 | exact |
+| One Pi transcript | 0.40 → 1.05 | 5.30 → 14.04 | 93.02 → 95.54 | exact |
+| Codex plus 1,000 unrelated files | 1.03 → 5.79 | 10.96 → 113.03 | 93.48 → 105.40 | exact |
+| Two conflicting Codex transcripts | 0.12 → 1.79 | 1.85 → 23.85 | 95.79 → 94.07 | held |
+| Unreadable later Claude home | 0.14 → 0.91 | 2.04 → 14.04 | 94.55 → 96.20 | held |
+| Codex plus 4,200 unrelated files | 4.10 → 12.29 | 43.08 → 199.83 | 92.88 → 104.07 | held |
+
+Every healthy lookup returned the exact transcript. Every current ambiguous, unavailable or over-limit lookup held; former code returned an unsafe exact result in those cases. The complete-pool checks add measured work: about 0.7–1.0 ms for these single-transcript cases and 4.8 ms with 1,000 unrelated files. This is an explicit cost of fresh complete evidence, not a claim of faster lookup or constant cost.
+
+Final local evidence: typecheck, 377 focused tests, 1,942 core/services tests and 265 harnessd tests with one existing skip passed (`20261009T165856.912427Z-45762`); core/services and harnessd retained required 100% coverage. The unchanged production and lane source passed all 28 private e2e and 57 private tmux cases, excluding 15 installed-vendor rows (`20261009T165253.657816Z-98926`). That receipt also records the subsequently corrected harnessd JSONL failure; it is not described as an all-green receipt. The first serial run passed 356 assertions but missed the already-landed composed Hermes Stop tests in its scope and reached 99.78% branches. Including those existing tests produced 413 passes and 100% statements, branches, functions and lines (`20261009T170140.831767Z-64765`), run alone. All 26 broken-wiring variants assertion-failed.
+
+Independent read-only review approved production `fb3e02387` and final test-only head `fa431e358` against `a847441e5`, with no remaining blockers. Final report review and CI/merge timing are recorded in the PR. Implementation ran after the 16:04 golden through the last production correction at 16:50; test-only work ended at 16:58. Validation and review overlapped that work; final deterministic gates ran 16:58–16:59, complete serial resume 17:01–17:02, and cost 17:03. The original request began October 8 at 23:26:41 UTC. Publication remains zero.
