@@ -14,7 +14,8 @@ vi.mock('../engines/inProcess.js', () => ({ loadEngine: vi.fn(async (name: strin
 }) }))
 
 const STARTED_AT = Date.parse('2026-10-08T09:00:00Z')
-const CWD = '/work/project'
+let CWD = ''
+let piDirectory = ''
 const UUID = '0b6f4f2e-6c1a-4c55-9a51-000000000001'
 let root = ''
 const saved: Record<string, string | undefined> = {}
@@ -22,6 +23,7 @@ let repair: typeof import('./sessionRepair.js')
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'repair-lazy-'))
+  CWD = join(root, 'work'); mkdirSync(CWD)
   const env = {
     MUSE_HOME: join(root, 'muse'), COPILOT_HOME: join(root, 'copilot'), HERMES_HOME: join(root, 'hermes'),
     AGY_HOME: join(root, 'agy'), PI_HOME: join(root, 'pi'), GROK_HOME: join(root, 'grok'), CLAUDE_PROJECTS_DIR: join(root, 'claude'), CODEX_HOME: join(root, 'codex'),
@@ -36,7 +38,7 @@ beforeAll(async () => {
     JSON.stringify({ payload: { kind: 'run', event: { kind: 'started', prompt: 'hi' } } }),
   ].join('\n') + '\n')
   utimesSync(museFile, new Date(STARTED_AT + 5_000), new Date(STARTED_AT + 5_000))
-  const piDirectory = join(root, 'pi', 'agent', 'sessions', '--work-project--')
+  piDirectory = join(root, 'pi', 'agent', 'sessions', `--${CWD.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`)
   mkdirSync(piDirectory, { recursive: true })
   writeFileSync(join(piDirectory, '2026-10-09_abc123.jsonl'), JSON.stringify({ type: 'session', id: 'abc123', cwd: CWD }) + '\n')
   vi.resetModules()
@@ -59,7 +61,7 @@ describe('session repair, independent of optional readers', () => {
         new Promise(resolve => { timer = setTimeout(() => resolve('blocked on optional code'), 1000) }),
       ])
       expect(value).toEqual([{ sessionId: UUID, transcriptPath: join(root, 'muse', 'sessions', '2026', '10', '08', UUID, 'session.jsonl') },
-        join(root, 'pi', 'agent', 'sessions', '--work-project--', '2026-10-09_abc123.jsonl')])
+        join(piDirectory, '2026-10-09_abc123.jsonl')])
       expect(loader.asked).toEqual([])
     } finally { clearTimeout(timer); loader.stalled = false }
   })

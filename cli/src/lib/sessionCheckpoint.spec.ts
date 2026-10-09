@@ -35,7 +35,8 @@ async function piSession() {
   const previousHome = env.PI_HOME
   env.PI_HOME = join(root, 'pi')
   // This fixture owns every possible source; never scan the developer's Pi store.
-  Object.assign(row, { engine: 'pi', sessionId: 'preallocated-session', transcriptPath: null })
+  const cwd = join(root, 'workspace'); await mkdir(cwd)
+  Object.assign(row, { engine: 'pi', sessionId: 'preallocated-session', transcriptPath: null, cwd })
   const folder = join(env.PI_HOME, 'agent', 'sessions', piSessionFolder(row.cwd!))
   await mkdir(folder, { recursive: true })
   const path = join(folder, `2026-10-04T12-00-00-000Z_${row.sessionId}.jsonl`)
@@ -122,12 +123,31 @@ it.each(['known', 'unreadable', 'ambiguous', 'unreadable store'] as const)('does
 it('does not back up a different Pi ID or a project with the same encoded folder', async () => {
   const pi = await piSession()
   try {
-    await writeFile(pi.path, `${JSON.stringify({ type: 'session', id: row.sessionId, cwd: '/different/project' })}\n`)
+    const other = join(root, 'different-project'); await mkdir(other)
+    await writeFile(pi.path, `${JSON.stringify({ type: 'session', id: row.sessionId, cwd: other })}\n`)
     await store.save(row, { screen: 'Startup screen' })
     expect((await manifest()).source).toBeNull()
     await writeFile(pi.path, `${JSON.stringify({ type: 'session', id: `other_${row.sessionId}`, cwd: row.cwd })}\n`)
     await store.save(row, { screen: 'Startup screen' })
     expect((await manifest()).source).toBeNull()
+  } finally { pi.restore() }
+})
+
+it.each(['partial', 'ambiguous', 'workspace unavailable'] as const)('holds %s Pi evidence without changing an earlier checkpoint or screen', async state => {
+  const pi = await piSession()
+  try {
+    await store.save(row, { screen: 'The original unsent draft' })
+    const before = Object.fromEntries(await Promise.all((await readdir(directory)).map(async file => [file, await readFile(join(directory, file), 'utf8')])))
+    const duplicate = join(pi.path, '..', `other_${row.sessionId}.jsonl`)
+    if (state === 'partial') await writeFile(pi.path, '{partial')
+    if (state === 'ambiguous') { await writeFile(pi.path, pi.history); await writeFile(duplicate, pi.history) }
+    if (state === 'workspace unavailable') await writeFile(pi.path, JSON.stringify({ type: 'session', id: row.sessionId, cwd: join(root, 'missing-workspace') }) + '\n')
+    await expect(store.save(row, { screen: 'A later unsent draft' })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    const after = Object.fromEntries(await Promise.all((await readdir(directory)).map(async file => [file, await readFile(join(directory, file), 'utf8')])))
+    expect(after).toEqual(before)
+    await rm(duplicate, { force: true }); await writeFile(pi.path, pi.history)
+    await store.save(row, { screen: 'A later unsent draft' })
+    expect((await manifest()).source).toBe(pi.path)
   } finally { pi.restore() }
 })
 

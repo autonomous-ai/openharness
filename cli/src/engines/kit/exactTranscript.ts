@@ -1,9 +1,9 @@
 /** A complete, bounded native pool for an exact resume id. No optional reader or cross-poll cache. */
-import { statSync, type Stats } from 'node:fs'
+import { realpathSync, statSync, type Stats } from 'node:fs'
 import { lstat, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { performance } from 'node:perf_hooks'
-import { identityBytes, identityEntries, identityScanBudget, IdentityReadUnavailable } from './identityScan.js'
+import { identityBytes, identityEntries, identityScanBudget, IdentityReadUnavailable, type IdentityVersion } from './identityScan.js'
 
 type Layout = { kind: 'projects'; filename: string }
   | { kind: 'walk' | 'directory'; matches: (name: string) => boolean }
@@ -14,7 +14,7 @@ const signature = (info: Stats | null) => info && `${identity(info)}:${info.size
 /** Filename authority remains engine-declared. An optional native header can reject another id/cwd;
  * every such exclusion is retained until the complete pool has been checked. */
 export async function exactTranscript(roots: readonly string[], layout: Layout,
-  options: { accepts?: (path: string) => Promise<boolean>; ambiguous?: string } = {},
+  options: { accepts?: (path: string, version: IdentityVersion) => Promise<boolean>; verify?: () => void; ambiguous?: string } = {},
 ): Promise<string | null> {
   if (roots.length > 64) throw new IdentityReadUnavailable('the known session-home limit was reached')
   const budget = identityScanBudget(), started = performance.now()
@@ -44,7 +44,7 @@ export async function exactTranscript(roots: readonly string[], layout: Layout,
     if (!info.isFile()) throw new IdentityReadUnavailable('an exact transcript is not a regular file')
     // Even filename-based authority needs a readable regular file. Opening one byte is bounded and
     // nonblocking; stat alone would let an unreadable file authorize a binding.
-    if (options.accepts ? await options.accepts(path) : await identityBytes(path, 1).then(() => true).catch(() => {
+    if (options.accepts ? await options.accepts(path, info) : await identityBytes(path, 1, info).then(() => true).catch(() => {
       throw new IdentityReadUnavailable('an exact transcript could not be read')
     })) {
       selected.set(identity(info)!, selected.get(identity(info)!) ?? proof)
@@ -84,6 +84,7 @@ export async function exactTranscript(roots: readonly string[], layout: Layout,
   // Keep the final pool check synchronous and the selected file last: no later native await may
   // invalidate the selected header. This is bounded change detection, not an atomic filesystem view.
   const only = selected.size === 1 ? selected.values().next().value! : undefined
+  options.verify?.()
   for (const proof of [...proofs.filter(proof => proof !== only), ...(only ? [only] : [])]) {
     deadline()
     let now: Stats | null
@@ -98,8 +99,33 @@ export async function exactTranscript(roots: readonly string[], layout: Layout,
     }
   }
   if (selected.size > 1) {
-    if (options.ambiguous) throw new Error(options.ambiguous)
+    if (options.ambiguous) throw new IdentityReadUnavailable(options.ambiguous, options.ambiguous)
     throw new IdentityReadUnavailable('more than one transcript matches the resumed conversation')
   }
   return only?.path ?? null
+}
+
+/** A lossy workspace folder needs canonical evidence for both matches and exclusions. */
+export function exactWorkspaces(): { same: (left: string, right: string) => Promise<boolean>; verify: () => void } {
+  const proofs = new Map<string, { target: string; identity: string }>()
+  const read = async (path: string): Promise<string> => {
+    try {
+      const target = await realpath(path), info = await lstat(target)
+      if (!info.isDirectory()) throw new Error('not a directory')
+      const proof = { target, identity: identity(info)! }, previous = proofs.get(path)
+      if (previous && (previous.target !== proof.target || previous.identity !== proof.identity)) throw new Error('changed workspace')
+      proofs.set(path, proof)
+      return target
+    } catch { throw new IdentityReadUnavailable('the Pi workspace identity could not be read') }
+  }
+  return {
+    same: async (left, right) => await read(left) === await read(right),
+    verify: () => {
+      for (const [path, proof] of proofs) {
+        try {
+          if (realpathSync(path) !== proof.target || identity(statSync(path)) !== proof.identity) throw new Error('changed workspace')
+        } catch { throw new IdentityReadUnavailable('the Pi workspace identity changed during lookup') }
+      }
+    },
+  }
 }

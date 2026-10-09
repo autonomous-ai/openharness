@@ -12,7 +12,12 @@ vi.mock('node:child_process', async original => ({ ...await original<object>(),
 }))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
-  return { ...fs, realpath: (name: string) => name.startsWith('/work/') ? Promise.resolve(name) : fs.realpath(name) }
+  return { ...fs, realpath: (name: string) => fs.realpath(name.startsWith('/work/') ? join(root, 'workspaces', name.slice(6)) : name) }
+})
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>()
+  const mapped = (name: string) => name.startsWith('/work/') ? join(root, 'workspaces', name.slice(6)) : name
+  return { ...fs, realpathSync: (name: string) => fs.realpathSync(mapped(name)), statSync: (name: string) => fs.statSync(mapped(name)) }
 })
 vi.mock('./inProcess.js', async original => ({ ...await original<object>(),
   loadEngine: () => { throw new Error('Optional engine loading is forbidden in this golden') },
@@ -42,6 +47,7 @@ async function check(key: string, value: Promise<unknown>): Promise<void> {
 }
 beforeAll(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'exact-resume-golden-')))
+  for (const cwd of ['pi/a-b', 'pi-a/b']) mkdirSync(path('workspaces', cwd), { recursive: true })
   for (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR',
     'PI_HOME', 'MUSE_HOME', 'HERMES_HOME', 'CURSOR_HOME', 'COPILOT_HOME', 'GROK_HOME', 'AGY_HOME',
     'XDG_CONFIG_HOME', 'XDG_DATA_HOME']) vi.stubEnv(name, path(name))

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync, type Dirent } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -9,7 +9,7 @@ const clock = vi.hoisted(() => ({ now: 0 }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => clock.now } }))
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, lstat: vi.fn(actual.lstat), opendir: vi.fn(actual.opendir), open: vi.fn(actual.open) }
+  return { ...actual, lstat: vi.fn(actual.lstat), opendir: vi.fn(actual.opendir), open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) }
 })
 vi.mock('../inProcess.js', async original => ({ ...await original<object>(), loadEngine: () => { throw new Error('Optional reader unavailable') } }))
 
@@ -34,6 +34,7 @@ beforeEach(async () => {
   vi.mocked(fs.lstat).mockReset().mockImplementation(actual.lstat)
   vi.mocked(fs.opendir).mockReset().mockImplementation(actual.opendir)
   vi.mocked(fs.open).mockReset().mockImplementation(actual.open)
+  vi.mocked(fs.realpath).mockReset().mockImplementation(actual.realpath)
   root = realpathSync(mkdtempSync(join(tmpdir(), 'exact-transcript-')))
   for (const [name, value] of Object.entries({ HOME: path('home'), ADAPTER_DATA_DIR: path('data'),
     ADAPTER_RUNTIME_DIR: path('runtime'), CLAUDE_CONFIG_DIR: path('claude'), CLAUDE_PROJECTS_DIR: path('claude', 'projects'),
@@ -179,5 +180,75 @@ describe('exact resume uses complete native evidence', () => {
   it('requires a directory at each declared root', async () => {
     file(path('pool'))
     await expect(lookup([path('pool')], walk)).rejects.toThrow('not a directory')
+  })
+  it.each(['claude', 'codex'] as const)('fences a newly adopted %s home during an exact read', async engine => {
+    if (engine === 'claude') claude(); else codex()
+    const homes = await import('../../lib/engineHomes.js')
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    vi.mocked(fs.open).mockImplementationOnce(async (name, flags, mode) => {
+      homes.adoptHomes({ [engine === 'claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME']: path('new-home') })
+      return actual.open(name, flags, mode)
+    })
+    await expect(repair.findResumedTranscript(engine, ID)).rejects.toThrow('known session homes changed')
+  })
+  it('keeps an explicit Codex profile independent of unrelated adopted homes', async () => {
+    const exact = codex()
+    const homes = await import('../../lib/engineHomes.js')
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    vi.mocked(fs.open).mockImplementationOnce(async (name, flags, mode) => {
+      homes.adoptHomes({ CODEX_HOME: path('new-home') }); return actual.open(name, flags, mode)
+    })
+    await expect(repair.findResumedTranscript('codex', ID, { codexHome: path('codex') })).resolves.toBe(exact)
+  })
+  it.each([undefined, 42, ''])('holds a matching-name subagent with inconclusive id %s', async id => {
+    codex('right')
+    file(path('codex', 'sessions', 'unknown', `rollout-${ID}.jsonl`),
+      JSON.stringify({ type: 'session_meta', payload: { id, source: { subagent: 'tool' } } }) + '\n')
+    await expect(repair.findResumedTranscript('codex', ID)).rejects.toThrow('no conclusive conversation id')
+  })
+  it.each(['codex', 'pi'] as const)('ties the %s header to its inspected inode through an ancestor alias ABA', async engine => {
+    const cwd = path('work'); mkdirSync(cwd)
+    const { piSessionFolder } = await import('../repairIdentities.js')
+    const relative = engine === 'codex' ? ['sessions', `rollout-${ID}.jsonl`]
+      : ['agent', 'sessions', piSessionFolder(cwd), `day_${ID}.jsonl`]
+    const body = (id: string) => JSON.stringify(engine === 'codex'
+      ? { type: 'session_meta', payload: { id, cwd, source: 'cli' } } : { type: 'session', id, cwd }) + '\n'
+    file(path('target-a', ...relative), body(OTHER)); file(path('target-b', ...relative), body(ID))
+    symlinkSync(path('target-a'), path(engine))
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
+      rmSync(path(engine)); symlinkSync(path('target-b'), path(engine))
+      const handle = await actual.open(name, flags, mode)
+      rmSync(path(engine)); symlinkSync(path('target-a'), path(engine))
+      return handle
+    })
+    await expect(repair.findResumedTranscript(engine, ID, { cwd })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  })
+  it.each(['accepted', 'excluded'] as const)('revalidates an %s Pi cwd alias after later native reads', async kind => {
+    const cwd = path('work'), other = path('other'), alias = path('cwd-alias')
+    mkdirSync(cwd); mkdirSync(other); symlinkSync(kind === 'accepted' ? cwd : other, alias)
+    const { piSessionFolder } = await import('../repairIdentities.js')
+    const directory = path('pi', 'agent', 'sessions', piSessionFolder(cwd))
+    file(join(directory, `first_${ID}.jsonl`), JSON.stringify({ type: 'session', id: ID, cwd: alias }) + '\n')
+    const second = file(join(directory, `second_${ID}.jsonl`), JSON.stringify({ type: 'session', id: OTHER, cwd }) + '\n')
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    vi.mocked(fs.opendir).mockImplementation(async (name, options) => {
+      const dir = await actual.opendir(name, options), entries: Dirent[] = []
+      for await (const entry of dir) entries.push(entry)
+      entries.sort((a, b) => a.name.localeCompare(b.name))
+      return { async *[Symbol.asyncIterator]() { yield* entries } } as never
+    })
+    vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
+      if (String(name) === second) { rmSync(alias); symlinkSync(kind === 'accepted' ? other : cwd, alias) }
+      return actual.open(name, flags, mode)
+    })
+    await expect(repair.findResumedTranscript('pi', ID, { cwd })).rejects.toThrow('workspace identity changed')
+  })
+  it('holds unavailable Pi workspace evidence instead of excluding that candidate', async () => {
+    const cwd = path('work'); mkdirSync(cwd)
+    const { piSessionFolder } = await import('../repairIdentities.js')
+    file(path('pi', 'agent', 'sessions', piSessionFolder(cwd), `day_${ID}.jsonl`),
+      JSON.stringify({ type: 'session', id: ID, cwd: path('unavailable') }) + '\n')
+    await expect(repair.findResumedTranscript('pi', ID, { cwd })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
 })

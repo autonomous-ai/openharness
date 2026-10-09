@@ -11,8 +11,8 @@ spec = 'src/engines/kit/exactTranscript.spec.ts'
 golden = 'src/engines/exactResume.golden.spec.ts'
 mutations = [
     ('native declaration disconnected', 'src/engines/claude/sessionStore.ts', "byId: { layout: 'projects', suffix: '.jsonl' }", "byId: { layout: 'projects', suffix: '.missing' }", golden),
-    ('Codex header id ignored', repair, '(await sessionIdentityMetaOf(engine, path))?.id === sessionId', 'true', spec),
-    ('Pi workspace header ignored', repair, 'head.sessionId === sessionId && await sameDir(head.cwd, opts.cwd!)', 'true', golden),
+    ('Codex header id ignored', repair, 'meta.id === sessionId', 'true', spec),
+    ('Pi workspace header ignored', repair, 'head.sessionId === sessionId && await workspaces.same(head.cwd, opts.cwd!)', 'true', golden),
     ('only first root inspected', kit, 'for (const root of roots) await walk(root)', 'for (const root of roots.slice(0, 1)) await walk(root)', spec),
     ('inspection errors become absent', kit, "if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null", 'return null', spec),
     ('directory budget enlarged silently', kit, 'const budget = identityScanBudget(),', 'const budget = { remaining: 8192 },', spec),
@@ -24,7 +24,15 @@ mutations = [
     ('pool revalidation removed', kit, 'if (fingerprint(now) !== fingerprint(proof.info))', 'if (false)', spec),
     ('dangling alias evidence dropped', kit, '    proofs.push({ path, info, content: true })\n    return info?.isDirectory() ?? false', '    return info?.isDirectory() ?? false', spec),
     ('ambiguous files accepted', kit, 'if (selected.size > 1)', 'if (false)', spec),
-    ('readability not checked', kit, 'await identityBytes(path, 1)', 'await Promise.resolve(Buffer.alloc(0))', spec),
+    ('readability not checked', kit, 'await identityBytes(path, 1, info)', 'await Promise.resolve(Buffer.alloc(0))', spec),
+    ('new native homes ignored', 'src/lib/sessionRepair.ts', "if (repairRoots(engine, opts?.codexHome).join('\\0') !== roots.join('\\0'))", 'if (false)', 'src/engines/kit/exactTranscript.spec.ts'),
+    ('workspace proof not revalidated', 'src/engines/kit/exactTranscript.ts', '  options.verify?.()', '  // workspace revalidation disconnected', 'src/engines/kit/exactTranscript.spec.ts'),
+    ('unavailable workspace excluded', 'src/engines/kit/exactTranscript.ts', "catch { throw new IdentityReadUnavailable('the Pi workspace identity could not be read') }", "catch { return '' }", 'src/engines/kit/exactTranscript.spec.ts'),
+    ('Pi unreadable loses retry code', 'src/lib/sessionRepair.ts', "new IdentityReadUnavailable('the Pi conversation file could not be read', 'The Pi conversation file could not be read.')", "new Error('The Pi conversation file could not be read.')", 'src/lib/closeAgentService.spec.ts'),
+    ('Pi ambiguous loses retry code', 'src/engines/kit/exactTranscript.ts', 'new IdentityReadUnavailable(options.ambiguous, options.ambiguous)', 'new Error(options.ambiguous)', 'src/lib/closeAgentService.spec.ts'),
+    ('checkpoint swallows identity hold', 'src/lib/sessionCheckpoint.ts', "error instanceof SessionCheckpointError || (error as { code?: unknown } | null)?.code === 'IDENTITY_UNAVAILABLE'", 'error instanceof SessionCheckpointError', 'src/lib/sessionCheckpoint.spec.ts'),
+    ('opened candidate version ignored', 'src/engines/kit/identityScan.ts', 'if (expected && (before.dev', 'if (false && (before.dev', 'src/engines/kit/exactTranscript.spec.ts'),
+    ('matching-name unknown child excluded', 'src/lib/sessionRepair.ts', "if (!meta?.id || !byId.id.test(meta.id)) throw new IdentityReadUnavailable('the exact rollout header has no conclusive conversation id')", 'if (!meta?.id || !byId.id.test(meta.id)) return false', 'src/engines/kit/exactTranscript.spec.ts'),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 for key in list(env):
@@ -39,7 +47,7 @@ def run(specs):
                           cwd=cli, env=env, capture_output=True, text=True, timeout=120)
 
 
-baseline = run([spec, golden])
+baseline = run([spec, golden, 'src/lib/sessionCheckpoint.spec.ts', 'src/lib/closeAgentService.spec.ts'])
 if baseline.returncode:
     print(baseline.stdout + baseline.stderr)
     raise SystemExit('baseline failed; no mutants ran')

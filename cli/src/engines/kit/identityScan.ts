@@ -1,21 +1,29 @@
 /** Bounded native evidence. An unfinished lookup cannot prove that a conversation is unique. */
-import { constants, type Dirent } from 'node:fs'
+import { constants, type Dirent, type Stats } from 'node:fs'
 import { open, opendir } from 'node:fs/promises'
 
 export class IdentityReadUnavailable extends Error {
   readonly code = 'IDENTITY_UNAVAILABLE'
-  constructor(reason: string) { super(`Conversation identity is held: ${reason}.`) }
+  constructor(reason: string, message = `Conversation identity is held: ${reason}.`) { super(message) }
 }
+
+export type IdentityVersion = Pick<Stats, 'dev' | 'ino' | 'size' | 'mtimeMs' | 'ctimeMs'>
 
 /** Shared across every directory/root in one lookup, including entries that are not transcripts. */
 export const identityScanBudget = () => ({ remaining: 4096 })
 
 /** A regular file only. Nonblocking open prevents a native-store FIFO from hanging session control. */
-export async function identityBytes(path: string, maxBytes: number): Promise<Buffer> {
+export async function identityBytes(path: string, maxBytes: number, expected?: IdentityVersion): Promise<Buffer> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK)
   try {
     const before = await handle.stat()
     if (!before.isFile()) throw new IdentityReadUnavailable('the native record is not a regular file')
+    // A pathname can switch to another inode and back while a caller awaits its header. The
+    // opened descriptor must be the candidate that authorized this read, not only the path at return.
+    if (expected && (before.dev !== expected.dev || before.ino !== expected.ino || before.size !== expected.size
+      || before.mtimeMs !== expected.mtimeMs || before.ctimeMs !== expected.ctimeMs)) {
+      throw new IdentityReadUnavailable('the opened native record differs from the inspected candidate')
+    }
     const length = Math.min(before.size, maxBytes)
     const bytes = Buffer.alloc(length)
     let read = 0
@@ -80,8 +88,8 @@ export async function identityFile(path: string, maxBytes = 64 * 1024): Promise<
 }
 
 /** Only complete lines from a bounded prefix; EOF may complete the final line without a newline. */
-export async function identityHead(path: string, lines: number, maxBytes = 256 * 1024): Promise<{ lines: string[]; complete: boolean }> {
-  const bytes = await identityBytes(path, maxBytes + 1).catch(error => {
+export async function identityHead(path: string, lines: number, maxBytes = 256 * 1024, expected?: IdentityVersion): Promise<{ lines: string[]; complete: boolean }> {
+  const bytes = await identityBytes(path, maxBytes + 1, expected).catch(error => {
     if (error instanceof IdentityReadUnavailable) throw error
     throw new IdentityReadUnavailable('the native header could not be read')
   })
