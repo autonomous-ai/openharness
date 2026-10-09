@@ -61,9 +61,9 @@ vi.mock('../lib/gridModels.js', () => ({
 }))
 vi.mock('../lib/runtimeInstall.js', () => ({ ensureManagedGrid: vi.fn(async () => {}), startGridPinRecheck: vi.fn(() => () => {}) }))
 /** The saved APIs and the Codex profiles: their files and folders are the lib's, never this machine's here. */
-const apis = vi.hoisted(() => ({ stores: [] as string[] }))
+const apis = vi.hoisted(() => ({ stores: [] as string[], bases: vi.fn(() => [] as string[]) }))
 vi.mock('../lib/apiConnections.js', () => ({
-  ApiConnections: class { constructor(dataDir: string) { apis.stores.push(dataDir) } },
+  ApiConnections: class { constructor(dataDir: string) { apis.stores.push(dataDir) } recognizedBases = apis.bases },
   apiConnectionsRequest: vi.fn((_store: unknown, payload: Record<string, unknown>) => ({ connections: [], presets: [], action: payload.action })),
 }))
 vi.mock('../lib/apiModels.js', () => ({
@@ -679,13 +679,26 @@ describe('the models service', () => {
       it('api_connections: lists, saves (and recognises agents already on the saved endpoints), removes, and reads an API\'s models', async () => {
         const { ask } = setup()
         expect(await ask('api_connections', { action: 'list' })).toEqual({ connections: [], presets: [], action: 'list' })
-        expect(rememberSavedApis).not.toHaveBeenCalled()
+        expect(rememberSavedApis).toHaveBeenCalledTimes(1)
         expect(await ask('api_connections', { action: 'save', connection: { name: 'x' } })).toEqual({ connections: [], presets: [], action: 'save' })
-        expect(rememberSavedApis).toHaveBeenCalledOnce()
+        expect(rememberSavedApis).toHaveBeenCalledTimes(2)
         expect(await ask('api_connections', { action: 'remove', id: 'a' })).toEqual({ connections: [], presets: [], action: 'remove' })
         expect(await ask('api_connections', { action: 'models', id: 'a' })).toEqual({ id: 'a', models: ['m1'] })
         expect(apiModelsRequest).toHaveBeenCalledOnce()
-        expect(rememberSavedApis).toHaveBeenCalledOnce()
+        expect(rememberSavedApis).toHaveBeenCalledTimes(2)
+      })
+
+      it('recognises persisted API endpoints after models restarts and refuses unreadable vocabulary', async () => {
+        const { port } = setup()
+        apis.bases.mockReturnValueOnce(['https://old-api.example/v1'])
+        const process = { key: 'organic', engine: 'claude' as const, env: { ANTHROPIC_BASE_URL: 'https://old-api.example', ANTHROPIC_MODEL: 'm' }, args: '' }
+        expect(await port.gridAssignments([process])).toEqual([{ key: 'organic', assignment: { baseUrl: 'https://old-api.example', model: 'm' } }])
+        apis.bases.mockImplementationOnce(() => { throw new Error('unreadable vocabulary') })
+        expect(await port.gridAssignments([process])).toMatchObject([{ assignment: { baseUrl: 'https://old-api.example' } }])
+        const restarted = setup().port
+        apis.bases.mockImplementationOnce(() => { throw new Error('unreadable vocabulary') })
+        await expect(restarted.gridAssignments([process])).rejects.toThrow('unreadable vocabulary')
+        expect(await restarted.gridAssignments([])).toEqual([])
       })
 
       it("builds the core's launches on a grid or a saved API, reading the saved APIs in the data folder as they are now", async () => {

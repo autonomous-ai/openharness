@@ -23,6 +23,44 @@ beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'harness-api-store-'))
 afterEach(() => { vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true }) })
 
 describe('saved API connections', () => {
+  it('atomically retains edited and removed endpoint vocabulary for a restarted models process', () => {
+    const saved = store.save(custom)
+    store.save({ ...saved, baseUrl: 'https://edited.example.test/v1' })
+    store.remove(saved.id)
+    const restarted = new ApiConnections(directory)
+    expect(restarted.list()).toEqual([])
+    expect(restarted.recognizedBases()).toEqual([custom.baseUrl, 'https://edited.example.test/v1'])
+    const disk = JSON.parse(readFileSync(join(directory, 'api-connections/connections.json'), 'utf8'))
+    expect(disk).toEqual({ version: 1, connections: [], recognizedBases: [custom.baseUrl, 'https://edited.example.test/v1'] })
+    expect(JSON.stringify(disk)).not.toContain(secret)
+  })
+
+  it('upgrades a legacy file without forgetting its old endpoint and fails closed on corrupt vocabulary', () => {
+    const saved = store.save(custom)
+    const file = join(directory, 'api-connections/connections.json')
+    const disk = JSON.parse(readFileSync(file, 'utf8'))
+    delete disk.recognizedBases
+    writeFileSync(file, JSON.stringify(disk))
+    expect(store.recognizedBases()).toEqual([custom.baseUrl])
+    store.remove(saved.id)
+    expect(new ApiConnections(directory).recognizedBases()).toEqual([custom.baseUrl])
+    writeFileSync(file, JSON.stringify({ version: 1, connections: [], recognizedBases: ['https://user:secret@example.test/v1'] }))
+    expect(() => store.recognizedBases()).toThrow('Saved APIs could not be read')
+  })
+
+  it('refuses an oversized vocabulary before replacing the saved connections and never prunes it', () => {
+    store.save(custom)
+    const file = join(directory, 'api-connections/connections.json')
+    const disk = JSON.parse(readFileSync(file, 'utf8'))
+    disk.recognizedBases = Array.from({ length: 1100 }, (_, i) => `https://example.test/${i}/${'x'.repeat(1980)}`)
+    // Valid read just below 2 MiB; a new maximum-length endpoint cannot fit.
+    while (Buffer.byteLength(JSON.stringify(disk)) > 2 * 1024 * 1024 - 1000) disk.recognizedBases.pop()
+    const before = JSON.stringify(disk)
+    writeFileSync(file, before)
+    expect(() => store.save({ ...custom, name: 'Another', baseUrl: `https://new.example.test/${'y'.repeat(1990)}` })).toThrow('could not be saved')
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
   it('lists empty storage and presets without creating a file or calling any API', () => {
     expect(store.list()).toEqual([])
     const result = apiConnectionsRequest(store, { action: 'list' })

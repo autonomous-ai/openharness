@@ -377,6 +377,52 @@ describe('models in its own process', () => {
     client.close()
   })
 
+  it('models killed during discovery: existing assignments stay, new marked processes bind without waiting, and later learn their grid', async () => {
+    const holdDir = mkdtempSync(join(tmpdir(), 'assignment-hold-'))
+    const hold = join(holdDir, 'hold')
+    try {
+      const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}` })
+      const client = await LocalClient.connect(d)
+      const grid = { networkId: 'assignment-e2e', networkName: 'Assignment', baseUrl: 'https://fixture.invalid/g/assignment/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
+      const known = await createOn(d, client, 'claude', 'assignment-known', grid)
+      writeFileSync(hold, '')
+      for (const pid of modelsPids(d)) process.kill(pid, 'SIGKILL')
+      await until('models disconnected', () => d.log().includes('[services] models disconnected') || null, 15_000, 100)
+      const discovered: Array<Record<string, any>> = []
+      for (const engine of ['claude', 'codex'] as const) {
+        const cwd = join(d.projectsDir, `assignment-external-${engine}`)
+        mkdirSync(cwd)
+        const environment = ['HOME', 'ZDOTDIR', 'PATH', 'CLAUDE_PATH', 'CODEX_PATH', 'CODEX_HOME', 'CLAUDE_PROJECTS_DIR', 'ADAPTER_DATA_DIR', 'PORT']
+          .flatMap(name => ['-e', `${name}=${d.env[name]}`])
+        if (engine === 'claude') environment.push('-e', `ANTHROPIC_BASE_URL=${grid.baseUrl}`, '-e', `ANTHROPIC_MODEL=${grid.model}`)
+        const args = engine === 'codex' ? ['-c', `model_providers.grid.base_url="${grid.baseUrl}"`, '-m', grid.model] : []
+        const asked = Date.now()
+        const tile = await client.request('agent_create', { engine: 'terminal', cwd }, 15_000)
+        expect(tile.error).toBeUndefined()
+        const pane = tile.agent.tmuxPane as string
+        // Start an engine in a Harness-owned terminal; unrelated user tmux sessions are intentionally ignored.
+        await d.tmux.run('respawn-pane', '-k', '-t', pane, '-c', cwd,
+          ...environment, d.env[engine === 'claude' ? 'CLAUDE_PATH' : 'CODEX_PATH']!, ...args)
+        const agent = await until(`${engine} discovered and bound while models is unavailable`, async () => {
+          const agents = (await client.request('agents_list', {}, 5_000)).agents as Array<Record<string, any>>
+          return agents.find(agent => agent.tmuxPane === pane && agent.sessionId && agent.status === 'active') ?? null
+        }, 15_000, 200)
+        expect(Date.now() - asked).toBeLessThan(15_000)
+        discovered.push(agent)
+        await turn(client, agent.id, `bound without models ${engine}`)
+      }
+      expect((await row(client, known.id))?.grid).toMatchObject({ baseUrl: grid.baseUrl, model: grid.model })
+      for (const agent of discovered) expect((await row(client, agent.id))?.grid ?? null).toBeNull()
+      rmSync(hold)
+      for (const agent of discovered) await until(`${agent.engine} classified after models returns`, async () => {
+        const now = await row(client, agent.id)
+        return now?.sessionId === agent.sessionId && now.grid?.baseUrl === grid.baseUrl && now.grid?.model === grid.model ? now : null
+      }, 45_000, 250)
+      expect(d.coresStarted()).toBe(1)
+      client.close()
+    } finally { rmSync(holdDir, { recursive: true, force: true }) }
+  })
+
   it('down at launch time: Claude Code and Codex on their own login launch as ever, a launch on a grid or a saved API is refused at once, and builds again once models is back', async () => {
     // Slow to come back, so what is launched meanwhile finds it down.
     const d = await fresh({ HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '8000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '8000' })

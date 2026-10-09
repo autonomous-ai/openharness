@@ -253,8 +253,9 @@ describe('agent_retarget onto an API model', () => {
   })
 
   it("recognises an agent on the API's endpoint from then on, as when the socket read the store itself", async () => {
-    // Read in another process: only the answer's endpoint can teach the core's grid assignment.
-    const socket = socketWithModels(async () => ({ target: { networkId: 'api:far', networkName: 'Far', baseUrl: 'https://far.example.test/v1', apiKey: secret, model: 'm' }, apiBase: 'https://far.example.test/v1' }))
+    store.save({ provider: 'custom', name: 'Far', baseUrl: 'https://far.example.test/v1', apiKey: secret })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(answering({ data: [{ id: 'm' }] }))
+    const socket = socketWithModels()
     vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     socket.onRetargetAgent = vi.fn(async () => ({ ok: true as const }))
     const env = { ANTHROPIC_BASE_URL: 'https://far.example.test', ANTHROPIC_MODEL: 'm' }

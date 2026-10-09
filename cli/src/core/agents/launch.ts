@@ -9,7 +9,6 @@
 import { loadEngine } from '../../engines/inProcess.js'
 import { prepareResume, repairedItemsName } from '../../engines/launchPrep.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
-import { rememberApiBase } from '../../lib/gridAssignment.js'
 import { gridUnavailable, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
 import type { ModelsPort } from '../api.js'
@@ -27,7 +26,6 @@ export function gridLaunchThrough(models: () => Pick<ModelsPort, 'gridLaunch'>) 
   return async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => {
     let answer: GridLaunchAnswer
     try { answer = await models().gridLaunch(request) } catch { return gridUnavailable(request.engine, request.override) }
-    if (answer.apiBase) rememberApiBase(answer.apiBase)
     return answer
   }
 }

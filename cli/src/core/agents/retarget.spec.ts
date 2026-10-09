@@ -7,7 +7,6 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import { inspectRuntimePane } from '../../lib/runtimeProfileController.js'
-import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
@@ -25,7 +24,6 @@ vi.mock('../../engines/inProcess.js', async (real) => {
 vi.mock('../../engines/opencode/version.js', () => ({ isOpencodeV2: vi.fn(() => false), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/binaryOnPath.js', () => ({ binaryOnPath: vi.fn(() => true) }))
 vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
-vi.mock('../../lib/gridAssignment.js', async (real) => ({ ...await real<object>(), probeGridAssignment: vi.fn(async () => undefined) }))
 vi.mock('../../lib/gridLaunchWire.js', async (real) => ({ ...await real<object>(), describeGridLaunch: vi.fn(() => 'claude on Home'), gridEnvVarNames: vi.fn(() => ['ANTHROPIC_BASE_URL']) }))
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), validateLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
@@ -72,6 +70,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
     paneSwapDeps: vi.fn(() => ({})) as never,
     liveBypassPermission: vi.fn(async () => true),
     announceSession: vi.fn(),
+    refreshGridAssignment: vi.fn(),
     opencodeDb: '/db/opencode.db',
     ...over,
   }
@@ -141,11 +140,11 @@ describe('retargeting an agent', () => {
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalled()
       expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, {})
       // The grid is read off the new process's command line, never its executable alone.
-      expect(probeGridAssignment).toHaveBeenCalledWith(expect.objectContaining({ pid: 2 }), 'claude', 'codex -c model_providers.grid.base_url=http://grid.local/v1')
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none', undefined)
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none')
       expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', { override: grid, webSearch: 'off' })
       expect(run.deps.registry.setSubscriptionModel).toHaveBeenCalledWith('a1', 'opus')
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
+      expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(agent())
       expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%4')
       expect(run.deps.announceSession).toHaveBeenCalled()
       expect(run.release).toHaveBeenCalled()

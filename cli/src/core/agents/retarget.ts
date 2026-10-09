@@ -15,7 +15,6 @@ import type { BackendSocket } from '../../backendSocket.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
-import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
 import { validateLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
 import { sid } from '../../lib/log.js'
@@ -27,7 +26,7 @@ import type { ScreenReader } from '../../lib/screenReader.js'
 import type { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
 import type { TmuxRuntimeRef } from '../../lib/terminalTypes.js'
-import { clearPaneRemainOnExit, processArgs } from '../../lib/tmux.js'
+import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import type { createLaunchHelpers } from './launch.js'
@@ -54,6 +53,7 @@ export interface RetargetDeps {
   paneSwapDeps: PaneSwap['paneSwapDeps']
   liveBypassPermission: PaneSwap['liveBypassPermission']
   announceSession: (session: RegisteredSession) => void
+  refreshGridAssignment: (session: RegisteredSession) => void
   /** OpenCode's store, whose rows a resumed session takes its model from. */
   opencodeDb: string
 }
@@ -61,7 +61,7 @@ export interface RetargetDeps {
 export function createAgentRetargeter({
   readScreen, purgeBusy, tmuxBackend, registry, runtimeProfiles, launchOverridesDeps, captureTerminal, acquireTerminalControl,
   relaunchOverrides, downgradedPermission, agentReconciler, restartJobs, paneSwapDeps, liveBypassPermission,
-  announceSession, opencodeDb,
+  announceSession, refreshGridAssignment, opencodeDb,
 }: RetargetDeps) {
   const retargetAgent: RetargetAgent = async ({ agentId, grid }) => {
     if (purgeBusy(agentId)) return { ok: false, error: 'AGENT_BUSY' }
@@ -237,13 +237,9 @@ export function createAgentRetargeter({
         console.warn(`[grid] retarget ${sid(session.agentId)} failed · ${outcome.detail}`)
         return { ok: false, error: 'RESPAWN_FAILED', detail: outcome.detail }
       }
-      // Both are read off the new pid: its cached environment, and for the grid its command line too.
-      const [gateway, assignment] = await Promise.all([
-        probeGatewayRuntime(outcome.processIdentity),
-        // Its command line, which carries a Codex or pi grid's address and model: never its executable.
-        processArgs(outcome.processIdentity).then((args) => probeGridAssignment(outcome.processIdentity, session.engine, args)),
-      ])
-      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind, assignment)
+      // Commit the new process now. Optional grid metadata follows outside the route hold.
+      const gateway = await probeGatewayRuntime(outcome.processIdentity)
+      registry.updateProcessIdentity(session.agentId, outcome.processIdentity, gateway.kind)
       // The launch that just worked is the one a restart or a post-reboot restore must repeat — and
       // what it decided about web search is what the app shows for this agent from now on. Null for
       // a move home: the block, and the status with it, leave the frame together.
@@ -257,7 +253,7 @@ export function createAgentRetargeter({
       const refreshed = registry.byAgent(session.agentId)
       // The app decides whether to still offer a move from what it is told here, so a silent success
       // would leave the banner up over an agent that had already been moved.
-      if (refreshed) announceSession(refreshed)
+      if (refreshed) { announceSession(refreshed); refreshGridAssignment(refreshed) }
       const how = outcome.resumed ? 'resumed' : 'fresh session'
       const record = built.overrides.gridLaunchRecord
       const where = record
