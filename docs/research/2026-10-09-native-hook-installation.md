@@ -1,0 +1,9 @@
+# Native hook installation stays with session control
+
+The shared optional `hooks` module is still awaited by daemon startup and OpenCode preflight. Removing or stalling it can block readiness or a launch. Hook installation supplies session discovery and turn boundaries, so those mechanics must be eager too.
+
+Before moving production code, the existing `otherHooks.golden.spec.ts` was re-recorded from main `f6f1eef1ab3823effa1646ebce960cc1b007a574` on 2026-10-09, then verified with recording disabled. All 340 cases pass. The recorded artifact is byte-for-byte identical to the existing fixture, SHA-256 `05013b28d8e42eec73598ac21d139130e4b5c65e2207aadbb1626bd5ee591197`. This commit records that baseline before implementation. Linux is pinned, the environment uses UTC and `/tmp`, every home is disposable, and Node paths are placeholders.
+
+The extraction will declare vendor settings, plugin source, paths and migration facts beside each engine, with shared mechanics in `engines/kit` and eager composition. Existing JSON merging, YAML preservation, generated plugin bytes, permissions, symlinks, migration ownership checks and log output remain covered by that unchanged golden. Deliberate wiring and declaration mutations must fail assertions. The real bundle must become ready and retain launch/Stop control with the obsolete shared hooks chunk missing or stalled.
+
+Compatibility is only the first step. The OpenCode control review separately identified swallowed plugin write/removal errors, the synchronous version probe, inconsistent preparation across dispatch paths and unavailable-service results lost by callers. Those require explicit held outcomes and shared preparation before any process or configuration mutation; an eager import alone does not establish that they are safe. See [OpenCode control](2026-10-09-opencode-control.md).
