@@ -2254,7 +2254,11 @@ void main() {
     ]);
     app.notifyListeners();
     await tester.pump();
-    expect(search(tester).rows.single.storeId, 'excalidraw');
+    // Devices ships with Harness, so it stays listed beside the live catalog.
+    expect(search(tester).rows.map((row) => row.storeId), [
+      'autonomous/devices',
+      'excalidraw',
+    ]);
     for (final size in [const Size(760, 650), const Size(400, 600)]) {
       tester.view.physicalSize = size;
       await tester.enterText(field, ':qwen');

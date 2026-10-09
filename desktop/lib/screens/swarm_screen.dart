@@ -555,7 +555,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       try {
         if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
         // A computer new to Harness opens on agents, not on an empty box.
-        if (app.firstArrival.pending) {
+        if (app.firstArrival.pending || app.firstArrival.running) {
           final arriving = app.firstArrival.run(
             app,
             // The person has not taken over meanwhile: no box, search or command bar opened.
@@ -7802,6 +7802,15 @@ class _SwarmScreenState extends State<SwarmScreen> {
         WorkspaceStoreButton.widthOf(context),
         math.max(0.0, constraints.maxWidth - cell.width * 22),
       );
+      // Devices only where Store keeps its full width beside it. A narrow
+      // window drops it from the bar first; Harness Store still opens it.
+      final devicesWidth =
+          WorkspaceStoreButton.widthOf(context, devices: true) +
+          DesktopChrome.controlGap;
+      final showDevices =
+          app.devicesEnabled &&
+          constraints.maxWidth - cell.width * 22 >=
+              WorkspaceStoreButton.widthOf(context) + devicesWidth;
       // Store, search and notifications — none of it here when the title bar
       // holds them.
       final actionsWidth = _titleBarActions
@@ -7809,10 +7818,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
           : storeWidth +
                 cell.width * 8 +
                 DesktopChrome.controlGap +
-                (app.devicesEnabled
-                    ? WorkspaceStoreButton.widthOf(context, devices: true) +
-                          DesktopChrome.controlGap
-                    : 0);
+                (showDevices ? devicesWidth : 0);
       final leadingWidth = chrome?.leadingWidth(context) ?? 0.0;
       final tabBudget = math.max(
         0.0,
@@ -7972,7 +7978,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
                 _searchButton(theme),
                 _notificationsButton(theme),
                 const SizedBox(width: DesktopChrome.controlGap),
-                if (app.devicesEnabled) ...[
+                if (showDevices) ...[
                   _devicesButton(context),
                   const SizedBox(width: DesktopChrome.controlGap),
                 ],

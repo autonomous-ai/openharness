@@ -36,7 +36,11 @@ export type SocialState = {
   likes: number;
   liked: boolean;
   following: boolean;
+  /** The latest comments (the backend sends at most 100), oldest first. */
   comments: HarnessComment[];
   signedIn: boolean;
   mine: boolean;
+  /** Every comment, and every public fork. A backend older than these counts leaves them out. */
+  commentCount?: number;
+  forks?: number;
 };

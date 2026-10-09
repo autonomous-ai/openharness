@@ -61,7 +61,7 @@
 .liked{color:#b7495c!important}
 .liked svg{fill:currentColor}
 .split{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,3fr);align-items:start;min-height:690px}
-.viewer{width:100%;min-width:0;background:#f7f7f7}
+.viewer{position:relative;width:100%;min-width:0;background:#f7f7f7}
 .viewer iframe{display:block;width:100%;height:690px;border:0;background:#f7f7f7}
 .chat{min-width:0;padding-left:29px}
 .chatHead{display:flex;justify-content:space-between;align-items:center;gap:14px;margin:0 0 30px;font-size:12px}
@@ -119,7 +119,7 @@
 @media(min-width:1900px){.viewer iframe{height:780px}}
 @media(max-width:1100px){.wrap{width:90%}.nav{gap:20px}.barActions{gap:18px}.chat{padding-left:22px}.actions{gap:13px}.identity h1{font-size:22px}.viewer iframe{height:640px}}
 @media(max-width:760px){.wrap{width:92%}.feed{padding-top:22px}.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:44px 14px}.split{grid-template-columns:1fr;gap:28px;min-height:0}.chat{padding:0}.detail{padding-top:16px;padding-bottom:50px}.back{margin-bottom:14px}.detailHead{flex-wrap:wrap;gap:16px;margin-bottom:22px}.actions{margin-left:auto}.viewer iframe{height:590px}.forkColumns,.publishForm{grid-template-columns:1fr;gap:25px}.fork h1,.publish h1{font-size:32px}.page input,.page textarea,.page select{font-size:16px}}
-@media(max-width:480px){.grid{grid-template-columns:1fr;gap:36px}.actions{width:100%;margin-left:0;gap:22px}.actions .primary{margin-left:auto}.identity h1{font-size:23px}.viewer iframe{height:510px;height:min(560px,68svh)}.fork{padding-top:20px}.publish{padding-top:24px}.fork h1,.publish h1{font-size:28px}.publishForm{gap:25px}}
+@media(max-width:480px){.grid{grid-template-columns:1fr;gap:36px}.actions{width:100%;margin-left:0;gap:22px}.actions>:last-child{margin-left:auto}.identity h1{font-size:23px}.viewer iframe{height:510px;height:min(560px,68svh)}.fork{padding-top:20px}.publish{padding-top:24px}.fork h1,.publish h1{font-size:28px}.publishForm{gap:25px}}
 .tags{display:inline-flex;gap:5px;flex-wrap:wrap;align-items:center}
 .tags>span{display:inline-block;background:#f3f3f1;color:#747471;font:10px/1.5 Arial,Helvetica,sans-serif;padding:3px 7px;border-radius:3px;white-space:nowrap}
 .cardMeta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px}
@@ -137,3 +137,61 @@
 @media(max-width:760px){.recording{height:auto;aspect-ratio:4/3}}
 
 .fileRow>details{flex:1;min-width:0}.sourceText{max-height:320px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#f6f6f4;padding:14px;font:11px/1.7 ui-monospace,monospace}
+
+/* Feed filters: one category at a time, and the order, on one row at every width. The chips scroll
+   sideways under a fade that says there are more; the order keeps its place at the end. */
+.filters{display:flex;align-items:center;gap:20px;margin:0 0 38px}
+.chipsWrap{position:relative;flex:1;min-width:0}
+.chips{--fade-left:0px;--fade-right:0px;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;overscroll-behavior-x:contain;scroll-snap-type:x proximity;-webkit-mask-image:linear-gradient(90deg,transparent,#000 var(--fade-left),#000 calc(100% - var(--fade-right)),transparent);mask-image:linear-gradient(90deg,transparent,#000 var(--fade-left),#000 calc(100% - var(--fade-right)),transparent)}
+.chips[data-fade-left]{--fade-left:48px}
+.chips[data-fade-right]{--fade-right:48px}
+/* Arrows over each end that hides more: small glass chips, above the fade. */
+.page .chipArrow{position:absolute;z-index:1;top:50%;transform:translateY(-50%);display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;min-height:0;border-radius:50%;color:#242424;background:rgba(255,255,255,.78);-webkit-backdrop-filter:saturate(180%) blur(12px);backdrop-filter:saturate(180%) blur(12px);box-shadow:0 1px 0 rgba(255,255,255,.8) inset,0 2px 10px rgba(36,36,36,.14);transition:transform .15s}
+.page .chipArrow:hover{transform:translateY(-50%) scale(1.08)}
+.chipArrow svg{width:16px;height:16px}
+.chipArrowLeft{left:0}
+.chipArrowRight{right:0}
+/* A finger swipes the row; the fades are enough there, and the arrows would take a narrow row's room. */
+@media(hover:none){.page .chipArrow{display:none}}
+.chips::-webkit-scrollbar{display:none}
+.page .chips button,.page .sort button{display:inline-flex;align-items:center;padding:0;flex-shrink:0;color:#777;white-space:nowrap}
+.chips span,.sort span{display:block;padding:6px 12px;font-size:13px;line-height:1.5;border-radius:999px;transition:background-color .15s,color .15s,box-shadow .15s}
+.page .chips button{scroll-snap-align:start}
+.page .chips button:last-child{margin-right:36px}
+.chips [aria-pressed=true] span{background:#242424;color:#fff}
+/* The order's track is drawn behind its labels, not on the buttons, for the same reason. */
+.sort{position:relative;isolation:isolate;display:flex;gap:2px;padding:0 3px;flex-shrink:0}
+.sort:before{content:'';position:absolute;z-index:-1;left:0;right:0;top:50%;height:34px;transform:translateY(-50%);border-radius:999px;background:#f4f4f2}
+.sort span{padding:4px 12px}
+.sort [aria-pressed=true] span{background:#fff;color:#242424;box-shadow:0 1px 3px rgba(36,36,36,.12)}
+/* Hover only where there is a pointer: on a phone a tapped chip would keep its hover. */
+@media(hover:hover){.chips button:not([aria-pressed=true]):hover span,.sort button:not([aria-pressed=true]):hover span{color:#242424;background:#ebebe8}}
+/* The first page's placeholders. */
+.skeleton .cover,.skeleton span{background:linear-gradient(100deg,#efeeeb 40%,#f7f6f3 50%,#efeeeb 60%) 0 0/200% 100%;animation:shimmer 1.4s linear infinite}
+.skeleton span{display:block;height:14px;margin-top:12px;width:62%}
+.skeleton span:last-child{width:84%;height:12px;margin-top:8px}
+@keyframes shimmer{to{background-position:-200% 0}}
+@media(prefers-reduced-motion:reduce){.skeleton .cover,.skeleton span{animation:none}}
+/* The output's full-screen control, on a slim bar under it. */
+.viewerBar{display:flex;justify-content:flex-end;background:#fff}
+.page .viewerBar button{display:inline-flex;align-items:center;gap:6px;padding:8px 0 0;font-size:12px;color:#777}
+.page .viewerBar button:hover{color:#242424}
+.viewerBar svg{width:14px;height:14px}
+.viewer:fullscreen{background:#fff}
+.viewer:fullscreen{display:flex;flex-direction:column}
+.viewer:fullscreen iframe{flex:1;height:auto}
+.viewer:fullscreen .viewerBar{padding:0 14px 8px}
+/* Source files beside the output. */
+.sourceFile{border-bottom:1px solid #efefed;font-size:12px}
+.sourceFile summary{display:flex;align-items:center;gap:12px;padding:10px 0;cursor:pointer}
+.sourceFile summary code{flex:1;min-width:0;overflow-wrap:anywhere}
+.sourceFile summary small{color:#999;font-size:11px}
+.sourceFile pre{margin-bottom:12px}
+.forks{margin-top:70px}
+.forks h2{font-size:17px;font-weight:400;margin-bottom:26px}
+/* Phones: the chips run to the screen's left edge (the gutter is 4vw), and the order shrinks to fit beside them. */
+@media(max-width:760px){.filters{gap:10px;margin:0 0 24px}.chipsWrap{margin-left:-4vw}.chips{padding-left:4vw;scroll-padding-left:4vw}.chipArrowLeft{left:2vw}.sort span{padding:4px 10px;font-size:12px}.forks{margin-top:50px}}
+/* Small phones: Files and Share keep their icon; their names stay for screen readers. */
+@media(max-width:480px){.actions{gap:18px}.actionLabel{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
+.byline a,.byline button{display:inline-flex;align-items:center}
+@media(max-width:760px){.chat{scroll-margin-top:104px}}

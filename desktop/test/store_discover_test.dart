@@ -1415,9 +1415,11 @@ void main() {
       find.byKey(const ValueKey('store-feature:autonomous/blender')),
       findsNothing,
     );
+    // Engineering still holds Devices, which ships with Harness and needs no
+    // catalog; nothing advertised from the missing catalog joins it.
     expect(
-      find.byKey(const ValueKey('store-category:Engineering')),
-      findsNothing,
+      find.byKey(const ValueKey('store-card:autonomous/devices')),
+      findsOneWidget,
     );
     expect(find.text('Start with code.'), findsOneWidget);
     expect(find.byKey(const ValueKey('store-card:codex')), findsOneWidget);

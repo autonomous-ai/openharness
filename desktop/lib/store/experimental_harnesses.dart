@@ -1,11 +1,15 @@
+import 'package:flutter/foundation.dart';
+
 import '../core/dsh_catalog.dart';
+import '../core/viewer_mode.dart';
 import '../settings/experimental_features.dart';
 
 /// App workspaces are bundled with Harness, not installed from the registry.
-/// Their Store presence follows the current account's confirmed experiment.
+/// Devices is always listed on the desktop app; an experimental one follows the
+/// current account's confirmed experiment.
 enum ExperimentalStoreHarness {
   devices(
-    ExperimentalFeature.devicesTab,
+    null,
     DshEntry(
       id: 'autonomous/devices',
       name: 'Devices',
@@ -31,13 +35,19 @@ enum ExperimentalStoreHarness {
   );
 
   const ExperimentalStoreHarness(this.feature, this.entry);
-  final ExperimentalFeature feature;
+
+  /// The account experiment that gates this workspace, or null when it ships
+  /// to everyone the platform allows.
+  final ExperimentalFeature? feature;
   final DshEntry entry;
 
-  bool enabled(ExperimentalFeaturesStore features) =>
+  bool enabled(ExperimentalFeaturesStore features) => switch (feature) {
+    null => !kIsWeb && !kViewerMode,
+    final feature =>
       feature.available &&
-      features.isAvailable(feature) &&
-      features.enabled(feature);
+          features.isAvailable(feature) &&
+          features.enabled(feature),
+  };
 
   static ExperimentalStoreHarness? forId(String id) =>
       values.where((harness) => harness.entry.id == id).firstOrNull;

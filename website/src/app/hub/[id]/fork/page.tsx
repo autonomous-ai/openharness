@@ -8,7 +8,7 @@ import { HarnessTags } from '../../components/HarnessTags';
 import styles from '../../community.module.css';
 
 export default async function ForkPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params, harness = await getPublicHarness(id);
+  const { id } = await params, harness = await getPublicHarness(id, { viewerOnly: true });
   if (!harness) notFound();
   return <><Header /><main className={`${styles.wrap} ${styles.fork}`}>
     <Link href={`/hub/${id}`} className={styles.back}><ArrowLeft /> {harness.title}</Link>
