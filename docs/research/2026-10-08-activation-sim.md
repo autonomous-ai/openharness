@@ -352,6 +352,49 @@ and answered a follow-up. The new desktop accepts any CLI from 0.2.48, so updati
 the CLI asks for nothing. The released 1.2.59 still shows a new user "OpenCode is unavailable. Choose
 an agent." and Apple's developer-tools dialog; both are fixed on main.
 
+## Faster opening and the developer-tools dialog (2026-10-09)
+
+**Harness opens before Codex and Claude Code finish downloading** (PR #1090, the owner's idea after
+1.2.60). The tour now waits only for setup and OpenCode. The Codex and Claude Code panes open at once
+and show the CLI's install line and bar while the one background npm finishes, then their own
+screens:
+- Each download names its process in `~/.harness/run/downloading-<engine>`, and a pane waits for that
+  process rather than starting a second npm into the same `~/.local`.
+- OpenCode's first run (`--version`) happens during setup: 3.9 s cold, 0.4 s after.
+
+| Persona (fresh macOS VM) | Harness open | First result | Second session |
+|---|---|---|---|
+| nothing installed (two runs) | 40–41 s (was 47–59) | 54–59 s (was 64–70) | 20 s, 83 s (free-model variance) |
+| Claude Code signed in | 41 s | 46 s | 2 s |
+| both, 5 sessions, 1 running | 40 s | 46 s | 3 s |
+| real Codex, not signed in | 41 s | 59 s | 20 s |
+| real Claude Code and Codex, not signed in | 41 s | 66 s | 21 s |
+| OpenCode only | 40 s | 54 s | 16 s |
+
+The review of #1090 found three ways to install twice, all fixed before merge:
+- A Ctrl-C during the wait fell through to the pane's own npm.
+- On Linux, bash 5 replaces the download's shell with npm, so its pid lost the name the pane checks.
+- A create skipped its own wait before the marker existed.
+
+**Apple's developer-tools dialog.** On a Mac without the command line developer tools, the "Install
+Command Line Developer Tools" dialog came up during the first session. Cause, traced on the VM:
+- `/usr/bin/git`, `python3`, `make`, `cc` and 74 more are one stub that opens the dialog.
+- Agents run them unasked: OpenCode ran `python3` for the starter task, and a real Claude Code and
+  Codex pair brought it up in one run of three.
+
+Agent panes on such a Mac now get stand-ins on PATH just before `/usr/bin`. Each one:
+- runs the real tool once the tools are installed;
+- else runs one later on PATH;
+- else tells the agent what is missing and how to install it (exit 127, no dialog).
+
+VM runs with this CLI (fresh macOS, no developer tools), two new users and two with real Claude Code
+and Codex:
+- no dialog in any run;
+- Codex, Claude Code and OpenCode all carry the stand-ins on PATH just before `/usr/bin`;
+- `git`, `python3`, `make`, `cc` and `swift` with a pane's PATH answer 127 and the message;
+- the bare stub (`/usr/bin/python3`) still brings the dialog up, which is what the stand-ins keep agents from;
+- first result 57 s in three runs and 79 s in the fourth (free-model variance).
+
 ## Next
 
 - #1061 merged. #1047, #1052, #1067 and #1069 are carried by the onboarding PR (branch
