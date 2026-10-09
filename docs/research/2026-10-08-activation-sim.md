@@ -437,6 +437,26 @@ opens. The one lever named for it (finding 23) is shipping Node and the CLI insi
 11 s, at the cost of a larger universal app and signing an embedded Node. That is a packaging
 decision, not an onboarding iteration.
 
+**The whole matrix on final main** (167001ed2, app and CLI built from it), each persona on a fresh Mac
+without developer tools. Every one finished two sessions, and no dialog appeared:
+
+| Persona | Opens on | Workspace | First result | Second session |
+|---|---|---|---|---|
+| nothing installed | OpenCode + Codex + Claude Code | 40 s | 52 s | 48 s; next day 7 s |
+| OpenCode only | OpenCode | 40 s | 56 s | 18 s |
+| real Codex, not signed in | OpenCode + Codex | 40 s | 81 s* | 163 s* |
+| real Claude Code, not signed in | OpenCode + Claude Code | 40 s | 124 s* | 90 s* |
+| real Claude Code and Codex, not signed in | all three | 41 s | 55 s | 17 s |
+| Claude Code signed in | Claude Code | 41 s | 46 s | 2 s |
+| Codex signed in | Codex | 40 s | 46 s | 3 s |
+| both signed in | Claude Code + Codex | 41 s | 46 s | 2 s |
+| both, 5 recent conversations | 2 tabs reopened | 41 s | 46 s | 2 s; next day at once |
+| Codex, 2 recent conversations | 1 tab reopened | 40 s | 46 s | 3 s |
+| Claude Code signed in, real Codex not | Claude Code + Codex | 40 s | 46 s | 3 s |
+
+\* OpenCode's free model itself: its footer read "Muse Spark 1.3 Free · 1m 17s" and "2m 38s" in
+those runs, against 8–15 s an hour earlier. The flow around it was immediate.
+
 **Rig note:** the VM has no developer tools, so it raises Apple's dialog for anything that runs
 `git`. Returning users of Claude Code or Codex have them, so a dialog seen there is the rig's, not
 theirs.
