@@ -241,7 +241,9 @@ impl App {
             if self.session_desk { self.session_alias = None; self.session_path = None; }
             for session in &mut self.sessions { if session.desk { session.alias = None; session.path = None; } }
         }
-        if !matches!(self.modal, Some(Modal::NewHarness(_)) | Some(Modal::Picker { kind:crate::modal::PickerKind::Account, .. })) { self.modal = None; }
+        // (The Models view a Set up's sign-in brought back stays: its Set up goes on under the new account.)
+        let setting_up = matches!(self.modal, Some(Modal::Picker { kind: crate::modal::PickerKind::Models, .. })) && self.models_view.set_up_after_sign_in;
+        if !setting_up && !matches!(self.modal, Some(Modal::NewHarness(_)) | Some(Modal::Picker { kind:crate::modal::PickerKind::Account, .. })) { self.modal = None; }
         crate::account::identity_changed(self);
         crate::models::account_changed(self);
         self.fit_panes(); self.redraw_all = true; self.server_dirty = true;
@@ -463,6 +465,25 @@ mod tests {
         assert!(!app.tabs.iter().find(|t| t.id == "tab-3").unwrap().on_desk);
         assert!(app.local_tabs_to_sync.is_empty());
         assert!(crate::agent_switch::preserves(&app, 1), "local view stays until the new desk confirms it");
+    }
+
+    /// The sign-in a Set up asked for can land before the daemon answers to the account: the Models view
+    /// it brought back stays open through that, where the Set up goes on. Any other view still closes.
+    #[test]
+    fn a_set_up_s_models_view_stays_through_the_sign_in() {
+        use crate::modal::{Modal, PickerKind};
+        let mut app = app("computer", false);
+        app.modal = Some(Modal::Picker { kind: PickerKind::Models, picker: crate::picker::Picker::new("models", "") });
+        app.models_view.set_up_after_sign_in = true;
+        app.models_view.set_up_signed_in = true;
+        app.adopt_daemon_identity(&status("account-a", true));
+        assert!(matches!(app.modal, Some(Modal::Picker { kind: PickerKind::Models, .. })));
+        assert!(app.models_view.set_up_after_sign_in, "the Set up carries over to the account's machine id");
+
+        let mut app = super::tests::app("computer", false);
+        app.modal = Some(Modal::Picker { kind: PickerKind::Models, picker: crate::picker::Picker::new("models", "") });
+        app.adopt_daemon_identity(&status("account-a", true));
+        assert!(app.modal.is_none(), "without a Set up, the old account's view closes");
     }
 
     #[test]
