@@ -1117,6 +1117,9 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     // meanwhile waits for that download, under the same line and bar, rather than starting a second
     // install into the folder it is writing (two npm installs into one prefix can break both). A
     // marker whose process is gone, or is not that download, is ignored. At most ten minutes.
+    // The waiting runs in command substitutions, out of a Ctrl+Z's reach (STOP_PROOF_FUNCTIONS), with
+    // the bar sent to the terminal through standard error. A wait ended early (Ctrl-C, the ten
+    // minutes) while the download still runs ends the pane rather than starting a second install.
     ...(friendly ? [
       'harness_wait_download() {',
       '  harness_dl_pid=$(cat "$HOME/.harness/run/downloading-$1" 2>/dev/null) || return 0',
@@ -1124,12 +1127,13 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
       '  kill -0 "$harness_dl_pid" 2>/dev/null || return 0',
       '  ps -p "$harness_dl_pid" -o command= 2>/dev/null | grep -q harness-download || return 0',
       '  if [ "$harness_quiet" -eq 1 ]; then',
-      '    ( harness_dl_i=0; while kill -0 "$harness_dl_pid" 2>/dev/null && [ "$harness_dl_i" -lt 1200 ]; do sleep 0.5; harness_dl_i=$((harness_dl_i + 1)); done ) | '
-        + `${shellSingleQuote(runtimeNode)} -e ${shellSingleQuote(INSTALL_PROGRESS_JS)} ${shellSingleQuote(label)} ${seconds} "$harness_install_log" ${friendly.messageWaiting ? 1 : 0}`,
+      '    harness_dl_w=$( ( harness_dl_i=0; while kill -0 "$harness_dl_pid" 2>/dev/null && [ "$harness_dl_i" -lt 1200 ]; do sleep 0.5; harness_dl_i=$((harness_dl_i + 1)); done ) | '
+        + `${shellSingleQuote(runtimeNode)} -e ${shellSingleQuote(INSTALL_PROGRESS_JS)} ${shellSingleQuote(label)} ${seconds} "$harness_install_log" ${friendly.messageWaiting ? 1 : 0} >&2 ) || :`,
       '  else',
       `    printf '%s\\n' ${shellSingleQuote(`harness: ${label} is downloading in the background; waiting for it`)}`,
-      '    harness_dl_i=0; while kill -0 "$harness_dl_pid" 2>/dev/null && [ "$harness_dl_i" -lt 1200 ]; do sleep 0.5; harness_dl_i=$((harness_dl_i + 1)); done',
+      '    harness_dl_i=0; while kill -0 "$harness_dl_pid" 2>/dev/null && [ "$harness_dl_i" -lt 1200 ]; do harness_dl_w=$(sleep 0.5) || :; harness_dl_i=$((harness_dl_i + 1)); done',
       '  fi',
+      `  if kill -0 "$harness_dl_pid" 2>/dev/null; then printf '\\n%s\\n' ${shellSingleQuote(`${label} is still downloading. Try again in a minute.`)}; exit 1; fi`,
       '  hash -r 2>/dev/null || true',
       '}',
     ] : []),

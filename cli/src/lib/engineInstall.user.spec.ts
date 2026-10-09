@@ -60,13 +60,14 @@ function fixture() {
     })
   }
   // The same run without blocking the event loop, for a test that has a process of its own to keep going.
-  const runAsync = (node: string, install = recipe, shell = '/bin/sh') => new Promise<{ status: number | null, stdout: string, stderr: string }>((resolve) => {
+  // `watch` sees the output so far as it comes, with the script's process, the leader of its own group.
+  const runAsync = (node: string, install = recipe, shell = '/bin/sh', watch?: (output: string, pid: number) => void) => new Promise<{ status: number | null, stdout: string, stderr: string }>((resolve) => {
     const argv = buildEngineLaunchArgv('codex', { installIfMissing: install }, shell, node, 'grid', null)
     const script = argv[argv.indexOf('harness-engine') - 1]
-    const child = spawn(shell, ['-c', script, 'harness-engine', name, 'argument with spaces'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(shell, ['-c', script, 'harness-engine', name, 'argument with spaces'], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
     let stdout = '', stderr = ''
-    child.stdout.on('data', (chunk) => { stdout += chunk })
-    child.stderr.on('data', (chunk) => { stderr += chunk })
+    child.stdout.on('data', (chunk) => { stdout += chunk; watch?.(stdout + stderr, child.pid!) })
+    child.stderr.on('data', (chunk) => { stderr += chunk; watch?.(stdout + stderr, child.pid!) })
     const timer = setTimeout(() => child.kill('SIGKILL'), 30_000)
     child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }) })
   })
@@ -164,9 +165,37 @@ describe('engine installation for a fresh OS user', () => {
     // The pane's own install would fail: only the download can have put the engine there.
     const result = await f.runAsync(node, { ...f.recipe, command: 'exit 93' })
     expect(result.status, result.stdout + result.stderr).toBe(0)
-    expect(result.stdout).toContain('Installing Codex')
+    // The bar goes through standard error, out of a command substitution; both are the pane's terminal.
+    expect(result.stderr).toContain('Installing Codex')
     expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
     expect(Date.now() - started).toBeGreaterThanOrEqual(1500)
+  })
+
+  it('ends the pane rather than install a second time when the wait for the download is interrupted', async () => {
+    const f = fixture()
+    const node = f.runtime('node-one')
+    const run = join(f.home, '.harness/run')
+    mkdirSync(run, { recursive: true })
+    // Two commands, so the shell stays the process and keeps its name.
+    const download = spawn('/bin/sh', ['-c', 'sleep 30; :', 'harness-download'], { stdio: 'ignore' })
+    try {
+      writeFileSync(join(run, 'downloading-codex'), String(download.pid))
+      const installed = join(f.home, 'installed-again')
+      let interrupted = false
+      // Ctrl-C reaches the pane's whole process group; the pane's own install would leave a file.
+      const result = await f.runAsync(node, { ...f.recipe, command: `touch ${shellSingleQuote(installed)}` }, '/bin/sh', (output, pid) => {
+        if (interrupted || !output.includes('Installing Codex')) return
+        interrupted = true
+        process.kill(-pid, 'SIGINT')
+      })
+      expect(interrupted).toBe(true)
+      expect(result.status, result.stdout + result.stderr).toBe(1)
+      expect(result.stdout).toContain('Codex is still downloading. Try again in a minute.')
+      expect(result.stdout).not.toContain('ENGINE_READY')
+      expect(existsSync(installed)).toBe(false)
+    } finally {
+      download.kill('SIGKILL')
+    }
   })
 
   it('ignores a download marker whose process is gone or is something else', () => {
