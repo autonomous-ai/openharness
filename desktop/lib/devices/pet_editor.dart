@@ -19,6 +19,7 @@ const petStateLabels = {
   'listening': 'Listening',
   'sending': 'Sending',
   'asking': 'Asking',
+  'relaxing': 'Relaxing',
 };
 
 /// How long the row picker waits for more changes before asking again.

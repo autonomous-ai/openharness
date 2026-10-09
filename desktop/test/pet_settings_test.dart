@@ -34,6 +34,7 @@ Map<String, dynamic> _preview() => {
     'listening': [_png],
     'sending': [_png],
     'asking': [_png, _png, _png],
+    'relaxing': [_png, _png],
   },
   'stepMs': {
     'small': 200,
@@ -41,6 +42,7 @@ Map<String, dynamic> _preview() => {
     'listening': 160,
     'sending': 160,
     'asking': 90,
+    'relaxing': 120,
   },
 };
 
@@ -60,6 +62,7 @@ Map<String, dynamic> sheetPreview(
         'listening': 'review',
         'sending': 'waving',
         'asking': 'waiting',
+        'relaxing': 'idle',
       }
   ..['sheetRows'] = [
     for (final row in rows) {'row': row, 'frames': frames, 'strip': _png},
@@ -627,6 +630,7 @@ void main() {
           'listening': 'waving',
           'sending': 'waving',
           'asking': 'waiting',
+          'relaxing': 'idle',
         },
       );
       await move(tester, 'working', 'runningRight');
@@ -648,6 +652,7 @@ void main() {
         'listening': 'waving',
         'sending': 'waving',
         'asking': 'waiting',
+        'relaxing': 'idle',
       });
       expect(sent.last['path'], sent.first['path']);
       expect(inCard('waving', 'Listening'), findsOneWidget);
@@ -689,6 +694,7 @@ void main() {
             'listening': 'review',
             'sending': 'waving',
             'asking': 'waiting',
+            'relaxing': 'idle',
           },
         ),
       );
@@ -857,6 +863,48 @@ void main() {
       expect(source(card('idle')), art, reason: 'frame 0 of row 0');
     });
 
+    testWidgets('Relaxing is the sixth chip; choosing it sends rows.relaxing', (
+      tester,
+    ) async {
+      daemon.previewReply = sheetPreview('boba', petdexRows);
+      await build(tester);
+      await tester.tap(find.text('Choose file…'));
+      await tester.pumpAndSettle();
+      expect(petStateLabels.keys.last, 'relaxing');
+      expect(petStateLabels['relaxing'], 'Relaxing');
+      await tester.tap(card('review'));
+      await tester.pump();
+      expect(
+        find.descendant(of: chip('relaxing'), matching: find.text('Relaxing')),
+        findsOneWidget,
+      );
+      expect(chipOn(tester, 'relaxing'), isFalse);
+      daemon.previewReply = sheetPreview(
+        'boba-2',
+        petdexRows,
+        mapping: {
+          'rest': 'idle',
+          'working': 'running',
+          'listening': 'review',
+          'sending': 'waving',
+          'asking': 'waiting',
+          'relaxing': 'review',
+        },
+      );
+      await tester.tap(chip('relaxing'));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      expect(daemon.payloads['pet_preview']!.last['rows'], {
+        'rest': 'idle',
+        'working': 'running',
+        'listening': 'review',
+        'sending': 'waving',
+        'asking': 'waiting',
+        'relaxing': 'review',
+      });
+      expect(chipOn(tester, 'relaxing'), isTrue);
+    });
+
     testWidgets('a card’s badges stay on one line, the rest as +n', (
       tester,
     ) async {
@@ -874,9 +922,9 @@ void main() {
           if (tester.any(inCard('idle', label))) label,
       ];
       expect(shown, isNotEmpty);
-      expect(shown.length, lessThan(5));
+      expect(shown.length, lessThan(petStateLabels.length));
       expect(shown, petStateLabels.values.take(shown.length));
-      final more = inCard('idle', '+${5 - shown.length}');
+      final more = inCard('idle', '+${petStateLabels.length - shown.length}');
       expect(more, findsOneWidget);
       final line = tester.getCenter(more).dy;
       for (final label in shown) {
@@ -918,6 +966,7 @@ void main() {
         'listening': 'idle',
         'sending': 'idle',
         'asking': 'waving',
+        'relaxing': 'idle',
       };
       const loose = ['idle', 'runningRight', 'runningLeft', 'waving'];
       daemon.previewReply = sheetPreview(
@@ -1044,10 +1093,11 @@ void main() {
           'listening': 'review',
           'sending': 'waving',
           'asking': 'waiting',
+          'relaxing': 'idle',
         },
       );
       pet.choose('working', 'idle');
-      expect(pet.statesOf('idle'), ['rest', 'working']);
+      expect(pet.statesOf('idle'), ['rest', 'working', 'relaxing']);
       expect(pet.statesOf('running'), isEmpty);
       expect(pet.current, isFalse);
       await tester.pump(const Duration(milliseconds: 100));
@@ -1062,6 +1112,7 @@ void main() {
         'listening': 'review',
         'sending': 'waving',
         'asking': 'idle',
+        'relaxing': 'idle',
       });
       expect(pet.current, isTrue);
       expect(pet.preview!.id, 'boba-2');
