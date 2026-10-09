@@ -957,6 +957,10 @@ export class BackendSocket {
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather
                 // than "no", per the desktop app's `EngineAvailability.fromJson`.
                 ...(entry.engine === 'codex' ? { supportsCodexHome: true } : {}),
+                // Static too: a pane whose engine is still downloading beside Desktop Harness's setup
+                // waits for that download (engineLaunch.ts `harness_wait_download`) rather than
+                // installing it again, so the desktop may open the pane before the download ends.
+                waitsForDownload: true,
               })),
             }))
             .catch(() => reply(type, requestId, { error: 'ENGINE_PROBE_FAILED' }))

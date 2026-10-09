@@ -23,6 +23,7 @@ class EngineAvailability {
     this.installCommand,
     this.signedIn,
     this.lastUsedAt,
+    this.waitsForDownload = false,
   });
 
   final String engine;
@@ -61,6 +62,11 @@ class EngineAvailability {
   /// the epoch. Null when unknown.
   final int? lastUsedAt;
 
+  /// Explicit capability: a pane of this engine opened while Desktop Harness is still downloading it
+  /// beside setup waits for that download instead of installing it again. Older CLIs do not say, and
+  /// a create then waits for the download itself before it opens the pane.
+  final bool waitsForDownload;
+
   static EngineAvailability? fromJson(Object? raw) {
     if (raw is! Map) return null;
     final engine = raw['engine'];
@@ -80,6 +86,7 @@ class EngineAvailability {
       lastUsedAt: raw['lastUsedAt'] is num
           ? (raw['lastUsedAt'] as num).toInt()
           : null,
+      waitsForDownload: raw['waitsForDownload'] == true,
     );
   }
 }
