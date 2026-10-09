@@ -152,6 +152,9 @@ describe('late optional profile observations', () => {
   })
 
   it('treats a repeated confirmation as newer authority than a pending config or transcript stage', async () => {
+    // One frozen millisecond: the repeated confirmation stamps observedAt again, and a clock that
+    // ticked in between failed the comparison below on CI (observedAt 1 ms apart, 2026-10-09).
+    vi.useFakeTimers({ toFake: ['Date'] })
     let finish!: (effort: string) => void
     const manager = new RuntimeProfileState(() => ({ ...claudeRuntime,
       configuredEffort: () => new Promise<string>(resolve => { finish = resolve }),
