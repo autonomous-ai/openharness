@@ -208,11 +208,13 @@ pub const ENGINES: [&str; 15] = ["claude", "codex", "opencode", "cursor", "pi", 
 
 /// The palette's commands: (id, title, keys, hint, group).
 pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
-    ("account", "Account / sign in…", "", "connect computers, sync your workspace and add your phone", "General"),
+    ("account", "Account…", "", "sign in, sign out, connect computers, sync your workspace and add your phone", "General"),
     ("signout", "Sign out", "", "leave your Harness account here — harnesses on this computer keep running", "General"),
-    ("open", "Harnesses…", "⌥P", "every harness on every machine", "Harness"),
-    ("projects", "Projects…", "⌥O", "a project, then one of its harnesses", "Harness"),
-    ("models", "Models…", "⌥I", "local, shared, subscriptions, APIs — use one on this harness", "Harness"),
+    // (Together with the rows above: one General group, not two. Listed to a search only.)
+    ("take", "Take control", "", "reclaim all panes across every tab", "General"),
+    ("open", "Open harness…", "⌥P", "every harness on every machine", "Harness"),
+    ("projects", "Open project…", "⌥O", "a project, then one of its harnesses", "Harness"),
+    ("models", "Open models…", "⌥I", "local, shared, subscriptions, APIs — use one on this harness", "Harness"),
     ("change-agent", "Change agent…", "", "continue this project with another agent", "Harness"),
     ("terminal", "New pane", "⌥N", "a shell on this pane's machine", "Harness"),
     ("inbox", "Harnesses needing input", "⌥⇧I", "", "Harness"),
@@ -223,7 +225,6 @@ pub const COMMANDS: &[(&str, &str, &str, &str, &str)] = &[
     ("restart", "Restart harness", "⌥⇧E", "", "Harness"),
     ("pause", "Pause harness", "", "stop the engine, keep the conversation", "Harness"),
     ("rename", "Rename harness…", "", "", "Harness"),
-    ("take", "Take control", "", "reclaim all panes across every tab", "General"),
     ("tab", "New Tab", "⌥T", "", "Tabs"),
     ("rename-tab", "Rename Tab…", "⌥⇧R", "", "Tabs"),
     ("close-tab", "Close Tab", "⌥⇧W", "save and stop; confirm active work", "Tabs"),
@@ -526,18 +527,19 @@ pub fn command_rows(app: &App) -> Vec<Row> {
     let own = COMMANDS.iter().map(|(id, title, _, hint, group)| {
         let key = own_key(app, id).unwrap_or_default();
         // (Tier 0: searched, listed above every tmux command that matches — `appe` is Appearance,
-        // not a word in set-buffer's description.)
-        Row::new(format!("cmd:{id}"), *title).extra(format!("{id} {hint} {group}")).detail(vec![span(*hint, fg(theme::MUTED))]).right(key).group(*group)
+        // not a word in set-buffer's description. A row shows its name and key only: the hint is
+        // searched, not printed, so the list is not a wall of text.)
+        Row::new(format!("cmd:{id}"), title.trim_end_matches('…')).extra(format!("{id} {hint} {group}")).right(key).group(*group)
     });
     // tmux's after them, grouped (Windows, Panes…), and none one of hn's runs already (Copy mode is
     // copy-mode): each group's rows together, in TMUX_GROUPS' order.
     let ours: Vec<&str> = COMMANDS.iter().filter_map(|(id, ..)| runs_of(id)).collect();
-    let mut tmux: Vec<(usize, Row)> = crate::commands::COMMANDS.iter().filter(|(name, ..)| !ours.contains(name)).map(|(name, alias, about)| {
+    let mut tmux: Vec<(usize, Row)> = crate::commands::COMMANDS.iter().filter(|(name, ..)| !ours.contains(name)).map(|(name, alias, _)| {
         let key = app.keymap.key_for_name(name).unwrap_or_default();
         let group = tmux_group(name);
-        // (Found by its name and alias: its description is shown, not searched — a word in it
+        // (Found by its name and alias: its description is neither shown nor searched — a word in it
         // would outrank what you meant, `appe` → set-buffer's "appends".)
-        let row = Row::new(format!("tmux:{name}"), *name).extra(alias.to_string()).detail(vec![span(*about, fg(theme::MUTED))]).right(key).group(format!("tmux · {group}")).tier(1);
+        let row = Row::new(format!("tmux:{name}"), *name).extra(alias.to_string()).right(key).group(format!("tmux · {group}")).tier(1);
         (TMUX_GROUPS.iter().position(|g| *g == group).unwrap_or(TMUX_GROUPS.len()), row)
     }).collect();
     tmux.sort_by_key(|(g, _)| *g);
@@ -567,10 +569,11 @@ fn tmux_group(name: &str) -> &'static str {
 pub fn command_rows_for(app: &App, searching: bool, in_tmux: bool) -> Vec<Row> {
     let all = command_rows(app);
     if in_tmux { return all.into_iter().filter(|r| r.id.starts_with("tmux:")).collect() }
-    let n = crate::commands::COMMANDS.len();
-    let more = Row::new("cmd:tmux-commands", "tmux commands…").extra("tmux every command")
-        .detail(vec![span(format!("every tmux command, grouped — {n} of them"), fg(theme::MUTED))]).group("Settings & help");
-    let (own, tmux): (Vec<Row>, Vec<Row>) = all.into_iter().filter(|r| searching || r.group.as_deref() != Some("Panes")).partition(|r| r.id.starts_with("cmd:"));
+    let more = Row::new("cmd:tmux-commands", "tmux commands").extra("tmux every command").group("Settings & help");
+    // (Sign out is in the Account panel already, and Take control is a rare repair: both are listed
+    // only to a search, as the Panes commands are.)
+    let rare = |r: &Row| matches!(r.id.as_str(), "cmd:signout" | "cmd:take");
+    let (own, tmux): (Vec<Row>, Vec<Row>) = all.into_iter().filter(|r| searching || (r.group.as_deref() != Some("Panes") && !rare(r))).partition(|r| r.id.starts_with("cmd:"));
     // (The row for tmux's after hn's own settings, before Close hn.)
     let at = own.iter().position(|r| r.id == "cmd:quit").unwrap_or(own.len());
     let mut rows = own;
@@ -1027,11 +1030,43 @@ mod theme_row_tests {
         assert!(tmux.iter().any(|r| r.label == "select-layout"));
         // Searched: hn's matches before tmux's, whatever they score.
         let mut p = crate::picker::Picker::new("Commands", "");
+        p.search_extra = true; // as the panel opens it: a row's hint is searched, not shown
         p.set_rows(command_rows_for(&app, true, false));
         p.set_query("lay");
         let shown: Vec<&str> = p.visible.iter().map(|(i, _)| p.rows[*i].id.as_str()).collect();
         let first_tmux = shown.iter().position(|id| id.starts_with("tmux:")).unwrap();
         assert!(shown[..first_tmux].contains(&"cmd:layout") && shown[first_tmux..].iter().all(|id| id.starts_with("tmux:")), "{shown:?}");
+    }
+
+    /// The list is names and keys: no description beside a row. Account is one row (Sign out is in
+    /// it), so Sign out is listed only to a search, and both words find their way.
+    #[test]
+    fn commands_show_names_and_keys_only_and_sign_out_is_found_by_search() {
+        let app = app();
+        for searching in [false, true] {
+            for row in command_rows_for(&app, searching, false).iter().chain(command_rows_for(&app, searching, true).iter()) {
+                assert!(row.detail.is_empty(), "{} has text beside it", row.label);
+            }
+        }
+        let listed = command_rows_for(&app, false, false);
+        assert!(listed.iter().any(|r| r.id == "cmd:account" && r.label == "Account"), "one Account row, without a sign-in suffix");
+        assert!(listed.iter().all(|r| !r.label.ends_with('…')), "names only, no trailing ellipsis");
+        assert!(!listed.iter().any(|r| r.id == "cmd:signout" || r.id == "cmd:take"), "Sign out and Take control are not listed");
+        for searching in [false, true] {
+            let mut groups: Vec<String> = Vec::new();
+            for g in command_rows_for(&app, searching, false).iter().filter(|r| r.id.starts_with("cmd:")).filter_map(|r| r.group.clone()) { if groups.last() != Some(&g) { groups.push(g) } }
+            assert_eq!(groups.iter().filter(|g| *g == "General").count(), 1, "one General heading (searching {searching}): {groups:?}");
+        }
+        let find = |query: &str| {
+            let mut p = crate::picker::Picker::new("Commands", "");
+            p.search_extra = true;
+            p.set_rows(command_rows_for(&app, true, false));
+            p.set_query(query);
+            p.visible.iter().map(|(i, _)| p.rows[*i].id.clone()).collect::<Vec<_>>()
+        };
+        assert!(find("sign out").contains(&"cmd:signout".to_string()), "searching finds Sign out");
+        assert!(find("sign in").contains(&"cmd:account".to_string()), "searching finds Account");
+        assert!(find("take control").contains(&"cmd:take".to_string()), "searching finds Take control");
     }
 
     /// Keybinds: the prefix and the second one first, then the commands grouped with their keys

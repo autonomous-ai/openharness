@@ -19,18 +19,24 @@ class QrCodeView extends StatelessWidget {
 
   static const _quietModules = 4;
 
-  // One entry: the dialog rebuilds on every font or palette change, and
-  // choosing the best of eight mask patterns is not free.
-  static (String, QrImage)? _cached;
+  // A few entries, the most recently drawn kept: the dialog rebuilds on every
+  // font or palette change, and choosing the best of eight mask patterns is not
+  // free. ⚠️ Not one: Add Phone shows three codes at once — the App Store's,
+  // Google Play's and the pairing code — and a single entry recomputed all
+  // three on every rebuild.
+  static final _cached = <String, QrImage>{};
+  static const _cacheSize = 4;
 
   static QrImage _imageOf(String data) {
-    if (_cached case (final cachedData, final image) when cachedData == data) {
+    if (_cached.remove(data) case final image?) {
+      _cached[data] = image;
       return image;
     }
     final image = QrImage(
       QrCode.fromData(data: data, errorCorrectLevel: QrErrorCorrectLevel.M),
     );
-    _cached = (data, image);
+    _cached[data] = image;
+    if (_cached.length > _cacheSize) _cached.remove(_cached.keys.first);
     return image;
   }
 

@@ -27,9 +27,14 @@ import 'engine_identity.dart';
 /// hit test for the whole subtree before the child is ever asked. Written that
 /// way first, the banners were dead to the mouse.
 class AgentAlertBanners extends StatelessWidget {
-  const AgentAlertBanners({super.key, required this.notifier});
+  const AgentAlertBanners({super.key, required this.notifier, this.footer});
 
   final AppNotifier notifier;
+
+  /// Under the banners, in the same corner and on the same terms: what else
+  /// the window offers without blocking the work — Add Phone's card
+  /// (`phone_offer_card.dart`).
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
@@ -41,7 +46,7 @@ class AgentAlertBanners extends StatelessWidget {
         listenable: notifier.agentAlerts,
         builder: (context, _) {
           final alerts = notifier.agentAlerts.alerts;
-          if (alerts.isEmpty) return const SizedBox.shrink();
+          if (alerts.isEmpty && footer == null) return const SizedBox.shrink();
           return Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -51,6 +56,7 @@ class AgentAlertBanners extends StatelessWidget {
                   padding: const EdgeInsets.only(bottom: 8),
                   child: _Banner(alert: alert, notifier: notifier),
                 ),
+              ?footer,
             ],
           );
         },

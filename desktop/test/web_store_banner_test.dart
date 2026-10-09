@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/local_key_value_store.dart';
+import 'package:harness/core/phone_app_links.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/web/shell/web_store_banner.dart';
 
@@ -53,6 +54,9 @@ void main() {
   tearDown(() => debugDefaultTargetPlatformOverride = null);
 
   test('a phone has a store page; a computer has none', () {
+    // The links Add Phone's download codes carry too (`core/phone_app_links.dart`).
+    expect(webStoreLink(TargetPlatform.iOS), Uri.parse(kAppStoreUrl));
+    expect(webStoreLink(TargetPlatform.android), Uri.parse(kGooglePlayUrl));
     expect(webStoreLink(TargetPlatform.iOS)!.host, 'apps.apple.com');
     expect(
       webStoreLink(TargetPlatform.android)!.queryParameters['id'],

@@ -509,8 +509,9 @@ const SHARE: u16 = 9;
 const PALETTE_SHARE_H: u16 = 7;
 /// Large: as wide as this at most, however wide the window.
 const LARGE_MAX_W: u16 = 160;
-/// (Room for a command's name, its hint and its key apart.)
-const PALETTE_W: u16 = 96;
+/// (Room for a command's name and its key apart: no description beside them any more. Commands,
+/// Keybinds and Layout are the palettes, and they keep one width so the panel stays put between them.)
+const PALETTE_W: u16 = 76;
 /// (New harness's form: its chooser opens beside it where there is room.)
 const FORM_W: u16 = 60;
 /// A form keeps this many rows however short the window (its action stays on screen), up to the
@@ -1680,12 +1681,12 @@ mod tests {
         let medium = Rect::new(0, 0, 120, 40);
         assert_eq!(area(medium, PanelSize::Large, 0), Rect::new(6, 2, 108, 36));
         // (Rows and chrome; at most seven tenths of the height; in the upper third.)
-        assert_eq!(area(medium, PanelSize::Palette, 5), Rect::new(12, 6, 96, 13));
-        assert_eq!(area(medium, PanelSize::Palette, 100), Rect::new(12, 6, 96, 28));
+        assert_eq!(area(medium, PanelSize::Palette, 5), Rect::new(22, 6, 76, 13));
+        assert_eq!(area(medium, PanelSize::Palette, 100), Rect::new(22, 6, 76, 28));
         assert_eq!(area(medium, PanelSize::Form, 20), Rect::new(30, 10, 60, 20));
         let wide = Rect::new(0, 0, 400, 60);
         assert_eq!(area(wide, PanelSize::Large, 0), Rect::new(120, 3, 160, 54));
-        assert_eq!(area(wide, PanelSize::Palette, 5), Rect::new(152, 10, 96, 13));
+        assert_eq!(area(wide, PanelSize::Palette, 5), Rect::new(162, 10, 76, 13));
         assert_eq!(area(wide, PanelSize::Form, 20), Rect::new(170, 20, 60, 20));
     }
 

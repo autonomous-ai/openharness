@@ -171,7 +171,7 @@ pub fn fill(app: &App, picker: &mut Picker) {
             _ => {
                 rows.push(Row::new("account:google", "Continue with Google"));
                 rows.push(Row::new("account:apple", "Continue with Apple"));
-                rows.push(Row::new("account:qr", "Sign in with your phone"));
+                rows.push(Row::new("account:qr", "Continue with your phone"));
             }
         },
     }
@@ -206,7 +206,7 @@ pub fn preview(app: &App, _: &str) -> Vec<Line<'static>> {
     match &app.account.phase {
         Phase::Browser(_) => {
             lines.push(Line::raw("Finish signing in in your browser."));
-            lines.push(Line::raw("Using SSH? Cancel and choose Sign in with your phone."));
+            lines.push(Line::raw("Using SSH? Cancel and choose Continue with your phone."));
         }
         Phase::Phone { expires, .. } => {
             lines.clear();
@@ -264,7 +264,7 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, picker: &mut Picker) -> Opt
             _ => vec![Line::raw("Connect computers and sync your workspace."), Line::raw("Use models on a linked machine. Follow work from your phone."),
                 Line::raw(""), Line::raw("Sign-in is optional. Keep working locally anytime.")],
         },
-        Phase::Browser(_) => vec![Line::raw("Finish signing in in your browser."), Line::raw("Using SSH? Cancel and choose Sign in with your phone.")],
+        Phase::Browser(_) => vec![Line::raw("Finish signing in in your browser."), Line::raw("Using SSH? Cancel and choose Continue with your phone.")],
         Phase::Failed(message) => vec![Line::raw(message.clone())],
         Phase::Phone { .. } => preview(app, ""),
         Phase::Starting => vec![Line::raw(app.account.waiting.clone().unwrap_or_else(|| "Opening sign-in…".into()))],
@@ -416,7 +416,7 @@ fn open_browser(app: &mut App, url: String) {
         tokio::time::timeout(Duration::from_secs(10), command.status()).await.is_ok_and(|s| s.is_ok_and(|s| s.success()))
     }, |app, opened| {
         if !opened { if let Some(Modal::Picker { kind: PickerKind::Account, picker }) = &mut app.modal {
-            picker.say("Could not open a browser. Copy the link, or use Sign in with your phone.");
+            picker.say("Could not open a browser. Copy the link, or use Continue with your phone.");
         } }
     });
 }
@@ -613,7 +613,7 @@ mod tests {
             crate::input::picker(&mut app, PickerKind::Account, "Your Harness account", "");
             let (text, _) = render(&mut app, 40, 12);
             for label in if signed_in { vec!["Connect a machine", "Add your phone", "Sign out"] }
-                else { vec!["Continue with Google", "Continue with Apple", "Sign in with your phone", "Keep using locally"] } {
+                else { vec!["Continue with Google", "Continue with Apple", "Continue with your phone", "Keep using locally"] } {
                 assert!(text.contains(label), "{label}\n{text}");
             }
             if signed_in { for gone in ["Models on your machines", "Back to workspace"] { assert!(!text.contains(gone), "{gone} is not offered\n{text}") } }
