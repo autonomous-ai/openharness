@@ -1,0 +1,59 @@
+# Orange Pi 4 Pro (Debian 12) image work
+
+A Harness SD image for the Orange Pi 4 Pro (Allwinner A733, aarch64), built on Orange Pi's
+official **Debian 12 server** image. It boots straight into the same session as the PC image:
+autologin on tty1, labwc, `hn` full screen in foot, Chromium on Super+b, the agent runtime as
+a lingering user service. The board can also be used over SSH alone.
+
+This is private platform work, **not a public Harness release**. No installer metadata or
+update feed is generated, and the board keeps Debian's own system updates.
+
+## What differs from the PC image
+
+| | PC image | Orange Pi 4 Pro |
+|---|---|---|
+| Base | Arch Linux, LTS kernel | Orange Pi Debian 12, vendor kernel 5.15 |
+| Compositor | labwc 0.20.2 on Arch's wlroots 0.20 | the same labwc source and patch, built with wlroots 0.20.2 and newer Wayland libraries into `/opt/harness-wl` |
+| Rendering | GPU | CPU (`WLR_RENDERER=pixman`): the PowerVR GPU has no open driver |
+| OpenCode | Arch's 2.x | the official 1.x ARM release pinned in `os/packaging/fedora/opencode.lock.json`; the skel config is restated in OpenCode 1's `permission` form |
+| System profile | `arch` | `debian`: `hn-os` and `harness install/upgrade/rollback` refuse PC system operations, as on Fedora |
+| Screen lock | gtklock | not available on Debian 12 (Super+l and the idle lock do nothing yet) |
+
+The session files come from `os/tools/build-package.py`'s `stage()`, so the board runs the PC
+package's tree. `install-session.sh` removes only the Arch-specific parts: pacman hooks, the
+installer, system updates, PC drivers and boot splash.
+
+## Build
+
+On the board, running Orange Pi's Debian 12 server image, with a clean checkout:
+
+```sh
+sudo apt install build-essential musl-tools cmake ninja-build pkg-config python3-venv parted \
+  libffi-dev libexpat1-dev libxml2-dev libudev-dev libmtdev-dev libevdev-dev libseat-dev \
+  libegl-dev libgles-dev libgbm-dev hwdata libglib2.0-dev libcairo2-dev libpango1.0-dev \
+  libpng-dev librsvg2-dev libpciaccess-dev
+# Node 22 (NodeSource) and Rust with the aarch64-unknown-linux-musl target, then:
+HARNESS_OS_RUNTIME_DIR=os/work/runtime-arm bash os/tools/build-runtime.sh
+sudo install -d -o "$USER" /opt/harness-wl
+bash os/platforms/orangepi-4pro/build-compositor.sh
+sudo bash os/platforms/orangepi-4pro/build-image.sh \
+  Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147.img os/work/runtime-arm \
+  harness-orangepi4pro.img
+```
+
+The base image is Orange Pi's download (Orange Pi 4 Pro → Official Images → Debian); check it
+against its `.sha` file first. Orange Pi's own Debian 12 boots on the 4 GB and 6 GB boards;
+the community Armbian image did not boot a 6 GB board.
+
+## First boot
+
+Write the image with balenaEtcher. The account is Orange Pi's default `orangepi` with password
+`orangepi`; change it with `passwd`. Wi-Fi: Super+w, or `sudo nmcli --ask device wifi connect
+NAME`. Sign in with `harness login --qr` and scan from Harness on a phone.
+
+## Checked on hardware
+
+Orange Pi 4 Pro over HDMI (1920×1080): autologin into labwc and `hn`, the daemon after a
+reboot, `hn-browser` opening Chromium maximized, OpenCode answering on Muse Spark 1.3 Free,
+`harness login --qr` rendering on the console. Keyboard shortcuts, audio, suspend and the
+screen lock remain unverified.
