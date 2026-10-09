@@ -26,6 +26,13 @@ installer, system updates, PC drivers and boot splash.
 
 ## Build
 
+The build has two phases, so a code change does not repeat the slow, rarely changing part:
+
+| Phase | Script | Contents | Rebuilt when |
+|---|---|---|---|
+| 1. Base | `build-compositor.sh`, `build-base.sh` | Orange Pi's image grown by 3 GB, Debian's session packages, Node 22, the compositor in `/opt/harness-wl` | its key changes (`base-key.sh`: the base image's checksum and the phase-1 scripts, labwc source and patch) |
+| 2. Harness | `build-runtime.sh`, `build-image.sh` | the session tree, runtime and agents on a copy of the base | every build |
+
 With Docker, on any host:
 
 ```sh
@@ -33,10 +40,13 @@ bash os/platforms/orangepi-4pro/build-docker.sh \
   Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147.img out/
 ```
 
-It runs the three steps below in a privileged arm64 Debian 12 container from the committed
-HEAD, and writes `harness-orangepi4pro-debian12-<commit>.img.xz` with its `.sha256`. Named
-volumes keep cargo downloads and the compositor build between runs. An x86-64 host emulates
-arm64 with QEMU, so a first build there takes hours; an arm64 host builds natively.
+`--base` runs only phase 1 (forcing a rebuild); `--harness` runs only phase 2 and needs the
+base for the current key. It runs in a privileged arm64 Debian 12 container from the committed HEAD, and
+writes `harness-orangepi4pro-debian12-<commit>.img.xz` with its `.sha256`. Named volumes
+(`harness-orangepi4pro-*`) keep the base image under its key, the compositor build under its
+own key, and cargo's target directory and npm's cache for incremental phase-2 builds. An
+x86-64 host emulates arm64 with QEMU, so a first build there takes hours; an arm64 host
+builds natively.
 
 Or natively on the board, running Orange Pi's Debian 12 server image, with a clean checkout:
 
@@ -49,8 +59,10 @@ sudo apt install build-essential musl-tools cmake ninja-build pkg-config python3
 HARNESS_OS_RUNTIME_DIR=os/work/runtime-arm bash os/tools/build-runtime.sh
 sudo install -d -o "$USER" /opt/harness-wl
 bash os/platforms/orangepi-4pro/build-compositor.sh
-sudo bash os/platforms/orangepi-4pro/build-image.sh \
-  Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147.img os/work/runtime-arm \
+# Phase 1 once (again only when base-key.sh prints a new key), phase 2 per code change:
+sudo bash os/platforms/orangepi-4pro/build-base.sh \
+  Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147.img harness-base.img
+sudo bash os/platforms/orangepi-4pro/build-image.sh harness-base.img os/work/runtime-arm \
   harness-orangepi4pro.img
 ```
 
