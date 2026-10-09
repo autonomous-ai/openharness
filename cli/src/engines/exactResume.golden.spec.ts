@@ -14,7 +14,7 @@ vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs, realpath: (name: string) => name.startsWith('/work/') ? Promise.resolve(name) : fs.realpath(name) }
 })
-vi.mock('./index.js', async original => ({ ...await original<object>(),
+vi.mock('./inProcess.js', async original => ({ ...await original<object>(),
   loadEngine: () => { throw new Error('Optional engine loading is forbidden in this golden') },
 }))
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/exact-resume.golden.json', import.meta.url))
