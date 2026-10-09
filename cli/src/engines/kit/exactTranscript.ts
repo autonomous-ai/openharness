@@ -1,7 +1,7 @@
 /** A complete, bounded native pool for an exact resume id. No optional reader or cross-poll cache. */
 import { lstatSync, realpathSync, statSync, type Stats } from 'node:fs'
 import { lstat, readlink, realpath } from 'node:fs/promises'
-import { dirname, join, parse, resolve, sep } from 'node:path'
+import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { identityBytes, identityEntries, identityScanBudget, IdentityReadUnavailable, type IdentityVersion } from './identityScan.js'
 
@@ -30,36 +30,39 @@ export async function exactTranscript(roots: readonly string[], layout: Layout,
   // Retain the links themselves, including links in ancestors and in another link's target.
   // Ordinary ancestor directories retain no content stamp: unrelated activity in /tmp is not ours.
   const inspectAliases = async (path: string) => {
-    let location = resolve(path), links = 0
-    for (;;) {
-      const root = parse(location).root, parts = location.slice(root.length).split(sep).filter(Boolean)
-      let prefix = root, redirected = false
-      for (const [index, part] of parts.entries()) {
-        deadline()
-        prefix = join(prefix, part)
-        let evidence = pathParts.get(prefix)
-        if (!evidence) {
-          if (budget.remaining-- <= 0) throw new IdentityReadUnavailable('the directory entry limit was reached')
-          try {
-            const info = await lstat(prefix)
-            evidence = { info, ...(info.isSymbolicLink() ? { target: await readlink(prefix) } : {}) }
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
-            throw new IdentityReadUnavailable('an exact transcript alias could not be inspected')
-          }
-          pathParts.set(prefix, evidence)
+    const location = resolve(path), root = parse(location).root
+    let prefix = root, pending = location.slice(root.length).split(sep).filter(Boolean), links = 0
+    while (pending.length) {
+      deadline()
+      const part = pending.shift()!
+      if (part === '.') continue
+      if (part === '..') { prefix = dirname(prefix); continue }
+      const next = join(prefix, part)
+      let evidence = pathParts.get(next)
+      if (!evidence) {
+        if (budget.remaining-- <= 0) throw new IdentityReadUnavailable('the directory entry limit was reached')
+        try {
+          const info = await lstat(next)
+          evidence = { info, ...(info.isSymbolicLink() ? { target: await readlink(next) } : {}) }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+          throw new IdentityReadUnavailable('an exact transcript alias could not be inspected')
         }
-        if (evidence.target !== undefined) {
-          if (++links > 32) throw new IdentityReadUnavailable('the exact transcript alias depth limit was reached')
-          aliases.set(prefix, evidence.info)
-          location = resolve(dirname(prefix), evidence.target, ...parts.slice(index + 1))
-          redirected = true
-          break
-        }
+        pathParts.set(next, evidence)
       }
-      if (!redirected) return
+      if (evidence.target !== undefined) {
+        if (++links > 32) throw new IdentityReadUnavailable('the exact transcript alias depth limit was reached')
+        aliases.set(next, evidence.info)
+        const targetRoot = isAbsolute(evidence.target) ? parse(evidence.target).root : ''
+        if (targetRoot) prefix = targetRoot
+        // Follow each link before consuming a later '..'. Lexically normalizing bridge/../home
+        // could skip bridge when it actually points at another directory's child.
+        const targetParts = evidence.target.slice(targetRoot.length).split(sep === '/' ? /\// : /[\\/]/).filter(Boolean)
+        pending = [...targetParts, ...pending]
+      } else prefix = next
     }
   }
+
   const inspect = async (path: string): Promise<Stats | null> => {
     deadline()
     await inspectAliases(path)

@@ -225,14 +225,18 @@ describe('exact resume uses complete native evidence', () => {
     })
     await expect(repair.findResumedTranscript(engine, ID, { cwd })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
-  it.each(['root', 'ancestor', 'chained target'] as const)('holds a directory listing redirected through a %s alias and restored', async kind => {
-    claude('conflict', path('target-a')); claude('other', path('moved'))
-    mkdirSync(path('target-b', 'projects'), { recursive: true })
-    const alias = kind === 'root' ? path('claude', 'projects') : kind === 'ancestor' ? path('claude') : path('outer')
+  it.each(['root', 'ancestor', 'chained target', 'relative parent'] as const)('holds a directory listing redirected through a %s alias and restored', async kind => {
+    const relative = kind === 'relative parent'
+    claude('conflict', relative ? path('target-a', 'home') : path('target-a'))
+    const competing = claude('other', path('moved'))
+    mkdirSync(relative ? path('target-b', 'home', 'projects') : path('target-b', 'projects'), { recursive: true })
+    if (relative) for (const name of ['target-a', 'target-b']) mkdirSync(path(name, 'leaf'), { recursive: true })
+    const alias = relative ? path('bridge') : kind === 'root' ? path('claude', 'projects') : kind === 'ancestor' ? path('claude') : path('outer')
     if (kind === 'root') mkdirSync(path('claude'))
-    const target = (name: string) => kind === 'root' ? path(name, 'projects') : path(name)
+    const target = (name: string) => relative ? path(name, 'leaf') : kind === 'root' ? path(name, 'projects') : path(name)
     symlinkSync(target('target-a'), alias)
     if (kind === 'chained target') symlinkSync(path('outer'), path('claude'))
+    if (relative) symlinkSync('bridge/../home', path('claude'))
     ;(await import('../../lib/engineHomes.js')).adoptHomes({ CLAUDE_CONFIG_DIR: path('moved') })
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
     vi.mocked(fs.opendir).mockImplementationOnce(async (name, options) => {
@@ -242,6 +246,8 @@ describe('exact resume uses complete native evidence', () => {
       return directory
     })
     await expect(repair.findResumedTranscript('claude', ID)).rejects.toThrow('alias changed during lookup')
+    rmSync(competing)
+    await expect(repair.findResumedTranscript('claude', ID)).resolves.toBe(path('claude', 'projects', 'conflict', `${ID}.jsonl`))
   })
   it.each(['accepted', 'excluded'] as const)('revalidates an %s Pi cwd alias after later native reads', async kind => {
     const cwd = path('work'), other = path('other'), alias = path('cwd-alias')
