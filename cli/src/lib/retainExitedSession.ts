@@ -30,6 +30,7 @@ export interface RetainExitedSessionDeps {
   announceSession(session: RegisteredSession): void
   invalidateTerminalControl(agentId: string): void
   forgetInput(agentId: string): void
+  forgetRelaunch?(sessionId: string): void
   detachDsh(agentId: string): void
   syncRecapPool(): void
   warn(message: string, error: unknown): void
@@ -62,6 +63,7 @@ export function createRetainExitedSession(deps: RetainExitedSessionDeps) {
     const saved = deps.stoppedAgents.get(entry.agentId)!
     deps.invalidateTerminalControl(entry.agentId)
     deps.forgetInput(entry.agentId)
+    deps.forgetRelaunch?.(entry.sessionId)
     deps.detachDsh(entry.agentId)
     // CLOSE THE VIEWS OF THE AGENT THAT JUST ENDED, the way a stop does.
     //
