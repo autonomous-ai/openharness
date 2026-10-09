@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/new_agent_draft.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
 import 'package:harness_mobile/state/app_state.dart';
@@ -69,6 +70,36 @@ void main() {
       await pumpNew(tester, app, scale, brightness);
       await tapInView(tester, find.text('options'));
       await frames(tester);
+    });
+  });
+
+  testWidgets('its computer offline under a long name: the row says so', (
+    tester,
+  ) async {
+    await expectNoLayoutErrors(tester, (scale, brightness) async {
+      final app = edgeApp(machineName: longMachine, online: false);
+      addTearDown(app.dispose);
+      await pumpNew(tester, app, scale, brightness);
+      expect(find.text('Offline', findRichText: true), findsOneWidget);
+    });
+  });
+
+  testWidgets('the computer chooser: long names, and one that cannot take a '
+      'harness', (tester) async {
+    await expectNoLayoutErrors(tester, (scale, brightness) async {
+      final app = edgeApp(machineName: longMachine);
+      addTearDown(app.dispose);
+      const away = Machine(
+        machineId: 'away',
+        authMode: MachineAuthMode.remote,
+        name: '$longMachine, downstairs',
+      );
+      app.machines = [...app.machines, away];
+      app.machineStates['away'] = MachineState(away)..nodeOnline = false;
+      await pumpNew(tester, app, scale, brightness);
+      await tapInView(tester, find.text('computer'));
+      await frames(tester);
+      expect(find.text('Computer'), findsOneWidget);
     });
   });
 

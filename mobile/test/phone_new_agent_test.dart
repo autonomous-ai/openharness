@@ -4,6 +4,7 @@ import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
 import 'package:harness_mobile/core/models.dart';
 import 'package:harness_mobile/phone/new_agent_page.dart';
+import 'package:harness_mobile/phone/tty_controls.dart' show TtyFormRow;
 import 'package:harness_mobile/state/app_state.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 
@@ -65,6 +66,15 @@ AppNotifier _app({Map<String, Map<String, dynamic>> answers = const {}}) {
   return app;
 }
 
+/// What the form's [label] row says.
+String _row(WidgetTester tester, String label) => tester
+    .widget<TtyFormRow>(
+      find.byWidgetPredicate(
+        (widget) => widget is TtyFormRow && widget.label == label,
+      ),
+    )
+    .value;
+
 void main() {
   testWidgets(
     'the Project chooser offers only machines that can host an agent',
@@ -80,8 +90,9 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      // The desktop's default: the project last started on this machine.
-      expect(find.text('Studio:app', findRichText: true), findsOneWidget);
+      // The desktop's default: the project last started on this machine, on a row of its own.
+      expect(_row(tester, 'computer'), 'Studio');
+      expect(_row(tester, 'project'), 'app');
 
       await tester.tap(find.text('project'));
       await tester.pumpAndSettle();
@@ -133,10 +144,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(
-      find.text('Studio:autonomous-harness', findRichText: true),
-      findsOneWidget,
-    );
+    expect(_row(tester, 'project'), 'autonomous-harness');
     expect(
       find.textContaining('silent-beacon', findRichText: true),
       findsNothing,

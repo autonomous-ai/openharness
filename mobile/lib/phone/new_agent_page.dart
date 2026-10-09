@@ -34,8 +34,9 @@ import 'voice_input_controller.dart';
 /// open a folder browser on top — a sheet that has to be dismissed to reach the
 /// browser, and rebuilt after it, loses the other choice on the way.
 ///
-/// Agent and project are the default flow. Model, approvals, Codex profile,
-/// branch and the independent worktree toggle live under Options, as on desktop.
+/// Agent, computer and project are the default flow, the desktop header's three
+/// pills in its order. Model, approvals, Codex profile, branch and the
+/// independent worktree toggle live under Options, as on desktop.
 class NewAgentPage extends StatefulWidget {
   const NewAgentPage({
     super.key,
@@ -61,9 +62,14 @@ class NewAgentPage extends StatefulWidget {
 }
 
 class _NewAgentPageState extends State<NewAgentPage> {
-  /// The machine the agent is created on. Starts on the one the page was opened with, and the
-  /// MACHINE rows change it.
+  /// The machine the agent is created on. Starts on the one the page was opened with; the computer
+  /// row changes it, and so does a Project pair on another computer.
   late String _machineId = widget.machineId;
+
+  /// What was chosen on each computer the form has moved off, so the computer row coming back
+  /// finds it again — the desktop's `_projectsByMachine`. Never carried to ANOTHER computer: see
+  /// [_selectMachine].
+  final _projectsByMachine = <String, _KeptProject>{};
 
   String? _folder;
 
@@ -315,6 +321,13 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// place.
   void _selectMachine(String machineId) {
     if (machineId == _machineId) return;
+    if (_folder != null || _project != null) {
+      _projectsByMachine[_machineId] = (
+        folder: _folder,
+        project: _project,
+        label: _projectLabel,
+      );
+    }
     setState(() {
       _machineId = machineId;
       _folder = null;
@@ -838,10 +851,23 @@ class _NewAgentPageState extends State<NewAgentPage> {
                                       : () => unawaited(_chooseAgent()),
                                 ),
                                 TtyFormRow(
+                                  label: 'computer',
+                                  value:
+                                      _machine?.machine.displayName ??
+                                      'Choose a computer',
+                                  valueColor: _machine == null
+                                      ? tty.green
+                                      : null,
+                                  detail: _machineNote,
+                                  onTap: _creating
+                                      ? null
+                                      : () => unawaited(_chooseComputer()),
+                                ),
+                                TtyFormRow(
                                   label: 'project',
                                   value: _folder == null && _project == null
                                       ? 'Choose a project'
-                                      : _projectValue,
+                                      : _projectName,
                                   valueColor:
                                       _folder == null && _project == null
                                       ? tty.green
@@ -1116,8 +1142,9 @@ class _NewAgentPageState extends State<NewAgentPage> {
     final history = widget.notifier.projectHistory;
     // Then, with no history on this phone: the folder of the computer's most recent harness —
     // someone who has only ever started harnesses on the desktop still opens New ready to Start.
+    // The folder the page was opened for is a path on ITS computer, never on one the row moved to.
     final folder =
-        widget.folder ??
+        (_machineId == widget.machineId ? widget.folder : null) ??
         history.selected(_machineId) ??
         history.recent(_machineId).firstOrNull ??
         _latestAgentFolder();
@@ -1150,23 +1177,36 @@ class _NewAgentPageState extends State<NewAgentPage> {
   /// back on the next build.
   bool _projectDefaulted = false;
 
-  /// The project on one line: `computer:name`. The full path is in the chooser.
+  /// The project row: the project's name alone, as the desktop's project pill writes it — the
+  /// computer has a row of its own above, and `computer:name` there spent the row on a long
+  /// hostname and cut the name off. Most repositories live in a folder of the same name; the full
+  /// path is in the chooser.
+  String get _projectName {
+    if (_folder case final folder?) return _basename(folder);
+    if (_project?.repository case final repository?) return repository.name;
+    if (_project != null) return 'New folder';
+    return 'Choose project';
+  }
+
+  /// The project as the one-line summary writes it while typing, where the computer row is hidden:
+  /// `computer:name`, as the title on Focus and every Find row write it.
   String get _projectValue {
-    final String name;
-    if (_folder case final folder?) {
-      name = _basename(folder);
-    } else if (_project?.repository case final repository?) {
-      name = repository.name;
-    } else if (_project != null) {
-      name = 'New folder';
-    } else {
-      return 'Choose project';
-    }
-    // One line, `computer:name` — always the computer, as the title on Focus and every Find row
-    // write it. Most repositories live in a folder of the same name; the full path is in the
-    // chooser.
     final machine = _machine?.machine.displayName;
-    return machine == null ? name : '$machine:$name';
+    return machine == null ? _projectName : '$machine:$_projectName';
+  }
+
+  /// Why the chosen computer cannot take a harness, under its name — or nothing while it can.
+  ///
+  /// Only for the two states Start would fail on. `Connecting…` is a socket redialling for a moment
+  /// (every return to the app), and a note flashing on each redial would teach nobody anything.
+  String? get _machineNote {
+    final machine = _machine;
+    if (machine == null) return null;
+    return switch (phoneMachineStatusOf(machine)) {
+      PhoneMachineStatus.offline ||
+      PhoneMachineStatus.needsPassword => phoneMachineSummary(machine).label,
+      PhoneMachineStatus.connecting || PhoneMachineStatus.ready => null,
+    };
   }
 
   /// The button: a missing choice opens its chooser and says why, the desktop's `requiredChoice`.
@@ -1225,6 +1265,50 @@ class _NewAgentPageState extends State<NewAgentPage> {
       _engine = picked;
       _error = null;
     });
+  }
+
+  /// The computer row: every computer on the account, ready ones first — the desktop header's
+  /// Computer menu. One that cannot take a harness now is listed greyed, with why, rather than
+  /// left out: a computer missing from the list reads as one the phone does not know.
+  ///
+  /// Moving keeps nothing of the old computer's folder (see [_selectMachine]). The new one gets back
+  /// what was chosen on it earlier in this form, else its own last project, as on the desktop.
+  Future<void> _chooseComputer() async {
+    final picked = await showNewAgentChooser<String>(
+      context,
+      title: 'Computer',
+      hint: 'Search computers',
+      items: [
+        for (final machine in filterableMachines(widget.notifier))
+          ChooserItem(
+            value: machine.machine.machineId,
+            title: machine.machine.displayName,
+            subtitle: phoneMachineSummary(machine).label,
+            icon: LucideIcons.laptopMinimal300,
+            selected: machine.machine.machineId == _machineId,
+            enabled: phoneMachineStatusOf(machine) == PhoneMachineStatus.ready,
+          ),
+      ],
+    );
+    if (picked == null || !mounted || picked == _machineId) return;
+    // Rechecked: the sheet is a picture of the moment it opened, and a computer can drop off while
+    // it is up.
+    final machine = widget.notifier.stateOf(picked);
+    if (machine == null ||
+        phoneMachineStatusOf(machine) != PhoneMachineStatus.ready) {
+      setState(() => _error = 'That computer is no longer available.');
+      return;
+    }
+    _selectMachine(picked);
+    final kept = _projectsByMachine[picked];
+    setState(() {
+      _folder = kept?.folder;
+      _project = kept?.project;
+      _projectLabel = kept?.label;
+      // Nothing kept: the next build's [_applyDefaultProject] takes this computer's last project.
+      _projectDefaulted = kept != null;
+    });
+    if (kept?.folder case final folder?) unawaited(_loadGit(folder));
   }
 
   /// Every machine's projects as `machine · folder` pairs — this machine first, then the rest —
@@ -1574,6 +1658,14 @@ class _ProjectChoice {
   final String? machineId;
   final String? folder;
 }
+
+/// A computer's project choice, held while the form is on another computer — see
+/// `_projectsByMachine`.
+typedef _KeptProject = ({
+  String? folder,
+  ProjectFolderRequest? project,
+  String? label,
+});
 
 /// A listenable that never speaks — the mic's before a recorder exists.
 class _Silent implements Listenable {

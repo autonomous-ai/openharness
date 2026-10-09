@@ -72,7 +72,9 @@ void main() {
   Future<({AppNotifier app, EdgeConn conn})> openNew(
     WidgetTester tester, {
     bool twoMachines = false,
+    bool awayComputer = false,
     bool makesProjects = true,
+    String? folder,
     List<Agent>? agents,
     Map<String, Map<String, dynamic>> overrides = const {},
   }) async {
@@ -98,6 +100,16 @@ void main() {
         ..agentLoadStatus = AgentLoadStatus.loaded
         ..agents = [edgeAgent('x', project: 'api')];
     }
+    if (awayComputer) {
+      // Harness is not running there: listed, but no harness can start on it.
+      const away = Machine(
+        machineId: 'box',
+        authMode: MachineAuthMode.remote,
+        name: 'box',
+      );
+      app.machines = [...app.machines, away];
+      app.machineStates['box'] = MachineState(away)..nodeOnline = false;
+    }
     await tester.pumpWidget(
       phoneApp(
         Builder(
@@ -107,6 +119,7 @@ void main() {
                 builder: (_) => NewAgentPage(
                   notifier: app,
                   machineId: 'm',
+                  folder: folder,
                   voice: edgeVoice().voice,
                 ),
               ),
@@ -405,7 +418,8 @@ void main() {
       'there', (tester) async {
     final (:app, :conn) = await openNew(tester, twoMachines: true);
     await choose(tester, 'project', 'api');
-    expect(find.text('mini:api', findRichText: true), findsWidgets);
+    expect(formRow(tester, 'computer').value, 'mini');
+    expect(formRow(tester, 'project').value, 'api');
     await tapInView(tester, find.text('Start'));
     await frames(tester, count: 20);
     await close(tester, app);
@@ -445,7 +459,14 @@ void main() {
       ),
       findsOneWidget,
     );
-    expect(find.text('web', findRichText: true), findsNothing);
+    // The chooser's rows only: the project row behind the sheet still names `web`.
+    expect(
+      find.descendant(
+        of: find.byType(FindRow),
+        matching: find.text('web', findRichText: true),
+      ),
+      findsNothing,
+    );
     await close(tester, app);
   });
 
@@ -454,7 +475,7 @@ void main() {
   ) async {
     final (:app, :conn) = await openNew(tester);
     await choose(tester, 'project', '+ New Folder');
-    expect(find.text('studio:New folder', findRichText: true), findsWidgets);
+    expect(formRow(tester, 'project').value, 'New folder');
 
     await choose(tester, 'project', '+ Clone Repository');
     await tester.enterText(find.byType(TextField).last, 'not a repository');
@@ -467,7 +488,7 @@ void main() {
     );
     await tester.tap(find.text('Select'));
     await frames(tester);
-    expect(find.text('studio:engine', findRichText: true), findsWidgets);
+    expect(formRow(tester, 'project').value, 'engine');
 
     await tapInView(tester, find.text('Start'));
     await frames(tester, count: 20);
@@ -562,7 +583,7 @@ void main() {
     expect(find.text('Cancel'), findsWidgets);
     await tester.tap(find.text('Cancel').last);
     await frames(tester);
-    expect(find.text('studio:web', findRichText: true), findsWidgets);
+    expect(formRow(tester, 'project').value, 'web');
     await close(tester, app);
   });
 
@@ -631,5 +652,152 @@ void main() {
     await frames(tester);
     expect(tester.takeException(), isNull);
     await close(tester, app);
+  });
+
+  group('the computer row', () {
+    testWidgets('a row of its own, between agent and project; the project row '
+        'names only the project', (tester) async {
+      final (:app, conn: _) = await openNew(tester);
+      expect(formRow(tester, 'computer').value, 'studio');
+      expect(formRow(tester, 'computer').detail, isNull);
+      expect(formRow(tester, 'project').value, 'web');
+      double top(String label) => tester.getTopLeft(find.text(label)).dy;
+      expect(top('agent'), lessThan(top('computer')));
+      expect(top('computer'), lessThan(top('project')));
+
+      // Typing folds the rows into one line, which still says where: `computer:project`.
+      await tester.enterText(find.byType(TextField), 'fix the login test');
+      raiseKeyboard(tester);
+      await frames(tester);
+      expect(find.text('computer'), findsNothing);
+      expect(formRow(tester, 'harness').value, startsWith('studio:web · '));
+      lowerKeyboard(tester);
+      await frames(tester);
+      await close(tester, app);
+    });
+
+    testWidgets('its computer goes offline: the row says so, and stops saying '
+        'so when it is back', (tester) async {
+      final (:app, conn: _) = await openNew(tester);
+      await app.handleMachineEventForTest('m', {
+        'type': 'node_status',
+        'payload': {'online': false},
+      });
+      await frames(tester);
+      expect(formRow(tester, 'computer').value, 'studio');
+      expect(formRow(tester, 'computer').detail, 'Offline');
+
+      await app.handleMachineEventForTest('m', {
+        'type': 'node_status',
+        'payload': {'online': true},
+      });
+      await frames(tester);
+      expect(formRow(tester, 'computer').detail, isNull);
+      await close(tester, app);
+    });
+
+    testWidgets('the chooser lists every computer; one that cannot take a '
+        'harness is greyed, with why', (tester) async {
+      final (:app, conn: _) = await openNew(
+        tester,
+        twoMachines: true,
+        awayComputer: true,
+      );
+      await tapInView(tester, find.text('computer'));
+      await frames(tester);
+      expect(find.text('Computer'), findsOneWidget);
+      expect(find.text('studio', findRichText: true), findsWidgets);
+      expect(find.text('mini', findRichText: true), findsOneWidget);
+      expect(find.text('box', findRichText: true), findsOneWidget);
+      expect(find.text('Offline', findRichText: true), findsOneWidget);
+
+      // A tap on the away one does nothing: the sheet stays, the form stays where it was.
+      await tester.tap(find.text('box', findRichText: true));
+      await frames(tester);
+      expect(find.text('Computer'), findsOneWidget);
+      await tester.tapAt(tester.getCenter(find.byType(ModalBarrier).last));
+      await frames(tester);
+      expect(formRow(tester, 'computer').value, 'studio');
+      expect(formRow(tester, 'project').value, 'web');
+      await close(tester, app);
+    });
+
+    testWidgets('another computer: the harness moves there, with that '
+        'computer\'s own project', (tester) async {
+      final (:app, conn: _) = await openNew(tester, twoMachines: true);
+      await choose(tester, 'computer', 'mini');
+      expect(formRow(tester, 'computer').value, 'mini');
+      expect(formRow(tester, 'project').value, 'api');
+
+      // What Start would send, read off the draft the form leaves on the way out.
+      await tester.binding.handlePopRoute();
+      await frames(tester, count: 6);
+      expect(newAgentDraft?.machineId, 'mini');
+      expect(newAgentDraft?.folder, '/code/api');
+      expect(newAgentDraft?.project, isNull);
+      await close(tester, app);
+    });
+
+    testWidgets('back on a computer: what was chosen there comes back, however '
+        'the form left it', (tester) async {
+      final (:app, conn: _) = await openNew(tester, twoMachines: true);
+      // Not the computer's default, so coming back to it cannot be mistaken for the default.
+      await choose(tester, 'project', '+ New Folder');
+      expect(formRow(tester, 'project').value, 'New folder');
+
+      // Left by the computer row.
+      await choose(tester, 'computer', 'mini');
+      expect(formRow(tester, 'project').value, 'api');
+      await choose(tester, 'computer', 'studio');
+      expect(formRow(tester, 'computer').value, 'studio');
+      expect(formRow(tester, 'project').value, 'New folder');
+
+      // Left by a folder on the other computer in Project.
+      await choose(tester, 'project', 'api');
+      expect(formRow(tester, 'computer').value, 'mini');
+      await choose(tester, 'computer', 'studio');
+      expect(formRow(tester, 'project').value, 'New folder');
+
+      await tester.binding.handlePopRoute();
+      await frames(tester, count: 6);
+      expect(newAgentDraft?.machineId, 'm');
+      expect(newAgentDraft?.folder, isNull);
+      expect(newAgentDraft?.project, isNotNull);
+      await close(tester, app);
+    });
+
+    testWidgets('opened for a folder: that folder stays on its own computer', (
+      tester,
+    ) async {
+      final (:app, conn: _) = await openNew(
+        tester,
+        twoMachines: true,
+        folder: '/code/site',
+      );
+      expect(formRow(tester, 'project').value, 'site');
+      await choose(tester, 'computer', 'mini');
+      expect(formRow(tester, 'project').value, 'api');
+      await choose(tester, 'computer', 'studio');
+      expect(formRow(tester, 'project').value, 'site');
+      await close(tester, app);
+    });
+
+    testWidgets('a computer that drops off while the chooser is up is not '
+        'moved to', (tester) async {
+      final (:app, conn: _) = await openNew(tester, twoMachines: true);
+      await tapInView(tester, find.text('computer'));
+      await frames(tester);
+      // The sheet was drawn while mini was answering; it goes away under it.
+      app.stateOf('mini')!.nodeOnline = false;
+      await tester.tap(find.text('mini', findRichText: true).last);
+      await frames(tester);
+      expect(formRow(tester, 'computer').value, 'studio');
+      expect(formRow(tester, 'project').value, 'web');
+      expect(
+        find.text('✗ That computer is no longer available.'),
+        findsOneWidget,
+      );
+      await close(tester, app);
+    });
   });
 }
