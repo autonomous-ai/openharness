@@ -555,7 +555,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
       try {
         if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
         // A computer new to Harness opens on agents, not on an empty box.
-        if (app.firstArrival.pending) {
+        if (app.firstArrival.pending || app.firstArrival.running) {
           final arriving = app.firstArrival.run(
             app,
             // The person has not taken over meanwhile: no box, search or command bar opened.
