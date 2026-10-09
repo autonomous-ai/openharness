@@ -99,7 +99,7 @@ describe('the handoff in the edge host', () => {
     expect(Object.keys(vi.mocked(runServiceProcess).mock.calls.at(-1)![0].requests)).toEqual([...HANDOFF_REQUESTS])
   })
 
-  it('loads the SQLite binding only for an engine that keeps its conversation in a store, and hands that one over', async () => {
+  it('reads SQLite only for a store-backed conversation and hands that one over', async () => {
     const ws = mkdtempSync(join(tmpdir(), 'handoff-store-'))
     try {
       execFileSync('git', ['init', '-q'], { cwd: ws })
@@ -111,14 +111,15 @@ describe('the handoff in the edge host', () => {
         value: query === 'resolve' ? Object.values(agents).find((agent) => agent.agentId === payload.id) ?? null
           : query === 'recentAsks' || query === 'recaps' ? [] : null,
       }))
-      // Claude Code and Codex keep a transcript file: nothing to read from a store, and the binding stays out.
+      // The eager SQLite module does not open a database for a file-backed conversation.
       expect(core.transcripts.databaseHistory(agents.claude as never)).toBeUndefined()
       expect(core.transcripts.databaseHistory({ ...agents.claude, engine: 'codex' } as never)).toBeUndefined()
       const prepare = startHandoff(core).agent_handoff_prepare!
       const asker = { local: true, owner: true }
       await prepare({ agentId: 'claude-1', changeId: 'c'.repeat(32), targetEngine: 'codex' }, asker)
-      expect(binding.loads).toBe(0)
-      // OpenCode: read through the binding, loaded for that read, and the turn it holds handed over.
+      expect(binding.loads).toBe(1)
+      expect(binding.reads).toEqual([])
+      // OpenCode reads through the same binding and hands over the turn the store holds.
       const handed = await prepare({ agentId: 'opencode-1', changeId: 'a'.repeat(32), targetEngine: 'claude' }, asker) as { file: string | null }
       expect(binding.loads).toBe(1)
       expect(binding.reads).toEqual([{ path: join(env.OPENCODE_DATA_DIR, 'opencode.db'), sql: expect.stringContaining('FROM message m'), params: ['ses_handoff1'] }])

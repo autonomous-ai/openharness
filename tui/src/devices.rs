@@ -1747,7 +1747,7 @@ mod tests {
         let app = app((150, 42));
         let rows = crate::modal::command_rows(&app);
         // (Connect a computer… only went to Connect machines…: one way in. Its command still runs.)
-        for (id, label) in [("devices", "Connect machines…"), ("add-phone", "Add phone…"), ("machines", "List machines")] {
+        for (id, label) in [("devices", "Connect machines"), ("add-phone", "Add phone"), ("machines", "List machines")] {
             let row = rows.iter().find(|r| r.id == format!("cmd:{id}")).unwrap_or_else(|| panic!("{id} missing"));
             assert_eq!((row.label.as_str(), row.group.as_deref()), (label, Some("Machines")));
         }

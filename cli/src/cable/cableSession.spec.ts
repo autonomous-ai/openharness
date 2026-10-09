@@ -1196,7 +1196,38 @@ describe('cable session', () => {
     await session.stop()
   })
 
-  it('coalesces quick app selections so the newest one focuses last', async () => {
+  it('focuses a remote pane before its machine connection answers', async () => {
+    let selected = 'mac-local'
+    let finishSelection!: () => void
+    const gate = new Promise<void>(resolve => { finishSelection = resolve })
+    const selectMachine = vi.fn(async (machineId: string) => {
+      await gate
+      selected = machineId
+      return { ok: true as const }
+    })
+    const { session, port } = await connect(makeHost({
+      selectedMachine: () => selected,
+      selectMachine,
+      listAgents: async () => [...AGENTS, { id: 'r1', name: 'Remote pane', machineId: 'remote-machine' }],
+    }))
+    let following: Promise<void> | undefined
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      port.sent.length = 0
+      following = session.followApp('remote-machine', 'r1')
+      await settle()
+      expect(selectMachine).toHaveBeenCalledWith('remote-machine')
+      expect(selected).toBe('mac-local')
+      expect(port.sent.filter(m => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'r1' }])
+    } finally {
+      finishSelection()
+      await following
+      await session.stop()
+    }
+  })
+
+  it('follows the newest pane without waiting for an older machine selection', async () => {
     let selected = 'mac-local'
     let finishFirstSelection!: () => void
     const firstSelectionGate = new Promise<void>((resolve) => { finishFirstSelection = resolve })
@@ -1217,13 +1248,21 @@ describe('cable session', () => {
 
     const oldSelection = session.followApp('remote-machine', 'r1')
     await settle()
+    port.sent.length = 0
     const newestSelection = session.followApp('mac-local', 'a2')
-    finishFirstSelection()
-    await Promise.all([oldSelection, newestSelection])
-
-    expect(port.sent.filter((m) => m.t === 'focus').map((m) => m.agentId)).toEqual(['a2'])
-    expect(selected).toBe('mac-local')
-    await session.stop()
+    try {
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'focus').map((m) => m.agentId)).toEqual(['a2'])
+      finishFirstSelection()
+      await Promise.all([oldSelection, newestSelection])
+      expect(port.sent.filter((m) => m.t === 'focus').map((m) => m.agentId)).toEqual(['a2'])
+      expect(port.sent.filter((m) => m.t === 'machine.selected').map((m) => m.machineId)).toEqual(['mac-local'])
+      expect(selected).toBe('mac-local')
+    } finally {
+      finishFirstSelection()
+      await Promise.all([oldSelection, newestSelection])
+      await session.stop()
+    }
   })
 
   it.each([{ selections: ['a2'] }, { selections: ['a1', 'a2'] }])('delivers the latest focus when $selections supersedes an unsent selection', async ({ selections }) => {
@@ -1242,6 +1281,71 @@ describe('cable session', () => {
       expect(port.sent.filter(m => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'a2' }])
     } finally { await session.stop() }
   })
+
+  it('settles the machine wheel when a newer pane uses the same pending connection', async () => {
+    let selected = 'mac-local'
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => { finish = resolve })
+    const selectMachine = vi.fn(async (machineId: string) => {
+      await gate
+      selected = machineId
+      return { ok: true as const }
+    })
+    const { session, port } = await connect(makeHost({ selectedMachine: () => selected, selectMachine }))
+    const pending: Promise<void>[] = []
+    try {
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await settle()
+      pending.push(session.followApp('remote-machine', 'r1'))
+      await settle()
+      port.sent.length = 0
+      pending.push(session.followApp('remote-machine', 'r2'))
+      await settle()
+      expect(port.sent.filter(m => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'r2' }])
+      finish()
+      await Promise.all(pending)
+      expect(selectMachine).toHaveBeenCalledTimes(1)
+      expect(port.sent.filter(m => m.t === 'machines.end').at(-1)).toMatchObject({ selected: 'remote-machine' })
+      expect(port.sent.filter(m => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'r2' }])
+    } finally { finish(); await Promise.all(pending); await session.stop() }
+  })
+
+  it.each(['refused', 'throws', 'disconnected'])(
+    'keeps pane focus independent when a remote attachment is %s', async outcome => {
+      let finish!: () => void
+      const gate = new Promise<void>(resolve => { finish = resolve })
+      const log = vi.fn()
+      const { session, port } = await connect(makeHost({
+        log,
+        selectMachine: async () => {
+          await gate
+          if (outcome === 'throws') throw new Error('connection lost')
+          if (outcome === 'refused') return { ok: false, code: 'UNREACHABLE', message: 'Remote unavailable' }
+          return { ok: true }
+        },
+      }))
+      let following: Promise<void> | undefined
+      try {
+        port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+        await settle()
+        port.sent.length = 0
+        following = session.followApp('remote-machine', 'r1')
+        await settle()
+        expect(port.sent.filter(m => m.t === 'focus')).toEqual([{ t: 'focus', agentId: 'r1' }])
+        if (outcome === 'disconnected') await port.close()
+        finish()
+        await following
+        if (outcome === 'disconnected') {
+          expect(port.sent).toEqual([{ t: 'focus', agentId: 'r1' }])
+        } else {
+          if (outcome === 'refused') expect(port.sent).toContainEqual(expect.objectContaining({ t: 'machine.error', code: 'UNREACHABLE' }))
+          else expect(log).toHaveBeenCalledWith('cable: could not follow app machine (connection lost)')
+          await session.followApp('mac-local', 'a2')
+          expect(port.sent.filter(m => m.t === 'focus').at(-1)).toEqual({ t: 'focus', agentId: 'a2' })
+        }
+      } finally { finish(); await following; await session.stop() }
+    },
+  )
 
   it('forwards a whole stroke, including the reports that carry no travel', async () => {
     // The ends of a stroke are the point of the message, not padding around it: a `down` with nothing in

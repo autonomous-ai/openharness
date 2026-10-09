@@ -3,8 +3,7 @@ import type { ProcessRow } from './tmux.js'
 import type { TerminalBackend } from './terminalBackend.js'
 
 /**
- * The Hermes home a process runs under rides the live discovery path, read by Hermes's own probe
- * (engines/hermes/homeProbe.ts), loaded for a Hermes process alone (engines/inProcess.ts).
+ * The Hermes home rides the live discovery path through eager process facts.
  * `engines/otherAdmission.golden.spec.ts` pins what it reads; this pins when it is asked.
  */
 const processRows = vi.hoisted(() => vi.fn())
@@ -39,16 +38,20 @@ beforeEach(() => {
 })
 
 describe('Hermes\'s home on the live terminal discovery path', () => {
-  it('is read by Hermes\'s code, loaded for its process alone', async () => {
+  it('is read without the optional engine loader', async () => {
     expect(await homes()).toEqual({ hermes: '/home/u/.hermes/profiles/work', claude: null })
-    expect(vi.mocked(loadEngine).mock.calls).toEqual([['hermes']])
+    expect(loadEngine).not.toHaveBeenCalled()
   })
 
-  it('is unknown without Hermes\'s code, which never overwrites what the registry knows', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    vi.mocked(loadEngine).mockResolvedValueOnce(null)
+  it('still discovers the home when Hermes interpretation cannot load', async () => {
+    vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(() => {}))
+    expect(await homes()).toEqual({ hermes: '/home/u/.hermes/profiles/work', claude: null })
+    expect(loadEngine).not.toHaveBeenCalled()
+  })
+
+  it('preserves an unknown home when the process environment cannot be read', async () => {
+    readProcessEnv.mockResolvedValue(null)
     expect(await homes()).toEqual({ hermes: undefined, claude: null })
-    error.mockRestore()
   })
 
   it('is not asked of a pane with no Hermes in it', async () => {

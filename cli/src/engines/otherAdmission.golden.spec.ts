@@ -48,6 +48,7 @@ function check(key: string, value: unknown): void {
 }
 
 const saved: Record<string, string | undefined> = {}
+const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
 type Modules = {
   registry: typeof import('../lib/registry.js')
   hookServer: typeof import('../hookServer.js')
@@ -58,6 +59,7 @@ let m: Modules
 const home = (...parts: string[]) => join(root, 'home', ...parts)
 
 beforeAll(async () => {
+  Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   root = realpathSync(mkdtempSync(join(tmpdir(), 'other-admission-golden-')))
   const env: Record<string, string | undefined> = {
     HOME: home(), ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'), HERMES_HOME: home('.hermes'),
@@ -80,6 +82,7 @@ beforeAll(async () => {
 })
 
 afterAll(() => {
+  Object.defineProperty(process, 'platform', platform)
   for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value
   if (root) rmSync(root, { recursive: true, force: true })
   if (RECORD) writeFileSync(GOLDEN, JSON.stringify(recorded, null, 1) + '\n')
@@ -124,9 +127,19 @@ describe('how the core admits a Hermes session and learns its home', () => {
         ['one in both homes: the default asked first', '20261008_100002_dddddd'],
         ['an editor\'s session, whose id is a uuid', '0b6f4f2e-6c1a-4c55-9a51-000000000001'],
         ['one no store holds yet', '20261008_100009_999999'],
+        ['one whose candidate store cannot be read', '20261008_100010_aaaaaa'],
       ] as const
       let pane = 0
       for (const [label, sessionId] of cases) {
+        if (label === 'one whose candidate store cannot be read') {
+          // Added only after the existing cases; preserve their former inputs and outcomes.
+          // Invalid SQLite bytes are unreadable on every host, including privileged CI users.
+          mkdirSync(home('.hermes', 'profiles', 'unreadable'), { recursive: true })
+          writeFileSync(home('.hermes', 'profiles', 'unreadable', 'state.db'), 'not a SQLite database')
+          const { forgetStoreHomes } = await import('./kit/storeHomes.js')
+          const { HERMES_HOMES } = await import('./hermes/contract.js')
+          forgetStoreHomes(HERMES_HOMES)
+        }
         const tmuxPane = `%${++pane}`
         m.registry.registry.openProcessAgent({ engine: 'hermes', tmuxPane, cwd: '/work/h', processIdentity: { pid: 20_000 + pane, startMarker: START, executable: 'python3' } })
         registered.length = 0
@@ -135,9 +148,9 @@ describe('how the core admits a Hermes session and learns its home', () => {
           method: 'POST', headers, body: JSON.stringify({ engine: 'hermes', tmuxPane, sessionId, cwd: '/work/h', hookEvent: 'SessionStart' }),
         })
         const answer = await response.json()
-        // Settled off the HTTP path: registered, or ignored, within the bounded wait for a row.
+        // Settled off the HTTP path: verified, rejected, or explicitly held without a registry write.
         const deadline = Date.now() + 10_000
-        while (!registered.length && !logs.some((line) => line.includes('ignored')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
+        while (!registered.length && !logs.some((line) => line.includes('ignored') || line.includes(' held ·')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
         results.push([label, response.status, answer, [...registered], logs.filter((line) => line.startsWith('[hooks]'))])
       }
       check('admission', results)

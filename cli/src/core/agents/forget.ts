@@ -28,6 +28,7 @@ export interface ForgetDeps {
   stoppedAgents: Pick<StoppedAgentStore, 'save'>
   syncRecapPool: () => void
   normalizers: Pick<SessionNormalizers, 'forget'>
+  forgetAttach: (sessionId: string) => void
   turnStartedAt: Map<string, number>
   /** Attach's two per-session marks (core/transcripts/attach.ts). */
   neverFoldedHistory: Set<string>
@@ -50,7 +51,7 @@ export interface ForgetDeps {
 }
 
 export function createForgetSession({
-  registry, stoppedAgents, syncRecapPool, normalizers, turnStartedAt, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
+  registry, stoppedAgents, syncRecapPool, normalizers, forgetAttach, turnStartedAt, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
   clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, teams, input,
   deviceInput, detachDsh, mirror, clients, dataDir, onRemoved,
 }: ForgetDeps) {
@@ -78,6 +79,7 @@ export function createForgetSession({
     else registry.remove(sessionId)
     syncRecapPool()
     normalizers.forget(sessionId)
+    forgetAttach(sessionId)
     turnStartedAt.delete(sessionId)
     neverFoldedHistory.delete(sessionId)
     // Both sets are per-session and must die with it: left behind they grow without bound in a daemon

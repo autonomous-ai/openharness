@@ -550,11 +550,10 @@ export class CableSession {
   private desiredFocus = ''
   /** A superseded list refresh can record the selection without ever writing its focus frame. */
   private appFocusUnsent = false
-  /**
-   * App-driven machine/focus changes are one transaction. Without this queue, two quick desktop clicks
-   * can interleave their machine lists and let the older click focus last.
-   */
+  /** Keep list-before-focus writes ordered, coalescing superseded desktop selections. */
   private appFocusTail: Promise<void> = Promise.resolve()
+  /** A remote attachment can take seconds. It must not hold the next pane's focus behind it. */
+  private appMachineTail: Promise<void> = Promise.resolve()
   private appFocusGeneration = 0
   /** When the app-driven switch began — see APP_SWITCH_REPAINT_MS. */
   private drivingSince = 0
@@ -2279,7 +2278,7 @@ export class CableSession {
    * until its own deadline, which reads as a hang rather than as "done, nothing changed" — the same rule
    * `models.list` follows.
    */
-  private async selectMachine(machineId: string): Promise<void> {
+  private async selectMachine(machineId: string, isCurrent = () => true): Promise<void> {
     if (!machineId) return
     if (machineId === this.host.selectedMachine()) {
       await this.send({ t: 'machine.selected', machineId })
@@ -2288,6 +2287,9 @@ export class CableSession {
       return
     }
     const result = await this.host.selectMachine(machineId)
+    // An app selection may have moved again, or its cable closed, during the remote attachment.
+    // The next queued selection corrects the host; never publish this obsolete acknowledgement.
+    if (!isCurrent()) return
     if (!result.ok) {
       this.log(`cable: machine.select ${machineId} refused (${result.code})`)
       await this.send({ t: 'machine.error', machineId, code: result.code, message: result.message })
@@ -2519,9 +2521,10 @@ export class CableSession {
    * The record is one field written by both sides (see desiredFocus). It used to be two, and the ring
    * closed through the gap between them.
    *
-   * The machine comes first when it differs. Sending `focus` for an agent on a machine the dial is not on
-   * would name an id its list has never heard of, and the tile it would have to move to does not exist
-   * yet — selectMachine is what streams that list.
+   * The list comes first, but attaching to the machine does not. The dial now holds the active tab's
+   * panes across all machines. Waiting for the separate remote attachment held even a newer LOCAL
+   * selection behind the network, leaving the round unit on the old pane. Update the machine wheel
+   * separately, still in order, so a slow attachment cannot block the selected pane.
    */
   async followApp(machineId: string, agentId: string): Promise<void> {
     if (!this.link?.isOpen || this.greetedMac === null) return
@@ -2534,15 +2537,9 @@ export class CableSession {
       this.drivingSince = Date.now()
       this.drivingAppFocus = true
       try {
-        if (machineId && machineId !== this.host.selectedMachine()) {
-          this.log(`cable: following the app to machine ${machineId}`)
-          await this.selectMachine(machineId)
-        }
-        // A newer selection can arrive while the remote machine RPC/list push is in flight. Never let
-        // this older transaction focus after it finishes.
         // Already where the window is: nothing to command. The record is right either way — this is the
         // window FOLLOWING the dial, and the dial's own report wrote it.
-        if (generation !== this.appFocusGeneration || (agentId === this.desiredFocus && !this.appFocusUnsent)) return
+        if (agentId === this.desiredFocus && !this.appFocusUnsent) return
         // Said before the frame goes out, not after: the frame itself succeeds either way.
         const unknown = this.host.knows?.(agentId) === false
         this.log(`cable: following the app to agent ${agentId}${unknown ? ' — NOT in this daemon\'s list, the dial has no tile for it' : ''}`)
@@ -2573,10 +2570,26 @@ export class CableSession {
     // Keep the queue usable after one transport failure. The local websocket intentionally
     // fire-and-forgets followApp, so the session log is the only place an unexpected rejection would
     // otherwise be visible; consume it here rather than creating an unhandled rejection.
-    this.appFocusTail = task.catch((err) => {
+    const focused = this.appFocusTail = task.catch((err) => {
       this.log(`cable: could not follow app focus (${(err as Error).message})`)
     })
-    await this.appFocusTail
+    const machineTask = this.appMachineTail.then(async () => {
+      await focused
+      const isCurrent = () => generation === this.appFocusGeneration
+      if (!isCurrent() || !machineId) return
+      if (machineId === this.host.selectedMachine()) {
+        // An older attachment to this same machine may have finished without acknowledging it,
+        // because a newer pane superseded that request. The wheel still needs its selection.
+        await this.syncMachines()
+        return
+      }
+      this.log(`cable: following the app to machine ${machineId}`)
+      await this.selectMachine(machineId, isCurrent)
+    })
+    const selected = this.appMachineTail = machineTask.catch((err) => {
+      this.log(`cable: could not follow app machine (${(err as Error).message})`)
+    })
+    await Promise.all([focused, selected])
   }
   async toast(text: string): Promise<void> {
     await this.send({ t: 'toast', text })

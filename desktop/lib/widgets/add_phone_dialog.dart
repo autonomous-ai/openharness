@@ -5,9 +5,11 @@ import 'dart:math' as math;
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../shared/widgets/qr_code_view.dart';
 import '../api/api_client.dart';
+import '../core/phone_app_links.dart';
 import '../screens/login_screen.dart' show showSignInSheet;
 import '../shared/theme/app_theme.dart' as grid;
 import '../shortcuts/app_keymap.dart';
@@ -318,6 +320,13 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// The sign-in sheet raised from here is up — see [_signInHere].
   bool _signingIn = false;
 
+  /// The code's space — "Preparing your code…", then the code — so it can be
+  /// brought into view ([_codeSpace]).
+  final _codeKey = GlobalKey();
+
+  /// The code's space has appeared once; after that, the scroll is the person's.
+  bool _codeAppeared = false;
+
   /// No pairing to be had from this daemon — asking stopped for good.
   bool _stopped = false;
   String? _connected;
@@ -553,7 +562,6 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   void _close() => Navigator.of(context).maybePop();
 
   Color get _faint => DesktopChrome.muted;
-  TextStyle _ink([Color? color]) => DesktopChrome.text(color: color);
 
   @override
   Widget build(BuildContext context) {
@@ -565,7 +573,6 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     return TerminalPromptKeys(
       cancel: _close,
       child: DesktopPromptSurface(
-        width: 440,
         body: LayoutBuilder(
           builder: (context, constraints) => DesktopPromptScrollBody(
             child: Column(
@@ -576,8 +583,32 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
                   header: true,
                   child: Text('Add your phone', style: DesktopChrome.heading()),
                 ),
-                const SizedBox(height: 24),
-                ..._body(math.min(240, constraints.maxWidth), 16),
+                const SizedBox(height: 18),
+                // Folded, the step is its one line, in the title's place: signed in, the
+                // pairing code is what the dialog is for, and at a large text size a
+                // title over the line pushed it below the fold.
+                _downloadsShown
+                    ? _AddPhoneStep(
+                        number: 1,
+                        title: Text(
+                          'Get Harness on your phone',
+                          style: _AddPhoneStep.titleStyle(),
+                        ),
+                        children: _downloads(),
+                      )
+                    : _AddPhoneStep(number: 1, title: _downloadsClosed()),
+                Divider(
+                  height: 1,
+                  thickness: 1,
+                  color: grid.AppPalette.divider,
+                ),
+                _AddPhoneStep(
+                  number: 2,
+                  title: Text(_pairingTitle, style: _AddPhoneStep.titleStyle()),
+                  children: _pairing(
+                    math.min(200, constraints.maxWidth - _AddPhoneStep.indent),
+                  ),
+                ),
               ],
             ),
           ),
@@ -596,36 +627,91 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     );
   }
 
-  List<Widget> _body(double qrSide, double row) {
+  /// Step 1's download codes, opened by hand once they are folded away. Null
+  /// follows the account: open for a guest, who is likeliest to be new to
+  /// Harness altogether; folded once signed in, so the one code on screen is
+  /// the one to scan from the app.
+  bool? _downloadsOpen;
+
+  bool get _downloadsShown => _downloadsOpen ?? app.isGuest;
+
+  /// The Harness app in its two stores, as codes a phone's camera opens —
+  /// not links: a link clicked here opens the store on this computer, which
+  /// cannot install a phone's app.
+  List<Widget> _downloads() => [
+    Text('Scan with your phone’s camera.', style: _note()),
+    Wrap(
+      spacing: 40,
+      runSpacing: 16,
+      children: const [
+        _StoreCode(
+          name: 'App Store',
+          mark: 'assets/stores/app-store.svg',
+          url: kAppStoreUrl,
+        ),
+        _StoreCode(
+          name: 'Google Play',
+          mark: 'assets/stores/google-play.svg',
+          url: kGooglePlayUrl,
+        ),
+      ],
+    ),
+  ];
+
+  Widget _downloadsClosed() => Wrap(
+    crossAxisAlignment: WrapCrossAlignment.center,
+    spacing: 4,
+    children: [
+      Text('Not on your phone yet?', style: _note()),
+      TextButton(
+        key: const ValueKey('add-phone-show-downloads'),
+        onPressed: () => setState(() => _downloadsOpen = true),
+        child: const Text('Show download codes'),
+      ),
+    ],
+  );
+
+  /// A browser with none of the account's computers to pair through.
+  bool get _connectFirst =>
+      app.viewer != null &&
+      !app.signingIn &&
+      app.currentUser?.email.contains('@') == true;
+
+  String get _pairingTitle {
+    if (app.isGuest) return 'Sign in on this ${_thisComputer()}';
+    if (_target == null && _connectFirst) return 'Connect a computer first';
+    return 'Scan this code with Harness';
+  }
+
+  /// Step 2: what signing in brings — the code, then whether it worked.
+  List<Widget> _pairing(double qrSide) {
     if (app.isGuest) {
-      // ⚠️ Keep the first line word for word: the phone app's scan screen
-      // quotes it, to tell someone who sees it here what to do.
       return [
-        Text('Sign in to add your phone.', style: _ink()),
-        SizedBox(height: row / 2),
         Text(
-          'Your phone signs in to the same account when it scans the code.',
-          style: _ink(_faint),
+          'A code appears here. Scan it with Harness on your phone.',
+          style: _note(),
         ),
       ];
     }
     final target = _target;
     if (target == null) {
-      if (app.viewer != null &&
-          !app.signingIn &&
-          app.currentUser?.email.contains('@') == true) {
+      if (_connectFirst) {
         return [
-          Text('Connect a computer to add your phone.', style: _ink()),
-          if (widget.onConnectMachine case final connect?) ...[
-            SizedBox(height: row),
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                connect();
-              },
-              child: const Text('Connect a machine'),
+          Text(
+            'Your phone pairs with a computer on your account.',
+            style: _note(),
+          ),
+          if (widget.onConnectMachine case final connect?)
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  connect();
+                },
+                child: const Text('Connect a machine'),
+              ),
             ),
-          ],
         ];
       }
       return [
@@ -633,7 +719,7 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
           app.currentUser?.email.contains('@') == true
               ? 'Waiting for Harness on this ${_thisComputer()}…'
               : 'Waiting for your account…',
-          style: _ink(_faint),
+          style: _note(),
         ),
       ];
     }
@@ -641,10 +727,13 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     // changed right after it appeared would be one scanned without it.
     if (!_signInAsked) {
       return [
-        SizedBox(
-          height: qrSide + row * 2,
-          child: Center(
-            child: Text('Preparing your code…', style: _ink(_faint)),
+        _codeSpace(
+          SizedBox(
+            height: qrSide,
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Text('Preparing your code…', style: _note()),
+            ),
           ),
         ),
       ];
@@ -656,41 +745,66 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       signIn: _signIn,
     ).toString();
     return [
-      Center(
-        // Dimmed once it has done its job, so nobody scans a spent code.
-        child: Opacity(
-          opacity: _connected == null && !_stopped ? 1 : .25,
-          child: PhonePairQr(data: link, side: qrSide),
+      _codeSpace(
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          // Dimmed once it has done its job, so nobody scans a spent code.
+          child: Opacity(
+            opacity: _connected == null && !_stopped ? 1 : .25,
+            child: PhonePairQr(data: link, side: qrSide),
+          ),
         ),
       ),
-      SizedBox(height: row),
-      if (_remoteMachineId case final machineId?) ...[
+      if (_remoteMachineId case final machineId?)
         Text(
           app.stateOf(machineId)?.machine.displayName ?? 'Computer',
-          textAlign: TextAlign.center,
-          style: _ink(_faint),
+          style: _note(),
         ),
-        SizedBox(height: row),
-      ],
       // One line, and it is the status too: what to do, then that it worked.
-      // The phone's own screen says the rest (Yes — scan to connect).
       _status(),
       // Not after a sign-in from here: it rebuilt the screen that opened this
       // dialog, and that screen is the one the link would open Settings from.
-      if (widget.onManageDevices case final manage?
-          when !_signedInWhileOpen) ...[
-        SizedBox(height: row),
-        TextButton(
-          key: const ValueKey('add-phone-manage-devices'),
-          onPressed: () {
-            Navigator.of(context).pop();
-            manage();
-          },
-          child: const Text('Manage devices…'),
+      if (widget.onManageDevices case final manage? when !_signedInWhileOpen)
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          child: TextButton(
+            key: const ValueKey('add-phone-manage-devices'),
+            onPressed: () {
+              Navigator.of(context).pop();
+              manage();
+            },
+            child: const Text('Manage devices…'),
+          ),
         ),
-      ],
     ];
   }
+
+  /// [child] in the code's space, scrolled into view the first time it appears.
+  ///
+  /// At a large text size or in a short window the steps above push the code —
+  /// what the dialog is for — below the fold. It is brought up only as far as
+  /// it takes, so where it already shows nothing moves; and only the once, so
+  /// a new code or a dimmed one never pulls back a person who scrolled up.
+  Widget _codeSpace(Widget child) {
+    if (!_codeAppeared) {
+      _codeAppeared = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final space = _codeKey.currentContext;
+        if (_closed || space == null) return;
+        unawaited(
+          Scrollable.ensureVisible(
+            space,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          ),
+        );
+      });
+    }
+    return KeyedSubtree(key: _codeKey, child: child);
+  }
+
+  /// A line under a step's title: smaller and quieter than the title.
+  TextStyle _note([Color? color]) =>
+      DesktopChrome.text(color: color ?? _faint, size: 13);
 
   Widget _status() {
     final connected = _connected;
@@ -698,15 +812,132 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
         ? ('✓ Connected $connected', grid.AppPalette.online)
         : _message != null
         ? (_message!, Theme.of(context).colorScheme.error)
-        : ('Scan with Harness on your iPhone', _faint);
+        // The phone's own button (mobile `set_up_computer.dart`).
+        : ('On your phone, open Harness and tap Pair computer.', _faint);
     return Semantics(
       liveRegion: true,
       child: Text(
         text,
         key: const ValueKey('add-phone-status'),
-        textAlign: TextAlign.center,
-        style: _ink(color),
+        style: _note(color),
       ),
+    );
+  }
+}
+
+/// One step of Add Phone: its number in a quiet circle, its title beside it,
+/// and what the step takes under the title.
+class _AddPhoneStep extends StatelessWidget {
+  const _AddPhoneStep({
+    required this.number,
+    required this.title,
+    this.children = const [],
+  });
+
+  static TextStyle titleStyle() =>
+      DesktopChrome.text(size: 14).copyWith(fontWeight: FontWeight.w600);
+
+  /// The number's circle and the gap after it — where a step's lines start.
+  static const double indent = _circle + 12;
+  static const double _circle = 24;
+
+  final int number;
+
+  /// Beside the number: the step's name — or, folded, the line it folds to.
+  final Widget title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ExcludeSemantics(
+            child: Container(
+              width: _circle,
+              height: _circle,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: DesktopChrome.field,
+                shape: BoxShape.circle,
+              ),
+              child: Text(
+                '$number',
+                style: DesktopChrome.metadata().copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: indent - _circle),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Centred on the circle while it is one line; wraps under itself after.
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: _circle),
+                  child: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: title,
+                  ),
+                ),
+                for (final child in children) ...[
+                  const SizedBox(height: 10),
+                  child,
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One store's download code: the code, then the store's own mark and name.
+class _StoreCode extends StatelessWidget {
+  const _StoreCode({required this.name, required this.mark, required this.url});
+
+  final String name;
+
+  /// The store's mark, in its own colours whatever the theme — it is the
+  /// store's brand, the way the sign-in buttons' marks are.
+  final String mark;
+  final String url;
+
+  static const double _side = 120;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        QrCodeView(
+          data: url,
+          side: _side,
+          semanticLabel: 'QR code for Harness on $name',
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ExcludeSemantics(
+              child: SvgPicture.asset(mark, width: 18, height: 18),
+            ),
+            const SizedBox(width: 7),
+            Text(
+              name,
+              style: DesktopChrome.control().copyWith(
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
