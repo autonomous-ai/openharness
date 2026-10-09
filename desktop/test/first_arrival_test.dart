@@ -216,6 +216,49 @@ void main() {
       expect(claude.typesStarterTask, isFalse);
     });
 
+    test(
+      'agents nobody has signed in to: OpenCode leads, they sit beside it',
+      () {
+        final codex = planFirstArrival(
+          newUser: false,
+          sessions: const [],
+          installed: const {'codex'},
+          signedOut: const {'codex'},
+        );
+        expect(codex.fresh, ['opencode', 'codex']);
+        expect(codex.typesStarterTask, isTrue);
+        expect(
+          planFirstArrival(
+            newUser: false,
+            sessions: const [],
+            installed: const {'claude', 'codex'},
+            signedOut: const {'claude', 'codex'},
+          ).fresh,
+          ['opencode', 'codex', 'claude'],
+        );
+        // One signed in is enough to start on: no OpenCode.
+        expect(
+          planFirstArrival(
+            newUser: false,
+            sessions: const [],
+            installed: const {'claude', 'codex'},
+            signedOut: const {'codex'},
+          ).fresh,
+          ['claude', 'codex'],
+        );
+        // Their conversations still come first.
+        expect(
+          planFirstArrival(
+            newUser: false,
+            sessions: [_s('codex', 'x1', 1)],
+            installed: const {'codex'},
+            signedOut: const {'codex'},
+          ).fresh,
+          isEmpty,
+        );
+      },
+    );
+
     test('OpenCode alone gets OpenCode with the starter task', () {
       final plan = planFirstArrival(
         newUser: false,
@@ -305,6 +348,28 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(store.values[FirstArrival.key], 'done');
       expect(await arrival.run(app, machineWait: Duration.zero), isFalse);
+    });
+
+    test('a second call joins the run under way', () async {
+      final arrival = FirstArrival(_MemoryStore())..begin(downloads: true);
+      await arrival.restore();
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+      addTearDown(app.dispose);
+      final first = arrival.run(
+        app,
+        machineWait: const Duration(milliseconds: 300),
+      );
+      expect(arrival.running, isTrue);
+      expect(arrival.pending, isFalse);
+      // The workspace's call, with none of its own settings: it waits for the same run.
+      final joined = arrival.run(app);
+      expect(await Future.wait([first, joined]), [false, false]);
+      expect(arrival.running, isFalse);
+      expect(await arrival.run(app), isFalse, reason: 'spent');
     });
 
     test('the person taking over first stops it and spends the mark', () async {

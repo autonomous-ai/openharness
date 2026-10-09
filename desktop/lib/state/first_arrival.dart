@@ -146,25 +146,59 @@ class FirstArrival {
   /// [stillCurrent] says the person has not taken over meanwhile (opened the New Harness box,
   /// search, the command bar); it is asked before each pane, and so is whether they are still on a
   /// tab this is filling.
+  ///
+  /// A second call while one is under way joins it: the app starts it behind the welcome tour, and
+  /// the workspace waits for that one when it appears.
   Future<bool> run(
     AppNotifier app, {
     bool Function()? stillCurrent,
     Duration machineWait = const Duration(seconds: 30),
     Duration indexWait = const Duration(seconds: 15),
     Duration starterWait = const Duration(minutes: 3),
+  }) {
+    if (_inFlight case final inFlight?) return inFlight;
+    if (!pending) return Future.value(false);
+    final run = _run(
+      app,
+      stillCurrent: stillCurrent,
+      machineWait: machineWait,
+      indexWait: indexWait,
+      starterWait: starterWait,
+    );
+    _inFlight = run;
+    return run.whenComplete(() => _inFlight = null);
+  }
+
+  Future<bool>? _inFlight;
+
+  Future<bool> _run(
+    AppNotifier app, {
+    bool Function()? stillCurrent,
+    required Duration machineWait,
+    required Duration indexWait,
+    required Duration starterWait,
   }) async {
-    if (!pending) return false;
     _running = true;
     final started = _now();
-    final tabs = <String>{app.activeSwarmId};
+    // The tabs this fills, fixed once the first pane is about to open: behind the welcome tour the
+    // desk is still being read and its tab can be replaced before then (a run that pinned it at the
+    // start gave up on an existing user's sessions, fresh macOS VM, 2026-10-09).
+    final tabs = <String>{};
     bool current() =>
-        (stillCurrent?.call() ?? true) && tabs.contains(app.activeSwarmId);
+        (stillCurrent?.call() ?? true) &&
+        (tabs.isEmpty || tabs.contains(app.activeSwarmId));
     var opened = false;
+    bool stop(String why) {
+      _log('first arrival: stopped, $why');
+      return false;
+    }
+
     try {
       // Someone whose account already has a desk elsewhere keeps it.
-      if (app.allPanes.isNotEmpty) return false;
+      if (app.allPanes.isNotEmpty) return stop('the desk already has panes');
       final machine = await _localMachine(app, machineWait);
-      if (machine == null || !current()) return false;
+      if (machine == null) return stop('this computer never answered');
+      if (!current()) return stop('the person took over');
       final machineId = machine.machine.machineId;
       final sessions = await recentSessions(app, machineId, budget: indexWait);
       await app.probeEngines(machineId);
@@ -176,12 +210,19 @@ class FirstArrival {
         newUser: _state == 'new',
         sessions: sessions,
         installed: installed,
+        signedOut: {
+          for (final engine in const ['claude', 'codex'])
+            if (machine.engines[engine]?.signedIn == false) engine,
+        },
       );
       _log(
         'first arrival: $plan after ${_now().difference(started).inMilliseconds} ms '
         '(${sessions.length} recent, installed $installed)',
       );
-      if (plan.isEmpty || app.allPanes.isNotEmpty || !current()) return false;
+      if (plan.isEmpty) return stop('nothing to open');
+      if (app.allPanes.isNotEmpty) return stop('the desk already has panes');
+      if (!current()) return stop('the person took over');
+      tabs.add(app.activeSwarmId);
       opened = plan.fresh.isNotEmpty
           ? await _openFresh(app, machineId, plan, starterWait, current)
           : await _openSessions(app, machineId, plan.tabs, tabs, current);
@@ -532,10 +573,16 @@ List<List<ArrivalSession>> oneOfEachEngine(List<ArrivalSession> sessions) {
 /// with both agents in it when both have one left. Without conversations, someone setup gave the
 /// three agents gets them in one tab, OpenCode first; someone with agents gets a fresh pane on each
 /// of Claude Code and Codex they have, or on OpenCode when that is all they have.
+///
+/// Claude Code or Codex installed but none of them signed in ([signedOut]) is someone who has not
+/// used them yet: OpenCode leads with the starter task, their agents beside it on their sign-in, so a
+/// first result never waits on an account (a fresh Mac with Codex from npm, 2026-10-09: the only pane
+/// was Codex's sign-in, which sent the person to a browser).
 FirstArrivalPlan planFirstArrival({
   required bool newUser,
   required List<ArrivalSession> sessions,
   required Set<String> installed,
+  Set<String> signedOut = const {},
 }) {
   if (sessions.isNotEmpty) return FirstArrivalPlan(tabs: recentTabs(sessions));
   if (newUser) {
@@ -545,6 +592,9 @@ FirstArrivalPlan planFirstArrival({
     for (final engine in const ['claude', 'codex'])
       if (installed.contains(engine)) engine,
   ];
+  if (fresh.isNotEmpty && fresh.every(signedOut.contains)) {
+    return FirstArrivalPlan(fresh: ['opencode', ...fresh.reversed]);
+  }
   if (fresh.isNotEmpty) return FirstArrivalPlan(fresh: fresh);
   if (installed.contains('opencode')) {
     return const FirstArrivalPlan(fresh: ['opencode']);
