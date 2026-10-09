@@ -38,7 +38,7 @@ export function createUsageLink(options: {
       entry.dirty = false; entry.pending = true; entry.checked = now()
       const generation = epoch, target = usageTarget(entry.target)
       running++
-      const task = Promise.resolve().then(() => stopped ? {} : options.call({ target })).then(answer => {
+      const task = Promise.resolve().then((): Record<string, unknown> | Promise<Record<string, unknown>> => stopped ? {} : options.call({ target })).then(answer => {
         if (stopped || generation !== epoch || entries.get(id) !== entry
           || !validUsageTarget(answer.target) || usageTargetKey(answer.target) !== usageTargetKey(target) || !validUsage(answer.value)) return
         const value = usageSnapshot(answer.value)
