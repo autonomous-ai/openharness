@@ -60,6 +60,8 @@ export type TerminalActionResult =
 export interface TerminalDispatchControl {
   current?: () => boolean
   onDispatch?: () => void
+  /** A held adoption may replace only its exact inert shell, checked inside tmux. */
+  expectedHeldToken?: string
 }
 
 export interface TerminalCreateRequest extends TerminalDispatchControl {

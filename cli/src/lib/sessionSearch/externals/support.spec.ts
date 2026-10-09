@@ -229,9 +229,10 @@ describe('processes', () => {
     expect(await listProcesses(async () => null)).toEqual([])
     const row = { pid: 5, parentPid: 1, executable: 'grok', args: 'grok', startMarker: 'Sun Sep 27 09:05:03 2026' }
     expect(await listProcesses(async () => [row, { ...row, pid: 6, startMarker: 'soon' }])).toEqual([
-      { pid: 5, ppid: 1, executable: 'grok', args: 'grok', started: Date.parse('Sun Sep 27 09:05:03 2026') },
+      { pid: 5, ppid: 1, executable: 'grok', args: 'grok', started: Date.parse(row.startMarker), generation: `ps:${Date.parse(row.startMarker)}` },
       { pid: 6, ppid: 1, executable: 'grok', args: 'grok' },
     ])
+    expect((await listProcesses(async () => [{ ...row, startTicks: 42 }]))[0].generation).toBe('linux:42')
   })
 
   it("knows Harness's own panes by their tmux session names, and by a daemon's tag wherever they moved", async () => {

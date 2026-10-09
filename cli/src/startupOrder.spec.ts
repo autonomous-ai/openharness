@@ -253,7 +253,7 @@ describe('the core\'s request gate (core/main.ts)', () => {
     // Readiness never waits on a service: the agents the boot held for one are launched after it, in the background
     // (core/agents/heldLaunches.ts).
     expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
-      'void heldLaunches.restoreHeld()'])
+      'void heldLaunches.restoreHeld()', 'externalResumes.open()'])
     expect(logged).toBeGreaterThan(ready)
   })
 })

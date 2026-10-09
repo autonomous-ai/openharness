@@ -276,7 +276,7 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
                 engineTrust.record(preparedFolder)
               }
             } catch (error) { console.warn(`[agent] pre-trust ${preparedFolder} · ${error instanceof Error ? error.message : error}`) }
-          } else if (!dsh && asker.local && dirname(input.cwd) === projectsRoot()) {
+          } else if (!dsh && !resumeSessionId && asker.local && dirname(input.cwd) === projectsRoot()) {
             // On the LOCAL machine the desktop makes a new workspace ITSELF and sends the path as a plain
             // cwd, so `projectFolder` above never sees it. Such a folder is empty and is trusted the way a
             // `new` project is — but only on evidence, and only where those workspaces live:

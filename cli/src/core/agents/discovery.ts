@@ -7,6 +7,7 @@
  * Moved verbatim out of the reconciler's options in `runForeground` (the core boundary, step 10:
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
  */
+import { externalResumePending } from '../../lib/externalResume.js'
 import { isTerminalEngine } from '../../engines/types.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
@@ -87,6 +88,7 @@ export function createDiscoveryHandlers({
     await bindObservedAgent(observed)
   }
   const onObserved = async (observed: DiscoveredTerminalAgent, current: RegisteredSession): Promise<void> => {
+    if (externalResumePending(current.externalResume)) return
     const wasDormant = !current.active
     // Read BEFORE the update, because the update is what overwrites it. `undefined` means the probe
     // could not look, which never counts as a move — see `probeGridAssignment`'s three answers.

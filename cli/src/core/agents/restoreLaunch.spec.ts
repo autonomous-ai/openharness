@@ -70,3 +70,16 @@ describe('restore preparation keeps session authority in core', () => {
     expect(deps.refreshGridWebSearch).not.toHaveBeenCalled()
   })
 })
+
+it('keeps unadmitted external work held before workspace checks, service preparation or transcript writes', async () => {
+  for (const phase of ['waiting', 'quitting', 'cancelled'] as const) {
+    for (const launch of [undefined, { state: 'held', service: 'search', detail: 'Waiting for the old terminal.' }]) {
+      const { deps, build } = setup()
+      const pending = { ...entry, sessionId: '', externalResume: { phase }, launch } as RegisteredSession
+      expect(await build(pending, { current: () => true })).toMatchObject({ held: 'search', holdScope: 'workspace' })
+      expect(deps.workspaceMissing).not.toHaveBeenCalled()
+      expect(deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(deps.prepareSessionResume).not.toHaveBeenCalled()
+    }
+  }
+})

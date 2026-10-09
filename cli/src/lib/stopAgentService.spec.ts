@@ -245,3 +245,41 @@ it('does not forget a new agent published while its old pane was being retired',
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('changed while pausing')
   expect(deps.forgetSession).not.toHaveBeenCalled()
 })
+
+it('cancels an external intent through core without archiving, signalling or waiting for search', async () => {
+  Object.assign(row, { sessionId: '', processIdentity: null, launch: { state: 'held', service: 'search', detail: 'Reader unavailable' },
+    externalResume: { phase: 'waiting' } })
+  deps.cancelExternal = vi.fn(async (entry, current) => { expect(entry).toBe(row); expect(current()).toBe(true); return true })
+  const save = vi.spyOn(stoppedAgents, 'save')
+  await createStopAgentService(deps)(row.agentId)
+  expect(deps.cancelExternal).toHaveBeenCalledOnce()
+  expect(save).not.toHaveBeenCalled()
+  expect(captureResumeIdentity).not.toHaveBeenCalled()
+  expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  expect(deps.stopNative).not.toHaveBeenCalled()
+  expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled()
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+})
+
+it.each(['missing', 'refused', 'error', 'unknown', 'cancelled'] as const)('keeps an external intent intact when cancellation is %s', async failure => {
+  Object.assign(row, { sessionId: '', processIdentity: null, launch: { state: 'held', service: 'search', detail: 'Reader unavailable' },
+    externalResume: { phase: 'waiting' } })
+  if (failure !== 'missing') deps.cancelExternal = vi.fn(async (_entry, current) => {
+    if (failure === 'error') throw new Error('Journal is unavailable')
+    if (failure === 'unknown') throw 'unavailable'
+    if (failure === 'cancelled') { expect(current()).toBe(false); return current() }
+    return false
+  })
+  const save = vi.spyOn(stoppedAgents, 'save')
+  await expect(createStopAgentService(deps)(row.agentId, { current: () => failure !== 'cancelled' }))
+    .rejects.toMatchObject({ code: 'STOP_UNCONFIRMED', message: failure === 'error' ? 'Journal is unavailable'
+      : failure === 'unknown' ? 'Adoption could not be cancelled.' : 'Adoption cancellation is unavailable.' })
+  expect(registry.byAgent(row.agentId)).toBe(row)
+  expect(deps.stopJobs.size).toBe(0)
+  expect(save).not.toHaveBeenCalled()
+  expect(captureResumeIdentity).not.toHaveBeenCalled()
+  expect(terminateDeletedAgent).not.toHaveBeenCalled()
+  expect(deps.stopNative).not.toHaveBeenCalled()
+  expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled()
+  expect(deps.forgetSession).not.toHaveBeenCalled()
+})
