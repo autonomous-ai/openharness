@@ -110,8 +110,10 @@ export class SessionCheckpointStore {
         ? await findResumedTranscript('pi', s.sessionId, { cwd: s.cwd ?? undefined }) : null)
       // Pi announces a session ID before it writes any history. In particular,
       // missing credentials can leave it here indefinitely. Preserve the screen
-      // just as for an unbound chat; a known/resumed transcript must still save.
-      const unwrittenPi = s.engine === 'pi' && !source && !s.resumeOnly && !previous?.source
+      // just as for an unbound chat; a known transcript, or one backed up before, must still save.
+      // A resumed chat is not evidence of history: one stopped before its first reply resumes with an
+      // ID, no path and no file, and refusing it left the window impossible to close.
+      const unwrittenPi = s.engine === 'pi' && !source && !previous?.source
       if (!s.sessionId || s.engine === 'terminal' || unwrittenPi) {
         // A shell or unused chat has no native conversation. Save its terminal
         // instead; the close service owns the activity check and confirmation.
