@@ -78,6 +78,33 @@ export interface HookSettings {
     /** The lines for an unreadable file that is kept. */
     malformed?: readonly string[]
   }
+  /**
+   * Where the engine asks a person to review a hook before it first runs, Harness's own blocks recorded as
+   * reviewed, the way the engine records the answer itself (kit/hookReview.ts).
+   */
+  reviewed?: HookReviewRecord
+}
+
+/**
+ * An engine's record of hooks a person reviewed: in its config file in the same home, a table per hook keyed
+ * `<real path of the settings file>:<event>:<block>:<hook>`, holding the hash the engine computes of that hook
+ * (Codex 0.162 `hooks.state`, `trusted_hash`). A hook whose hash differs from the recorded one is asked about again.
+ */
+export interface HookReviewRecord {
+  /** The engine's config file, in the settings' home. */
+  file: string
+  /** The TOML table the records are sub-tables of. */
+  table: string
+  /** The field of a record that holds the hash. */
+  key: string
+  /** The engine's name for each declared event, in keys and in the hash. */
+  events: Readonly<Record<string, string>>
+  /** The events whose matcher is part of the hash; the engine ignores the others'. */
+  matcherEvents: readonly string[]
+  /** The timeout, in seconds, the engine assumes for a hook that names none. */
+  defaultTimeout: number
+  /** The daemon's log lines, with {config} filled in. */
+  messages: { recorded: string; skipped: string }
 }
 
 /** A session another session delegated to, told apart by its transcript's first record. */
