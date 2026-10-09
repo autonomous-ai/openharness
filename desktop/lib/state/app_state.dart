@@ -922,6 +922,13 @@ class AppNotifier extends ChangeNotifier {
   // (agent_synced/agent_created/agent_renamed/agent_deleted) that normally keep it live — catches the
   // rare case a push event was dropped. Runs silently: see _syncAgentsIfChanged.
   final Map<String, Timer> _agentSyncTimers = {};
+
+  /// Machines with a harness the daemon holds back ([_watchHeldLaunches]).
+  final Map<String, Timer> _heldSyncTimers = {};
+
+  /// How often a machine with a held harness is read again ([_watchHeldLaunches]).
+  @visibleForTesting
+  Duration heldLaunchSyncInterval = const Duration(seconds: 3);
   // Keeps the local `harness` daemon alive for the whole app run — started once after the first
   // successful bootstrap (see `ensureCliDaemonReady`), cancelled on dispose. Cancelling only stops this
   // Dart-side loop; the daemon itself self-daemonizes and must keep running after the app quits.
@@ -7140,13 +7147,49 @@ class AppNotifier extends ChangeNotifier {
 
   void _stopAgentSyncTimer(String machineId) {
     _agentSyncTimers.remove(machineId)?.cancel();
+    _heldSyncTimers.remove(machineId)?.cancel();
   }
 
   void _stopAllAgentSyncTimers() {
-    for (final timer in _agentSyncTimers.values) {
+    for (final timer in [
+      ..._agentSyncTimers.values,
+      ..._heldSyncTimers.values,
+    ]) {
       timer.cancel();
     }
     _agentSyncTimers.clear();
+    _heldSyncTimers.clear();
+  }
+
+  /// Reads a machine's agents again every [heldLaunchSyncInterval] while one of them is held.
+  ///
+  /// The daemon starts a held harness by itself (a conversation it could not yet verify, a move
+  /// waiting for a turn to end), but the start reaches the app only with its next agent sync: on a
+  /// fresh VM (2026-10-09) the reopened conversations ran for a minute under "Waiting", until the
+  /// [agentSyncInterval] tick. The quiet re-read ([_syncAgentsIfChanged]) brings it within seconds,
+  /// and only while something is held.
+  void _watchHeldLaunches(MachineState machine) {
+    final machineId = machine.machine.machineId;
+    final held =
+        machine.connectionStatus == ConnectionStatus.connected &&
+        machine.agents.any((agent) => agent.launchState == 'held');
+    if (!held) {
+      _heldSyncTimers.remove(machineId)?.cancel();
+      return;
+    }
+    if (_heldSyncTimers.containsKey(machineId)) return;
+    _heldSyncTimers[machineId] = Timer.periodic(heldLaunchSyncInterval, (_) {
+      final current = machineStates[machineId];
+      if (current == null) {
+        _heldSyncTimers.remove(machineId)?.cancel();
+        return;
+      }
+      unawaited(
+        _syncAgentsIfChanged(current).whenComplete(() {
+          if (machineStates[machineId] == current) _watchHeldLaunches(current);
+        }),
+      );
+    });
   }
 
   /// Silent safety-net reconciliation, ticked every [agentSyncInterval] while a machine is connected.
@@ -9697,6 +9740,7 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.agents = agents;
+    _watchHeldLaunches(machine);
     for (final agent in agents) {
       _reconcileAgentActivity(machine, agent, previous[agent.id]);
       if (previous[agent.id]?.name != agent.name) {
@@ -9810,6 +9854,7 @@ class AppNotifier extends ChangeNotifier {
     }
     machine.agentLoadStatus = AgentLoadStatus.loaded;
     machine.agentsLoadError = null;
+    _watchHeldLaunches(machine);
     _syncViewerPane(machine, agent);
     // A terminal that adopted an engine, or let one go: the tiles already
     // attached to it keep their stream and change their face. The dial's
