@@ -262,7 +262,7 @@ describe('Devin owners', () => {
   const view = (rows: RunningProcess[], dead: number[] = []): ProcessView => ({
     list: async () => rows,
     openFiles: async () => new Map(),
-    openFilesOf: async () => new Map(),
+    cwds: async () => new Map(), openFilesOf: async () => new Map(),
     alive: (pid) => !dead.includes(pid),
   })
 

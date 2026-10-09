@@ -9,9 +9,9 @@ import { externalEvidenceActive, externalReadFailed } from '../../lib/sessionSea
 
 import { agentCommandOwnershipSnapshot } from '../../lib/engineBin.js'
 import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readHead, readJson, readTail, readText, record, text } from '../../lib/sessionSearch/externals/support.js'
-import { argvTokens, engineProcessMatch } from '../../lib/tmux.js'
+import { argvTokens, engineProcessMatch, resumeSessionId } from '../../lib/tmux.js'
 import {
-  type ExternalEngine, type ExternalOrigin, type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView,
+  type ExternalEngine, type ExternalOrigin, type ExternalProvider, type ExternalSession, type OwnerClaim, type Ownership, type ProcessView,
   type RunningProcess, type ScanContext, UNSETTLED,
 } from '../../lib/sessionSearch/externals/types.js'
 import type { AdoptionContract } from '../facets/adoption.js'
@@ -148,7 +148,20 @@ export async function turnOpen(path: string, tail: Tail, unknown: boolean | null
   return unknown
 }
 
-async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { records: unknown }>['records'], pattern: RegExp, dirs: string[], view: ProcessView): Promise<OwnerClaim[]> {
+/** The conversation a process's arguments say it started on: a resume of it, or one of `flags` naming it. */
+function namedSession(engine: ExternalEngine, args: string, flags: readonly string[], pattern: RegExp): string | null {
+  const resumed = resumeSessionId(engine as never, args)
+  if (resumed) return resumed
+  const tokens = argvTokens(args)
+  for (const [i, token] of tokens.entries()) {
+    const flag = flags.find(name => token === name || token.startsWith(`${name}=`))
+    const value = flag && (token === flag ? tokens[i + 1] : token.slice(flag.length + 1))
+    if (value && pattern.test(value)) return value
+  }
+  return null
+}
+
+async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { records: unknown }>['records'], pattern: RegExp, dirs: string[], view: ProcessView): Promise<Ownership> {
   const claims: OwnerClaim[] = []
   for (const dir of dirs) {
     const records = (await entries(dir)).filter((file) => file.isFile() && file.name.endsWith(owners.suffix))
@@ -178,15 +191,27 @@ async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { re
       claims.push({ sessionId: text(row?.[owners.id]), pid, record: path })
     }
   }
+  const unresolved: number[] = []
   if (externalEvidenceActive()) {
     const ownership = agentCommandOwnershipSnapshot()
     for (const process of await view.list()) {
       if (!view.alive(process.pid) || engineProcessMatch(process, engine as never, ownership).score <= 0) continue
       const ids = new Set(claims.filter(claim => claim.pid === process.pid).map(claim => claim.sessionId))
-      if (ids.size !== 1) externalReadFailed(new Error('no unambiguous current process record'), 'current owner')
+      if (ids.size === 1) continue
+      // Records that disagree about one live process are a store nobody can read: nothing is admitted on it.
+      if (ids.size > 1) { externalReadFailed(new Error('no unambiguous current process record'), 'current owner'); continue }
+      // No record. This used to fail every conversation: one long-running `claude` started before it kept
+      // records (two such TUIs on a developer's Mac, days old) held every adoption on the machine forever,
+      // "The conversation's current owner could not be verified" (CLI 0.3.70). Such a process can hold only
+      // the conversation its arguments name or, moved on with `/resume`, one its folder's picker lists. The
+      // first is a claim never stopped on; the second admission judges against each conversation's folder.
+      const named = namedSession(engine, process.args, owners.sessionFlags ?? [], pattern)
+      if (named) claims.push({ sessionId: named, pid: process.pid, record: '', fromArgs: true })
+      else unresolved.push(process.pid)
     }
   }
-  return claims
+  const cwds = unresolved.length ? await view.cwds(unresolved) : new Map<number, string>()
+  return { claims, unresolved: unresolved.map(pid => ({ pid, cwd: cwds.get(pid) ?? null })) }
 }
 
 async function openFileOwners(engine: ExternalEngine, open: Extract<Owners, { open: unknown }>['open'], view: ProcessView): Promise<OwnerClaim[]> {
@@ -228,6 +253,9 @@ export function adoptionProvider(engine: ExternalEngine, contract: AdoptionContr
   }
   const owners = contract.owners
   const busy = contract.busy
+  const ownership = async (view: ProcessView): Promise<Ownership> => 'records' in owners
+    ? recordOwners(engine, owners.records, head.id.pattern, places.records?.() ?? places.roots().map((root) => join(root, '..', owners.records.folder)), view)
+    : { claims: await openFileOwners(engine, owners.open, view), unresolved: [] }
   return {
     engine,
     async scan(ctx: ScanContext): Promise<ExternalSession[]> {
@@ -260,11 +288,12 @@ export function adoptionProvider(engine: ExternalEngine, contract: AdoptionContr
       }
       return found
     },
-    owners: (view: ProcessView) => 'records' in owners
-      ? recordOwners(engine, owners.records, head.id.pattern, places.records?.() ?? places.roots().map((root) => join(root, '..', owners.records.folder)), view)
-      : openFileOwners(engine, owners.open, view),
+    ownership,
+    owners: async (view: ProcessView) => (await ownership(view)).claims,
     async confirmOwner(owner, process) {
-      if (!('records' in owners) || !('record' in busy)) return null
+      // Only its arguments name it (no record): nothing says whether it is still there or mid-turn, and it is
+      // never stopped on that, so its activity stays unknown.
+      if (!('records' in owners) || !('record' in busy) || owner.fromArgs) return null
       // Claude's one record carries the session, PID, incarnation and activity together. A final
       // transcript read cannot offer this guarantee when ownership lives in a separate store.
       const row = record(await readJson(owner.record)), fields = owners.records
@@ -277,6 +306,8 @@ export function adoptionProvider(engine: ExternalEngine, contract: AdoptionContr
     },
     async busy(owner): Promise<boolean | null> {
       if ('tail' in busy) return turnOpen(owner.record, busy.tail, null)
+      // A process placed by its arguments has no record to read; that absence says nothing here.
+      if (!owner.record) return null
       const row = record(await readJson(owner.record))
       // No record: the process ended with it, so it is not mid-turn.
       if (!row) return false

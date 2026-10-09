@@ -92,6 +92,8 @@ export interface ProcessView {
   openFiles(pids: readonly number[]): Promise<Map<number, string[]>>
   /** The files processes with these command names have open, by pid (`lsof -c`). */
   openFilesOf(commands: readonly string[]): Promise<Map<number, string[]>>
+  /** Each of [pids]' working folder, where it could be read; a pid left out is one nobody can say. */
+  cwds(pids: readonly number[]): Promise<Map<number, string>>
   alive(pid: number): boolean
 }
 
@@ -111,12 +113,34 @@ export interface OwnerClaim {
   fromArgs?: boolean
 }
 
+/**
+ * A live process of the engine that leaves no exact word of which conversation it has open: Claude Code
+ * started before it kept `sessions/<pid>.json`, with no session in its arguments. It may hold any
+ * conversation its own `/resume` lists, which are its working folder's; `cwd` is null when that folder
+ * could not be read, and then it may hold any.
+ */
+export interface UnresolvedOwner {
+  pid: number
+  cwd: string | null
+}
+
+/** A provider's whole answer about who holds what: its exact claims, and the processes it could not place. */
+export interface Ownership {
+  claims: OwnerClaim[]
+  unresolved: UnresolvedOwner[]
+}
+
 export interface ExternalProvider {
   readonly engine: ExternalEngine
   /** Every conversation of this engine on disk that a person started and Harness can resume. */
   scan(ctx: ScanContext): Promise<ExternalSession[]>
   /** Which of them a process has open right now, when the engine leaves exact evidence of it. */
   owners?(view: ProcessView): Promise<OwnerClaim[]>
+  /**
+   * The same claims as `owners`, with the live processes it could not place. Only admission asks it, and
+   * only an engine whose processes can be unplaced has it; without it, every process is placed.
+   */
+  ownership?(view: ProcessView): Promise<Ownership>
   /** Whether the owner is mid-turn; null when the engine's store cannot say. */
   busy?(owner: { pid: number; record: string }): Promise<boolean | null>
   /** Final admission proof from one coherent record: exact ownership and activity together.

@@ -62,7 +62,7 @@ it('search recognizes a moved Claude conversation that is still busy in another 
   const claims = await provider.owners!({
     alive: pid => pid === 123,
     list: async () => [{ pid: 123, ppid: 1, executable: 'claude', args: 'claude', started: 1000 }],
-    openFiles: async () => new Map(), openFilesOf: async () => new Map(),
+    openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(),
   })
   expect(claims).toContainEqual({ sessionId: 'external-conversation', pid: 123, record })
   expect(await provider.busy!(claims[0])).toBe(true)

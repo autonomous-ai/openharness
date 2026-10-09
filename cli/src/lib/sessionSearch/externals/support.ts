@@ -5,7 +5,7 @@
 
 import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
-import { open, readdir, readFile, stat } from 'node:fs/promises'
+import { open, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, relative, resolve } from 'node:path'
 
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
@@ -226,11 +226,47 @@ export async function listProcesses(read: typeof processRows = processRows): Pro
   })
 }
 
+/**
+ * Each of [pids]' working folder. Linux says it in /proc; macOS only through lsof, asked once for every pid
+ * (`-a -d cwd`: that one descriptor) under the same timeout and output bound as its open files. A pid whose
+ * folder cannot be read (gone, another user's) is left out: unknown, which admission reads as "may hold any".
+ */
+export async function processCwds(
+  pids: readonly number[],
+  exec: Run = run,
+  os: NodeJS.Platform = process.platform,
+  link: (path: string) => Promise<string> = readlink,
+): Promise<Map<number, string>> {
+  const cwds = new Map<number, string>()
+  if (!pids.length) return cwds
+  if (os === 'linux') {
+    await Promise.all(pids.map(async (pid) => {
+      const cwd = await link(`/proc/${pid}/cwd`).catch(() => null)
+      if (cwd) cwds.set(pid, cwd)
+    }))
+    return cwds
+  }
+  for (const [pid, files] of parseLsof(await exec('lsof', ['-n', '-P', '-a', '-d', 'cwd', '-Fpn', '-p', pids.join(',')], 3_000) ?? '')) {
+    if (files[0]) cwds.set(pid, files[0])
+  }
+  return cwds
+}
+
+/**
+ * A folder as one key whichever way it was spelled: a trailing slash, `..`, or a link (macOS's /tmp is
+ * /private/tmp, and lsof reports the resolved one). A folder that cannot be resolved keeps its spelling.
+ */
+export async function folderKey(path: string): Promise<string> {
+  const absolute = resolve(path)
+  return realpath(absolute).catch(() => absolute)
+}
+
 /** The machine's processes, looked at once per view: the list is read on first use and kept. */
 export function processView(
   exec: Run = run,
   alive: (pid: number) => boolean = processAlive,
   list: () => Promise<RunningProcess[]> = listProcesses,
+  cwds: (pids: readonly number[]) => Promise<Map<number, string>> = (pids) => processCwds(pids, exec),
 ): ProcessView {
   let listed: Promise<RunningProcess[]> | null = null
   return {
@@ -241,6 +277,7 @@ export function processView(
     openFilesOf: async (commands) => commands.length
       ? parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', ...commands.flatMap((name) => ['-c', name])], 3_000) ?? '')
       : new Map(),
+    cwds,
     alive,
   }
 }

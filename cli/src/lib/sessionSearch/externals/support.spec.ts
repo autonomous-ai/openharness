@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { UNSETTLED } from './types.js'
 import {
-  absoluteFolder, entries, epochMs, fileStamp, firstLine, harnessTtys, listProcesses, parseLine, parseLsof, parseTtys,
-  processAlive, processTtys, processView, readHead, readJson, readTail, readText, record, run, scanMemo, text, UUID,
+  absoluteFolder, entries, epochMs, fileStamp, firstLine, folderKey, harnessTtys, listProcesses, parseLine, parseLsof, parseTtys,
+  processAlive, processCwds, processTtys, processView, readHead, readJson, readTail, readText, record, run, scanMemo, text, UUID,
   within,
 } from './support.js'
 
@@ -207,6 +207,42 @@ describe('processes', () => {
     expect(await processTtys([1], async () => null)).toEqual(new Map())
   })
 
+  it("reads each process's working folder in one bounded look, and leaves out what it cannot read", async () => {
+    const calls: string[] = []
+    const exec = async (command: string, args: readonly string[]) => {
+      calls.push(`${command} ${args.join(' ')}`)
+      // lsof says nothing of a gone pid, or of one it may not look at; a pid with no name line is unknown too.
+      return 'p7\nfcwd\nn/work/dial\np8\nfcwd\n'
+    }
+    expect(await processCwds([7, 8, 9], exec, 'darwin')).toEqual(new Map([[7, '/work/dial']]))
+    expect(calls).toEqual(['lsof -n -P -a -d cwd -Fpn -p 7,8,9'])
+    expect(await processCwds([7], async () => null, 'darwin')).toEqual(new Map())
+    expect(await processCwds([], exec, 'darwin')).toEqual(new Map())
+    expect(calls).toHaveLength(1)
+    // Linux says it in /proc, one link a pid; one it may not read is unknown.
+    const links: string[] = []
+    const link = async (path: string) => {
+      links.push(path)
+      if (path === '/proc/8/cwd') throw Object.assign(new Error('denied'), { code: 'EACCES' })
+      return path === '/proc/7/cwd' ? '/work/dial' : ''
+    }
+    expect(await processCwds([7, 8, 9], exec, 'linux', link)).toEqual(new Map([[7, '/work/dial']]))
+    expect(links.sort()).toEqual(['/proc/7/cwd', '/proc/8/cwd', '/proc/9/cwd'])
+    expect(calls).toHaveLength(1)
+  })
+
+  it('keys a folder the same however it is spelled', async () => {
+    const dir = home()
+    mkdirSync(join(dir, 'project'))
+    symlinkSync(join(dir, 'project'), join(dir, 'link'))
+    const key = await folderKey(join(dir, 'project'))
+    for (const spelling of [`${join(dir, 'project')}/`, join(dir, 'link'), join(dir, 'link', '..', 'project')]) {
+      expect(await folderKey(spelling), spelling).toBe(key)
+    }
+    // A folder that is gone keeps its spelling, less a trailing slash.
+    expect(await folderKey(`${join(dir, 'gone')}/`)).toBe(join(dir, 'gone'))
+  })
+
   it('lists the real machine: this very process is among them, with its own open files', async () => {
     const view = processView()
     const me = (await view.list()).find((row) => row.pid === process.pid)
@@ -223,6 +259,7 @@ describe('processes', () => {
       await handle.close()
     }
     expect((await processTtys([process.pid])).has(process.pid)).toBe(true)
+    expect(await folderKey((await view.cwds([process.pid])).get(process.pid) ?? '')).toBe(await folderKey(process.cwd()))
   })
 
   it('lists no processes when ps cannot be read, and each start time when it can be read', async () => {
