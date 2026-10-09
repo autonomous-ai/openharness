@@ -34,6 +34,7 @@ import {
   firstPromptArgs,
   gridPanePrelude,
   harnessNodePrelude,
+  noDevtoolsPrelude,
   namedAgentArgs,
   supportsFirstPrompt,
   supportsNamedAgent,
@@ -81,6 +82,7 @@ afterAll(() => {
 /** The prelude every case below gets by default: no managed grid on this machine, so PATH is left
  *  alone and only grid's update check is turned off. */
 const GRID_PRELUDE = gridPanePrelude('grid')
+const NO_DEVTOOLS = noDevtoolsPrelude()
 /** The engine-in-a-shell wrapper every launch carries, for the shell each case names — see
  *  `engineFallbackPrelude`. `null` tmux: the suite must not depend on what this machine has. */
 const FALLBACK = (engine: AgentEngine, shell: string) => engineFallbackPrelude(engine, shell, null)
@@ -131,13 +133,13 @@ describe('buildEngineLaunchArgv', () => {
     expect(argv).toEqual([
       '/usr/bin/env', 'DISABLE_AUTO_UPDATE=true', '/bin/zsh', '-lic', expect.stringMatching(SOURCED), 'harness-engine', engineBin('claude'),
     ])
-    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${RUN}`)
+    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${NO_DEVTOOLS}${RUN}`)
   })
 
   it('uses Ubuntu bash interactive startup files without making it a login shell', () => {
     const argv = buildEngineLaunchArgv('claude', {}, '/bin/bash', undefined, undefined, NO_TMUX)
     expect(argv).toEqual(['/bin/bash', '-ic', expect.stringMatching(SOURCED), 'harness-engine', engineBin('claude')])
-    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/bash')}${GRID_PRELUDE}${RUN}`)
+    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/bash')}${GRID_PRELUDE}${NO_DEVTOOLS}${RUN}`)
   })
 
   it('hands the shell its script in a one-time file that removes itself, private to this user', () => {
@@ -180,7 +182,7 @@ describe('buildEngineLaunchArgv', () => {
     env.ADAPTER_DATA_DIR = '/dev/null/no-data-folder'
     try {
       const argv = buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, undefined, NO_TMUX)
-      expect(argv[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${RUN}`)
+      expect(argv[4]).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${NO_DEVTOOLS}${RUN}`)
     } finally { env.ADAPTER_DATA_DIR = saved }
   })
 
@@ -224,7 +226,7 @@ describe('buildEngineLaunchArgv', () => {
       'harness-engine', '/work/project', engineBin('claude'),
     ])
     expect(launchScriptOf(argv)).toBe(
-      `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}if ! cd -- "$1"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\n${unreadableCwdGuard(process.platform)}shift\n${RUN}`,
+      `${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${NO_DEVTOOLS}if ! cd -- "$1"; then printf '%s\\n' 'harness: the selected working directory is unavailable.' >&2; exit 1; fi\n${unreadableCwdGuard(process.platform)}shift\n${RUN}`,
     )
   })
 
@@ -628,10 +630,10 @@ printf '%s %s' "$harness_status" "$resumed"`], { encoding: 'utf8', stdio: ['igno
     // On this branch every pane script opens with the open-files raise, the engine-in-a-shell
     // wrapper and the grid prelude; the Node line lands after them, and a launch without
     // `harnessNode` is exactly the baseline above.
-    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${harnessNodePrelude('/opt/harness runtime/bin/node')}${RUN}`)
+    expect(launchScriptOf(argv)).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${NO_DEVTOOLS}${harnessNodePrelude('/opt/harness runtime/bin/node')}${RUN}`)
     expect(harnessNodePrelude('/opt/harness runtime/bin/node')).toBe(
       'if ! command -v node >/dev/null 2>&1; then PATH="${PATH:+$PATH:}"\'/opt/harness runtime/bin\'; export PATH; fi\n')
-    expect(launchScriptOf(buildEngineLaunchArgv('claude', { harnessNode: false }, '/bin/zsh', undefined, undefined, NO_TMUX))).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${RUN}`)
+    expect(launchScriptOf(buildEngineLaunchArgv('claude', { harnessNode: false }, '/bin/zsh', undefined, undefined, NO_TMUX))).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('claude', '/bin/zsh')}${GRID_PRELUDE}${NO_DEVTOOLS}${RUN}`)
   })
 
   it('the DSH prelude, run by a real shell, reaches the engine\'s PATH only when node is missing', () => {
@@ -1264,7 +1266,8 @@ describe('buildEngineLaunchArgv — the grid the pane finds', () => {
   it('leaves PATH alone when grid is only a name on it, but still turns the update check off', () => {
     const script = launchScriptOf(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, 'grid'))
 
-    expect(script).not.toContain('export PATH')
+    // The developer-tools stand-ins change PATH only on a Mac without the tools (noDevtoolsPrelude).
+    expect(script.replace(NO_DEVTOOLS, '')).not.toContain('export PATH')
     expect(script).toContain('GRID_NO_UPDATE_CHECK=1')
   })
 
@@ -1317,7 +1320,7 @@ describe('buildEngineLaunchArgv with installFirst', () => {
     buildEngineLaunchArgv('opencode', { installFirst: install }, '/bin/zsh')[4]
 
   it('leaves the plain launch alone when nothing has to be installed', () => {
-    expect(launchScriptOf(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX))).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}${RUN}`)
+    expect(launchScriptOf(buildEngineLaunchArgv('opencode', {}, '/bin/zsh', undefined, undefined, NO_TMUX))).toBe(`${RAISE_OPEN_FILES_SH}${FALLBACK('opencode', '/bin/zsh')}${GRID_PRELUDE}${NO_DEVTOOLS}${RUN}`)
   })
 
   it('keeps the engine argv positional, so the shell never re-parses a path or a flag', () => {
