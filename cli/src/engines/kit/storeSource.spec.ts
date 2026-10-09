@@ -29,12 +29,19 @@ describe('store source evidence', () => {
   })
 
   it('accepts only an actual row as source evidence and preserves optional-reader unknowns', async () => {
-    for (const [rows, expected] of [[[], null], [[{ source: 'cli' }], 'cli'], [[{ source: 'tool' }], 'tool'], [[{}], '']] as const) {
+    for (const [rows, expected] of [[[], null], [[{ source: 'cli' }], 'cli'], [[{ source: 'tool' }], 'tool'], [[{ source: '' }], ''], [[{}], null]] as const) {
       vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: true, rows: [...rows], via: 'builtin' })
       expect(await storeSessionSource(rule, '/fixture/store', 'session')).toBe(expected)
     }
     vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: false, reason: 'transient' })
     expect(await storeSessionSource(rule, '/fixture/store', 'session')).toBeNull()
     expect(sqliteReadAll).toHaveBeenCalledWith('/fixture/store', rule.query, ['session'], { maxBuffer: 1024 })
+  })
+
+  it('holds malformed source values instead of turning them into the interactive empty string', async () => {
+    for (const source of [undefined, null, 42, Buffer.from('cli')]) {
+      vi.mocked(sqliteReadAll).mockResolvedValueOnce({ ok: true, rows: [{ source }], via: 'builtin' })
+      expect(await readStoreSessionSource(rule, '/fixture/store', 'session')).toEqual({ unavailable: true, reason: 'transient' })
+    }
   })
 })

@@ -40,7 +40,7 @@ export async function readStoreSessionSource(rule: StoreSourceRule, dbPath: stri
   if (!result.ok) return { unavailable: true, reason: result.reason }
   if (result.rows.length === 0) return null
   const source = result.rows[0]?.[rule.column]
-  return typeof source === 'string' ? source : ''
+  return typeof source === 'string' ? source : { unavailable: true, reason: 'transient' }
 }
 
 /** Compatibility for optional readers: unknown stays unknown, never an interactive source. */

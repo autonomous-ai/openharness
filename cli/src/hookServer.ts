@@ -10,7 +10,7 @@ import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
 import { HERMES_HOMES, HERMES_SOURCE, hermesDbPath } from './engines/hermes/contract.js'
-import { listStoreHomes } from './engines/kit/storeHomes.js'
+import { readStoreHomes } from './engines/kit/storeHomes.js'
 import { isInteractiveSource, readStoreSessionSource } from './engines/kit/storeSource.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
@@ -70,7 +70,7 @@ export interface HookServerHandlers {
       orphaned?: { agentId: string; sessionId: string } | null
       hookEvent?: string
     },
-  ) => void
+  ) => void | Promise<void>
 
   /** SessionEnd — a reconciliation hint only; it is never process-lifetime authority. */
   onSessionEnd: (sessionId: string, reason: string | undefined) => void
@@ -360,9 +360,10 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
 
 /** Read source evidence without binding. Unreadable stores never authorize a conversation. */
 async function inspectHermesKind(sessionId: string): Promise<AdmissionDecision<string | undefined>> {
-  const homes = await listStoreHomes(HERMES_HOMES, env.HERMES_HOME)
+  const { homes, complete } = await readStoreHomes(HERMES_HOMES, env.HERMES_HOME)
   let unavailable = false
   for (const home of homes) {
+    if (home !== env.HERMES_HOME && !complete) unavailable = true
     const answer = await readStoreSessionSource(HERMES_SOURCE, hermesDbPath(home), sessionId)
     if (answer === null) continue
     if (typeof answer === 'object') { unavailable = true; continue }
@@ -371,7 +372,7 @@ async function inspectHermesKind(sessionId: string): Promise<AdmissionDecision<s
     if (!unavailable) return { kind: 'accept', value: home === env.HERMES_HOME ? undefined : home }
     break
   }
-  return { kind: 'hold', reason: unavailable
+  return { kind: 'hold', reason: unavailable || !complete
     ? 'Hermes session source is unavailable; keeping the current conversation.'
     : 'Waiting for the Hermes session source record; keeping the current conversation.' }
 }
@@ -531,10 +532,9 @@ export function startHookServer(
           // Settled off the HTTP path entirely: the answer needs a SQLite read, and the row may not even
           // be written yet (measured: a child's hook beat its own INSERT by 110ms). Registering
           // optimistically would hand the parent's pane to a sub-agent.
-          answer(200, { pending: true })
           const identity = paneReadIdentity(processAgent)
-          admissions.submit(processAgent.agentId, {
-            current: () => !isRecentlyDeleted(body.sessionId)
+          const queued = admissions.submit(processAgent.agentId, body.sessionId!, {
+            current: () => !isRecentlyDeleted(processAgent.agentId) && !isRecentlyDeleted(body.sessionId)
               && paneReadIdentity(registeredHookProcess(body, 'hermes')) === identity,
             inspect: () => inspectHermesKind(body.sessionId!),
             held: (reason) => console.log(`[hooks] ${sid(body.sessionId!)} ${body.hookEvent ?? 'session-start'} held · ${reason}`),
@@ -543,10 +543,16 @@ export function startHookServer(
               const result = registry.register(hermesHome ? { ...body, hermesHome } : body)
               if (!result) return
               console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=hermes · isNew=${result.isNew} · after a source check${hermesHome ? ` · home=${hermesHome}` : ''}`)
-              handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound,
+              return handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound,
                 orphaned: result.orphaned, hookEvent: body.hookEvent })
             },
           })
+          if (queued) answer(200, { pending: true })
+          else {
+            const reason = 'Too many unverified Hermes hooks are pending; this hook was not queued. Retry after source recovery.'
+            console.log(`[hooks] ${sid(body.sessionId!)} ${body.hookEvent ?? 'session-start'} held · ${reason}`)
+            answer(429, { pending: false, error: 'HOOK_ADMISSION_BUSY', detail: reason })
+          }
           return
         }
         if (body.hookEvent === 'UserPromptSubmit') {

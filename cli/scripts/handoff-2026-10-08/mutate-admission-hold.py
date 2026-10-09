@@ -12,8 +12,18 @@ mutations = [
     ('absent source row admits', 'src/hookServer.ts',
      "if (answer === null) continue", "if (answer === null) return { kind: 'accept', value: undefined }", golden),
     ('late source reply publishes', 'src/core/engines/pendingAdmission.ts',
-     "    if (!current(key, job)) { discard(key, job); return }\n    if (decision.kind",
-     "    if (decision.kind", 'src/core/engines/pendingAdmission.spec.ts'),
+     "    if (!current(key, job)) { discard(key, job); return }\n    // A newer",
+     "    // A newer", 'src/core/engines/pendingAdmission.spec.ts'),
+    ('malformed source admits', 'src/engines/kit/storeSource.ts',
+     "return typeof source === 'string' ? source : { unavailable: true, reason: 'transient' }",
+     "return typeof source === 'string' ? source : ''", 'src/engines/kit/storeSource.spec.ts'),
+    ('incomplete homes admit', 'src/hookServer.ts',
+     "if (home !== env.HERMES_HOME && !complete) unavailable = true",
+     "if (false) unavailable = true", 'src/hookServer.hermes.spec.ts'),
+    ('stop loses admission fence', 'src/hookServer.ts',
+     "!isRecentlyDeleted(processAgent.agentId) && ", "", 'src/hookServer.hermes.spec.ts'),
+    ('unverified child erases parent', 'src/core/engines/pendingAdmission.ts',
+     "const queue = jobs.get(key) ?? []", "const queue: Job[] = []", 'src/core/engines/pendingAdmission.spec.ts'),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 env.pop('TMUX', None)
