@@ -23,11 +23,10 @@ harness connections call github GET https://api.github.com/user
 
 ## Which services
 
-The list is the Grid app's: the connector gateway's `GET /v1/grid/connectors`. Signed in
-(`harness login`), the page follows that live list; signed out or offline it shows the bundled
-snapshot, `assets/catalog.json`; signed out, the services that need the gateway wait for
-`harness login`. `scripts/update-connector-catalog.ts` rebuilds the snapshot and its icons from the
-gateway; `scripts/connector-assets.mjs` turns `assets/` into `generated/` (cli.js carries them; a spec
+The list is the Grid app's, bundled as `assets/catalog.json`. Signed in (`harness login`), the Harness
+connector gateway's `GET /api/connectors` adds which `app` services it signs in to; signed out, those
+wait for `harness login`. `scripts/update-connector-catalog.ts` rebuilds the snapshot and its icons from
+Grid's catalog; `scripts/connector-assets.mjs` turns `assets/` into `generated/` (cli.js carries them; a spec
 keeps the two in step). Codes are Grid's; a connection saved under an earlier code (`apollo`,
 `supermetrics_marketing`) is read under Grid's (`apollo_io`, `supermetrics`).
 
@@ -41,12 +40,22 @@ involved. Renewal goes straight to the service's token endpoint. 78 of Grid's 86
 every one Grid marks `dcr`, plus Linear, Notion, Amplitude and monday.com, which Grid signs in through
 its gateway but whose MCP servers also allow self-registration.
 
-**`app`: through the Autonomous connector gateway** (`gateway.ts`). These services let no computer
-register itself, so the OAuth app Autonomous registered with them is used: `POST /v1/grid/connectors/start`,
-the browser signs in, then `/connectors/poll` returns the token once. The gateway holds the app's secret
-and renews tokens (`/connectors/refresh`). It needs the Grid session `harness login` keeps in
-`~/.grid/credentials.toml`. GitHub, Slack, Asana, HubSpot, Gmail, Google Calendar, Google Drive, Figma
-(`figma-api-app`). Signed out, they are listed with Connect disabled and "Needs harness login".
+**`app`: through the Harness connector gateway** (`gateway.ts`; backend `routes/connectors.ts`, the same
+requests as Grid's). These services let no computer register itself, so the OAuth app Autonomous
+registered with them is used: `POST /api/connectors/start`, the browser signs in, then
+`/api/connectors/poll` returns the token once. The gateway holds the app's secret and renews tokens
+(`/api/connectors/refresh`); a grant it no longer holds marks the connection "Reconnect". It asks with
+the Harness sign-in (`~/.harness/auth/session.json`, `lib/controlPlane.ts`). GitHub, Slack, Asana,
+HubSpot, Gmail, Google Calendar, Google Drive, Figma (`figma-api-app`). Signed out, they are listed with
+Connect disabled and "Needs harness login".
+
+**REST tools as MCP** (`rest.ts`). Gmail, Google Drive, Google Calendar and Figma have no MCP server the
+grant can use. As in the Grid app, the gateway sends their `rest_entry` (each tool one HTTPS request
+template) with `transport: rest`, and the bridge is their MCP server: `tools/list` from the entry,
+`tools/call` sent from this computer with the token in the entry's header. Path values are
+percent-encoded, an optional parameter left out is left out, Gmail's message is RFC 2822 (UTF-8, no header
+injection) in base64url, a Drive upload is `multipart/related`, and a failed call is a result the model
+reads (`isError`), in words a person can act on.
 
 **Add custom** takes any remote MCP server URL: one that asks for sign-in uses the `dcr` path, one with
 static headers (a personal token) is saved as given.
@@ -59,14 +68,16 @@ written atomically under one lock shared by every agent, the bridge and the page
 them in `~/.local/share/harness-os/connections`; they are moved here the first time.
 
 - `tokens.json`: per connection, Grid's format: `access_token`, `refresh_token`, `expires_at`, `scope`,
-  `account_name`, `source` (`dcr`/`gateway`/`custom`) and `mcp_entry {url, headers}`.
+  `account_name`, `source` (`dcr`/`gateway`/`custom`), `mcp_entry {url, headers}`, or `rest_entry` and
+  `transport` for a REST-backed service.
 - `clients.json`: this computer's registered OAuth clients, by issuer.
 - `bridge.json`: the bridge capability; `projections.json`: which agent entries Harness wrote;
   `page.json`: the running page.
 
 ## Agents and the bridge
 
-Agent configs never hold a token (`agents.ts`). Each connection with an MCP server becomes an entry
+Agent configs never hold a token (`agents.ts`). Each connection with tools (an MCP server, or REST tools
+the bridge serves) becomes an entry
 pointing at `http://127.0.0.1:51793/<capability>/<code>/mcp`:
 
 | Agent | File | Entry |

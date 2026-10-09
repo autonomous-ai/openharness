@@ -1,7 +1,8 @@
 /**
  * The local MCP bridge: agents call http://127.0.0.1:51793/<key>/<code>/mcp and the bridge forwards to the
  * service's MCP server with the stored credential, renewing it first when it is about to expire, and streams
- * the answer back (event streams included). Runs in the daemon (services/connectors.ts).
+ * the answer back (event streams included). A service reached by REST (no MCP server the grant can use) is
+ * answered here instead, its REST tools served as MCP (rest.ts). Runs in the daemon (services/connectors.ts).
  */
 import { timingSafeEqual } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
@@ -9,6 +10,7 @@ import { Readable } from 'node:stream'
 import { label } from './catalog.js'
 import { needsRefresh, refreshable, type Store, type Token } from './store.js'
 import { refresh } from './renew.js'
+import { answer as answerRest, transport } from './rest.js'
 
 /** Headers an MCP client sends that the service must see. Authorization never comes from the agent. */
 const FORWARD = ['accept', 'content-type', 'mcp-session-id', 'mcp-protocol-version', 'last-event-id']
@@ -64,6 +66,24 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
     return fetch(upstream, { method: request.method, headers, body: body ?? undefined, redirect: 'manual', signal: AbortSignal.timeout(300_000) })
   }
 
+  /** A REST-backed connection: this bridge is its MCP server (rest.ts), reading the store per call. */
+  const serveRest = async (code: string, request: IncomingMessage, response: ServerResponse, body: Buffer | null): Promise<void> => {
+    // No event stream to offer: 405 is how an MCP server says so (MCP streamable HTTP).
+    if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST', 'Content-Length': 0 }).end(); return }
+    let message: unknown
+    try { message = JSON.parse(body?.toString('utf8') ?? '') } catch { message = undefined }
+    const reply = message === undefined
+      ? { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }
+      : await answerRest(message, () => vault.token(code)?.rest_entry ?? null, async () => {
+        const token = vault.token(code)
+        if (!token) throw new Error('That connection is no longer connected. Reconnect it in harness connections and try again.')
+        return needsRefresh(token) ? refresh(vault, code) : token
+      })
+    if (!reply) { response.writeHead(202, { 'Content-Length': 0 }).end(); return }
+    const raw = JSON.stringify(reply)
+    response.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(raw) }).end(raw)
+  }
+
   const relay = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     // Only a process on this computer that knows this user's key gets through; never a web page.
     if (request.headers.origin || !['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.socket.remoteAddress ?? '')) {
@@ -75,10 +95,13 @@ export function createBridge(vault: Store, options: BridgeOptions): Server {
     let body: Buffer | null
     try { body = await readBody(request) } catch { fail(response, 413, 'Request is too large.'); return }
     const name = vault.token(code)?.label || label(code)
-    let token: Token | undefined
+    let stored: Token | undefined
+    try { stored = vault.token(code) } catch (error) { fail(response, 401, `${name}: ${(error as Error).message}`); return }
+    const via = stored ? transport(stored) : 'none'
+    if (!stored || via === 'none') { fail(response, 404, `${name} is not connected. Open harness connections to connect it.`); return }
+    if (via === 'rest') { await serveRest(code, request, response, body); return }
+    let token = stored
     try {
-      token = vault.token(code)
-      if (!token?.mcp_entry) { fail(response, 404, `${name} is not connected. Open harness connections to connect it.`); return }
       if (needsRefresh(token)) token = await refresh(vault, code)
     } catch (error) { fail(response, 401, `${name}: ${(error as Error).message}`); return }
     let answer: Response

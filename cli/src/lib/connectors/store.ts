@@ -10,6 +10,7 @@ import { closeSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFi
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { cleanRestEntry, transport, type RestEntry, type Transport } from './rest.js'
 
 export const MAX_BYTES = 1024 * 1024
 /** A token is renewed this long before it expires, as Grid does. */
@@ -36,6 +37,10 @@ export interface Token {
   refresh?: boolean
   needs_reconnect?: boolean
   mcp_entry?: McpEntry
+  /** A service with no usable MCP server: its REST tools, served as MCP by the bridge (rest.ts). */
+  rest_entry?: RestEntry
+  /** The gateway's word on which of the two agents use. */
+  transport?: Transport
 }
 export interface Client {
   client_id: string
@@ -175,6 +180,9 @@ export function cleanToken(entry: unknown): Token {
     const entryRaw = mcp as Record<string, unknown>
     result.mcp_entry = { url: cleanUrl(entryRaw.url), headers: cleanHeaders(entryRaw.headers) }
   }
+  const rest = cleanRestEntry(raw.rest_entry)
+  if (rest) result.rest_entry = rest
+  if (raw.transport === 'mcp' || raw.transport === 'rest' || raw.transport === 'none') result.transport = raw.transport
   if (!result.access_token && !result.mcp_entry) throw new ConnectorError('No access token was supplied.')
   return result
 }
@@ -290,7 +298,7 @@ export class Store {
     return {
       ...base, state, account: token.account_name ?? '', source: token.source ?? 'dcr',
       scopes: (token.scope ?? '').split(/\s+/).filter(Boolean), expires_at: expires || null,
-      auto_refresh: refreshable(token), tools: Boolean(token.mcp_entry),
+      auto_refresh: refreshable(token), tools: transport(token) !== 'none',
     }
   }
 }

@@ -10,10 +10,10 @@ import { LocalSignIn, type SignIn } from './oauth.js'
 import { sync } from './agents.js'
 
 /** The sign-in that connects CODE: the gateway's or this computer's own. */
-export function signInFor(vault: Store, code: string, items: Record<string, CatalogItem>, env: NodeJS.ProcessEnv = process.env): SignIn {
+export function signInFor(vault: Store, code: string, items: Record<string, CatalogItem>): SignIn {
   const item = items[code]
   if (!item) throw new ConnectorError('This service is not available. Run harness login to see every service.')
-  return item.auth === 'app' ? new gateway.GatewaySignIn(code, env) : new LocalSignIn(vault, item.mcp_url!)
+  return item.auth === 'app' ? new gateway.GatewaySignIn(code) : new LocalSignIn(vault, item.mcp_url!)
 }
 
 export function finish(vault: Store, code: string, token: Token, label?: string, env: NodeJS.ProcessEnv = process.env): void {
@@ -23,7 +23,7 @@ export function finish(vault: Store, code: string, token: Token, label?: string,
 }
 
 export async function disconnect(vault: Store, code: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  if (vault.token(code)?.source === 'gateway') await gateway.disconnect(code, env)
+  if (vault.token(code)?.source === 'gateway') await gateway.disconnect(code)
   vault.disconnect(code)
   try { sync(vault, env) } catch { /* As above. */ }
 }
@@ -71,10 +71,10 @@ export class Flows {
 export type Card = Status & { description: string, auth: string, custom: boolean, reason: string }
 
 /** The cards: every service, then connections no list names (custom servers, or ones Grid dropped). */
-export function cards(vault: Store, offered: Record<string, GatewayRow>, env: NodeJS.ProcessEnv = process.env): { connections: Card[], signed_in: boolean } {
+export function cards(vault: Store, offered: Record<string, GatewayRow>): { connections: Card[], signed_in: boolean } {
   const tokens = vault.tokens()
   const known = services(offered)
-  const signedIn = gateway.session(env) !== null
+  const signedIn = gateway.backend.signedIn()
   const result: Card[] = []
   for (const [code, item] of Object.entries(known)) {
     result.push({ ...vault.status(code, item.label, tokens[code]), name: item.label, description: item.description, auth: item.auth, custom: false,

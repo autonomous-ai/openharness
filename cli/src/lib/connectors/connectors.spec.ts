@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs'
-import { request as httpRequest } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FakeGateway, FakeService } from '../../testing/connectorServers.js'
@@ -28,10 +28,13 @@ const closers: (() => void)[] = []
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'connectors-'))
-  env = { HOME: home, PATH: '', XDG_CONFIG_HOME: join(home, '.config'), GRID_HOME: join(home, '.grid'), CODEX_HOME: join(home, '.codex'), HARNESS_CONNECTIONS_PORT: '51793' }
+  env = { HOME: home, PATH: '', XDG_CONFIG_HOME: join(home, '.config'), CODEX_HOME: join(home, '.codex'), HARNESS_CONNECTIONS_PORT: '51793' }
   vault = new Store(join(home, '.harness', 'connections'), env)
+  // Signed out of Harness whatever this computer is, unless a test signs in to a fake gateway.
+  gateway.backend.signedIn = () => false
 })
-afterEach(() => { while (closers.length) closers.pop()!(); rmSync(home, { recursive: true, force: true }) })
+const signedInHere = gateway.backend.signedIn
+afterEach(() => { gateway.backend.signedIn = signedInHere; while (closers.length) closers.pop()!(); rmSync(home, { recursive: true, force: true }) })
 
 async function service(): Promise<FakeService> {
   const fake = await new FakeService().start()
@@ -177,41 +180,80 @@ describe('agent configs', () => {
 })
 
 describe('the connector gateway', () => {
-  async function signedIn(): Promise<FakeGateway> {
+  const original = { ...gateway.backend }
+  afterEach(() => { Object.assign(gateway.backend, original) })
+
+  /** Signed in to Harness, the backend being a fake gateway. */
+  async function signedIn(session = 'harness-session'): Promise<FakeGateway> {
     const fake = await new FakeGateway().start()
     closers.push(() => fake.close())
-    mkdirSync(join(home, '.grid'))
-    writeFileSync(join(home, '.grid', 'credentials.toml'), `session_token = "grid-session"\napi_url = "${fake.base}"\n\n[device]\nid = "x"\n`)
+    Object.assign(gateway.backend, { signedIn: () => true, base: async () => fake.base, headers: async () => ({ authorization: `Bearer ${session}`, 'x-autonomous-env': 'prod' }) })
     return fake
   }
 
   it('signs in a service with no self-registration through the gateway, renews and disconnects it', async () => {
     const fake = await signedIn()
-    expect(Object.keys(await gateway.available(env))).toContain('github')
-    const flow = signInFor(vault, 'github', services(await gateway.available(env)), env)
+    expect(Object.keys(await gateway.available())).toContain('github')
+    const flow = signInFor(vault, 'github', services(await gateway.available()))
     expect(await flow.prepare()).toMatch(/^https:\/\/github\.com\//)
     finish(vault, 'github', await flow.wait(), undefined, env)
-    expect(vault.token('github')).toMatchObject({ source: 'gateway', account_name: 'octo', access_token: 'gho-fixture' })
-    await refresh(vault, 'github', true).catch(() => undefined)
+    expect(vault.token('github')).toMatchObject({ source: 'gateway', account_name: 'octo', access_token: 'gho-fixture', transport: 'mcp' })
+    expect((await refresh(vault, 'github', true)).access_token).toBe('gho-renewed')
+    await disconnect(vault, 'github', env)
+    expect(fake.calls.map(([path]) => path)).toEqual(['connectors/start', 'connectors/poll', 'connectors/poll', 'connectors/refresh', 'connectors/disconnect'])
+    expect(vault.token('github')).toBeUndefined()
   }, 15_000)
 
+  it('a grant the gateway no longer holds asks for connecting again; a lapsed Harness sign-in says so', async () => {
+    const fake = await signedIn()
+    const due = { access_token: 'gho-old', refresh: true, source: 'gateway' as const, expires_at: Math.floor(Date.now() / 1000) + 60 }
+    vault.save('github', due)
+    fake.fail = { status: 404, code: 'NOT_CONNECTED', message: 'This service is not connected. Connect it again.' }
+    await expect(refresh(vault, 'github')).rejects.toThrow('connected again')
+    expect(vault.token('github')).toMatchObject({ needs_reconnect: true })
+    vault.save('github', due)
+    fake.fail = { status: 503, code: 'CONNECTORS_FAILED', message: 'Connections are unavailable. Try again.' }
+    await expect(refresh(vault, 'github')).rejects.toThrow('Connections are unavailable. Try again.')
+    expect(vault.token('github')!.needs_reconnect).toBeUndefined()
+    fake.fail = { status: 502, code: '', message: '' }
+    await expect(gateway.call('connectors/refresh', {})).rejects.toThrow('Harness answered 502. Try again shortly.')
+    await signedIn('expired')
+    await expect(refresh(vault, 'github')).rejects.toThrow('Your Harness sign-in has expired')
+    expect(await gateway.available()).toEqual({})
+    Object.assign(gateway.backend, { headers: async () => { throw new Error('Not signed in. Run `harness login`.') } })
+    await expect(gateway.call('connectors')).rejects.toThrow('Could not reach Harness')
+    Object.assign(gateway.backend, { signedIn: () => false })
+    await expect(new gateway.GatewaySignIn('github').prepare()).rejects.toThrow('Sign in to Harness first')
+  })
+
+  it('refuses an answer that is not the gateway\'s', async () => {
+    const odd = createServer((request, response) => response.writeHead(200, { 'Content-Type': 'application/json' }).end(request.url === '/api/list' ? '{"success":true,"data":[]}' : 'not json'))
+    await new Promise<void>(resolve => odd.listen(0, '127.0.0.1', resolve))
+    closers.push(() => odd.close())
+    Object.assign(gateway.backend, { signedIn: () => true, base: async () => `http://127.0.0.1:${(odd.address() as { port: number }).port}`, headers: async () => ({}) })
+    await expect(gateway.call('connectors')).rejects.toThrow('Harness sent an unexpected answer.')
+    await expect(gateway.call('list')).rejects.toThrow('Harness sent an unexpected answer.')
+  })
+
   it('signed out, lists the gateway services waiting for harness login; signed in, follows the gateway', async () => {
-    let page = cards(vault, {}, env)
+    Object.assign(gateway.backend, { signedIn: () => false })
+    let page = cards(vault, {})
     const byCode = (list: typeof page.connections) => Object.fromEntries(list.map(card => [card.connector, card]))
     expect(page.signed_in).toBe(false)
     for (const code of ['github', 'gmail', 'google_calendar', 'google_drive']) expect(byCode(page.connections)[code].reason).toBe('Needs harness login')
     expect(byCode(page.connections).linear).toMatchObject({ auth: 'dcr', reason: '' })
     await signedIn()
-    const offered = await gateway.available(env)
-    page = cards(vault, offered, env)
+    const offered = await gateway.available()
+    page = cards(vault, offered)
+    expect(page.signed_in).toBe(true)
     const cardsNow = byCode(page.connections)
     expect(cardsNow.github.auth).toBe('app')
     expect(cardsNow.linear.auth).toBe('dcr')
     expect(cardsNow.newsvc).toMatchObject({ name: 'New Service', auth: 'dcr' })
     expect(cardsNow.slack).toBeUndefined()
     expect(cardsNow['manual-only']).toBeUndefined()
-    expect(signInFor(vault, 'newsvc', services(offered), env)).toBeInstanceOf(LocalSignIn)
-    expect(signInFor(vault, 'github', services(offered), env)).toBeInstanceOf(gateway.GatewaySignIn)
+    expect(signInFor(vault, 'newsvc', services(offered))).toBeInstanceOf(LocalSignIn)
+    expect(signInFor(vault, 'github', services(offered))).toBeInstanceOf(gateway.GatewaySignIn)
   })
 })
 

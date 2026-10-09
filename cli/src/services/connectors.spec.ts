@@ -6,17 +6,21 @@ import { join } from 'node:path'
 import { fakeCore } from '../testing/fakeCore.js'
 import { CONNECTORS_REQUESTS, startConnectors } from './connectors.js'
 import { Store } from '../lib/connectors/store.js'
+import * as gateway from '../lib/connectors/gateway.js'
 
 const OWNER = { local: true, owner: true }
 
 describe('the connectors service', () => {
   let home: string
   let env: NodeJS.ProcessEnv
+  const signedIn = gateway.backend.signedIn
   beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), 'connectors-service-'))
-    env = { HOME: home, PATH: '', GRID_HOME: join(home, '.grid'), HARNESS_CONNECTIONS_PORT: '0', XDG_CONFIG_HOME: join(home, '.config') }
+    env = { HOME: home, PATH: '', HARNESS_CONNECTIONS_PORT: '0', XDG_CONFIG_HOME: join(home, '.config') }
+    // Signed out of Harness whatever this computer is: nothing here reaches the backend.
+    gateway.backend.signedIn = () => false
   })
-  afterEach(() => rmSync(home, { recursive: true, force: true }))
+  afterEach(() => { gateway.backend.signedIn = signedIn; rmSync(home, { recursive: true, force: true }) })
 
   it('answers exactly the request it declares, and only for the owner', async () => {
     const requests = startConnectors(fakeCore(), { env })

@@ -12,6 +12,7 @@ import { existsSync, readFileSync, realpathSync, renameSync, writeFileSync, mkdi
 import { homedir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { CODE, locked, writePrivate, type Store } from './store.js'
+import { transport } from './rest.js'
 
 /** The bridge's fixed address, which every agent entry names. HARNESS_CONNECTIONS_PORT moves it (tests). */
 export function bridgePort(env: NodeJS.ProcessEnv = process.env): number {
@@ -135,9 +136,9 @@ export function agents(env: NodeJS.ProcessEnv = process.env): Agent[] {
   ]
 }
 
-/** Give every installed agent exactly the connections that have MCP tools. */
+/** Give every installed agent exactly the connections that have MCP tools (their own, or REST served as MCP). */
 export function sync(vault: Store, env: NodeJS.ProcessEnv = process.env, list: Agent[] = agents(env)): Record<string, string[]> {
-  const codes = Object.entries(vault.tokens()).filter(([code, token]) => token.mcp_entry && CODE.test(code)).map(([code]) => code)
+  const codes = Object.entries(vault.tokens()).filter(([code, token]) => transport(token) !== 'none' && CODE.test(code)).map(([code]) => code)
   const key = codes.length ? bridgeKey(vault) : ''
   const wanted = Object.fromEntries(codes.map(code => [code, bridgeUrl(key, code, bridgePort(env))]))
   return locked(vault.root, () => {

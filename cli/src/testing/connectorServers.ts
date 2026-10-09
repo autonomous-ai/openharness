@@ -93,24 +93,33 @@ export class FakeGateway {
   async start(): Promise<this> { this.base = `http://127.0.0.1:${await listen(this.server)}`; return this }
   close(): void { this.server.close(); this.server.closeAllConnections() }
 
+  /** An answer in the Harness backend's envelope; `fail` makes the next one a refusal with that code. */
+  fail: { status: number, code: string, message: string } | null = null
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
-    if (request.headers.authorization !== 'Bearer grid-session') { send(response, 401, {}); return }
+    const ok = (data: unknown) => send(response, 200, { success: true, data })
+    if (request.headers.authorization !== 'Bearer harness-session') { send(response, 401, { success: false, error: { code: 'UNAUTHORIZED', message: 'Sign in.' } }); return }
+    if (this.fail) {
+      const { status, code, message } = this.fail
+      this.fail = null
+      send(response, status, { success: false, error: { code, message } }); return
+    }
     if (request.method === 'GET') {
-      send(response, 200, { connectors: [
+      ok({ connectors: [
         { code: 'github', label: 'GitHub', auth_type: 'app', mcp_url: 'https://api.githubcopilot.com/mcp/' },
         { code: 'linear', label: 'Linear', auth_type: 'app', mcp_url: 'https://mcp.linear.app/mcp' },
         { code: 'newsvc', label: 'New Service', auth_type: 'dcr', mcp_url: 'https://mcp.newsvc.example/mcp', description: 'Added to Grid after this build.' },
         { code: 'manual-only', label: 'Manual', auth_type: 'pat' },
       ] }); return
     }
-    const path = (request.url ?? '').replace('/v1/grid/', '')
+    const path = (request.url ?? '').replace('/api/', '')
     const data = JSON.parse(await body(request))
     this.calls.push([path, data])
-    const token = { access_token: 'gho-fixture', expires_at: Math.floor(Date.now() / 1000) + 3600, refresh: true, account_name: 'octo',
+    const token = { access_token: 'gho-fixture', expires_at: Math.floor(Date.now() / 1000) + 3600, refresh: true, account_name: 'octo', transport: 'mcp', rest_entry: null,
       mcp_entry: { url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer gho-fixture' } } }
-    if (path === 'connectors/start') send(response, 200, { authorize_url: 'https://github.com/login/oauth/authorize?state=grid_x', pickup_code: 'pickup-1', poll_interval: 1, expires_in: 60 })
-    else if (path === 'connectors/poll') { this.polls += 1; send(response, 200, this.polls < 2 ? { status: 'pending' } : { ...token, status: 'ready', connector: 'github' }) }
-    else if (path === 'connectors/refresh') send(response, 200, { ...token, access_token: 'gho-renewed' })
-    else send(response, 200, { disconnected: true })
+    if (path === 'connectors/start') ok({ authorize_url: 'https://github.com/login/oauth/authorize?state=harness_x', pickup_code: 'pickup-1', poll_interval: 1, expires_in: 60 })
+    else if (path === 'connectors/poll') { this.polls += 1; ok(this.polls < 2 ? { status: 'pending' } : { ...token, status: 'ready', connector: 'github' }) }
+    else if (path === 'connectors/refresh') ok({ ...token, access_token: 'gho-renewed' })
+    else ok({ disconnected: true })
   }
 }

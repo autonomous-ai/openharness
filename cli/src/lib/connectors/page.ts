@@ -55,7 +55,7 @@ export class PageServer {
 
   async gatewayOffers(): Promise<Record<string, GatewayRow>> {
     if (Date.now() - this.offeredAt > GATEWAY_CACHE_MS) {
-      this.offered = await gateway.available(this.env)
+      this.offered = await gateway.available()
       this.offeredAt = Date.now()
     }
     return this.offered
@@ -93,7 +93,7 @@ export class PageServer {
       this.lastRequest = Date.now()
       try {
         if (path === '/api/connections') {
-          const page = cards(this.vault, await this.gatewayOffers(), this.env)
+          const page = cards(this.vault, await this.gatewayOffers())
           const connections = page.connections.map(card => ({ ...card, icon: ICONS[card.connector] ? `/icons/${card.connector}` : '' }))
           this.reply(response, 200, { ...page, connections })
         } else this.reply(response, 200, this.flows.get(path.slice('/api/flows/'.length)))
@@ -129,7 +129,7 @@ export class PageServer {
     try {
       if (path === '/api/connect') {
         const code = validateCode(data.connector)
-        this.reply(response, 200, await this.flows.start(code, signInFor(this.vault, code, services(await this.gatewayOffers()), this.env)))
+        this.reply(response, 200, await this.flows.start(code, signInFor(this.vault, code, services(await this.gatewayOffers()))))
       } else if (path === '/api/custom') {
         this.reply(response, 200, await addCustom(this.vault, this.flows, data, this.env))
       } else if (path === '/api/disconnect') {

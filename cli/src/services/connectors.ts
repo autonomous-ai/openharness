@@ -41,7 +41,7 @@ export function startConnectors(_core: CoreApi, overrides: Partial<ConnectorsDep
   const env = overrides.env ?? process.env
   const deps: ConnectorsDeps = {
     vault: overrides.vault ?? new Store(undefined, env), port: overrides.port ?? bridgePort(env),
-    offered: overrides.offered ?? (() => gateway.available(env)), env, retryMs: overrides.retryMs ?? 5_000,
+    offered: overrides.offered ?? (() => gateway.available()), env, retryMs: overrides.retryMs ?? 5_000,
   }
   const { vault } = deps
   const flows = new Flows(vault, env)
@@ -59,10 +59,10 @@ export function startConnectors(_core: CoreApi, overrides: Partial<ConnectorsDep
 
   const answer = async (payload: Record<string, unknown>): Promise<Record<string, unknown>> => {
     switch (payload.action) {
-      case 'list': return { ...cards(vault, await gatewayOffers(), env) }
+      case 'list': return { ...cards(vault, await gatewayOffers()) }
       case 'connect': {
         const code = validateCode(payload.connector)
-        return { ...(await flows.start(code, signInFor(vault, code, services(await gatewayOffers()), env))) }
+        return { ...(await flows.start(code, signInFor(vault, code, services(await gatewayOffers())))) }
       }
       case 'flow': return { ...flows.get(String(payload.flow ?? '')) }
       case 'disconnect': {
