@@ -343,6 +343,7 @@ export function createBinding({
         bornOnly: true,
         pid: observed.processIdentity.pid,
         codexHome: agent.codexHome ?? undefined,
+        hermesHome: agent.hermesHome ?? undefined,
       }))
       if (!located) return
       const found = located.value

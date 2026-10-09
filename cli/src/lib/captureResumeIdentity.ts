@@ -8,7 +8,7 @@
  * including the four that keep theirs in a database rather than a file.
  */
 import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
-import { findLiveSession, findResumedTranscript, processSessionOf } from './sessionRepair.js'
+import { findLiveSession, findResumedTranscript, processSessionOf, type RepairedSession } from './sessionRepair.js'
 import { processRows, resumeSessionId } from './tmux.js'
 import { sameProcessIdentity } from './terminalRuntime.js'
 import { isTerminalEngine } from '../engines/types.js'
@@ -35,10 +35,10 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
   const explicit = resumeSessionId(session.engine, live.args)
   // An engine whose process names its own session in a record (Claude Code's, removed at exit) is read now.
   const native = await processSessionOf(session.engine, expected.pid, session.cwd, Date.parse(expected.startMarker))
-  const found = native ?? (explicit
-    ? { sessionId: explicit, transcriptPath: await findResumedTranscript(session.engine, explicit, options) }
+  const found: RepairedSession | null = native ?? (explicit
+    ? { sessionId: explicit, transcriptPath: await findResumedTranscript(session.engine, explicit, options) ?? undefined }
     : await findLiveSession(session.engine, session.cwd, Date.parse(expected.startMarker), {
-      ...options, pid: expected.pid, bornOnly: true,
+      ...options, hermesHome: session.hermesHome ?? undefined, pid: expected.pid, bornOnly: true,
     }))
   if (!found?.sessionId) return session
   // A file-backed engine still has to produce a transcript this daemon can point a resume at; a
@@ -48,6 +48,7 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
     ...session,
     sessionId: found.sessionId,
     ...(found.transcriptPath ? { transcriptPath: found.transcriptPath } : {}),
+    ...(found.hermesHome ? { hermesHome: found.hermesHome } : {}),
     source: 'stop-repair',
     boundAt: Date.now(),
   }

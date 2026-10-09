@@ -44,7 +44,26 @@ const normalize = (value: unknown): unknown => JSON.parse(JSON.stringify(value ?
 function check(key: string, value: unknown): void {
   const result = normalize(value)
   recorded[key] = result
-  if (!RECORD) expect({ key, result }).toEqual({ key, result: golden[key] })
+  if (!RECORD) {
+    if (key === 'admission') {
+      // Preserve the former artifact, including its unsafe first-home answer. Complete native
+      // pools deliberately hold this case and explain unreadable evidence; healthy answers stay unchanged.
+      const label = 'one in both homes: the default asked first'
+      const before = golden[key] as unknown[][], after = result as unknown[][]
+      expect(before.filter(row => row[0] === label)).toEqual([[label, 200, { pending: true },
+        [{ sessionId: '20261008_100002_dddddd', engine: 'hermes', hermesHome: null }],
+        ['[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check']]])
+      expect(after.filter(row => row[0] === label)).toEqual([[label, 200, { pending: true }, [],
+        ['[hooks] 20261008 SessionStart held · Hermes session source is ambiguous across homes; keeping the current conversation.']]])
+      const unreadable = 'one whose candidate store cannot be read'
+      const held = '[hooks] 20261008 SessionStart held · Hermes session source is unavailable; keeping the current conversation.'
+      expect(before.filter(row => row[0] === unreadable)).toEqual([[unreadable, 200, { pending: true }, [], [held]]])
+      expect(after.filter(row => row[0] === unreadable)).toEqual([[unreadable, 200, { pending: true }, [],
+        [held + ' Conversation identity is held: a native store query is unavailable.']]])
+      const healthy = (row: unknown[]) => row[0] !== label && row[0] !== unreadable
+      expect(after.filter(healthy)).toEqual(before.filter(healthy))
+    } else expect({ key, result }).toEqual({ key, result: golden[key] })
+  }
 }
 
 const saved: Record<string, string | undefined> = {}

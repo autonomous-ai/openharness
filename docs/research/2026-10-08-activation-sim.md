@@ -437,6 +437,54 @@ opens. The one lever named for it (finding 23) is shipping Node and the CLI insi
 11 s, at the cost of a larger universal app and signing an embedded Node. That is a packaging
 decision, not an onboarding iteration.
 
+**The whole matrix on final main** (167001ed2, app and CLI built from it), each persona on a fresh Mac
+without developer tools. Every one finished two sessions, and no dialog appeared:
+
+| Persona | Opens on | Workspace | First result | Second session |
+|---|---|---|---|---|
+| nothing installed | OpenCode + Codex + Claude Code | 40 s | 52 s | 48 s; next day 7 s |
+| OpenCode only | OpenCode | 40 s | 56 s | 18 s |
+| real Codex, not signed in | OpenCode + Codex | 40 s | 81 s* | 163 s* |
+| real Claude Code, not signed in | OpenCode + Claude Code | 40 s | 124 s* | 90 s* |
+| real Claude Code and Codex, not signed in | all three | 41 s | 55 s | 17 s |
+| Claude Code signed in | Claude Code | 41 s | 46 s | 2 s |
+| Codex signed in | Codex | 40 s | 46 s | 3 s |
+| both signed in | Claude Code + Codex | 41 s | 46 s | 2 s |
+| both, 5 recent conversations | 2 tabs reopened | 41 s | 46 s | 2 s; next day at once |
+| Codex, 2 recent conversations | 1 tab reopened | 40 s | 46 s | 3 s |
+| Claude Code signed in, real Codex not | Claude Code + Codex | 40 s | 46 s | 3 s |
+
+\* OpenCode's free model itself: its footer read "Muse Spark 1.3 Free · 1m 17s" and "2m 38s" in
+those runs, against 8–15 s an hour earlier. The flow around it was immediate.
+
+**Would another free model help the slow runs?** No. OpenCode's ten free models were each run three
+times on the starter task (`opencode run -m <model>`, a fresh folder and home each, side by side,
+2026-10-09):
+- **The default, `muse-spark-1.3-contributor-free`:** 13.3, 11.7 and 7.1 s, the page made each time.
+  This is the model that took 77 s and 158 s in the matrix an hour earlier.
+- **`space-bunny-free`** (9–11 s) and **`big-pickle`** (8–12 s): as fast, not faster.
+- **The rest:** slower, or failed to make the page (`ling-*`, `fledge-alpha-free`,
+  `nemotron-3.5-lightning-free`).
+
+The slow runs were the default model under load at that moment. Pinning another model would risk
+a first session failing when OpenCode changes its free list, for no steady gain.
+
+**Where a new user's first 30 s go** (final main, fresh VM, from the app's and CLI's logs, 2026-10-09):
+
+| After opening | Step |
+|---|---|
+| +4 s | app launched |
+| +7 s | tmux in place (managed runtime) |
+| +7 → +20 s | Harness's Node runtime and the CLI downloaded and installed: the longest step |
+| +15 s / +18 s | OpenCode downloaded (10.4 s, in parallel) / its first run done |
+| +22 → +25 s | `harness start`: the daemon is ready |
+| +27 → +30 s | the first workspace planned (1.9 s) and its three panes opened (4.5 s) |
+
+OpenCode is off the critical path, so finishing it in its pane as Codex and Claude Code do would
+gain nothing. The one large step is the Node runtime and the CLI. Shipping them in the app would
+save about 13 s, against the documented choice that `install.sh` alone installs them
+(desktop/CLAUDE.md). That is the owner's decision. Everything else left is 1–4 s.
+
 **Rig note:** the VM has no developer tools, so it raises Apple's dialog for anything that runs
 `git`. Returning users of Claude Code or Codex have them, so a dialog seen there is the rig's, not
 theirs.
