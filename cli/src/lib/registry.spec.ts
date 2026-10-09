@@ -1946,6 +1946,43 @@ describe('registry across a reboot and pane loss', () => {
     expect(saved.map((row) => row.agentId).sort()).toEqual([a, b].sort())
   })
 
+  it('flushes an acknowledged binding at exit without waiting for a discovery transaction', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const transcriptPath = join(dataDir, 'just-bound.jsonl')
+    writeFileSync(transcriptPath, '{}\n')
+    const pending = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%7', processIdentity: processIdentity(71) })!.entry
+    let finish!: () => void
+    const batch = registry.transaction(async () => {
+      registry.register({ engine: 'claude', sessionId: 'just-bound', transcriptPath, tmuxPane: '%7' })
+      await new Promise<void>(resolve => { finish = resolve })
+    })
+    try {
+      // Reflect keeps this regression runnable against the former flush(), which ignored this option.
+      Reflect.apply(registry.flush, registry, [{ exiting: true }])
+      const saved = JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))
+      expect(saved.find((row: any) => row.agentId === pending.agentId).sessionId).toBe('just-bound')
+    } finally { finish(); await batch }
+  })
+
+  it('never flushes an incomplete pane swap at exit or lets merge conflict resolution evict its other owner', async () => {
+    const { registry } = await loadRegistryModule()
+    registry.load()
+    const a = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%1', processIdentity: processIdentity(11) })!.entry.agentId
+    const b = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', processIdentity: processIdentity(12) })!.entry.agentId
+    const file = join(dataDir, 'registry.json')
+    const before = readFileSync(file, 'utf8')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await registry.transaction(async () => {
+      registry.updateRuntimes(a, [{ backend: 'tmux', paneId: '%2' }], 'tmux\u0000%2')
+      Reflect.apply(registry.flush, registry, [{ exiting: true }])
+      expect(readFileSync(file, 'utf8')).toBe(before)
+      registry.updateRuntimes(b, [{ backend: 'tmux', paneId: '%1' }], 'tmux\u0000%1')
+    })
+    expect(JSON.parse(readFileSync(file, 'utf8')).map((row: any) => row.agentId).sort()).toEqual([a, b].sort())
+    error.mockRestore()
+  })
+
   it('stops holding saves back for a transaction that outlives its hold, and saves what it has changed', async () => {
     // A reconcile pass stuck inside its transaction held every save back for as long as it ran.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

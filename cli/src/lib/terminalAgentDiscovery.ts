@@ -6,7 +6,8 @@ import {
   type AgentCommandOwnershipSnapshot,
 } from './engineBin.js'
 import { probeGatewayRuntime } from './gatewayRuntime.js'
-import { probeGridAssignment, type GridAssignment } from './gridAssignment.js'
+import { gridAssignmentProcess, type GridAssignment, type GridAssignmentProcess } from './gridAssignmentWire.js'
+import { readProcessEnv } from './processEnv.js'
 import { probeProfileHome } from '../engines/discoveries.js'
 import { loadEngine } from '../engines/inProcess.js'
 import { probeDsh } from '../dsh/probe.js'
@@ -49,11 +50,13 @@ export interface DiscoveredTerminalAgent {
   gateway?: 'ori' | null
   /**
    * The grid this engine process is pointed at, read from the same environment. null = a vendor login
-   * or an unreadable probe — `gridAssignment.ts` explains why those share an answer.
+   * while undefined means the process or models could not be read and preserves the last assignment.
    *
    * Backend-agnostic for the same reason `gateway` is: it is a fact about the process, not the pane.
    */
   grid?: GridAssignment | null
+  /** Sanitized launch markers; classified after the binding pass, never awaited by it. */
+  gridProcess?: GridAssignmentProcess
   /**
    * Codex only: the CODEX_HOME profile the process was launched under, when it is not this machine's
    * default. null = the default profile (or not Codex); undefined = the probe could not read the
@@ -260,8 +263,13 @@ export async function probeTerminalAgents(
   await Promise.all(discovered.agents.map(async (agent) => {
     const runtime = await probeGatewayRuntime(agent.processIdentity, agent.args)
     agent.gateway = runtime.kind
-    // Same process, same cached read — the grid costs no extra `ps`.
-    agent.grid = await probeGridAssignment(agent.processIdentity, agent.engine, agent.args)
+    // Only the marker read is core work. Models classifies it after reconciliation, without blocking binding.
+    const env = await readProcessEnv(agent.processIdentity)
+    if (env) {
+      const evidence = gridAssignmentProcess('', agent.engine, env, agent.args)
+      if (evidence) agent.gridProcess = evidence
+      else agent.grid = null
+    }
     // And, for Codex, the profile it runs under — a fact about the process the row cannot otherwise learn.
     agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine)
     // …and, for Hermes, the home — same cached read, and it beats looking the session up in every store. Read by

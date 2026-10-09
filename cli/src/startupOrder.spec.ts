@@ -141,6 +141,18 @@ describe('the core\'s start-up order (core/main.ts)', () => {
       .toEqual([])
   })
 
+  it('protects acknowledged bindings on every exit after registry ownership, before startup can yield', () => {
+    const source = code(SOURCE)
+    const owned = source.indexOf('await refuseServedDataFolder(')
+    const loaded = source.indexOf('registry.load()')
+    const exiting = source.indexOf("process.on('exit', () => registry.flush({ exiting: true }))")
+    expect(loaded).toBeGreaterThan(owned)
+    expect(exiting).toBeGreaterThan(loaded)
+    // An update can exit before full teardown is constructed. Install the synchronous safeguard
+    // before the first yield after load, while a duplicate daemon still exits without touching disk.
+    expect(exiting).toBeLessThan(source.indexOf('\n  await ', loaded))
+  })
+
   it('only swaps in the full restart handler once everything it tears down exists', () => {
     // `bootHandoff` hands the machine over without finishing start-up; the full handoff
     // (core/updateHandoff.ts) tears down two dozen subsystems, handed to it here as its teardown, and may

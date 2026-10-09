@@ -48,6 +48,7 @@ export interface TerminalAgentReconcilerDeps {
   onDormant: (current: RegisteredSession, reason: string) => void | Promise<void>
   onRemoved: (current: RegisteredSession, reason: string) => void | Promise<void>
   onTerminalAvailability?: (current: RegisteredSession, available: boolean) => void | Promise<void>
+  onReconciled?: (agents: readonly DiscoveredTerminalAgent[]) => void
   onProbeStatus?: (status: { ready: true; error: string | null }) => void
   transaction?: <T>(apply: () => T | Promise<T>) => Promise<T>
   probe?: (hints: ReadonlyMap<string, AgentEngine>) => Promise<TerminalAgentProbe>
@@ -462,5 +463,6 @@ export class TerminalAgentReconciler {
     // Readiness is published last: clients must never observe ready=true between the inventory read and
     // the authoritative availability/registry update.
     this.deps.onProbeStatus?.({ ready: true, error: probeError })
+    this.deps.onReconciled?.(probe.agents.filter(agent => !this.routeHeld(agent.runtimes, probeSeq)))
   }
 }

@@ -1,33 +1,11 @@
 /** Machine-local API connections. Only child tools receive credentials; model/subscription
  * selection and the daemon's own environment are never changed by saving a key. */
-import { chmodSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { z } from 'zod'
 
-const text = z.string().trim().min(1).max(120).regex(/^[^\x00-\x1f\x7f]+$/)
-const id = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)
-const environmentName = z.string().regex(/^[A-Z][A-Z0-9_]{0,79}$/).refine(
-  value => !/^(PATH|HOME|SHELL|ENV|BASH_ENV|ZDOTDIR|NODE_OPTIONS|LD_.+|DYLD_.+|HARNESS_.+)$/.test(value),
-)
-const baseUrl = z.string().max(2048).url().refine(value => {
-  const url = new URL(value)
-  return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash
-})
-const metadata = z.object({
-  id,
-  provider: id,
-  name: text,
-  baseUrl,
-  keyEnv: environmentName,
-  authHeader: z.string().regex(/^[A-Za-z][A-Za-z0-9-]{0,79}$/).refine(value =>
-    !['host', 'content-length', 'connection', 'transfer-encoding', 'cookie'].includes(value.toLowerCase())),
-  authPrefix: z.string().trim().max(40).regex(/^[A-Za-z0-9_-]*$/),
-})
-const stored = metadata.extend({ apiKey: z.string().trim().min(1).max(8192).regex(/^[^\s\x00-\x1f\x7f]+$/) })
-const storeSchema = z.object({ version: z.literal(1), connections: z.array(stored).max(100) })
-export type ApiConnection = z.infer<typeof metadata>
-type StoredConnection = z.infer<typeof stored>
+import { id, metadata, stored, readApiConnectionStore, ApiConnectionError, type ApiConnection, type StoredConnection } from './apiConnectionMetadata.js'
+export { ApiConnectionError, type ApiConnection } from './apiConnectionMetadata.js'
 export type ApiPreset = Omit<ApiConnection, 'id'> & { keyUrl: string; docsUrl: string }
 
 /** Defaults verified against each provider's public authentication docs. Custom APIs use the
@@ -41,7 +19,6 @@ export const API_PRESETS: ApiPreset[] = [
   { provider: 'replicate', name: 'Replicate', baseUrl: 'https://api.replicate.com/v1', keyEnv: 'REPLICATE_API_TOKEN', authHeader: 'Authorization', authPrefix: 'Bearer', keyUrl: 'https://replicate.com/account/api-tokens', docsUrl: 'https://replicate.com/docs/topics/security/api-tokens' },
 ]
 
-export class ApiConnectionError extends Error {}
 const message = (value: string): never => { throw new ApiConnectionError(value) }
 const publicConnection = (value: StoredConnection): ApiConnection => metadata.parse(value)
 
@@ -54,35 +31,31 @@ export function servesModels(connection: Pick<ApiConnection, 'authHeader' | 'aut
 export class ApiConnections {
   private readonly dir: string
   private readonly file: string
-  constructor(dataDir: string) {
+  constructor(private readonly dataDir: string) {
     this.dir = join(dataDir, 'api-connections')
     this.file = join(this.dir, 'connections.json')
   }
 
-  private read(): StoredConnection[] {
-    try {
-      if (!existsSync(this.dir)) return []
-      if (!lstatSync(this.dir).isDirectory() || lstatSync(this.dir).isSymbolicLink()) throw new Error()
-      if (!existsSync(this.file)) return []
-      const stat = lstatSync(this.file)
-      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error()
-      const parsed = storeSchema.parse(JSON.parse(readFileSync(this.file, 'utf8'))).connections
-      if (new Set(parsed.map(row => row.id)).size !== parsed.length) throw new Error()
-      return parsed
-    } catch { return message('Saved APIs could not be read. Your keys have not been changed.') }
-  }
+  private read(): StoredConnection[] { return readApiConnectionStore(this.dataDir).connections }
 
   private write(connections: StoredConnection[]): void {
     const temporary = join(this.dir, `.connections-${randomUUID()}.tmp`)
     let fd: number | undefined
     let created = false
     try {
+      const previous = readApiConnectionStore(this.dataDir)
+      // Endpoint recognition must survive a models restart, even before an organic agent's first scan.
+      // Keep it in this same atomic document so saving a key cannot half-write its endpoint vocabulary.
+      const recognizedBases = [...new Set([...(previous.recognizedBases ?? []),
+        ...previous.connections.map(row => row.baseUrl), ...connections.map(row => row.baseUrl)])]
+      const contents = JSON.stringify({ version: 1, connections, recognizedBases })
+      if (Buffer.byteLength(contents) > 2 * 1024 * 1024) throw new Error('API store is full')
       mkdirSync(this.dir, { recursive: true, mode: 0o700 })
       if (lstatSync(this.dir).isSymbolicLink()) throw new Error()
       chmodSync(this.dir, 0o700)
       fd = openSync(temporary, 'wx', 0o600)
       created = true
-      writeFileSync(fd, JSON.stringify({ version: 1, connections }))
+      writeFileSync(fd, contents)
       fsyncSync(fd)
       closeSync(fd)
       fd = undefined
@@ -92,6 +65,11 @@ export class ApiConnections {
       if (fd !== undefined) closeSync(fd)
       if (created) rmSync(temporary, { force: true })
     }
+  }
+
+  recognizedBases(): string[] {
+    const store = readApiConnectionStore(this.dataDir)
+    return [...new Set([...(store.recognizedBases ?? []), ...store.connections.map(row => row.baseUrl)])]
   }
 
   list(): ApiConnection[] { return this.read().map(publicConnection) }

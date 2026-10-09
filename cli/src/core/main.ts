@@ -1,3 +1,4 @@
+import { createGridAssignments } from './agents/gridAssignments.js'
 import { createQuestionControls } from './engines/questionControls.js'
 import { masterRunsEngineQuestionControl } from '../harnessd/services.js'
 import { createModelControls } from './engines/modelControls.js'
@@ -76,8 +77,7 @@ import { buildHarnessSessionLabel } from '../lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from '../lib/tmuxAgentDiscovery.js'
 import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
 import { dshThrough } from './agents/dshThrough.js'
-import { ApiConnections } from '../lib/apiConnections.js'
-import { rememberSavedApis } from '../lib/gridAssignment.js'
+import { ApiConnectionMetadata } from '../lib/apiConnectionMetadata.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
@@ -458,9 +458,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // master's updater runs on, and a published fix still lands (`enterSafeMode`).
   if (process.env.HARNESSD_SAFE_MODE) throw new SafeModeRequest(process.env.HARNESSD_SAFE_MODE)
 
-  const savedApis = new ApiConnections(env.ADAPTER_DATA_DIR)
-  // Before any agent is probed: one already running on a saved API's model reports that model.
-  rememberSavedApis(savedApis)
+  const savedApis = new ApiConnectionMetadata(env.ADAPTER_DATA_DIR)
+  // Instructions read metadata locally; a models outage must not change a workspace's tool instructions.
   const prepareApiTools = (cwd: string | null | undefined, engine: string): void => {
     if (!cwd) return
     try { prepareApiInstructions(savedApis, cwd, engine) }
@@ -471,6 +470,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (engines/inProcess.ts).
   registry.onEnter = preloadEngine
   registry.load()
+  // Bindings can finish before full teardown exists, or during its awaits. Cover every owned exit,
+  // including a staged update received during startup, without touching a different daemon's table.
+  process.on('exit', () => registry.flush({ exiting: true }))
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
   // Mark them dormant before the backend socket can publish anything; the first authoritative reconcile
   // reactivates matching process agents without changing their public identity or session binding.
@@ -1546,6 +1548,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // applied: some scans land at once and some straddle an agent's start, as on a loaded machine. The
   // end-to-end suite uses it to put a scan across an engine's start on purpose (e2e/core.e2e.ts).
   const slowProbeMs = Number(process.env.HARNESSD_TEST_SLOW_PROBE_MS) || 0
+  const gridAssignments = createGridAssignments({ models: () => ports.models ?? MODELS_OFF, registry,
+    revision: (id) => restartJobs.revision(id), announce: announceSession })
   const agentReconciler = new TerminalAgentReconciler({
     // The hook server starts before restore. Its early SessionStart hints must not run a full
     // discovery scan over rows whose panes have not been recreated yet (and archive those rows).
@@ -1562,6 +1566,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       },
     } : {}),
     ...discovery,
+    onReconciled: gridAssignments.observe,
     onProbeStatus: (status) => {
       discoveryReady = status.ready
       discoveryError = status.error
@@ -2303,6 +2308,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     restartJobs,
     paneSwapDeps,
     liveBypassPermission,
+    refreshGridAssignment: gridAssignments.refresh,
     announceSession,
     opencodeDb: OPENCODE_DB,
   })
@@ -2372,6 +2378,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     sameRestartTarget,
     agentReconciler,
     terminalHintMachineName,
+    refreshGridAssignment: gridAssignments.refresh,
     announceSession,
     relaunchOverrides,
     downgradedPermission,
@@ -2425,7 +2432,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // A straight-line assignment, never a wait: if the body never reaches this line the handler stays
   // `bootHandoff`, and the fix still lands.
   const updateTeardown = (): TeardownStep[] => [
-    ['the registry', () => registry.flush()], ['the updater', () => daemonBoot.updaterBeside?.()],
+    ['the registry', () => registry.flush({ exiting: true })], ['the updater', () => daemonBoot.updaterBeside?.()],
     ['the reconciler', () => agentReconciler.stop()],
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
     ['the question watchers', () => questionWatcher.stopAll()],
@@ -2460,6 +2467,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const forGood = (reason: string): boolean => reason === 'revoked' || reason === 'busy'
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`\n[cli] ${signal} — shutting down`)
+    // A slow teardown may exhaust the master's grace. Persist already acknowledged bindings first.
+    registry.flush({ exiting: true })
     // Mid-handoff everything below is already being torn down, and nothing has been started yet: leave
     // — a second teardown of closed servers is noise.
     if (updateHandoff.restarting()) {

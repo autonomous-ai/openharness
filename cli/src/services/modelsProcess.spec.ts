@@ -24,6 +24,7 @@ function fakeModels() {
     launchTarget: vi.fn(async () => LAUNCH),
     moveTarget: vi.fn(async (): Promise<{ target: typeof LAUNCH } | { detail: string }> => ({ target: LAUNCH })),
     moved: vi.fn(),
+    gridAssignments: vi.fn(async () => []),
     gridLaunch: vi.fn(async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => ({ ok: true, launch: BUILT, override: request.override })),
     apiTarget: vi.fn(async (): Promise<{ target: typeof LAUNCH; apiBase: string } | { detail: string }> => ({ target: LAUNCH, apiBase: RELAY })),
     privateGridName: vi.fn(async () => 'mine'),
@@ -69,7 +70,7 @@ describe('models in its own process', () => {
   it('reaches the core as `models`, answering the apps\' requests and the core\'s port calls, and stops with its link', () => {
     const { models, options, handle, service } = setup()
     expect(options).toMatchObject({ name: 'models', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests).sort()).toEqual(['apiTarget', 'ensure', 'gridLaunch', 'grid_models_list', 'launchTarget', 'lists', 'moveTarget', 'privateGridName'])
+    expect(Object.keys(options.requests).sort()).toEqual(['apiTarget', 'ensure', 'gridAssignments', 'gridLaunch', 'grid_models_list', 'launchTarget', 'lists', 'moveTarget', 'privateGridName'])
     expect(options.requests.grid_models_list).toBe(models.requests.grid_models_list)
     handle.stop()
     expect(service.stop).toHaveBeenCalled()
@@ -107,6 +108,8 @@ describe('models in its own process', () => {
     expect(await options.requests.gridLaunch!({ engine: 'claude', override: 'nope', machine }, asker))
       .toEqual({ ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' })
     expect(models.port.gridLaunch).toHaveBeenCalledOnce()
+    expect(await options.requests.gridAssignments!({ processes: [] }, asker)).toEqual({ assignments: [] })
+    expect(await options.requests.gridAssignments!({ processes: 'invalid' }, asker)).toEqual({ error: 'INVALID_PROCESSES' })
     expect(await options.requests.apiTarget!({ connectionId: 'openrouter', model: 'q' }, asker)).toEqual({ target: LAUNCH, apiBase: RELAY })
     models.port.apiTarget.mockResolvedValueOnce({ detail: 'gone' })
     expect(await options.requests.apiTarget!({ connectionId: 7 }, asker)).toEqual({ detail: 'gone' })

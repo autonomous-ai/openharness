@@ -37,6 +37,8 @@ export interface EngineConfig {
   /** Note every submitted prompt and hold a `!latestart` turn's start at a file gate (submission tests). */
   submissionGate?: boolean
   codexModel?: string
+  /** Keep the real interpreter/entrypoint argv, so macOS ps can also read the fixture environment. */
+  preserveProcessArgs?: boolean
   /** The test's throwaway root: the engine runs no hooks from settings outside it. */
   root: string
   /** Where the engine notes each hook it ran. */
@@ -64,6 +66,8 @@ export interface DaemonOptions {
   /** Note every submitted prompt and hold a `!latestart` turn's start at a file gate (submission tests). */
   submissionGate?: boolean
   codexModel?: string
+  /** Process-evidence tests need the real entrypoint; Node's process.title hides its env on macOS. */
+  preserveProcessArgs?: boolean
   /** Boot the core on its own (`__run`) instead of under harnessd's master (`__harnessd`). */
   noMaster?: boolean
   /** Start as a supervisor does, `harness start -f`: the master in the foreground, the core its child. */
@@ -219,6 +223,7 @@ export class IsolatedDaemon {
     const config: EngineConfig = {
       port, dataDir: dirs.data, claudeProjectsDir: dirs.claudeProjects, codexHome: dirs.codexHome,
       claudeModel: options.claudeModel, codexModel: options.codexModel, modelControlGate: options.modelControlGate,
+      ...(options.preserveProcessArgs ? { preserveProcessArgs: true } : {}),
       ...(options.submissionGate ? { submissionGate: true } : {}),
       root, hookLog: join(own, 'fake-engine-hooks.log'),
       ...(options.trustPrompt ? { trustPrompt: true } : {}),
