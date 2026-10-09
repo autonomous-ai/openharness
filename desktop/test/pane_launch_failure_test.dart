@@ -156,6 +156,48 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets(
+    'a harness the daemon holds back says it is waiting, and why, not "Unavailable"',
+    (tester) async {
+      // Onboarding reopening a team's recent conversations, 2026-10-09: held
+      // until the daemon could tell who had them open, each pane showed only
+      // its name and "Unavailable".
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'a0',
+            'name': 'Session a0',
+            'engine': 'claude',
+            'terminal': {'available': false},
+            'launch': {
+              'state': 'held',
+              'service': 'search',
+              'detail':
+                  "The conversation's current owner could not be verified.",
+            },
+          },
+        },
+      });
+      final agent = app.stateOf('m')!.agents.singleWhere((a) => a.id == 'a0');
+      expect(agent.launchState, 'held');
+      expect(
+        agent.launchDetail,
+        "The conversation's current owner could not be verified.",
+      );
+      await pump(tester);
+      expect(
+        find.textContaining(
+          "could not be verified. It starts here by itself once that clears.",
+        ),
+        findsWidgets,
+      );
+      expect(find.text('Unavailable'), findsNothing);
+      expect(find.textContaining('terminal unavailable'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('a launch that really failed offers Restart, with its reason', (
     tester,
   ) async {

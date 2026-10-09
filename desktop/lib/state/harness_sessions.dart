@@ -40,9 +40,16 @@ String? harnessSessionUnavailable(MachineState? machine, Agent? agent) {
   return switch (agent.launchState) {
     'starting' => 'Starting',
     'failed' => 'Start failed',
+    'held' => 'Waiting',
     _ => 'Unavailable',
   };
 }
+
+/// What a harness the daemon holds back says: its reason, such as a
+/// conversation another process may have open, and that it starts by itself.
+String heldLaunchDetail(Agent agent) =>
+    '${agent.launchDetail ?? 'Harness is not starting it yet.'} '
+    'It starts here by itself once that clears.';
 
 /// A session appears once, however many tabs or viewers show it.
 class HarnessSession {
@@ -98,6 +105,8 @@ class HarnessSession {
       ? 'Start failed'
       : agent.launchState == 'starting'
       ? 'Starting'
+      : agent.launchState == 'held'
+      ? 'Waiting'
       : needsInput
       ? 'Needs input'
       : agent.closePlanState == 'failed'
