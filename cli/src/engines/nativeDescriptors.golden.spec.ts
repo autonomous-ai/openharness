@@ -1,6 +1,6 @@
 /** Healthy native descriptor answers from former main. Pinned Linux/macOS, UTC, fixed time and private files;
  * every host binary is forbidden. Record before changing process or descriptor authority. */
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -9,11 +9,31 @@ import type { ProcessRow } from '../lib/tmux.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
 const fixture = vi.hoisted(() => ({ root: '', rows: [] as ProcessRow[], lsof: new Map<number, string[]>() }))
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>()
+  const mapped = (path: unknown) => String(path).startsWith('/proc/')
+    ? join(fixture.root, 'proc', String(path).slice('/proc/'.length)) : path
+  return { ...fs,
+    openSync: (path: unknown, ...args: unknown[]) => Reflect.apply(fs.openSync, fs, [mapped(path), ...args]),
+    readlinkSync: (path: unknown, ...args: unknown[]) => Reflect.apply(fs.readlinkSync, fs, [mapped(path), ...args]),
+    statSync: (path: unknown, ...args: unknown[]) => Reflect.apply(fs.statSync, fs, [mapped(path), ...args]),
+    opendirSync: (path: unknown, ...args: unknown[]) => {
+      const task = /^\/proc\/(\d+)\/task$/.exec(String(path))
+      if (task) {
+        const folder = join(String(mapped(path)), task[1]); fs.mkdirSync(folder, { recursive: true })
+        const children = fixture.rows.filter(row => row.parentPid === Number(task[1])).map(row => row.pid)
+        fs.writeFileSync(join(folder, 'children'), children.length ? children.join(' ') + ' ' : '')
+      }
+      return Reflect.apply(fs.opendirSync, fs, [mapped(path), ...args])
+    },
+  }
+})
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   const mapped = (path: unknown) => String(path).startsWith('/proc/')
     ? join(fixture.root, 'proc', String(path).slice('/proc/'.length)) : path
   return { ...fs,
+    open: (path: unknown, ...args: unknown[]) => Reflect.apply(fs.open, fs, [mapped(path), ...args]),
     readdir: (path: unknown, ...args: unknown[]) => Reflect.apply(fs.readdir, fs, [mapped(path), ...args]),
     opendir: (path: unknown, ...args: unknown[]) => Reflect.apply(fs.opendir, fs, [mapped(path), ...args]),
     readlink: (path: unknown, ...args: unknown[]) => Reflect.apply(fs.readlink, fs, [mapped(path), ...args]),
@@ -22,15 +42,46 @@ vi.mock('node:fs/promises', async original => {
 })
 vi.mock('node:child_process', async original => {
   const forbidden = () => { throw new Error('This golden must never run a host binary') }
-  return { ...await original<object>(), execFile: (command: string, args: string[], _options: unknown, done: (error: Error | null, out: string, err: string) => void) => {
-    if (command !== 'lsof' || !args.includes('-Fn')) return forbidden()
-    const pid = Number(args[args.indexOf('-p') + 1]), paths = fixture.lsof.get(pid)
-    if (!paths) return forbidden()
-    done(null, `p${pid}\n${paths.map(path => `n${path}\n`).join('')}`, '')
+  return { ...await original<object>(), execFile: (command: string, args: string[], _options: unknown, done: (error: Error | null, out: Buffer, err: Buffer) => void) => {
+    const pid = Number(args[args.indexOf('-p') + 1])
+    let output: string
+    if (command === 'ps' && args.join(' ') === '-axo pid=,ppid=,state=,lstart=') {
+      output = fixture.rows.map(row => `${row.pid} ${row.parentPid} S ${row.startMarker}\n`).join('')
+    } else if (command === 'ps' && args[0] === '-ww') {
+      const row = fixture.rows.find(row => row.pid === pid)
+      if (!row) return forbidden()
+      output = `${row.parentPid} S ${row.executable} ${row.startMarker} ${row.args}\n`
+    } else if (command === 'lsof' && args.includes('-F0pftDin')) {
+      const paths = fixture.lsof.get(pid)
+      if (!paths) return forbidden()
+      output = `p${pid}\0\n` + paths.map((path, index) => {
+        const info = statSync(path, { bigint: true })
+        return `f${index + 3}\0tREG\0D0x${info.dev.toString(16)}\0i${info.ino}\0n${path}\0\n`
+      }).join('')
+    } else if (command === '/fixture-tools/native-control' && args[0] === '--control') {
+      const parent = Number(args[2]), ids = args.slice(3).map(Number)
+      output = JSON.stringify({ schema: 2, mode: 'control', parent,
+        children: parent ? fixture.rows.filter(row => row.parentPid === parent).map(row => row.pid) : [] }) + '\n'
+      for (const id of ids) {
+        const row = fixture.rows.find(row => row.pid === id)!
+        output += JSON.stringify({ pid: id, parentPid: row.parentPid, startSeconds: Date.parse(row.startMarker) / 1000,
+          startMicros: 123456, commandHex: Buffer.from(row.executable.split('/').at(-1)!).toString('hex'),
+          imageHex: Buffer.from(row.executable).toString('hex'), commandDigest: 'a'.repeat(64),
+          fds: (fixture.lsof.get(id) ?? []).map((path, index) => {
+            const info = statSync(path, { bigint: true })
+            return { fd: index + 3, type: 1, mode: 0o100000, device: String(info.dev), inode: String(info.ino) }
+          }),
+        }) + '\n'
+      }
+    } else return forbidden()
+    done(null, Buffer.from(output), Buffer.alloc(0))
   }, execFileSync: forbidden, spawn: forbidden, spawnSync: forbidden }
 })
 vi.mock('../lib/tmux.js', async original => ({ ...await original<object>(), processRows: async () => fixture.rows }))
 vi.mock('../lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
+vi.mock('../lib/nativeProcessImages.js', async original => ({ ...await original<object>(),
+  bundledProcessImageHelper: async () => ({ path: '/fixture-tools/native-control', key: 'fixture' }),
+}))
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/native-descriptors.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_NATIVE_DESCRIPTORS_GOLDEN === '1'
@@ -60,6 +111,11 @@ function descriptors(pid: number, targets: string[]): void {
   targets.forEach((target, index) => symlinkSync(target, join(folder, String(index + 3))))
 }
 function processRow(pid: number, parentPid: number, executable = '/fixture-tools/codex', args = executable): ProcessRow {
+  mkdirSync(path('proc', String(pid), 'fd'), { recursive: true })
+  const fields = ['S', String(parentPid), ...Array(17).fill('0'), String(pid * 100)]
+  file(path('proc', String(pid), 'stat'), `${pid} (${executable}) ${fields.join(' ')}\n`)
+  file(path('proc', String(pid), 'cmdline'), args.split(' ').join('\0') + '\0')
+  const exe = path('proc', String(pid), 'exe'); rmSync(exe, { force: true }); symlinkSync(executable, exe)
   return { pid, parentPid, executable, args, startMarker, startTicks: pid * 100 }
 }
 function row(pid = 42): RegisteredSession {

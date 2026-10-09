@@ -645,6 +645,20 @@ describe('binding a running process to its session', () => {
   })
 
   describe('a repair', () => {
+    it.each(['rebound', 'stopped'] as const)('does not publish native Codex evidence after its owner was %s', async change => {
+      const run = setup(), entry = agent({ engine: 'codex', sessionId: '' }), seen = observed({ engine: 'codex' })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(entry)
+      let answer!: (value: { sessionId: string; transcriptPath: string }) => void
+      vi.mocked(findLiveSession).mockReturnValueOnce(new Promise(resolve => { answer = resolve }))
+      const pending = run.binding.bindObservedAgent(seen)
+      expect(findLiveSession).toHaveBeenCalledWith('codex', '/work', expect.any(Number), expect.objectContaining({ expectedProcess: seen.processIdentity }))
+      if (change === 'rebound') entry.sessionId = 'replacement'
+      else vi.mocked(run.deps.registry.byProcess).mockReturnValue(undefined)
+      answer({ sessionId: 'native', transcriptPath: '/fixture/rollout.jsonl' }); await pending
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+      expect(run.deps.attachSession).not.toHaveBeenCalled()
+    })
+
     it('looks for the session a new process opened, sweeping eagerly, then once a minute', async () => {
       vi.useFakeTimers()
       vi.setSystemTime(Date.parse('2026-10-04T10:00:00Z'))
@@ -655,7 +669,7 @@ describe('binding a running process to its session', () => {
       vi.advanceTimersByTime(60_000)
       await run.binding.bindObservedAgent(observed())
       expect(findLiveSession).toHaveBeenCalledTimes(25)
-      expect(findLiveSession).toHaveBeenLastCalledWith('claude', '/work', Date.parse('2026-10-04T10:00:00Z'), { bornOnly: true, pid: 42, codexHome: undefined, hermesHome: undefined })
+      expect(findLiveSession).toHaveBeenLastCalledWith('claude', '/work', Date.parse('2026-10-04T10:00:00Z'), { bornOnly: true, pid: 42, codexHome: undefined, hermesHome: undefined, expectedProcess: observed().processIdentity })
     })
 
     it('binds what it finds, with the Hermes home it was found in, and starts the count over', async () => {

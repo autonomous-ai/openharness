@@ -8,9 +8,10 @@
  * including the four that keep theirs in a database rather than a file.
  */
 import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
-import { findLiveSession, findResumedTranscript, processSessionOf, type RepairedSession } from './sessionRepair.js'
-import { processRows, resumeSessionId } from './tmux.js'
-import { sameProcessIdentity } from './terminalRuntime.js'
+import { findLiveSession, findResumedTranscript, processSessionEvidence, type RepairedSession } from './sessionRepair.js'
+import { resumeSessionId } from './tmux.js'
+import { readProcessEvidence } from './processEvidence.js'
+import { NativeEvidenceBudget } from '../engines/kit/nativeEvidence.js'
 import { isTerminalEngine } from '../engines/types.js'
 
 export async function captureResumeIdentity(session: RegisteredSession): Promise<RegisteredSession> {
@@ -29,17 +30,24 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
   }
   const expected = session.processIdentity
   if (!expected || !session.cwd) return session
-  const live = (await processRows())?.find(row => sameProcessIdentity(row, expected)
-    && row.executable === expected.executable)
-  if (!live) return session
-  const explicit = resumeSessionId(session.engine, live.args)
+  const budget = new NativeEvidenceBudget()
+  const owner = await readProcessEvidence(expected.pid, budget, undefined, expected)
+  const live = owner.parent
+  if (!live) { await owner.verify(); return session }
+  const explicit = resumeSessionId(session.engine, live.args, live.nativeArgv)
   // An engine whose process names its own session in a record (Claude Code's, removed at exit) is read now.
-  const native = await processSessionOf(session.engine, expected.pid, session.cwd, Date.parse(expected.startMarker))
+  const claim = await processSessionEvidence(session.engine, expected.pid, session.cwd, Date.parse(expected.startMarker), budget)
+  const native = claim.session
   const found: RepairedSession | null = native ?? (explicit
     ? { sessionId: explicit, transcriptPath: await findResumedTranscript(session.engine, explicit, options) ?? undefined }
     : await findLiveSession(session.engine, session.cwd, Date.parse(expected.startMarker), {
       ...options, hermesHome: session.hermesHome ?? undefined, pid: expected.pid, bornOnly: true,
+      expectedProcess: expected, nativeBudget: budget,
     }))
+  // Codex's open-file finder verifies this owner, all candidate headers and its descriptor
+  // pool together. Other finders still need this final process fence before a Stop may proceed.
+  if (native || explicit || session.engine !== 'codex') await owner.verify()
+  claim.verify()
   if (!found?.sessionId) return session
   // A file-backed engine still has to produce a transcript this daemon can point a resume at; a
   // database-backed one has nothing to check and is taken on its id alone.

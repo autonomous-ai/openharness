@@ -397,6 +397,46 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     client.close()
   }, 240_000)
 
+  it('unavailable Codex descriptor evidence holds binding, Stop and Close, then recovers the same conversation', async () => {
+    const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'claude' } }); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    const fault = join(d.root, 'native-descriptors-unavailable')
+    d.env.HARNESS_DESCRIPTOR_FAULT_FILE = fault
+    d.env.NODE_OPTIONS = `--import=${pathToFileURL(join(CLI_ROOT, 'e2e/harness/nativeDescriptorFault.mjs')).href}`
+    await d.start()
+    let client = await LocalClient.connect(d)
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the private terminal tile', async () => {
+      const now = await row(client, opened.agent.id); return now?.tmuxPane ? now : null
+    })
+    client.close(); await d.stop()
+    await type(d, tile.tmuxPane, 'codex')
+    const sessionId = await until('the private Codex rollout', () => conversationIn('codex', d.env.CODEX_HOME!), 30_000)
+    writeFileSync(fault, 'hold', { mode: 0o600 })
+    await d.start()
+    client = await LocalClient.connect(d)
+    await until('the descriptor binding hold after readiness', () => /binding held · Conversation identity is held: the native (?:lsof|descriptor)/.test(d.log()), 45_000)
+    const held = await row(client, tile.id)
+    expect(held).toMatchObject({ engine: 'codex', status: 'active' })
+    expect(held?.sessionId).toBeFalsy()
+    const sibling = await client.request('agent_create', { engine: 'claude', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    expect(sibling.error, JSON.stringify(sibling)).toBeUndefined()
+    await until('the independent sibling to bind', async () => (await row(client, sibling.agent.id))?.sessionId, 45_000)
+    const stopped = await client.request('agent_delete', { agentId: tile.id }, 60_000)
+    expect(stopped.error, JSON.stringify(stopped)).toBeTruthy()
+    const closed = await client.request('agent_close', { agentId: tile.id, sessionId: held!.sessionId, createdAt: held!.createdAt, mode: 'now' }, 60_000)
+    expect(closed).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', detail: expect.stringMatching(/native (?:lsof|descriptor)/) })
+    expect((await row(client, tile.id))?.status).toBe('active')
+    expect(conversationIn('codex', d.env.CODEX_HOME!)).toBe(sessionId)
+    renameSync(fault, fault + '.recovered')
+    await until('the same live Codex conversation to bind after native evidence recovers', async () => {
+      const now = await row(client, tile.id)
+      return now?.status === 'active' && now.sessionId === sessionId
+    }, 60_000, 250)
+    client.close()
+  }, 240_000)
+
   // A Codex agent in a moved CODEX_HOME, restarted, then stopped and opened again. Its rollout was held to the
   // daemon's own CODEX_HOME before the relaunch (portableHistory.ts) and refused as outside the profile: the
   // restart failed after Codex had already been stopped, and the reopen said RESUME_PREPARATION_FAILED. And

@@ -1,5 +1,6 @@
+import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { execFileSync, spawn } from 'child_process'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -17,6 +18,7 @@ const dirs: string[] = []
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   delete process.env.GROK_HOME
+  vi.unstubAllGlobals()
   vi.resetModules()
 })
 
@@ -512,24 +514,31 @@ describe('session repair — a Codex process names its own rollout', () => {
       { pid: 50, parentPid: 1, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
       { pid: 51, parentPid: 43, executable: '/opt/vendor/codex', args: '/opt/vendor/codex' },
     ]
-    await expect(processFilesOf('codex', 42, files, async () => rows)).resolves.toEqual(['/dev/null', own])
-    expect(files.mock.calls.map(([pid]) => pid)).toEqual([42, 43])
+    await expect(processFilesOf('codex', 42, { sources: nativeConversationFixture(files, async () => rows) })).resolves.toEqual(['/dev/null', own])
+    expect(files.mock.calls.map(([pid]) => pid)).toEqual([42, 43, 42, 43, 42, 43])
     // macOS's comm column can truncate the full Node path; argv still names the executable.
-    await expect(processFilesOf('codex', 42, files, async () => rows.map(row => row.pid === 42
-      ? { ...row, executable: '/Users/demo/.ha', args: '/Users/demo/.harness/node/bin/node /tmp/bin/codex' } : row)))
+    await expect(processFilesOf('codex', 42, { sources: nativeConversationFixture(files, async () => rows.map(row => row.pid === 42
+      ? { ...row, executable: '/Users/demo/.ha', args: '/Users/demo/.harness/node/bin/node /tmp/bin/codex' } : row)) }))
       .resolves.toEqual(['/dev/null', own])
-    await expect(processFilesOf('codex', 42, files, async () => null)).resolves.toEqual(['/dev/null'])
-    await expect(processFilesOf('codex', 42, files, async () => [])).resolves.toEqual(['/dev/null'])
-    await expect(processFilesOf('codex', 42, files, async () => rows.filter(row => row.pid !== 43))).resolves.toEqual(['/dev/null'])
-    await expect(processFilesOf('codex', 42, files, async () => [...rows, { ...rows[1], pid: 44 }])).resolves.toEqual(['/dev/null'])
+    await expect(processFilesOf('codex', 42, { sources: nativeConversationFixture(files, async () => null) })).rejects.toThrow('graph is incomplete')
+    await expect(processFilesOf('codex', 42, { sources: nativeConversationFixture(files, async () => []) })).resolves.toEqual([])
+    await expect(processFilesOf('codex', 42, { sources: nativeConversationFixture(files, async () => rows.filter(row => row.pid !== 43)) })).resolves.toEqual(['/dev/null'])
+    await expect(processFilesOf('codex', 42, { sources: nativeConversationFixture(files, async () => [...rows, { ...rows[1], pid: 44 }]) })).rejects.toThrow('more than one native child')
     // A native process owns its file directly. No walk into the tools it launched.
     const table = vi.fn(async () => rows)
-    await expect(processFilesOf('codex', 43, files, table)).resolves.toEqual([own])
-    expect(table).not.toHaveBeenCalled()
-    await expect(processFilesOf('codex', 51, files, table)).resolves.toEqual(['/dev/null'])
+    await expect(processFilesOf('codex', 43, { sources: nativeConversationFixture(files, table) })).resolves.toEqual([own])
+    expect(table).toHaveBeenCalledTimes(3)
+    await expect(processFilesOf('codex', 51, { sources: nativeConversationFixture(files, table) })).resolves.toEqual(['/dev/null'])
   })
 
   it('does not give a starting process the only sibling rollout before its own file opens', async () => {
+    if (process.platform === 'darwin') {
+      // Native source tests explicitly supply the same verified artifact as the bundle.
+      // A missing helper is itself a held identity, never a permissive ps/lsof fallback.
+      const artifact = process.env.HARNESS_PROCESS_IMAGES_ARTIFACT
+      expect(artifact, 'Build the private Darwin helper for native integration tests').toBeTruthy()
+      vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', readFileSync(artifact!, 'utf8'))
+    }
     const profile = tempRoot()
     const sibling = 'a1b2c3d4-1111-4a4a-8a8a-000000000009'
     writeCodexRollout(profile, sibling, CWD, Date.now())
@@ -537,9 +546,15 @@ describe('session repair — a Codex process names its own rollout', () => {
     const { openFileSessionOf, findLiveSession } = await import('./sessionRepair.js')
     // October 6 full E2E: two Codex processes start together, but only one has written
     // its rollout yet. This process holds neither: a directory match is not ownership.
-    await expect(openFileSessionOf('codex', process.pid, join(profile, 'sessions'), CWD)).resolves.toBeNull()
-    await expect(findLiveSession('codex', CWD, Date.now() - 1_000,
-      { codexHome: profile, bornOnly: true, pid: process.pid })).resolves.toBeNull()
+    // A private idle process has a stable empty pool. Inspecting the Vitest parent would
+    // include this lookup's own short-lived ps/lsof children and cannot prove completeness.
+    const starting = spawn(process.execPath, ['-e', 'console.log("ready"); setTimeout(() => process.exit(0), 30_000)'], { stdio: ['ignore', 'pipe', 'ignore'] })
+    try {
+      await new Promise<void>(resolve => starting.stdout!.once('data', () => resolve()))
+      await expect(openFileSessionOf('codex', starting.pid!, join(profile, 'sessions'), CWD)).resolves.toBeNull()
+      await expect(findLiveSession('codex', CWD, Date.now() - 1_000,
+        { codexHome: profile, bornOnly: true, pid: starting.pid! })).resolves.toBeNull()
+    } finally { starting.kill(); vi.unstubAllGlobals() }
   })
 
   it('names a fork among its siblings by the rollout its process holds open, where a scan must refuse', async () => {
@@ -556,20 +571,24 @@ describe('session repair — a Codex process names its own rollout', () => {
     await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true })).resolves.toBeNull()
     // The process holds one of them open, beside files that are not rollouts or not this profile's.
     const held = async () => [forkFile, '/dev/null', join(profile, 'notes.jsonl'), elsewhere]
-    await expect(openFileSessionOf('codex', 42, sessions, CWD, held)).resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
+    await expect(openFileSessionOf('codex', 42, sessions, CWD, { sources: nativeConversationFixture(held) })).resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
     // Two held, or one for another folder: nothing, rather than a guess.
-    await expect(openFileSessionOf('codex', 42, sessions, CWD, async () => [forkFile, siblingFile])).resolves.toBeNull()
-    await expect(openFileSessionOf('codex', 42, sessions, '/Users/demo/elsewhere', held)).resolves.toBeNull()
-    await expect(openFileSessionOf('codex', 42, sessions, CWD, async () => [])).resolves.toBeNull()
+    await expect(openFileSessionOf('codex', 42, sessions, CWD, { sources: nativeConversationFixture(async () => [forkFile, siblingFile]) })).rejects.toThrow('more than one open rollout')
+    await expect(openFileSessionOf('codex', 42, sessions, '/Users/demo/elsewhere', { sources: nativeConversationFixture(held) })).rejects.toThrow('could not be compared conclusively')
+    await expect(openFileSessionOf('codex', 42, sessions, CWD, { sources: nativeConversationFixture(async () => []) })).resolves.toBeNull()
   })
 
   it('reads a live process\'s open files, and binds the repair to the rollout it holds', async () => {
+    if (process.platform === 'darwin') {
+      expect(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT, 'Build the private Darwin helper for native integration tests').toBeTruthy()
+      vi.stubGlobal('__DARWIN_PROCESS_IMAGES__', readFileSync(process.env.HARNESS_PROCESS_IMAGES_ARTIFACT!, 'utf8'))
+    }
     const profile = tempRoot()
     const fork = 'a1b2c3d4-1111-4a4a-8a8a-000000000006'
     const forkFile = writeCodexRollout(profile, fork, CWD, STARTED_AT + 1_000)
     writeCodexRollout(profile, 'a1b2c3d4-1111-4a4a-8a8a-000000000007', CWD, STARTED_AT + 2_000)
     // A stand-in for Codex: a process that keeps its rollout open.
-    const holder = spawn(process.execPath, ['-e', 'require("fs").openSync(process.argv[1], "r"); setInterval(() => {}, 60_000)', forkFile], { stdio: 'ignore' })
+    const holder = spawn(process.execPath, ['-e', 'require("fs").openSync(process.argv[1], "r"); setTimeout(() => process.exit(0), 30_000)', forkFile], { stdio: 'ignore' })
     try {
       vi.resetModules()
       const { findLiveSession, openFiles } = await import('./sessionRepair.js')
@@ -577,6 +596,7 @@ describe('session repair — a Codex process names its own rollout', () => {
       await expect(findLiveSession('codex', CWD, STARTED_AT, { codexHome: profile, bornOnly: true, pid: holder.pid! }))
         .resolves.toEqual({ sessionId: fork, transcriptPath: realpathSync(forkFile) })
       expect(await openFiles(-1)).toEqual([])
+      vi.unstubAllGlobals()
     } finally {
       holder.kill()
     }
@@ -634,7 +654,7 @@ describe('session repair — homes the person moved', () => {
     const { openFileSessionOf, findLiveSession } = await moved(tempRoot(), codexHome)
     await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath: file })
     const roots = [join(process.env.CODEX_HOME!, 'sessions'), join(codexHome, 'sessions')]
-    await expect(openFileSessionOf('codex', 42, roots, CWD, async () => [file])).resolves.toEqual({ sessionId: id, transcriptPath: realpathSync(file) })
+    await expect(openFileSessionOf('codex', 42, roots, CWD, { sources: nativeConversationFixture(async () => [file]) })).resolves.toEqual({ sessionId: id, transcriptPath: realpathSync(file) })
     // One conversation in each home for this folder: two agents, and no guess.
     writeCodexRollout(process.env.CODEX_HOME!, 'a1b2c3d4-1111-4a4a-8a8a-000000000102', CWD, STARTED_AT + 6_000)
     await expect(findLiveSession('codex', CWD, STARTED_AT, { bornOnly: true })).resolves.toBeNull()

@@ -1,3 +1,4 @@
+import { nativeConversationFixture } from '../testing/nativeConversationEvidence.js'
 import { execFile, execFileSync } from 'node:child_process'
 import { constants } from 'node:buffer'
 import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
@@ -19,6 +20,17 @@ vi.mock('node:child_process', async original => {
   return { ...actual, execFile: vi.fn(actual.execFile) }
 })
 vi.mock('./tmux.js', async original => ({ ...await original<object>(), processRows: vi.fn() }))
+vi.mock('../engines/kit/nativeDescriptors.js', async original => ({ ...await original<object>(), readDescriptorEvidence: vi.fn() }))
+vi.mock('./processEvidence.js', async () => {
+  const { nativeConversationFixture } = await import('../testing/nativeConversationEvidence.js')
+  const { processRows } = await import('./tmux.js')
+  const { readDescriptorEvidence } = await import('../engines/kit/nativeDescriptors.js')
+  return { readProcessEvidence: (...args: Parameters<typeof import('./processEvidence.js')['readProcessEvidence']>) => {
+    const sources = nativeConversationFixture(async () => [], processRows)
+    sources.descriptors = readDescriptorEvidence
+    return sources.processes(...args)
+  } }
+})
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
 
 const START = Date.parse('2026-10-09T00:00:00Z')
@@ -149,13 +161,10 @@ describe('complete bounded evidence before choosing a conversation', () => {
     const other = codex ? file(join(moved, 'sessions', `rollout-${OTHER}.jsonl`), header(OTHER))
       : file(join(moved, 'projects', 'work', `${OTHER}.jsonl`), body())
     if (codex) {
-      // Both native OS paths are fixtures; never inspect an actual process's descriptors.
-      vi.mocked(fs.readdir).mockResolvedValueOnce(['0', '1'] as never)
-      vi.mocked(fs.readlink).mockResolvedValueOnce(own).mockResolvedValueOnce(other)
-      vi.mocked(execFile).mockImplementationOnce(((...args: unknown[]) => {
-        (args.at(-1) as (error: null, out: string, err: string) => void)(null, `n${own}\nn${other}\n`, '')
-        return {}
-      }) as never)
+      const { processRows } = await import('./tmux.js')
+      const { readDescriptorEvidence } = await import('../engines/kit/nativeDescriptors.js')
+      vi.mocked(processRows).mockResolvedValue([{ pid: 77, parentPid: 1, executable: 'codex', args: 'codex', startMarker: new Date(START).toString() }])
+      vi.mocked(readDescriptorEvidence).mockImplementation(nativeConversationFixture(async () => [own, other]).descriptors)
     }
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
     let adopted = false
@@ -198,7 +207,7 @@ describe('bounded native metadata', () => {
       })
     }
     await expect(repair.findLiveSession('codex', CWD, START)).rejects.toThrow('identity is held')
-    await expect(repair.openFileSessionOf('codex', 77, home, CWD, async () => [own, other])).rejects.toThrow('identity is held')
+    await expect(repair.openFileSessionOf('codex', 77, home, CWD, { sources: nativeConversationFixture(async () => [own, other]) })).rejects.toThrow('identity is held')
   })
 
   it.each(['empty', 'workspace', 'run'])('holds Muse with a partly written %s identity beside a complete run', async mode => {
@@ -363,7 +372,7 @@ describe('bounded native metadata', () => {
   })
 })
 
-it.each(['Stop', 'checkpointed Stop'])('%s holds before saving, signalling or retiring when real native identity is incomplete', async action => {
+it.each(['Stop', 'checkpointed Stop', 'unknown process', 'unknown descriptors', 'Claude record switch', 'Claude new record'])('%s holds before saving, signalling or retiring when real native identity is incomplete', async action => {
   transcript(OTHER); record('{')
   const row = { agentId: 'fixture-agent', engine: 'claude', sessionId: '', cwd: CWD, registeredAt: 1,
     runtimes: [{ backend: 'tmux', paneId: '%77' }],
@@ -371,6 +380,28 @@ it.each(['Stop', 'checkpointed Stop'])('%s holds before saving, signalling or re
   } as RegisteredSession
   const tmux = await import('./tmux.js')
   vi.mocked(tmux.processRows).mockResolvedValue([{ ...row.processIdentity!, parentPid: 1, args: 'claude' }])
+  let reason = 'process record is incomplete'
+  if (action === 'Claude record switch' || action === 'Claude new record') {
+    transcript()
+    if (action === 'Claude record switch') record(validRecord())
+    else rmSync(join(root, 'claude', 'sessions', '77.json'))
+    let probes = 0
+    vi.mocked(tmux.processRows).mockImplementation(async () => {
+      // Same pid, generation, executable and argv. Only the native conversation switches
+      // during the final asynchronous process probe, after the first selected record proof.
+      if (++probes === 2) { await Promise.resolve(); record(validRecord(OTHER)) }
+      return [{ ...row.processIdentity!, parentPid: 1, args: 'claude' }]
+    })
+    reason = action === 'Claude new record' ? 'native path or alias changed' : 'process records changed'
+  }
+  if (action === 'unknown process') { vi.mocked(tmux.processRows).mockResolvedValue(null); reason = 'process graph is incomplete' }
+  if (action === 'unknown descriptors') {
+    row.engine = 'codex'
+    const { readDescriptorEvidence } = await import('../engines/kit/nativeDescriptors.js')
+    const { IdentityReadUnavailable } = await import('../engines/kit/identityScan.js')
+    vi.mocked(readDescriptorEvidence).mockRejectedValueOnce(new IdentityReadUnavailable('the descriptor probe is incomplete'))
+    reason = 'descriptor probe is incomplete'
+  }
   const { AgentRestartCoordinator } = await import('./restartAgent.js')
   const { createStopAgentService } = await import('./stopAgentService.js')
   const { terminateDeletedAgent } = await import('./deleteAgentFallback.js')
@@ -382,10 +413,27 @@ it.each(['Stop', 'checkpointed Stop'])('%s holds before saving, signalling or re
     forgetSession: vi.fn(), markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: vi.fn(),
   }
   await expect(createStopAgentService(deps)(row.agentId, action === 'checkpointed Stop' ? { checkpoint } : {}))
-    .rejects.toThrow('process record is incomplete')
+    .rejects.toThrow(reason)
   expect(save).not.toHaveBeenCalled(); expect(checkpoint).not.toHaveBeenCalled()
   expect(deps.stopNative).not.toHaveBeenCalled(); expect(terminateDeletedAgent).not.toHaveBeenCalled()
   expect(deps.tmuxBackend!.kill).not.toHaveBeenCalled(); expect(deps.forgetSession).not.toHaveBeenCalled()
   expect(deps.markDeleted).not.toHaveBeenCalled(); expect(deps.registry.resolve(row.agentId)).toBe(row)
   expect(deps.stopJobs.size).toBe(0)
+})
+
+
+it('retains lossless descriptor identity when numeric stat values round two inodes together', async () => {
+  const path = file(join(root, 'large-inode'), 'exact')
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  const original = await actual.stat(path)
+  const version = { ...original, dev: 5, ino: 9007199254740992, fileKey: { device: 5n, inode: 9007199254740992n } }
+  expect(Number(9007199254740993n)).toBe(version.ino)
+  vi.mocked(fs.open).mockImplementation(async (...args) => {
+    const handle = await actual.open(...args)
+    vi.spyOn(handle, 'stat').mockImplementation(async (options?: { bigint?: boolean }) => options?.bigint
+      ? { ...original, dev: 5n, ino: 9007199254740993n } as never
+      : { ...original, dev: 5, ino: version.ino, isFile: () => true } as never)
+    return handle
+  })
+  await expect(identityBytes(path, 64, version)).rejects.toThrow('not the file held by the process')
 })

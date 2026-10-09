@@ -22,22 +22,68 @@ STUB = r'''
 #include <string.h>
 #include <libproc.h>
 #include <sys/proc_info.h>
+#include <sys/proc.h>
+#include <sys/stat.h>
+#include <sys/sysctl.h>
 
-static unsigned births, paths;
+static unsigned births, paths, commands, lists;
 static int scenario(const char *name) {
     const char *value = getenv("PROBE_FIXTURE_CASE");
     return value && strcmp(value, name) == 0;
 }
 int fixture_proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int size) {
-    (void)flavor; (void)arg;
     if (scenario("denied")) { errno = EPERM; return 0; }
     if (scenario("short-info")) return size - 1;
+    if (flavor == PROC_PIDLISTFDS) {
+        lists++;
+        if (scenario("short-fds")) return 1;
+        if (scenario("full-fds")) return size;
+        struct proc_fdinfo *fds = buffer;
+        fds[0].proc_fd = 3; fds[0].proc_fdtype = PROX_FDTYPE_VNODE;
+        if (scenario("fd-changed") && lists > 1) fds[0].proc_fd = 4;
+        return sizeof(*fds);
+    }
     struct proc_bsdinfo *info = buffer;
     memset(info, 0, sizeof(*info));
     info->pbi_pid = (uint32_t)(pid + (scenario("pid-mismatch") ? 1 : 0));
     info->pbi_start_tvsec = scenario("bad-start") ? 0 : 1770000000;
     info->pbi_start_tvusec = scenario("pid-reused") ? ++births : 123456;
+    info->pbi_ppid = pid == 7 ? 1 : 7;
+    info->pbi_status = pid == 8 && scenario("zombie-child") ? SZOMB : SRUN;
+    if (info->pbi_status == SZOMB && !arg) { errno = ESRCH; return 0; }
+    info->pbi_nfiles = scenario("fd-capacity-grew") && lists ? 64 : 32;
+    memcpy(info->pbi_comm, "fixture", 8);
     return sizeof(*info);
+}
+int fixture_proc_pidfdinfo(int pid, int fd, int flavor, void *buffer, int size) {
+    (void)pid; (void)fd; (void)flavor;
+    if (scenario("fd-denied")) { errno = EPERM; return 0; }
+    struct vnode_fdinfo *info = buffer;
+    memset(info, 0, sizeof(*info));
+    info->pvi.vi_stat.vst_mode = S_IFREG;
+    info->pvi.vi_stat.vst_dev = 17;
+    info->pvi.vi_stat.vst_ino = 9007199254740993ULL;
+    return size;
+}
+int fixture_proc_listchildpids(pid_t parent, void *buffer, int size) {
+    (void)parent; (void)size;
+    if (scenario("children-full")) return 33;
+    if (scenario("children-denied")) { errno = EPERM; return -1; }
+    if (scenario("zombie-child")) { ((pid_t *)buffer)[0] = 8; return 1; }
+    return 0;
+}
+int fixture_sysctl(int *name, unsigned int count, void *buffer, size_t *size, void *value, size_t value_size) {
+    (void)name; (void)count; (void)value; (void)value_size;
+    if (scenario("command-denied")) { errno = EPERM; return -1; }
+    if (scenario("command-full")) { memset(buffer, 0, *size); return 0; }
+    unsigned char *out = buffer;
+    int argc = 1;
+    memcpy(out, &argc, sizeof(argc));
+    const char data[] = "/fixture/probe\0\0fixture\0FIXTURE_SECRET=never-output\0";
+    memcpy(out + sizeof(argc), data, sizeof(data));
+    *size = sizeof(argc) + sizeof(data);
+    if (scenario("command-changed") && ++commands > 1) out[sizeof(argc) + 16] = 'x';
+    return 0;
 }
 int fixture_proc_pidpath(int pid, void *buffer, uint32_t size) {
     (void)pid; ++paths;
@@ -80,11 +126,16 @@ class ProcessImagesTest(unittest.TestCase):
         cls.stub = cls.root / 'stub-probe'
         command(['/usr/bin/xcrun', 'clang', '-std=c11', '-Wall', '-Wextra', '-Werror',
                  '-Dproc_pidinfo=fixture_proc_pidinfo', '-Dproc_pidpath=fixture_proc_pidpath',
+                 '-Dproc_pidfdinfo=fixture_proc_pidfdinfo', '-Dproc_listchildpids=fixture_proc_listchildpids',
+                 '-Dsysctl=fixture_sysctl',
                  str(SOURCE), str(stub), '-o', str(cls.stub)])
         sleeper = cls.root / 'sleeper.c'
-        sleeper.write_text('#include <stdio.h>\n#include <unistd.h>\n'
-                           'int main(void) { puts("ready"); fflush(stdout); '
-                           'char c; while (read(0, &c, 1) > 0) {} return 0; }\n')
+        sleeper.write_text('#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n'
+                           'int main(int argc, char **argv) { (void)argc; '
+                           'puts("ready"); fflush(stdout); char c; while (read(0, &c, 1) > 0) { '
+                           'if (c == \'t\') { size_t n = strlen(argv[0]); if (n >= 5) { '
+                           'memset(argv[0], 0, n); memcpy(argv[0], "codex", 5); } '
+                           'puts("ready"); fflush(stdout); } } return 0; }\n')
         cls.sleeper = cls.root / 'renamed 引擎 2.9.0'
         command(['/usr/bin/xcrun', 'clang', '-Wall', '-Wextra', '-Werror',
                  str(sleeper), '-o', str(cls.sleeper)])
@@ -107,9 +158,9 @@ class ProcessImagesTest(unittest.TestCase):
                 if stream:
                     stream.close()
 
-    def launch(self, argv):
+    def launch(self, argv, **kwargs):
         child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE)
+                                 stderr=subprocess.PIPE, **kwargs)
         self.children.append(child)
         return child
 
@@ -204,6 +255,74 @@ class ProcessImagesTest(unittest.TestCase):
         expected = command(['/bin/ps', '-p', str(os.getpid()), '-o', 'lstart='],
                            env={**os.environ, 'LC_ALL': '', 'LC_TIME': 'C'}).stdout.decode().strip()
         self.assertEqual(row['startMarker'], expected)
+
+    def control(self, pids, parent=0, *, stub=False, case='stable', okay=True):
+        result = subprocess.run([str(self.stub if stub else self.probe), '--control', '2000', str(parent), *map(str, pids)],
+                                capture_output=True, timeout=5, env={**os.environ, 'PROBE_FIXTURE_CASE': case})
+        if not okay:
+            self.assertEqual(result.returncode, 75)
+            self.assertEqual(result.stdout, b'')
+            return
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(records.pop(0), {'schema': 2, 'mode': 'control', 'parent': parent, 'children': []})
+        self.assertEqual([row['pid'] for row in records], pids)
+        return records
+
+    def test_control_protocol_preserves_lossless_keys_and_never_emits_argument_or_environment_strings(self):
+        [row] = self.control([7], stub=True)
+        self.assertEqual(row['fds'], [{'fd': 3, 'type': 1, 'mode': 32768, 'device': '17', 'inode': '9007199254740993'}])
+        self.assertRegex(row['commandDigest'], '^[a-f0-9]{64}$')
+        self.assertNotIn('argvHex', row)
+        self.assertNotIn('argc', row)
+        self.assertNotIn('SECRET', json.dumps(row))
+
+    def test_control_holds_partial_changed_denied_and_capacity_truncated_evidence(self):
+        for case in ['denied', 'short-info', 'pid-mismatch', 'pid-reused', 'exec-changed',
+                     'missing-second-path', 'truncated-path', 'relative-path', 'bad-start',
+                     'short-fds', 'full-fds', 'fd-changed', 'fd-denied', 'fd-capacity-grew',
+                     'children-full', 'children-denied', 'command-denied', 'command-full', 'command-changed']:
+            with self.subTest(case=case):
+                self.control([7], parent=7, stub=True, case=case, okay=False)
+
+    def test_control_excludes_a_proven_unreaped_zombie(self):
+        self.control([7], parent=7, stub=True, case='zombie-child')
+
+    def test_control_reads_a_private_process_with_empty_argv_without_exposing_environment(self):
+        child = self.launch([''], executable=str(self.sleeper), env={**os.environ, 'PRIVATE_FIXTURE_SECRET': 'never-output'})
+        self.wait_ready(child)
+        [row] = self.control([child.pid])
+        self.assertRegex(row['commandDigest'], '^[a-f0-9]{64}$')
+        self.assertNotIn('PRIVATE_FIXTURE_SECRET', json.dumps(row))
+        self.assertNotIn('argvHex', row)
+
+    def test_control_retains_same_process_generation_and_fd_file_identity(self):
+        child = self.launch([str(self.sleeper)])
+        self.wait_ready(child)
+        [first] = self.control([child.pid])
+        [second] = self.control([child.pid])
+        self.assertEqual(first, second)
+        self.assertTrue(any(fd['type'] == 6 for fd in first['fds']))
+
+    def test_control_fences_a_rewritten_title_without_inventing_argv_boundaries(self):
+        child = self.launch([str(self.sleeper), 'original-argument'], env={**os.environ, 'PRIVATE_FIXTURE_SECRET': 'never-output'})
+        self.wait_ready(child)
+        [before] = self.control([child.pid])
+        child.stdin.write(b't'); child.stdin.flush(); self.wait_ready(child)
+        [after] = self.control([child.pid])
+        self.assertNotEqual(before['commandDigest'], after['commandDigest'])
+        for key in ['pid', 'parentPid', 'startSeconds', 'startMicros', 'imageHex', 'fds']:
+            self.assertEqual(before[key], after[key])
+        self.assertNotIn('argvHex', after)
+        self.assertNotIn('PRIVATE_FIXTURE_SECRET', json.dumps(after))
+
+    def test_control_rejects_invalid_requests_before_output(self):
+        for args in [[], ['0', '0', '7'], ['3001', '0', '7'], ['1', '0', '7', '7'], ['100', '0', 'bad'],
+                     ['100', '0', *map(str, range(1, 35))]]:
+            with self.subTest(args=args[:4]):
+                result = subprocess.run([str(self.stub), '--control', *args], capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 64)
+                self.assertEqual(result.stdout, b'')
 
 
 if __name__ == '__main__':

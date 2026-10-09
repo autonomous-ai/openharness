@@ -31,6 +31,9 @@ export const sessionStore: SessionStoreContract = {
   first: {
     type: hooks.children!.type, id: ['payload', 'id'], cwd: ['payload', 'cwd'], child: hooks.children!.child,
     parent: [...hooks.children!.child, 'thread_spawn', 'parent_thread_id'], maxBytes: 128 * 1024,
+    // Native SessionSource is an externally tagged enum. Legacy rollouts omitted it;
+    // present unknown object shapes cannot establish that a rollout is interactive.
+    source: { field: ['payload', 'source'], values: ['cli', 'vscode', 'exec', 'mcp', 'unknown'], named: ['custom'], legacyMissing: true },
   },
   scan: { from: 'first' },
   /**
