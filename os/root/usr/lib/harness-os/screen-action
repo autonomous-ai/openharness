@@ -45,7 +45,12 @@ def screen_socket():
     owner = process(main) if main > 0 else None
     if not owner:
         raise RuntimeError('Harness has no active screen.')
-    children = (PROC / str(main) / 'task' / str(main) / 'children').read_text().split()
+    try:
+        children = (PROC / str(main) / 'task' / str(main) / 'children').read_text().split()
+    except FileNotFoundError:
+        # CONFIG_PROC_CHILDREN is optional (Orange Pi's vendor kernel lacks it). Every
+        # candidate's parent is checked below, so scanning all processes is equivalent.
+        children = [entry.name for entry in PROC.iterdir() if entry.name.isdigit()]
     matches = []
     for value in children:
         pid = int(value)
