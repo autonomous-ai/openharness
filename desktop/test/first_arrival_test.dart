@@ -216,6 +216,49 @@ void main() {
       expect(claude.typesStarterTask, isFalse);
     });
 
+    test(
+      'agents nobody has signed in to: OpenCode leads, they sit beside it',
+      () {
+        final codex = planFirstArrival(
+          newUser: false,
+          sessions: const [],
+          installed: const {'codex'},
+          signedOut: const {'codex'},
+        );
+        expect(codex.fresh, ['opencode', 'codex']);
+        expect(codex.typesStarterTask, isTrue);
+        expect(
+          planFirstArrival(
+            newUser: false,
+            sessions: const [],
+            installed: const {'claude', 'codex'},
+            signedOut: const {'claude', 'codex'},
+          ).fresh,
+          ['opencode', 'codex', 'claude'],
+        );
+        // One signed in is enough to start on: no OpenCode.
+        expect(
+          planFirstArrival(
+            newUser: false,
+            sessions: const [],
+            installed: const {'claude', 'codex'},
+            signedOut: const {'codex'},
+          ).fresh,
+          ['claude', 'codex'],
+        );
+        // Their conversations still come first.
+        expect(
+          planFirstArrival(
+            newUser: false,
+            sessions: [_s('codex', 'x1', 1)],
+            installed: const {'codex'},
+            signedOut: const {'codex'},
+          ).fresh,
+          isEmpty,
+        );
+      },
+    );
+
     test('OpenCode alone gets OpenCode with the starter task', () {
       final plan = planFirstArrival(
         newUser: false,

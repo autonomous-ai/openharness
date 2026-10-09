@@ -176,6 +176,10 @@ class FirstArrival {
         newUser: _state == 'new',
         sessions: sessions,
         installed: installed,
+        signedOut: {
+          for (final engine in const ['claude', 'codex'])
+            if (machine.engines[engine]?.signedIn == false) engine,
+        },
       );
       _log(
         'first arrival: $plan after ${_now().difference(started).inMilliseconds} ms '
@@ -532,10 +536,16 @@ List<List<ArrivalSession>> oneOfEachEngine(List<ArrivalSession> sessions) {
 /// with both agents in it when both have one left. Without conversations, someone setup gave the
 /// three agents gets them in one tab, OpenCode first; someone with agents gets a fresh pane on each
 /// of Claude Code and Codex they have, or on OpenCode when that is all they have.
+///
+/// Claude Code or Codex installed but none of them signed in ([signedOut]) is someone who has not
+/// used them yet: OpenCode leads with the starter task, their agents beside it on their sign-in, so a
+/// first result never waits on an account (a fresh Mac with Codex from npm, 2026-10-09: the only pane
+/// was Codex's sign-in, which sent the person to a browser).
 FirstArrivalPlan planFirstArrival({
   required bool newUser,
   required List<ArrivalSession> sessions,
   required Set<String> installed,
+  Set<String> signedOut = const {},
 }) {
   if (sessions.isNotEmpty) return FirstArrivalPlan(tabs: recentTabs(sessions));
   if (newUser) {
@@ -545,6 +555,9 @@ FirstArrivalPlan planFirstArrival({
     for (final engine in const ['claude', 'codex'])
       if (installed.contains(engine)) engine,
   ];
+  if (fresh.isNotEmpty && fresh.every(signedOut.contains)) {
+    return FirstArrivalPlan(fresh: ['opencode', ...fresh.reversed]);
+  }
   if (fresh.isNotEmpty) return FirstArrivalPlan(fresh: fresh);
   if (installed.contains('opencode')) {
     return const FirstArrivalPlan(fresh: ['opencode']);
