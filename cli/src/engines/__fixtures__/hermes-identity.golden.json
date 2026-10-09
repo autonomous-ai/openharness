@@ -1,0 +1,41 @@
+{
+  "homes": {
+    "homes": [
+      "<root>/hermes",
+      "<root>/hermes/profiles/work"
+    ],
+    "complete": true
+  },
+  "missing-home": {
+    "homes": [
+      "<root>/missing-home"
+    ],
+    "complete": true
+  },
+  "repair:own": {
+    "sessionId": "20261009_120000_a1b2",
+    "hermesHome": "<root>/hermes"
+  },
+  "repair:profile": {
+    "sessionId": "20261009_120001_c3d4",
+    "hermesHome": "<root>/hermes/profiles/work"
+  },
+  "repair:none": null,
+  "repair:old": null,
+  "repair:both": null,
+  "repair:many": null,
+  "repair:born-only": {
+    "sessionId": "20261009_120001_c3d4",
+    "hermesHome": "<root>/hermes/profiles/work"
+  },
+  "repair:pid": {
+    "sessionId": "20261009_120001_c3d4",
+    "hermesHome": "<root>/hermes/profiles/work"
+  },
+  "source:own": "cli",
+  "source:profile": "tui",
+  "source:child": "subagent",
+  "source:absent": null,
+  "source:unwritten": null,
+  "source:invalid": ""
+}
