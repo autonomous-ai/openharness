@@ -119,4 +119,7 @@ export interface ExternalProvider {
   owners?(view: ProcessView): Promise<OwnerClaim[]>
   /** Whether the owner is mid-turn; null when the engine's store cannot say. */
   busy?(owner: { pid: number; record: string }): Promise<boolean | null>
+  /** Final admission proof from one coherent record: exact ownership and activity together.
+   *  Separate process/file reads cannot prove idle. Missing support means unknown, never idle. */
+  confirmOwner?(owner: OwnerClaim, process: RunningProcess | null): Promise<{ current: boolean; busy: boolean | null } | null>
 }

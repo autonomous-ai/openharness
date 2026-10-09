@@ -4,11 +4,12 @@
  * archived does not: Codex refuses to resume it until `codex unarchive <id>` puts it back, and opening it
  * started a pane that only printed Codex's error. The daemon now says so, and opens nothing.
  */
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient } from './harness/client.js'
-import { IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
 
 type Row = Record<string, any>
 
@@ -20,7 +21,7 @@ describe('opening a Codex conversation Harness did not start', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
 
-  it('one from a terminal opens as a harness on it; one Codex archived is refused, saying how to put it back', async () => {
+  it('opens a terminal conversation, refuses archives, and never replaces an adopted conversation when restart loses resume support', async () => {
     const d = await IsolatedDaemon.create()
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
@@ -53,6 +54,16 @@ describe('opening a Codex conversation Harness did not start', () => {
       const now = await row(client, opened.agent.id)
       return now?.sessionId === kept && now.status === 'active' ? now : null
     }, 60_000, 500)
+    // An engine update can remove resume. The coordinator must carry the adoption's strict
+    // resume requirement into the real pane swap instead of falling back to a new conversation.
+    const wrapper = join(d.root, 'bin', 'codex')
+    const module = pathToFileURL(join(CLI_ROOT, 'e2e', 'harness', 'fakeEngine.mjs')).href
+    writeFileSync(wrapper + '.new', `#!${process.execPath}\nimport(${JSON.stringify(module)}).then(m => m.run('codex', ${JSON.stringify({ ...d.engineConfig, version: '0.161.0', without: ['resume'] })}))\n`, { mode: 0o755 })
+    renameSync(wrapper + '.new', wrapper)
+    expect(await client.request('agent_restart', { agentId: opened.agent.id }, 90_000)).toMatchObject({ error: 'RESTART_FAILED' })
+    const conversations = (await rows(client)).filter(agent => agent.engine === 'codex' && agent.sessionId)
+    expect(conversations.length).toBeGreaterThan(0)
+    expect(conversations.every(agent => agent.sessionId === kept)).toBe(true)
     client.close()
   }, 240_000)
 

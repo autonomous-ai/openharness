@@ -20,7 +20,7 @@ it('copies bounded facts, never history readers, and matches the exact request a
 it('holds mismatched, oversized, malformed or unavailable answers instead of reporting free', () => {
   for (const value of [null, [], {}, { ...answer, request: { ...request, engine: 'codex' } },
     { ...answer, session: { ...session, sessionId: 'other' } }, { ...answer, extra: 'x'.repeat(65536) },
-    { ...answer, busy: true }, { ...answer, generation: 'marker' }, { ...answer, session: undefined },
+    { ...answer, busy: true }, { ...answer, busyConfirmed: true }, { ...answer, busyConfirmed: false }, { ...answer, generation: 'marker' }, { ...answer, session: undefined },
     { ...answer, owner: { pid: -1 } }, { ok: false, detail: '\u0000' }, { ...answer, owner: {}, session: null }]) {
     expect(externalSessionAnswer(value, request)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
   }
@@ -36,6 +36,9 @@ it('refuses invalid metadata and owner boundaries', () => {
   const owner = { pid: 7, engine: 'claude', tty: '/dev/fixture-terminal', record: '/store/record', harness: true }
   const owned = { ...answer, owner, generation: 'ps:1000', busy: true }
   expect(externalSessionAnswer(owned, request)).toMatchObject({ ok: true, owner })
+  expect(externalSessionAnswer({ ...owned, owner: { ...owner, harness: undefined }, busyConfirmed: true }, request)).toMatchObject({ ok: true, busyConfirmed: true })
+  for (const patch of [{ harness: true }, { fromArgs: true }, { unverified: true }, { tty: null }])
+    expect(externalSessionAnswer({ ...owned, owner: { ...owner, harness: undefined, ...patch }, busyConfirmed: true }, request).ok).toBe(false)
   for (const patch of [{ pid: 0 }, { pid: 2 ** 32 }, { tty: '/workspace' }, { record: '\u0000' },
     { harness: false }, { engine: 'codex' }]) expect(externalSessionAnswer({ ...owned, owner: { ...owner, ...patch } }, request).ok).toBe(false)
   expect(externalSessionAnswer({ ...owned, owner: { ...owner, harness: undefined }, generation: null }, request).ok).toBe(false)

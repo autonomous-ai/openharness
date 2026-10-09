@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import type { ExternalResumeIntent } from './externalResume.js'
 import type { RegisteredSession } from './registry.js'
+import { createExternalResumes } from '../core/agents/externalResume.js'
+import { stopExternalOwner } from '../core/agents/externalOwner.js'
 vi.mock('./bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'linux:12345678-1234-1234-1234-123456789012' }))
 
 let root: string
@@ -135,6 +137,33 @@ it('never overwrites a concurrent durable cancellation or commits dispatch again
   expect(disk()[0].externalResume?.phase).toBe('cancelled')
   const next = await load()
   expect(next.finishExternalCancellation(row.agentId)).toBe(true)
+})
+
+it('refuses KILL when another writer durably binds the conversation during the TERM grace period', async () => {
+  const { registry, row } = await pending({ takeOver: 'idle' })
+  const owner = { engine: 'claude' as const, pid: 101, tty: '/dev/fixture-terminal', record: '/fixture/record' }
+  const kill = vi.fn(), launch = vi.fn()
+  let written = false
+  const controller = createExternalResumes({ registry, tmux: null, stopped: () => [], cancelled: () => false,
+    generation: () => 1, waiting: async () => true, preflight: async () => null, announce: () => {}, forget: () => {}, launch,
+    inspect: async request => ({ ok: true, request, session: fact(), owner, generation: 'ps:1', busy: false }),
+    stopOwner: (target, control) => stopExternalOwner(target, { ...control, exists: () => true, generation: () => 'ps:1',
+      job: async () => null, kill, sleep: async () => {
+        if (written) return
+        written = true
+        const saved = disk()
+        write([...saved, { ...saved[0], agentId: 'foreign-owner', externalResume: undefined, sessionId: 'canonical', boundAt: 1,
+          runtimes: [{ backend: 'tmux', paneId: '%2' }], primaryRuntimeKey: 'tmux\u0000%2', tmuxPane: '%2', launch: { state: 'ready' }, active: true }])
+      } }),
+  })
+  try {
+    controller.open(); await controller.settled()
+    expect(written).toBe(true)
+    expect(kill.mock.calls).toEqual([[101, 'SIGTERM']])
+    expect(launch).not.toHaveBeenCalled()
+    expect(registry.byAgent(row.agentId)?.externalResume?.phase).toBe('quitting')
+    expect(disk().find(value => value.agentId === 'foreign-owner')?.sessionId).toBe('canonical')
+  } finally { controller.stop() }
 })
 
 it('rolls back strict persistence failures before acknowledging admission, dispatch or cleanup', async () => {

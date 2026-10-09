@@ -17,7 +17,8 @@ afterEach(() => { for (const controller of controllers.splice(0)) controller.sto
 const fact = { sessionId: 'conversation', engine: 'claude' as const, cwd, title: 'Named conversation', origin: 'terminal' as const, mtime: 1, transcriptPath: join(cwd, 'conversation.jsonl') }
 const processOwner = { pid: 7, engine: 'claude' as const, tty: '/dev/fixture-terminal', record: '/fixture/record' }
 const free = (request: ExternalSessionRequest): ExternalSessionAnswer => ({ ok: true, request, session: { ...fact, sessionId: request.sessionId }, owner: null, generation: null, busy: false })
-const held = (request: ExternalSessionRequest, busy = false): ExternalSessionAnswer => ({ ...free(request), owner: processOwner, generation: 'ps:1', busy }) as ExternalSessionAnswer
+const held = (request: ExternalSessionRequest, busy = false): ExternalSessionAnswer => ({ ...free(request), owner: processOwner, generation: 'ps:1', busy,
+  ...(busy ? { busyConfirmed: true } : {}) }) as ExternalSessionAnswer
 const input = (extra = {}) => ({ engine: 'claude', cwd, bypassPermission: false, permissionMode: null, grid: null, codexHome: null, dsh: null,
   prompt: null, name: null, agent: null, resumeSessionId: 'conversation', takeOver: null, ...extra }) as Parameters<ReturnType<typeof createExternalResumes>['create']>[0]
 const defer = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes }); return { promise, resolve } }
@@ -140,6 +141,37 @@ it('never transfers takeover permission to a replacement owner or interrupts wor
   await vi.advanceTimersByTimeAsync(2000); await test.controller.settled()
   expect(test.rows.get(id)?.launch).toMatchObject({ detail: expect.stringContaining('another process') })
   expect(test.deps.stopOwner).toHaveBeenCalledTimes(1)
+})
+
+it('explicit takeover of unknown activity never manufactures a continuation prompt', async () => {
+  const test = setup()
+  test.inspect.mockImplementation(async request => ({ ...held(request), busy: true }))
+  const id = await test.stage({ takeOver: 'now' }); await test.controller.settled()
+  expect(test.rows.get(id)?.externalResume).toMatchObject({ phase: 'admitted', signal: 'sent' })
+  expect(test.rows.get(id)?.externalResume?.continue).toBeUndefined()
+})
+
+it.each([null, 'idle', 'wait'] as const)('holds unknown activity with %s consent and names the missing evidence', async takeOver => {
+  const test = setup(); test.inspect.mockImplementation(async request => ({ ...held(request), busy: true }))
+  const id = await test.stage({ takeOver }); await test.controller.settled()
+  expect(test.rows.get(id)?.launch).toMatchObject({ state: 'held', detail: expect.stringContaining('verify whether') })
+  expect(test.deps.stopOwner).not.toHaveBeenCalled(); expect(test.deps.launch).not.toHaveBeenCalled()
+  test.inspect.mockImplementation(async request => held(request, true))
+  if (takeOver !== 'wait') expect(await test.controller.create(input({ resumeSessionId: 'another', takeOver }))).toMatchObject({ error: 'SESSION_BUSY_IN_TERMINAL' })
+})
+
+it.each(['pane', 'cancelled-pane', 'unavailable', 'missing'] as const)('withholds every signal when the last %s observation cannot prove ownership', async point => {
+  const test = setup(); test.inspect.mockImplementation(async request => held(request))
+  vi.mocked(test.deps.stopOwner!).mockImplementation(async (_owner, control) => {
+    if (point === 'pane') vi.mocked(test.deps.waiting).mockResolvedValue(false)
+    else if (point === 'cancelled-pane') vi.mocked(test.deps.waiting).mockImplementation(async () => { test.cancelWork(); return true })
+    else test.inspect.mockImplementation(async request => point === 'unavailable' ? externalUnavailable() : { ...free(request), session: null })
+    expect(await control.same()).toBe(false)
+    return false
+  })
+  const id = await test.stage({ takeOver: 'idle' }); await test.controller.settled()
+  expect(test.rows.get(id)?.externalResume?.signal).toBeUndefined()
+  expect(test.deps.launch).not.toHaveBeenCalled()
 })
 
 it('rechecks reservations and metadata before signalling and before committing a free admission', async () => {
@@ -267,6 +299,16 @@ it('holds storage/preflight failures and known late refusals without launching o
     expect(test.rows.get(id)?.externalResume?.phase).toBe('waiting'); expect(test.deps.launch).not.toHaveBeenCalled()
     test.controller.stop()
   }
+})
+
+it('does not begin stopping an owner when the quitting journal cannot commit', async () => {
+  const test = setup(); test.inspect.mockImplementation(async request => held(request))
+  const save = test.registry.setExternalResume
+  test.registry.setExternalResume = (id, intent) => intent.phase === 'quitting' ? null : save(id, intent)
+  const id = await test.stage({ takeOver: 'idle' }); await test.controller.settled()
+  expect(test.rows.get(id)?.externalResume?.phase).toBe('waiting')
+  expect(test.deps.stopOwner).not.toHaveBeenCalled()
+  expect(test.deps.launch).not.toHaveBeenCalled()
 })
 
 it('reserves stopped conversations before any pane exists and cleans up an allocation whose durable claim fails', async () => {

@@ -16,6 +16,8 @@ import { stopExternalOwner } from './externalOwner.js'
 type CreateAgent = NonNullable<BackendSocket['onCreateAgent']>
 type Owner = NonNullable<ExternalResumeIntent['owner']>
 const sameOwner = (a: Owner, b: Owner) => JSON.stringify(a) === JSON.stringify(b)
+const activityUnknown = (answer: ExternalSessionAnswer) => answer.ok && answer.owner && answer.busy && !answer.busyConfirmed
+const ACTIVITY_UNKNOWN = 'Waiting to verify whether this conversation is idle in its terminal. Close it there to continue.'
 const identity = (row: RegisteredSession | undefined) => row && JSON.stringify([
   row.engine, row.registeredAt, row.sessionId, row.launch, row.processIdentity, row.cwd, row.codexHome, row.permissionMode, row.bypassPermission, row.runtimes.map(terminalRouteKey).sort(), row.externalResume,
 ])
@@ -68,14 +70,14 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     if (!current()) return
     if (!answer.ok) { hold(row, answer.detail); return }
     const decision = adoptionDecision(intent.request.sessionId, intent.request.engine, intent.takeOver, answer, id => held(id, row.agentId))
-    if (!decision.ok) { hold(row, decision.detail); return }
+    if (!decision.ok) { hold(row, decision.error === 'SESSION_BUSY_IN_TERMINAL' && activityUnknown(answer) ? ACTIVITY_UNKNOWN : decision.detail); return }
     const session = answer.session!
     const owner: Owner | undefined = answer.owner && answer.generation ? { process: answer.owner, generation: answer.generation } : undefined
     if (intent.session && owner && (!intent.owner || !sameOwner(intent.owner, owner))) {
       hold(row, 'The conversation moved to another process. Close it there, then open it here again.'); return
     }
     if (!commit({ ...intent, session, ...(owner ? { owner } : {}) })) return
-    if (owner && decision.busy && intent.takeOver === 'wait') { hold(row, 'Waiting for the conversation’s current turn to finish in its terminal.'); return }
+    if (owner && decision.busy && intent.takeOver === 'wait') { hold(row, activityUnknown(answer) ? ACTIVITY_UNKNOWN : 'Waiting for the conversation’s current turn to finish in its terminal.'); return }
     const refusal = await deps.preflight(row, session)
     if (!current()) return
     if (refusal) { hold(row, refusal.detail); return }
@@ -89,7 +91,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
         answer = await inspect(intent.request)
         if (!current() || !answer.ok || !answer.session) return false
         const fresh = adoptionDecision(intent.request.sessionId, intent.request.engine, intent.takeOver, answer, id => held(id, row.agentId))
-        interrupted = answer.busy
+        interrupted = answer.busyConfirmed === true
         return fresh.ok && answer.session.sessionId === session.sessionId && answer.session.cwd === session.cwd
           && answer.session.transcriptPath === session.transcriptPath
           && JSON.stringify(answer.session.launchArgs) === JSON.stringify(session.launchArgs)
@@ -98,8 +100,10 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
       }
       if (!await (deps.stopOwner ?? stopExternalOwner)(owner, { current, same,
         beforeSignal: signal => {
-          if (signal !== 'SIGTERM') return
-          if (!commit({ ...row.externalResume!, signal: 'prepared', continue: interrupted ? true : undefined })) throw new Error('Signal intent could not be saved')
+          // KILL needs the same locked conflict check after TERM's grace period, even when the
+          // durable intent is unchanged. A daemon-down hook can bind another owner meanwhile.
+          const next = signal === 'SIGTERM' ? { ...row.externalResume!, signal: 'prepared' as const, continue: interrupted ? true as const : undefined } : row.externalResume!
+          if (!commit(next)) throw new Error('Signal intent could not be saved')
         },
         afterSignal: signal => {
           if (signal === 'SIGTERM' && !commit({ ...row.externalResume!, signal: 'sent' })) throw new Error('Signal receipt could not be saved')
@@ -155,7 +159,8 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     const answer = await inspect(request)
     if (stopped) return { ok: false, error: 'CORE_NOT_READY' }
     const decision = adoptionDecision(request.sessionId, request.engine, input.takeOver ?? null, answer, held)
-    if (!decision.ok && decision.error !== 'SEARCH_UNAVAILABLE') return decision
+    if (!decision.ok && decision.error !== 'SEARCH_UNAVAILABLE'
+      && !(decision.error === 'SESSION_BUSY_IN_TERMINAL' && activityUnknown(answer))) return decision
     const intent: ExternalResumeIntent = { token: randomUUID(), request, takeOver: input.takeOver ?? null, phase: 'waiting',
       ...(answer.ok && answer.session ? { session: answer.session } : {}),
       ...(answer.ok && answer.owner && answer.generation ? { owner: { process: answer.owner, generation: answer.generation } } : {}) }

@@ -211,7 +211,7 @@ describe('the session search service', () => {
 
 it('keeps external inspection available without SQLite and sends every port through the owned readers/index', async () => {
   const { core, ports, requests, readers } = setup()
-  const request = { engine: 'claude', sessionId: 'conversation' }
+  const request = { engine: 'claude' as const, sessionId: 'conversation' }
   expect(Object.keys(requests)).toEqual([...SEARCH_REQUESTS])
   expect(await ports.search!.inspect(request)).toEqual({ ok: true })
   expect(readers.inspect).toHaveBeenCalledWith(request)

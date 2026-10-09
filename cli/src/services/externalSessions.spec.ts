@@ -12,7 +12,8 @@ const target = { sessionId: 'conversation', engine: 'claude' as const }
 const session: ExternalSession = { ...target, cwd: '/workspace', origin: 'terminal', title: '', mtime: 10, transcriptPath: '/store/conversation.jsonl' }
 function fixture() {
   const claim: OwnerClaim = { sessionId: target.sessionId, pid: 7, record: '/store/process.json' }
-  const provider: ExternalProvider = { engine: 'claude', scan: vi.fn(async () => [session]), owners: vi.fn(async () => []), busy: vi.fn(async () => false) }
+  const provider: ExternalProvider = { engine: 'claude', scan: vi.fn(async () => [session]), owners: vi.fn(async () => []),
+    confirmOwner: vi.fn(async () => ({ current: true, busy: false })) }
   const view: ProcessView = { list: vi.fn(async () => [{ pid: 7, ppid: 1, executable: 'fixture', args: '', generation: 'ps:1000' }]),
     openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
   const generation = vi.fn((): string | null => 'ps:1000')
@@ -27,21 +28,21 @@ it.each(['terminal', 'activity'] as const)('rejects same-PID conversation change
   const gate = new Promise<void>(resolve => { finish = resolve })
   vi.mocked(f.provider.owners!).mockResolvedValue([f.claim])
   if (point === 'terminal') f.options.open.ttys.mockImplementation(async () => { await gate; return new Map([[7, '/dev/fixture-terminal']]) })
-  else vi.mocked(f.provider.busy!).mockImplementation(async () => { await gate; return false })
+  else vi.mocked(f.provider.confirmOwner!).mockImplementation(async () => { await gate; return { current: false, busy: false } })
   const answer = f.reader.inspect(target)
-  await vi.waitFor(() => expect(point === 'terminal' ? f.options.open.ttys : f.provider.busy).toHaveBeenCalled())
+  await vi.waitFor(() => expect(point === 'terminal' ? f.options.open.ttys : f.provider.confirmOwner).toHaveBeenCalled())
   vi.mocked(f.provider.owners!).mockResolvedValue([{ ...f.claim, sessionId: 'another-conversation' }])
   finish()
   expect(await answer).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
 })
 
-it.each(['record', 'contender', 'app'] as const)('rejects %s owner evidence that changes while activity is read', async change => {
+it.each(['record', 'contender', 'app'] as const)('rejects %s owner evidence that changes while terminal evidence is read', async change => {
   const f = fixture()
   vi.mocked(f.provider.owners!).mockResolvedValue([f.claim])
-  vi.mocked(f.provider.busy!).mockImplementation(async () => {
+  f.options.open.ttys.mockImplementation(async () => {
     vi.mocked(f.provider.owners!).mockResolvedValue(change === 'record' ? [{ ...f.claim, record: '/other-record' }]
       : change === 'app' ? [{ ...f.claim, app: true }] : [f.claim, { ...f.claim, pid: 8 }])
-    return false
+    return new Map([[7, '/dev/fixture-terminal']])
   })
   expect(await f.reader.inspect(target)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
 })
@@ -89,13 +90,24 @@ it('holds conflicting exact records/app evidence and missing terminal evidence',
   expect(await f.reader.inspect(target)).toMatchObject({ ok: false })
 })
 
+it.each(['initial', 'later'] as const)('holds a same-PID unrelated exact conversation seen in the %s ownership pass', async when => {
+  const f = fixture(), both = [f.claim, { ...f.claim, sessionId: 'another-conversation', record: '/store/another.json' }]
+  vi.mocked(f.provider.owners!).mockResolvedValue(both)
+  if (when === 'later') vi.mocked(f.provider.owners!).mockResolvedValueOnce([f.claim])
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
+  expect(f.provider.confirmOwner).not.toHaveBeenCalled()
+  // Startup arguments can name a previous conversation; they do not contradict an exact record.
+  vi.mocked(f.provider.owners!).mockResolvedValue([f.claim, { ...both[1], fromArgs: true }])
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: true })
+})
+
 it('checks process generation after the activity read and treats tmux permission failure as unknown', async () => {
   const f = fixture()
   vi.mocked(f.provider.owners!).mockResolvedValue([f.claim])
-  vi.mocked(f.provider.busy!).mockImplementation(async () => { f.generation.mockReturnValue(null); return false })
+  vi.mocked(f.provider.confirmOwner!).mockImplementation(async () => { f.generation.mockReturnValue(null); return { current: true, busy: false } })
   expect(await f.reader.inspect(target)).toMatchObject({ ok: false })
   f.generation.mockReturnValue('ps:1000')
-  vi.mocked(f.provider.busy!).mockResolvedValue(false)
+  vi.mocked(f.provider.confirmOwner!).mockResolvedValue({ current: true, busy: false })
   const { harnessTtys } = await vi.importActual<typeof import('../lib/sessionSearch/externals/support.js')>('../lib/sessionSearch/externals/support.js')
   f.options.open.harnessTtys.mockImplementation(() => harnessTtys(async () => ({ failed: true, stdout: '',
     stderr: 'error connecting to /fixture/socket (Permission denied)' }), true))
@@ -119,18 +131,40 @@ it('refuses unavailable or conflicting owners and changed process incarnations',
 
 it('keeps app, argument-only, Harness and unverifiable pane owners distinguishable; unknown activity stays busy', async () => {
   const f = fixture()
+  vi.mocked(f.provider.confirmOwner!).mockResolvedValue({ current: true, busy: true })
   for (const flags of [{ app: true }, { fromArgs: true }, {}]) {
     vi.mocked(f.provider.owners!).mockResolvedValue([{ ...f.claim, ...flags }])
-    expect(await f.reader.inspect(target)).toMatchObject({ ok: true, owner: flags.app ? { tty: null } : flags.fromArgs ? { fromArgs: true } : { tty: '/dev/fixture-terminal' } })
+    const answer = await f.reader.inspect(target)
+    expect(answer).toMatchObject({ ok: true, owner: flags.app ? { tty: null } : flags.fromArgs ? { fromArgs: true } : { tty: '/dev/fixture-terminal' } })
+    if (flags.app || flags.fromArgs) expect(answer).not.toHaveProperty('busyConfirmed')
   }
   f.options.open.harnessTtys.mockResolvedValue(new Set(['/dev/fixture-terminal']))
   expect(await f.reader.inspect(target)).toMatchObject({ ok: true, owner: { harness: true } })
   f.options.open.harnessTtys.mockResolvedValue(null)
   expect(await f.reader.inspect(target)).toMatchObject({ ok: true, owner: { unverified: true } })
-  vi.mocked(f.provider.busy!).mockImplementation(async () => { externalReadFailed({ code: 'ENOENT' }); return false })
+  vi.mocked(f.provider.confirmOwner!).mockImplementation(async () => { externalReadFailed({ code: 'ENOENT' }); return { current: true, busy: false } })
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: false })
+  f.provider.confirmOwner = undefined
   expect(await f.reader.inspect(target)).toMatchObject({ ok: true, busy: true })
-  f.provider.busy = undefined
-  expect(await f.reader.inspect(target)).toMatchObject({ ok: true, busy: true })
+})
+
+it('reads coherent activity after a deferred second ownership pass and never turns unknown into an interrupted turn', async () => {
+  const f = fixture()
+  let finish!: () => void
+  const gate = new Promise<void>(resolve => { finish = resolve })
+  vi.mocked(f.provider.owners!).mockResolvedValueOnce([f.claim]).mockImplementationOnce(async () => { await gate; return [f.claim] })
+  const reading = f.reader.inspect(target)
+  await vi.waitFor(() => expect(f.provider.owners).toHaveBeenCalledTimes(2))
+  vi.mocked(f.provider.confirmOwner!).mockResolvedValue({ current: true, busy: true })
+  finish()
+  expect(await reading).toMatchObject({ ok: true, busy: true, busyConfirmed: true })
+  vi.mocked(f.provider.owners!).mockResolvedValue([f.claim])
+  for (const proof of [null, { current: true, busy: null }]) {
+    vi.mocked(f.provider.confirmOwner!).mockResolvedValue(proof)
+    const answer = await f.reader.inspect(target)
+    expect(answer).toMatchObject({ ok: true, busy: true })
+    expect(answer).not.toHaveProperty('busyConfirmed')
+  }
 })
 
 it('uses fresh provider facts after cold discovery finds an ID from another engine', async () => {

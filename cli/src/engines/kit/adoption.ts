@@ -189,15 +189,24 @@ async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { re
   return claims
 }
 
-async function openFileOwners(open: Extract<Owners, { open: unknown }>['open'], view: ProcessView): Promise<OwnerClaim[]> {
+async function openFileOwners(engine: ExternalEngine, open: Extract<Owners, { open: unknown }>['open'], view: ProcessView): Promise<OwnerClaim[]> {
   const claims: OwnerClaim[] = []
   const held = await view.openFilesOf(open.commands)
   if (!held.size) return claims
   const processes = new Map((await view.list()).map((row): [number, RunningProcess] => [row.pid, row]))
+  const ownership = agentCommandOwnershipSnapshot()
   for (const [pid, files] of held) {
+    const records = files.filter(path => open.id.test(path) && path.includes(open.contains))
+    if (!records.length) continue
+    // lsof -c selects command prefixes; a codex-audit helper can hold a rollout too. The exact
+    // process snapshot must identify the engine before an FD claim can authorize its termination.
+    const process = processes.get(pid)
+    if (externalEvidenceActive() && (!process || !view.alive(pid) || engineProcessMatch(process, engine as never, ownership).score <= 0)) {
+      externalReadFailed(new Error('unverified file owner process'), 'owner process'); continue
+    }
     // A server holding a thread is never stopped from here, even when a terminal started it.
     const app = servesOthers(processes.get(pid), open.servers)
-    for (const path of files) {
+    for (const path of records) {
       const id = open.id.exec(path)?.[1]
       if (id && path.includes(open.contains)) claims.push({ sessionId: id, pid, record: path, ...(app ? { app: true } : {}) })
     }
@@ -253,7 +262,19 @@ export function adoptionProvider(engine: ExternalEngine, contract: AdoptionContr
     },
     owners: (view: ProcessView) => 'records' in owners
       ? recordOwners(engine, owners.records, head.id.pattern, places.records?.() ?? places.roots().map((root) => join(root, '..', owners.records.folder)), view)
-      : openFileOwners(owners.open, view),
+      : openFileOwners(engine, owners.open, view),
+    async confirmOwner(owner, process) {
+      if (!('records' in owners) || !('record' in busy)) return null
+      // Claude's one record carries the session, PID, incarnation and activity together. A final
+      // transcript read cannot offer this guarantee when ownership lives in a separate store.
+      const row = record(await readJson(owner.record)), fields = owners.records
+      const started = row?.[fields.started]
+      if (!process || process.pid !== owner.pid || row?.[fields.pid] !== owner.pid || row?.[fields.id] !== owner.sessionId
+        || typeof started !== 'number' || !Number.isFinite(started) || started <= 0
+        || !Number.isFinite(process.started) || process.started! <= 0 || process.started! > started + fields.slackMs)
+        return { current: false, busy: null }
+      return { current: true, busy: row?.[busy.record.field] === busy.record.busy ? true : row?.[busy.record.field] === busy.record.idle ? false : null }
+    },
     async busy(owner): Promise<boolean | null> {
       if ('tail' in busy) return turnOpen(owner.record, busy.tail, null)
       const row = record(await readJson(owner.record))

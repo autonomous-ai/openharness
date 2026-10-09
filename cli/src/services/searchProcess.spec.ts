@@ -98,6 +98,7 @@ describe('search in its own process', () => {
     expect(await options.requests.session_search({ query: 'anything' }, ASKER)).toEqual(off)
     expect(await options.requests.session_tail({ sessionId: SESSION }, ASKER)).toEqual(off)
     expect(await options.requests.external_inspect({ engine: 'claude', sessionId: SESSION }, ASKER)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
+    expect(await options.requests.external_inspect({}, ASKER)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
     options.onEvent!({ kind: 'touch', sessionId: SESSION })
   })
 

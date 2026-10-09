@@ -13,6 +13,8 @@ export interface ExternalSessionObservation {
   /** A process generation read with ownership evidence, never a bare PID grant. */
   generation: string | null
   busy: boolean
+  /** Unknown activity blocks idle takeover, but must never manufacture a continuation prompt. */
+  busyConfirmed?: true
 }
 export interface ExternalSessionUnavailable {
   ok: false
@@ -70,14 +72,17 @@ export function externalSessionAnswer(value: unknown, request: ExternalSessionRe
     if (value.ok === false) return externalUnavailable(text(value.detail, 4096) ? value.detail : undefined)
     const target = externalSessionRequest(value.request)
     if (value.ok !== true || !target || target.sessionId !== request.sessionId || target.engine !== request.engine
-      || typeof value.busy !== 'boolean' || !(value.generation === null || text(value.generation, 200) && /^(linux|ps):\d+$/.test(value.generation))) return externalUnavailable()
+      || typeof value.busy !== 'boolean' || !(value.busyConfirmed === undefined || value.busyConfirmed === true && value.busy === true)
+      || !(value.generation === null || text(value.generation, 200) && /^(linux|ps):\d+$/.test(value.generation))) return externalUnavailable()
     const session = value.session === null ? null : externalSessionFact(value.session)
     const owner = value.owner === null ? null : externalSessionOwner(value.owner)
     if (value.session !== null && !session || value.owner !== null && !owner
       || session && session.sessionId !== request.sessionId && !session.aliases?.includes(request.sessionId)
       || owner && (!session || owner.engine !== session.engine)
+      || value.busyConfirmed && (!owner?.tty || owner.harness || owner.fromArgs || owner.unverified)
       || owner?.tty && !owner.harness && !owner.fromArgs && !owner.unverified && value.generation === null
       || !owner && (value.generation !== null || value.busy)) return externalUnavailable()
-    return { ok: true, request: target, session, owner, generation: value.generation as string | null, busy: value.busy }
+    return { ok: true, request: target, session, owner, generation: value.generation as string | null, busy: value.busy,
+      ...(value.busyConfirmed ? { busyConfirmed: true } : {}) }
   } catch { return externalUnavailable() }
 }

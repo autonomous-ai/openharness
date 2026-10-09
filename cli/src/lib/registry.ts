@@ -2487,7 +2487,7 @@ class Registry {
           const intent = parseExternalResume(value.externalResume)
           // Every strict admission/signal/dispatch transition earns permission here. Ordinary
           // observations may persist a held provisional overlap; they never authorize a signal.
-          if (id !== externalAgentId || !intent || intent.phase === 'cancelled' || this.persistedBaseline.get(id) === rowFingerprint(value)) continue
+          if (id !== externalAgentId || !intent || intent.phase === 'cancelled') continue
           const claims = new Set(externalReservations(value as unknown as RegisteredSession))
           for (const [otherId, otherValue] of latest) {
             if (otherId === id) continue

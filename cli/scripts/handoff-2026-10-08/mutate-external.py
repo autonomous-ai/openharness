@@ -13,7 +13,7 @@ mutations = [
     ('owner observations dropped', 'src/services/externalSessions.ts',
      'const claim = claims.find(claim => !claim.fromArgs) ?? claims[0]', 'const claim = undefined', golden),
     ('busy observations dropped', 'src/services/externalSessions.ts',
-     'busy: activity.ok ? activity.value : true', 'busy: false', golden),
+     'busy: activity.value?.busy !== false', 'busy: false', golden),
     ('archived conversation admitted', 'src/core/agents/adopt.ts',
      'if (found.archived)', 'if (false)', golden),
     ('Hermes profile stripped at wire', 'src/lib/externalSessionWire.ts',

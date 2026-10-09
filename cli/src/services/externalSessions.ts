@@ -60,7 +60,8 @@ export function createExternalSessions(options: ExternalReaderOptions) {
         [session.sessionId, ...session.aliases ?? []].includes(claim.sessionId))
       const signature = (claims: readonly OwnerClaim[]) => JSON.stringify([...new Set(claims.map(claim =>
         JSON.stringify([claim.sessionId, claim.pid, claim.record, !!claim.app, !!claim.fromArgs])))].sort())
-      const claims = matching(await provider.owners!(view))
+      const allClaims = await provider.owners!(view)
+      const claims = matching(allClaims)
       const pids = new Set(claims.map(claim => claim.pid))
       if (pids.size > 1) throw new Error('conflicting owners')
       const exact = claims.filter(claim => !claim.fromArgs)
@@ -68,6 +69,10 @@ export function createExternalSessions(options: ExternalReaderOptions) {
         || new Set(claims.map(claim => !!claim.app)).size > 1) throw new Error('conflicting owner evidence')
       const claim = claims.find(claim => !claim.fromArgs) ?? claims[0]
       if (!claim) return { owner: null, generation: null, busy: false }
+      const candidateClaims = (all: readonly OwnerClaim[]) => all.filter(other => other.pid === claim.pid || matching([other]).length > 0)
+      // A terminal process with another exact conversation open cannot be stopped for this one.
+      // Keep its other claims in the second-pass comparison too: filtering to this ID hid that race.
+      if (allClaims.some(other => other.pid === claim.pid && !other.fromArgs && !matching([other]).length)) throw new Error('process holds another conversation')
       if (!Number.isSafeInteger(claim.pid) || claim.pid <= 0 || claim.pid > 0x7fffffff) throw new Error('invalid owner PID')
       const [ttys, harness] = await Promise.all([
         (options.open?.ttys ?? processTtys)([claim.pid]), (options.open?.harnessTtys ?? harnessTtys)(),
@@ -77,16 +82,20 @@ export function createExternalSessions(options: ExternalReaderOptions) {
       const owner: SessionOwner = { pid: claim.pid, engine: provider.engine, record: claim.record, tty,
         ...(tty && harness?.has(tty) ? { harness: true } : {}), ...(tty && !harness ? { unverified: true } : {}),
         ...(claim.fromArgs ? { fromArgs: true } : {}) }
-      const activity = await externalEvidence(async () => await provider.busy?.(owner) ?? true, true)
-      // A process can switch conversations while terminal/activity reads wait. Its PID surviving
+      // A process can switch conversations while terminal reads wait. Its PID surviving
       // does not prove it still owns this conversation. Re-read ownership with a fresh process view.
       const fresh = (options.open?.view ?? processView)()
       await fresh.list()
-      if (signature(matching(await provider.owners!(fresh))) !== signature(claims)) throw new Error('owner changed during observation')
+      if (signature(candidateClaims(await provider.owners!(fresh))) !== signature(candidateClaims(allClaims))) throw new Error('owner changed during observation')
+      // Nothing asynchronous follows this proof. Idle must come from a record that also proves
+      // the exact current owner; a separate activity read could belong to a previous conversation.
+      const activity = await externalEvidence(async () => await provider.confirmOwner?.(claim, processes.find(row => row.pid === claim.pid) ?? null) ?? null, true)
+      if (!activity.ok || activity.value && !activity.value.current) throw new Error('current ownership/activity could not be verified')
       const identity = generation(claim.pid, processes)
       if (!identity && tty && !owner.harness && !owner.fromArgs && !owner.unverified) throw new Error('unverified process incarnation')
       // Unknown activity cannot grant an idle takeover. Explicit take-over-now still requires ownership.
-      return { owner, generation: identity, busy: activity.ok ? activity.value : true }
+      return { owner, generation: identity, busy: activity.value?.busy !== false,
+        ...(activity.value?.busy === true && owner.tty && !owner.harness && !owner.fromArgs && !owner.unverified ? { busyConfirmed: true as const } : {}) }
     })
     if (!observed.ok) return externalUnavailable(observed.detail)
     return externalSessionAnswer({ ok: true, request,
