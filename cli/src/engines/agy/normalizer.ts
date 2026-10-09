@@ -322,12 +322,16 @@ export function agyStepToEvents(step: AgyStep, state: AgyTurnState, mode: 'live'
 
 export class AgyNormalizer implements EngineNormalizer {
   private state = newAgyTurnState()
+  private revision = 0
 
   get turnOpen(): boolean { return this.state.open }
+  /** A capture dispatched before newer transcript or turn evidence cannot close this state. */
+  get turnRevision(): number { return this.revision }
 
   /** The `Stop` hook fired: close every row this turn opened, then the turn. */
   closeTurn(): LiveEvent[] {
     if (!this.state.open) return []
+    this.revision++
     const events: LiveEvent[] = []
     closeRows(this.state, events, 'completed')
     this.state.open = false
@@ -339,6 +343,7 @@ export class AgyNormalizer implements EngineNormalizer {
 
   abortTurn(): LiveEvent[] {
     if (!this.state.open) return []
+    this.revision++
     const events: LiveEvent[] = []
     closeRows(this.state, events, 'failed')
     this.state.open = false
@@ -350,6 +355,7 @@ export class AgyNormalizer implements EngineNormalizer {
 
   ingest(line: string): LiveEvent[] {
     const step = agyStep(line)
+    if (step) this.revision++
     return step ? agyStepToEvents(step, this.state, 'live') : []
   }
 

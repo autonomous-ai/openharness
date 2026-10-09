@@ -8,6 +8,7 @@ export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } f
 import { encodeRuntimeProfile, record, stripAnsi, transcriptFields, RUNTIME_EFFORTS } from '../engines/kit/runtime.js'
 export { encodeRuntimeProfile, runtimeModelLabel } from '../engines/kit/runtime.js'
 import { engineNow, isOtherEngine, loadEngine } from '../engines/inProcess.js'
+import { processIdentityKey } from './terminalRuntime.js'
 
 const blankState = (): RuntimeState => ({ model: null, effort: null, mode: 'unknown', cliVersion: null, observedAt: null })
 
@@ -32,7 +33,8 @@ const EFFORTS = RUNTIME_EFFORTS
 const CHANGE_DEBOUNCE_MS = 120
 const readIdentity = (session: RegisteredSession): string => JSON.stringify([session.agentId, session.sessionId,
   session.engine, session.cwd, session.transcriptPath, session.codexHome, session.hermesHome,
-  session.model, session.cliVersion, session.boundAt, session.tmuxPane, session.primaryRuntimeKey, session.runtimes])
+  session.model, session.cliVersion, session.boundAt, session.tmuxPane, session.primaryRuntimeKey, session.runtimes,
+  session.active, session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : undefined])
 const copyControl = (control: RuntimeControl | undefined): RuntimeControl | undefined => control && {
   ...control, target: { ...control.target },
 }
@@ -152,6 +154,18 @@ export class RuntimeProfileState {
     if (runtime) runtime.pane(context, text)
     else if (this.readerNow(session.engine)?.pane?.(context, text) === false) return false
     return this.observed(session, before, silent)
+  }
+
+  /** Capture and consume one observation under the binding and authority that requested it. */
+  async capturePane(session: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
+    historyLines?: number, silent = false): Promise<string | null> {
+    if (this.unbound(session.sessionId) || !this.currentSession(session)) return null
+    const id = session.sessionId, identity = readIdentity(session)
+    const state = this.state(id), version = this.version(state)
+    const text = await capture(session.agentId, historyLines)
+    if (!text || this.states.get(id) !== state || this.version(state) !== version || !this.currentSession(session, identity)) return null
+    this.ingestPane(session, text, silent)
+    return text
   }
 
   async ingestConfig(session: RegisteredSession, silent = false): Promise<boolean> {
