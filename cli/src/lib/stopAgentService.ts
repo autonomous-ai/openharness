@@ -52,6 +52,7 @@ export interface StopAgentOptions {
 // identity or property ordering, while retaining the exact PID-reuse guard.
 const runtimeIdentity = (entry: RegisteredSession | undefined, withProcess = true) => entry ? JSON.stringify([
   entry.engine, entry.registeredAt,
+  entry.codexHome ?? null, entry.hermesHome ?? null,
   ...(withProcess ? [entry.processIdentity?.pid, entry.processIdentity?.executable, entry.processIdentity?.startMarker] : []),
   entry.runtimes.map(terminalRouteKey).sort(),
 ]) : null
@@ -93,7 +94,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       }
       const current = registry.resolve(sessionId)!
       const s = current.sessionId && current.sessionId !== captured.sessionId ? { ...current } : { ...current, sessionId: captured.sessionId,
-        transcriptPath: captured.transcriptPath, boundAt: captured.boundAt, source: captured.source }
+        transcriptPath: captured.transcriptPath, hermesHome: captured.hermesHome, boundAt: captured.boundAt, source: captured.source }
       // Saving precedes every mutation. A storage failure leaves the live agent alone.
       stoppedAgents.save(s)
       await options.checkpoint?.(s, 'before')

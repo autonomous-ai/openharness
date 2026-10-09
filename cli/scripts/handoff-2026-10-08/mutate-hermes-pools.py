@@ -34,6 +34,10 @@ mutations = [
     ('first hook home wins', hook, 'if (found.length !== 1)', 'if (false)', hook_spec),
     ('unavailable hook admitted', hook, "return { kind: 'hold', reason: `Hermes session source is unavailable; keeping the current conversation. ${error.message}` }", "return { kind: 'accept', value: undefined }", hook_spec),
     ('cached SQLite deadline ignored', 'src/lib/sqliteBuiltin.ts', 'if (cached.busyTimeoutMs !== timeout)', 'if (false)', 'src/lib/sqliteRead.spec.ts'),
+    ('captured profile lost before Stop save', 'src/lib/stopAgentService.ts', 'hermesHome: captured.hermesHome, ', '', spec),
+    ('captured profile lost during forget save', 'src/lib/stoppedAgents.ts', 'hermesHome: previous.hermesHome, boundAt:', 'boundAt:', spec),
+    ('changed home not fenced during Stop', 'src/lib/stopAgentService.ts', '  entry.codexHome ?? null, entry.hermesHome ?? null,\n', '', spec),
+    ('saved home combined with changed authority', 'src/lib/stoppedAgents.ts', '      && (!session.hermesHome || session.hermesHome === previous.hermesHome)\n', '', spec),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 for key in list(env):

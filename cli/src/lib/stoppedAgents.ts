@@ -117,10 +117,13 @@ export class StoppedAgentStore {
     // A temporarily unbound observation of the SAME process cannot erase a known conversation.
     // A replacement process must earn its own binding; never carry history across PID reuse.
     if (!session.sessionId && previous?.sessionId && previous.engine === session.engine
+      && session.registeredAt === previous.registeredAt
+      && (session.codexHome ?? null) === (previous.codexHome ?? null)
+      && (!session.hermesHome || session.hermesHome === previous.hermesHome)
       && sameProcessIdentity(session.processIdentity, previous.processIdentity)
       && session.processIdentity!.executable === previous.processIdentity!.executable) {
       session = { ...session, sessionId: previous.sessionId, transcriptPath: previous.transcriptPath,
-        boundAt: previous.boundAt, source: previous.source }
+        hermesHome: previous.hermesHome, boundAt: previous.boundAt, source: previous.source }
     }
     // With optional readers absent, Stop can capture a path the live row has not learned.
     // Hooks during its checkpoint and the final forget both save that pathless row. They

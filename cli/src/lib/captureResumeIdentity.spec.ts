@@ -91,6 +91,12 @@ it.each(['claude', 'codex'] as const)('captures an explicit %s resume without gu
   expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'exact', transcriptPath: '/exact', source: 'stop-repair' })
   expect(findLiveSession).not.toHaveBeenCalled()
 })
+it('keeps an explicit file-backed resume unbound while its transcript is still unwritten', async () => {
+  vi.mocked(resumeSessionId).mockReturnValue('exact')
+  vi.mocked(findResumedTranscript).mockResolvedValue(null)
+  expect(await captureResumeIdentity(row)).toBe(row)
+  expect(findLiveSession).not.toHaveBeenCalled()
+})
 it('prefers current Claude native metadata to old resume argv', async () => {
   vi.mocked(resumeSessionId).mockReturnValue('old')
   vi.mocked(processSessionOf).mockResolvedValue({ sessionId: 'current', transcriptPath: '/current' })

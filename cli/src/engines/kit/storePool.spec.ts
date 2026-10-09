@@ -11,7 +11,11 @@ const control = vi.hoisted(() => ({
   result: undefined as undefined | import('../../lib/sqliteRead.js').SqliteReadResult,
   now: undefined as number | undefined,
   queries: [] as Array<{ path: string; options: import('../../lib/sqliteRead.js').SqliteReadOptions }>,
+  processes: [] as import('../../lib/tmux.js').ProcessRow[],
 }))
+vi.mock('../../lib/tmux.js', async original => ({ ...await original<object>(), processRows: async () => control.processes }))
+vi.mock('../../lib/deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn(async () => 'gone') }))
+vi.mock('../../core/engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
 vi.mock('node:child_process', async original => ({ ...await original<object>(),
   execFile: () => { throw new Error('Native identity tests must not launch a host binary') },
 }))
@@ -107,6 +111,8 @@ afterEach(async () => {
   ;(await import('../../lib/sqliteBuiltin.js')).closeSqliteHandles()
   control.failures.clear(); control.afterQuery = undefined; control.afterStat = undefined
   control.result = undefined; control.now = undefined; control.queries = []
+  control.processes = []
+  vi.clearAllMocks()
   vi.restoreAllMocks(); vi.unstubAllEnvs()
   rmSync(root, { recursive: true, force: true })
 })
@@ -388,4 +394,74 @@ it('cannot bind a delegated row through directory repair, and retries when an in
   update(path, `INSERT INTO sessions VALUES ('${other}', 'cli', '/fixture/work', 1791547200)`)
   await binding.bindObservedAgent(observed)
   expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: other, hermesHome: home }))
+})
+
+async function stopFixture() {
+  const profile = join(home, 'profiles', 'work')
+  store(profile)
+  const { registry } = await import('../../lib/registry.js')
+  const { stoppedAgents } = await import('../../lib/stoppedAgents.js')
+  const { AgentRestartCoordinator } = await import('../../lib/restartAgent.js')
+  const { createForgetSession } = await import('../../core/agents/forget.js')
+  const { createStopAgentService } = await import('../../lib/stopAgentService.js')
+  const { terminateDeletedAgent } = await import('../../lib/deleteAgentFallback.js')
+  const processIdentity = { pid: 4242, executable: 'hermes', startMarker: '2026-10-09T11:59:00Z' }
+  control.processes = [{ ...processIdentity, args: 'hermes', parentPid: 1 }]
+  const live = registry.openProcessAgent({ engine: 'hermes', cwd: '/fixture/work', tmuxPane: '%77', processIdentity })!.entry
+  const forgetSession = createForgetSession({
+    registry, stoppedAgents, syncRecapPool: vi.fn(), normalizers: { forget: vi.fn() },
+    forgetAttach: vi.fn(), turnStartedAt: new Map(), neverFoldedHistory: new Set(), replayedFirstTurn: new Set(),
+    clearAgyIdleWatch: vi.fn(), cursorDiscovery: { remove: vi.fn() }, cursorSubagents: { forget: vi.fn() },
+    runtimeProfiles: { forget: vi.fn() }, watcher: { removeSession: vi.fn(async () => {}) },
+    stopHeartbeat: vi.fn(), teams: { forget: vi.fn() }, input: { forget: vi.fn() }, deviceInput: { forget: vi.fn() },
+    detachDsh: vi.fn(), mirror: { forget: vi.fn() }, clients: { send: vi.fn(), sendCommander: vi.fn() },
+    dataDir: process.env.ADAPTER_DATA_DIR!,
+  })
+  const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
+  const stop = createStopAgentService({ registry, stoppedAgents, restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(),
+    tmuxBackend: { kill }, agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
+    forgetSession, markDeleted: vi.fn(), clearDeleted: vi.fn(), stopNative: vi.fn(async () => {}),
+  })
+  return { stop, registry, stoppedAgents, live, profile, kill, terminateDeletedAgent }
+}
+
+it('preserves a newly captured Hermes profile through actual Stop, checkpoint and final forget saves', async () => {
+  const f = await stopFixture()
+  await f.stop(f.live.agentId, { checkpoint: async (captured, phase) => {
+    expect(captured).toMatchObject({ sessionId: id, hermesHome: f.profile })
+    if (phase === 'before') {
+      expect(f.live.sessionId).toBe('')
+      expect(f.live.hermesHome).toBeNull()
+      f.stoppedAgents.save(f.live)
+      expect(f.stoppedAgents.get(f.live.agentId)).toMatchObject({ sessionId: id, hermesHome: f.profile })
+    }
+  } })
+  expect(f.registry.byAgent(f.live.agentId)).toBeUndefined()
+  expect(f.stoppedAgents.get(f.live.agentId)).toMatchObject({ sessionId: id, hermesHome: f.profile, active: false })
+  expect(f.terminateDeletedAgent).toHaveBeenCalledOnce()
+  expect(f.kill).toHaveBeenCalledOnce()
+})
+
+it.each(['capture', 'checkpoint'])('cannot combine a captured conversation with a changed live home during %s', async phase => {
+  const f = await stopFixture()
+  const change = () => { f.registry.setHermesHome(f.live.agentId, join(root, 'replacement-home')) }
+  if (phase === 'capture') control.afterQuery = () => { control.afterQuery = undefined; change() }
+  await expect(f.stop(f.live.agentId, { checkpoint: async (_captured, at) => {
+    if (phase === 'checkpoint' && at === 'before') change()
+  } })).rejects.toThrow('changed')
+  expect(f.registry.byAgent(f.live.agentId)).toBe(f.live)
+  expect(f.terminateDeletedAgent).not.toHaveBeenCalled()
+  expect(f.kill).not.toHaveBeenCalled()
+})
+
+it.each(['home', 'process', 'registered', 'codex-home'])('does not carry saved Hermes history across a changed %s authority', async change => {
+  const f = await stopFixture()
+  f.stoppedAgents.save({ ...f.live, sessionId: id, hermesHome: f.profile, source: 'stop-repair' })
+  const current = { ...f.live }
+  if (change === 'home') current.hermesHome = join(root, 'different-home')
+  if (change === 'process') current.processIdentity = { ...current.processIdentity!, startMarker: 'replacement' }
+  if (change === 'registered') current.registeredAt++
+  if (change === 'codex-home') current.codexHome = join(root, 'different-profile')
+  f.stoppedAgents.save(current)
+  expect(f.stoppedAgents.get(f.live.agentId)?.sessionId).toBe('')
 })
