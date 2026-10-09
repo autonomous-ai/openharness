@@ -1988,12 +1988,47 @@ static void focus_custom_pet_relaxing(void)
         assert(ht_focus_pet_next_ms(&f, "") == (f.clock_ms / 150 + 1) * 150);
         ink_inside_r230(&scene);
     }
+    // with notices (the bell pill takes the lower arc) or a footer action: the same runs, the line left out
+    {
+        ht_character_face_t nf = custom_face(false, 2), ff = custom_face(false, 0);
+        ff.footer_action = true;
+        ht_scene_t base, ns, fs;
+        ht_scene_clear(&base, 0); ht_scene_clear(&ns, 0); ht_scene_clear(&fs, 0);
+        ht_character_face(&base, &c, &f, 0xffff, "");
+        ht_character_face(&ns, &c, &nf, 0xffff, "");
+        ht_character_face(&fs, &c, &ff, 0xffff, "");
+        assert(base.runs[10].arc == 2 && base.runs[10].text[0]);
+        assert(ns.count == base.count && fs.count == base.count);
+        assert(!ns.runs[10].arc && !ns.runs[10].text[0] && !fs.runs[10].arc && !fs.runs[10].text[0]);
+        ink_inside_r230(&ns);
+    }
     // working, and a recap, are not relaxing
     ht_character_face_t w = custom_face(true, 0);
     ht_scene_t ws; ht_scene_clear(&ws, 0); ht_character_face(&ws, &c, &w, 0xffff, "");
     assert(ws.runs[1].sprite.cells && !ws.runs[1].sprite.zoom && ws.runs[10].arc == 2 && ws.runs[10].fg == ht_rgb(0x00ff2f));
     ht_scene_t rc; ht_scene_clear(&rc, 0); ht_character_face(&rc, &c, &f, 0xffff, "Done.");
     assert(rc.runs[3].text[0] && !rc.runs[10].arc);
+    pet_store_release_frame();
+    pack_unload();
+    // a v2 pack whose relaxing scene has no frames keeps today's resting face
+    {
+        static const uint8_t none[] = {0, 0, 0, 0, 0, 0, 0};
+        size_t pos = 22;
+        pos += 1 + 2u * vec_buf[pos];
+        pos += 4;
+        for (int l = 0; l < 3; l++) pos += 1 + 2u * vec_buf[pos];
+        for (int k = 0; k < 4; k++) pos += 7 + 2u * vec_buf[pos];
+        memcpy(b, vec_buf, pos);
+        memcpy(b + pos, none, sizeof none);
+        memcpy(b + pos + sizeof none, vec_buf + pos, vec_len - pos);
+        b[4] = 2;
+        pack_load(b, vec_len + sizeof none);
+        pet = pet_store_lookup("claude");
+        assert(pet && !pet->relaxing_scene);
+        ht_scene_t e; ht_scene_clear(&e, 0);
+        ht_character_face(&e, &c, &f, 0xffff, "");
+        assert(e.count == 11 && (e.runs[8].text[0] || e.runs[9].text[0]) && !e.runs[10].arc && e.runs[1].sprite.zoom);
+    }
     pet_store_release_frame();
     pack_unload();
 }

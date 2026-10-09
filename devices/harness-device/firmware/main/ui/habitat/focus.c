@@ -1021,7 +1021,10 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         char arc[HT_TEXT_BYTES];
         status_fitted(arc, sizeof arc, f, NULL, &ht_arc_inter_lower, HT_ARC_SPAN);
         ht_arc_status_face(s, ht_rgb(FOCUS_VOICE), arc, &ht_arc_inter_lower);
-    } else if (relax)   // the relaxing face's one line, in the working line's arc and font, quiet grey
+    } else if (relax && !f->notices && !f->footer_action)
+        // The relaxing face's one line, in the working line's arc and font, quiet grey. Left out (an empty slot) when
+        // the bell pill (y 400, notices > 0; this face has no bubble to tell them) or a footer control (y 389..439)
+        // has the lower edge.
         ht_arc_status_face(s, ht_rgb(FOCUS_REST), relaxing_line(f), &ht_arc_inter_lower);
     if (s->count == before) no_text(s, sf);
 
