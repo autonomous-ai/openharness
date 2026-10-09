@@ -470,6 +470,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (engines/inProcess.ts).
   registry.onEnter = preloadEngine
   registry.load()
+  // Bindings can finish before full teardown exists, or during its awaits. Cover every owned exit,
+  // including a staged update received during startup, without touching a different daemon's table.
+  process.on('exit', () => registry.flush({ exiting: true }))
   // Persisted locators are hints until this process has observed their terminal root and PID/start marker.
   // Mark them dormant before the backend socket can publish anything; the first authoritative reconcile
   // reactivates matching process agents without changing their public identity or session binding.
@@ -2502,8 +2505,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     process.exit(coreLink.supervised && forGood(signal) ? CORE_EXIT_STOP : 0)
   }
   process.on('SIGINT', () => void shutdown('SIGINT'))
-  // Bindings can finish during teardown awaits. This final synchronous safeguard also covers handoff exits.
-  process.on('exit', () => registry.flush({ exiting: true }))
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
   // A core whose master is gone stops, so nothing is left holding the port for a master that is not
   // there to restart it.

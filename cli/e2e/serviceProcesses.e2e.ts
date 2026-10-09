@@ -311,8 +311,8 @@ async function modelsAnswers(client: LocalClient): Promise<boolean> {
 describe('models in its own process', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
-  const fresh = async (env: Record<string, string> = {}) => {
-    const d = await IsolatedDaemon.create({ env: {
+  const fresh = async (env: Record<string, string> = {}, preserveProcessArgs = false) => {
+    const d = await IsolatedDaemon.create({ preserveProcessArgs, env: {
       HARNESSD_SERVICES: 'models',
       HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200',
       HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000',
@@ -381,7 +381,7 @@ describe('models in its own process', () => {
     const holdDir = mkdtempSync(join(tmpdir(), 'assignment-hold-'))
     const hold = join(holdDir, 'hold')
     try {
-      const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}` })
+      const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}` }, true)
       const client = await LocalClient.connect(d)
       const grid = { networkId: 'assignment-e2e', networkName: 'Assignment', baseUrl: 'https://fixture.invalid/g/assignment/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
       const known = await createOn(d, client, 'claude', 'assignment-known', grid)
