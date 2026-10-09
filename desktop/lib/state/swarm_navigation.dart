@@ -272,7 +272,7 @@ class ExternalSessionRef {
   /// open, or the machine predates taking over.
   final String? openIn;
 
-  /// Open, and only in a terminal: opening it here moves it, once asked.
+  /// Open, and only in a terminal: opening it here moves it.
   bool get inTerminal => open && openIn == 'terminal';
 
   /// Where it ran, as a person says it.
@@ -892,8 +892,12 @@ Future<bool> activateSwarmSearchSelection(
     final machineId = destination.machineId;
     if (machineId == null || split != null) return false;
     // A new harness that resumes it, in its own folder: the machine refuses one
-    // that is open elsewhere, or already a harness, and says so — and one open
-    // in a terminal until asked how to take it over from there.
+    // that is open elsewhere, or already a harness, and says so. One open in a
+    // terminal is moved here without a question (the owner, 2026-10-09: "why do
+    // we need to confirm? just move"): `wait` quits that terminal at once when
+    // it is between turns, and holds the move until a running turn ends. Sent
+    // with the first create, so a move the daemon must first verify (its search
+    // service busy) keeps that consent rather than stalling as open elsewhere.
     final (:error, :refusal) = await app.resumeConversation(
       machineId,
       engine: external.engine,
@@ -902,7 +906,7 @@ Future<bool> activateSwarmSearchSelection(
       name: external.title.isEmpty ? null : external.title,
       swarmId: destinationSwarmId,
       placement: placement ?? HarnessPlacement.currentTab,
-      takeOver: takeOver,
+      takeOver: takeOver ?? TakeOver.wait,
     );
     if (error != null) {
       throw SwarmResumeFailure(destination, error, code: refusal);

@@ -21,6 +21,7 @@ import '../shared/theme/appearance_prefs_store.dart';
 import '../shortcuts/app_shortcuts.dart' hide TerminalKey;
 import '../state/account_devices.dart' show registerRefusalSentence;
 import '../state/app_state.dart';
+import '../state/harness_sessions.dart' show heldLaunchDetail;
 import '../state/pane_preset.dart';
 import '../state/pane_arrangement.dart';
 import '../state/terminal_pane.dart';
@@ -1630,6 +1631,15 @@ class _PaneContent extends StatelessWidget {
           onAction: () => notifier.openSavedPane(pane.id).ignore(),
           banner: true,
         );
+      } else if (agent != null && agent.launchState == 'held') {
+        // Held back by the daemon until it can start it safely: say why,
+        // rather than "Unavailable" over an empty pane.
+        notice = terminalNotice(
+          label: 'Waiting',
+          icon: AppIcons.hourglass,
+          detail: heldLaunchDetail(agent),
+          banner: true,
+        );
       } else if (agent == null || !agent.terminalAvailable) {
         notice = terminalNotice(
           label: 'Unavailable',
@@ -1692,12 +1702,15 @@ class _PaneContent extends StatelessWidget {
           // Launch progress/failure describes the engine, not permission to
           // type into its terminal. Connection and control ownership still
           // gate input independently in TerminalPanel/TerminalSession.
+          // A held harness's terminal is the daemon's waiting shell, which
+          // ignores what is typed: nothing there reaches the agent.
           readOnly:
               machine == null ||
               needsLink ||
               offline ||
               agent == null ||
-              !agent.terminalAvailable,
+              !agent.terminalAvailable ||
+              agent.launchState == 'held',
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
           onClose: single && !swarmMode ? null : close,
@@ -1850,6 +1863,19 @@ class _PaneContent extends StatelessWidget {
         busy: opening?.busy == true,
         actionLabel: opening?.busy == true ? null : 'Open',
         onAction: () => notifier.openSavedPane(pane.id).ignore(),
+      );
+    }
+    // Held back by the daemon until it can start it safely (a conversation
+    // another process may have open): it says so and why, and starts by
+    // itself. It read "terminal unavailable (no verified terminal pane)".
+    if (agent != null && agent.launchState == 'held') {
+      return _PaneStatus(
+        activity: activityMark,
+        title: agentName,
+        icon: AppIcons.hourglass,
+        message: heldLaunchDetail(agent),
+        onClose: close,
+        busy: true,
       );
     }
     if (agent != null && !agent.terminalAvailable) {
