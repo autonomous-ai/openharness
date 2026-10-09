@@ -1,3 +1,4 @@
+import { usageTarget, usageTargetKey, usageSnapshot, validUsage, validUsageTarget } from '../lib/agentUsageWire.js'
 /**
  * The core API a light service runs on in its own process (the edge host: usage, the monitor, the project
  * readers): the agents the core last said, and nothing else. Each process asks the core for what it reads
@@ -89,6 +90,10 @@ export function processCoreApi(dataDir: string, service: string, view: AgentsVie
   const daemon = (): DaemonAddress => view.daemon?.() ?? DAEMON_UNKNOWN
   return {
     dataDir,
+    usage: async target => {
+      const answer = await ask?.('agentUsage', { target: usageTarget(target) }).catch(() => null)
+      return validUsageTarget(answer?.target) && usageTargetKey(answer.target) === usageTargetKey(target) && validUsage(answer?.value) ? usageSnapshot(answer.value) : null
+    },
     conversations: CONVERSATIONS_OFF,
     // Terminals are launched by the core alone (the shell service, #893): a service in its own process
     // is refused, never handed a way to start a process outside the core.

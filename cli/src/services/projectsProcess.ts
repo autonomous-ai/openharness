@@ -29,7 +29,7 @@ export function runProjectsService(options: ProjectsServiceOptions): ServiceProc
   const refresh = async (): Promise<void> => {
     live = agentsIn(await core?.query('live').catch(() => null)) ?? live
   }
-  const answers = (options.start ?? startProjects)(processCoreApi(options.dataDir, 'projects', { live: () => live }))
+  const answers = (options.start ?? startProjects)(processCoreApi(options.dataDir, 'projects', { live: () => live, ask: (query, payload) => core?.query(query, payload) ?? Promise.resolve({ error: 'SERVICE_UNAVAILABLE' }) }))
   // Each request reads the agents as they are when it is asked, as the core's registry would answer it:
   // an agent stopped a moment ago is no longer one whose folder this reads.
   const requests: ServiceRequests = Object.fromEntries(Object.entries(answers).map(([type, handle]) =>

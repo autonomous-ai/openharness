@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { insideGitCheckout, validGitPath } from './gitProject.js'
 import { canonicalRepository } from './agentProject.js'
-import { validPullRequestUrl } from './sessionWork.js'
+import { validPullRequestUrl } from './sessionWorkWire.js'
 import { tmpdir } from 'node:os'
 
 const exec = promisify(execFile)

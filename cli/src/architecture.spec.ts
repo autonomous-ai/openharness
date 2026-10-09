@@ -199,6 +199,8 @@ const EDGE: RegExp[] = [
   /^lib\/(gridLaunch|gridWebMcp|apiModels|gridAssignment|apiConnections)\.ts$/,
   // The change-agent handoff reads and redacts history and runs git: the edge host owns that work.
   /^lib\/agentHandoff\.ts$/,
+  // Usage owns all aggregate readers and ledgers. Core reads validated wire snapshots only.
+  /^lib\/(agentTokenUsage|agentOutputStats|sessionWork)\.ts$/,
   // The relay's own parts, the gateway's alone: the windows' sessions to other machines, P2P and STUN, the
   // remote viewers' proxy, and the shaping of what goes up the link.
   /^lib\/(remoteRelay|terminalP2p|stunSelect|remoteViewerProxy|deviceRecentTrim|commanderReplay)\.ts$/,

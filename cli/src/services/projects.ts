@@ -33,6 +33,7 @@ export function startProjects(core: CoreApi): ServiceRequests {
         return { status: 'unavailable' }
       }
       return readSessionGitPullRequest(agent, {
+        usage: () => core.usage?.(agent) ?? Promise.resolve(null),
         expected: requested as ExpectedGitContext | undefined,
         history: payload.history === true, offset: typeof payload.offset === 'number' ? payload.offset : undefined,
       }).then((result) => result, () => ({ status: 'unavailable' }))
