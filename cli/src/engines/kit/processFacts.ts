@@ -31,5 +31,6 @@ function canonical(path: string): string {
 export function profileFromEnv(profile: NonNullable<DiscoveryContract['profile']>, processEnv: Record<string, string>, defaultHome: string): string | null {
   const home = processEnv[profile.variable]
   if (!home || !isAbsolute(home) || home.length > 4096 || /[\x00-\x1f\x7f]/.test(home)) return null
-  return canonical(home) === canonical(defaultHome) ? null : home
+  const compared = (path: string) => canonical(profile.trimTrailingSlashes ? path.replace(/\/+$/, '') : path)
+  return compared(home) === compared(defaultHome) ? null : home
 }

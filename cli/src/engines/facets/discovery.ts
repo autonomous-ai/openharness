@@ -29,7 +29,7 @@ export interface DiscoveryContract {
   modelInArgv?: boolean
   /** The engine home a process carries in `variable` when launched under a profile, and the setting naming
    *  this machine's default. */
-  profile?: { variable: string; setting: FolderSetting }
+  profile?: { variable: string; setting: FolderSetting; trimTrailingSlashes?: boolean }
   /**
    * Transcripts kept by the folder the session began in, `<root>/<folder's directory name>/<id>`, never
    * moved: the directory name is the folder with every character `mangle` matches replaced by `with`, and

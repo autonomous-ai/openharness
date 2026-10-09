@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AgentEngine } from './types.js'
 
+vi.mock('../lib/bootId.js', async (original) => ({ ...await original<object>(), currentBootId: () => 'linux:11111111-1111-4111-8111-111111111111' }))
+
 const descriptors = vi.hoisted(() => new Map<string, string[]>())
 vi.mock('fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>()
@@ -73,6 +75,7 @@ type Modules = {
   notify: typeof import('./kit/notifyHooks.js')
   home: typeof import('./cursor/home.js')
   hermes: typeof import('./hermes/contract.js')
+  cursorDiscovery: typeof import('../core/engines/cursorDiscovery.js')
 }
 let m: Modules
 
@@ -103,6 +106,7 @@ beforeAll(async () => {
     notify: await import('./kit/notifyHooks.js'),
     home: await import('./cursor/home.js'),
     hermes: await import('./hermes/contract.js'),
+    cursorDiscovery: await import('../core/engines/cursorDiscovery.js'),
   }
   m.registry.registry.load()
   golden = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, unknown>
@@ -195,7 +199,10 @@ describe('where the core finds the other engines\' conversations', () => {
     file(home('.grok', 'sessions', encodeURIComponent('/work/g'), UUID(32), 'updates.jsonl'), '{}\n')
     file(home('.gemini', 'antigravity-cli', 'brain', UUID(33), '.system_generated', 'logs', 'transcript_full.jsonl'), '{}\n')
     file(home('.copilot', 'session-state', UUID(34), 'events.jsonl'), '{}\n')
+    file(home('.copilot', 'session-state', UUID(34), 'inuse.4242.lock'))
     file(home('.copilot', 'session-state', UUID(35), 'inuse.4242.lock'))
+    file(home('.grok', 'sessions', 'hashed-group', '.cwd'), ' /work/g \n')
+    file(home('.grok', 'sessions', 'hashed-group', UUID(36), 'updates.jsonl'), '{}\n')
     file(home('.copilot', 'session-state', UUID(35), 'events.jsonl'), '{}\n')
     const registered: unknown[] = []
     const agents = new Map<string, Record<string, unknown>>()
@@ -215,7 +222,7 @@ describe('where the core finds the other engines\' conversations', () => {
       processIdentity: { pid: 4242, startMarker: 'Mon Oct  8 10:00:00 2026', executable: engine }, ...over,
     })
     const results: unknown[] = []
-    const ids: Record<string, string[]> = { cursor: [UUID(31), UUID(39)], grok: [UUID(32), UUID(39)], agy: [UUID(33), UUID(39)], copilot: [UUID(34), UUID(39)] }
+    const ids: Record<string, string[]> = { cursor: [UUID(31), UUID(39)], grok: [UUID(32), UUID(36), UUID(39)], agy: [UUID(33), UUID(39)], copilot: [UUID(34), UUID(39)] }
     for (const [engine, sessions] of Object.entries(ids)) {
       for (const resumeSessionId of sessions) {
         agents.clear(); agents.set(engine, { agentId: `agent-${engine}`, engine, sessionId: '', registeredAt: 0 })
@@ -283,6 +290,28 @@ describe('where the core finds the other engines\' conversations', () => {
     } finally { descriptors.clear() }
     check('repair agy lock', results)
   }, 60_000)
+
+  it('locates an existing and a later Cursor transcript through core discovery, and stops pending work', async () => {
+    const { loadEngine } = await import('./inProcess.js')
+    await loadEngine('cursor')
+    const found: unknown[] = []
+    const discovery = m.cursorDiscovery.createCursorDiscovery(home('.cursor'), (id, path) => { found.push([id, path]) })
+    await discovery.start()
+    try {
+      const existing = UUID(61), later = UUID(62), removed = UUID(63)
+      file(home('.cursor', 'projects', 'golden-existing', 'agent-transcripts', existing, `${existing}.jsonl`), '{}\n')
+      await discovery.add(existing)
+      await discovery.add(later)
+      await discovery.add(removed)
+      discovery.remove(removed)
+      file(home('.cursor', 'projects', 'golden-later', 'agent-transcripts', later, `${later}.jsonl`), '{}\n')
+      file(home('.cursor', 'projects', 'golden-removed', 'agent-transcripts', removed, `${removed}.jsonl`), '{}\n')
+      await vi.waitFor(() => expect(found).toHaveLength(2), { timeout: 5000 })
+      await discovery.add('../invalid')
+      await discovery.stop()
+      check('pending cursor transcripts', found)
+    } finally { await discovery.stop() }
+  })
 
   it('has a recorded outcome for every case, and no other', () => {
     if (RECORD) return

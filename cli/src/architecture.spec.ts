@@ -443,6 +443,14 @@ describe('the daemon\'s shape', () => {
     }
   }, WALK_TIMEOUT_MS)
 
+  it('transcript location, native process evidence and profile discovery have no lazy implementation dependency', () => {
+    for (const entry of ['core/agents/bind.ts', 'core/engines/cursorDiscovery.ts', 'engines/identities.ts',
+      'engines/kit/sessionLocation.ts', 'engines/kit/transcriptDiscovery.ts', 'lib/terminalAgentDiscovery.ts', 'lib/sqliteRead.ts']) {
+      const imports = importsFor(entry, readFileSync(join(SRC, entry), 'utf8'))
+      expect(imports.filter(one => one.dynamic || /inProcess\.js$/.test(one.from)), entry).toEqual([])
+    }
+  })
+
   it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
     // It speaks to the core through GatewayPort and GatewayEvents alone, so that it can run in a process of
     // its own (step 10, R2) without taking any of the core with it.

@@ -18,6 +18,7 @@ function setup() {
     stoppedAgents: { save: vi.fn() },
     syncRecapPool: vi.fn(),
     normalizers: { forget: vi.fn() },
+    forgetAttach: vi.fn(),
     turnStartedAt: new Map([['s1', 1], ['other', 2]]),
     neverFoldedHistory: new Set(['s1', 'other']),
     replayedFirstTurn: new Set(['s1', 'other']),
@@ -42,6 +43,7 @@ function setup() {
 function expectLetGo(deps: ForgetDeps, sessionId: string, agentId: string) {
   expect(deps.syncRecapPool).toHaveBeenCalled()
   expect(deps.normalizers.forget).toHaveBeenCalledWith(sessionId)
+  expect(deps.forgetAttach).toHaveBeenCalledWith(sessionId)
   expect(deps.turnStartedAt.has(sessionId)).toBe(false)
   expect(deps.neverFoldedHistory.has(sessionId)).toBe(false)
   expect(deps.replayedFirstTurn.has(sessionId)).toBe(false)

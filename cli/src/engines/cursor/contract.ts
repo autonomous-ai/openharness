@@ -4,6 +4,12 @@
  */
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
+import type { TranscriptLocation } from '../kit/sessionLocation.js'
+
+export const CURSOR_TRANSCRIPT: TranscriptLocation = {
+  id: /^[0-9a-f-]{16,}$/i, kind: 'projects', root: 'projects', folder: 'agent-transcripts', suffix: '.jsonl',
+}
+export const CURSOR_TRANSCRIPT_POLL_MS = 1000
 
 /** Cursor's hooks and chat databases follow its config root, which can differ from its data root. */
 export function cursorConfigDir(vars: NodeJS.ProcessEnv = process.env): string {

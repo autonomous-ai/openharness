@@ -1,5 +1,5 @@
-/** The native `node:sqlite` binding, apart from `sqliteRead.ts`, which imports it at its first read: the edge host
- *  loads it only to read a store opencode, kilo, hermes or devin keeps, never for Claude Code or Codex. */
+/** The native SQLite read mechanism is eager: hook admission must not depend on a lazy code chunk.
+ *  The optional Node builtin is resolved without a bundler import, and older Node keeps its CLI fallback. */
 import { statSync } from 'node:fs'
 import { pathToFileURL } from 'node:url'
 import { idleWalStore, type SqliteParam, type SqliteReadResult, type SqliteRow } from './sqliteRead.js'
