@@ -132,8 +132,8 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.2 (61)` | 2026-10-08 | TestFlight. Shows when a computer is asleep instead of loading, polls faster while all are asleep and adds a refresh button; reopens the terminal before the agent list on reconnect; the key strip leads with a question's key hints, Codex glyph hints (`⇧←`) included. ASC refused it as `1.0.1 (61)`: 1.0.1 had been approved, which closes its train, so it went up as 1.0.2. Built from `feat/mobile-ios-android` at `99e17f3d` |
 | `1.0.2 (62)` | 2026-10-09 | TestFlight. One-button Connect your computer onboarding (`feat/connect-your-computer`); Google sign-in on iOS reuses Safari's signed-in accounts; swipe left opens Computers and New Harness moves into Find, which opens with the keyboard down. Built from `feat/mobile-ios-android` at `bf8c4b4c` |
 
-`pubspec.yaml` is now at `1.0.2+63`, the next build number. Build 62 (1.0.2) is the last iOS upload and 60
-the last to both TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 is approved, so its train is closed: new builds go up as 1.0.2. Check App Store Connect before uploading if another release has happened meanwhile.
+`pubspec.yaml` is now at `1.0.2+63`, the next build number. Build 62 (1.0.2) is the last upload, to both
+TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 is approved, so its train is closed: new builds go up as 1.0.2. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
 
@@ -351,3 +351,4 @@ account (Autonomous Inc.) is exempt — check which kind the account is before p
 | `41` (1.0.0) | 2026-09-24 | Built for resubmission after Play rejected the build under the broken-functionality policy (its browser sign-in redirected to `127.0.0.1`, which timed out on the reviewer's device). Signs in with an emailed code instead; also carries the notices and tab marks of iOS 39–40 |
 | `53` (1.0.1) | 2026-10-01 | Internal testing. Same code as iOS 1.0.1 (52): faster launch, QR sign-in for desktop/web/CLI (#519), tab and Find polish. First Play build from the second Mac, with the upload key copied from the first (`storeFile` rewritten to this Mac's path) |
 | `60` (1.0.1) | 2026-10-07 | Internal testing. Same code as iOS 1.0.1 (60): Google/Apple sign-in, faster launch, terminal typing, paste and scroll fixes, renaming computers and profiles, the hardened onboarding |
+| `62` (1.0.2) | 2026-10-09 | Internal testing. Same code as iOS 1.0.2 (62), built with the pubspec briefly set back to `+62` so the two stores match: one-button Connect your computer onboarding, asleep computers shown with a refresh button, the terminal back first on reconnect, question key hints, swipe left for Computers, New Harness in Find |
