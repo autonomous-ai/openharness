@@ -27,10 +27,16 @@ import type { LaunchHome } from '../engines/facets/launch.js'
 import { sessionStoreContracts, sessionStoreOf, type SessionStoreEngine } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
+import { MAX_CATALOG_HOMES, readHomeCatalog, type HomeCatalog } from '../engines/kit/homeCatalog.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 
 /** The homes each engine's person moved (its session store's `sessions.moved.variable`), by engine, as saved. */
 const movedByEngine = Object.fromEntries(Object.keys(sessionStoreContracts).map((engine) => [engine, [] as string[]])) as Record<SessionStoreEngine, string[]>
 let loadedStamp = ''
+// Positive facts only: they can require a hold, never supply roots absent from a fresh read.
+let nativeCatalogFile = ''
+let nativeKnownHomes: HomeCatalog = { claude: [], codex: [] }
+let nativeCatalogOverflow = false
 
 const savedFile = (): string => join(env.ADAPTER_DATA_DIR, 'engine-homes.json')
 
@@ -119,6 +125,45 @@ export function sessionRoots(engine: AgentEngine | string, profile?: string | nu
   const below = (home: string): string => own.folder ? join(home, own.folder) : home
   if (followsProfile && profile) return [below(profile)]
   return [below(env[own.setting]), ...movedHomes(engine).map((home) => join(home, moved.folder))]
+}
+
+/** Complete native identity pools cannot use the legacy reader's partial or cached catalog.
+ * Legacy lifecycle callers migrate separately, together with their durable hold/retry handling. */
+export function nativeSessionRoots(engine: AgentEngine | string, profile?: string | null): string[] {
+  const store = sessionStoreOf(engine)
+  if (!store) return []
+  const { own, moved, profile: followsProfile } = store.sessions
+  const below = (home: string): string => own.folder ? join(home, own.folder) : home
+  if (followsProfile && profile) return [below(profile)]
+  const file = savedFile(), read = readHomeCatalog(file)
+  if (nativeCatalogFile !== file) {
+    nativeCatalogFile = file; nativeKnownHomes = { claude: [], codex: [] }; nativeCatalogOverflow = false
+  }
+  const names = Object.keys(sessionStoreContracts) as SessionStoreEngine[]
+  const overflow = (): never => {
+    nativeCatalogOverflow = true
+    throw new IdentityReadUnavailable('the known session-home limit was reached')
+  }
+  if (nativeCatalogOverflow) overflow()
+  for (const name of names) {
+    // Adoption predates this boundary and can keep an unsaved home in memory. Bound that
+    // legacy list before copying or visiting it; remembering an overflow also prevents forgetting it.
+    const legacy = movedByEngine[name]
+    if (legacy.length > MAX_CATALOG_HOMES) overflow()
+    for (const list of [read.homes[name], legacy]) for (const home of list) {
+      if (nativeKnownHomes[name].includes(home)) continue
+      if (nativeKnownHomes[name].length === MAX_CATALOG_HOMES) overflow()
+      nativeKnownHomes[name].push(home)
+    }
+  }
+  // Even a held read can reveal a competitor. Retain all bounded positive facts before
+  // checking omissions, so A -> B (held) -> A cannot forget the observed B.
+  for (const name of names) {
+    if (nativeKnownHomes[name].some(home => !read.homes[name].includes(home))) {
+      throw new IdentityReadUnavailable('the saved engine-home catalog omits a previously observed or unsaved home')
+    }
+  }
+  return [below(env[own.setting]), ...read.homes[engine as SessionStoreEngine].map(home => join(home, moved.folder))]
 }
 
 /** Every moved home known: adopted on this boot or an earlier one. */
@@ -246,4 +291,7 @@ export function profileEnvironment(engine: AgentEngine | string, home: string): 
 export function resetEngineHomes(): void {
   for (const homes of Object.values(movedByEngine)) homes.length = 0
   loadedStamp = ''
+  nativeCatalogFile = ''
+  nativeKnownHomes = { claude: [], codex: [] }
+  nativeCatalogOverflow = false
 }
