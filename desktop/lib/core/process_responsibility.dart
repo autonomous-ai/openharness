@@ -106,6 +106,17 @@ class DaemonOwnerGuard {
   Future<bool>? _inFlight;
   bool _gaveUp = false;
 
+  /// Judge [daemonPid] again, as if it were new: something now needs the LAN (a person looking for
+  /// their first robot) that did not when it was first kept.
+  Future<bool> recheck(int daemonPid) async {
+    // A check already running may have skipped the LAN test the caller now
+    // needs; judge again once it is done, rather than taking its answer.
+    final pending = _inFlight;
+    if (pending != null) await pending;
+    _judged.remove(daemonPid);
+    return check(daemonPid);
+  }
+
   /// Judges [daemonPid] if it is new, restarting it when needed. True when a restart happened.
   Future<bool> check(int daemonPid) {
     // A restart in progress is the answer for every caller, whichever pid they saw.

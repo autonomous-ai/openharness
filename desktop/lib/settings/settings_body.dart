@@ -53,6 +53,7 @@ class SettingsBody extends StatelessWidget {
         builder: (context, _) => DevicesSection(
           dial: notifier.dial,
           onDeviceSettings: notifier.setDeviceSettings,
+          onLocalNetworkBlocked: notifier.localNetworkBlocked,
           showCompanion: (experimentalFeatures ?? notifier.experimentalFeatures)
               .enabled(ExperimentalFeature.focusBarCreature),
         ),

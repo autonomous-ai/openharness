@@ -943,7 +943,7 @@ export class BackendSocket {
           // A full probe starts interactive login shells and is intentionally detached from this
           // connection's ordered RPC chain. Request ids make its eventual reply safe to deliver out
           // of order; keeping it awaited here made a Create click sit behind an unrelated sweep.
-          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined)
+          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined, { accounts: true })
             .then((availability) => reply(type, requestId, {
               engines: availability.map((entry) => ({
                 engine: entry.engine,
@@ -951,6 +951,7 @@ export class BackendSocket {
                 command: entry.command,
                 installable: entry.installable,
                 installCommand: entry.installable ? engineInstallRecipe(entry.engine)?.command ?? null : null,
+                ...(entry.signedIn !== undefined ? { signedIn: entry.signedIn, lastUsedAt: entry.lastUsedAt ?? null } : {}),
                 // Static per-CLI-version capability, not a probe result: its mere presence is what
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather
                 // than "no", per the desktop app's `EngineAvailability.fromJson`.

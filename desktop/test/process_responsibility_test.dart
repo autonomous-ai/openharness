@@ -138,6 +138,28 @@ void main() {
       },
     );
 
+    // Kept once because nothing needed the LAN; asked again when a person
+    // looks for their first robot and discovery finds the LAN refused.
+    test('judges a kept daemon again when the LAN is wanted later', () async {
+      var blocked = false;
+      final g = DaemonOwnerGuard(
+        probe: FakeProbe(owners, {app: harness, daemon: node}),
+        ownPid: app,
+        restart: () async {
+          restarts++;
+          owners[201] = app;
+          return 201;
+        },
+        lanBlocked: () async => blocked,
+        log: lines.add,
+      );
+      expect(await g.check(daemon), isFalse);
+      expect(await g.check(daemon), isFalse, reason: 'judged once');
+      blocked = true;
+      expect(await g.recheck(daemon), isTrue);
+      expect(restarts, 1);
+    });
+
     test('keeps a self-owned daemon when the LAN test cannot answer', () async {
       final g = guard(lanBlocked: null);
       expect(await g.check(daemon), isFalse);
