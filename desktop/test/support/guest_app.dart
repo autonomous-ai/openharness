@@ -10,6 +10,7 @@ class GuestTestApp extends AppNotifier {
     super.environmentProvisioner,
     super.agentPrefetch,
     super.localManualFixture,
+    super.paneLayoutStore,
   });
 
   var daemonGates = 0;
