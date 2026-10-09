@@ -905,3 +905,21 @@ model HarnessLink {
   @@index([ownerId, machineId])
   @@map("harness_links")
 }
+
+/// One account's sign-in to a service through the connector gateway (lib/connectorGateway.ts), as the
+/// Grid control plane keeps it: the provider's tokens sealed with CONNECTOR_ENCRYPTION_KEY (AES-256-GCM),
+/// so the gateway can renew them for any of the account's computers. Disconnecting deletes the row.
+model ConnectorCredential {
+  id          String   @id @default(uuid()) @map("_id")
+  userId      String
+  connector   String
+  /// The token response, sealed: access and refresh token, type, scope, expiry.
+  sealed      String
+  accountName String   @default("")
+  expiresAt   Int      @default(0)
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, connector])
+  @@map("connector_credentials")
+}

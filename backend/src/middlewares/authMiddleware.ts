@@ -66,7 +66,11 @@ export function shouldSkipAuth(url: string): boolean {
     // The approve/deny/lookup half is NOT listed and stays SSO-gated — that is where the user's identity
     // and their machine list are involved. Listed one by one, like the cursor pair above.
     path === '/api/device-auth/start' ||
-    path === '/api/device-auth/poll'
+    path === '/api/device-auth/poll' ||
+    // The connector gateway's callback (routes/connectors.ts), posted by the Autonomous web callback
+    // page for an anonymous browser: its one-time `harness_` state is the ticket, and it answers no token.
+    // The rest of /api/connectors stays SSO-gated.
+    path === '/api/connectors/callback'
   )
 }
 

@@ -1,0 +1,182 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import Fastify, { type FastifyInstance } from 'fastify'
+import { createHash } from 'crypto'
+
+const mocks = vi.hoisted(() => {
+  // An in-memory Redis for the sign-ins in progress: set (with EX), get, del and multi.
+  const store = new Map<string, string>()
+  const ops = {
+    set: (key: string, value: string) => { store.set(key, value); return 'OK' },
+    get: (key: string) => store.get(key) ?? null,
+    del: (key: string) => (store.delete(key) ? 1 : 0),
+  }
+  const pub = {
+    set: vi.fn(async (key: string, value: string) => ops.set(key, value)),
+    get: vi.fn(async (key: string) => ops.get(key)),
+    del: vi.fn(async (key: string) => ops.del(key)),
+    multi: vi.fn(() => {
+      const queued: (() => unknown)[] = []
+      const chain = {
+        set: (key: string, value: string) => { queued.push(() => ops.set(key, value)); return chain },
+        get: (key: string) => { queued.push(() => ops.get(key)); return chain },
+        del: (key: string) => { queued.push(() => ops.del(key)); return chain },
+        exec: async () => queued.map(run => [null, run()]),
+      }
+      return chain
+    }),
+  }
+  // The account's kept sign-ins (ConnectorCredential), by userId + connector.
+  type Row = { userId: string, connector: string, sealed: string, accountName: string, expiresAt: number, connectedAt: Date }
+  const rows = new Map<string, Row>()
+  const id = (where: { userId_connector: { userId: string, connector: string } }) => `${where.userId_connector.userId}/${where.userId_connector.connector}`
+  const connectorCredential = {
+    findMany: vi.fn(async ({ where }: { where: { userId: string } }) => [...rows.values()].filter(row => row.userId === where.userId)),
+    findUnique: vi.fn(async ({ where }: { where: { userId_connector: { userId: string, connector: string } } }) => rows.get(id(where)) ?? null),
+    upsert: vi.fn(async ({ where, create, update }: { where: { userId_connector: { userId: string, connector: string } }, create: Row, update: Partial<Row> }) => {
+      const row = rows.has(id(where)) ? { ...rows.get(id(where))!, ...update } : { ...create, connectedAt: new Date() }
+      rows.set(id(where), row as Row); return row
+    }),
+    deleteMany: vi.fn(async ({ where }: { where: { userId: string, connector: string } }) => {
+      const had = rows.delete(`${where.userId}/${where.connector}`); return { count: had ? 1 : 0 }
+    }),
+  }
+  return { store, pub, rows, prisma: { connectorCredential }, auth: vi.fn() }
+})
+vi.mock('../lib/bus.js', () => ({ pub: mocks.pub }))
+vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma }))
+vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: mocks.auth }))
+vi.mock('../config/env.js', () => {
+  return { env: { NODE_ENV: 'test', CONNECTOR_REDIRECT_URI: 'https://www.autonomous.ai/connector/callback', CONNECTOR_AUTH_FILE: undefined,
+    CONNECTOR_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+    CONNECTOR_AUTH_JSON: JSON.stringify({ connectors: {
+      github: { auth_type: 'app', label: 'GitHub', client_id: 'gh-client', client_secret: 'gh-secret', auth_url: 'https://github.com/login/oauth/authorize',
+        token_url: 'https://github.com/login/oauth/access_token', scopes: ['repo', 'read:user'], userinfo_url: 'https://api.github.com/user', mcp_url: 'https://api.githubcopilot.com/mcp/' },
+      gmail: { auth_type: 'app', label: 'Gmail', client_id: 'g-client', client_secret: 'g-secret', auth_url: 'https://accounts.google.com/o/oauth2/v2/auth',
+        token_url: 'https://oauth2.googleapis.com/token', scopes: ['https://www.googleapis.com/auth/gmail.readonly'], refresh: true, auth_style: 'header',
+        auth_params: { access_type: 'offline', prompt: 'consent' } },
+      notion: { auth_type: 'app', client_id: 'n', auth_url: 'https://mcp.notion.com/authorize', token_url: 'https://mcp.notion.com/token', pkce: true },
+      linear: { auth_type: 'dcr', mcp_url: 'https://mcp.linear.app/mcp' },
+    } }) } }
+})
+import { connectorRoutes } from './connectors.js'
+import { resetConfig } from '../lib/connectorGateway.js'
+import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
+import { errorHandler } from '../middlewares/errorHandler.js'
+
+type Fetched = { url: string, init: RequestInit }
+
+describe('the connector gateway', () => {
+  let app: FastifyInstance
+  let fetched: Fetched[]
+  let answer: (url: string, init: RequestInit) => Response
+  const owner = { authorization: 'Bearer owner' }
+
+  beforeEach(async () => {
+    vi.clearAllMocks(); mocks.store.clear(); mocks.rows.clear(); resetConfig(); fetched = []
+    mocks.auth.mockImplementation(async (token: string) => ({ sub: token === 'stranger' ? 'stranger' : 'owner', email: 'o@example.com', role: 'user', autonomousEnv: 'prod' }))
+    answer = (url) => url.includes('/user')
+      ? Response.json({ login: 'octo' })
+      : Response.json({ access_token: 'gho-1', token_type: 'bearer', scope: 'repo,read:user' })
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { fetched.push({ url: String(url), init }); return answer(String(url), init) }))
+    app = Fastify(); app.setErrorHandler(errorHandler); registerAuthMiddleware(app, mocks.auth)
+    await app.register(connectorRoutes); await app.ready()
+  })
+  afterEach(async () => { vi.unstubAllGlobals(); await app.close() })
+
+  const post = (url: string, payload: unknown, headers: Record<string, string> = owner) => app.inject({ method: 'POST', url, payload: payload as object, headers })
+
+  it('lists only the services that sign in here, never a secret', async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/connectors', headers: owner })
+    const codes = res.json().data.connectors.map((row: { code: string }) => row.code)
+    expect(codes).toEqual(['github', 'gmail', 'notion'])
+    expect(res.body).not.toContain('secret')
+    expect((await app.inject({ method: 'GET', url: '/api/connectors' })).statusCode).toBe(401)
+  })
+
+  it('signs in through the service, hands the token over once, to the account that asked', async () => {
+    const started = (await post('/api/connectors/start', { connector: 'github' })).json().data
+    const consent = new URL(started.authorize_url)
+    expect(consent.origin + consent.pathname).toBe('https://github.com/login/oauth/authorize')
+    const state = consent.searchParams.get('state')!
+    expect(state.startsWith('harness_')).toBe(true)
+    expect(consent.searchParams.get('redirect_uri')).toBe('https://www.autonomous.ai/connector/callback')
+    expect(consent.searchParams.get('scope')).toBe('repo read:user')
+    expect((await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data.status).toBe('pending')
+
+    // The Autonomous web callback page, for an anonymous browser: no token in the answer.
+    const back = await post('/api/connectors/callback', { code: 'code-1', state }, {})
+    expect(back.json().data).toEqual({ connector: 'github' })
+    const exchange = fetched.find(call => call.url.includes('access_token'))!
+    expect(String(exchange.init.body)).toContain('client_secret=gh-secret')
+    expect(String(exchange.init.body)).toContain('redirect_uri=https%3A%2F%2Fwww.autonomous.ai%2Fconnector%2Fcallback')
+
+    expect((await post('/api/connectors/poll', { pickup_code: started.pickup_code }, { authorization: 'Bearer stranger' })).json().data.status).toBe('expired')
+    const ready = (await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data
+    expect(ready).toMatchObject({ status: 'ready', access_token: 'gho-1', account_name: 'octo',
+      mcp_entry: { url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer gho-1' } } })
+    expect(JSON.stringify(ready)).not.toContain('gh-secret')
+    expect((await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data.status).toBe('expired')
+    // Nothing of the sign-in is left in Redis; the account's sign-in is kept, sealed.
+    expect(mocks.store.size).toBe(0)
+    const kept = mocks.rows.get('owner/github')!
+    expect(kept.accountName).toBe('octo')
+    expect(kept.sealed.startsWith('v1.')).toBe(true)
+    expect(kept.sealed).not.toContain('gho-1')
+    const listed = (await app.inject({ method: 'GET', url: '/api/connectors', headers: owner })).json().data.connectors
+    expect(listed.find((row: { code: string }) => row.code === 'github')).toMatchObject({ status: 'connected', account_name: 'octo' })
+    const theirs = (await app.inject({ method: 'GET', url: '/api/connectors', headers: { authorization: 'Bearer stranger' } })).json().data.connectors
+    expect(theirs.find((row: { code: string }) => row.code === 'github').status).toBe('not_connected')
+  })
+
+  it('takes a callback once, refuses another\'s state, and says when the service said no', async () => {
+    const started = (await post('/api/connectors/start', { connector: 'github' })).json().data
+    const state = new URL(started.authorize_url).searchParams.get('state')!
+    expect((await post('/api/connectors/callback', { code: 'x', state: 'grid_abc' }, {})).statusCode).toBe(400)
+    expect((await post('/api/connectors/callback', { error: 'access_denied', state }, {})).statusCode).toBe(200)
+    expect((await post('/api/connectors/callback', { code: 'again', state }, {})).statusCode).toBe(410)
+    expect((await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data)
+      .toEqual({ status: 'failed', connector: 'github', error: 'The sign-in was cancelled.' })
+  })
+
+  it('sends Google\'s offline consent, PKCE where configured, and client credentials as Basic when asked', async () => {
+    const google = new URL((await post('/api/connectors/start', { connector: 'gmail' })).json().data.authorize_url)
+    expect(google.searchParams.get('access_type')).toBe('offline')
+    expect(google.searchParams.get('code_challenge')).toBeNull()
+    const notion = new URL((await post('/api/connectors/start', { connector: 'notion' })).json().data.authorize_url)
+    expect(notion.searchParams.get('code_challenge_method')).toBe('S256')
+    // Signed in to Gmail: a refresh token Google gave once, kept here.
+    const gmail = (await post('/api/connectors/start', { connector: 'gmail' })).json().data
+    answer = () => Response.json({ access_token: 'ya29-1', expires_in: 3600, refresh_token: 'refresh-held' })
+    await post('/api/connectors/callback', { code: 'c', state: new URL(gmail.authorize_url).searchParams.get('state') }, {})
+    answer = () => Response.json({ access_token: 'ya29-2', expires_in: 3600 })
+    const renewed = (await post('/api/connectors/refresh', { connector: 'gmail' })).json().data
+    expect(renewed).toMatchObject({ access_token: 'ya29-2', refresh_token: 'refresh-held', refresh: true })
+    const call = fetched.at(-1)!
+    expect((call.init.headers as Record<string, string>).Authorization).toBe('Basic ' + Buffer.from('g-client:g-secret').toString('base64'))
+    expect(String(call.init.body)).toContain('refresh_token=refresh-held')
+    expect(String(call.init.body)).not.toContain('g-secret')
+  })
+
+  it('a revoked refresh token asks for connecting again; disconnect forgets; an unknown service is refused', async () => {
+    const gmail = (await post('/api/connectors/start', { connector: 'gmail' })).json().data
+    answer = () => Response.json({ access_token: 'ya29-1', expires_in: 3600, refresh_token: 'r' })
+    await post('/api/connectors/callback', { code: 'c', state: new URL(gmail.authorize_url).searchParams.get('state') }, {})
+    answer = () => Response.json({ error: 'invalid_grant' }, { status: 400 })
+    const revoked = await post('/api/connectors/refresh', { connector: 'gmail' })
+    expect([revoked.statusCode, revoked.json().error.code]).toEqual([401, 'INVALID_GRANT'])
+    expect((await post('/api/connectors/refresh', { connector: 'gmail' }, { authorization: 'Bearer stranger' })).json().error.code).toBe('NOT_CONNECTED')
+    expect((await post('/api/connectors/disconnect', { connector: 'gmail' })).json().data).toEqual({ connector: 'gmail', disconnected: true })
+    expect(mocks.rows.size).toBe(0)
+    expect((await post('/api/connectors/start', { connector: 'linear' })).statusCode).toBe(404)
+    expect((await post('/api/connectors/start', { connector: '../x' })).statusCode).toBe(404)
+  })
+
+  it('stores only hashes of the state and the pickup code', async () => {
+    const started = (await post('/api/connectors/start', { connector: 'github' })).json().data
+    const state = new URL(started.authorize_url).searchParams.get('state')!
+    const keys = [...mocks.store.keys()].join()
+    expect(keys).not.toContain(state)
+    expect(keys).not.toContain(started.pickup_code)
+    expect(keys).toContain(createHash('sha256').update(started.pickup_code).digest('hex'))
+  })
+})

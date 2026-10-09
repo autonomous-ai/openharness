@@ -97,6 +97,33 @@ Redis side set it to at least `64mb 16mb 60` and alert on `client_recent_max_out
 app-proxy channels ride their own subscriber connection (`appSub` in `bus.ts`), so a disconnect there
 cannot take the chat / presence subscriptions down with it.
 
+## Connector gateway
+
+`routes/connectors.ts`, `lib/connectorGateway.ts`: sign-in to GitHub, Slack, Asana, HubSpot, Gmail,
+Google Calendar, Google Drive and Figma for `harness connections` and the desktop app's Settings ▸
+Connectors. These services let no computer register its own OAuth client, so the OAuth apps Autonomous
+registered with them are used, with the same requests and answers as the Grid control plane
+(`autonomous-grid-be` `grid_networks/connectors.py`). Every other service signs in from the computer.
+
+To turn it on:
+
+1. **The apps' config**, never in git: the Grid control plane's `config-connector-auth.json` shape
+   (`{"connectors": {"github": {"auth_type": "app", "client_id", "client_secret", "auth_url",
+   "token_url", "scopes", …}}}`), as a file (`CONNECTOR_AUTH_FILE`) or inline (`CONNECTOR_AUTH_JSON`,
+   for a k8s secret). Only `auth_type: app` entries are used. Production's are the `app` entries of
+   Grid prod's `/var/lib/grid-apis/config-connector-auth.json`; staging's, Grid dev's.
+2. **`CONNECTOR_ENCRYPTION_KEY`**: 32 random bytes as base64 (`openssl rand -base64 32`), its own key.
+   It seals the tokens kept per account (`ConnectorCredential`). Losing it means everyone connects again.
+3. **`CONNECTOR_REDIRECT_URI`**: the page every one of those apps allows. Production keeps the default,
+   `https://www.autonomous.ai/connector/callback`; staging,
+   `https://staging.autonomousdev.xyz/connector/callback`.
+4. **The index** for `ConnectorCredential` (`npx prisma db push` creates `connector_credentials` and its
+   unique `userId + connector` index).
+5. **The Autonomous web callback page** forwards a state that starts `harness_` to
+   `POST /api/connectors/callback`, as it forwards `grid_` to Grid (see the PR that added this gateway).
+
+Unset, the gateway lists no service and starts no sign-in; nothing else changes.
+
 ## Persistence
 
 Prisma over the **same MongoDB** as the agent-manager (no migration files — `prisma db push` at
