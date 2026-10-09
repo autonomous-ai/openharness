@@ -1,8 +1,11 @@
 import 'package:xterm/core.dart';
 
+// Web pages and PDFs too: "Created index.html — open it in a browser to view"
+// is how a new user's first harness most often ends (fresh macOS VM,
+// 2026-10-08), and the page is the result they came for.
 const _mediaExtensions =
     r'png|jpe?g|gif|webp|avif|heic|heif|bmp|tiff?|svg|ico|'
-    r'mp4|m4v|mov|webm|mkv|avi|mpe?g|ogv|3gp';
+    r'mp4|m4v|mov|webm|mkv|avi|mpe?g|ogv|3gp|html?|pdf';
 final _mediaSuffix = RegExp('\\.(?:$_mediaExtensions)\$', caseSensitive: false);
 final _markdownLink = RegExp(
   r'!?\[[^\]\r\n]*\]\((<[^>\r\n]+>|(?:[^()\r\n]|\([^()\r\n]*\))+)\)',

@@ -1,10 +1,12 @@
+import { screenFor } from '../engines/screens.js'
+import { inlineNativeControls } from '../testing/inlineNativeControls.js'
 import { readFile, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { createTerminalControl } from '../core/terminals/control.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
-import { CloseAgentService, inspectCloseActivity } from './closeAgentService.js'
+import { CloseAgentService, inspectCloseActivity as inspectCloseReading } from './closeAgentService.js'
 import { registry } from './registry.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
@@ -61,7 +63,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     const stop = createStopAgentService({ registry, stoppedAgents,
       restartJobs: new AgentRestartCoordinator(), stopJobs: new Map(), tmuxBackend: backend,
       agentReconciler: { suppress() {}, holdRoute() {}, releaseRoute() {}, trigger: async () => {} },
-      forgetSession: id => registry.removeAgent(id), markDeleted() {}, clearDeleted() {},
+      forgetSession: id => registry.removeAgent(id), markDeleted() {}, clearDeleted() {}, stopNative: inlineNativeControls().stop,
     })
     close = new CloseAgentService({ registry, stop, changed() {},
       activity: async session => inspectCloseActivity(session, await control.captureTerminal(session.agentId), undefined, false),
@@ -86,3 +88,7 @@ it.runIf(process.env.RUN_REAL_TMUX_DISCOVERY === '1')('saves and closes an inact
     await server.close()
   }
 }, 15_000)
+
+function inspectCloseActivity(session: Parameters<typeof inspectCloseReading>[0], capture: string | null, turnOpen: boolean | undefined, needsInput: boolean) {
+  return inspectCloseReading(session, capture === null ? null : screenFor(session.engine).inspect(capture), turnOpen, needsInput)
+}

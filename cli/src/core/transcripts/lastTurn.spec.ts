@@ -3,6 +3,13 @@ import { engineTranscriptFor } from '../../engines/transcripts.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createLastTurnReader } from './lastTurn.js'
+import { loadEngine } from '../../engines/inProcess.js'
+
+// Each engine's readers are its own code, loaded in this process; a test may say one could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 
 // Every engine's own reader is tested with that engine; this file checks that each engine is read its own way.
 const text = (from: string) => ({ text: from })
@@ -22,6 +29,7 @@ vi.mock('../../lib/transcriptTail.js', () => ({
 vi.mock('../../engines/claude/normalize.js', () => ({
   lastTurnTextFromRawLines: vi.fn((lines: string[]) => ({ text: `raw: ${lines[0]}` })),
   selectClaudeRecapLine: vi.fn(),
+  claudePageLine: vi.fn(),
 }))
 vi.mock('../../engines/cursor/normalizer.js', () => ({ lastCursorTurnText: vi.fn((lines: string[]) => ({ text: `cursor: ${lines[0]}` })) }))
 vi.mock('../../engines/muse/normalizer.js', () => ({ lastMuseTurnText: vi.fn((lines: string[]) => ({ text: `muse: ${lines[0]}` })) }))
@@ -61,6 +69,15 @@ describe('the last turn of each engine', () => {
     expect(await read('devin-s')).toEqual(text('devin /db/devin.db devin-s'))
   })
 
+  it('is nothing for an engine whose code could not be loaded', async () => {
+    const engines = ['opencode', 'kilo', 'hermes', 'devin', 'cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'commandcode']
+    const read = await reader(engines.map((engine) => session(engine, `/t/${engine}.jsonl`)))
+    vi.mocked(loadEngine).mockResolvedValue(null as never)
+    try {
+      for (const engine of engines) expect(await read(`${engine}-s`), engine).toBeNull()
+    } finally { vi.mocked(loadEngine).mockReset() }
+  })
+
   it('is read backward for Claude Code, from the rollout for Codex, and from the whole transcript for the rest', async () => {
     const engines = ['cursor', 'muse', 'amp', 'grok', 'agy', 'copilot', 'pi', 'commandcode']
     const read = await reader([
@@ -72,8 +89,9 @@ describe('the last turn of each engine', () => {
     for (const engine of engines) {
       expect(await read(`${engine}-s`), engine).toEqual(text(`${engine}: /t/${engine}.jsonl capped`))
     }
-    // An engine with no reader of its own: its raw lines.
-    expect(await read('terminal-s')).toEqual(text('raw: /t/shell.log capped'))
+    // An engine with no reader and no code of its own here has no last turn: core reads no engine's lines itself.
+    // (A shell keeps no transcript: registry.engineKeepsTranscriptFile.)
+    expect(await read('terminal-s')).toBeNull()
   })
 })
 

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { loadEngine } from '../engines/inProcess.js'
 import { buildLaunchOverrides, validateLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
 import { DSH_SESSION_ENV } from '../dsh/launch.js'
 import { GRID_CONFLICTING_ENV_VARS, type GridLaunchOverride } from './gridLaunch.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -11,10 +13,16 @@ const GRID: GridLaunchOverride = {
   model: 'gpt-5',
 }
 
+// OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+vi.mock('../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
+
 function deps(overrides: Partial<LaunchOverridesDeps> = {}) {
   const calls: string[] = []
   const d: LaunchOverridesDeps = {
-    machine: () => ({ hermesSystemManaged: false }),
+    machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async (key) => { calls.push(`writeConfig:${key}`); return `/state/grid-engine-config/${key}` },
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: (home) => { calls.push(`hooks:${home}`) },
@@ -50,6 +58,14 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual(['writeConfig:agent-1'])
     expect(result.overrides.env.PI_CODING_AGENT_DIR).toBe('/state/grid-engine-config/agent-1')
     expect(result.overrides.clearEnv).not.toContain('PI_CODING_AGENT_DIR')
+  })
+
+  it('names the service that could not be asked, so a restore holds the agent rather than failing it', async () => {
+    const down = async () => ({ ok: false as const, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
+    expect(await buildLaunchOverrides(deps({ gridLaunch: down }).d, 'claude', { gridLaunch: GRID }, 'a'))
+      .toEqual({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
+    expect(await validateLaunchOverrides(deps({ gridLaunch: down }).d, 'claude', { gridLaunch: GRID }))
+      .toEqual({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down', unavailable: 'models' })
   })
 
   it('refuses rather than falling back when the grid cannot be honoured', async () => {
@@ -93,6 +109,19 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual([])
   })
 
+  it('refuses an OpenCode launch whose code could not be loaded, and asks the machine for the engine it launches', async () => {
+    vi.mocked(loadEngine).mockResolvedValueOnce(null)
+    expect(await buildLaunchOverrides(deps().d, 'opencode', {}, 'agent-1')).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
+    vi.mocked(loadEngine).mockClear()
+    const machine = vi.fn((_engine: string) => ({ hermesSystemManaged: false }))
+    await buildLaunchOverrides(deps({ machine }).d, 'claude', { gridLaunch: GRID, subscriptionModel: 'opus' }, 'agent-1')
+    expect(loadEngine).not.toHaveBeenCalled()
+    expect(machine.mock.calls.every(([engine]) => engine === 'claude')).toBe(true)
+    await buildLaunchOverrides(deps({ machine }).d, 'opencode', { agent: 'reviewer' }, 'agent-1')
+    expect(loadEngine).toHaveBeenCalledWith('opencode')
+    expect(machine).toHaveBeenLastCalledWith('opencode')
+  })
+
   it('never lets the key into argv', async () => {
     for (const engine of ['claude', 'codex', 'opencode', 'hermes', 'grok', 'pi', 'copilot'] as const) {
       const result = await buildLaunchOverrides(deps().d, engine, { gridLaunch: { ...GRID, model: 'm' } }, 'a')
@@ -130,7 +159,7 @@ describe('buildLaunchOverrides — coming back off a grid', () => {
   // leaves the NAME stored with nothing defining it, and `codex resume` dies before the TUI is up:
   //   thread/resume failed: failed to load configuration: Model provider `grid` not found
   // The daemon's only answer was to abandon the conversation ("retrying fresh"). Reproduced against
-  // codex-cli 0.155.1; see `engines/codex/ownLoginProvider.ts`.
+  // codex-cli 0.155.1; see `ownProvider` in `engines/codex/launch.ts`.
 
   it('names a provider for Codex even when no model is remembered', async () => {
     // The case a model-shaped fix misses entirely: nothing to re-select, and the stale provider is

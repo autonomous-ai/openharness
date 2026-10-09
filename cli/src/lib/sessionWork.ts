@@ -20,11 +20,8 @@ const object = (v: unknown): Record<string, unknown> | null =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : null
 const hash = (s: string) => createHash('sha256').update(s).digest('hex')
 const stamp = (v: unknown): v is string => typeof v === 'string' && Number.isFinite(Date.parse(v))
-export const validWorkPath = (v: unknown): v is string =>
-  typeof v === 'string' && isAbsolute(v) && v.length <= 4096 && !/[\x00-\x1f\x7f]/.test(v)
-export const validPullRequestUrl = (v: unknown): v is string => typeof v === 'string'
-  && /^https:\/\/github\.com\/[\w-]+\/[\w.-]+\/pull\/[1-9]\d*$/.test(v)
-  && new URL(v).href === v && Number.isSafeInteger(Number(v.split('/').at(-1)))
+export { validWorkPath, validPullRequestUrl } from './sessionWorkWire.js'
+import { validWorkPath, validPullRequestUrl } from './sessionWorkWire.js'
 export const emptySessionWork = (): SessionWorkLedger => ({ context: null, sequence: 0, latest: 0, currentOrder: 0, failedOrder: 0,
   current: [], locations: [], pullRequests: [], pending: {}, running: {}, completed: [], uncertain: false, truncated: false })
 

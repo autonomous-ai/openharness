@@ -12,6 +12,12 @@
 > facet. Launch metadata and hooks load separately from history readers. Core retains authenticated
 > transport, process binding, prompt timestamps and event delivery. Discovery/resume, live ingestion,
 > screen/input, models and one-shot handling remain to migrate.
+> Since then, Claude Code's and Codex's transcript readers (#1015), live parsing (#1017, #1019), runtime
+> profiles (#1022), screen interpretation (#1027), model controls (#1038), question navigation, the
+> readings behind submission verification and Codex's shared app-server connection run in their
+> supervised engine workers. Still in core for them: hook admission and installers, and engine-specific
+> launch, discovery and resume; [the remaining facets](2026-10-08-engine-remaining-facets.md) maps them
+> and their order.
 > The older all-engine branches (`engine-interface-1..5`, `engine-lane-*`, draft PR #842) are retained as
 > reference work; they are not the implementation currently landing. The phased plan below is the
 > target architecture, not a claim that all facets or engine isolation are already complete.

@@ -15,6 +15,8 @@ import 'device_artwork.dart';
 import 'device_settings.dart';
 import 'device_setup_dialog.dart';
 import 'devices_controller.dart';
+import 'pet_settings.dart';
+import 'pet_source.dart';
 
 final harnessDeviceShopUrl = Uri.parse(
   'https://www.autonomous.ai/harness-device',
@@ -33,6 +35,7 @@ class _DevicesTabState extends State<DevicesTab> {
     accountId: widget.notifier.currentUser?.id ?? 'guest',
     storage: widget.notifier.deviceLibraryStorage,
     sendHostSettings: widget.notifier.setHostDeviceSettings,
+    petRequest: widget.notifier.petRequest,
   );
   Timer? _refresh;
   @override
@@ -67,10 +70,19 @@ class DevicesScreen extends StatefulWidget {
     required this.controller,
     this.openShop,
     this.onRefresh,
+    this.pickPetFile,
+    this.resolvePetSource,
+    this.loadPetSheet,
   });
   final DevicesController controller;
   final Future<bool> Function(Uri)? openShop;
   final Future<void> Function()? onRefresh;
+
+  /// Replace the pet file chooser, [resolvePetSource] and [decodePetSheet]
+  /// (tests).
+  final Future<String?> Function()? pickPetFile;
+  final Future<PetSource> Function(String path)? resolvePetSource;
+  final Future<PetSheet?> Function(String path)? loadPetSheet;
   @override
   State<DevicesScreen> createState() => _DevicesScreenState();
 }
@@ -79,18 +91,166 @@ class _DevicesScreenState extends State<DevicesScreen> {
   String? _selectedKey;
   String? _shopError;
   final _cards = ScrollController();
+  final _page = ScrollController();
+
+  /// The selected dial's pet edit, shared by the Pet section and the row
+  /// viewer in the left column. One per dial: another selection drops it.
+  PetEditor? _pet;
+
+  /// While a pet is edited on a wide screen, its row viewer sits in the left
+  /// column beside the Pet section: [_besideKey] marks the two columns,
+  /// [_petKey] the Pet section, [_showcaseKey] what the left column holds
+  /// above the viewer, [_viewerKey] the viewer.
+  final _besideKey = GlobalKey();
+  final _petKey = GlobalKey();
+  final _showcaseKey = GlobalKey();
+  final _viewerKey = GlobalKey();
+
+  /// Where those were last laid out; null until measured.
+  _Beside? _beside;
+
+  /// The viewer's top in the columns, kept beside the part of the Pet
+  /// section in view; null until measured (the viewer is hidden till then).
+  final _viewerTop = ValueNotifier<double?>(null);
+
+  /// Room under the columns for a viewer longer than both.
+  double _room = 0;
+
+  /// Room above the Pet section, so it starts level with the viewer when
+  /// the left column holds more above it than the right.
+  double _petGap = 0;
+  bool _measuring = false;
 
   @override
   void initState() {
     super.initState();
+    _page.addListener(_place);
     unawaited(widget.controller.load());
+  }
+
+  @override
+  void didUpdateWidget(DevicesScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) _dropPet();
   }
 
   @override
   void dispose() {
     _cards.dispose();
+    _page.dispose();
+    _viewerTop.dispose();
+    _pet?.removeListener(_petChanged);
+    _pet?.dispose();
     super.dispose();
   }
+
+  void _petChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Ends the current pet edit. Disposed after the frame, once no widget
+  /// listens to it any more.
+  void _dropPet() {
+    final old = _pet;
+    if (old == null) return;
+    _pet = null;
+    old.removeListener(_petChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => old.dispose());
+  }
+
+  /// The pet edit for [device], made on first use; null where pets are not
+  /// offered.
+  PetEditor? _petFor(HarnessDevice? device) {
+    final key =
+        device != null && device.local && widget.controller.petRequest != null
+        ? device.key
+        : null;
+    if (_pet?.deviceKey == key) return _pet;
+    _dropPet();
+    if (key == null) return null;
+    return _pet = PetEditor(
+      controller: widget.controller,
+      deviceKey: key,
+      resolveSource: widget.resolvePetSource,
+      loadSheet: widget.loadPetSheet,
+    )..addListener(_petChanged);
+  }
+
+  /// Measures the columns after this frame, once.
+  void _measureSoon() {
+    if (_measuring) return;
+    _measuring = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measuring = false;
+      if (mounted) _measure();
+    });
+  }
+
+  RenderBox? _box(GlobalKey key) {
+    final box = key.currentContext?.findRenderObject();
+    return box is RenderBox && box.attached && box.hasSize ? box : null;
+  }
+
+  void _measure() {
+    final columns = _box(_besideKey);
+    final pet = _box(_petKey);
+    final showcase = _box(_showcaseKey);
+    final viewer = _box(_viewerKey);
+    final page = _page.hasClients
+        ? _page.position.context.storageContext.findRenderObject()
+        : null;
+    if (columns == null ||
+        pet == null ||
+        showcase == null ||
+        viewer == null ||
+        page is! RenderBox) {
+      _beside = null;
+      _viewerTop.value = null;
+      return;
+    }
+    final petTop = pet.localToGlobal(Offset.zero, ancestor: columns).dy;
+    final beside = _Beside(
+      top:
+          columns.localToGlobal(Offset.zero).dy -
+          page.localToGlobal(Offset.zero).dy +
+          _page.offset,
+      height: columns.size.height,
+      petTop: petTop,
+      petBottom: petTop + pet.size.height,
+      showcaseBottom:
+          showcase.localToGlobal(Offset.zero, ancestor: columns).dy +
+          showcase.size.height,
+      viewer: viewer.size.height,
+    );
+    _beside = beside;
+    final gap = math.max(0.0, beside.showcaseBottom + 16 - (petTop - _petGap));
+    final room = math.max(0.0, beside.highest + beside.viewer - beside.height);
+    if ((gap - _petGap).abs() > .5 || (room - _room).abs() > .5) {
+      // Measured again once laid out with them.
+      setState(() {
+        _petGap = gap;
+        _room = room;
+      });
+      return;
+    }
+    _place();
+  }
+
+  /// Keeps the viewer beside the part of the Pet section in view.
+  void _place() {
+    final beside = _beside;
+    if (beside == null || !_page.hasClients) return;
+    final low = beside.highest;
+    final high = math.max(low, beside.petBottom - beside.viewer);
+    _viewerTop.value = (_page.offset - beside.top + _stickyGap).clamp(
+      low,
+      high,
+    );
+  }
+
+  /// The viewer's distance from the top of the window while it follows the
+  /// Pet section.
+  static const _stickyGap = 16.0;
 
   Future<void> _shop() async {
     var opened = false;
@@ -109,6 +269,29 @@ class _DevicesScreenState extends State<DevicesScreen> {
         () => _shopError = opened ? null : 'Couldn’t open the shop. Try again.',
       );
     }
+  }
+
+  /// The left column's width on a wide screen.
+  static const _leftColumn = 340.0;
+
+  /// After this frame, measures the viewer's place when it is [beside] the
+  /// Pet section, else forgets it.
+  void _settle(bool beside) {
+    if (beside) return _measureSoon();
+    if (_beside == null &&
+        _room == 0 &&
+        _petGap == 0 &&
+        _viewerTop.value == null) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _beside = null;
+      _viewerTop.value = null;
+      if (_room != 0 || _petGap != 0) {
+        setState(() => _room = _petGap = 0);
+      }
+    });
   }
 
   Future<void> _setup({HarnessDevice? editing}) async {
@@ -139,9 +322,11 @@ class _DevicesScreenState extends State<DevicesScreen> {
                 devices.where((d) => d.status.attached).firstOrNull ??
                 devices.firstOrNull;
             _selectedKey = selected?.key;
+            final pet = _petFor(selected);
             final pad = bounds.maxWidth < 640 ? 20.0 : 40.0;
             return SingleChildScrollView(
               key: const PageStorageKey('devices-page'),
+              controller: _page,
               padding: EdgeInsets.fromLTRB(pad, 36, pad, 40),
               child: Center(
                 child: ConstrainedBox(
@@ -320,15 +505,24 @@ class _DevicesScreenState extends State<DevicesScreen> {
                         const SizedBox(height: 24),
                         LayoutBuilder(
                           builder: (context, constraints) {
+                            final wide =
+                                constraints.maxWidth >= 850 &&
+                                MediaQuery.textScalerOf(context).scale(1) <=
+                                    1.5;
+                            final beside = wide && pet != null && pet.editing;
                             final showcase = _DeviceShowcase(device: selected);
                             final settings = DeviceSettingsPanel(
                               key: ValueKey(selected.key),
                               device: selected,
                               controller: widget.controller,
+                              petEditor: pet,
+                              petViewerBeside: beside,
+                              petKey: _petKey,
+                              petGap: beside ? _petGap : 0,
+                              pickPetFile: widget.pickPetFile,
                             );
-                            if (constraints.maxWidth < 850 ||
-                                MediaQuery.textScalerOf(context).scale(1) >
-                                    1.5) {
+                            if (!wide) {
+                              _settle(false);
                               return Column(
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
@@ -338,13 +532,55 @@ class _DevicesScreenState extends State<DevicesScreen> {
                                 ],
                               );
                             }
-                            return Row(
+                            final columns = Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                SizedBox(width: 340, child: showcase),
+                                SizedBox(
+                                  width: _leftColumn,
+                                  child: KeyedSubtree(
+                                    key: _showcaseKey,
+                                    child: showcase,
+                                  ),
+                                ),
                                 const SizedBox(width: 36),
                                 Expanded(child: settings),
                               ],
+                            );
+                            _settle(beside);
+                            if (!beside) return columns;
+                            return Padding(
+                              padding: EdgeInsets.only(bottom: _room),
+                              child: Stack(
+                                key: _besideKey,
+                                clipBehavior: Clip.none,
+                                children: [
+                                  columns,
+                                  ValueListenableBuilder<double?>(
+                                    valueListenable: _viewerTop,
+                                    builder: (context, top, child) =>
+                                        Positioned(
+                                          left: 0,
+                                          width: _leftColumn,
+                                          top: top ?? 0,
+                                          child: Opacity(
+                                            opacity: top == null ? 0 : 1,
+                                            child: child,
+                                          ),
+                                        ),
+                                    child: KeyedSubtree(
+                                      key: _viewerKey,
+                                      child: PetRowViewer(
+                                        key: const ValueKey(
+                                          'devices-pet-viewer',
+                                        ),
+                                        editor: pet,
+                                        maxViewer: (bounds.maxHeight - 330)
+                                            .clamp(160.0, 300.0),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
                             );
                           },
                         ),
@@ -511,6 +747,19 @@ class _DeviceShowcase extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 16),
+      _DeviceFacts(device: device),
+    ],
+  );
+}
+
+/// The dial's firmware, display and hardware address.
+class _DeviceFacts extends StatelessWidget {
+  const _DeviceFacts({required this.device});
+  final HarnessDevice device;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
       Text(
         [
           if (device.status.fw != null) 'Firmware ${device.status.fw}',
@@ -525,6 +774,25 @@ class _DeviceShowcase extends StatelessWidget {
       ],
     ],
   );
+}
+
+/// Where the two columns, the Pet section and the viewer were laid out:
+/// [top] is the columns' place in the page, the rest is in the columns.
+@immutable
+class _Beside {
+  const _Beside({
+    required this.top,
+    required this.height,
+    required this.petTop,
+    required this.petBottom,
+    required this.showcaseBottom,
+    required this.viewer,
+  });
+  final double top, height, petTop, petBottom, showcaseBottom, viewer;
+
+  /// The highest the viewer sits: level with the Pet section, below what the
+  /// left column holds above it.
+  double get highest => math.max(petTop, showcaseBottom + 16);
 }
 
 class _EmptyDevices extends StatelessWidget {

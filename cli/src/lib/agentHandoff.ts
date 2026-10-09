@@ -226,6 +226,9 @@ function dotGitAbove(dir: string): boolean {
  * writes nothing rather than a file git might then list.
  */
 export async function repoState(cwd: string, git = 'git', timeoutMs?: number): Promise<RepoState> {
+  // No `.git` anywhere above is the one case git is not needed for, and on a Mac without the Command
+  // Line Tools running it there opens Apple's install dialog (gitProject's insideGitCheckout).
+  if (!dotGitAbove(cwd)) return 'none'
   try {
     return (await runGit(git, cwd, ['rev-parse', '--is-inside-work-tree'], timeoutMs)).trim() === 'true' ? 'repo' : 'unknown'
   } catch (error) {

@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 
 import 'agent_alerts.dart';
 import 'alert_sounds.dart';
+import 'browser_notifier.dart';
 
 /// Whether an agent's news is ALSO handed to the operating system, so it reaches
 /// somebody whose window is behind their editor, on another desktop, or minimised.
@@ -19,6 +20,19 @@ class DesktopNotificationStore extends OnOffPreference {
   DesktopNotificationStore({super.storage})
     : super('app_desktop_notifications');
 }
+
+/// Whether this computer has been offered notifications once already.
+///
+/// Notifications stay off until somebody wants them; the one moment they are
+/// offered is when an agent finished while the person was away from Harness
+/// and nothing told them. Asked once, whatever the answer: a second offer is a
+/// nag.
+class NotificationOfferStore extends OnOffPreference {
+  NotificationOfferStore({super.storage})
+    : super('app_notifications_offered');
+}
+
+final notificationOfferStore = NotificationOfferStore();
 
 /// What the operating system said about posting notifications.
 enum NotificationPermission {
@@ -55,6 +69,10 @@ abstract class SystemNotifier {
   /// what the platform does.
   bool get clickOpensAgent;
 
+  /// Where a person who said no turns notifications back on — Settings shows
+  /// it under a switch that is on but [NotificationPermission.denied].
+  String get deniedAdvice;
+
   /// Ask for permission if it has not been asked, and say what the answer is.
   Future<NotificationPermission> authorize();
 
@@ -83,6 +101,10 @@ class NoSystemNotifier implements SystemNotifier {
 
   @override
   bool get clickOpensAgent => false;
+
+  @override
+  String get deniedAdvice =>
+      'Allow it in System Settings ▸ Notifications ▸ Harness.';
 
   @override
   Future<NotificationPermission> authorize() async =>
@@ -121,6 +143,10 @@ class MacSystemNotifier implements SystemNotifier {
 
   @override
   bool get clickOpensAgent => true;
+
+  @override
+  String get deniedAdvice =>
+      'Allow it in System Settings ▸ Notifications ▸ Harness.';
 
   @override
   Future<NotificationPermission> authorize() => _ask('authorize', null);
@@ -212,6 +238,10 @@ class LinuxSystemNotifier implements SystemNotifier {
   bool get clickOpensAgent => false;
 
   @override
+  String get deniedAdvice =>
+      'Allow it in System Settings ▸ Notifications ▸ Harness.';
+
+  @override
   Future<NotificationPermission> authorize() async {
     try {
       final result = await _run('notify-send', ['--version']);
@@ -276,7 +306,7 @@ class LinuxSystemNotifier implements SystemNotifier {
 
 /// The notifier for the platform this build runs on.
 SystemNotifier platformSystemNotifier() {
-  if (kIsWeb) return const NoSystemNotifier();
+  if (kIsWeb) return browserSystemNotifier();
   if (Platform.isMacOS) return MacSystemNotifier();
   if (Platform.isLinux) return LinuxSystemNotifier();
   return const NoSystemNotifier();

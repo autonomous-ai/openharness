@@ -6,6 +6,7 @@ import '../shared/widgets/app_select_field.dart';
 import '../shared/widgets/setting_row.dart';
 import '../widgets/desktop_chrome.dart';
 import 'devices_controller.dart';
+import 'pet_settings.dart';
 
 /// Face ids belong to the firmware (character.h), not screen dimensions.
 /// Add future faces here only when production firmware can actually select them.
@@ -18,9 +19,31 @@ class DeviceSettingsPanel extends StatefulWidget {
     super.key,
     required this.device,
     required this.controller,
+    this.petEditor,
+    this.petViewerBeside = false,
+    this.petKey,
+    this.petGap = 0,
+    this.pickPetFile,
   });
   final HarnessDevice device;
   final DevicesController controller;
+
+  /// The dial's pet edit, when the screen shares it with a viewer of its own.
+  final PetEditor? petEditor;
+
+  /// Whether the screen draws [petEditor]'s row viewer beside this panel, so
+  /// the Pet section leaves it out.
+  final bool petViewerBeside;
+
+  /// Marks the Pet section, so the screen can line the viewer up with it.
+  final Key? petKey;
+
+  /// Extra room above the Pet section, so it starts level with the viewer
+  /// beside it.
+  final double petGap;
+
+  /// Replaces the pet file chooser (tests).
+  final Future<String?> Function()? pickPetFile;
   @override
   State<DeviceSettingsPanel> createState() => _DeviceSettingsPanelState();
 }
@@ -164,6 +187,17 @@ class _DeviceSettingsPanelState extends State<DeviceSettingsPanel> {
                     _languageLabel(settings.voiceLang),
                     style: DesktopChrome.control(),
                   ),
+          ),
+        ),
+        SizedBox(height: 10 + widget.petGap),
+        KeyedSubtree(
+          key: widget.petKey,
+          child: PetSettingsSection(
+            device: device,
+            controller: controller,
+            editor: widget.petEditor,
+            showViewer: !widget.petViewerBeside,
+            pickFile: widget.pickPetFile,
           ),
         ),
         const SizedBox(height: 12),

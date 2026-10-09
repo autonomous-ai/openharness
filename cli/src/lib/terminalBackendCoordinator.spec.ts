@@ -203,6 +203,19 @@ describe('TerminalBackendCoordinator', () => {
     expect(submit).toHaveBeenCalledWith(tmux, 'hello', undefined)
   })
 
+  it('refuses a revoked submit after the locator validation awaited', async () => {
+    const submit = submitBy({ state: 'succeeded', dispatch: 'executed' })
+    const terminal = backend('tmux:default', submit)
+    const coordinator = new TerminalBackendCoordinator([terminal], ['tmux'])
+    const current = session(), acquired = await coordinator.acquireLease(current)
+    if (acquired.state !== 'succeeded') throw new Error('no lease')
+    let allowed = true
+    terminal.validate = vi.fn(async () => { allowed = false; return { state: 'alive' as const } })
+    expect(await coordinator.submitTextForLease(current, acquired.value, 'hello', { allowed: () => allowed }))
+      .toMatchObject({ state: 'failed', dispatch: 'not_started', reason: 'terminal control revoked' })
+    expect(submit).not.toHaveBeenCalled()
+  })
+
   it('hands the check before the Enter to the backend, on every way a text is submitted', async () => {
     const submit = submitBy({ state: 'succeeded', dispatch: 'executed' })
     const coordinator = new TerminalBackendCoordinator([backend('tmux:default', submit)], ['tmux'])

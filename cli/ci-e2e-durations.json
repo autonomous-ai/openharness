@@ -9,6 +9,7 @@
     "e2e/compaction.e2e.ts": 50000,
     "e2e/core.e2e.ts": 121200,
     "e2e/enginehomes.e2e.ts": 131900,
+    "e2e/engineQuestionControl.e2e.ts": 172000,
     "e2e/history.e2e.ts": 113000,
     "e2e/races.e2e.ts": 264300,
     "e2e/recovery.e2e.ts": 28700,

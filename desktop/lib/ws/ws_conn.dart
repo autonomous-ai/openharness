@@ -478,6 +478,10 @@ class WsConn {
         return;
       case 'e2e_welcome':
         if (_directObserver) return;
+        // One per session (see `RelaySessionCrypto.handleWelcome`): another once this one is up
+        // is the relay repeating itself — not the machine failing to prove who it is, which is
+        // what refusing the peer below would take it for.
+        if (_ready) return;
         final verified = await codec.handleWelcome(payload);
         if (_closing || !identical(_codec, codec)) return;
         if (verified) {

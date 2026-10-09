@@ -1,8 +1,8 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { validGitPath } from './gitProject.js'
+import { insideGitCheckout, validGitPath } from './gitProject.js'
 import { canonicalRepository } from './agentProject.js'
-import { validPullRequestUrl } from './sessionWork.js'
+import { validPullRequestUrl } from './sessionWorkWire.js'
 import { tmpdir } from 'node:os'
 
 const exec = promisify(execFile)
@@ -34,6 +34,8 @@ export function boundedPullRequestRunner(execute: Run, limit = 4, queueLimit = 6
   }
 }
 const run: Run = boundedPullRequestRunner(async (command, args, cwd) => {
+  // The focused pane's folder is read for its pull request whatever it is (insideGitCheckout).
+  if (command === 'git' && !(await insideGitCheckout(cwd))) throw new Error('not a Git checkout')
   const env = { ...process.env, GH_PROMPT_DISABLED: '1', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' }
   for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_NAMESPACE', 'GIT_PREFIX']) delete (env as NodeJS.ProcessEnv)[key]
   return (await exec(command, args, { cwd, env, timeout: command === 'git' ? 1500 : 5000,

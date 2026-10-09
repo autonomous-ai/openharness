@@ -35,6 +35,7 @@ describe('the project readers in their own process', () => {
     expect(options).toMatchObject({ name: 'projects', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     // Before a core has connected: the agents it last said, which is none.
     expect(await options.requests.git_project_info!({ path: '/work' }, ASKER)).toEqual({ path: '/work', owner: true })
+    expect(await api.usage!(agent('a1'))).toBeNull()
     let answer: Record<string, unknown> = { agents: [agent('a1')] }
     const query = vi.fn(async (_name: string) => answer)
     options.onConnected!({ query } satisfies CoreConnection)
@@ -49,6 +50,8 @@ describe('the project readers in their own process', () => {
     await options.requests.git_project_info!({ path: '/work' }, ASKER)
     expect(seen).toEqual([[], ['a1'], ['a1', 'a2'], ['a1', 'a2'], ['a1', 'a2']])
     expect(api.agents.resolve('s-a2')).toEqual(agent('a2'))
+    expect(await api.usage!(agent('a1'))).toBeNull()
+    expect(query).toHaveBeenLastCalledWith('agentUsage', expect.any(Object))
   })
 
   it('runs as a real service by default, answering every request the core routes to the readers', () => {

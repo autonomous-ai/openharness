@@ -13,7 +13,7 @@
  */
 import { homedir } from 'node:os'
 import type { AgentEngine } from '../engines/types.js'
-import type { GridLaunchRecord } from './gridLaunch.js'
+import type { GridLaunchRecord } from './gridLaunchWire.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'

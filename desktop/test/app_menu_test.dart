@@ -12,6 +12,7 @@ import 'package:harness/settings/settings_screen.dart';
 import 'package:harness/shared/theme/app_theme.dart' as grid;
 import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_preset.dart';
+import 'package:harness/widgets/setup_tour.dart';
 
 import 'swarm_state_test.dart' show createApp;
 
@@ -147,6 +148,46 @@ void main() {
     expect(find.byType(SettingsScreen), findsOneWidget);
     Navigator.of(tester.element(find.byType(SettingsScreen))).pop();
     await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpWidget(const SizedBox());
+    app.dispose();
+  });
+
+  // Help ▸ Welcome Tour (macOS native menu, Linux menu bar): the first-run
+  // slides again, full window, with no install line.
+  testWidgets('Welcome Tour shows the slides until Escape or Close', (
+    tester,
+  ) async {
+    final app = createApp();
+    await _mount(tester, app);
+
+    final shown = _menu(tester, 'welcomeTour');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(SetupTour), findsOneWidget);
+    expect(find.text(tourTagline), findsOneWidget);
+    expect(find.byKey(const ValueKey('tour-install-line')), findsNothing);
+    // Held or repeated, the menu opens one tour.
+    await _menu(tester, 'welcomeTour');
+    await _menu(tester, 'showShortcuts');
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byType(SetupTour), findsOneWidget);
+    expect(find.byType(Dialog), findsNothing);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await shown;
+    expect(find.byType(SetupTour), findsNothing);
+
+    final again = _menu(tester, 'welcomeTour');
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byKey(const ValueKey('tour-close')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await again;
+    expect(find.byType(SetupTour), findsNothing);
+
     await tester.pumpWidget(const SizedBox());
     app.dispose();
   });

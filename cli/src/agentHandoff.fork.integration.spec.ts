@@ -50,8 +50,9 @@ async function modules() {
   const discovery = await import('./lib/handoffDiscovery.js')
   const handoff = await import('./lib/agentHandoff.js')
   const stopped = await import('./lib/stoppedAgents.js')
+  const stores = await import('./engines/sessionStores.js')
   registryModule.registry.load()
-  return { ...registryModule, ...repair, ...discovery, ...handoff, ...stopped }
+  return { ...registryModule, ...repair, ...discovery, ...handoff, ...stopped, processSession: stores.processSessionOf }
 }
 
 type Mods = Awaited<ReturnType<typeof modules>>
@@ -82,7 +83,7 @@ function forkOriginAsCliBuildsIt(source: RegisteredSession, sourceName: string) 
  * The provider deps through cli.ts's own factory (`handoffProviderDeps`), with the real registry, stopped store,
  * transcript lookup, gate and session searches; only the mirror is faked, loudly, so any use of it shows.
  */
-function cliDeps(m: Mods, rows: RegisteredSession[], over: { findLiveSession?: Mods['findLiveSession']; claudeProcessSession?: Mods['claudeProcessSession'] } = {}) {
+function cliDeps(m: Mods, rows: RegisteredSession[], over: { findLiveSession?: Mods['findLiveSession']; processSession?: Mods['processSession'] } = {}) {
   const stoppedDir = join(data, 'stopped-agents')
   const store = new m.StoppedAgentStore(stoppedDir)
   return m.handoffProviderDeps({
@@ -105,7 +106,7 @@ function cliDeps(m: Mods, rows: RegisteredSession[], over: { findLiveSession?: M
     } as unknown as Parameters<Mods['handoffProviderDeps']>[0]['mirror'],
     databaseHistory: () => undefined,
     findLiveSession: over.findLiveSession ?? m.findLiveSession,
-    claudeProcessSession: over.claudeProcessSession ?? m.claudeProcessSession,
+    processSession: over.processSession ?? m.processSession,
     isRecentlyDeleted: () => false,
     findResumedTranscript: m.findResumedTranscript,
     validTranscriptPath: m.validTranscriptPath,
@@ -152,8 +153,8 @@ describe('fork record → registry → stopped copy → inheritance (real module
     for (const [label, row] of [['live', fork], ['restarted', restartedFork], ['stopped', stoppedFork]] as const) {
       rmSync(join(ws, '.harness'), { recursive: true, force: true })
       const findLiveSession = vi.fn(m.findLiveSession)
-      const claudeProcessSession = vi.fn(m.claudeProcessSession)
-      const result = await m.prepareAgentHandoff(cliDeps(m, [parent, row], { findLiveSession, claudeProcessSession }), { agentId: row.agentId, changeId: CHANGE, targetEngine: 'codex' })
+      const claudeProcessSession = vi.fn(m.processSession)
+      const result = await m.prepareAgentHandoff(cliDeps(m, [parent, row], { findLiveSession, processSession: claudeProcessSession }), { agentId: row.agentId, changeId: CHANGE, targetEngine: 'codex' })
       expect(result, label).toEqual({ file: `.harness/handoff/${row.agentId}-${CHANGE}.md`, gitRepo: false, cwd: ws, degraded: ['git'] })
       const md = handoffMd(row.agentId)
       expect(md, label).toContain('PRE-FORK ask: add a retry')
@@ -235,8 +236,8 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     const marker = startMarker()
     ownFile(Date.parse(marker) + 500)
     const findLiveSession = vi.fn(m.findLiveSession)
-    const claudeProcessSession = vi.fn(m.claudeProcessSession)
-    const result = await ask(m, cliDeps(m, [unbound(marker)], { findLiveSession, claudeProcessSession }))
+    const claudeProcessSession = vi.fn(m.processSession)
+    const result = await ask(m, cliDeps(m, [unbound(marker)], { findLiveSession, processSession: claudeProcessSession }))
     expect(claudeProcessSession).toHaveBeenCalledTimes(1)
     expect(findLiveSession).not.toHaveBeenCalled()
     expect(result).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })
@@ -250,8 +251,8 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     processRecord(FOUND_SESSION, marker)
     for (const [label, row] of [['no marker', unbound(null)], ['no pid', unbound(marker, null)], ['no identity', unbound(null, null)]] as const) {
       const findLiveSession = vi.fn(m.findLiveSession)
-      const claudeProcessSession = vi.fn(m.claudeProcessSession)
-      expect(await ask(m, cliDeps(m, [row], { findLiveSession, claudeProcessSession })), label).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })
+      const claudeProcessSession = vi.fn(m.processSession)
+      expect(await ask(m, cliDeps(m, [row], { findLiveSession, processSession: claudeProcessSession })), label).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })
       expect(claudeProcessSession, label).not.toHaveBeenCalled()
       expect(findLiveSession, label).not.toHaveBeenCalled()
     }
@@ -300,8 +301,8 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     processRecord(FOUND_SESSION, marker)
     const fork = { ...unbound(marker), forkedFrom: { agentId: 'gone-parent', name: 'Gone' } } as RegisteredSession
     const findLiveSession = vi.fn(m.findLiveSession)
-    const claudeProcessSession = vi.fn(m.claudeProcessSession)
-    const result = await ask(m, cliDeps(m, [fork], { findLiveSession, claudeProcessSession }))
+    const claudeProcessSession = vi.fn(m.processSession)
+    const result = await ask(m, cliDeps(m, [fork], { findLiveSession, processSession: claudeProcessSession }))
     expect(findLiveSession).not.toHaveBeenCalled()
     expect(claudeProcessSession).not.toHaveBeenCalled()
     expect(result).toEqual({ file: null, gitRepo: false, cwd: ws, degraded: ['transcript'] })

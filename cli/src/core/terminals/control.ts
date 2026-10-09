@@ -86,14 +86,15 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     if (!session) return terminalActionNotStarted('terminal agent is unavailable')
     const lease = await leasedTerminal(session)
     if (!lease) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
+    if (options?.allowed && !options.allowed()) return terminalActionNotStarted('terminal control revoked')
     const result = pinnedControls.has(session.agentId)
       ? await terminals.submitTextLease(lease.value, text, options)
       : await terminals.submitTextForLease(session, lease.value, text, options)
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result
   }
-  const submitTerminal = async (target: string, text: string): Promise<boolean> => {
-    return terminalActionSucceeded(await submitTerminalAction(target, text))
+  const submitTerminal = async (target: string, text: string, options?: SubmitOptions): Promise<boolean> => {
+    return terminalActionSucceeded(await submitTerminalAction(target, text, options))
   }
   const typeTerminal = async (target: string, text: string): Promise<boolean> => {
     const session = terminalSession(target)
@@ -104,17 +105,18 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     if (!succeeded && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return succeeded
   }
-  const keyTerminalAction = async (target: string, key: string): Promise<TerminalActionResult> => {
+  const keyTerminalAction = async (target: string, key: string, allowed?: () => boolean): Promise<TerminalActionResult> => {
     const session = terminalSession(target)
     if (!session) return terminalActionNotStarted('terminal session is unavailable')
     const lease = await leasedTerminal(session)
     if (!lease) return terminalActionNotStarted(TERMINAL_LEASE_REFUSED)
+    if (allowed && !allowed()) return terminalActionNotStarted('terminal control revoked')
     const result = await terminals.sendLegacyKeyLease(lease.value, key)
     if (result.state !== 'succeeded' && pinnedControls.has(session.agentId)) invalidateTerminalControl(session.agentId)
     return result
   }
-  const keyTerminal = async (target: string, key: string): Promise<boolean> => {
-    return terminalActionSucceeded(await keyTerminalAction(target, key))
+  const keyTerminal = async (target: string, key: string, allowed?: () => boolean): Promise<boolean> => {
+    return terminalActionSucceeded(await keyTerminalAction(target, key, allowed))
   }
   const validateTerminal = async (session: RegisteredSession): Promise<boolean> =>
     (await terminals.validate(session)).state === 'alive'

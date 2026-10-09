@@ -429,6 +429,16 @@ pub fn pane_supports(app: &App, pane: u64) -> bool {
         && app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a| a.status != "stopped" && ["codex", "claude", "opencode"].contains(&a.engine.as_str()))
 }
 
+/// The model the pane's harness runs, as its title names it: Grid's, or what the engine reported.
+pub fn pane_label(app: &App, pane: u64) -> String {
+    let observed = app.panes.get(&pane).and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id)).and_then(|a| {
+        if !a.grid_model.is_empty() { Some(a.grid_model.clone()) }
+        else { crate::runtime_model::details(&a.model, &a.id, &a.engine).map(|m| m.name) }
+    });
+    let label = observed.unwrap_or_else(|| "Model".into()).chars().filter(|c| !c.is_control()).collect::<String>();
+    crate::format::clip_middle(&label, 24)
+}
+
 pub fn target(app: &App) -> Option<Target> {
     let of = |machine: String, agent: String| -> Option<Target> {
         if app.fleet.machine(&machine).is_some_and(|m| m.shared) { return None }

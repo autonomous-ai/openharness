@@ -5,7 +5,6 @@
  * Contracts and primary sources: store/spec/portability.md.
  */
 import { harnessAdapters } from '../engines/launches.js'
-export { codexEnvArgs } from '../engines/launches.js'
 import type { AgentEngine, ProcessEngine } from '../engines/types.js'
 
 export interface HarnessAdapter {

@@ -10,7 +10,7 @@ import type { AgentFrame } from '../../lib/agentFrame.js'
 import type { CloseAgentService } from '../../lib/closeAgentService.js'
 import { preview, sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
-import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../lib/runtimeProfileController.js'
+import { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../../lib/runtimeControl.js'
 
 /** An `agent_update {opened: true}` for an agent opened less than this long ago is answered but not
  *  stamped or broadcast: a person flicking between two tabs, or two apps opening the same agent at

@@ -8,15 +8,9 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md).
  */
-import { AgyNormalizer } from '../../engines/agy/normalizer.js'
-import { AmpNormalizer } from '../../engines/amp/normalizer.js'
+import type { CursorNormalizer } from '../../engines/cursor/normalizer.js'
 import type { LiveFor, LiveParser } from '../../engines/facets/live.js'
-import { CommandCodeNormalizer, commandCodeRunError, commandCodeRunErrorSummary } from '../../engines/commandcode/normalizer.js'
-import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
-import { CursorNormalizer } from '../../engines/cursor/normalizer.js'
-import { GrokNormalizer } from '../../engines/grok/normalizer.js'
-import { MuseNormalizer } from '../../engines/muse/normalizer.js'
-import { PiNormalizer } from '../../engines/pi/normalizer.js'
+import { engineNow } from '../../engines/inProcess.js'
 import type { WifiFeed } from '../wifi.js'
 import { sid } from '../../lib/log.js'
 import type { LiveEvent } from '../../engines/kit/events.js'
@@ -79,46 +73,56 @@ export function createIngest({
       events = read.events
       if (read.failure !== undefined) announceTurnAborted(evt.sessionId, session.engine, read.failure)
     } else if (session.engine === 'cursor') {
+      // Each engine's normalizer is its own code, loaded before its tail started (the attach awaited it). One
+      // that could not load reads no events from its lines, as an engine with no normalizer does.
       let normalizer = cursorNormalizers.get(evt.sessionId)
-      if (!normalizer) {
-        normalizer = new CursorNormalizer('live', evt.sessionId)
+      const cursor = normalizer ? null : engineNow('cursor', 'a transcript line came')
+      if (!normalizer && cursor) {
+        normalizer = new cursor.CursorNormalizer('live', evt.sessionId)
         cursorNormalizers.set(evt.sessionId, normalizer)
       }
-      events = normalizer.ingest(evt.text)
+      events = normalizer ? normalizer.ingest(evt.text) : []
     } else if (session.engine === 'muse') {
       let normalizer = museNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new MuseNormalizer(); museNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
+      const muse = normalizer ? null : engineNow('muse', 'a transcript line came')
+      if (!normalizer && muse) { normalizer = new muse.MuseNormalizer(); museNormalizers.set(evt.sessionId, normalizer) }
+      events = normalizer ? normalizer.ingest(evt.text) : []
     } else if (session.engine === 'amp') {
       let normalizer = ampNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new AmpNormalizer(); ampNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
+      const amp = normalizer ? null : engineNow('amp', 'a transcript line came')
+      if (!normalizer && amp) { normalizer = new amp.AmpNormalizer(); ampNormalizers.set(evt.sessionId, normalizer) }
+      events = normalizer ? normalizer.ingest(evt.text) : []
     } else if (session.engine === 'grok') {
       let normalizer = grokNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new GrokNormalizer(); grokNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
+      const grok = normalizer ? null : engineNow('grok', 'a transcript line came')
+      if (!normalizer && grok) { normalizer = new grok.GrokNormalizer(); grokNormalizers.set(evt.sessionId, normalizer) }
+      events = normalizer ? normalizer.ingest(evt.text) : []
     } else if (session.engine === 'agy') {
       let normalizer = agyNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new AgyNormalizer(); agyNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
+      const agy = normalizer ? null : engineNow('agy', 'a transcript line came')
+      if (!normalizer && agy) { normalizer = new agy.AgyNormalizer(); agyNormalizers.set(evt.sessionId, normalizer) }
+      events = normalizer ? normalizer.ingest(evt.text) : []
     } else if (session.engine === 'copilot') {
       let normalizer = copilotNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new CopilotNormalizer(); copilotNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
+      const copilot = normalizer ? null : engineNow('copilot', 'a transcript line came')
+      if (!normalizer && copilot) { normalizer = new copilot.CopilotNormalizer(); copilotNormalizers.set(evt.sessionId, normalizer) }
+      events = normalizer ? normalizer.ingest(evt.text) : []
     } else if (session.engine === 'pi') {
       let normalizer = piNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new PiNormalizer('live'); piNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
+      const pi = normalizer ? null : engineNow('pi', 'a transcript line came')
+      if (!normalizer && pi) { normalizer = new pi.PiNormalizer('live'); piNormalizers.set(evt.sessionId, normalizer) }
+      events = normalizer ? normalizer.ingest(evt.text) : []
     } else if (session.engine === 'commandcode') {
+      const commandcode = engineNow('commandcode', 'a transcript line came')
       let normalizer = commandcodeNormalizers.get(evt.sessionId)
-      if (!normalizer) { normalizer = new CommandCodeNormalizer('live'); commandcodeNormalizers.set(evt.sessionId, normalizer) }
-      events = normalizer.ingest(evt.text)
+      if (!normalizer && commandcode) { normalizer = new commandcode.CommandCodeNormalizer('live'); commandcodeNormalizers.set(evt.sessionId, normalizer) }
+      events = normalizer ? normalizer.ingest(evt.text) : []
       // Command Code fires no Stop hook for a failed turn: this record IS the notification. `ingest`
       // already closed the turn (its turn_ended is in `events`, emitted just below) — announce the
       // reason first so the web/device show the error ahead of the turn closing.
-      const runError = commandCodeRunError(evt.text)
+      const runError = commandcode?.commandCodeRunError(evt.text) ?? null
       if (runError !== null) {
-        announceTurnAborted(evt.sessionId, 'commandcode', runError, commandCodeRunErrorSummary(runError))
+        announceTurnAborted(evt.sessionId, 'commandcode', runError, commandcode!.commandCodeRunErrorSummary(runError))
       }
     } else {
       events = []

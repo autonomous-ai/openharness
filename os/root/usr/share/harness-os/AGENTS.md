@@ -12,7 +12,8 @@ is required.
 
 - For connected services, read `/usr/share/harness-os/connections.md`.
   `harness connections list --json` discovers this user's connected accounts.
-  Use the shared helper from any agent; keep credentials out of conversations.
+  They appear as MCP servers in Claude Code, Codex and OpenCode; keep
+  credentials out of conversations.
 
 - `Super+u` starts the update inside hn. `harness updates` opens its screen;
   click Update to start the same action. No confirmation or password is needed.

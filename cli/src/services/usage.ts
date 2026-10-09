@@ -1,3 +1,6 @@
+import { join } from 'node:path'
+import { createAgentUsage } from './agentUsage.js'
+import type { CorePorts } from '../core/api.js'
 /**
  * This machine's Claude and Codex rate limits, read with its own credentials (`usage_read`): how the
  * desktop reads an account on a machine it does not run on, which may be signed in to another
@@ -26,4 +29,11 @@ export function startUsage(_core: CoreApi, deps: UsageDeps = { read: readAccount
       () => ({ error: 'USAGE_READ_FAILED' }),
     )),
   }
+}
+
+/** Explicit inline compatibility uses the same port and validators as the worker. */
+export function startUsageInCore(core: CoreApi, ports: CorePorts): ServiceRequests {
+  const reader = createAgentUsage(join(core.dataDir, 'agent-token-usage'))
+  ports.usage = { read: target => reader.read({ target }), stop: reader.stop }
+  return startUsage(core)
 }

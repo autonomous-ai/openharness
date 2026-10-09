@@ -84,7 +84,7 @@ function callArguments(source: string, call: string): { text: string; at: number
 }
 
 /** Every call whose dependencies run DURING start-up, before `runForeground` has finished its body. */
-const STARTUP_CALLS = ['await repairClaudeCwd({', 'await restoreAgents({']
+const STARTUP_CALLS = ['await repairProjectCwds({', 'await restoreAgents({']
 
 /** What the prologue is allowed to do before the master's update is listened for: nothing that can throw. */
 const PROLOGUE_CALLS = new Set(['installTimestampedConsole'])
@@ -113,7 +113,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     for (const risky of [
       'requireTmuxAvailable(',      // throws outright when tmux is missing
       'await startHookServer(',     // EADDRINUSE on a fixed port with no fallback
-      'installSessionHooks(',       // 13 vendor settings files, any of which can be unreadable
+      'installEngineHooks(',        // 13 vendor settings files, any of which can be unreadable
       'await restoreAgents({',      // tmux, the registry, and the closures a bad edit puts in a dead zone
       'await agentReconciler.start(',
       'loadCursorPendingTasks(',    // a file lock that can hang, not just throw
@@ -139,6 +139,18 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     expect([...new Set(called.filter(name => !PROLOGUE_CALLS.has(name)))].sort(),
       'only calls that cannot fail belong above the update; move this below it, or add it to PROLOGUE_CALLS with a reason')
       .toEqual([])
+  })
+
+  it('protects acknowledged bindings on every exit after registry ownership, before startup can yield', () => {
+    const source = code(SOURCE)
+    const owned = source.indexOf('await refuseServedDataFolder(')
+    const loaded = source.indexOf('registry.load()')
+    const exiting = source.indexOf("process.on('exit', () => registry.flush({ exiting: true }))")
+    expect(loaded).toBeGreaterThan(owned)
+    expect(exiting).toBeGreaterThan(loaded)
+    // An update can exit before full teardown is constructed. Install the synchronous safeguard
+    // before the first yield after load, while a duplicate daemon still exits without touching disk.
+    expect(exiting).toBeLessThan(source.indexOf('\n  await ', loaded))
   })
 
   it('only swaps in the full restart handler once everything it tears down exists', () => {
@@ -234,11 +246,14 @@ describe('the core\'s request gate (core/main.ts)', () => {
     expect(yields, 'bind the relay callbacks before connect() first').toEqual([])
   })
 
-  it('opens the gate, tells the master it is ready, then says so — last', () => {
+  it('opens the gate, tells the master it is ready, says so, and only then launches what waits for a service', () => {
     const ready = at('coreLink.ready()', opened)
     const logged = at("console.log('[cli] ready')", ready)
     const tail = source.slice(opened, from + text.length).split('\n').map((line) => line.trim()).filter(Boolean)
-    expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')"])
+    // Readiness never waits on a service: the agents the boot held for one are launched after it, in the background
+    // (core/agents/heldLaunches.ts).
+    expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
+      'void heldLaunches.restoreHeld()'])
     expect(logged).toBeGreaterThan(ready)
   })
 })

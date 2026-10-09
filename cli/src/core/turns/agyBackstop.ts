@@ -13,9 +13,9 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 9: docs/design/2026-10-03-harnessd.md).
  */
 import type { AgyNormalizer } from '../../engines/agy/normalizer.js'
-import { agyPaneIdle } from '../../engines/agy/runtimeProfile.js'
+import { engineNow } from '../../engines/inProcess.js'
 import { sid } from '../../lib/log.js'
-import type { LiveEvent } from '../../lib/normalize.js'
+import type { LiveEvent } from '../../engines/kit/events.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 
 export interface AgyBackstopDeps {
@@ -52,7 +52,10 @@ export function createAgyBackstop({ agyNormalizers, bySession, captureTerminal, 
         const entry = bySession(sessionId)
         if (!entry) return
         const capture = await captureTerminal(entry.agentId, 60)
-        if (!capture || !agyPaneIdle(capture)) { armAgyIdleWatch(sessionId, checks + 1); return }
+        // Its pane is read with agy's own code, loaded since its session's attach: without it there is no backstop.
+        const agy = engineNow('agy', 'its idle backstop read the pane')
+        if (!agy) return
+        if (!capture || !agy.agyPaneIdle(capture)) { armAgyIdleWatch(sessionId, checks + 1); return }
         await drain(sessionId)
         if (!normalizer.turnOpen) return
         console.log(`[turn] ${sid(sessionId)} closed by the agy idle backstop · no final Stop arrived`)

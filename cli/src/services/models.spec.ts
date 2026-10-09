@@ -21,8 +21,8 @@ import { resolveGridTarget } from '../lib/gridTarget.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import { ensureManagedGrid, startGridPinRecheck } from '../lib/runtimeInstall.js'
-import { apiConnectionsRequest } from '../lib/apiConnections.js'
-import { apiModelsRequest, rememberSavedApis } from '../lib/apiModels.js'
+import { ApiConnections, apiConnectionsRequest } from '../lib/apiConnections.js'
+import { apiModelsRequest, apiTargetAnswer, refreshApiFor, rememberSavedApis } from '../lib/apiModels.js'
 import { linkCodexProfile, listCodexProfiles } from '../lib/codexProfiles.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { compactRuntimePickerModels, launchTarget, MODELS_REQUESTS, startModels } from './models.js'
@@ -61,14 +61,16 @@ vi.mock('../lib/gridModels.js', () => ({
 }))
 vi.mock('../lib/runtimeInstall.js', () => ({ ensureManagedGrid: vi.fn(async () => {}), startGridPinRecheck: vi.fn(() => () => {}) }))
 /** The saved APIs and the Codex profiles: their files and folders are the lib's, never this machine's here. */
-const apis = vi.hoisted(() => ({ stores: [] as string[] }))
+const apis = vi.hoisted(() => ({ stores: [] as string[], bases: vi.fn(() => [] as string[]) }))
 vi.mock('../lib/apiConnections.js', () => ({
-  ApiConnections: class { constructor(dataDir: string) { apis.stores.push(dataDir) } },
+  ApiConnections: class { constructor(dataDir: string) { apis.stores.push(dataDir) } recognizedBases = apis.bases },
   apiConnectionsRequest: vi.fn((_store: unknown, payload: Record<string, unknown>) => ({ connections: [], presets: [], action: payload.action })),
 }))
 vi.mock('../lib/apiModels.js', () => ({
   apiModelsRequest: vi.fn(async (_store: unknown, payload: Record<string, unknown>) => ({ id: payload.id, models: ['m1'] })),
   rememberSavedApis: vi.fn(),
+  refreshApiFor: vi.fn(() => (override: unknown) => ({ override, apiBase: 'https://api.example.test/v1' })),
+  apiTargetAnswer: vi.fn(async () => ({ detail: 'This API is not saved. Add it in Models → APIs.' })),
 }))
 vi.mock('../lib/codexProfiles.js', () => ({
   listCodexProfiles: vi.fn((observed: string[]) => observed.map((path) => ({ path, label: 'Codex' }))),
@@ -677,13 +679,39 @@ describe('the models service', () => {
       it('api_connections: lists, saves (and recognises agents already on the saved endpoints), removes, and reads an API\'s models', async () => {
         const { ask } = setup()
         expect(await ask('api_connections', { action: 'list' })).toEqual({ connections: [], presets: [], action: 'list' })
-        expect(rememberSavedApis).not.toHaveBeenCalled()
+        expect(rememberSavedApis).toHaveBeenCalledTimes(1)
         expect(await ask('api_connections', { action: 'save', connection: { name: 'x' } })).toEqual({ connections: [], presets: [], action: 'save' })
-        expect(rememberSavedApis).toHaveBeenCalledOnce()
+        expect(rememberSavedApis).toHaveBeenCalledTimes(2)
         expect(await ask('api_connections', { action: 'remove', id: 'a' })).toEqual({ connections: [], presets: [], action: 'remove' })
         expect(await ask('api_connections', { action: 'models', id: 'a' })).toEqual({ id: 'a', models: ['m1'] })
         expect(apiModelsRequest).toHaveBeenCalledOnce()
-        expect(rememberSavedApis).toHaveBeenCalledOnce()
+        expect(rememberSavedApis).toHaveBeenCalledTimes(2)
+      })
+
+      it('recognises persisted API endpoints after models restarts and refuses unreadable vocabulary', async () => {
+        const { port } = setup()
+        apis.bases.mockReturnValueOnce(['https://old-api.example/v1'])
+        const process = { key: 'organic', engine: 'claude' as const, env: { ANTHROPIC_BASE_URL: 'https://old-api.example', ANTHROPIC_MODEL: 'm' }, args: '' }
+        expect(await port.gridAssignments([process])).toEqual([{ key: 'organic', assignment: { baseUrl: 'https://old-api.example', model: 'm' } }])
+        apis.bases.mockImplementationOnce(() => { throw new Error('unreadable vocabulary') })
+        expect(await port.gridAssignments([process])).toMatchObject([{ assignment: { baseUrl: 'https://old-api.example' } }])
+        const restarted = setup().port
+        apis.bases.mockImplementationOnce(() => { throw new Error('unreadable vocabulary') })
+        await expect(restarted.gridAssignments([process])).rejects.toThrow('unreadable vocabulary')
+        expect(await restarted.gridAssignments([])).toEqual([])
+      })
+
+      it("builds the core's launches on a grid or a saved API, reading the saved APIs in the data folder as they are now", async () => {
+        const { port } = setup([], { dataDir: '/data/launch' })
+        const store = apis.stores.indexOf('/data/launch')
+        expect(store).toBeGreaterThanOrEqual(0)
+        const override = { networkId: 'api:a', networkName: 'Home API', baseUrl: 'https://api.example.test/v1', apiKey: 'k', model: 'm' }
+        expect(await port.gridLaunch({ engine: 'claude', override, machine: { hermesSystemManaged: false }, refresh: true })).toMatchObject({
+          ok: true, override, apiBase: 'https://api.example.test/v1', launch: { env: { ANTHROPIC_MODEL: 'm' } },
+        })
+        expect(vi.mocked(refreshApiFor).mock.calls.at(-1)![0]).toBeInstanceOf(ApiConnections)
+        expect(await port.apiTarget({ connectionId: 'a', model: 'm' })).toEqual({ detail: 'This API is not saved. Add it in Models → APIs.' })
+        expect(vi.mocked(apiTargetAnswer).mock.calls.at(-1)!.slice(1)).toEqual(['a', 'm'])
       })
 
       it('codex_profiles_list: the folders this machine offers, with the ones the asker has seen; a failed scan is said', async () => {

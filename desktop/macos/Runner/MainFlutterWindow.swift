@@ -28,6 +28,8 @@ class MainFlutterWindow: NSWindow {
   private var notifications: HarnessNotifications?
 
   override func awakeFromNib() {
+    // Before the engine exists, so a move never interrupts the first-run setup.
+    MoveToApplications.offerIfNeeded()
     // Before the engine exists: its first frame already draws from the
     // back-buffer cache this patches (flutter/flutter#185394).
     SurfaceCacheGuard.install()
@@ -121,8 +123,9 @@ class MainFlutterWindow: NSWindow {
     )
   }
 
-  /// Help: learning Harness first — Quick Start, Keyboard Practice, and the
-  /// shortcut sheet — then the two things support asks for.
+  /// Help: learning Harness first — the Welcome Tour (the first-run slides,
+  /// again), Quick Start, Keyboard Practice, and the shortcut sheet — then
+  /// the two things support asks for.
   ///
   /// Keyboard Shortcuts… ⌘/ sits where people look for it in every Mac app,
   /// and AppKit prints ⌘/ beside it, which is how people learn the chord.
@@ -134,6 +137,7 @@ class MainFlutterWindow: NSWindow {
     guard let helpMenu = NSApp.mainMenu?.item(withTitle: "Help")?.submenu else { return }
     guard helpMenu.indexOfItem(withTag: exportLogsMenuItemTag) == -1 else { return }
     let items: [NSMenuItem] = [
+      menuItem(title: "Welcome Tour", action: #selector(welcomeTour(_:)), symbol: "sparkles", tag: welcomeTourMenuItemTag),
       menuItem(title: "Quick Start", action: #selector(quickStart(_:)), symbol: "terminal", tag: 7310),
       menuItem(title: "Keyboard Practice", action: #selector(keyboardPractice(_:)), symbol: "keyboard", tag: 7311),
       menuItem(
@@ -293,6 +297,7 @@ class MainFlutterWindow: NSWindow {
   private var smallerFontMenuItemTag: Int { 7306 }
   private var layoutMenuItemTag: Int { 7307 }
   private var exportLogsMenuItemTag: Int { 7308 }
+  private var welcomeTourMenuItemTag: Int { 7309 }
 
   @objc private func checkForUpdates(_ sender: Any?) {
     menuChannel?.invokeMethod("checkForUpdates", arguments: nil)
@@ -312,6 +317,10 @@ class MainFlutterWindow: NSWindow {
 
   @objc private func showShortcuts(_ sender: Any?) {
     menuChannel?.invokeMethod("showShortcuts", arguments: nil)
+  }
+
+  @objc private func welcomeTour(_ sender: Any?) {
+    menuChannel?.invokeMethod("welcomeTour", arguments: nil)
   }
 
   @objc private func quickStart(_ sender: Any?) {

@@ -6,8 +6,10 @@ type Query = { where?: Record<string, unknown>; select?: Record<string, boolean>
 const db = vi.hoisted(() => {
   function matches(row: Row, where: Record<string, unknown> = {}): boolean {
     return Object.entries(where).every(([key, value]) => {
+      if (key === 'OR') return (value as Record<string, unknown>[]).some(branch => matches(row, branch))
       if (value && typeof value === 'object' && !(value instanceof Date)) {
         const filter = value as Record<string, unknown>
+        if ('contains' in filter) return typeof row[key] === 'string' && (row[key] as string).toLowerCase().includes((filter.contains as string).toLowerCase())
         if ('in' in filter) return (filter.in as unknown[]).includes(row[key])
         if ('gt' in filter) return (row[key] as Date) > (filter.gt as Date)
         if ('isSet' in filter || 'not' in filter) return (!filter.isSet || row[key] !== undefined) && (!('not' in filter) || row[key] !== filter.not)
@@ -227,6 +229,16 @@ describe('persistent social actions', () => {
     expect((await call('POST', `harnesses/${starter}/comments`, 'alice', { body: 'Hello', clientId: crypto.randomUUID() })).statusCode).toBe(429)
     expect((await call('POST', `harnesses/${starter}/comments`, 'alice', payload)).statusCode).toBe(200)
     expect((await call('POST', `harnesses/${starter}/comments`, 'alice', { ...payload, body: ' ' })).statusCode).toBe(400)
+  })
+  it('searches publications on the server, case-insensitively, within the feed filters', async () => {
+    await publish('alice', { ...sample, title: 'Lantern room' }); await publish('bob', { ...sample, title: 'Orbit study', description: 'Planets in a lantern light' })
+    const search = async (query: string, token?: string) => (await call('GET', `harnesses?${query}`, token)).json().data.harnesses.map((row: { title: string }) => row.title)
+    expect(await search('q=LANTERN')).toEqual(expect.arrayContaining(['Lantern room', 'Orbit study']))
+    expect(await search('q=lantern')).toHaveLength(2)
+    expect(await search('q=lantern&mine=true', 'alice')).toEqual(['Lantern room'])
+    expect(await search('q=nothing-like-this')).toEqual([])
+    expect((await call('GET', 'harnesses?q=')).statusCode).toBe(400)
+    expect((await call('GET', `harnesses?q=${'x'.repeat(81)}`)).statusCode).toBe(400)
   })
   it('follows real creators and filters the following feed', async () => {
     await publish('alice'); await publish('bob')

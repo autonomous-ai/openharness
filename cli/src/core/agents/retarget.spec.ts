@@ -7,7 +7,6 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { parseRuntimeProfile } from '../../lib/runtimeProfileWire.js'
 import { inspectRuntimePane } from '../../lib/runtimeProfileController.js'
-import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
@@ -17,11 +16,15 @@ vi.mock('../../engines/opencode/sessionModel.js', async (real) => ({
   applyOpencodeSessionModel: vi.fn(async () => ({ ok: true })),
   parseOpencodeModelId: vi.fn((id: string) => ({ providerID: id.split('/')[0], modelID: id.split('/')[1] })),
 }))
+// OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 vi.mock('../../engines/opencode/version.js', () => ({ isOpencodeV2: vi.fn(() => false), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/binaryOnPath.js', () => ({ binaryOnPath: vi.fn(() => true) }))
 vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
-vi.mock('../../lib/gridAssignment.js', async (real) => ({ ...await real<object>(), probeGridAssignment: vi.fn(async () => undefined) }))
-vi.mock('../../lib/gridLaunch.js', async (real) => ({ ...await real<object>(), describeGridLaunch: vi.fn(() => 'claude on Home'), gridEnvVarNames: vi.fn(() => ['ANTHROPIC_BASE_URL']) }))
+vi.mock('../../lib/gridLaunchWire.js', async (real) => ({ ...await real<object>(), describeGridLaunch: vi.fn(() => 'claude on Home'), gridEnvVarNames: vi.fn(() => ['ANTHROPIC_BASE_URL']) }))
 vi.mock('../../lib/launchOverrides.js', async (real) => ({ ...await real<object>(), validateLaunchOverrides: vi.fn(async () => ({ ok: true })) }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
   ...await real<object>(),
@@ -45,6 +48,7 @@ const agent = (over: Partial<RegisteredSession> = {}): RegisteredSession => ({
 function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDeps> = {}) {
   const release = vi.fn()
   const deps: RetargetDeps = {
+    readScreen: async (session, capture) => ({ pane: inspectRuntimePane(session.engine, capture ?? ''), question: null, messageHold: null, teamHold: null, activity: null, busy: false, stoppedGoal: false }),
     purgeBusy: vi.fn(() => false),
     tmuxBackend: { clearEnv: vi.fn(async () => ({ state: 'succeeded' })) } as unknown as RetargetDeps['tmuxBackend'],
     registry: {
@@ -62,10 +66,11 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
     relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { gridLaunchRecord: { override: grid, webSearch: 'off' } } })) as never,
     downgradedPermission: vi.fn(async (_s, bypass: boolean) => ({ bypassPermission: bypass, permissionMode: null })) as never,
     agentReconciler: { holdRoute: vi.fn(), releaseRoute: vi.fn() },
-    restartJobs: { busy: vi.fn(() => false) } as never,
+    restartJobs: { busy: vi.fn(() => false), cancel: vi.fn() } as never,
     paneSwapDeps: vi.fn(() => ({})) as never,
     liveBypassPermission: vi.fn(async () => true),
     announceSession: vi.fn(),
+    refreshGridAssignment: vi.fn(),
     opencodeDb: '/db/opencode.db',
     ...over,
   }
@@ -80,6 +85,20 @@ describe('retargeting an agent', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
   describe('refusals before anything is touched', () => {
+    it('invalidates an older restore as soon as retarget takes control', async () => {
+      const { deps, retarget, release } = setup()
+      await retarget({ agentId: 'a1', grid })
+      expect(deps.restartJobs.cancel).toHaveBeenCalledExactlyOnceWith('a1')
+      expect(vi.mocked(deps.restartJobs.cancel).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.relaunchOverrides).mock.invocationCallOrder[0])
+      expect(release).toHaveBeenCalledOnce()
+    })
+    it('rechecks a pane operation that began while the screen was being read', async () => {
+      const purgeBusy = vi.fn().mockReturnValueOnce(false).mockReturnValue(true)
+      const { retarget, deps } = setup(agent(), { purgeBusy })
+      expect(await retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_BUSY' })
+      expect(deps.acquireTerminalControl).not.toHaveBeenCalled()
+      expect(deps.relaunchOverrides).not.toHaveBeenCalled()
+    })
     it('for an agent being purged, no tmux, no agent, no tmux pane or no process to validate', async () => {
       expect(await setup(agent(), { purgeBusy: () => true }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(agent(), { tmuxBackend: null }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
@@ -121,11 +140,11 @@ describe('retargeting an agent', () => {
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalled()
       expect(restartAgent).toHaveBeenCalledWith({ engine: 'claude', sessionId: 's1' }, true, {})
       // The grid is read off the new process's command line, never its executable alone.
-      expect(probeGridAssignment).toHaveBeenCalledWith(expect.objectContaining({ pid: 2 }), 'claude', 'codex -c model_providers.grid.base_url=http://grid.local/v1')
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none', undefined)
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', expect.objectContaining({ pid: 2 }), 'none')
       expect(run.deps.registry.setGridLaunch).toHaveBeenCalledWith('a1', { override: grid, webSearch: 'off' })
       expect(run.deps.registry.setSubscriptionModel).toHaveBeenCalledWith('a1', 'opus')
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
+      expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(agent())
       expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%4')
       expect(run.deps.announceSession).toHaveBeenCalled()
       expect(run.release).toHaveBeenCalled()
@@ -204,6 +223,15 @@ describe('retargeting an agent', () => {
       expect(await setup(agent({ engine: 'opencode', subscriptionModel: 'claude' } as Partial<RegisteredSession>), withModel).retarget({ agentId: 'a1', grid: null })).toEqual({ ok: true })
       expect(await setup(agent({ engine: 'opencode', sessionId: '' } as Partial<RegisteredSession>), withModel).retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
       vi.mocked(binaryOnPath).mockReturnValue(true)
+    })
+
+    it('refuses to move OpenCode when its code could not be loaded, before the pane is touched', async () => {
+      const { loadEngine } = await import('../../engines/inProcess.js')
+      vi.mocked(loadEngine).mockResolvedValueOnce(null)
+      const run = setup(agent({ engine: 'opencode' } as Partial<RegisteredSession>))
+      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
+      expect(restartAgent).not.toHaveBeenCalled()
+      expect(applyOpencodeSessionModel).not.toHaveBeenCalled()
     })
 
     it('reads the live bypass flag only when the row recorded none, and announces nothing for a row gone meanwhile', async () => {

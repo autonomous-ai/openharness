@@ -293,7 +293,7 @@ jobs:
         if: ${{ inputs.checks == 'browser' }}
         env:
           OS_MEMORY_MIB: ${{ inputs.memory_mib || '2048' }}
-        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml ${{ inputs.browser_memory && '--memory-profile --zram-config os/root/etc/systemd/zram-generator.conf' || '' }}
+        run: python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware '${{ matrix.firmware }}' --memory-mib "$OS_MEMORY_MIB" --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml --home-source . ${{ inputs.browser_memory && '--memory-profile --zram-config os/root/etc/systemd/zram-generator.conf' || '' }}
       - name: Exercise browser-active suspend, unlock and input recovery
         if: ${{ inputs.checks == 'browser-suspend' }}
         run: timeout 12m python3 os/tests/browser_vm.py --iso os/dist/*.iso --firmware uefi --memory-mib 2048 --check suspend --wlrctl /usr/bin/wlrctl --browser-script os/root/usr/bin/hn-browser --compositor-config os/root/usr/share/harness-os/labwc/rc.xml

@@ -1,3 +1,4 @@
+import { usageTargetKey, type AgentUsageTarget } from '../../lib/agentUsageWire.js'
 /**
  * Telling the app and the dial about an agent: its frame (sync), its name (rename), both at once
  * (announce), and a fresh frame when its token usage moves, for a live agent or a stopped one.
@@ -20,7 +21,7 @@ export interface AnnounceSink {
 }
 
 /** The agent whose token usage changed, as the usage cache names it. */
-export type TokenUsageTarget = Pick<RegisteredSession, 'agentId' | 'sessionId' | 'engine'>
+export type TokenUsageTarget = AgentUsageTarget
 
 export interface AgentEventDeps {
   /** The socket, read as each frame goes out; undefined until it exists. */
@@ -48,13 +49,13 @@ export function createAgentEvents({ sink, terminalAvailable, resolve, stopped, p
   }
   const onTokenUsageChanged = (target: TokenUsageTarget): void => {
     const current = resolve(target.agentId)
-    if (current?.sessionId === target.sessionId && current.engine === target.engine) {
+    if (current && usageTargetKey(current) === usageTargetKey(target)) {
       if (terminalAvailable(current.agentId)) syncSession(current, { device: false })
       return
     }
     try {
       const saved = stopped(target.agentId)
-      if (saved?.sessionId === target.sessionId && saved.engine === target.engine) {
+      if (saved && usageTargetKey(saved) === usageTargetKey(target)) {
         void sink()?.publishStoppedAgent(saved).catch(() => {})
       }
     } catch { /* A concurrently removed archive has nothing to update. */ }

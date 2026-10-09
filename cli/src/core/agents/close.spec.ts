@@ -1,7 +1,9 @@
+import { readInlineScreen } from '../../testing/inlineScreen.js'
+import { screenFor } from '../../engines/screens.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inspectCloseActivity, type CloseAgentServiceDeps } from '../../lib/closeAgentService.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
-import { createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
+import { CLOSE_READ_RECONNECT_MS, createAgentClosing, createCloseRequests, type ClosingDeps } from './close.js'
 
 // The real close service, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../../lib/closeAgentService.js', async (real) => {
@@ -17,6 +19,7 @@ const row = (over: Partial<RegisteredSession> = {}) =>
 
 function setup(over: Partial<ClosingDeps> = {}, advertised: RegisteredSession[] = []) {
   const deps: ClosingDeps = {
+    readScreen: readInlineScreen,
     registry: { advertised: vi.fn(() => advertised) } as unknown as ClosingDeps['registry'],
     cleanupTabs: { refresh: vi.fn(async () => {}), isHidden: vi.fn(() => true), assertHidden: vi.fn(async () => {}) },
     watcher: { pollSession: vi.fn(async () => {}) } as unknown as ClosingDeps['watcher'],
@@ -27,6 +30,7 @@ function setup(over: Partial<ClosingDeps> = {}, advertised: RegisteredSession[] 
     sessionCheckpoints: { save: vi.fn(async () => {}) } as unknown as ClosingDeps['sessionCheckpoints'],
     stopAgent: vi.fn(async () => {}),
     announceSession: vi.fn(),
+    engineReady: vi.fn(async () => {}),
     ...over,
   }
   const closing = createAgentClosing(deps)
@@ -53,13 +57,38 @@ describe('closing agents no window shows', () => {
       expect(deps.captureTerminal).toHaveBeenCalledWith('a1', 80)
       expect(deps.sessionTurnState).toHaveBeenCalledWith('s1')
       expect(deps.openQuestions.has).toHaveBeenCalledWith('s1')
-      expect(inspectCloseActivity).toHaveBeenCalledWith(row(), 'screen', false, false)
+      expect(inspectCloseActivity).toHaveBeenCalledWith(row(), screenFor('claude').inspect('screen'), false, false)
     })
 
     it('with no session yet, has no lines to read', async () => {
       const { deps, close } = setup()
       await close.activity(row({ sessionId: '' }))
       expect(deps.watcher.pollSession).not.toHaveBeenCalled()
+    })
+
+    it.each(['ENGINE_STALE_REPLY', 'ENGINE_UNAVAILABLE'])('reads once more after %s, once the restarted worker is linked again', async code => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const pollSession = vi.fn().mockRejectedValueOnce(Object.assign(new Error(code), { code })).mockResolvedValue(undefined)
+      const { deps, close } = setup({ watcher: { pollSession } as unknown as ClosingDeps['watcher'] })
+      expect(await close.activity(row({ engine: 'codex' }))).toBe('idle')
+      expect(deps.engineReady).toHaveBeenCalledWith('codex', CLOSE_READ_RECONNECT_MS)
+      expect(pollSession).toHaveBeenCalledTimes(2)
+    })
+
+    it('reads only once more, and never retries a failure that is not a worker\'s restart', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {})
+      const stale = Object.assign(new Error('stale'), { code: 'ENGINE_STALE_REPLY' })
+      const twice = vi.fn().mockRejectedValue(stale)
+      const again = setup({ watcher: { pollSession: twice } as unknown as ClosingDeps['watcher'] })
+      await expect(again.close.activity(row())).rejects.toBe(stale)
+      expect(twice).toHaveBeenCalledTimes(2)
+      for (const error of [new Error('disk gone'), null]) {
+        const other = vi.fn().mockRejectedValue(error)
+        const once = setup({ watcher: { pollSession: other } as unknown as ClosingDeps['watcher'] })
+        await expect(once.close.activity(row())).rejects.toBe(error)
+        expect(other).toHaveBeenCalledOnce()
+        expect(once.deps.engineReady).not.toHaveBeenCalled()
+      }
     })
   })
 

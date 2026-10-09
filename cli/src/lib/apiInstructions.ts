@@ -1,7 +1,8 @@
 /** Discoverable tool access, without copying credentials or model settings into projects. */
 import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { ApiConnections } from './apiConnections.js'
+import type { ApiConnectionMetadata } from './apiConnectionMetadata.js'
+import { instructionFileOf } from '../engines/launches.js'
 
 const marker = '<!-- harness:apis -->'
 export const API_INSTRUCTIONS = `${marker}
@@ -18,9 +19,9 @@ Adding an API does not change this harness's model or subscription.
 
 /** Only Harness-created workspaces with saved APIs. Existing instructions are kept;
  * no global agent settings or credentials are written into the project. */
-export function prepareApiInstructions(store: ApiConnections, workspace: string, engine: string): void {
+export function prepareApiInstructions(store: Pick<ApiConnectionMetadata, 'list'>, workspace: string, engine: string): void {
   if (engine === 'terminal' || !store.list().length) return
-  const name = engine === 'claude' ? 'CLAUDE.md' : engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md'
+  const name = instructionFileOf(engine) ?? (engine === 'gemini' ? 'GEMINI.md' : 'AGENTS.md')
   const file = join(workspace, name)
   if (existsSync(file) && (!lstatSync(file).isFile() || lstatSync(file).isSymbolicLink())) return
   const previous = existsSync(file) ? readFileSync(file, 'utf8') : ''

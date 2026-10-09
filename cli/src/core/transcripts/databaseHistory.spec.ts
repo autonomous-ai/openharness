@@ -7,7 +7,7 @@ import { readKiloMessages } from '../../engines/kilo/reader.js'
 import { readOpencodeMessages } from '../../engines/opencode/reader.js'
 import { hermesDbForSession } from '../../lib/hermesHome.js'
 import type { RegisteredSession } from '../../lib/registry.js'
-import { databaseHistory } from './databaseHistory.js'
+import { databaseHistory, hermesDb } from './databaseHistory.js'
 
 vi.mock('../../engines/opencode/reader.js', () => ({ readOpencodeMessages: vi.fn(async () => ['opencode rows']) }))
 vi.mock('../../engines/opencode/normalizer.js', () => ({ opencodeMessagesToEvents: vi.fn((rows: unknown[]) => [{ from: 'opencode', rows }]) }))
@@ -36,6 +36,31 @@ describe('reading a conversation its engine keeps in a database', () => {
     expect(await databaseHistory(hermes)!()).toEqual([{ from: 'hermes', rows: ['hermes rows'] }])
     expect(hermesDbForSession).toHaveBeenCalledWith(hermes)
     expect(readHermesMessages).toHaveBeenCalledWith('/profiles/work/state.db', 's1')
+  })
+
+  it('nothing to read when the engines\' readers could not be loaded', async () => {
+    vi.resetModules()
+    vi.doMock('../../lib/databaseHistory.js', () => { throw new Error('the readers are gone') })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { databaseHistory: lazily } = await import('./databaseHistory.js')
+    expect(await lazily(session('kilo'))!()).toEqual([])
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[engine databaseHistory\] unavailable · /))
+    vi.doUnmock('../../lib/databaseHistory.js')
+    error.mockRestore()
+  })
+
+  it('a Hermes session\'s store is its home\'s, found by Hermes\'s code; the default home\'s without it', async () => {
+    const hermes = session('hermes')
+    expect(await hermesDb(hermes)).toBe('/profiles/work/state.db')
+    expect(hermesDbForSession).toHaveBeenLastCalledWith(hermes)
+    vi.resetModules()
+    vi.doMock('../../engines/hermes/inProcess.js', () => { throw new Error('Hermes is gone') })
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { hermesDb: lazily } = await import('./databaseHistory.js')
+    expect(await lazily(hermes)).toBe(join(env.HERMES_HOME, 'state.db'))
+    expect(error).toHaveBeenCalledWith(expect.stringMatching(/^\[engine hermes\] unavailable · /))
+    vi.doUnmock('../../engines/hermes/inProcess.js')
+    error.mockRestore()
   })
 
   it('nothing to read for an engine with a transcript file, and nothing read until asked', () => {

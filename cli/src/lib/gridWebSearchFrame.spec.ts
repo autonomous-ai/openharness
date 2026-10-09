@@ -18,6 +18,7 @@ import { agentFrame } from './agentFrame.js'
 import { buildLaunchOverrides, type LaunchOverridesDeps } from './launchOverrides.js'
 import { clearGridMcpUrlCache } from './gridMcpUrl.js'
 import { resolveGridTarget } from './gridTarget.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 const { gridName: GRID, baseUrl: BASE_URL, mcpUrl: MCP_URL, plan } = fakeGridAnswers()
 
@@ -42,7 +43,7 @@ async function loadRegistry() {
 }
 
 const DEPS: LaunchOverridesDeps = {
-  machine: () => ({ hermesSystemManaged: false }),
+  machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
   writeGridConfigDir: async (key) => `/state/grid-engine-config/${key}`,
   tmuxSupportsSessionEnv: async () => true,
   installCodexHooks: () => {},

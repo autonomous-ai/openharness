@@ -1,5 +1,4 @@
 /** Stop retains the logical session before retiring its process and terminal. */
-import { stopSharedCodexSession } from './codexSessionLifecycle.js'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
 import type { registry as liveRegistry, RegisteredSession } from './registry.js'
@@ -11,6 +10,7 @@ import { terminalRouteKey } from './terminalRuntime.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
 
 export interface StopAgentServiceDeps {
+  settlePane?: (agentId: string) => Promise<void>
   registry: Pick<typeof liveRegistry, 'resolve'>
   stoppedAgents: StoppedAgentStore
   restartJobs: AgentRestartCoordinator
@@ -25,6 +25,11 @@ export interface StopAgentServiceDeps {
   forgetSession(agentId: string, options: { force: true }): void
   markDeleted(agentId: string): void
   clearDeleted(agentId: string): void
+  /**
+   * Unload the conversation from its engine's own server (Codex's shared app-server) before its client is
+   * signalled: core/engines/nativeControls.ts, the engine's worker speaking its protocol under a grant.
+   */
+  stopNative(session: RegisteredSession, current: () => boolean, confirmUnusedConversation?: (session: RegisteredSession) => Promise<boolean>): Promise<void>
 }
 export class AgentStopError extends Error {
   readonly code = 'STOP_UNCONFIRMED'
@@ -51,13 +56,14 @@ const runtimeIdentity = (entry: RegisteredSession | undefined, withProcess = tru
 
 export function createStopAgentService(deps: StopAgentServiceDeps) {
   const { registry, stoppedAgents, restartJobs, stopJobs, tmuxBackend, agentReconciler,
-    forgetSession, markDeleted, clearDeleted } = deps
+    forgetSession, markDeleted, clearDeleted, stopNative } = deps
   return (target: string, options: StopAgentOptions = {}) => {
     const sessionId = registry.resolve(target)?.agentId ?? target
     const existing = stopJobs.get(sessionId)
     if (existing) return existing
     restartJobs.cancel(sessionId)
     const job = Promise.resolve().then(async () => {
+      await deps.settlePane?.(sessionId)
       const live = registry.resolve(sessionId)
       if (!live) return
       // A row still starting has no process yet, and the one it gains while this stop runs is the engine
@@ -92,8 +98,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       try {
         markDeleted(sessionId)
         if (s.sessionId) markDeleted(s.sessionId)
-        await stopSharedCodexSession(s, () => sameTarget() && options.current?.() !== false,
-          undefined, options.confirmUnusedConversation)
+        await stopNative(s, () => sameTarget() && options.current?.() !== false, options.confirmUnusedConversation)
         // Keep the terminal alive while the engine handles SIGTERM and flushes
         // its native store. Killing tmux in parallel can deliver SIGHUP first.
         const termination = await (isTerminalEngine(s.engine) ? Promise.resolve('gone' as const)

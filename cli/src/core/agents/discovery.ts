@@ -9,8 +9,8 @@
  */
 import { isTerminalEngine } from '../../engines/types.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
-import type { QuestionWatcher } from '../../lib/askQuestion.js'
-import { sameGridAssignment } from '../../lib/gridAssignment.js'
+import type { QuestionWatcher } from '../../lib/questionController.js'
+import { sameGridAssignment } from '../../lib/gridAssignmentWire.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import type { SessionInputController } from '../../lib/sessionInput.js'
@@ -175,7 +175,7 @@ export function createDiscoveryHandlers({
     if (refreshed) announceSession(refreshed)
   }
   const onDormant = async (agent: RegisteredSession, reason: string): Promise<void> => {
-    if (!agent.active) return
+    if (!agent.active || agent.launch?.state === 'held') return
     invalidateTerminalControl(agent.agentId)
     teams.forget(agent.agentId)
     input.forget(agent.agentId)
@@ -204,6 +204,12 @@ export function createDiscoveryHandlers({
     announceSession(agent)
   }
   const onRemoved = (agent: RegisteredSession, reason: string): void => {
+    // A missing waiting shell does not end the conversation held for preparation/recovery.
+    if (agent.launch?.state === 'held') {
+      registry.setActive(agent.agentId, false)
+      announceSession(agent)
+      return
+    }
     // A pane absent because RESTORE never ran is not a pane the person closed. Retiring it here
     // would archive a row whose tmux pane was simply never rebuilt, and the person would have to
     // Open each one by hand; keeping it dormant leaves the next daemon — the fixed one — something

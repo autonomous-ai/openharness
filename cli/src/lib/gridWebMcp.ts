@@ -43,6 +43,7 @@
  * authentication with nothing naming why.
  */
 
+import { GRID_MCP_AUTH_VAR, GROK_HOME_VAR, HERMES_MANAGED_DIR_VAR, HERMES_SYSTEM_MANAGED_DIR } from './gridLaunchWire.js'
 import {
   HARNESS_MCP_SERVER_NAME,
   HARNESS_MCP_TOOL_NAMES,
@@ -59,7 +60,7 @@ import {
  * it is rejected for the reason that ADR gives beside it, that it sends no header at all during
  * discovery.
  */
-export const GRID_MCP_AUTH_VAR = 'GRID_MCP_AUTHORIZATION'
+export { GRID_MCP_AUTH_VAR } from './gridLaunchWire.js'
 
 /** The header value [GRID_MCP_AUTH_VAR] carries — the whole of it, not the key. */
 export function mcpAuthorizationHeader(apiKey: string): string {
@@ -291,7 +292,7 @@ export function codexMcpArgs(mcpUrl: string): string[] {
  * Emitted as JSON, which is a subset of YAML: Hermes parses this file with a YAML loader, and
  * hand-rolling YAML quoting for a URL and a `${VAR}` is a way to be subtly wrong for free.
  */
-export const HERMES_MANAGED_DIR_VAR = 'HERMES_MANAGED_DIR'
+export { HERMES_MANAGED_DIR_VAR } from './gridLaunchWire.js'
 
 /**
  * Where Hermes looks for a managed scope when [HERMES_MANAGED_DIR_VAR] is unset
@@ -301,7 +302,7 @@ export const HERMES_MANAGED_DIR_VAR = 'HERMES_MANAGED_DIR'
  * module: a contract that stats the filesystem answers differently on two machines, and its spec
  * would pass or fail depending on which one ran it.
  */
-export const HERMES_SYSTEM_MANAGED_DIR = '/etc/hermes'
+export { HERMES_SYSTEM_MANAGED_DIR } from './gridLaunchWire.js'
 
 /** The one file [HERMES_MANAGED_DIR_VAR] is read for. */
 export const HERMES_MANAGED_CONFIG_FILE = 'config.yaml'
@@ -348,7 +349,7 @@ export function hermesManagedConfig(mcpUrl: string, keyVar: string): string {
  * with a user-scope server in a private `GROK_HOME`, Grok started it with no trust prompt and sent
  * `Authorization: Bearer <the variable's value>` on every request.
  */
-export const GROK_HOME_VAR = 'GROK_HOME'
+export { GROK_HOME_VAR } from './gridLaunchWire.js'
 
 /** The one file [GROK_HOME_VAR] is written for here. */
 export const GROK_CONFIG_FILE = 'config.toml'

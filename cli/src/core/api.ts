@@ -1,3 +1,5 @@
+import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
+import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
 /**
  * The boundary the services stand on (docs/design/2026-10-03-harnessd.md, "The core boundary"):
  * `CoreApi` is what a service may ask of the core, and `CorePorts` is what the core asks of services.
@@ -17,15 +19,16 @@ import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
+import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
 import type { createHarnessStorageReader } from '../lib/harnessTelemetry.js'
 import type { AgentGridTarget, GridAnnotation } from '../lib/gridAnnotation.js'
 import { GRID_FLEET_MAX_TIMEOUT_MS } from '../lib/gridFleetProtocol.js'
-import type { GridLaunchOverride } from '../lib/gridLaunch.js'
+import type { GridLaunchAnswer, GridLaunchOverride, GridLaunchRequest } from '../lib/gridLaunchWire.js'
 import type { NewAgentModel } from '../lib/newAgentModel.js'
-import type { LastTurnText, LiveEvent } from '../lib/normalize.js'
+import type { LastTurnText, LiveEvent } from '../engines/kit/events.js'
 import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
@@ -105,7 +108,15 @@ export const CONVERSATIONS_OFF: ConversationReads = {
   transcriptOk: async () => false,
 }
 
+export interface UsagePort {
+  read(target: AgentUsageTarget): Promise<Record<string, unknown>>
+  stop(): void
+}
+export const USAGE_FALLBACKS: PortFallbacks<UsagePort> = { read: later(FAIL), stop: undefined }
+
 export interface CoreApi {
+  /** Last aggregate observation, never a transcript read. Optional for services that do not ask. */
+  usage?: (target: AgentUsageTarget) => Promise<AgentTokenUsage | null>
   /** The daemon's data folder; a service keeps its own files in it. */
   dataDir: string
   terminals: TerminalsPort
@@ -496,6 +507,10 @@ const MINUTE = 60_000
  *   a move onto a grid model (`moveTarget`) each wait for it.
  * - A launch target, the private grid's name and the lists each run a few `grid` calls of up to 30 s.
  * - The Store's install and update set up a harness's toolchain: minutes.
+ *
+ * A grid or saved-API launch (`gridLaunch`) is built from what models has in hand, and a saved API's target
+ * (`apiTarget`) reads its model list for at most 15 s (lib/apiModels.ts): both take the half minute, which bounds
+ * how long a launch on one can wait. A launch on the engine's own login asks models nothing.
  */
 export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
   models: {
@@ -504,7 +519,7 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
     ensure: 15 * MINUTE, moveTarget: 15 * MINUTE,
     launchTarget: 3 * MINUTE, privateGridName: 2 * MINUTE, lists: 2 * MINUTE,
   },
-  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE },
+  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE, dshMaterialize: 6 * MINUTE },
 }
 
 /** The orchestrator (services/orchestrator.ts): its projects, for the apps and for the agents it runs. */
@@ -703,6 +718,18 @@ export interface ModelsPort {
   moveTarget(request: { gridName: string | null; model: string }): Promise<{ target: GridLaunchOverride } | { detail: string }>
   /** An agent was just moved onto a grid model: start that grid while its pane restarts, if it sleeps. */
   moved(launch: GridLaunchOverride): void
+  /**
+   * The launch that points `request.engine` at a grid or a saved API (lib/gridLaunch.ts): what its pane starts
+   * with and the config files the core writes for it, with a saved API's endpoint and key as saved now when
+   * `refresh`. An engine that cannot be pointed there is answered with the reason. The core builds no grid launch
+   * itself (docs/design/2026-10-08-launch-port.md).
+   */
+  gridLaunch(request: GridLaunchRequest): Promise<GridLaunchAnswer>
+  /** Fresh process evidence, batched; core never waits for it to discover or bind a session. */
+  gridAssignments(processes: readonly GridAssignmentProcess[]): Promise<GridAssignmentAnswer[]>
+  /** Where an agent moved onto a saved API's model sends its inference: the key travels only into its launch. The
+   *  sentence a person reads when the API cannot be used. */
+  apiTarget(request: { connectionId: string; model: string }): Promise<{ target: GridLaunchOverride; apiBase: string } | { detail: string }>
   /** The account's private grid: the backend's word, else what this machine works out; null for none. */
   privateGridName(): Promise<string | null>
   /** What `grid_models_changed` tells the windows: the list as a window that draws row state reads it,
@@ -716,13 +743,14 @@ export interface ModelsPort {
 }
 
 /**
- * What the core gets when models fails: grid set-up and every target answered with an error (a create on
- * a grid model answers GRID_UNAVAILABLE), frames with no note and no prewarm, the private grid as the
- * backend said it or none, and no push of the lists.
+ * What the core gets when models fails: grid set-up, every target and every grid or saved-API launch answered
+ * with an error (a create on a grid model answers GRID_UNAVAILABLE, and so does a relaunch on one), frames with no
+ * note and no prewarm, the private grid as the backend said it or none, and no push of the lists. A launch on the
+ * engine's own login never asks models.
  */
 export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
   ensure: later(FAIL), annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
-  privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
+  gridAssignments: later(FAIL), gridLaunch: later(FAIL), apiTarget: later(FAIL), privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
 }
 
 /** What the core calls while `ports.models` is null (models is off): its fallbacks' answers. */
@@ -733,6 +761,9 @@ export const MODELS_OFF: ModelsPort = {
   launchTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   moveTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   moved: () => {},
+  gridAssignments: () => Promise.reject(new ServiceUnavailableError('models')),
+  gridLaunch: () => Promise.reject(new ServiceUnavailableError('models')),
+  apiTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   privateGridName: async () => null,
   lists: () => Promise.reject(new ServiceUnavailableError('models')),
   machines: () => {},
@@ -838,7 +869,7 @@ export type VoiceRouteReply = { t: 'taken' } | { t: 'sent'; agentId: string } | 
 
 /** The Devices tab (services/devices.ts): the devices on this computer, and a device's settings. Only
  *  the owner, on this computer or through the owner's own app, may manage them. */
-export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_settings'] as const
+export const DEVICES_REQUESTS = ['harness_devices_list', 'harness_device_settings', 'pet_preview', 'pet_apply', 'pet_reset', 'pet_status'] as const
 
 /**
  * The core's calls into the devices: what the windows on this computer said that the dial follows, the
@@ -1265,9 +1296,22 @@ export interface WindowRelay {
     onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
 }
 
+export interface StorePort {
+  dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
+  dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
+}
+
+export const STORE_FALLBACKS: PortFallbacks<StorePort> = { dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
+export const STORE_OFF: StorePort = {
+  dshMaterialize: () => Promise.reject(new ServiceUnavailableError('store')),
+  dshLaunch: () => Promise.reject(new ServiceUnavailableError('store')),
+}
+
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
+  usage: UsagePort | null
+  store: StorePort | null
   search: SearchPort | null
   viewers: ViewersPort | null
   models: ModelsPort | null
@@ -1282,7 +1326,7 @@ export interface CorePorts {
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
 }
 
 export interface CoreApiDeps {

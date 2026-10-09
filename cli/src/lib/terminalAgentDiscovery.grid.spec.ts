@@ -15,11 +15,11 @@ import type { TerminalRootObservation, TerminalRuntimeRef } from './terminalType
  */
 
 const probeGatewayRuntime = vi.hoisted(() => vi.fn())
-const probeGridAssignment = vi.hoisted(() => vi.fn())
+const readProcessEnv = vi.hoisted(() => vi.fn())
 const processRows = vi.hoisted(() => vi.fn())
 
 vi.mock('./gatewayRuntime.js', () => ({ probeGatewayRuntime }))
-vi.mock('./gridAssignment.js', () => ({ probeGridAssignment }))
+vi.mock('./processEnv.js', () => ({ readProcessEnv }))
 vi.mock('./tmux.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./tmux.js')>(),
   processRows,
@@ -46,7 +46,7 @@ function backendWith(name: 'tmux', instanceId: string, roots: TerminalRootObserv
 beforeEach(() => {
   probeGatewayRuntime.mockReset()
   probeGatewayRuntime.mockResolvedValue({ kind: null })
-  probeGridAssignment.mockReset()
+  readProcessEnv.mockReset()
   processRows.mockReset()
 })
 
@@ -54,9 +54,9 @@ describe('grid assignment on the live terminal discovery path', () => {
   it('reports the grid for every pane, from the process rather than the pane', async () => {
     processRows.mockResolvedValue([
       row(10, 1, 'bash'), row(30, 10, 'claude'),
-      row(20, 1, 'bash'), row(40, 20, 'codex'),
+      row(20, 1, 'bash'), row(40, 20, 'codex', 'codex -c model_providers.grid.base_url="https://grid.example/relay/v1" -m chosen'),
     ])
-    probeGridAssignment.mockResolvedValue(ASSIGNMENT)
+    readProcessEnv.mockResolvedValue({ ANTHROPIC_BASE_URL: ASSIGNMENT.baseUrl, ANTHROPIC_MODEL: ASSIGNMENT.model, API_KEY: 'secret' })
 
     const probe = await probeTerminalAgents(
       [
@@ -70,16 +70,17 @@ describe('grid assignment on the live terminal discovery path', () => {
     )
 
     expect(probe.agents).toHaveLength(2)
-    expect(probe.agents.every((agent) => agent.grid === ASSIGNMENT)).toBe(true)
-    expect(probeGridAssignment).toHaveBeenCalledTimes(2)
-    for (const [identity] of probeGridAssignment.mock.calls) {
+    expect(probe.agents.every((agent) => agent.grid === undefined && agent.gridProcess)).toBe(true)
+    expect(JSON.stringify(probe.agents.map(a => a.gridProcess))).not.toContain('secret')
+    expect(readProcessEnv).toHaveBeenCalled()
+    for (const [identity] of readProcessEnv.mock.calls) {
       expect(identity).toMatchObject({ startMarker: START })
     }
   })
 
   it('reports null for an agent on its own login', async () => {
     processRows.mockResolvedValue([row(10, 1, 'bash'), row(30, 10, 'claude')])
-    probeGridAssignment.mockResolvedValue(null)
+    readProcessEnv.mockResolvedValue({})
     const probe = await probeTerminalAgents(
       [backendWith('tmux', 'tmux', [{ runtime: TMUX_RUNTIME, rootPid: 10, cwd: '/work' }])],
       ['tmux'],
@@ -96,6 +97,6 @@ describe('grid assignment on the live terminal discovery path', () => {
       999,
     )
     expect(probe.processTableAvailable).toBe(false)
-    expect(probeGridAssignment).not.toHaveBeenCalled()
+    expect(readProcessEnv).not.toHaveBeenCalled()
   })
 })

@@ -86,7 +86,9 @@ coding agent should run it, using the last successful agent when compatible. The
 then reads `Blender · Codex`. Choosing a direct agent removes the package choice
 and sends no `dsh`; it does not remove project instructions or skills.
 
-Fresh harnesses use OpenCode with Muse Spark 1.3, xhigh effort and Auto-approve when compatible. Explicit and
+With nothing remembered, a fresh harness opens on the agent the person already uses: Claude Code
+or Codex when the machine reports it installed and signed in (the one used most recently when both
+are). Otherwise fresh harnesses use OpenCode with Muse Spark 1.3, xhigh effort and Auto-approve when compatible. Explicit and
 remembered agent choices are retained; reopening a session keeps its saved agent
 and model. A package's declared agent is a compatibility fallback, not a global default.
 

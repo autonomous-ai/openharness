@@ -1,3 +1,4 @@
+import { parseEngineQuestionPane } from '../engines/screens.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { createQuestionResponse, createQuestions, type QuestionDeps } from './questions.js'
@@ -9,6 +10,8 @@ const agents = new Map<string, RegisteredSession>([
 
 function setup(over: Partial<QuestionDeps> = {}) {
   const deps: QuestionDeps = {
+    questionControlFor: () => undefined,
+    readQuestion: (session, capture) => parseEngineQuestionPane(session.engine, capture),
     resolve: (id) => agents.get(id),
     terminal: {
       captureTerminal: vi.fn(async () => 'pane'),

@@ -4,15 +4,11 @@
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 12: docs/design/2026-10-03-harnessd.md).
  */
-import { dirname } from 'node:path'
 import { engineHooks } from '../../engines/hooks.js'
-import { env } from '../../config/env.js'
+import { sessionStoreContracts, type SessionStoreEngine } from '../../engines/sessionStoreContracts.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
-import { adoptEngineHomes, movedEngineHomes } from '../../lib/engineHomes.js'
-import {
-  installAgyHooks, installAmpPlugin, installCommandCodeHooks, installCopilotHooks, installCursorHooks,
-  installDevinHooks, installGrokHooks, installHermesHooks, installKiloPlugin, installOpencodePlugin, installPiExtension,
-} from '../../lib/hooks.js'
+import { adoptHomes, movedHomes } from '../../lib/engineHomes.js'
+import { loadEngine, type InProcessModules } from '../../engines/inProcess.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
@@ -24,6 +20,8 @@ import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 type ResolveHookAgent = NonNullable<HookServerHandlers['resolveHookAgent']>
 
 export interface EngineHookDeps {
+  /** Only the core's short pane dispatch/commit, never service preparation or an engine watch. */
+  panePending?: (agentId: string) => Promise<unknown> | undefined
   /** Hints name tmux panes; without tmux there is nothing they can point at. */
   tmuxBackend: unknown
   agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'trigger'>
@@ -48,7 +46,7 @@ type HookQuery = Parameters<ResolveHookAgent>[0]
 const recordKey = (session: RegisteredSession | undefined): string =>
   session ? `${session.agentId}\u0000${session.processIdentity?.pid ?? ''}\u0000${session.processIdentity?.startMarker ?? ''}` : ''
 
-export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: EngineHookDeps) {
+export function createEngineHooks({ tmuxBackend, agentReconciler, registry, panePending }: EngineHookDeps) {
   /**
    * The agents on the hinted panes: those whose recorded process the caller descends from, the rest,
    * and of the rest those with no live process recorded at all (none yet, or one that has exited).
@@ -147,6 +145,19 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
       found = again
       choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
     }
+    // Cursor may admit a unique runtime without recorded ancestry. A hook from the engine just
+    // dispatched there must not rewrite its row before that pane operation has committed its route.
+    // Acknowledge now so the hook client never falls back to writing the registry itself.
+    for (;;) {
+      const pending = choice.agent && panePending?.(choice.agent.agentId)
+      if (!pending) break
+      onWait?.()
+      try { await pending } catch { return null }
+      const again = await matchCaller(resolved, engine, ancestry)
+      if (!again) return null
+      found = again
+      choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
+    }
     const { candidates } = found
     if (choice.agent) {
       if (choice.reason === 'runtime') {
@@ -175,6 +186,18 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
   return { resolveHookAgent, onSessionEnd }
 }
 
+/**
+ * OpenCode's plugin, installed again before an OpenCode spawn (core/agents/create.ts): OpenCode may have moved
+ * from 1.x to 2.x under a running daemon, and its new TUI must not find the old server plugin. False when the
+ * other engines' installers could not be loaded.
+ */
+export async function installOpencodePluginBeforeSpawn(port: number): Promise<boolean> {
+  const installers = await loadEngine('hooks')
+  if (!installers) return false
+  installers.installOpencodePlugin(port)
+  return true
+}
+
 export interface InstallEngineHooksOptions {
   /** Only these engines' hooks (`HOOK_INSTALL_ENGINES`); every engine's when absent. */
   only?: ReadonlySet<string> | null
@@ -185,49 +208,69 @@ export interface InstallEngineHooksOptions {
 }
 
 /**
+ * The other engines' installers, in the order they have always run. Their code is loaded only here, once, as
+ * the core starts (engines/inProcess.ts `hooks`), and only when one of them is to be installed.
+ */
+const OTHER_INSTALLERS: Array<[string, (installers: InProcessModules['hooks']) => (port: number) => void]> = [
+  ['cursor', (installers) => installers.installCursorHooks],
+  ['opencode', (installers) => installers.installOpencodePlugin],
+  ['kilo', (installers) => installers.installKiloPlugin],
+  ['pi', (installers) => installers.installPiExtension],
+  // A self-update refreshes plugin files here; running engine processes pick them up according to each
+  // vendor's own plugin reload lifecycle.
+  ['amp', (installers) => installers.installAmpPlugin],
+  ['hermes', (installers) => installers.installHermesHooks],
+  ['devin', (installers) => installers.installDevinHooks],
+  ['commandcode', (installers) => installers.installCommandCodeHooks],
+  ['grok', (installers) => installers.installGrokHooks],
+  ['agy', (installers) => installers.installAgyHooks],
+  ['copilot', (installers) => installers.installCopilotHooks],
+]
+
+/**
  * Install every engine's hooks with the port the local server actually bound.
  *
  * One vendor at a time, each behind its own guard: these write into thirteen different settings
  * files owned by thirteen different CLIs, and one that is malformed, read-only or mid-write is not
  * a reason for the other twelve to go uninstalled — let alone for the daemon not to come up.
+ *
+ * Claude Code's and Codex's first, in line, as before. Then the other engines' installers are loaded, at this
+ * same step, which the caller awaits so that nothing it starts next (a restored pane among them) runs before
+ * their hooks are in place. Installers that could not be loaded are skipped and named, as one that throws is.
+ * Never rejects.
  */
-export function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): void {
+export async function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): Promise<void> {
   const hookStep = (vendor: string, install: () => void): void => {
     if (options.only && !options.only.has(vendor)) return
     try { install() } catch (error) {
       console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
     }
   }
-  // The homes the person moved (lib/engineHomes.ts) get the hooks too: every one adopted before, those
-  // the daemon's own environment names, and those of the login shell every engine is launched through
-  // once it has been read. That read is never waited on (cli.ts), so an engine started in the first
-  // seconds of a daemon's very first start with a moved home may miss its first hook.
-  const installIn = (homes: { claude: Array<string | null>; codex: Array<string | null> }): void => {
-    for (const engine of Object.keys(homes) as Array<keyof typeof homes>) {
-      for (const home of homes[engine]) if (home) hookStep(engine, () => engineHooks[engine].installIn(port, home))
-    }
+  // The homes the person moved (lib/engineHomes.ts, by each engine's declared session store) get the hooks
+  // too: every one adopted before, those the daemon's own environment names, and those of the login shell
+  // every engine is launched through once it has been read. That read is never waited on (cli.ts), so an
+  // engine started in the first seconds of a daemon's very first start with a moved home may miss its first hook.
+  const installIn = (homes: Array<[SessionStoreEngine, string]>): void => {
+    for (const [engine, home] of homes) hookStep(engine, () => engineHooks[engine].installIn(port, home))
   }
   const adopt = (environment: NodeJS.ProcessEnv): void => {
-    const moved = adoptEngineHomes(environment, { claudeHome: dirname(env.CLAUDE_PROJECTS_DIR), codexHome: env.CODEX_HOME })
-    if (!moved.claude && !moved.codex) return
-    console.log(`[hooks] engines keep their data elsewhere here: ${[moved.claude && `Claude Code in ${moved.claude}`, moved.codex && `Codex in ${moved.codex}`].filter(Boolean).join(', ')}`)
-    installIn({ claude: [moved.claude], codex: [moved.codex] })
+    const moved = (Object.entries(adoptHomes(environment)) as Array<[SessionStoreEngine, string | null]>)
+      .filter((found): found is [SessionStoreEngine, string] => !!found[1])
+    if (!moved.length) return
+    console.log(`[hooks] engines keep their data elsewhere here: ${moved.map(([engine, home]) => `${sessionStoreContracts[engine].product} in ${home}`).join(', ')}`)
+    installIn(moved)
   }
-  installIn(movedEngineHomes())
+  installIn((Object.keys(sessionStoreContracts) as SessionStoreEngine[]).flatMap((engine) => movedHomes(engine).map((home): [SessionStoreEngine, string] => [engine, home])))
   adopt(options.environment ?? process.env)
   void options.loginShell?.then(adopt)
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port))
-  hookStep('cursor', () => installCursorHooks(port))
-  hookStep('opencode', () => installOpencodePlugin(port))
-  hookStep('kilo', () => installKiloPlugin(port))
-  hookStep('pi', () => installPiExtension(port))
-  // A self-update refreshes plugin files here; running engine processes pick them up according to each
-  // vendor's own plugin reload lifecycle.
-  hookStep('amp', () => installAmpPlugin(port))
-  hookStep('hermes', () => installHermesHooks(port))
-  hookStep('devin', () => installDevinHooks(port))
-  hookStep('commandcode', () => installCommandCodeHooks(port))
-  hookStep('grok', () => installGrokHooks(port))
-  hookStep('agy', () => installAgyHooks(port))
-  hookStep('copilot', () => installCopilotHooks(port))
+  const others = OTHER_INSTALLERS.filter(([vendor]) => !options.only || options.only.has(vendor))
+  if (!others.length) return
+  const installers = await loadEngine('hooks')
+  for (const [vendor, installer] of others) {
+    hookStep(vendor, () => {
+      if (!installers) throw new Error('its installer could not be loaded')
+      installer(installers)(port)
+    })
+  }
 }

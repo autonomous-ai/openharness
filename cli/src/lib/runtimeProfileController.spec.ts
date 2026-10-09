@@ -4,6 +4,14 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { codexEffortRows, parseCodexPicker } from '../engines/codex/modelPicker.js'
 import type { RegisteredSession } from './registry.js'
+import { loadEngine } from '../engines/inProcess.js'
+
+// The other engines' pane drivers read with their engine's own code, loaded in this process; a test may say it
+// could not be.
+vi.mock('../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
 import { encodeRuntimeProfile, parseRuntimeProfile, RuntimeProfileManager } from './runtimeProfile.js'
 import {
   inspectRuntimePane,
@@ -11,6 +19,7 @@ import {
   parseCursorParameterRows,
   paneModal,
   RuntimeProfileController,
+  RuntimeProfileControlError,
 } from './runtimeProfileController.js'
 import {
   CLAUDE_PROMPT, CLAUDE_REWIND_CONFIRM, CLAUDE_REWIND_EMPTY, CLAUDE_REWIND_LIST, CLAUDE_REWIND_LIST_MESSAGE_FOCUSED,
@@ -432,6 +441,32 @@ describe('runtime pane parsing', () => {
 })
 
 describe('RuntimeProfileController', () => {
+  it('cancels the original conversation transaction after the registry row is rebound in place', async () => {
+    const value = session('claude'), original = structuredClone(value), manager = new RuntimeProfileManager()
+    manager.hydrate(value, [])
+    manager.ingestPane(value, 'Sonnet 5 with low effort\n❯ ', true)
+    const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'claude', model: 'opus', effort: 'high' })
+    const cancelled = vi.spyOn(manager, 'cancelControl'), finished = vi.spyOn(manager, 'finishControl'), release = vi.fn()
+    const controller = new RuntimeProfileController({
+      manager, getSession: () => value, validateRuntime: async () => true, capture: async () => CLAUDE_PROMPT,
+      sendText: vi.fn(async () => true), sendLiteral: vi.fn(async () => true), sendKey: vi.fn(async () => true), acquireInput: () => release,
+      modelControlFor: bound => ({ validate: async () => {}, apply: async () => {
+        value.sessionId = 'replacement'
+        value.tmuxPane = '%2'
+        value.runtimes[0] = { backend: 'tmux', paneId: '%2' }
+        expect(bound.sessionId).toBe('s1')
+        expect(bound.runtimes).toEqual(original.runtimes)
+        throw new RuntimeProfileControlError('BUSY')
+      } }),
+    })
+    await expect(controller.setProfile('h1', target)).rejects.toMatchObject({ code: 'BUSY' })
+    expect(cancelled).toHaveBeenCalledExactlyOnceWith('s1')
+    expect(finished).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledOnce()
+    expect(manager.beginControl(original, parseRuntimeProfile(target)!)).toBe(true)
+    manager.cancelControl('s1')
+  })
+
   it('sets Claude model and effort only after transcript confirmations', async () => {
     const value = session('claude')
     const manager = new RuntimeProfileManager()
@@ -1005,5 +1040,27 @@ describe('RuntimeProfileController', () => {
     await expect(controller.setProfile('s1', target)).rejects.toMatchObject({ code: 'UNSUPPORTED_CLI_VERSION' })
     expect(sendKey).not.toHaveBeenCalled()
     expect(sendText).not.toHaveBeenCalled()
+  })
+
+  it('refuses a switch of another engine whose code could not be loaded, before any key or the input lock', async () => {
+    // Behind the gate above today; were it to open again, a driver must not press keys it cannot read the
+    // answer to.
+    const value = session('opencode')
+    const manager = new RuntimeProfileManager()
+    manager.hydrate(value, [])
+    const target = encodeRuntimeProfile({ sessionId: 'h1', engine: 'opencode', model: 'vibe/minimax-m3', effort: 'auto' })
+    vi.spyOn(manager, 'supportsControl').mockReturnValue(true)
+    vi.spyOn(manager, 'modelsForSession').mockResolvedValue([{ id: target, displayName: 'MiniMax M3' }])
+    vi.mocked(loadEngine).mockResolvedValueOnce(null as never)
+    const sendKey = vi.fn().mockResolvedValue(true)
+    const acquireInput = vi.fn(() => () => undefined)
+    const controller = new RuntimeProfileController({
+      manager, getSession: () => value, validateRuntime: async () => true, capture: async () => '',
+      sendText: vi.fn().mockResolvedValue(true), sendKey, sendLiteral: vi.fn().mockResolvedValue(true), acquireInput,
+    })
+    await expect(controller.setProfile('s1', target)).rejects.toMatchObject({ code: 'UNSUPPORTED_CLI_VERSION' })
+    expect(loadEngine).toHaveBeenCalledWith('opencode')
+    expect(acquireInput).not.toHaveBeenCalled()
+    expect(sendKey).not.toHaveBeenCalled()
   })
 })

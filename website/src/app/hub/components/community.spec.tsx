@@ -44,9 +44,15 @@ describe('community navigation', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Search harnesses' }));
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'orbit' } });
+    // Publications are searched by the server, across every page; the starters are matched here.
+    await waitFor(() => expect(request).toHaveBeenLastCalledWith('harnesses?q=orbit'));
     expect(screen.getByRole('link', { name: 'Open A little perspective' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Open Blue hour' })).not.toBeInTheDocument();
-    await waitFor(() => expect(request).toHaveBeenCalled());
+    expect(window.location.search).toBe('?q=orbit');
+    fireEvent.keyDown(screen.getByRole('searchbox'), { key: 'Escape' });
+    await waitFor(() => expect(request).toHaveBeenLastCalledWith('harnesses?'));
+    expect(window.location.search).toBe('');
+    expect(screen.getByRole('link', { name: 'Open Blue hour' })).toBeInTheDocument();
   });
   it('draws the starters after the last page, so paging never lands above them', async () => {
     request.mockResolvedValueOnce({ harnesses: [{ ...sample, id: 'first' }], nextCursor: 'next-page', following: [], stats: {}, signedIn: true });
@@ -54,10 +60,13 @@ describe('community navigation', () => {
     await screen.findByRole('button', { name: 'More harnesses' });
     expect(screen.queryByRole('link', { name: 'Open Blue hour' })).not.toBeInTheDocument();
     // A search finds them at once: there is nothing to scroll past.
+    request.mockResolvedValueOnce({ harnesses: [], nextCursor: null, following: [], stats: {}, signedIn: true });
     fireEvent.click(screen.getByRole('button', { name: 'Search harnesses' }));
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'melody' } });
-    expect(screen.getByRole('link', { name: 'Open Blue hour' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close search' }));
+    await screen.findByRole('link', { name: 'Open Blue hour' });
+    request.mockResolvedValueOnce({ harnesses: [{ ...sample, id: 'first' }], nextCursor: 'next-page', following: [], stats: {}, signedIn: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    await waitFor(() => expect(screen.queryByRole('link', { name: 'Open Blue hour' })).not.toBeInTheDocument());
     request.mockResolvedValueOnce({ harnesses: [{ ...sample, id: 'second', title: 'Second' }], nextCursor: null, following: [], stats: {}, signedIn: true });
     fireEvent.click(screen.getByRole('button', { name: 'More harnesses' }));
     await screen.findByRole('link', { name: 'Open Blue hour' });

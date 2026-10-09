@@ -1,6 +1,6 @@
 import type { LiveParser } from '../../engines/facets/live.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { removeCursorPendingTasks } from '../../engines/cursor/pendingTasks.js'
+import { removePendingCursorTasks } from '../engines/cursorTasks.js'
 import type { TurnState } from '../../lib/normalize.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createSessionNormalizers } from '../transcripts/normalizers.js'
@@ -8,7 +8,8 @@ import { createTurnHooks, STOP_HOOK_GRACE_MS, type TurnHookDeps } from './turnHo
 import { engineHooks } from '../../engines/hooks.js'
 import type { HookTurnContext } from '../../engines/facets/hooks.js'
 
-vi.mock('../../engines/cursor/pendingTasks.js', () => ({ removeCursorPendingTasks: vi.fn(async () => {}) }))
+// Cursor's queued Tasks are cleared through the core's own door to them (core/engines/cursorTasks.ts).
+vi.mock('../engines/cursorTasks.js', () => ({ removePendingCursorTasks: vi.fn(async () => {}) }))
 
 const END = [{ type: 'turn_ended', payload: {} }]
 const ABORT = [{ type: 'turn_ended', payload: { aborted: true } }]
@@ -412,7 +413,7 @@ describe('turn hooks', () => {
       expect(run.deps.emit).toHaveBeenCalledWith('s1', END)
       expect(run.deps.announceTurnAborted).not.toHaveBeenCalled()
       await vi.advanceTimersByTimeAsync(2_500)
-      expect(removeCursorPendingTasks).toHaveBeenCalledWith('/data', 's1')
+      expect(removePendingCursorTasks).toHaveBeenCalledWith('/data', 's1')
     })
 
     it('announces a turn that failed before writing anything, and leaves a session with no normalizer', async () => {

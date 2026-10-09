@@ -6,8 +6,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TailHold } from '../../watcher/watcher.js'
 import { createAttach, type AttachDeps } from './attach.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import { createSessionNormalizers } from './normalizers.js'
-import type { RelaunchMark } from './relaunch.js'
+import { createRelaunchMarks, type RelaunchMark } from './relaunch.js'
 import type { PreparedLive } from '../engines/liveSessions.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 
@@ -68,8 +69,14 @@ const transcript = (lines: unknown[] = []): string => {
 const session = (engine: string, transcriptPath?: string, over: Partial<RegisteredSession> = {}): RegisteredSession =>
   ({ agentId: `${engine}-agent`, sessionId: `${engine}-s`, engine, transcriptPath, ...over }) as RegisteredSession
 
+// Each engine's code is loaded in this process before an attach folds; a test may say it could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
+})
+
 const IDLE_AGY = 'done\n\n  ? for shortcuts'
-const started = (userMessage = 'go') => ({ type: 'turn_started', payload: { userMessage } })
+const started = (userMessage = 'go') => ({ type: 'turn_started' as const, payload: { userMessage } })
 const CLAUDE_PROMPT = { type: 'user', message: { role: 'user', content: 'hello' }, uuid: 'u1' }
 
 function setup(over: Partial<AttachDeps> = {}) {
@@ -106,7 +113,7 @@ function setup(over: Partial<AttachDeps> = {}) {
 
 const made = (kind: string) => fakes.made.filter((entry) => entry.kind === kind).map((entry) => entry.instance)
 
-function remoteSetup(open = false) {
+function remoteSetup(open = false, over: Partial<AttachDeps> = {}) {
   const turn = { identity: 'worker:turn', turnOpen: open, continued: false }
   const handle = { engine: 'claude', turnOpen: open, snapshot: () => ({ ...turn }), closeTurn: vi.fn() }
   const candidate = { state: { handle }, page: { cursor: { offset: 20 }, lastStarted: open ? started() : null },
@@ -120,9 +127,50 @@ function remoteSetup(open = false) {
     prepare: vi.fn(async (_session, _options, observe, observePage) => { await observePage?.(frames); frames.forEach(observe); return candidate }),
     install: vi.fn(() => true), discard: vi.fn(), retry: vi.fn(),
   }
-  const p = setup({ remoteLive: remote, liveFor: vi.fn(() => { throw new Error('isolated parser must stay in its worker') }) })
+  const p = setup({ remoteLive: remote, liveFor: vi.fn(() => { throw new Error('isolated parser must stay in its worker') }), ...over })
   return { ...p, remote, candidate, handle }
 }
+
+describe('the order of an attach of another engine\'s session', () => {
+  it('loads the engine\'s code, then folds, then starts the tail: no line can come before its normalizer', async () => {
+    let loaded!: () => void
+    const real = await loadEngine('muse')
+    vi.mocked(loadEngine).mockImplementationOnce(() => new Promise((settle) => { loaded = () => settle(real as never) }) as never)
+    const run = setup()
+    const path = transcript([{ any: 'line' }])
+    const attaching = run.attach.attachSession(session('muse', path))
+    await new Promise((settle) => setTimeout(settle, 20))
+    expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+    expect(run.normalizers.hasState('muse-s')).toBe(false)
+    loaded()
+    expect(await attaching).toBe(true)
+    expect(run.normalizers.museNormalizers.has('muse-s')).toBe(true)
+    expect(run.deps.watcher.addSession).toHaveBeenCalledTimes(1)
+    // Claude Code and Codex never ask for it.
+    vi.mocked(loadEngine).mockClear()
+    await setup().attach.attachSession(session('codex', transcript([])))
+    expect(loadEngine).not.toHaveBeenCalled()
+  })
+})
+
+describe('attaching a session whose engine\'s code could not be loaded', () => {
+  it('follows it with no normalizer or reader, says so, and folds nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.mocked(loadEngine).mockResolvedValueOnce(null as never).mockResolvedValueOnce(null as never)
+    const file = setup()
+    const path = transcript([{ any: 'line' }])
+    expect(await file.attach.attachSession(session('grok', path))).toBe(true)
+    expect(file.normalizers.hasState('grok-s')).toBe(false)
+    expect(file.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'grok-s', transcriptPath: path }), {})
+    expect(file.deps.emit).not.toHaveBeenCalled()
+    const store = setup()
+    expect(await store.attach.attachSession(session('opencode'))).toBe(true)
+    expect(store.normalizers.hasState('opencode-s')).toBe(false)
+    expect(warn).toHaveBeenCalledWith('[agent] grok-age attached without its engine\'s code · engine=grok · its transcript is not read')
+    expect(warn).toHaveBeenCalledWith('[agent] opencode attached without its engine\'s code · engine=opencode · its transcript is not read')
+    warn.mockRestore()
+  })
+})
 
 describe('attaching a session', () => {
   afterEach(() => {
@@ -157,6 +205,77 @@ describe('attaching a session', () => {
     expect(p.remote.prepare).toHaveBeenCalledWith(s, { live: true, end: undefined }, expect.any(Function), undefined)
     expect(p.deps.watcher.hold).not.toHaveBeenCalled()
     expect(p.normalizers.liveParsers.get(s.sessionId)).toBe(p.handle)
+  })
+
+  it.each(['begin', 'prepare', 'config', 'commit', 'install'])('keeps the crash-resume boundary after a failed %s until an attach commits', async phase => {
+    let now = 0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const marks = createRelaunchMarks()
+    const p = remoteSetup(true, { relaunchMarks: marks }), s = session('claude', '/fixture/transcript')
+    marks.note(s.sessionId, 20, true)
+    const unavailable = () => { throw new Error('ENGINE_STALE_REPLY') }
+    if (phase === 'begin') vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockImplementationOnce(unavailable)
+    if (phase === 'prepare') vi.mocked(p.remote.prepare).mockImplementationOnce(unavailable)
+    if (phase === 'config') vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...p.profile, config: async () => unavailable() })
+    if (phase === 'commit') vi.mocked(p.deps.runtimeProfiles.beginHydrate).mockReturnValueOnce({ ...p.profile, commitWith: () => false })
+    if (phase === 'install') vi.mocked(p.remote.install).mockReturnValueOnce(false)
+    await p.attach.attachSession(s).catch(() => {})
+    expect(p.deps.emit).not.toHaveBeenCalled()
+    expect(p.remote.retry).toHaveBeenCalledWith(s)
+    expect(marks.size).toBe(1)
+    // Worker availability cannot age a confirmed resume back into an interrupted live turn.
+    now = 60 * 60_000
+    await p.attach.attachSession(s, true)
+    expect(p.remote.prepare).toHaveBeenLastCalledWith(s, { live: false, end: 20 }, expect.any(Function), undefined)
+    expect(p.handle.closeTurn).toHaveBeenCalledExactlyOnceWith('abandoned')
+    expect(p.deps.emit).not.toHaveBeenCalled()
+    expect(marks.size).toBe(0)
+  })
+
+  it('closes the interrupted history before the resumed engine can deliver a new live turn', async () => {
+    const marks = createRelaunchMarks()
+    const p = remoteSetup(true, { relaunchMarks: marks }), s = session('claude', '/fixture/transcript')
+    marks.note(s.sessionId, 20, true)
+    vi.mocked(p.deps.watcher.addSession).mockImplementationOnce(async () => {
+      expect(p.handle.closeTurn).toHaveBeenCalledExactlyOnceWith('abandoned')
+      p.deps.emit(s.sessionId, [started('after the crash')])
+      p.handle.closeTurn.mockClear()
+    })
+    await p.attach.attachSession(s)
+    expect(p.deps.emit).toHaveBeenCalledExactlyOnceWith(s.sessionId, [started('after the crash')])
+    expect(p.handle.closeTurn).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('uses a held tail from the old engine only when the engine survived: restarted %s', async restarted => {
+    const marks = createRelaunchMarks()
+    const p = remoteSetup(true, { relaunchMarks: marks }), s = session('claude', '/fixture/transcript')
+    const old = { ...p.handle }
+    p.normalizers.liveParsers.set(s.sessionId, old)
+    const hold: TailHold = { offset: 12, expired: false, release: vi.fn() }
+    vi.mocked(p.deps.watcher.hold).mockResolvedValue(hold)
+    vi.mocked(p.deps.watcher.tails).mockReturnValue(true)
+    marks.note(s.sessionId, 20, restarted)
+    await p.attach.attachSession(s)
+    expect(p.remote.prepare).toHaveBeenCalledWith(s, { live: false, end: restarted ? 20 : 12 }, expect.any(Function), undefined)
+    expect(p.handle.closeTurn).toHaveBeenCalledTimes(restarted ? 1 : 0)
+    expect(p.deps.emit).not.toHaveBeenCalled()
+    expect(hold.release).toHaveBeenCalled()
+    expect(marks.size).toBe(0)
+  })
+
+  it.each(['prepare', 'config'])('retries a resumed attach whose tail hold expires during %s', async stage => {
+    const marks = createRelaunchMarks()
+    const p = remoteSetup(true, { relaunchMarks: marks }), s = session('claude', '/fixture/transcript')
+    let expired = stage === 'prepare'
+    const hold: TailHold = { offset: 12, get expired() { return expired }, release: vi.fn() }
+    vi.mocked(p.deps.watcher.hold).mockResolvedValue(hold)
+    if (stage === 'config') vi.mocked(p.deps.runtimeProfiles.ingestConfig).mockImplementationOnce(async () => { expired = true; return false })
+    marks.note(s.sessionId, 20, true)
+    await p.attach.attachSession(s)
+    expect(p.remote.retry).toHaveBeenCalledWith(s)
+    expect(p.remote.install).not.toHaveBeenCalled()
+    expect(p.deps.emit).not.toHaveBeenCalled()
+    expect(marks.read(s.sessionId)).toEqual({ offset: 20, engineStarted: true })
   })
 
   it.each([false, true])('retains a binding and retries a failed worker prepare, with an existing tail: %s', async held => {
@@ -353,21 +472,21 @@ describe('attaching a session', () => {
 
     it('folds a resumed conversation only up to where its relaunched engine began, and tails the rest live', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
-      const take = vi.fn((_sessionId: string): RelaunchMark | undefined => undefined)
-      const run = setup({ relaunchMarks: { take } })
+      const read = vi.fn((_sessionId: string): RelaunchMark | undefined => undefined)
+      const run = setup({ relaunchMarks: { read, complete: vi.fn() } })
       const history = JSON.stringify({ ...CLAUDE_PROMPT, uuid: 'before' })
       // The relaunched engine answered a message before this attach: a whole turn after the mark.
       const s = session('claude', transcript([history, { ...CLAUDE_PROMPT, uuid: 'after' }, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn' }, uuid: 'a1' }]))
       const mark = Buffer.byteLength(history) + 1
-      take.mockReturnValueOnce({ offset: mark, engineStarted: true })
+      read.mockReturnValueOnce({ offset: mark, engineStarted: true })
       expect(await run.attach.attachSession(s)).toBe(true)
-      expect(take).toHaveBeenCalledWith(s.sessionId)
+      expect(read).toHaveBeenCalledWith(s.sessionId)
       // The tail starts where the engine's own writing began, so its turn reaches every window live.
       expect(vi.mocked(run.deps.watcher.addSession).mock.calls[0][1]).toEqual({ fromOffset: mark })
       // A mark is for the next attach only: taken even by an attach that only makes sure the tail runs.
-      take.mockReturnValueOnce({ offset: mark, engineStarted: true })
+      read.mockReturnValueOnce({ offset: mark, engineStarted: true })
       expect(await run.attach.attachSession(s)).toBe(true)
-      expect(take).toHaveBeenCalledTimes(2)
+      expect(read).toHaveBeenCalledTimes(2)
     })
 
     it('takes over a tail it holds for a reset, resuming it where the read stopped', async () => {
@@ -433,8 +552,8 @@ describe('attaching a session', () => {
       // what the first-turn rule asks, but its engine was relaunched on it, so it is history.
       const lines = [CLAUDE_PROMPT, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }], stop_reason: 'end_turn' }, uuid: 'a1' }]
       const s = session('claude', transcript(lines))
-      const take = vi.fn((_sessionId: string): RelaunchMark | undefined => ({ offset: statSync(s.transcriptPath!).size, engineStarted: true }))
-      const run = setup({ relaunchMarks: { take } })
+      const read = vi.fn((_sessionId: string): RelaunchMark | undefined => ({ offset: statSync(s.transcriptPath!).size, engineStarted: true }))
+      const run = setup({ relaunchMarks: { read, complete: vi.fn() } })
       await run.attach.attachSession(s, false, false, true)
       expect(run.deps.emit).not.toHaveBeenCalled()
       expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('replayed the first turn'))).toBe(false)
@@ -450,11 +569,11 @@ describe('attaching a session', () => {
       const s = session('claude', transcript([CLAUDE_PROMPT]))
       const size = statSync(s.transcriptPath!).size
       // A daemon restart marks every conversation, and an engine that kept running is still in that turn.
-      const survived = setup({ relaunchMarks: { take: () => ({ offset: size, engineStarted: false }) } })
+      const survived = setup({ relaunchMarks: { complete: vi.fn(), read: () => ({ offset: size, engineStarted: false }) } })
       await survived.attach.attachSession(s)
       expect(vi.mocked(survived.deps.emit).mock.calls.some((call) => call[2]?.resumed)).toBe(true)
       // A resume, or a restore that rebuilt the pane, started a new engine: that turn died with the old one.
-      const restarted = setup({ relaunchMarks: { take: () => ({ offset: size, engineStarted: true }) } })
+      const restarted = setup({ relaunchMarks: { complete: vi.fn(), read: () => ({ offset: size, engineStarted: true }) } })
       await restarted.attach.attachSession(s)
       expect(restarted.deps.emit).not.toHaveBeenCalled()
       expect(log.mock.calls.some(([line]) => String(line).includes('left the turn open at attach as history'))).toBe(true)
@@ -463,7 +582,7 @@ describe('attaching a session', () => {
       expect(survived.normalizers.liveParsers.get(s.sessionId)?.turnOpen).toBe(true)
       // Codex's own normalizer, likewise.
       const codex = session('codex', transcript([{ open: true }]))
-      const resumed = setup({ relaunchMarks: { take: () => ({ offset: statSync(codex.transcriptPath!).size, engineStarted: true }) } })
+      const resumed = setup({ relaunchMarks: { complete: vi.fn(), read: () => ({ offset: statSync(codex.transcriptPath!).size, engineStarted: true }) } })
       await resumed.attach.attachSession(codex)
       expect(resumed.normalizers.liveParsers.get(codex.sessionId)?.turnOpen).toBe(false)
     })

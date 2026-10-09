@@ -100,6 +100,55 @@ describe('models in its own process, as the core reaches it', () => {
       await expect(setup().port.moveTarget({ gridName: null, model: 'm' })).rejects.toBeInstanceOf(ServiceUnavailableError)
     })
 
+    it('checks the entire assignment batch before returning it', async () => {
+      const processes = [{ key: 'a', engine: 'claude' as const, env: { ANTHROPIC_BASE_URL: RELAY }, args: '' }]
+      const assignments = [{ key: 'a', assignment: { baseUrl: RELAY, model: null } }]
+      const { port, call } = setup({ gridAssignments: { assignments } })
+      expect(await port.gridAssignments(processes)).toEqual(assignments)
+      expect(call).toHaveBeenCalledWith('gridAssignments', { processes })
+      await expect(setup({ gridAssignments: {} }).port.gridAssignments(processes)).rejects.toBeInstanceOf(ServiceUnavailableError)
+    })
+
+    it("a grid or saved-API launch, as models built it and checked as far as the core hands it on; unavailable when it is not one", async () => {
+      const request = { engine: 'claude' as const, override: LAUNCH, machine: { hermesSystemManaged: false }, refresh: true }
+      const launch = { env: { ANTHROPIC_MODEL: 'Small-Q4' }, args: ['--x'], webSearch: 'on', sessionModel: 'grid/Small-Q4' }
+      const built = { ok: true, launch, override: LAUNCH }
+      const { call, port } = setup({ gridLaunch: built })
+      expect(await port.gridLaunch(request)).toEqual(built)
+      expect(call).toHaveBeenCalledWith('gridLaunch', request)
+      const files = { envVar: 'OPENCODE_CONFIG', files: [{ name: 'opencode.json', content: '{}' }], pointAt: 'opencode.json', links: [{ name: 'auth.json', target: '/a' }] }
+      const withFiles = { ...built, launch: { ...launch, configDir: files }, apiBase: RELAY }
+      expect(await setup({ gridLaunch: withFiles }).port.gridLaunch(request)).toEqual(withFiles)
+      expect(await setup({ gridLaunch: { ...built, launch: { ...launch, configDir: { envVar: 'PI', files: [] } } } }).port.gridLaunch(request)).toMatchObject({ ok: true })
+      const refused = { ok: false, error: 'GRID_ENGINE_UNSUPPORTED', detail: 'no grid for amp', apiBase: RELAY }
+      expect(await setup({ gridLaunch: refused }).port.gridLaunch(request)).toEqual(refused)
+      expect(await setup({ gridLaunch: { ok: false, error: 'API_UNAVAILABLE', detail: 'gone' } }).port.gridLaunch(request)).toEqual({ ok: false, error: 'API_UNAVAILABLE', detail: 'gone' })
+      // Anything else — down, or an answer the core could not start a pane with — is models being unavailable.
+      const unusable: Array<Record<string, unknown>> = [
+        { ok: false, error: 'X' }, { ok: 'yes', launch, override: LAUNCH }, { ...built, override: { networkId: 'n' } },
+        { ...built, launch: null }, { ...built, launch: { ...launch, env: { A: 1 } } }, { ...built, launch: { ...launch, args: [1] } },
+        { ...built, launch: { ...launch, webSearch: 'off' } }, { ...built, launch: { ...launch, sessionModel: 7 } },
+        { ...built, launch: { ...launch, configDir: 'dir' } }, { ...built, launch: { ...launch, configDir: { ...files, envVar: 7 } } },
+        { ...built, launch: { ...launch, configDir: { ...files, files: 'x' } } }, { ...built, launch: { ...launch, configDir: { ...files, files: [{ name: 'a' }] } } },
+        { ...built, launch: { ...launch, configDir: { ...files, files: [null] } } },
+        { ...built, launch: { ...launch, configDir: { ...files, pointAt: 7 } } }, { ...built, launch: { ...launch, configDir: { ...files, links: 'x' } } },
+        { ...built, launch: { ...launch, configDir: { ...files, links: [{ name: 'a' }] } } }, { ...built, launch: { ...launch, configDir: { ...files, links: [null] } } },
+      ]
+      for (const answer of unusable) await expect(setup({ gridLaunch: answer }).port.gridLaunch(request), JSON.stringify(answer)).rejects.toBeInstanceOf(ServiceUnavailableError)
+      await expect(setup().port.gridLaunch(request)).rejects.toBeInstanceOf(ServiceUnavailableError)
+    })
+
+    it("a saved API's target and the endpoint it read, or why not, in models' words or the core's", async () => {
+      const { call, port } = setup({ apiTarget: { target: LAUNCH, apiBase: RELAY } })
+      expect(await port.apiTarget({ connectionId: 'openrouter', model: 'q' })).toEqual({ target: LAUNCH, apiBase: RELAY })
+      expect(call).toHaveBeenCalledWith('apiTarget', { connectionId: 'openrouter', model: 'q' })
+      expect(await setup({ apiTarget: { detail: 'This API is not saved.' } }).port.apiTarget({ connectionId: 'x', model: 'q' })).toEqual({ detail: 'This API is not saved.' })
+      for (const answer of [{}, { detail: '' }, { target: LAUNCH }, { target: { networkId: 'n' }, apiBase: RELAY }]) {
+        expect(await setup({ apiTarget: answer }).port.apiTarget({ connectionId: 'x', model: 'q' })).toEqual({ detail: 'This API could not be used. Try again.' })
+      }
+      await expect(setup().port.apiTarget({ connectionId: 'x', model: 'q' })).rejects.toBeInstanceOf(ServiceUnavailableError)
+    })
+
     it('the private grid\'s name, or none while models cannot say', async () => {
       expect(await setup({ privateGridName: { name: 'derived-1a2b' } }).port.privateGridName()).toBe('derived-1a2b')
       expect(await setup({ privateGridName: { name: null } }).port.privateGridName()).toBeNull()

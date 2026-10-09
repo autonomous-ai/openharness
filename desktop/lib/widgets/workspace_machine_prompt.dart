@@ -11,11 +11,15 @@ class WorkspaceMachinePrompt extends StatelessWidget {
     required this.loading,
     required this.onChoose,
     this.preparing = false,
+    this.preparingText = 'Preparing your harness…',
   });
 
   final bool loading;
   final VoidCallback onChoose;
   final bool preparing;
+
+  /// What [preparing] says: the first workspace on a new computer opens agents instead.
+  final String preparingText;
 
   @override
   Widget build(BuildContext context) {
@@ -36,7 +40,7 @@ class WorkspaceMachinePrompt extends StatelessWidget {
           liveRegion: true,
           child: Text(
             preparing
-                ? 'Preparing your harness…'
+                ? preparingText
                 : loading
                 ? 'Finding your machines…'
                 : 'Choose a machine to start a new harness.',

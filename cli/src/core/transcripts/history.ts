@@ -17,29 +17,10 @@ import { stat } from 'node:fs/promises'
 import type { EngineTranscript } from '../../engines/facets/transcript.js'
 import { EngineReadError } from '../../engines/worker/protocol.js'
 import { transcriptReadIdentity } from './readIdentity.js'
-import { enrichSubagentStats } from '../../engines/kit/history.js'
-import { agyMessagesToEvents } from '../../engines/agy/normalizer.js'
-import { ampMessagesToEvents } from '../../engines/amp/normalizer.js'
-import { ampThreadToEvents, readAmpThread } from '../../engines/amp/threadExport.js'
-import { commandcodeMessagesToEvents, windowCommandCodeLines } from '../../engines/commandcode/normalizer.js'
-import { copilotMessagesToEvents } from '../../engines/copilot/normalizer.js'
-import { cursorConfigDir, cursorDataDir } from '../../engines/cursor/home.js'
-import { cursorMessagesToEvents, windowCursorLines } from '../../engines/cursor/normalizer.js'
-import { loadCursorReplayTaskLinks } from '../../engines/cursor/subagent.js'
-import { devinMessagesToEvents, windowDevinMessages } from '../../engines/devin/normalizer.js'
-import { readDevinMessages } from '../../engines/devin/reader.js'
-import { grokMessagesToEvents } from '../../engines/grok/normalizer.js'
-import { hermesMessagesToEvents, windowHermesMessages } from '../../engines/hermes/normalizer.js'
-import { readHermesMessages } from '../../engines/hermes/reader.js'
-import { kiloMessagesToEvents, windowKiloMessages } from '../../engines/kilo/normalizer.js'
-import { readKiloMessages } from '../../engines/kilo/reader.js'
-import { museMessagesToEvents } from '../../engines/muse/normalizer.js'
-import { opencodeMessagesToEvents, windowOpencodeMessages } from '../../engines/opencode/normalizer.js'
-import { readOpencodeMessages } from '../../engines/opencode/reader.js'
-import { piMessagesToEvents, windowPiLines } from '../../engines/pi/normalizer.js'
+import { isOtherEngine, loadEngine, type InProcessModules, type OtherEngine } from '../../engines/inProcess.js'
 import { sid } from '../../lib/log.js'
 import { lastActivityAt } from '../../lib/agentFrame.js'
-import { messagesToEvents, windowRawLines, type SessionEvent } from '../../lib/normalize.js'
+import type { SessionEvent } from '../../engines/kit/events.js'
 import { projectDisplayName, type RegisteredSession } from '../../lib/registry.js'
 import type { TranscriptPager } from '../../lib/transcriptPages.js'
 import { tailFileCapped, WHOLE_READ_CAP_BYTES } from '../../lib/transcriptTail.js'
@@ -51,7 +32,7 @@ export interface HistoryDeps {
    *  and one a restart, a move or a restore had to leave for a new one. */
   stopped: () => readonly RegisteredSession[]
   /** Line counts, and the explicit inline compatibility path's pages. Isolated readers own their indexes. */
-  pages: Pick<TranscriptPager, 'claude' | 'codex' | 'lineCount'>
+  pages: Pick<TranscriptPager, 'page' | 'lineCount'>
   readerFor: (engine: string) => EngineTranscript | undefined
   /** The database engines' stores. */
   dbs: { opencode: string; kilo: string; devin: string }
@@ -70,36 +51,21 @@ export interface HistoryDeps {
  * all is worse than a partial one. Which source answered is logged either way: silently serving the lesser
  * record is exactly how the missing tool cards went unnoticed for a day.
  */
-async function ampHistory(sessionId: string, lines: string[]): Promise<SessionEvent[]> {
-  const messages = await readAmpThread(sessionId)
+async function ampHistory(amp: InProcessModules['amp'], sessionId: string, lines: string[]): Promise<SessionEvent[]> {
+  const messages = await amp.readAmpThread(sessionId)
   if (messages) {
     console.log(`[history] ${sessionId.slice(0, 12)} amp · ${messages.length} message(s) from amp's own store`)
-    return ampThreadToEvents(messages)
+    return amp.ampThreadToEvents(messages)
   }
   console.warn(`[history] ${sessionId.slice(0, 12)} amp · export unavailable — falling back to the local transcript`)
-  return ampMessagesToEvents(lines)
+  return amp.ampMessagesToEvents(lines)
 }
 
-/** Grok has no transcript windower yet. Keep BOTH `session_get` shapes on the same real-record replay:
- * web always sends a limit, while legacy callers omit it. Returning the whole small transcript for a
+/** Grok, agy and Copilot have no transcript windower yet. Keep BOTH `session_get` shapes on the same real-record
+ * replay: web always sends a limit, while legacy callers omit it. Returning the whole small transcript for a
  * page is honest (`hasMore:false`) and cannot fall through to Claude's incompatible line cursor. */
-export function grokHistoryPage(lines: string[], paginated: boolean):
+export function wholeHistoryPage(events: SessionEvent[], paginated: boolean):
   { events: SessionEvent[]; hasMore?: false; oldestCursor?: null } {
-  const events = grokMessagesToEvents(lines)
-  return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
-}
-
-/** agy has no transcript windower either; same both-shapes replay as grok, for the same reason. */
-export function agyHistoryPage(lines: string[], paginated: boolean):
-  { events: SessionEvent[]; hasMore?: false; oldestCursor?: null } {
-  const events = agyMessagesToEvents(lines)
-  return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
-}
-
-/** Copilot has no transcript windower either; same both-shapes replay as grok and agy. */
-export function copilotHistoryPage(lines: string[], paginated: boolean):
-  { events: SessionEvent[]; hasMore?: false; oldestCursor?: null } {
-  const events = copilotMessagesToEvents(lines)
   return paginated ? { events, hasMore: false, oldestCursor: null } : { events }
 }
 
@@ -143,12 +109,23 @@ function databasePage<M>(
 export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFor }: HistoryDeps) {
   // Devin, OpenCode and Kilo keep one store on this machine. Hermes keeps one per HOME, so its path is
   // the session's own (`hermesDb`) rather than this machine's default.
-  const databases = new Map<string, DatabasePage>([
-    ['devin', databasePage((s) => readDevinMessages(dbs.devin, s.sessionId), devinMessagesToEvents, windowDevinMessages)],
-    ['hermes', databasePage(async (s) => readHermesMessages(await hermesDb(s), s.sessionId), hermesMessagesToEvents, windowHermesMessages)],
-    ['opencode', databasePage((s) => readOpencodeMessages(dbs.opencode, s.sessionId), opencodeMessagesToEvents, windowOpencodeMessages)],
-    ['kilo', databasePage((s) => readKiloMessages(dbs.kilo, s.sessionId), kiloMessagesToEvents, windowKiloMessages)],
+  // Each store's reader, replay and window are the engine's own code, loaded in this process (engines/inProcess.ts).
+  const databases = new Map<string, (s: RegisteredSession) => Promise<DatabasePage | null>>([
+    ['devin', async () => { const m = await loadEngine('devin'); return m && databasePage((s) => m.readDevinMessages(dbs.devin, s.sessionId), m.devinMessagesToEvents, m.windowDevinMessages) }],
+    ['hermes', async () => { const m = await loadEngine('hermes'); return m && databasePage(async (s) => m.readHermesMessages(await hermesDb(s), s.sessionId), m.hermesMessagesToEvents, m.windowHermesMessages) }],
+    ['opencode', async () => { const m = await loadEngine('opencode'); return m && databasePage((s) => m.readOpencodeMessages(dbs.opencode, s.sessionId), m.opencodeMessagesToEvents, m.windowOpencodeMessages) }],
+    ['kilo', async () => { const m = await loadEngine('kilo'); return m && databasePage((s) => m.readKiloMessages(dbs.kilo, s.sessionId), m.kiloMessagesToEvents, m.windowKiloMessages) }],
   ])
+  /** A conversation with nothing to show: no transcript yet, or its engine's code could not be loaded. */
+  const emptyPage = (s: RegisteredSession, sessionId: string): Record<string, unknown> => ({
+    id: sessionId,
+    title: projectDisplayName(s),
+    events: [],
+    timestamp: new Date(s.touchedAt).toISOString(),
+    engine: s.engine,
+    hasMore: false,
+    oldestCursor: null,
+  })
 
   const lookup = (id: string) => resolve(id) ?? stopped().find((saved) => saved.sessionId === id)
 
@@ -172,18 +149,11 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
     const limit = typeof rawLimit === 'number' && rawLimit > 0 ? Math.min(Math.floor(rawLimit), 500) : undefined
     const before = typeof payload.before === 'string' ? payload.before : undefined
     const database = databases.get(s.engine)
-    if (database) return database(s, sessionId, { limit, before })
-    if (!s.transcriptPath) {
-      return {
-        id: sessionId,
-        title: projectDisplayName(s),
-        events: [],
-        timestamp: new Date(s.touchedAt).toISOString(),
-        engine: s.engine,
-        hasMore: false,
-        oldestCursor: null,
-      }
+    if (database) {
+      const page = await database(s)
+      return page ? page(s, sessionId, { limit, before }) : emptyPage(s, sessionId)
     }
+    if (!s.transcriptPath) return emptyPage(s, sessionId)
     const reader = readerFor(s.engine)
     if (reader) {
       const identity = transcriptReadIdentity(s)
@@ -204,26 +174,30 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
     const truncated = capped ? { truncated: true } : {}
     const st = await stat(s.transcriptPath).catch(() => null)
     const timestamp = new Date(st?.mtimeMs ?? Date.now()).toISOString()
+    // The other file engines' replays and windows are their own code, loaded in this process: one that could
+    // not load shows an empty conversation, and so does an engine with no reader and no code of its own here.
+    // Claude Code and Codex always have a reader (core/engines/readers.ts), and a shell keeps no transcript
+    // (registry.engineKeepsTranscriptFile), so none reaches this: their replays are their readers', never core's.
+    const other = isOtherEngine(s.engine) ? await loadEngine(s.engine) : null
+    if (other === null) return { ...emptyPage(s, sessionId), timestamp }
+    const engine = <Name extends OtherEngine>(name: Name): InProcessModules[Name] => other as InProcessModules[Name]
 
     if (!limit) {
       const fullEvents = s.engine === 'cursor'
-          ? cursorMessagesToEvents(lines, s.sessionId, await loadCursorReplayTaskLinks(cursorConfigDir(), s.sessionId, cursorDataDir()))
+          ? engine('cursor').cursorMessagesToEvents(lines, s.sessionId, await engine('cursor').loadCursorReplayTaskLinks(engine('cursor').cursorConfigDir(), s.sessionId, engine('cursor').cursorDataDir()))
           : s.engine === 'muse'
-            ? museMessagesToEvents(lines)
+            ? engine('muse').museMessagesToEvents(lines)
             : s.engine === 'amp'
-            ? await ampHistory(s.sessionId, lines)
+            ? await ampHistory(engine('amp'), s.sessionId, lines)
             : s.engine === 'grok'
-              ? grokHistoryPage(lines, false).events
+              ? wholeHistoryPage(engine('grok').grokMessagesToEvents(lines), false).events
             : s.engine === 'agy'
-              ? agyHistoryPage(lines, false).events
+              ? wholeHistoryPage(engine('agy').agyMessagesToEvents(lines), false).events
             : s.engine === 'copilot'
-              ? copilotHistoryPage(lines, false).events
+              ? wholeHistoryPage(engine('copilot').copilotMessagesToEvents(lines), false).events
             : s.engine === 'pi'
-            ? piMessagesToEvents(lines)
-            : s.engine === 'commandcode'
-              ? commandcodeMessagesToEvents(lines)
-              : messagesToEvents(lines)
-      if (s.engine !== 'cursor' && s.engine !== 'pi' && s.engine !== 'commandcode' && s.engine !== 'muse' && s.engine !== 'amp' && s.engine !== 'grok' && s.engine !== 'agy' && s.engine !== 'copilot') await enrichSubagentStats(fullEvents, s.transcriptPath)
+            ? engine('pi').piMessagesToEvents(lines)
+            : engine('commandcode').commandcodeMessagesToEvents(lines)
       return {
         id: sessionId,
         title: projectDisplayName(s),
@@ -243,20 +217,20 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
     // through would pair claude's line-uuid cursor with claude's normalizer and return nothing.
     if (s.engine === 'muse' || s.engine === 'amp' || s.engine === 'grok' || s.engine === 'agy' || s.engine === 'copilot') {
       const wholePage = s.engine === 'grok'
-        ? grokHistoryPage(lines, true)
+        ? wholeHistoryPage(engine('grok').grokMessagesToEvents(lines), true)
         : s.engine === 'agy'
-          ? agyHistoryPage(lines, true)
+          ? wholeHistoryPage(engine('agy').agyMessagesToEvents(lines), true)
           : s.engine === 'copilot'
-            ? copilotHistoryPage(lines, true)
+            ? wholeHistoryPage(engine('copilot').copilotMessagesToEvents(lines), true)
             : null
       return {
         id: sessionId,
         title: projectDisplayName(s),
         events: s.engine === 'amp'
-          ? await ampHistory(s.sessionId, lines)
+          ? await ampHistory(engine('amp'), s.sessionId, lines)
           : wholePage
             ? wholePage.events
-            : museMessagesToEvents(lines),
+            : engine('muse').museMessagesToEvents(lines),
         timestamp,
         engine: s.engine,
         hasMore: wholePage?.hasMore ?? false,
@@ -265,30 +239,25 @@ export function createHistory({ resolve, stopped, pages, dbs, hermesDb, readerFo
       }
     }
     const w = s.engine === 'cursor'
-        ? windowCursorLines(lines, { limit, before })
+        ? engine('cursor').windowCursorLines(lines, { limit, before })
         : s.engine === 'pi'
-          ? windowPiLines(lines, { limit, before })
-          : s.engine === 'commandcode'
-            ? windowCommandCodeLines(lines, { limit, before })
-            : windowRawLines(lines, { limit, before })
+          ? engine('pi').windowPiLines(lines, { limit, before })
+          : engine('commandcode').windowCommandCodeLines(lines, { limit, before })
     if (w.staleCursor) {
       return { id: sessionId, title: projectDisplayName(s), events: [], timestamp, engine: s.engine, hasMore: false, oldestCursor: null, staleCursor: true, ...truncated }
     }
     const events = s.engine === 'cursor'
-        ? cursorMessagesToEvents(
+        ? engine('cursor').cursorMessagesToEvents(
             w.window,
             s.sessionId,
-            await loadCursorReplayTaskLinks(cursorConfigDir(), s.sessionId, cursorDataDir()),
+            await engine('cursor').loadCursorReplayTaskLinks(engine('cursor').cursorConfigDir(), s.sessionId, engine('cursor').cursorDataDir()),
             'startIndex' in w && typeof w.startIndex === 'number' ? w.startIndex : 0,
             'initialTodos' in w && Array.isArray(w.initialTodos) ? w.initialTodos : [],
           )
         : s.engine === 'pi'
-          ? piMessagesToEvents(w.window)
-          : s.engine === 'commandcode'
-            ? commandcodeMessagesToEvents(w.window)
-            : messagesToEvents(w.window)
+          ? engine('pi').piMessagesToEvents(w.window)
+          : engine('commandcode').commandcodeMessagesToEvents(w.window)
     // muse and amp are answered above and never reach here, so both are absent by design.
-    if (s.engine !== 'cursor' && s.engine !== 'pi' && s.engine !== 'commandcode') await enrichSubagentStats(events, s.transcriptPath)
     // Older pages must not inject a spurious end-of-transcript marker mid-scroll.
     if (before && events[events.length - 1]?.type === 'done') events.pop()
     return {

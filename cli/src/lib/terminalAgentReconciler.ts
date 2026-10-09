@@ -48,6 +48,7 @@ export interface TerminalAgentReconcilerDeps {
   onDormant: (current: RegisteredSession, reason: string) => void | Promise<void>
   onRemoved: (current: RegisteredSession, reason: string) => void | Promise<void>
   onTerminalAvailability?: (current: RegisteredSession, available: boolean) => void | Promise<void>
+  onReconciled?: (agents: readonly DiscoveredTerminalAgent[]) => void
   onProbeStatus?: (status: { ready: true; error: string | null }) => void
   transaction?: <T>(apply: () => T | Promise<T>) => Promise<T>
   probe?: (hints: ReadonlyMap<string, AgentEngine>) => Promise<TerminalAgentProbe>
@@ -184,7 +185,7 @@ export class TerminalAgentReconciler {
    * `finally`, but a future refactor that drops that `finally` must not leave a route permanently
    * invisible to reconciliation.
    */
-  holdRoute(routeKey: string, autoReleaseMs = 30_000): void {
+  holdRoute(routeKey: string, autoReleaseMs = 30_000): () => void {
     this.heldRoutes.add(routeKey)
     this.routeTouched.set(routeKey, ++this.routeSeq)
     const existing = this.heldRouteTimers.get(routeKey)
@@ -192,6 +193,8 @@ export class TerminalAgentReconciler {
     const timer = setTimeout(() => this.releaseRoute(routeKey), autoReleaseMs)
     timer.unref?.()
     this.heldRouteTimers.set(routeKey, timer)
+    // A cancelled restore cannot release the newer Stop/restart that took this route over.
+    return () => { if (this.heldRouteTimers.get(routeKey) === timer) this.releaseRoute(routeKey) }
   }
 
   /** Resume normal reconciliation for a route held by `holdRoute`. Idempotent. */
@@ -460,5 +463,6 @@ export class TerminalAgentReconciler {
     // Readiness is published last: clients must never observe ready=true between the inventory read and
     // the authoritative availability/registry update.
     this.deps.onProbeStatus?.({ ready: true, error: probeError })
+    this.deps.onReconciled?.(probe.agents.filter(agent => !this.routeHeld(agent.runtimes, probeSeq)))
   }
 }

@@ -3,9 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BackendSocket } from '../backendSocket.js'
+import type { ModelsPort } from '../core/api.js'
 import { dispatchDown, gatewayOf, relaySocket } from '../testing/relaySocket.js'
 import { ApiConnections } from './apiConnections.js'
-import { apiModelsRequest, chatModels, forgetApiModels, listApiModels, refreshApiLaunch, resolveApiTarget } from './apiModels.js'
+import { apiModelsRequest, apiTargetAnswer, chatModels, forgetApiModels, listApiModels, refreshApiFor, refreshApiLaunch, resolveApiTarget } from './apiModels.js'
 import { classifyGridAssignment } from './gridAssignment.js'
 import { buildGridEngineLaunch } from './gridLaunch.js'
 
@@ -130,15 +131,40 @@ describe('an API as a model source', () => {
     store.remove(saved.id)
     expect(() => refreshApiLaunch(store, launch)).toThrow('This API is not saved. Add it in Models → APIs.')
   })
+
+  it('answers the core as models: the launch as saved now and its endpoint, or why it cannot be used', async () => {
+    const saved = store.save({ provider: 'openrouter', apiKey: secret })
+    const target = await apiTargetAnswer(store, saved.id, 'z-ai/glm-5', { fetch: answering(listing) })
+    expect(target).toEqual({ target: expect.objectContaining({ networkId: `api:${saved.id}`, apiKey: secret }), apiBase: 'https://openrouter.ai/api/v1' })
+    expect(await apiTargetAnswer(store, saved.id, 'not/listed', { fetch: answering(listing) })).toEqual({ detail: 'OpenRouter does not list not/listed for coding agents.' })
+    vi.spyOn(store, 'modelAccess').mockImplementationOnce(() => { throw new Error('unreadable') })
+    expect(await apiTargetAnswer(store, saved.id, 'z-ai/glm-5')).toEqual({ detail: 'This API could not be used. Try again.' })
+    const launch = 'target' in target ? target.target : null
+    const refresh = refreshApiFor(store)
+    store.save({ id: saved.id, provider: 'openrouter', apiKey: newSecret })
+    expect(refresh(launch!)).toEqual({ override: { ...launch, apiKey: newSecret }, apiBase: 'https://openrouter.ai/api/v1' })
+    const grid = { networkId: 'grid-1', networkName: 'home', baseUrl: 'https://grid.example.test/relay/v1', apiKey: 'grid-key' }
+    expect(refresh(grid)).toEqual({ override: grid })
+    vi.spyOn(store, 'modelAccess').mockImplementationOnce(() => { throw new Error('unreadable') })
+    expect(refresh(launch!)).toEqual({ error: 'API_UNAVAILABLE', detail: 'OpenRouter could not be read from saved APIs.' })
+    store.remove(saved.id)
+    expect(refresh(launch!)).toEqual({ error: 'API_UNAVAILABLE', detail: 'This API is not saved. Add it in Models → APIs.' })
+  })
 })
 
 describe('agent_retarget onto an API model', () => {
   function retarget(socket: BackendSocket, payload: Record<string, unknown>, connId = 'local:apis') {
     return dispatchDown(socket, { type: 'agent_retarget', payload: { requestId: 'r', agentId: 'agent-1', ...payload } }, connId, connId === 'remote' ? 'relay' : 'local')
   }
+  /** A socket whose models service reads this spec's saved APIs, as services/models.ts answers `apiTarget`. */
+  function socketWithModels(apiTarget: ModelsPort['apiTarget'] = async (request) => apiTargetAnswer(store, request.connectionId, request.model)) {
+    const socket = relaySocket('fixture')
+    socket.models = () => ({ apiTarget }) as unknown as ModelsPort
+    return socket
+  }
 
   it('resolves the endpoint and key on this computer and hands the engine launch that override', async () => {
-    const socket = relaySocket('fixture')
+    const socket = socketWithModels()
     const reply = vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     const saved = store.save({ provider: 'openrouter', apiKey: secret })
     const access = vi.spyOn(ApiConnections.prototype, 'modelAccess').mockImplementation(() => ({
@@ -185,7 +211,7 @@ describe('agent_retarget onto an API model', () => {
   })
 
   it('lets the owner\'s paired session use the API, as it may manage it', async () => {
-    const socket = relaySocket('fixture')
+    const socket = socketWithModels()
     const reply = vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     const saved = store.save({ provider: 'openrouter', apiKey: secret })
     vi.spyOn(ApiConnections.prototype, 'modelAccess').mockImplementation(() => ({ connection: saved, apiKey: secret }))
@@ -203,13 +229,39 @@ describe('agent_retarget onto an API model', () => {
   })
 
   it('answers why an API cannot be used, without touching the pane', async () => {
-    const socket = relaySocket('fixture')
+    const socket = socketWithModels()
     const reply = vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
     const moved = vi.fn(async () => ({ ok: true as const }))
     socket.onRetargetAgent = moved
     await retarget(socket, { apiConnection: 'never-saved', apiModel: 'z-ai/glm-5' })
-    expect(reply).toHaveBeenLastCalledWith('local:apis', 'agent_retarget', 'r', expect.objectContaining({ error: 'API_UNAVAILABLE' }))
+    expect(reply).toHaveBeenLastCalledWith('local:apis', 'agent_retarget', 'r', { error: 'API_UNAVAILABLE', detail: 'This API is not saved. Add it in Models → APIs.' })
     expect(moved).not.toHaveBeenCalled()
+    await socket.stop()
+  })
+
+  it('refuses at once, and touches no pane, while the models service that keeps the APIs is down', async () => {
+    const down = 'The models service is not running, so this API cannot be used now. Try again in a moment.'
+    for (const socket of [relaySocket('fixture'), socketWithModels(async () => { throw new Error('SERVICE_UNAVAILABLE') })]) {
+      const reply = vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
+      const moved = vi.fn(async () => ({ ok: true as const }))
+      socket.onRetargetAgent = moved
+      await retarget(socket, { apiConnection: 'openrouter', apiModel: 'z-ai/glm-5' })
+      expect(reply).toHaveBeenLastCalledWith('local:apis', 'agent_retarget', 'r', { error: 'API_UNAVAILABLE', detail: down })
+      expect(moved).not.toHaveBeenCalled()
+      await socket.stop()
+    }
+  })
+
+  it("recognises an agent on the API's endpoint from then on, as when the socket read the store itself", async () => {
+    store.save({ provider: 'custom', name: 'Far', baseUrl: 'https://far.example.test/v1', apiKey: secret })
+    vi.spyOn(globalThis, 'fetch').mockImplementation(answering({ data: [{ id: 'm' }] }))
+    const socket = socketWithModels()
+    vi.spyOn(socket as any, 'emitReply').mockImplementation(() => {})
+    socket.onRetargetAgent = vi.fn(async () => ({ ok: true as const }))
+    const env = { ANTHROPIC_BASE_URL: 'https://far.example.test', ANTHROPIC_MODEL: 'm' }
+    expect(classifyGridAssignment('claude', env)).toBeNull()
+    await retarget(socket, { apiConnection: 'far', apiModel: 'm' })
+    expect(classifyGridAssignment('claude', env)).toEqual({ baseUrl: 'https://far.example.test', model: 'm' })
     await socket.stop()
   })
 })

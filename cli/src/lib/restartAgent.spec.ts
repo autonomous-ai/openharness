@@ -195,17 +195,38 @@ describe('restart cancellation', () => {
     })
   }
 
+  it('does not retain epochs for rejected unknown restart or resume IDs', async () => {
+    const coordinator = new AgentRestartCoordinator()
+    const before = coordinator.revision('known')
+    for (const operation of ['restart', 'resume']) for (let i = 0; i < 20; i++) {
+      const id = `${operation}-${i}`
+      await coordinator.run(id, async () => ({ ok: false, error: 'AGENT_NOT_FOUND' }), operation)
+      coordinator.cancel(id)
+    }
+    expect(coordinator.revision('next observed')).toBe(before + 1)
+  })
+
   it('joins overlapping restarts but leaves other agents independent', async () => {
     const coordinator = new AgentRestartCoordinator()
+    const initial = coordinator.revision('a')
+    expect(initial).toBeGreaterThan(0)
+    expect(coordinator.operation('a')).toBeUndefined()
     let finish!: () => void
     const handler = vi.fn(async () => { await new Promise<void>((resolve) => { finish = resolve }); return { ok: false, error: 'fixture' } as const })
     const first = coordinator.run('a', handler)
+    expect(coordinator.revision('a')).toBe(initial + 1)
+    expect(coordinator.operation('a')).toBe('restart')
     expect(coordinator.run('a', handler)).toBe(first)
     expect(await coordinator.run('b', async () => ({ ok: false, error: 'other' }))).toEqual({ ok: false, error: 'other' })
     finish()
     await first
+    expect(coordinator.revision('a')).toBe(initial + 1)
     expect(handler).toHaveBeenCalledTimes(1)
     expect(await coordinator.run('a', async () => ({ ok: false, error: 'fresh' }))).toEqual({ ok: false, error: 'fresh' })
+    expect(coordinator.revision('a')).toBeGreaterThan(initial + 1)
+    const old = coordinator.revision('a')
+    coordinator.forget('a')
+    expect(coordinator.revision('a')).toBeGreaterThan(old)
   })
 
   it('Stop cancels before dispatch and during an outstanding step', async () => {

@@ -117,6 +117,22 @@ describe('live session lifecycle', () => {
     expect(p.transport.pull).toHaveBeenCalledTimes(3)
   })
 
+  it('says a rewrite once through the default logger, and the re-attach names the stream whose read found it', async () => {
+    vi.useFakeTimers()
+    const say = vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p = setup(true), s = p.session()
+    const original = await p.attach(s)
+    p.transport.pull.mockRejectedValue(new EngineLiveError('ENGINE_TRANSCRIPT_CHANGED'))
+    await expect(p.live.pollSession(s.sessionId)).rejects.toMatchObject({ code: 'ENGINE_TRANSCRIPT_CHANGED' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(say.mock.calls.filter(([line]) => String(line).includes('transcript rewritten in place'))).toHaveLength(1)
+    expect(p.deps.reattach).toHaveBeenCalledWith(s)
+    p.transport.pull.mockImplementation(async ask => reply(ask))
+    const replacement = await p.prepare(s)
+    expect(replacement.state.ask).toMatchObject({ rewritten: true, rewrittenFrom: original.state.ask.token })
+  })
+
   it('coalesces concurrent drains and remembers file changes arriving during a read', async () => {
     vi.useFakeTimers()
     const p = setup(), s = p.session(); await p.attach(s)

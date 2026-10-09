@@ -6,7 +6,8 @@ import { isWholeRecord, locateAttachSpan, type AttachSpan } from '../../lib/atta
 import type { RuntimeField, RuntimeRecord } from '../facets/runtime.js'
 import { streamRecords } from '../../lib/transcriptTail.js'
 import { sameStamp, stampAt } from './liveFiles.js'
-import { LIVE_HISTORY_BYTES, LIVE_PAGE_BYTES, type LiveCursor, type LiveFrame, type LivePage, type LiveSession, type LivePull } from './liveProtocol.js'
+import { LIVE_CACHE_SESSIONS, LIVE_HISTORY_BYTES, LIVE_PAGE_BYTES, type LiveCursor, type LiveFrame, type LivePage, type LiveSession,
+  type LivePull, type LiveStamp } from './liveProtocol.js'
 
 interface Stream {
   session: LiveSession
@@ -20,6 +21,9 @@ interface Stream {
   activation: { end: number; history: boolean } | null
 }
 
+/** Where a read found its file rewritten: the length then, and the bytes and file identity there. */
+interface Rewrite { offset: number; device: number; inode: number; stamp: LiveStamp | null }
+
 const emptySpan = (): AttachSpan => ({ end: 0, turnFrom: 0, profileFrom: 0, head: null, seeds: [] })
 const sameCursor = (a: LiveCursor | null, b: LiveCursor | null): boolean => JSON.stringify(a) === JSON.stringify(b)
 const binding = (s: LiveSession): string => JSON.stringify([s.agentId, s.sessionId, s.engine, s.transcriptPath, s.codexHome])
@@ -27,6 +31,14 @@ function changed(): never { throw new Error('ENGINE_TRANSCRIPT_CHANGED') }
 
 export class LiveStreams {
   private readonly streams = new Map<string, Stream>()
+  /**
+   * Where each stream's read found its file rewritten, by the stream's token, until core forgets that token.
+   * Core re-attaches a second later (core/engines/liveSessions.ts `retry`), and the file's end by then is
+   * not where it was rewritten: the turn an agent ran in that second was folded into history and never
+   * reached a client as a turn (e2e/bounded.e2e.ts, broken by #1019, found 2026-10-08). The legacy tailer
+   * put the boundary where it noticed the rewrite (watcher.ts), and the re-attach puts it here.
+   */
+  private readonly rewrites = new Map<string, Rewrite>()
   constructor(private readonly adapter: EngineLive, private readonly fields: (session: LiveSession, raw: string) => readonly RuntimeField[],
     private readonly runtime?: (raw: string) => RuntimeRecord | null) {}
 
@@ -34,7 +46,51 @@ export class LiveStreams {
     return this.runtime ? { ...frame, runtime: this.runtime(frame.raw) } : frame
   }
 
-  forget(token: string): void { this.streams.delete(token) }
+  forget(token: string, release = false): void {
+    this.streams.delete(token)
+    if (release) this.rewrites.delete(token)
+  }
+
+  /** The file as it is at `offset` now, or null when it cannot be read there. */
+  private async at(file: string, offset: number): Promise<Rewrite | null> {
+    try {
+      const { dev, ino } = await stat(file)
+      return { offset, device: dev, inode: ino, stamp: await stampAt(file, offset) }
+    } catch { return null }
+  }
+
+  /** Whether the file has only grown since `rewrite` was noted: same file, same bytes at its boundary. */
+  private async unchangedSince(file: string, rewrite: Rewrite): Promise<boolean> {
+    const now = await this.at(file, rewrite.offset)
+    return !!now && now.device === rewrite.device && now.inode === rewrite.inode && sameStamp(rewrite.stamp, now.stamp)
+  }
+
+  /**
+   * Note where a read with a cursor found the file rewritten. Core keeps pulling with that cursor until
+   * it re-attaches, and each pull finds the change again: the first one's boundary stands while the file
+   * has only grown since, so the records appended after the rewrite stay live.
+   */
+  private async noteRewrite(ask: LivePull): Promise<void> {
+    const file = ask.session.transcriptPath
+    if (!file) return
+    const known = this.rewrites.get(ask.token)
+    if (known && await this.unchangedSince(file, known)) return
+    let size: number
+    try { size = (await stat(file)).size } catch { this.rewrites.delete(ask.token); return }
+    const rewrite = await this.at(file, size)
+    this.rewrites.delete(ask.token)
+    if (!rewrite) return
+    this.rewrites.set(ask.token, rewrite)
+    // Bounded like the replies: one per stream core still holds, and core holds at most this many.
+    if (this.rewrites.size > LIVE_CACHE_SESSIONS) this.rewrites.delete(this.rewrites.keys().next().value!)
+  }
+
+  /** Where a re-attach's history ends: where `rewrittenFrom`'s read found the rewrite, while that still holds. */
+  private async rewriteBoundary(ask: LivePull): Promise<number | undefined> {
+    const file = ask.session.transcriptPath
+    const rewrite = ask.rewrittenFrom === undefined ? undefined : this.rewrites.get(ask.rewrittenFrom)
+    return file && rewrite && await this.unchangedSince(file, rewrite) ? rewrite.offset : undefined
+  }
 
   private ingest(stream: Stream, token: string, raw: string, offset: number): ReturnType<LiveParser['ingest']> {
     const before = stream.parser.snapshot().identity
@@ -57,10 +113,12 @@ export class LiveStreams {
       turn: { ...parser.snapshot(), identity: `${ask.token}:empty` }, closed: false,
       cursor: null, lastStarted: null, head: true, activation: null }
     const file = ask.session.transcriptPath
+    const boundary = !ask.cursor && ask.rewritten ? await this.rewriteBoundary(ask) : undefined
     if (!ask.cursor && (ask.liveStart || ask.rewritten)) {
       let end = 0
       try { if (file) end = (await stat(file)).size }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      if (boundary !== undefined) end = boundary
       if (ask.liveStart || end <= LIVE_HISTORY_BYTES) {
         stream.activation = { end, history: !!ask.rewritten }
         return stream
@@ -69,7 +127,7 @@ export class LiveStreams {
     if (!file) return stream
     const cursor = ask.cursor
     if (cursor && !sameStamp(cursor.stamp, await stampAt(file, cursor.offset))) changed()
-    const end = cursor ? cursor.origin : ask.rewritten ? undefined : ask.end
+    const end = cursor ? cursor.origin : ask.rewritten ? boundary : ask.end
     const rules = this.adapter.attachRules!((line) => this.fields(ask.session, line))
     try {
       stream.span = await locateAttachSpan(file, rules, { end, fromStart: ask.fromStart })
@@ -109,6 +167,13 @@ export class LiveStreams {
   }
 
   async pull(ask: LivePull): Promise<LivePage> {
+    try { return await this.read(ask) } catch (error) {
+      if (ask.cursor && error instanceof Error && error.message === 'ENGINE_TRANSCRIPT_CHANGED') await this.noteRewrite(ask)
+      throw error
+    }
+  }
+
+  private async read(ask: LivePull): Promise<LivePage> {
     const stream = await this.get(ask)
     const file = ask.session.transcriptPath
     if (!ask.cursor && stream.activation) {

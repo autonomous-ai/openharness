@@ -1,5 +1,7 @@
+import { readInlineScreen } from '../testing/inlineScreen.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { CodexActivityReader, RuntimeActivityReader } from './runtimeActivity.js'
+import { RuntimeActivityReader } from './runtimeActivity.js'
+import { composedCodex } from '../testing/inlineNativeControls.js'
 import { registry, type RegisteredSession } from './registry.js'
 
 function session(): RegisteredSession {
@@ -15,7 +17,8 @@ function control() {
   const close = vi.fn()
   const rows = vi.fn(async () => [{ ...row.processIdentity!, parentPid: 1, args: 'codex resume conversation' }])
   const connect = vi.fn(async () => ({ request, close }))
-  const reader = new CodexActivityReader({ connect, rows, now: () => now })
+  // Codex's activity, read by its own control (in its worker) on the conversation the core identified.
+  const reader = composedCodex({ connect, rows, now: () => now })
   return { reader, row, request, close, rows, connect, advance: () => { now += 60_001 } }
 }
 describe('Codex activity RPC', () => {
@@ -51,7 +54,7 @@ describe('live terminal fallback', () => {
   it('requires changing busy indicators and refuses a frozen footer or prose', async () => {
     const row = session()
     const capture = vi.fn(async () => '• Working (30s · esc to interrupt)\n› \x1b[2mAsk Codex to do anything\x1b[0m\n? for shortcuts')
-    const reader = new RuntimeActivityReader({ codex: async () => 'unknown', capture })
+    const reader = new RuntimeActivityReader({ readScreen: readInlineScreen, codex: async () => 'unknown', capture })
     expect(await reader.read(row)).toBe('unknown')
     expect(await reader.read(row)).toBe('unknown')
     capture.mockResolvedValue('• Working (35s · esc to interrupt)\n› \x1b[2mAsk Codex to do anything\x1b[0m\n? for shortcuts')
@@ -62,7 +65,7 @@ describe('live terminal fallback', () => {
   it('recognizes the actual cmd p stopped goal without requiring or generating a transcript end', async () => {
     const row = session()
     const capture = vi.fn(async () => '■ Conversation interrupted\n› \x1b[2mAsk Codex to do anything\x1b[0m\n  GPT-6-Astra max · ~/work Goal stalled (/goal resume)\n? for shortcuts')
-    const reader = new RuntimeActivityReader({ codex: async () => 'unknown', capture })
+    const reader = new RuntimeActivityReader({ readScreen: readInlineScreen, codex: async () => 'unknown', capture })
     expect(await reader.read(row)).toBe('unknown')
     expect(await reader.read(row)).toBe('idle')
     row.processIdentity = { ...row.processIdentity!, startMarker: 'replacement' }
@@ -73,9 +76,9 @@ describe('live terminal fallback', () => {
   it('prefers structured status and leaves unsupported engines unknown', async () => {
     const row = session(); const capture = vi.fn(async () => null)
     const codex = vi.fn(async () => 'working' as const)
-    const reader = new RuntimeActivityReader({ codex, capture })
+    const reader = new RuntimeActivityReader({ readScreen: readInlineScreen, codex, capture })
     expect(await reader.read(row)).toBe('working'); expect(capture).not.toHaveBeenCalled()
-    const unsupported = new RuntimeActivityReader({ codex: async () => 'unknown', capture })
+    const unsupported = new RuntimeActivityReader({ readScreen: readInlineScreen, codex: async () => 'unknown', capture })
     row.engine = 'pi'; expect(await unsupported.read(row)).toBe('unknown'); expect(capture).not.toHaveBeenCalled()
   })
 })

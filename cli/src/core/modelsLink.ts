@@ -1,3 +1,4 @@
+import { gridAssignmentAnswersIn } from '../lib/gridAssignmentWire.js'
 /**
  * Models in its own process, as the core reaches it (`HARNESSD_SERVICES=models`; the process's side is
  * services/modelsProcess.ts).
@@ -13,7 +14,8 @@
  * asleep, which is the only time the service would act on it.
  *
  * Everything else is asked when it is needed (core/serviceLinks.ts `call`): grid's set-up, where an agent
- * on a grid model sends its inference, the private grid's name, the lists the windows are pushed. An
+ * on a grid model sends its inference, the launch that points an engine at a grid or a saved API (the core builds
+ * none itself), the private grid's name, the lists the windows are pushed. An
  * answer that does not come (the process is down, or slower than its wait, core/api.ts `LONG_ANSWERS`) is
  * what the fallbacks give in the core's process (`MODELS_FALLBACKS`): an error for the one request that
  * asked, so a create on a grid model answers GRID_UNAVAILABLE, never a hang. What models is only told (a
@@ -27,7 +29,7 @@
  */
 import { annotate, glanceFor, type GridGlance } from '../lib/gridAnnotation.js'
 import type { GridAttachResult } from '../lib/gridAttach.js'
-import { parseGridLaunchOverride, type GridLaunchOverride } from '../lib/gridLaunch.js'
+import { parseGridLaunchOverride, type GridEngineLaunch, type GridLaunchAnswer, type GridLaunchOverride } from '../lib/gridLaunchWire.js'
 import type { CoreApi, ModelsPort } from './api.js'
 import { ServiceUnavailableError } from './serviceHost.js'
 import type { ServiceFrame } from './serviceLinks.js'
@@ -64,6 +66,35 @@ const launchIn = (value: unknown): GridLaunchOverride | null => {
   return parsed.state === 'ok' ? parsed.override : null
 }
 
+const isText = (value: unknown): value is string => typeof value === 'string'
+const isTexts = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText)
+const isTextRecord = (value: unknown): value is Record<string, string> => isRecord(value) && Object.values(value).every(isText)
+const WEB_SEARCH = new Set(['on', 'unavailable', 'unsupported'])
+
+/** A built launch, as far as the core hands it to a pane and writes its files; null when it is not one. */
+function engineLaunchIn(value: unknown): GridEngineLaunch | null {
+  if (!isRecord(value) || !isTextRecord(value.env) || !isTexts(value.args) || !WEB_SEARCH.has(value.webSearch as string)) return null
+  if (value.sessionModel !== undefined && !isText(value.sessionModel)) return null
+  const dir = value.configDir
+  if (dir !== undefined) {
+    if (!isRecord(dir) || !isText(dir.envVar) || !Array.isArray(dir.files)) return null
+    if (!dir.files.every((file) => isRecord(file) && isText(file.name) && isText(file.content))) return null
+    if (dir.pointAt !== undefined && !isText(dir.pointAt)) return null
+    if (dir.links !== undefined && !(Array.isArray(dir.links) && dir.links.every((link) => isRecord(link) && isText(link.name) && isText(link.target)))) return null
+  }
+  return value as unknown as GridEngineLaunch
+}
+
+/** The process's answer to a grid launch, checked; null when it is not one. */
+export function gridLaunchAnswerIn(value: Record<string, unknown>): GridLaunchAnswer | null {
+  const apiBase = isText(value.apiBase) ? { apiBase: value.apiBase } : {}
+  if (value.ok === false) return isText(value.error) && isText(value.detail) ? { ok: false, error: value.error, detail: value.detail, ...apiBase } : null
+  const launch = engineLaunchIn(value.launch)
+  const override = launchIn(value.override)
+  if (value.ok !== true || !launch || !override) return null
+  return { ok: true, launch, override, ...apiBase }
+}
+
 export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'clients'>, call: CallModels, notify: NotifyModels) {
   let glances: GridGlance[] = []
   /** What each agent's frame last said of its grid, so only a change sends the frame again. */
@@ -95,6 +126,22 @@ export function createModelsLink(core: Pick<CoreApi, 'agents' | 'account' | 'cli
       return { detail: typeof answer.detail === 'string' && answer.detail ? answer.detail : 'Could not read this machine\'s grid endpoint.' }
     },
     moved: (launch) => tell({ kind: 'moved', launch }),
+    gridAssignments: async (processes) => {
+      const assignments = gridAssignmentAnswersIn((await ask('gridAssignments', { processes })).assignments, processes)
+      if (!assignments) throw new ServiceUnavailableError('models')
+      return assignments
+    },
+    gridLaunch: async (request) => {
+      const answer = gridLaunchAnswerIn(await ask('gridLaunch', { ...request }))
+      if (!answer) throw new ServiceUnavailableError('models')
+      return answer
+    },
+    apiTarget: async (request) => {
+      const answer = await ask('apiTarget', { ...request })
+      const target = launchIn(answer.target)
+      if (target && isText(answer.apiBase)) return { target, apiBase: answer.apiBase }
+      return { detail: isText(answer.detail) && answer.detail ? answer.detail : 'This API could not be used. Try again.' }
+    },
     // Its fallback is no name, not an error: the backend's, which the caller reads first, is all there is.
     privateGridName: async () => {
       const answer = await call('privateGridName', {})

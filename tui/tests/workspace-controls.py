@@ -627,13 +627,12 @@ try:
     assert not login_events()
     wait(lambda: 'Continue with Google' not in screen(), 'back to local workspace')
 
-    # The pane menu's agent and model act on the captured pane even if external focus changes.
+    # The title's agent and model labels act on the captured pane even if external focus changes.
     x, y = map(int, value('#{pane_left} #{pane_top}', alpha).split())
-    assert 'Codex' not in screen().splitlines()[y - 1] and 'GPT-6 Astra' not in screen().splitlines()[y - 1], 'no agent or model label in the title'
-    pane_menu_item('Change agent…', row=y - 1)
+    click_text('Codex', row=y - 1)
     alpha_agent_picker()
     keys('Escape')
-    pane_menu_item('Change model…', row=y - 1)
+    click_text('GPT-6 Astra', row=y - 1)
     shown('Fixture local model')
     hn('select-pane', '-t', beta)
     click_text('Fixture local model', before=85)

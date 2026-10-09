@@ -16,7 +16,8 @@
 // before answering (the transcripts that crashed the daemon on 2026-10-03), `!hold` leaves the turn
 // open until the next prompt, `!holdtool <command>` leaves it open with that tool still running (an
 // interrupt then writes the tool's aborted output before the turn's end, as the CLIs do), `!ask` asks the person which drink they would like in the engine's own
-// dialog and answers with their choice, `!permit <command>` asks permission to run a command the way
+// dialog and answers with their choice (Claude Code's "Type something." row takes a typed answer too;
+// `!askmany`, Claude Code: which toppings, a multiSelect question of six), `!permit <command>` asks permission to run a command the way
 // the engine does and runs it only if allowed, `!flood <KiB>` prints that much to the terminal, in
 // numbered lines, the way a build log or a long diff does, `!clear` starts a new conversation in the
 // same pane as Claude Code's `/clear` and Codex's `/new` do, `!compact` compacts the conversation as
@@ -31,7 +32,10 @@
 // scrollback mode, `!search` searching its prompt history, as ctrl+r does, `!config` (Claude Code) in its
 // settings and `!center` (Codex) in its agent command center, screens the daemon has no name for,
 // `!permitnext <command>` keeps its turn open and asks permission to run the command the moment a
-// message is pasted, before its Enter (a request arriving mid-turn), `!exit` ends the process.
+// message is pasted, before its Enter (a request arriving mid-turn), `!latestart` (with `submissionGate` in
+// the config) takes the prompt off the composer and holds its turn's start, the prompt hook and the record,
+// until the test's release file exists, as a CLI does whose hooks or first record are slow, `!exit` ends the
+// process.
 // Everything else is echoed as the answer. Codex's `/model` is not a prompt: it opens 0.160's model
 // picker over the `models_cache.json` in its CODEX_HOME, and a choice in it is applied to the turns
 // that follow (see `openModelPicker`).
@@ -56,7 +60,7 @@
 // child in the same process group and terminal (`codexWrapper`).
 import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -164,7 +168,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // conversation on that command line). The title used to be the name alone, so no argument was ever on
   // the command line discovery read. The name is padded to the 16 columns macOS's `ps` gives a name in a
   // table, so the arguments are not read as part of it; a control character is shown as `ps` shows one.
-  process.title = [engine.padEnd(16), ...args].join(' ').replace(/[\x00-\x1f\x7f]/g, '?')
+  // Node's title rewrite makes macOS ps omit the environment. Evidence tests keep the interpreter
+  // and its actual engine entrypoint, which discovery also recognizes, so endpoint markers are readable.
+  if (!config.preserveProcessArgs) process.title = [engine.padEnd(16), ...args].join(' ').replace(/[\x00-\x1f\x7f]/g, '?')
   // Raw at once, as the real CLIs are (Ink and ratatui take the terminal before they draw anything): a
   // terminal still in line mode keeps at most 1 KiB of a line, so a paste that arrived before the
   // engine was ready lost the rest of itself (measured: 1,018 of 2,406 characters).
@@ -366,6 +372,16 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // (subscriptionModel.ts).
   const modelAt = engine === 'codex' ? args.findIndex((arg) => arg === '-m' || arg === '--model') : -1
   let current = { model: (modelAt >= 0 && args[modelAt + 1]) || config.codexModel || 'gpt-6', effort: 'high' }
+  let claudeModel = config.claudeModel ?? 'claude-opus-5-5'
+  // Test-owned file gate, used to stop an engine worker after its command reached the live CLI.
+  const modelGate = async command => {
+    const log = join(config.root, 'model-control-commands')
+    appendFileSync(log, `${engine} ${command}\n`)
+    if (config.modelControlGate) {
+      while (!existsSync(`${log}.release`)) await new Promise(resolve => setTimeout(resolve, 20))
+    }
+  }
+
   /**
    * The JSON an event hands its hooks on stdin, in each CLI's own shape: what notify.mjs reads (session,
    * transcript, folder, the event and its source, prompt or reason) and the rest of what the real CLIs
@@ -640,9 +656,55 @@ export async function run(engine, config = {}, { native = false } = {}) {
   let notes = ''
   const QUESTION = 'Which drink would you like?'
   const CHOICES = [['Tea', 'Lighter, steeped leaves.'], ['Coffee', 'Stronger, roasted beans.']]
+  // `!askmany` (Claude Code): one multiSelect question, drawn as Claude Code draws one
+  // (__fixtures__/question-multi.txt and question-review.txt). A digit toggles its row, Tab moves on
+  // to the Submit tab's review, whose 1 submits the checked rows and 2 goes back; Esc cancels.
+  const MANY = 'Which toppings do you want?'
+  const TOPPINGS = [['Cheese', 'Melted and savory.'], ['Ham', 'Salty cured meat.'], ['Basil', 'Fresh herb, aromatic.'],
+    ['Olives', 'Briny and dark.'], ['Onion', 'Sweet once cooked.'], ['Peppers', 'Crisp and bright.']]
+  // Every key a dialog takes, one per line (`question-keys-<engine>` in the test's root): what reached the
+  // engine, whoever typed it. A test can arm `question-keys-<engine>.signal`, `{ pid, signal, after, delayMs? }`:
+  // once `after` keys in all have reached a dialog, the engine signals that process before it acts on the
+  // key, and leaves `.fired` beside it. That is how a test stops an engine worker between two keystrokes of
+  // one answer, exactly, rather than whenever its own poll happens to notice the first.
+  const questionKeys = join(config.root, `question-keys-${engine}`)
+  const keyName = (key) => key.startsWith('\x1b[200~') ? `paste:${key.slice(6).replace(/\x1b\[201~$/, '')}`
+    : ({ '\r': 'Enter', '\n': 'Enter', '\t': 'Tab', '\x1b': 'Escape', '\x1b[A': 'Up', '\x1b[B': 'Down' })[key] ?? key
+  const noteDialogKey = (key) => {
+    appendFileSync(questionKeys, `${keyName(key)}\n`)
+    const armed = `${questionKeys}.signal`
+    if (!existsSync(armed)) return
+    let trigger
+    try { trigger = JSON.parse(readFileSync(armed, 'utf8')) } catch { return }
+    const count = readFileSync(questionKeys, 'utf8').split('\n').filter(Boolean).length
+    if (count < trigger.after) return
+    renameSync(armed, `${questionKeys}.fired`)
+    const fire = () => {
+      let outcome = 'sent'
+      try { process.kill(trigger.pid, trigger.signal) } catch (error) { outcome = String(error?.code ?? error) }
+      appendFileSync(`${questionKeys}.fired`, `\n${JSON.stringify({ count, outcome })}\n`)
+    }
+    // `delayMs`: a moment later instead, once the worker has heard that the key went in.
+    if (trigger.delayMs) setTimeout(fire, trigger.delayMs)
+    else fire()
+  }
   const drawDialog = () => {
     const rule = '─'.repeat(60)
     const mark = (i, on) => (dialog.cursor === i ? on : ' ')
+    if (dialog.kind === 'many') {
+      const lines = dialog.review
+        ? [rule, '←  ☒ Toppings  ✔ Submit  →', '', 'Review your answers', '', ` ● ${MANY}`,
+            `   → ${TOPPINGS.filter((_, i) => dialog.checked.has(i)).map(([label]) => label).join(', ')}`, '',
+            'Ready to submit your answers?', '', `${mark(0, '❯')} 1. Submit answers`, `${mark(1, '❯')} 2. Cancel`]
+        : [rule, '←  ☐ Toppings  ✔ Submit  →', '', MANY, '',
+            ...TOPPINGS.flatMap(([label, description], i) => [`${mark(i, '❯')} ${i + 1}. [${dialog.checked.has(i) ? '✔' : ' '}] ${label}`, `  ${description}`]),
+            `${mark(TOPPINGS.length, '❯')} ${TOPPINGS.length + 1}. [ ] Type something`, '     Submit', rule,
+            `  ${TOPPINGS.length + 2}. Chat about this`, '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
+      eraseDialog()
+      process.stdout.write(`\r\n${lines.join('\r\n')}\r\n`)
+      dialog.drawn = lines.length + 1
+      return
+    }
     // A permission prompt, as the CLIs draw one (__fixtures__/permission-claude.txt, permission-codex.txt).
     const command = dialog.command
     const lines = dialog.kind === 'permit' ? (engine === 'claude'
@@ -655,7 +717,9 @@ export async function run(engine, config = {}, { native = false } = {}) {
       : engine === 'claude'
       ? [rule, ' ☐ Drink', '', QUESTION, '',
           ...CHOICES.flatMap(([label, description], i) => [`${mark(i, '❯')} ${i + 1}. ${label}`, `     ${description}`]),
-          '  3. Type something.', rule, '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
+          // Its free-text row: chosen, what is typed or pasted goes in under it, and Enter sends that.
+          `${mark(2, '❯')} 3. Type something.`, ...(dialog.typed === undefined ? [] : [`     ${dialog.typed}`]),
+          rule, '  4. Chat about this', '', 'Enter to select · ↑/↓ to navigate · Esc to cancel']
       : ['  Question 1/1 (1 unanswered)', `  ${QUESTION}`,
           ...CHOICES.map(([label, description], i) => `  ${mark(i, '›')} ${i + 1}. ${label.padEnd(7)} ${description}`),
           `  ${mark(2, '›')} 3. None of the above  Optionally, add details in notes (tab).`,
@@ -677,15 +741,53 @@ export async function run(engine, config = {}, { native = false } = {}) {
   // Accept). In a question, Claude Code drops the paste the same way and Enter picks the focused option;
   // Codex takes a paste as notes on the focused option (request_user_input `handle_paste`) and Enter
   // submits it. Digits pick a row; Codex's `y` approves; arrows move; Esc declines or cancels.
-  const dialogKeys = (chunk) => {
-    for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[AB]|\x1b|\r|\n|./gs) ?? []) {
+  // A paste split across reads is one paste: its start is held until its end arrives.
+  let dialogPaste = ''
+  const dialogKeys = (input) => {
+    let chunk = dialogPaste + input
+    dialogPaste = ''
+    const opened = chunk.lastIndexOf('\x1b[200~')
+    if (opened >= 0 && chunk.indexOf('\x1b[201~', opened) < 0) { dialogPaste = chunk.slice(opened); chunk = chunk.slice(0, opened) }
+    for (const key of chunk.match(/\x1b\[200~[\s\S]*?(?:\x1b\[201~|$)|\x1b\[[ABCD]|\x1b|\r|\n|\x7f|./gs) ?? []) {
       if (!dialog) return
+      noteDialogKey(key)
       const settle = (choice) => {
         // An old dialog can survive in tmux scrollback after a redraw/resize, as in the chaos run.
         // Keep the whole frame for that acceptance case; the composer below it is the live screen.
         if (dialog.keepInScrollback) process.stdout.write('\r\n')
         else eraseDialog()
         const asked = dialog; dialog = null; notes = asked.notes ?? ''; drawComposer(); asked.resolve(choice)
+      }
+      if (dialog.kind === 'many') {
+        // A paste is dropped, as in Claude Code's other dialogs; Enter on a row toggles it.
+        if (key.startsWith('\x1b[200~')) continue
+        const rows = dialog.review ? 2 : TOPPINGS.length
+        if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog(); continue }
+        if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog(); continue }
+        if (key === '\x1b') { settle(null); continue }
+        if (dialog.review) {
+          const row = key === '\r' || key === '\n' ? dialog.cursor : /^[12]$/.test(key) ? Number(key) - 1 : -1
+          if (row === 0) settle(TOPPINGS.filter((_, i) => dialog.checked.has(i)).map(([label]) => label).join(', '))
+          else if (row === 1) { dialog.review = false; dialog.cursor = 0; drawDialog() }
+          continue
+        }
+        const toggle = key === '\r' || key === '\n' ? dialog.cursor : /^[1-9]$/.test(key) ? Number(key) - 1 : -1
+        if (toggle >= 0 && toggle < rows) {
+          dialog.cursor = toggle
+          if (dialog.checked.has(toggle)) dialog.checked.delete(toggle)
+          else dialog.checked.add(toggle)
+          drawDialog()
+        } else if (key === '\t') { dialog.review = true; dialog.cursor = 0; drawDialog() }
+        continue
+      }
+      if (dialog.typed !== undefined) {
+        // Claude Code's free-text row, chosen: a paste or typing goes in, Enter sends it, Esc cancels.
+        if (key.startsWith('\x1b[200~')) { dialog.typed += key.slice(6).replace(/\x1b\[201~$/, ''); drawDialog() }
+        else if (key === '\x1b') settle(null)
+        else if (key === '\r' || key === '\n') { if (dialog.typed.trim()) settle(dialog.typed) }
+        else if (key === '\x7f') { dialog.typed = dialog.typed.slice(0, -1); drawDialog() }
+        else if (!key.startsWith('\x1b') && key >= ' ') { dialog.typed += key; drawDialog() }
+        continue
       }
       const rows = dialog.kind === 'permit' ? 3 : engine === 'claude' ? CHOICES.length : CHOICES.length + 1
       if (key.startsWith('\x1b[200~')) {
@@ -694,6 +796,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       }
       if (key === '\x1b[B') { dialog.cursor = Math.min(dialog.cursor + 1, rows - 1); drawDialog(); continue }
       if (key === '\x1b[A') { dialog.cursor = Math.max(dialog.cursor - 1, 0); drawDialog(); continue }
+      if (dialog.kind !== 'permit' && engine === 'claude' && key === String(CHOICES.length + 1)) {
+        dialog.cursor = CHOICES.length
+        dialog.typed = ''
+        drawDialog()
+        continue
+      }
       if (dialog.kind === 'permit') {
         if (key === '\x1b') settle(null)
         else if (key === 'y' && engine === 'codex') settle(0)
@@ -984,7 +1092,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
   }
   const finish = async (text) => {
     if (engine === 'claude') {
-      claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
+      claude({ type: 'assistant', message: { id: `msg_${turn}`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text }], stop_reason: 'end_turn' } })
     } else {
       codex('event_msg', { type: 'item_completed', item: { type: 'AgentMessage', content: [{ type: 'Text', text }], phase: 'final_answer' } })
       codex('event_msg', { type: 'task_complete', turn_id: open, last_agent_message: text })
@@ -1003,7 +1111,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     const id = `call_${turnOf}_p`
     if (allowed) {
       if (engine === 'claude') {
-        claude({ type: 'assistant', message: { id: `msg_${turnOf}_p`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }], stop_reason: 'tool_use' } })
+        claude({ type: 'assistant', message: { id: `msg_${turnOf}_p`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }], stop_reason: 'tool_use' } })
         claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${command}` }] } })
       } else {
         codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: command }) })
@@ -1038,6 +1146,17 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await runHooks('SessionEnd', { reason: 'prompt_input_exit' })
       process.stdout.write('\x1b[?2004l\r\n')
       process.exit(0)
+    }
+    if (engine === 'claude' && /^\/(?:model|effort) \S+$/.test(prompt)) {
+      await modelGate(prompt)
+      const [, command, value] = /^\/(model|effort) (\S+)$/.exec(prompt)
+      if (command === 'model') claudeModel = value
+      // The same control confirmations used in runtimeProfileController.spec.ts and engineReaders.e2e.ts.
+      // This fake tests the process boundary; it is not real-model acceptance evidence.
+      const output = command === 'model' ? `Set model to ${value}` : `Set effort level to ${value}`
+      claude({ type: 'system', content: output })
+      say(`${output}\r\n`)
+      return
     }
     if (prompt === '!compact') {
       // `/compact` is a command, not a turn: a summary replaces the history, and Claude Code announces
@@ -1079,6 +1198,12 @@ export async function run(engine, config = {}, { native = false } = {}) {
       await runHooks('SessionStart', { source: 'clear' })
       return
     }
+    if (config.submissionGate && /^!latestart\b/.test(prompt)) {
+      // Taken off the composer (above), its turn not started: the daemon's check of the submission finds
+      // the composer clear and no turn yet, and keeps looking, until the test releases it.
+      const release = join(config.root, 'submitted-prompts.release')
+      while (!existsSync(release)) await new Promise((resolve) => setTimeout(resolve, 20))
+    }
     runningTool = null
     if (open) await finish('(interrupted by a new prompt)')
     // Both CLIs run their UserPromptSubmit hooks on every prompt, before the prompt is taken: notify.mjs
@@ -1092,7 +1217,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     open = `turn-${turn}`
     if (engine === 'claude') {
       claude({ type: 'user', message: { role: 'user', content: prompt } })
-      claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
+      claude({ type: 'assistant', message: { id: `msg_${turn}_t`, role: 'assistant', model: claudeModel, content: [{ type: 'thinking', thinking: `considering: ${prompt}` }], stop_reason: null } })
     } else {
       codex('event_msg', { type: 'task_started', turn_id: open })
       codex('turn_context', { turn_id: open, model: current.model, reasoning_effort: current.effort, collaboration_mode: { mode: 'default' } })
@@ -1114,7 +1239,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
     if (directive?.[1] === 'tool') {
       const id = `call_${turn}`
       if (engine === 'claude') {
-        claude({ type: 'assistant', message: { id: `msg_${turn}_u`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
+        claude({ type: 'assistant', message: { id: `msg_${turn}_u`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
         claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `ran ${directive[2]}` }] } })
       } else {
         codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: directive[2] }) })
@@ -1128,10 +1253,10 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // user record Claude Code writes when the parent is idle.
       const name = directive[2] || 'scout'
       const id = `toolu_${turn}_bg`
-      claude({ type: 'assistant', message: { id: `msg_${turn}_bg`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Agent', input: { description: `Count for ${name}`, prompt: `Count the files for ${name}.`, run_in_background: true } }], stop_reason: 'tool_use' } })
+      claude({ type: 'assistant', message: { id: `msg_${turn}_bg`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Agent', input: { description: `Count for ${name}`, prompt: `Count the files for ${name}.`, run_in_background: true } }], stop_reason: 'tool_use' } })
       claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'Async agent launched successfully.\nagentId: a0f1e2d3c4b5a6978' }] }, toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'a0f1e2d3c4b5a6978' } })
       const edit = `toolu_${turn}_ed`
-      claude({ type: 'assistant', message: { id: `msg_${turn}_ed`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id: edit, name: 'Bash', input: { command: 'true' } }], stop_reason: 'tool_use' } })
+      claude({ type: 'assistant', message: { id: `msg_${turn}_ed`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id: edit, name: 'Bash', input: { command: 'true' } }], stop_reason: 'tool_use' } })
       claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: edit, content: 'ran true' }] } })
       const notification = `<task-notification>\n<task-id>a0f1e2d3c4b5a6978</task-id>\n<tool-use-id>${id}</tool-use-id>\n<output-file>${join(cwd, '.tasks', 'a0f1e2d3c4b5a6978.output')}</output-file>\n<status>completed</status>\n<summary>Agent "Count for ${name}" finished</summary>\n<result>${name} found 3 files</result>\n</task-notification>`
       claude({ type: 'attachment', attachment: { type: 'queued_command', prompt: notification, commandMode: 'task-notification', origin: { kind: 'task-notification', producer: 'session-task' } } })
@@ -1190,7 +1315,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // A tool still running when the person interrupts. Both CLIs write its output, marked aborted, only
       // AFTER the interrupt and just before the turn's end: what a real Codex 0.160 did in daemon QA.
       const id = `call_${turn}`
-      if (engine === 'claude') claude({ type: 'assistant', message: { id: `msg_${turn}_u`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
+      if (engine === 'claude') claude({ type: 'assistant', message: { id: `msg_${turn}_u`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'Bash', input: { command: directive[2] } }], stop_reason: 'tool_use' } })
       else codex('response_item', { type: 'function_call', call_id: id, name: 'exec_command', arguments: JSON.stringify({ cmd: directive[2] }) })
       runningTool = id
       return
@@ -1222,7 +1347,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       const questions = [{ question: QUESTION, header: 'Drink', multiSelect: false, options: CHOICES.map(([label, description]) => ({ label, description })) }]
       if (engine === 'claude') {
         const id = `toolu_${turn}`
-        claude({ type: 'assistant', message: { id: `msg_${turn}_q`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }], stop_reason: 'tool_use' } })
+        claude({ type: 'assistant', message: { id: `msg_${turn}_q`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }], stop_reason: 'tool_use' } })
         claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `User has answered your questions: "${QUESTION}"="${choice}"` }] } })
         say(`⏺ User answered Claude's questions:\r\n  ⎿  · ${QUESTION} → ${choice}\r\n`)
       } else {
@@ -1232,6 +1357,22 @@ export async function run(engine, config = {}, { native = false } = {}) {
         say(`• ${QUESTION} → ${choice}\r\n`)
       }
       await finish(`you chose ${choice}${notes ? ` (notes: ${notes})` : ''}`)
+      return
+    }
+    if (engine === 'claude' && directive?.[1] === 'askmany') {
+      await new Promise((resolve) => setTimeout(resolve, 2_000))
+      const choice = await new Promise((resolve) => { eraseComposer(); dialog = { kind: 'many', cursor: 0, checked: new Set(), review: false, drawn: 0, resolve }; drawDialog() })
+      if (choice === null) {
+        say('(question cancelled)\r\n')
+        await finish('(question cancelled)')
+        return
+      }
+      const questions = [{ question: MANY, header: 'Toppings', multiSelect: true, options: TOPPINGS.map(([label, description]) => ({ label, description })) }]
+      const id = `toolu_${turn}`
+      claude({ type: 'assistant', message: { id: `msg_${turn}_q`, role: 'assistant', model: claudeModel, content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: { questions } }], stop_reason: 'tool_use' } })
+      claude({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: `User has answered your questions: "${MANY}"="${choice}"` }] } })
+      say(`⏺ User answered Claude's questions:\r\n  ⎿  · ${MANY} → ${choice}\r\n`)
+      await finish(`you chose ${choice || 'nothing'}`)
       return
     }
     if (engine === 'codex' && directive?.[1] === 'askasync') {
@@ -1252,7 +1393,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // The same refusal, after which Claude Code pauses the goal instead of working on (real 2.1.283): two
       // notices and its turn_duration, with no output and no further Stop hook.
       const condition = directive[2] || 'the work is done'
-      claude({ type: 'assistant', message: { id: `msg_${turn}_p1`, role: 'assistant', model: config.claudeModel ?? 'claude-opus-5-5', content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
+      claude({ type: 'assistant', message: { id: `msg_${turn}_p1`, role: 'assistant', model: claudeModel, content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
       say(`\r\nfirst pass at: ${condition}\r\n`)
       await runHooks('Stop', { stop_hook_active: false })
       claude({ type: 'user', isMeta: true, promptId: randomUUID(), message: { role: 'user', content: `Stop hook feedback:\n[goal]: not met yet: ${condition}` } })
@@ -1275,7 +1416,7 @@ export async function run(engine, config = {}, { native = false } = {}) {
       // it in a full end-to-end run (520 ms after that pass started): the CLI waits for its hook commands,
       // but the hook's request can be read after it has gone on. So the hooks run once the pass has begun.
       const condition = directive[2] || 'the work is done'
-      const model = config.claudeModel ?? 'claude-opus-5-5'
+      const model = claudeModel
       const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
       claude({ type: 'assistant', message: { id: `msg_${turn}_g1`, role: 'assistant', model, content: [{ type: 'text', text: `first pass at: ${condition}` }], stop_reason: 'end_turn' } })
       say(`\r\nfirst pass at: ${condition}\r\n`)
@@ -1496,9 +1637,11 @@ export async function run(engine, config = {}, { native = false } = {}) {
         if (engine === 'codex' && popup.found[0][0] === '/model' && popup.token.startsWith('/')) {
           buffer = ''
           pastes.clear()
-          openModelPicker()
-          const rest = parts.slice(index + 1).join('')
-          if (rest && picker) { const left = pickerKeys(rest); if (left) process.stdin.emit('data', left) }
+          void modelGate('/model').then(() => {
+            openModelPicker()
+            const rest = parts.slice(index + 1).join('')
+            if (rest && picker) { const left = pickerKeys(rest); if (left) process.stdin.emit('data', left) }
+          })
           return
         }
         // Otherwise Enter with suggestions open takes the highlighted one into the draft, and sends nothing.
@@ -1529,11 +1672,15 @@ export async function run(engine, config = {}, { native = false } = {}) {
         // Codex's `/model` is a command, not a prompt: its picker takes the composer's place at once and
         // nothing is sent. The keys after it in this read are the picker's.
         if (engine === 'codex' && line.trim() === '/model') {
-          openModelPicker()
-          const rest = parts.slice(index + 1).join('')
-          if (rest && picker) { const left = pickerKeys(rest); if (left) process.stdin.emit('data', left) }
+          void modelGate('/model').then(() => {
+            openModelPicker()
+            const rest = parts.slice(index + 1).join('')
+            if (rest && picker) { const left = pickerKeys(rest); if (left) process.stdin.emit('data', left) }
+          })
           return
         }
+        // What the test counts: every Enter that sent the composer's text, an empty one included.
+        if (config.submissionGate) appendFileSync(join(config.root, 'submitted-prompts'), `${JSON.stringify(line)}\n`)
         queue = queue.then(() => handle(line))
       } else if (part) {
         buffer += part

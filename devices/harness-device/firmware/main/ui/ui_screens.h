@@ -76,6 +76,8 @@ void ui_enter_link_guide(void);
 void ui_leave_remote_offline_loading(void);
 // Global commander connection indicator (shown on every tile's header).
 void ui_set_connected(bool connected);
+// The custom pets changed (pet.map, a finished pack, pet.drop): redraw so the dial applies them at the next scene.
+void ui_pets_changed(void);
 // Node (paired machine) online↔offline from the `node_status` frame — distinct from ui_set_connected
 // Ensure a tile exists for project_id (creates one if new). Safe to call repeatedly.
 // Set/refresh the human name shown on a project's tile.

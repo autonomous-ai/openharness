@@ -7,6 +7,7 @@ import { buildLaunchOverrides, type LaunchOverridesDeps } from '../lib/launchOve
 import type { TerminalCreateResult, TmuxRuntimeRef } from '../lib/terminalTypes.js'
 import * as scmProjects from './scmProjects.js'
 import type { ScmLaunchRecord } from './types.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 let dataDir = ''
 
@@ -26,7 +27,7 @@ const GIT: ScmLaunchRecord = { kind: 'git' }
 
 function deps(): LaunchOverridesDeps {
   return {
-    machine: () => ({ hermesSystemManaged: false }),
+    machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async (key) => `/state/grid-engine-config/${key}`,
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: () => {},
@@ -112,7 +113,7 @@ describe('the SCM launch record on the registry row', () => {
 
     // An SCM whose workspace binding travels in the environment: its env goes over the DSH's.
     vi.spyOn(scmProjects, 'scmLaunchEnv').mockImplementation(record => record ? { SCM_WORKSPACE: 'bound' } : undefined)
-    const built = await buildLaunchOverrides({ ...deps(), dshLaunch: () => ({ env: { SCM_WORKSPACE: 'not-this-one', HARNESS_DSH: 'x' }, args: ['--dsh'] }) },
+    const built = await buildLaunchOverrides({ ...deps(), dshLaunch: async () => ({ ok: true, launch: { env: { SCM_WORKSPACE: 'not-this-one', HARNESS_DSH: 'x' }, args: ['--dsh'] } }) },
       'claude', { ...row, dsh: 'x', cwd: '/tmp/demo' }, row.agentId)
     expect(built).toMatchObject({ ok: true, overrides: {
       env: { HARNESS_DSH: 'x', SCM_WORKSPACE: 'bound' },

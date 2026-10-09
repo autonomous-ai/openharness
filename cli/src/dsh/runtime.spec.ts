@@ -7,9 +7,12 @@ import { PROCESS_ENGINES } from '../engines/types.js'
 import { buildEngineCommandArgv, buildEngineLaunchArgv } from '../lib/engineLaunch.js'
 import { buildLaunchOverrides } from '../lib/launchOverrides.js'
 import type { InstalledDsh } from './installed.js'
-import { HARNESS_ADAPTERS, HARNESS_BOOTSTRAP, codexEnvArgs, harnessAdapter } from './adapters.js'
+import { HARNESS_ADAPTERS, HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
 import { compatibleHarnessEngines } from './compatibility.js'
-import { forkRuntimeKey, harnessLaunchOrRefusal, harnessRuntimeDir, incompatibleHarnessEngine, migrateHarnessInstructions, prepareHarnessLaunch } from './runtime.js'
+import { incompatibleHarnessEngine } from './compatibility.js'
+import { storeLaunchPort } from '../services/storeLaunch.js'
+import { forkRuntimeKey, harnessRuntimeDir, migrateHarnessInstructions, prepareHarnessLaunch } from './runtime.js'
+import { gridLaunchInProcess } from '../testing/gridLaunchInProcess.js'
 
 let root: string
 let ws: string
@@ -90,9 +93,9 @@ describe('session isolation and lifecycle', () => {
   })
 
   it('does not inherit the previous account private grid on a harness relaunch', async () => {
-    const result = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }),
+    const result = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(),
       writeGridConfigDir: async () => '/unused', tmuxSupportsSessionEnv: async () => true,
-      installCodexHooks: () => {}, dshLaunch: () => prepareHarnessLaunch(pkg, ws, 'claude', 'new-account'),
+      installCodexHooks: () => {}, dshLaunch: async () => ({ ok: true, launch: prepareHarnessLaunch(pkg, ws, 'claude', 'new-account') }),
     }, 'claude', { dsh: pkg.id, cwd: ws }, 'agent')
     if (!result.ok) throw new Error(result.detail)
     const [, , script] = buildEngineLaunchArgv('claude', { clearEnv: result.overrides.clearEnv }, '/bin/sh', undefined, undefined, null)
@@ -134,10 +137,10 @@ describe('session isolation and lifecycle', () => {
     pkg.manifest.agent!.args = ['--new-flag']
     pkg.manifest.agent!.env = { TOOLCHAIN: 'changed' }
     write(join(pkg.realDir, 'AGENTS.md'), '# Updated instructions\n')
-    const deps = { machine: () => ({ hermesSystemManaged: false }), writeGridConfigDir: async () => '/cfg',
+    const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
       tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => {},
-      dshLaunch: (_id: string, workspace: string, engine: typeof PROCESS_ENGINES[number] | 'terminal', key: string) =>
-        prepareHarnessLaunch(pkg, workspace, engine, key, { privateGrid: 'new-grid' }) }
+      dshLaunch: async (_id: string, workspace: string, engine: typeof PROCESS_ENGINES[number] | 'terminal', key: string) =>
+        ({ ok: true as const, launch: prepareHarnessLaunch(pkg, workspace, engine, key, { privateGrid: 'new-grid' }) }) }
     const result = await buildLaunchOverrides(deps, 'claude', { dsh: pkg.id, cwd: ws, dshRuntime: 'original' }, 'registry-agent-id')
     expect(result.ok && result.overrides.env.HARNESS_CONTEXT_FILE).toBe(first.env.HARNESS_CONTEXT_FILE)
     expect(result.ok && result.overrides.env.HARNESS_PRIVATE_GRID).toBe('new-grid')
@@ -149,13 +152,13 @@ describe('session isolation and lifecycle', () => {
     expect(fork.env.HARNESS_PRIVATE_GRID).toBeUndefined()
     const fresh = prepareHarnessLaunch(pkg, ws, 'codex', 'fresh')
     expect(readFileSync(fresh.env.HARNESS_CONTEXT_FILE!, 'utf8')).toContain('# Updated instructions')
-    expect(fresh.args).toEqual(['--new-flag', ...codexEnvArgs(fresh.env)])
+    expect(fresh.args).toEqual(['--new-flag', ...HARNESS_ADAPTERS.codex.envArgs!(fresh.env)])
   })
 
   it('keeps older rows stable using their agent id and supports package renames', async () => {
-    const deps = { machine: () => ({ hermesSystemManaged: false }), writeGridConfigDir: async () => '/cfg',
+    const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
       tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => {},
-      dshLaunch: (_id: string, workspace: string, engine: typeof PROCESS_ENGINES[number] | 'terminal', key: string) => prepareHarnessLaunch(pkg, workspace, engine, key) }
+      dshLaunch: async (_id: string, workspace: string, engine: typeof PROCESS_ENGINES[number] | 'terminal', key: string) => ({ ok: true as const, launch: prepareHarnessLaunch(pkg, workspace, engine, key) }) }
     const first = await buildLaunchOverrides(deps, 'codex', { dsh: pkg.id, cwd: ws }, 'old-agent')
     pkg.manifest.formerly = [pkg.id]
     pkg.id = 'acme/drawing'
@@ -164,7 +167,7 @@ describe('session isolation and lifecycle', () => {
   })
 
   it('reports preparation failures, missing dependencies, or no resolver before a relaunch', async () => {
-    const deps = { machine: () => ({ hermesSystemManaged: false }), writeGridConfigDir: async () => '/cfg',
+    const deps = { machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/cfg',
       tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => {} }
     expect(await buildLaunchOverrides(deps, 'codex', { dsh: pkg.id, cwd: ws }, 'key')).toMatchObject({ ok: false, error: 'DSH_NOT_INSTALLED' })
     expect(await buildLaunchOverrides({ ...deps, dshLaunch: () => { throw new Error('broken context') } }, 'codex', { dsh: pkg.id, cwd: ws }, 'key'))
@@ -392,14 +395,13 @@ describe('create and fork decisions', () => {
     expect(forkRuntimeKey({ ...source, dshRuntime: '' })).toBe('a1')
   })
 
-  it('turns a runtime that cannot be prepared into a refusal, never a throw', () => {
-    const ok = harnessLaunchOrRefusal(() => prepareHarnessLaunch(pkg, ws, 'claude', 'k'))
-    expect(ok.ok).toBe(true)
+  it('the Store turns a runtime that cannot be prepared into a refusal', async () => {
+    const store = storeLaunchPort(() => pkg)
+    const request = { dsh: pkg.id, workspace: ws, engine: 'claude' as const, key: 'k', account: {} }
+    expect((await store.dshLaunch(request)).ok).toBe(true)
     rmSync(join(pkg.realDir, 'skills/draw/SKILL.md'))
-    const refused = harnessLaunchOrRefusal(() => prepareHarnessLaunch(pkg, ws, 'claude', 'fresh'))
+    const refused = await store.dshLaunch({ ...request, key: 'fresh' })
     expect(refused).toMatchObject({ ok: false, error: 'DSH_RUNTIME_FAILED' })
     expect(refused.ok ? '' : refused.detail).not.toMatch(/^Error: /)
-    expect(harnessLaunchOrRefusal(() => { throw 'a bare string' })).toEqual(
-      { ok: false, error: 'DSH_RUNTIME_FAILED', detail: 'a bare string' })
   })
 })

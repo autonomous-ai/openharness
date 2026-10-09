@@ -5,49 +5,18 @@ import { join } from 'path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import { env } from '../config/env.js'
-import { parseMuseSettings } from '../engines/muse/runtimeProfile.js'
-import { parseAmpSession } from '../engines/amp/runtimeProfile.js'
 import type { AgentEngine } from '../engines/types.js'
 import type { RegisteredSession } from './registry.js'
-import {
-  DEVIN_EFFORTS,
-  devinFooterModel,
-  parseDevinModelsOutput,
-  type DevinModelTarget,
-} from '../engines/devin/runtimeProfile.js'
-import {
-  HERMES_EFFORTS,
-  hermesStatusModel,
-  parseHermesConfig,
-  parseHermesModelsCache,
-  type HermesModelTarget,
-} from '../engines/hermes/runtimeProfile.js'
-import {
-  COMMANDCODE_EFFORTS,
-  commandcodeBannerModel,
-  COMMANDCODE_EFFORT_LEVELS,
-  parseCommandcodeModelsOutput,
-  type CommandcodeModelTarget,
-} from '../engines/commandcode/runtimeProfile.js'
-import {
-  opencodeFooterModelId,
-  parseOpencodeFooter,
-  parseOpencodeModelsOutput,
-  type OpencodeModelTarget,
-} from '../engines/opencode/runtimeProfile.js'
-import {
-  kiloFooterModelId,
-  parseKiloModelsOutput,
-  type KiloModelTarget,
-} from '../engines/kilo/runtimeProfile.js'
-import {
-  PI_EFFORTS,
-  PI_THINKING_LEVELS,
-  parsePiFooterProfile,
-  parsePiModelsOutput,
-} from '../engines/pi/runtimeProfile.js'
-import { parseGrokFooterProfile } from '../engines/grok/runtimeProfile.js'
-import { parseAgyFooterProfile } from '../engines/agy/runtimeProfile.js'
+import type { DevinModelTarget } from '../engines/devin/runtimeProfile.js'
+import type { HermesModelTarget } from '../engines/hermes/runtimeProfile.js'
+import type { CommandcodeModelTarget } from '../engines/commandcode/runtimeProfile.js'
+import type { OpencodeModelTarget } from '../engines/opencode/runtimeProfile.js'
+import type { KiloModelTarget } from '../engines/kilo/runtimeProfile.js'
+import type { parsePiModelsOutput } from '../engines/pi/runtimeProfile.js'
+// The other engines' readers of their own profiles are their own code, loaded in this process as one of their
+// sessions enters the registry (engines/inProcess.ts): a pane read takes them as loaded, a config or catalog read
+// waits for them, and without them the chip keeps its last values.
+import { engineNow, loadEngine } from '../engines/inProcess.js'
 import type { RuntimeFor } from '../engines/facets/runtime.js'
 import type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField, RuntimeControl, RuntimeCatalogModel } from '../engines/facets/runtime.js'
 export type { RuntimeProfile, RuntimeModelOption, RuntimeState, RuntimeField } from '../engines/facets/runtime.js'
@@ -460,7 +429,9 @@ export class LegacyRuntimeProfileManager {
       const state = this.state(session.sessionId)
       // This agent's OWN home: `hermes -p <name>` keeps its model and effort in the profile's
       // config.yaml, and reading the default one reported the wrong model on every profile agent.
-      const parsed = parseHermesConfig(await readText(join(session.hermesHome || env.HERMES_HOME, 'config.yaml')))
+      const hermes = await loadEngine('hermes')
+      if (!hermes) return false
+      const parsed = hermes.parseHermesConfig(await readText(join(session.hermesHome || env.HERMES_HOME, 'config.yaml')))
       if (parsed.model) state.model = parsed.model.slice(parsed.model.lastIndexOf('/') + 1)
       state.effort = parsed.effort ?? 'auto'
       state.observedAt = Date.now()
@@ -478,7 +449,9 @@ export class LegacyRuntimeProfileManager {
       // absence of the key means the CLI default, which its own --help documents as `high`.
       const before = this.selectedModel(session)
       const state = this.state(session.sessionId)
-      const parsed = parseMuseSettings(await readText(join(env.MUSE_CONFIG_DIR, 'settings.json')))
+      const muse = await loadEngine('muse')
+      if (!muse) return false
+      const parsed = muse.parseMuseSettings(await readText(join(env.MUSE_CONFIG_DIR, 'settings.json')))
       if (parsed.model) state.model = parsed.model
       state.effort = parsed.effort ?? 'auto'
       state.observedAt = Date.now()
@@ -494,7 +467,9 @@ export class LegacyRuntimeProfileManager {
       // second axis to report. `~/.local/share/amp/session.json` is the only local place it is written.
       const before = this.selectedModel(session)
       const state = this.state(session.sessionId)
-      const parsed = parseAmpSession(await readText(join(env.AMP_STATE_DIR, 'session.json')))
+      const amp = await loadEngine('amp')
+      if (!amp) return false
+      const parsed = amp.parseAmpSession(await readText(join(env.AMP_STATE_DIR, 'session.json')))
       if (parsed.mode) state.model = parsed.mode
       state.effort = 'auto'
       state.observedAt = Date.now()
@@ -596,7 +571,7 @@ export class LegacyRuntimeProfileManager {
       // Devin writes no transcript unless the user passes `--export`, so the footer's bottom-left cell is
       // the only per-session record of the running model. It is a DISPLAY name (`SWE-1.6 Slow`); the
       // catalog resolves it back to a model key so the chip and the picker agree.
-      const label = devinFooterModel(paneText)
+      const label = engineNow('devin', 'its pane was read')?.devinFooterModel(paneText)
       const model = label ? this.devinModelKeyForLabel(session.sessionId, label) : null
       if (model) {
         state.model = model.modelKey
@@ -607,7 +582,7 @@ export class LegacyRuntimeProfileManager {
     } else if (session.engine === 'hermes') {
       // `⚕ minimax-m3 │ ctx --` — the status line is how a switch is seen immediately; config.yaml is
       // rewritten too, but the poll that reads it runs on its own schedule.
-      const model = hermesStatusModel(paneText)
+      const model = engineNow('hermes', 'its pane was read')?.hermesStatusModel(paneText)
       if (model && model !== state.model) {
         state.model = model
         state.observedAt = Date.now()
@@ -616,7 +591,7 @@ export class LegacyRuntimeProfileManager {
       // `/model` reprints the session banner (`# models: kimi-k2.6 · taste-1`) with the new model. The
       // transcript would say the same thing, but only after the NEXT turn runs — too late to confirm a
       // switch, and long enough for the chip to look stuck.
-      const model = commandcodeBannerModel(paneText)
+      const model = engineNow('commandcode', 'its pane was read')?.commandcodeBannerModel(paneText)
       if (model && model !== state.model) {
         state.model = model
         state.observedAt = Date.now()
@@ -634,8 +609,9 @@ export class LegacyRuntimeProfileManager {
       // case: with no provider connected OpenCode runs a built-in free model that `opencode models`
       // never prints, so insisting on a catalog match left the chips blank on a freshly opened agent
       // — showing nothing about a model the terminal was naming two lines below.
-      const footer = parseOpencodeFooter(paneText)
-      const id = opencodeFooterModelId(paneText, this.opencodeCatalogCache?.entries ?? [])
+      const opencode = engineNow('opencode', 'its pane was read')
+      const footer = opencode?.parseOpencodeFooter(paneText)
+      const id = opencode?.opencodeFooterModelId(paneText, this.opencodeCatalogCache?.entries ?? [])
       const model = id ?? footer?.target ?? null
       if (model) {
         // 'auto' remains the default: early builds had no reasoning axis at all, and inventing a
@@ -649,7 +625,7 @@ export class LegacyRuntimeProfileManager {
     } else if (session.engine === 'kilo') {
       // Kilo names the model in its composer footer too, but the line is shaped differently enough that
       // its resolver had to be rewritten rather than renamed — see engines/kilo/runtimeProfile.ts.
-      const id = kiloFooterModelId(paneText, this.kiloCatalogCache?.entries ?? [])
+      const id = engineNow('kilo', 'its pane was read')?.kiloFooterModelId(paneText, this.kiloCatalogCache?.entries ?? [])
       if (id) {
         state.model = id
         state.effort = 'auto'
@@ -658,7 +634,7 @@ export class LegacyRuntimeProfileManager {
       }
     } else if (session.engine === 'pi') {
       // Pi puts both axes in one footer cell: `minimax/minimax-m3 • high`.
-      const footer = parsePiFooterProfile(paneText)
+      const footer = engineNow('pi', 'its pane was read')?.parsePiFooterProfile(paneText)
       if (footer) {
         state.model = footer.model
         state.effort = footer.effort
@@ -666,7 +642,7 @@ export class LegacyRuntimeProfileManager {
         this.confirmObserved(session.sessionId, footer.model, footer.effort)
       }
     } else if (session.engine === 'grok') {
-      const footer = parseGrokFooterProfile(paneText)
+      const footer = engineNow('grok', 'its pane was read')?.parseGrokFooterProfile(paneText)
       if (footer) {
         state.model = footer.model
         state.effort = footer.effort
@@ -675,7 +651,7 @@ export class LegacyRuntimeProfileManager {
     } else if (session.engine === 'agy') {
       // agy's transcript never names the model, so the pane footer is the only continuous source; the
       // hook payload's `modelName` seeds it at session start.
-      const footer = parseAgyFooterProfile(paneText)
+      const footer = engineNow('agy', 'its pane was read')?.parseAgyFooterProfile(paneText)
       if (footer) {
         state.model = footer.model
         state.effort = footer.effort
@@ -1014,6 +990,8 @@ export class LegacyRuntimeProfileManager {
    * ACTUALLY running is pinned to the front so trimming can never hide it.
    */
   private async devinModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
+    const devin = await loadEngine('devin')
+    if (!devin) return []
     const entries = await this.devinCatalog()
     const targets = new Map<string, DevinModelTarget>()
     const state = this.states.get(session.sessionId)
@@ -1026,7 +1004,7 @@ export class LegacyRuntimeProfileManager {
     const seen = new Set<string>()
     for (const entry of ordered) {
       if (output.length >= CATALOG_LIMIT) break
-      if (!DEVIN_EFFORTS.has(entry.effort)) continue
+      if (!devin.DEVIN_EFFORTS.has(entry.effort)) continue
       const id = encodeRuntimeProfile({
         sessionId: session.agentId,
         engine: 'devin',
@@ -1043,6 +1021,9 @@ export class LegacyRuntimeProfileManager {
   }
 
   private async devinCatalog(): Promise<DevinModelTarget[]> {
+    // Its output is read with the engine's own code: without it there is no catalog, and nothing is run.
+    const devin = await loadEngine('devin')
+    if (!devin) return []
     const key = env.DEVIN_HOME
     if (this.devinCatalogCache?.key === key && this.devinCatalogCache.expiresAt > Date.now()) {
       return this.devinCatalogCache.entries
@@ -1054,7 +1035,7 @@ export class LegacyRuntimeProfileManager {
         timeout: 10_000,
         maxBuffer: 1024 * 1024,
       })
-      entries = parseDevinModelsOutput(result.stdout)
+      entries = devin.parseDevinModelsOutput(result.stdout)
     } catch (err) {
       console.warn('[runtime-profile] Devin model catalog failed:', err instanceof Error ? err.message : err)
     }
@@ -1068,18 +1049,20 @@ export class LegacyRuntimeProfileManager {
    * the table (the state fallback) still gets its own row so the chip never goes blank.
    */
   private async piModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
+    const pi = await loadEngine('pi')
+    if (!pi) return []
     const entries = await this.piCatalog()
     const output: RuntimeModelOption[] = []
     const seen = new Set<string>()
     for (const entry of entries) {
       addOption(output, seen, session, entry.model, 'auto', entry.model)
       if (!entry.thinking) continue
-      for (const level of PI_THINKING_LEVELS) addOption(output, seen, session, entry.model, level, entry.model)
+      for (const level of pi.PI_THINKING_LEVELS) addOption(output, seen, session, entry.model, level, entry.model)
     }
     const state = this.states.get(session.sessionId)
     if (entries.length && state?.model) {
       addOption(output, seen, session, state.model, 'auto', state.model)
-      if (state.effort && PI_EFFORTS.has(state.effort)) {
+      if (state.effort && pi.PI_EFFORTS.has(state.effort)) {
         addOption(output, seen, session, state.model, state.effort, state.model)
       }
     }
@@ -1098,12 +1081,14 @@ export class LegacyRuntimeProfileManager {
    * the chip names it truthfully; it just cannot be picked.
    */
   private async hermesModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
+    const hermes = await loadEngine('hermes')
+    if (!hermes) return []
     const entries = await this.hermesCatalog(session.hermesHome || env.HERMES_HOME)
     const state = this.states.get(session.sessionId)
     const targets = new Map<string, HermesModelTarget>()
     const output: RuntimeModelOption[] = []
     const seen = new Set<string>()
-    const effort = state?.effort && HERMES_EFFORTS.has(state.effort) ? state.effort : 'auto'
+    const effort = state?.effort && hermes.HERMES_EFFORTS.has(state.effort) ? state.effort : 'auto'
     const add = (entry: HermesModelTarget): void => {
       const short = entry.id.slice(entry.id.lastIndexOf('/') + 1)
       const id = encodeRuntimeProfile({
@@ -1131,8 +1116,10 @@ export class LegacyRuntimeProfileManager {
     // key was already right and only the path it read was not.
     const cached = this.hermesCatalogCache.get(home)
     if (cached && cached.expiresAt > Date.now()) return cached.entries
+    const hermes = await loadEngine('hermes')
+    if (!hermes) return []
     const cache = await readJson(join(home, 'provider_models_cache.json'))
-    const entries = parseHermesModelsCache(cache)
+    const entries = hermes.parseHermesModelsCache(cache)
     this.hermesCatalogCache.set(home, { entries, expiresAt: Date.now() + CATALOG_TTL_MS })
     return entries
   }
@@ -1148,6 +1135,8 @@ export class LegacyRuntimeProfileManager {
    * (see COMMANDCODE_EFFORT_LEVELS).
    */
   private async commandcodeModels(session: RegisteredSession): Promise<RuntimeModelOption[]> {
+    const commandcode = await loadEngine('commandcode')
+    if (!commandcode) return []
     const entries = await this.commandcodeCatalog()
     const targets = new Map<string, CommandcodeModelTarget>()
     const output: RuntimeModelOption[] = []
@@ -1163,7 +1152,7 @@ export class LegacyRuntimeProfileManager {
     }
     for (const entry of entries) {
       add(entry, 'auto')
-      for (const level of COMMANDCODE_EFFORT_LEVELS) add(entry, level)
+      for (const level of commandcode.COMMANDCODE_EFFORT_LEVELS) add(entry, level)
     }
     const state = this.states.get(session.sessionId)
     // `entries.length` guards the fallback: a model row is worth adding when the catalogue is readable but
@@ -1172,13 +1161,16 @@ export class LegacyRuntimeProfileManager {
     if (entries.length && state?.model && !entries.some((entry) => entry.shortId === state.model)) {
       const own: CommandcodeModelTarget = { id: state.model, shortId: state.model, section: '', isDefault: false }
       add(own, 'auto')
-      if (state.effort && COMMANDCODE_EFFORTS.has(state.effort)) add(own, state.effort)
+      if (state.effort && commandcode.COMMANDCODE_EFFORTS.has(state.effort)) add(own, state.effort)
     }
     this.commandcodeTargets.set(session.sessionId, targets)
     return output
   }
 
   private async commandcodeCatalog(): Promise<CommandcodeModelTarget[]> {
+    // Its output is read with the engine's own code: without it there is no catalog, and nothing is run.
+    const commandcode = await loadEngine('commandcode')
+    if (!commandcode) return []
     const key = env.COMMANDCODE_HOME
     if (this.commandcodeCatalogCache?.key === key && this.commandcodeCatalogCache.expiresAt > Date.now()) {
       return this.commandcodeCatalogCache.entries
@@ -1188,7 +1180,7 @@ export class LegacyRuntimeProfileManager {
       const result = await execFileAsync('commandcode', ['--list-models'], {
         env: process.env, timeout: 15_000, maxBuffer: 1024 * 1024,
       })
-      entries = parseCommandcodeModelsOutput(result.stdout)
+      entries = commandcode.parseCommandcodeModelsOutput(result.stdout)
     } catch (err) {
       console.warn('[runtime-profile] Command Code model catalog failed:', err instanceof Error ? err.message : err)
     }
@@ -1221,6 +1213,9 @@ export class LegacyRuntimeProfileManager {
   }
 
   async opencodeCatalog(): Promise<OpencodeModelTarget[]> {
+    // Its output is read with the engine's own code: without it there is no catalog, and nothing is run.
+    const opencode = await loadEngine('opencode')
+    if (!opencode) return []
     const key = env.OPENCODE_DATA_DIR
     if (this.opencodeCatalogCache?.key === key && this.opencodeCatalogCache.expiresAt > Date.now()) {
       return this.opencodeCatalogCache.entries
@@ -1230,7 +1225,7 @@ export class LegacyRuntimeProfileManager {
       const result = await execFileAsync(opencodeBin(), ['models'], {
         env: process.env, timeout: 10_000, maxBuffer: 1024 * 1024,
       })
-      entries = parseOpencodeModelsOutput(result.stdout)
+      entries = opencode.parseOpencodeModelsOutput(result.stdout)
     } catch (err) {
       console.warn('[runtime-profile] OpenCode model catalog failed:', err instanceof Error ? err.message : err)
     }
@@ -1255,6 +1250,9 @@ export class LegacyRuntimeProfileManager {
   }
 
   async kiloCatalog(): Promise<KiloModelTarget[]> {
+    // Its output is read with the engine's own code: without it there is no catalog, and nothing is run.
+    const kilo = await loadEngine('kilo')
+    if (!kilo) return []
     const key = env.KILO_DATA_DIR
     if (this.kiloCatalogCache?.key === key && this.kiloCatalogCache.expiresAt > Date.now()) {
       return this.kiloCatalogCache.entries
@@ -1267,7 +1265,7 @@ export class LegacyRuntimeProfileManager {
       const result = await execFileAsync(env.KILO_PATH || 'kilo', ['models'], {
         env: process.env, timeout: 10_000, maxBuffer: 1024 * 1024,
       })
-      entries = parseKiloModelsOutput(result.stdout)
+      entries = kilo.parseKiloModelsOutput(result.stdout)
     } catch (err) {
       console.warn('[runtime-profile] Kilo model catalog failed:', err instanceof Error ? err.message : err)
     }
@@ -1276,6 +1274,9 @@ export class LegacyRuntimeProfileManager {
   }
 
   private async piCatalog(): Promise<ReturnType<typeof parsePiModelsOutput>> {
+    // Its output is read with the engine's own code: without it there is no catalog, and nothing is run.
+    const pi = await loadEngine('pi')
+    if (!pi) return []
     const key = env.PI_HOME
     if (this.piCatalogCache?.key === key && this.piCatalogCache.expiresAt > Date.now()) {
       return this.piCatalogCache.entries
@@ -1287,7 +1288,7 @@ export class LegacyRuntimeProfileManager {
         timeout: 10_000,
         maxBuffer: 1024 * 1024,
       })
-      entries = parsePiModelsOutput(result.stdout)
+      entries = pi.parsePiModelsOutput(result.stdout)
     } catch (err) {
       console.warn('[runtime-profile] Pi model catalog failed:', err instanceof Error ? err.message : err)
     }

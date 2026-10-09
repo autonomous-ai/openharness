@@ -22,23 +22,19 @@
  */
 
 import { readdirSync, realpathSync, statSync } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { env } from '../../config/env.js'
+import { HERMES_HISTORY_ID_RE, HERMES_HOMES, hermesDbPath } from './contract.js'
+import { forgetStoreHomes, listStoreHomes } from '../kit/storeHomes.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import type { AgentEngine } from '../types.js'
-import { HERMES_HISTORY_ID_RE } from './reader.js'
 
 /** `YYYYMMDD_HHMMSS_<hex>`, or an editor's (ACP) uuid — the shapes `reader.ts` reads history for. */
 const SESSION_ID_RE = HERMES_HISTORY_ID_RE
-/** How long a homes listing is reused. A profile is created by hand, minutes apart; this is a `readdir`. */
-const HOMES_TTL_MS = 30_000
 /** A person with hundreds of profile folders has a different problem; this keeps the scan bounded. */
 const MAX_PROFILES = 64
 
-export function hermesDbPath(home: string): string {
-  return join(home, 'state.db')
-}
+export { hermesDbPath } from './contract.js'
 
 function canonical(path: string): string {
   try { return realpathSync(path) } catch { return path }
@@ -49,30 +45,15 @@ export function sameHermesHome(a: string, b: string): boolean {
   return canonical(a.replace(/\/+$/, '')) === canonical(b.replace(/\/+$/, ''))
 }
 
-let homesCache: { at: number; homes: string[] } | null = null
-
 /**
  * Every home this machine has, the default first.
  *
  * A profile counts only once it has a `state.db`: before that there is nothing to read and nothing to
- * match a session against, and listing it would cost a failed query on every lookup.
+ * match a session against, and listing it would cost a failed query on every lookup. Declared (contract.ts) and
+ * listed by the kit, whose one listing the hook server's admission shares.
  */
 export async function listHermesHomes(defaultHome = env.HERMES_HOME): Promise<string[]> {
-  const now = Date.now()
-  if (homesCache && now - homesCache.at < HOMES_TTL_MS) return homesCache.homes
-  const homes = [defaultHome]
-  try {
-    const entries = await readdir(join(defaultHome, 'profiles'), { withFileTypes: true })
-    for (const entry of entries.slice(0, MAX_PROFILES)) {
-      if (!entry.isDirectory()) continue
-      const home = join(defaultHome, 'profiles', entry.name)
-      try {
-        if ((await stat(hermesDbPath(home))).isFile()) homes.push(home)
-      } catch { /* a profile whose first session has not started */ }
-    }
-  } catch { /* no profiles folder — the single-home machine, which is most of them */ }
-  homesCache = { at: now, homes }
-  return homes
+  return listStoreHomes(HERMES_HOMES, defaultHome)
 }
 
 /**
@@ -97,7 +78,7 @@ export function hermesConfigHomes(defaultHome = env.HERMES_HOME): string[] {
 
 /** Forget the listing — for a test, and for an installer that has just made a profile. */
 export function forgetHermesHomes(): void {
-  homesCache = null
+  forgetStoreHomes(HERMES_HOMES)
 }
 
 /**

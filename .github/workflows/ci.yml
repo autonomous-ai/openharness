@@ -76,6 +76,11 @@ jobs:
             .github
             scripts
       - name: Validate the integration workflows
+        # actionlint needs Go 1.25 or newer, and `go run` otherwise switches to the newest toolchain it is told of.
+        # On 2026-10-08 that was go1.26.9, listed before it was published (proxy and checksum database: 404), and
+        # every PR's planning failed. A toolchain that exists keeps planning off Go's release timing.
+        env:
+          GOTOOLCHAIN: go1.26.8
         run: >-
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           .github/workflows/ci.yml .github/workflows/cli-e2e.yml .github/workflows/ci-health.yml
@@ -157,6 +162,12 @@ jobs:
             /docs/images/
             /mobile/pubspec.lock
             /backend/src/lib/communityContract.ts
+            /mobile/lib/p2p/terminal_p2p_plugin.dart
+            /mobile/lib/p2p/terminal_p2p_link.dart
+            /mobile/lib/p2p/terminal_p2p_policy.dart
+            /mobile/lib/ws/terminal_transport_plugin.dart
+            /mobile/lib/ws/relay_codec.dart
+            /mobile/lib/e2ee/relay_session_crypto.dart
             /.gitattributes
             /.gitignore
             /.gitmodules

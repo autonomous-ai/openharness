@@ -1,3 +1,5 @@
+import { readInlineScreen } from '../testing/inlineScreen.js'
+import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,9 +8,12 @@ import type { AutonomousDeviceInput } from './deviceInput.js'
 import { deviceErrorText } from './cardText.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
-import { TERMINAL_LEASE_REFUSED, type TerminalActionResult } from '../lib/terminalTypes.js'
+import { TERMINAL_LEASE_REFUSED, type ProcessIdentity, type TerminalActionResult } from '../lib/terminalTypes.js'
 import { CLAUDE_REWIND_LIST, CODEX_BROWSING_SCROLLBACK } from '../lib/__fixtures__/rewindPickers.js'
 import { createInput, createMessageRequest, deviceInputDeps, messageWriter, sessionInputDeps, type InputDeps } from './input.js'
+import { createScreens } from './engines/screens.js'
+import { screenFor } from '../engines/screens.js'
+import { readerEngine } from '../engines/worker/protocol.js'
 
 const ok: TerminalActionResult = { state: 'succeeded', dispatch: 'executed' }
 const fixture = (name: string) => readFileSync(new URL(`../lib/__fixtures__/${name}`, import.meta.url), 'utf8')
@@ -38,6 +43,8 @@ function deps(over: Partial<InputDeps> = {}) {
   const normalizer = { openTurn: vi.fn((text: string) => [{ type: 'turn_started', text }]) }
   let pane: string | null = READY_PANE
   const base: InputDeps = {
+    readScreen: readInlineScreen,
+    submission: inlineSubmission,
     resolve: (id) => agents.get(id),
     byAgent: (agentId) => agents.get(agentId),
     terminal: {
@@ -150,7 +157,7 @@ describe('the session input controller\'s dependencies', () => {
   it('reads the pane again right before the Enter, and gives the reason not to press it, a popup of the message\'s own aside', async () => {
     const screens = [READY_PANE, CLAUDE_PERMISSION, READY_PANE, null, READY_PANE, READY_PANE, `────────────\n❯ /mo\n────────────\n  /model   Set the AI model`]
     const answers: Array<string | null> = []
-    const write = messageWriter({
+    const write = messageWriter({ readScreen: deps().deps.readScreen,
       resolve: (id) => agents.get(id),
       terminal: {
         validateTerminal: vi.fn(async () => true),
@@ -178,7 +185,7 @@ describe('the session input controller\'s dependencies', () => {
     const order: string[] = []
     const promptTyped = vi.fn((session: { agentId: string }, capture: string | null) => { order.push(`prompt ${session.agentId} ${capture === READY_PANE}`) })
     const screens = [READY_PANE, CLAUDE_PERMISSION]
-    const write = messageWriter({
+    const write = messageWriter({ readScreen: deps().deps.readScreen,
       resolve: (id) => agents.get(id),
       terminal: {
         validateTerminal: vi.fn(async () => true),
@@ -199,7 +206,7 @@ describe('the session input controller\'s dependencies', () => {
     for (const screen of [null, '✻ Welcome to Claude Code']) {
       let reads = 0
       const answers: Array<string | null> = []
-      const write = messageWriter({
+      const write = messageWriter({ readScreen: deps().deps.readScreen,
         resolve: (id) => agents.get(id),
         terminal: {
           validateTerminal: vi.fn(async () => true),
@@ -221,6 +228,57 @@ describe('the session input controller\'s dependencies', () => {
     }
   })
 
+  it('presses the Enter of a message typed while its engine started once it binds its first conversation, and under no other change', async () => {
+    // An engine draws its composer before its first hook binds the conversation: a message typed in that gap
+    // finds its record rebuilt by the Enter. The screen is read under the record as it now stands only when it
+    // is that launch, in the same pane and process; any other change is read as typed, and the fence holds it.
+    const engineProcess = (pid: number): ProcessIdentity => ({ pid, executable: 'claude', startMarker: `start ${pid}` })
+    const starting = { agentId: 'a9', sessionId: '', boundAt: null, engine: 'claude', active: true, launch: { state: 'ready' },
+      registeredAt: 1, tmuxPane: '%9', primaryRuntimeKey: 'tmux:%9', runtimes: [], transcriptPath: null, processIdentity: null } as unknown as RegisteredSession
+    const bound = { ...starting, launch: undefined, sessionId: 's9', boundAt: 2, transcriptPath: '/t/s9.jsonl', processIdentity: engineProcess(7) } as RegisteredSession
+    const known = { ...starting, processIdentity: engineProcess(7) } as RegisteredSession
+    const resumed = { ...bound, launch: { state: 'ready' }, resumeOnly: true } as RegisteredSession
+    const cases: Array<[string, RegisteredSession, RegisteredSession | undefined, string | null]> = [
+      ['its first bind', starting, bound, null],
+      ['its first bind, the process it knew', known, bound, null],
+      ['nothing changed', bound, bound, null],
+      ['another process', known, { ...bound, processIdentity: engineProcess(8) }, 'screen_unreadable'],
+      ['another pane', starting, { ...bound, tmuxPane: '%10' }, 'screen_unreadable'],
+      ['another route', starting, { ...bound, primaryRuntimeKey: 'tmux:%10' }, 'screen_unreadable'],
+      ['another registration', starting, { ...bound, registeredAt: 3 }, 'screen_unreadable'],
+      ['another engine', starting, { ...bound, engine: 'codex' }, 'screen_unreadable'],
+      ['another agent', starting, { ...bound, agentId: 'a10' }, 'screen_unreadable'],
+      ['the agent gone', starting, undefined, 'screen_unreadable'],
+      ['a rotation', bound, { ...bound, sessionId: 's10', boundAt: 3 }, 'screen_unreadable'],
+      ['a resumed conversation rebound', resumed, { ...resumed, sessionId: 's10', boundAt: 3 }, 'screen_unreadable'],
+    ]
+    for (const [name, typed, after, answer] of cases) {
+      let current: RegisteredSession | undefined = typed
+      const answers: Array<string | null> = []
+      const screens = createScreens({ handles: () => false, transport: { read: vi.fn() }, resolve: () => current,
+        inline: (engine, capture) => readerEngine(engine) && capture !== null ? screenFor(engine).inspect(capture) : undefined })
+      const write = messageWriter({ readScreen: screens.read,
+        resolve: () => current,
+        terminal: {
+          validateTerminal: vi.fn(async () => true),
+          captureTerminal: vi.fn(async () => READY_PANE),
+          submitTerminalAction: vi.fn(async (_id: string, _text: string, options?: { beforeEnter?: () => Promise<string | null> }) => {
+            current = after
+            answers.push(await options!.beforeEnter!())
+            return ok
+          }),
+        } as unknown as InputDeps['terminal'],
+      })
+      vi.useFakeTimers()
+      try {
+        const written = write('a9', 'sent while it was starting')
+        await vi.advanceTimersByTimeAsync(5_000)
+        await written
+      } finally { vi.useRealTimers() }
+      expect(answers, name).toEqual([answer])
+    }
+  })
+
   it('writes a team turn only into a ready pane whose delivery still holds control', async () => {
     const run = deps()
     const wired = sessionInputDeps(run.deps, () => lock(run.calls))
@@ -232,6 +290,18 @@ describe('the session input controller\'s dependencies', () => {
     expect(await wired.injectTeam!('a1', 'hi', 'd1')).toEqual({ state: 'failed', dispatch: 'not_started', reason: 'team_waiting_control' })
     expect(await wired.injectTeam!('a1', 'hi', 'd1')).toBe(ok)
     expect(run.calls.filter((call) => call.startsWith('submit'))).toEqual(['submit a1 hi'])
+  })
+
+  it('holds team and device writes when an otherwise readable screen has no worker evidence', async () => {
+    const run = deps({ readScreen: async () => null })
+    const wired = sessionInputDeps(run.deps, () => lock(run.calls))
+    expect(await wired.beforeTeamWrite!(agents.get('a1')!)).toBe('team_waiting_unavailable')
+    expect(await wired.inject('a1', 'hello')).toMatchObject({ dispatch: 'not_started', reason: 'screen_unreadable' })
+    expect(await wired.injectTeam!('a1', 'hello', 'delivery')).toMatchObject({ dispatch: 'not_started', reason: 'team_waiting_unavailable' })
+    const device = deviceInputDeps(run.deps, () => ({ acquireControl: vi.fn(), submit: vi.fn(), cancelDelivery: vi.fn() }))
+    expect(await device.isAwaitingUser!(agents.get('a1')!)).toBe(true)
+    expect(run.deps.terminal.submitTerminalAction).not.toHaveBeenCalled()
+    expect(run.deps.terminal.keyTerminalAction).not.toHaveBeenCalled()
   })
 
   it('reports an error to the app and, in the device\'s words, to the dial', () => {

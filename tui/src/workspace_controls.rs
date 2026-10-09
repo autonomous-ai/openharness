@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::{app::App, draw::RangeKind, theme, workspace_menu as menu};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action { New, Menu, Account, Header(u64), PaneMenu(u64) }
+pub enum Action { New, Menu, Account, Header(u64), PaneMenu(u64), Agent(u64), Model(u64) }
 
 /// The menu's glyph — at a pane's title, in the status line and the side bar: three dots up and
 /// down, centred in the cell, drawn bold so it does not read thin. (A braille `⠇` is as big as the
@@ -71,8 +71,24 @@ pub fn register(app: &App, rect: Rect, action: Action) {
 pub fn title_reserve(app: &App, window: usize, pane: u64, width: u16) -> u16 {
     let tab = app.tabs.get(window).map(|t| t.id.as_str()).unwrap_or("");
     if !enabled(app) || !app.mouse || width < 20 || app.options.has_window_override("pane-border-format", tab, pane) { return 0 }
-    // (No agent or model label: the menu changes both.)
-    MENU_COLS
+    MENU_COLS + identity_labels(app, pane, width).iter().map(|(label, _)| label.width() as u16 + 2).sum::<u16>()
+}
+
+/// The harness's agent and model, before the menu; each opens its picker. They keep the title's
+/// first 30 columns for its name and place: a narrower pane drops the model, then the agent.
+fn identity_labels(app: &App, pane: u64, width: u16) -> Vec<(String, Action)> {
+    let mut labels = Vec::new();
+    let mut available = width.saturating_sub(30);
+    if crate::agent_switch::pane_supports(app, pane) {
+        let label = crate::agent_switch::pane_label(app, pane);
+        let size = label.width() as u16 + 2;
+        if size <= available { available -= size; labels.push((label, Action::Agent(pane))); }
+    }
+    if crate::models::pane_supports(app, pane) {
+        let label = crate::models::pane_label(app, pane);
+        if label.width() as u16 + 2 <= available { labels.push((label, Action::Model(pane))); }
+    }
+    labels
 }
 
 /// Return the title's remaining space. The controls never add a row or resize a terminal.
@@ -83,7 +99,15 @@ pub fn title(buf: &mut Buffer, app: &App, pane: u64, rect: Rect, style: Style) -
     register(app, rect, Action::Header(pane));
     app.controls.grips.borrow_mut().push((Rect::new(rect.x, rect.y, rect.width - reserve, 1), pane));
     let quiet = style.remove_modifier(Modifier::BOLD | Modifier::DIM).fg(theme::paint(theme::pane_palette().muted));
-    let menu = Rect::new(rect.right() - reserve, rect.y, reserve, 1);
+    let mut x = rect.right() - reserve;
+    for (label, action) in identity_labels(app, pane, rect.width) {
+        let size = label.width() as u16 + 2;
+        let at = Rect::new(x, rect.y, size, 1);
+        Span::styled(format!(" {label} "), quiet).render(at, buf);
+        register(app, at, action);
+        x += size;
+    }
+    let menu = Rect::new(x, rect.y, MENU_COLS, 1);
     Span::styled(format!(" {MENU_GLYPH} "), quiet.add_modifier(Modifier::BOLD)).render(menu, buf);
     register(app, menu, Action::PaneMenu(pane));
     Rect::new(rect.x, rect.y, rect.width - reserve, rect.height)
@@ -151,6 +175,8 @@ pub fn activate(app: &mut App, action: Action, at: Option<(u16, u16)>) {
         Action::Account => crate::account::open(app),
         Action::Header(pane) => { select_pane(app, pane); }
         Action::PaneMenu(pane) => pane_menu(app, pane, at),
+        Action::Agent(pane) => if select_pane(app, pane) { crate::agent_switch::open(app, pane); },
+        Action::Model(pane) => if crate::models::pane_supports(app, pane) && select_pane(app, pane) { crate::input::run(app, "models"); },
     }
 }
 
@@ -198,7 +224,7 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     let at = Some((mouse.column, mouse.row.saturating_add(1)));
     // A title is a border in line layouts and a pane's first row in boxed layouts.
     // Either explicit binding takes precedence over the added header controls.
-    let places: &[&str] = if matches!(action, Some(Action::Header(_) | Action::PaneMenu(_))) { &["Border", "Pane"] } else { &["Status"] };
+    let places: &[&str] = if matches!(action, Some(Action::Header(_) | Action::PaneMenu(_) | Action::Agent(_) | Action::Model(_))) { &["Border", "Pane"] } else { &["Status"] };
     if let MouseEventKind::Down(button @ (MouseButton::Left | MouseButton::Right)) = mouse.kind {
         let defaults = crate::keys::Keymap::tmux_defaults();
         for place in places {
@@ -227,7 +253,7 @@ pub fn mouse(app: &mut App, mouse: &MouseEvent) -> bool {
             return true;
         },
         MouseEventKind::Down(MouseButton::Right) => {
-            let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p)) => Some(p), _ => None };
+            let pane = match action { Some(Action::Header(p) | Action::PaneMenu(p) | Action::Agent(p) | Action::Model(p)) => Some(p), _ => None };
             if let Some(pane) = pane { begin_press(app, MouseButton::Right); pane_menu(app, pane, at); return true; }
             // A machine's heading in the side bar: what can be done on it.
             if let Some(crate::bar::Hit::Machine(machine, _)) = crate::bar::hit_at(app, mouse.column, mouse.row) {
@@ -454,6 +480,12 @@ pub(crate) mod tests {
         app.controls.hits.borrow().iter().find(|(_, action)| *action == wanted).unwrap_or_else(|| panic!("missing {wanted:?}")).0
     }
 
+    /// Where a pane's title controls start: its agent and model labels, else the menu.
+    fn controls_x(app: &App, pane: u64) -> u16 {
+        app.controls.hits.borrow().iter().filter(|(_, a)| matches!(a, Action::Agent(p) | Action::Model(p) | Action::PaneMenu(p) if *p == pane))
+            .map(|(r, _)| r.x).min().unwrap_or_else(|| panic!("no controls for {pane}"))
+    }
+
     fn send(app: &mut App, kind: MouseEventKind, x: u16, y: u16) {
         crate::input::handle(app, Event::Mouse(MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE }));
     }
@@ -564,10 +596,11 @@ pub(crate) mod tests {
                 let (pane, other) = if status == "top" { (2, 1) } else { (1, 2) };
                 let probe = stacked(look, status);
                 let (title, name) = (hit(&probe, Action::Header(pane)), grip(&probe, pane));
-                assert!(name.width > 0 && name.right() < title.right() - MENU_COLS, "{look:?} {status}: the grip is the name, not the whole row");
+                assert!(name.width > 0 && name.right() < controls_x(&probe, pane), "{look:?} {status}: the grip is the name, not the whole row");
                 let away = (hit(&probe, Action::Header(other)), grip(&probe, other));
-                assert_eq!(away.1.width, away.0.width - MENU_COLS, "{look:?} {status}: a title on no divider drags from its whole row");
-                let controls = [hit(&probe, Action::PaneMenu(pane))];
+                assert_eq!(away.1.right(), controls_x(&probe, other), "{look:?} {status}: a title on no divider drags from its whole row");
+                let controls: Vec<Rect> = probe.controls.hits.borrow().iter()
+                    .filter(|(_, a)| matches!(a, Action::Agent(p) | Action::Model(p) | Action::PaneMenu(p) if *p == pane)).map(|(r, _)| *r).collect();
                 let before = probe.tab().root.as_ref().unwrap().to_tmux();
                 // 3 rows into its own pane, from each cell of the row
                 let to = if status == "top" { title.y + 3 } else { title.y - 3 };
@@ -684,8 +717,8 @@ pub(crate) mod tests {
         app.fit_panes();
         let buf = render(&mut app);
         let title = hit(&app, Action::Header(1));
-        // the blank part of the header, right of the name and left of the … × controls
-        let x = title.right() - 8;
+        // the blank part of the header, right of the name and left of the agent, model and ⋮
+        let x = controls_x(&app, 1) - 2;
         assert_eq!(buf[(x, title.y)].symbol(), " ", "this test needs a blank header cell right of the name");
         send(&mut app, MouseEventKind::Down(MouseButton::Left), x, title.y);
         send(&mut app, MouseEventKind::Drag(MouseButton::Left), x - 4, title.y + 3);
@@ -850,13 +883,25 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn the_pane_title_names_no_agent_or_model_and_its_menu_changes_both() {
+    async fn the_pane_title_names_its_agent_and_model_until_the_pane_is_narrow() {
         let mut app = app(120);
         app.fleet.agents.get_mut(&("local".into(), "a1".into())).unwrap().model = "runtime-v1:a1:codex:gpt-6-astra@max".into();
         let buf = render(&mut app);
-        let menu = hit(&app, Action::PaneMenu(1));
-        let title: String = (0..buf.area.width).map(|x| buf[(x, menu.y)].symbol()).collect();
-        assert!(!title.contains("GPT-6 Astra") && !title.contains("Codex"), "{title}");
+        let (agent, model, menu) = (hit(&app, Action::Agent(1)), hit(&app, Action::Model(1)), hit(&app, Action::PaneMenu(1)));
+        let cells = |r: Rect| -> String { (r.x..r.right()).map(|x| buf[(x, r.y)].symbol()).collect() };
+        assert_eq!((cells(agent), cells(model), cells(menu)), (" Codex ".into(), " GPT-6 Astra ".into(), format!(" {MENU_GLYPH} ")));
+        assert!(agent.right() == model.x && model.right() == menu.x, "agent, model, then the menu: {agent:?} {model:?} {menu:?}");
+        // Each label opens its picker for this pane.
+        click(&mut app, MouseButton::Left, model.x + 1, model.y);
+        assert!(matches!(app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::Models, .. })));
+        assert_eq!(crate::models::target(&app).unwrap().agent, "a1");
+        app.modal = None;
+        render(&mut app);
+        let agent = hit(&app, Action::Agent(1));
+        click(&mut app, MouseButton::Left, agent.x + 1, agent.y);
+        assert!(matches!(app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::AgentSwitch, .. })));
+        app.modal = None;
+        // The menu changes both too.
         pane_menu(&mut app, 1, None);
         let token = app.controls.target.as_ref().unwrap().token.clone();
         run(&mut app, &token, "models");
@@ -869,6 +914,7 @@ pub(crate) mod tests {
         assert!(matches!(app.modal, Some(crate::modal::Modal::Picker { kind: crate::modal::PickerKind::AgentSwitch, .. })));
         app.modal = None;
         app.size.0 = 32; app.fit_panes(); render(&mut app);
+        assert!(app.controls.hits.borrow().iter().all(|(_, a)| !matches!(a, Action::Agent(_) | Action::Model(_))), "a narrow pane keeps its name, not the labels");
         assert!(app.controls.hits.borrow().iter().any(|(_, a)| *a == Action::PaneMenu(1)), "narrow panes retain the menu");
     }
 

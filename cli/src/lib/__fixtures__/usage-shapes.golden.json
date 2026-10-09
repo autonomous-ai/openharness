@@ -1,0 +1,518 @@
+{
+  "darwin": {
+    "cold": null,
+    "missing": null,
+    "streaming-and-foreign": {
+      "totalTokens": 420,
+      "updatedAt": "2026-10-01T00:01:00.000Z",
+      "inputTokens": 380,
+      "outputTokens": 40,
+      "cachedTokens": 160
+    },
+    "partial": {
+      "totalTokens": 420,
+      "updatedAt": "2026-10-01T00:01:30.000Z",
+      "inputTokens": 380,
+      "outputTokens": 40,
+      "cachedTokens": 160
+    },
+    "completed": {
+      "totalTokens": 630,
+      "updatedAt": "2026-10-01T00:02:00.000Z",
+      "inputTokens": 570,
+      "outputTokens": 60,
+      "cachedTokens": 240
+    },
+    "output-and-work": {
+      "totalTokens": 630,
+      "updatedAt": "2026-10-01T00:02:30.000Z",
+      "inputTokens": 570,
+      "outputTokens": 60,
+      "cachedTokens": 240,
+      "output": {
+        "linesAdded": 2,
+        "linesRemoved": 0,
+        "pullRequestsCreated": 1
+      },
+      "work": {
+        "current": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "locations": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "pullRequests": [
+          {
+            "url": "https://github.com/example/project/pull/42",
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "uncertain": false,
+        "truncated": false
+      }
+    },
+    "unreadable-keeps-last": {
+      "totalTokens": 630,
+      "updatedAt": "2026-10-01T00:02:30.000Z",
+      "inputTokens": 570,
+      "outputTokens": 60,
+      "cachedTokens": 240,
+      "output": {
+        "linesAdded": 2,
+        "linesRemoved": 0,
+        "pullRequestsCreated": 1
+      },
+      "work": {
+        "current": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "locations": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "pullRequests": [
+          {
+            "url": "https://github.com/example/project/pull/42",
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "uncertain": false,
+        "truncated": false
+      }
+    },
+    "rewritten-keeps-history": {
+      "totalTokens": 410,
+      "updatedAt": "2026-10-01T00:03:30.000Z",
+      "inputTokens": 390,
+      "outputTokens": 20,
+      "cachedTokens": 80,
+      "work": {
+        "current": [],
+        "locations": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "pullRequests": [
+          {
+            "url": "https://github.com/example/project/pull/42",
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "uncertain": true,
+        "truncated": false
+      }
+    },
+    "rebound-does-not-borrow": null,
+    "unsupported": null,
+    "fork": {
+      "totalTokens": 330,
+      "updatedAt": "2026-10-01T00:05:00.000Z",
+      "inputTokens": 290,
+      "outputTokens": 40,
+      "cachedTokens": 80
+    },
+    "codex-deltas": {
+      "totalTokens": 250,
+      "updatedAt": "2026-10-01T00:05:30.000Z",
+      "inputTokens": 200,
+      "outputTokens": 50,
+      "cachedTokens": 100
+    },
+    "codex-append": {
+      "totalTokens": 380,
+      "updatedAt": "2026-10-01T00:06:00.000Z",
+      "inputTokens": 300,
+      "outputTokens": 80,
+      "cachedTokens": 150
+    },
+    "codex-other-conversation": null,
+    "notifications": [
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation"
+    ],
+    "restart-from-checkpoint": {
+      "totalTokens": 540,
+      "updatedAt": "2026-10-01T00:07:00.000Z",
+      "inputTokens": 480,
+      "outputTokens": 60,
+      "cachedTokens": 160,
+      "work": {
+        "current": [],
+        "locations": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "pullRequests": [
+          {
+            "url": "https://github.com/example/project/pull/42",
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "uncertain": true,
+        "truncated": false
+      }
+    },
+    "corrupt-checkpoint-rebuilt": {
+      "totalTokens": 540,
+      "updatedAt": "2026-10-01T00:07:30.000Z",
+      "inputTokens": 480,
+      "outputTokens": 60,
+      "cachedTokens": 160
+    },
+    "opencode/valid/cold": null,
+    "opencode/valid": {
+      "value": {
+        "totalTokens": 215,
+        "updatedAt": "2026-10-01T00:07:30.000Z",
+        "inputTokens": 190,
+        "outputTokens": 25,
+        "cachedTokens": 80
+      },
+      "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        }
+      ]
+    },
+    "opencode/fallback/cold": null,
+    "opencode/fallback": {
+      "value": {
+        "totalTokens": 215,
+        "updatedAt": "2026-10-01T00:07:30.000Z",
+        "inputTokens": 190,
+        "outputTokens": 25,
+        "cachedTokens": 80
+      },
+      "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        },
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, 0 AS tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        }
+      ]
+    },
+    "opencode/unreadable/cold": null,
+    "opencode/unreadable": {
+      "value": null,
+      "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        },
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, 0 AS tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        }
+      ]
+    },
+    "opencode/malformed/cold": null,
+    "opencode/malformed": {
+      "value": null,
+      "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        }
+      ]
+    }
+  },
+  "linux": {
+    "cold": null,
+    "missing": null,
+    "streaming-and-foreign": {
+      "totalTokens": 420,
+      "updatedAt": "2026-10-01T00:01:00.000Z",
+      "inputTokens": 380,
+      "outputTokens": 40,
+      "cachedTokens": 160
+    },
+    "partial": {
+      "totalTokens": 420,
+      "updatedAt": "2026-10-01T00:01:30.000Z",
+      "inputTokens": 380,
+      "outputTokens": 40,
+      "cachedTokens": 160
+    },
+    "completed": {
+      "totalTokens": 630,
+      "updatedAt": "2026-10-01T00:02:00.000Z",
+      "inputTokens": 570,
+      "outputTokens": 60,
+      "cachedTokens": 240
+    },
+    "output-and-work": {
+      "totalTokens": 630,
+      "updatedAt": "2026-10-01T00:02:30.000Z",
+      "inputTokens": 570,
+      "outputTokens": 60,
+      "cachedTokens": 240,
+      "output": {
+        "linesAdded": 2,
+        "linesRemoved": 0,
+        "pullRequestsCreated": 1
+      },
+      "work": {
+        "current": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "locations": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "pullRequests": [
+          {
+            "url": "https://github.com/example/project/pull/42",
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "uncertain": false,
+        "truncated": false
+      }
+    },
+    "unreadable-keeps-last": {
+      "totalTokens": 630,
+      "updatedAt": "2026-10-01T00:02:30.000Z",
+      "inputTokens": 570,
+      "outputTokens": 60,
+      "cachedTokens": 240,
+      "output": {
+        "linesAdded": 2,
+        "linesRemoved": 0,
+        "pullRequestsCreated": 1
+      },
+      "work": {
+        "current": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "locations": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "pullRequests": [
+          {
+            "url": "https://github.com/example/project/pull/42",
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "uncertain": false,
+        "truncated": false
+      }
+    },
+    "rewritten-keeps-history": {
+      "totalTokens": 410,
+      "updatedAt": "2026-10-01T00:03:30.000Z",
+      "inputTokens": 390,
+      "outputTokens": 20,
+      "cachedTokens": 80,
+      "work": {
+        "current": [],
+        "locations": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "pullRequests": [
+          {
+            "url": "https://github.com/example/project/pull/42",
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "uncertain": true,
+        "truncated": false
+      }
+    },
+    "rebound-does-not-borrow": null,
+    "unsupported": null,
+    "fork": {
+      "totalTokens": 330,
+      "updatedAt": "2026-10-01T00:05:00.000Z",
+      "inputTokens": 290,
+      "outputTokens": 40,
+      "cachedTokens": 80
+    },
+    "codex-deltas": {
+      "totalTokens": 250,
+      "updatedAt": "2026-10-01T00:05:30.000Z",
+      "inputTokens": 200,
+      "outputTokens": 50,
+      "cachedTokens": 100
+    },
+    "codex-append": {
+      "totalTokens": 380,
+      "updatedAt": "2026-10-01T00:06:00.000Z",
+      "inputTokens": 300,
+      "outputTokens": 80,
+      "cachedTokens": 150
+    },
+    "codex-other-conversation": null,
+    "notifications": [
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation",
+      "agent/conversation"
+    ],
+    "restart-from-checkpoint": {
+      "totalTokens": 540,
+      "updatedAt": "2026-10-01T00:07:00.000Z",
+      "inputTokens": 480,
+      "outputTokens": 60,
+      "cachedTokens": 160,
+      "work": {
+        "current": [],
+        "locations": [
+          {
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "pullRequests": [
+          {
+            "url": "https://github.com/example/project/pull/42",
+            "cwd": "/fixture/work",
+            "at": "2026-10-01T00:00:00.000Z"
+          }
+        ],
+        "uncertain": true,
+        "truncated": false
+      }
+    },
+    "corrupt-checkpoint-rebuilt": {
+      "totalTokens": 540,
+      "updatedAt": "2026-10-01T00:07:30.000Z",
+      "inputTokens": 480,
+      "outputTokens": 60,
+      "cachedTokens": 160
+    },
+    "opencode/valid/cold": null,
+    "opencode/valid": {
+      "value": {
+        "totalTokens": 215,
+        "updatedAt": "2026-10-01T00:07:30.000Z",
+        "inputTokens": 190,
+        "outputTokens": 25,
+        "cachedTokens": 80
+      },
+      "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        }
+      ]
+    },
+    "opencode/fallback/cold": null,
+    "opencode/fallback": {
+      "value": {
+        "totalTokens": 215,
+        "updatedAt": "2026-10-01T00:07:30.000Z",
+        "inputTokens": 190,
+        "outputTokens": 25,
+        "cachedTokens": 80
+      },
+      "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        },
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, 0 AS tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        }
+      ]
+    },
+    "opencode/unreadable/cold": null,
+    "opencode/unreadable": {
+      "value": null,
+      "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        },
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, 0 AS tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        }
+      ]
+    },
+    "opencode/malformed/cold": null,
+    "opencode/malformed": {
+      "value": null,
+      "queries": [
+        {
+          "sql": "SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write FROM session WHERE id = ?",
+          "args": [
+            "conversation"
+          ]
+        }
+      ]
+    }
+  }
+}

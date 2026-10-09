@@ -495,6 +495,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           WorkspaceMachinePrompt(
                             loading: app.machinesLoading,
                             preparing: _hasNewHarnessMachine,
+                            preparingText: app.firstArrival.running
+                                ? 'Opening your agents…'
+                                : 'Preparing your harness…',
                             onChoose: () => unawaited(_openMachines()),
                           ),
                           if (recent != null) ...[
@@ -551,6 +554,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
+        // A computer new to Harness opens on agents, not on an empty box.
+        if (app.firstArrival.pending) {
+          final arriving = app.firstArrival.run(
+            app,
+            // The person has not taken over meanwhile: no box, search or command bar opened.
+            stillCurrent: () =>
+                mounted &&
+                _newHarness == null &&
+                _search == null &&
+                !_commandBarOpen &&
+                !_pickingFolder,
+          );
+          // Says "Opening your agents…" while it works.
+          if (mounted) setState(() {});
+          if (await arriving) return;
+          if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
+        }
         await _newAgent(
           stillCurrent: () =>
               _canShowWelcomeComposer && app.activeSwarmId == tab,
@@ -588,6 +608,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.canChangeCompanionAgent = _canChangeCompanionAgent;
     app.openAgentPicker = _openPaneAgents;
     app.agentChangeNotice = _showPaneActionHint;
+    app.notificationOffer = _offerNotifications;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -809,6 +830,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app.canChangeCompanionAgent = null;
     }
     if (app.openAgentPicker == _openPaneAgents) app.openAgentPicker = null;
+    if (app.notificationOffer == _offerNotifications) {
+      app.notificationOffer = null;
+    }
     if (app.agentChangeNotice == _showPaneActionHint) {
       app.agentChangeNotice = null;
     }
@@ -2656,7 +2680,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // treats a lost reply as proof that the session stopped. A replaced
       // session must not inherit a choice made for the old one.
       return targets.every((target) {
-        final current = app.stateOf(target.$1)?.agents
+        final current = app
+            .stateOf(target.$1)
+            ?.agents
             .where((agent) => agent.id == target.$2.id)
             .firstOrNull;
         return current == null ||
@@ -3579,6 +3605,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Why a pane action did nothing, for the one route that is not gated by
   /// `_canExecuteCommand`: a native menu item clicked while no keymap region
   /// owns the focus reaches its handler directly.
+  /// Once: an agent finished while the person was away and nothing told them.
+  void _offerNotifications() {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        key: const ValueKey('notification-offer'),
+        duration: const Duration(seconds: 12),
+        content: const Text(
+          'An agent finished while you were away. Get a notification next time?',
+        ),
+        action: SnackBarAction(
+          label: 'Turn on',
+          onPressed: () => unawaited(app.acceptNotificationOffer()),
+        ),
+      ),
+    );
+  }
+
   void _showPaneActionHint(String message) {
     if (!mounted) return;
     ScaffoldMessenger.maybeOf(context)
@@ -6325,11 +6369,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
         machine.connectionStatus == ConnectionStatus.connected,
   );
 
-  bool get _browserMachineSetupReady =>
+  /// The inventory has answered, and answered for now: loaded, not loading,
+  /// not stale, no error. What the account HAS, independent of what is open.
+  bool get _machineInventorySettled =>
       app.machineInventoryLoaded &&
       !app.machinesLoading &&
       !app.machinesAreStale &&
-      app.machineListError == null &&
+      app.machineListError == null;
+
+  bool get _browserMachineSetupReady =>
+      _machineInventorySettled &&
       !app.machineStates.values.any(
         (machine) =>
             !machine.machine.isShared &&
@@ -6345,8 +6394,48 @@ class _SwarmScreenState extends State<SwarmScreen> {
       _search == null &&
       _routeIsCurrent;
 
+  /// No computer of the account's is connected, and none is on its way: the
+  /// inventory has answered, and every one is missing, offline or waiting to
+  /// be linked — what the host's [WorkspaceChrome.firstMachine] is for.
+  bool get _needsFirstConnection =>
+      _machineInventorySettled &&
+      !_hasConnectedBrowserMachine &&
+      !app.machineStates.values.any(
+        (machine) =>
+            !machine.machine.isShared &&
+            !machine.needsLink &&
+            machine.nodeOnline != false &&
+            (machine.connectionStatus == ConnectionStatus.connecting ||
+                machine.connectionStatus == ConnectionStatus.reconnecting),
+      );
+
+  /// The host's connect-a-computer page over the whole workspace — tabs synced
+  /// from the account's desk would otherwise show panes for computers this
+  /// browser cannot reach yet. Null when not needed, and for a host without one.
+  Widget? _firstConnection(BuildContext context) {
+    final page = widget.chrome?.firstMachine;
+    if (page == null || !_needsFirstConnection) return null;
+    return ColoredBox(
+      color: grid.AppPalette.swarmTabBar,
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 760),
+            child: page(context),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _maybeInitialBrowserMachines() {
     if (_browserMachineSetupHandled) return;
+    // A host with a connect page never covers it with the machine picker.
+    if (widget.chrome?.firstMachine != null) {
+      _browserMachineSetupHandled = true;
+      return;
+    }
     if (_hasConnectedBrowserMachine) {
       _browserMachineSetupHandled = true;
       return;
@@ -7200,6 +7289,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                                           ),
                                         ),
                                       ),
+                                      if (_firstConnection(context)
+                                          case final connect?)
+                                        Positioned.fill(child: connect),
                                     ],
                                   ),
                                 ),

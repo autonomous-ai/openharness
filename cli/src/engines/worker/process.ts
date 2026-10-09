@@ -1,4 +1,7 @@
-/** One engine's read-only adapter, hosted by the master's existing service supervisor. */
+import { engineQuestionControlRequests } from './questionControlRequests.js'
+import type { CoreConnection } from '../../services/process.js'
+import { engineModelControlRequests } from './modelControlRequests.js'
+/** One engine's facets, hosted by the master's existing service supervisor. */
 import { isAbsolute } from 'node:path'
 import type { ServiceRequests } from '../../core/api.js'
 import { TranscriptPager } from '../../lib/transcriptPages.js'
@@ -6,6 +9,9 @@ import { runServiceProcess, type ServiceProcess } from '../../services/process.j
 import type { ServiceProcessOptions } from '../../serviceProcess.js'
 import type { EngineTranscript, HistoryAsk, TranscriptSession } from '../facets/transcript.js'
 import { engineLiveRequests } from './liveRequests.js'
+import { engineScreenRequests } from './screenRequests.js'
+import { engineSubmissionRequests } from './submissionRequests.js'
+import { engineNativeControlRequests } from './nativeControlRequests.js'
 import { engineRuntimeRequests } from './runtimeRequests.js'
 import {
   EngineReadError, record, READER_HISTORY, READER_IN_FLIGHT, READER_LAST_TURN, READER_REPLY_BYTES,
@@ -84,8 +90,16 @@ export interface EngineProcessOptions extends ServiceProcessOptions {
 }
 
 export function runEngineReader(engine: ReaderEngine, options: EngineProcessOptions): ServiceProcess {
+  let core: CoreConnection | null = null
   return (options.run ?? runServiceProcess)({
     name: READER_SERVICES[engine], socketPath: options.socketPath, machineId: options.machineId,
-    token: options.token, requests: options.requests ?? { ...engineReaderRequests(engine), ...engineLiveRequests(engine), ...engineRuntimeRequests(engine) },
+    token: options.token, requests: options.requests ?? { ...engineReaderRequests(engine), ...engineLiveRequests(engine), ...engineRuntimeRequests(engine), ...engineScreenRequests(engine), ...engineSubmissionRequests(engine), ...engineModelControlRequests(engine, {
+      query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
+    }), ...engineQuestionControlRequests(engine, {
+      query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
+    }), ...(engine === 'codex' ? engineNativeControlRequests(engine, {
+      query: (query, payload) => core ? core.query(query, payload) : Promise.reject(new Error('core disconnected')),
+    }) : {}) },
+    onConnected: connected => { core = connected }, onDisconnected: () => { core = null },
   })
 }

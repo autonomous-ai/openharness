@@ -4,7 +4,6 @@ import { engineBin, enginePathOverride } from '../../lib/engineBin.js'
 import { engineInstallRecipe } from '../../lib/engineInstall.js'
 import { buildEngineLaunchArgv, commandAvailableInInteractiveShell } from '../../lib/engineLaunch.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
-import { probeGridAssignment } from '../../lib/gridAssignment.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { AgentRestartCoordinator, bypassPermissionFor, restartAgent } from '../../lib/restartAgent.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
@@ -19,7 +18,6 @@ vi.mock('../../lib/engineLaunch.js', async (real) => ({
   commandAvailableInInteractiveShell: vi.fn(async () => true),
 }))
 vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
-vi.mock('../../lib/gridAssignment.js', async (real) => ({ ...await real<object>(), probeGridAssignment: vi.fn(async () => undefined) }))
 vi.mock('../../lib/restartAgent.js', async (real) => ({
   ...await real<object>(),
   bypassPermissionFor: vi.fn(async (_s: unknown, live: () => Promise<boolean>) => live()),
@@ -60,11 +58,13 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RestartDep
     agentReconciler: { holdRoute: vi.fn(), releaseRoute: vi.fn() },
     terminalHintMachineName: () => 'studio',
     announceSession: vi.fn(),
+    refreshGridAssignment: vi.fn(),
     relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { env: { GRID_KEY: 'k' } } })) as never,
     downgradedPermission: vi.fn(async (_s, bypass: boolean) => ({ bypassPermission: bypass, permissionMode: 'auto' })) as never,
     refreshGridWebSearch: vi.fn() as never,
     liveBypassPermission: vi.fn(async () => true),
     paneSwapDeps: vi.fn(() => ({ swap: true })) as never,
+    restartHeld: vi.fn(() => null),
     ...over,
   }
   return { deps, state, tmuxBackend, restart: createAgentRestarter(deps) }
@@ -82,6 +82,15 @@ describe('restarting an agent', () => {
       expect(await setup(agent(), { stopJobs: new Map([['a1', Promise.resolve()]]) }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(agent(), { pinnedControls: new Set(['a1']) }).restart('a1')).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(null).restart('a1')).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })
+    })
+
+    it('for an agent held for a service, its launch, now, with nothing of a swap touched', async () => {
+      const launched = { ok: true as const, session: agent(), resumed: true }
+      const run = setup(agent({ processIdentity: undefined, tmuxPane: '%4' } as Partial<RegisteredSession>), { restartHeld: vi.fn(() => Promise.resolve(launched)) })
+      expect(await run.restart('a1')).toBe(launched)
+      expect(run.deps.restartHeld).toHaveBeenCalledWith('a1')
+      expect(run.deps.relaunchOverrides).not.toHaveBeenCalled()
+      expect(run.tmuxBackend.respawn).not.toHaveBeenCalled()
     })
 
     it('for an agent with no tmux pane, or no tmux at all', async () => {
@@ -238,12 +247,11 @@ describe('restarting an agent', () => {
       expect(run.deps.refreshGridWebSearch).toHaveBeenCalledWith('a1', { env: { GRID_KEY: 'k' } })
       expect(probeGatewayRuntime).toHaveBeenCalledWith(newProcess)
       // Its command line, where a Codex or pi grid's address and model are: never its executable alone.
-      expect(processArgs).toHaveBeenCalledWith(newProcess)
-      expect(probeGridAssignment).toHaveBeenCalledWith(newProcess, 'claude', '/bin/claude --model opus -c model_provider=grid')
-      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none', undefined)
+      expect(run.deps.registry.updateProcessIdentity).toHaveBeenCalledWith('a1', newProcess, 'none')
       expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', true)
       expect(clearPaneRemainOnExit).toHaveBeenCalledWith('%4')
       expect(run.deps.announceSession).toHaveBeenCalledWith(agent())
+      expect(run.deps.refreshGridAssignment).toHaveBeenCalledWith(agent())
       expect(console.log).toHaveBeenCalledWith('[restart] a1 claude · resumed')
       expect(run.deps.agentReconciler.holdRoute).toHaveBeenCalledWith(routeKey)
       expect(run.deps.agentReconciler.releaseRoute).toHaveBeenCalledWith(routeKey)
