@@ -59,7 +59,6 @@ export function attachTeams<T extends BackendSocket>(socket: T): T & TeamFixture
     },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined, lastTurn: async () => null },
-    external: { sessions: { list: () => [], scan: async () => [] }, open: { known: () => new Map(), fresh: async () => new Map() } },
     account: {
       mintGridName: async () => null, accessToken: () => Promise.reject(new Error('no credential')), lane: LANE_OFF,
       privateGridName: async () => null, machineName: () => null,

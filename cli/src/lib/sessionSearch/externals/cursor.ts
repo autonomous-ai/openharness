@@ -1,3 +1,4 @@
+import { externalEvidenceActive, externalReadFailed } from '../evidence.js'
 /**
  * Cursor (`cursor-agent`, also `agent`): a chat is `<configDir>/chats/<md5(folder)>/<id>/`, holding its
  * `store.db` (SQLite, WAL) and `meta.json`, which says its title, when it last moved, the folder it
@@ -128,7 +129,7 @@ export async function readStoreMeta(storePath: string, Database: CursorDatabase 
 
 /** The first answer [pick] gives, reading lines back from the end of [path]. */
 async function fromEnd<T>(path: string, pick: (line: string) => T | null): Promise<T | null> {
-  const size = (await stat(path).catch(() => null))?.size ?? 0
+  const size = (await stat(path).catch(error => { externalReadFailed(error, 'record'); return null }))?.size ?? 0
   for (const bytes of TAIL_BYTES) {
     const lines = (await readTail(path, bytes)).split('\n')
     // A window that starts mid-file starts mid-line.
@@ -231,14 +232,15 @@ export async function readChat(ctx: ScanContext, chatDir: string, Database: () =
     read = await ctx.memo(`cursor:${chatDir}`, `${meta?.stamp ?? '-'}|${db.stamp}|${wal?.stamp ?? '-'}`, async () => {
       // A `meta.json` Cursor is still writing is not JSON yet, and throws: nothing is remembered, and
       // the next scan reads it again. One that is not a sidecar is read past, as Cursor reads past it.
-      const source = await readFile(join(chatDir, 'meta.json'), 'utf8').catch(() => null)
+      const source = await readFile(join(chatDir, 'meta.json'), 'utf8').catch(error => { externalReadFailed(error, 'record'); return null })
       return (source === null ? null : parseCursorMeta(JSON.parse(source))) ?? readStoreMeta(store, Database())
     })
-  } catch {
+  } catch (error) {
+    externalReadFailed(error, 'conversation metadata')
     // Half-written, or a store that could not be opened: read again next scan.
     read = null
   }
-  if (!read) return { kind: 'skip', reason: 'unreadable' }
+  if (!read) { externalReadFailed(new Error('unreadable'), 'conversation metadata'); return { kind: 'skip', reason: 'unreadable' } }
   if (read.isSubagent) return { kind: 'skip', reason: 'subagent' }
   if (!read.hasConversation) return { kind: 'skip', reason: 'empty' }
   return { kind: 'chat', chat: { sessionId: basename(chatDir), meta: read, movedAt: read.updatedAt ?? Math.max(db.mtime, wal?.mtime ?? 0) } }
@@ -317,7 +319,7 @@ export function cursorProvider(options: CursorOptions): ExternalProvider {
       const cursor = rows.filter((row) => engineProcessMatch(row, 'cursor', ownership).score > 0 && view.alive(row.pid))
       if (!cursor.length) return []
       const byPid = new Map(rows.map((row) => [row.pid, row]))
-      const roots = new Set([chatsRoot, join(await realpath(options.configDir).catch(() => options.configDir), 'chats')])
+      const roots = new Set([chatsRoot, join(await realpath(options.configDir).catch(error => { externalReadFailed(error, 'folder'); return options.configDir }), 'chats')])
       const files = await view.openFiles(cursor.map((row) => row.pid))
       const claims: OwnerClaim[] = []
       for (const row of cursor) {
@@ -328,11 +330,13 @@ export function cursorProvider(options: CursorOptions): ExternalProvider {
           const chatDir = dirname(store)
           const sessionId = basename(chatDir)
           if (basename(store) !== 'store.db' || !UUID.test(sessionId) || !BUCKET.test(basename(dirname(chatDir)))) continue
-          if (!roots.has(dirname(dirname(chatDir))) || held.has(sessionId)) continue
-          held.add(sessionId)
+          const key = externalEvidenceActive() ? store : sessionId
+          if (!roots.has(dirname(dirname(chatDir))) || held.has(key)) continue
+          held.add(key)
           claims.push({ sessionId, pid: row.pid, record: store, ...app })
         }
         if (held.size) continue
+        externalReadFailed(new Error('no current open store for a live process'), 'current owner')
         // No chat store open (yet, or `lsof` could not say): the chat its arguments name.
         const resumed = resumeSessionId('cursor', row.args)
         // A guess: an in-app `/resume` leaves the arguments naming the first chat. Never stopped on it.

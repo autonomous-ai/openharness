@@ -1,3 +1,4 @@
+import { externalEvidenceActive, externalReadFailed } from '../evidence.js'
 /**
  * GitHub Copilot CLI: one folder per conversation, `<COPILOT_HOME>/session-state/<id>/`, holding its
  * event stream (`events.jsonl`, whose first line is `session.start`) and `workspace.yaml` (its folder
@@ -203,7 +204,8 @@ async function streamHead(path: string): Promise<{ start: Record<string, unknown
       },
       shouldStop: () => prompted,
     }))
-  } catch {
+  } catch (error) {
+    externalReadFailed(error, 'conversation stream')
     return null
   }
   // Not one whole line yet.
@@ -213,7 +215,7 @@ async function streamHead(path: string): Promise<{ start: Record<string, unknown
 
 /** The first answer [pick] gives, reading lines back from the end of [path]. */
 async function fromEnd<T>(path: string, pick: (line: string) => T | null): Promise<T | null> {
-  const size = (await stat(path).catch(() => null))?.size ?? 0
+  const size = (await stat(path).catch(error => { externalReadFailed(error, 'record'); return null }))?.size ?? 0
   for (const bytes of TAIL_BYTES) {
     const lines = (await readTail(path, bytes)).split('\n')
     // A window that starts mid-file starts mid-line.
@@ -240,7 +242,7 @@ export function copilotMovedAt(path: string): Promise<number | null> {
  * the stream holds no turn event at all.
  */
 export async function copilotTurnOpen(path: string): Promise<boolean | null> {
-  const size = (await stat(path).catch(() => null))?.size ?? 0
+  const size = (await stat(path).catch(error => { externalReadFailed(error, 'record'); return null }))?.size ?? 0
   for (const bytes of TAIL_BYTES) {
     const lines = (await readTail(path, bytes)).split('\n').filter((line) => {
       // A window that starts mid-file starts mid-line, and half a line is not JSON.
@@ -264,7 +266,7 @@ export async function readCopilotSession(dir: string, sessionId: string): Promis
   if (!head || head.start?.type !== 'session.start' || !data) return skip('unreadable')
   if (text(data.sessionId) && data.sessionId !== sessionId) return skip('mismatch')
   if (text(data.detachedFromSpawningParentSessionId)) return skip('detached')
-  const workspace = workspaceYaml(await readFile(join(dir, 'workspace.yaml'), 'utf8').catch(() => ''))
+  const workspace = workspaceYaml(await readFile(join(dir, 'workspace.yaml'), 'utf8').catch(error => { externalReadFailed(error, 'record'); return '' }))
   if (workspace.get('mc_task_id')) return skip('cloud-task')
   const origin = copilotOrigin(workspace.get('client_name') ?? '')
   if (!origin) return skip('automation')
@@ -300,7 +302,7 @@ export function copilotProvider(options: CopilotOptions): ExternalProvider {
         if (!stamp) continue
         const workspace = await fileStamp(join(dir, 'workspace.yaml'))
         const read = await ctx.memo(`copilot:${dir}`, `${stamp.stamp}|${workspace?.stamp ?? '-'}`, () => readCopilotSession(dir, entry.name))
-          .catch(() => null)
+          .catch(error => { externalReadFailed(error, 'record'); return null })
         await ctx.pace()
         // Half-written: nothing was remembered, and the next scan reads it again.
         if (read?.kind !== 'session' || ctx.excluded(read.cwd)) continue
@@ -314,6 +316,7 @@ export function copilotProvider(options: CopilotOptions): ExternalProvider {
     async owners(view: ProcessView): Promise<OwnerClaim[]> {
       // Each pid's newest lock: the session it is in now.
       const newest = new Map<number, { sessionId: string; at: number }>()
+      const tied = new Set<number>()
       for (const entry of await entries(root)) {
         if (!entry.isDirectory() || !UUID.test(entry.name)) continue
         for (const file of await entries(join(root, entry.name))) {
@@ -321,25 +324,36 @@ export function copilotProvider(options: CopilotOptions): ExternalProvider {
           const stamp = pid > 0 ? await fileStamp(join(root, entry.name, file.name)) : null
           if (!stamp) continue
           const held = newest.get(pid)
+          if (!held || stamp.mtime > held.at) tied.delete(pid)
+          else if (stamp.mtime === held.at && entry.name !== held.sessionId) tied.add(pid)
           if (!held || stamp.mtime > held.at || (stamp.mtime === held.at && entry.name > held.sessionId)) {
             newest.set(pid, { sessionId: entry.name, at: stamp.mtime })
           }
         }
       }
-      if (!newest.size) return []
+      if (!newest.size && !externalEvidenceActive()) return []
       const rows = new Map((await view.list()).map((row) => [row.pid, row]))
       const ownership = agentCommandOwnershipSnapshot()
       const claims: OwnerClaim[] = []
       for (const [pid, held] of newest) {
         const row = rows.get(pid)
+        if (externalEvidenceActive() && !row && view.alive(pid)) externalReadFailed(new Error('missing owner process'), 'owner process')
         // A crash leaves its lock behind, and the pid can be reused: only a live Copilot counts.
         const kind = row && view.alive(pid) ? copilotProcess(row, ownership) : null
+        if (kind && externalEvidenceActive() && (!Number.isFinite(row!.started) || tied.has(pid))) {
+          externalReadFailed(new Error('ambiguous owner lock'), 'owner record'); continue
+        }
         // A lock older than the process that has its pid was left by an earlier one.
         if (!kind || (row!.started !== undefined && held.at + START_SLACK_MS < row!.started)) continue
         claims.push({
           sessionId: held.sessionId, pid, record: join(root, held.sessionId, 'events.jsonl'),
           ...(kind === 'server' ? { app: true } : {}),
         })
+      }
+      if (externalEvidenceActive()) for (const row of rows.values()) {
+        if (view.alive(row.pid) && copilotProcess(row, ownership) && !claims.some(claim => claim.pid === row.pid)) {
+          externalReadFailed(new Error('no current lock for a live process'), 'current owner')
+        }
       }
       return claims
     },

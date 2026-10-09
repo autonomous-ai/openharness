@@ -5,6 +5,7 @@ import { createServiceHost, FAIL, later, ServiceUnavailableError, testFaults, ty
 
 // A port whose members cover every shape: sync and async, value and FAIL fallbacks, a stop.
 class FakeSearch {
+  inspect: SearchPort['inspect'] = async () => ({ ok: false, error: 'SEARCH_UNAVAILABLE', detail: 'unavailable' })
   readonly calls: string[] = []
   touch(sessionId: string): void { this.calls.push(`touch ${sessionId}`) }
   deleteHistory(sessionId: string): void { this.calls.push(`delete ${sessionId}`) }

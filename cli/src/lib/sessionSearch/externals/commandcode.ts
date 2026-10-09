@@ -17,6 +17,7 @@
  */
 
 import { join } from 'node:path'
+import { externalReadFailed } from '../evidence.js'
 
 import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { engineProcessMatch, resumeSessionId } from '../../tmux.js'
@@ -135,6 +136,7 @@ export function commandcodeProvider(options: CommandcodeOptions): ExternalProvid
       const claims: OwnerClaim[] = []
       for (const row of await view.list()) {
         if (!engineProcessMatch(row, 'commandcode', NO_FILE_OWNERS).score) continue
+        if (view.alive(row.pid)) externalReadFailed(new Error('only launch arguments identify this live process'), 'current owner')
         // `--resume <id>`, `-r <id>` or `--session <id>`: a title, a path or a prefix names no session exactly.
         const sessionId = resumeSessionId('commandcode', row.args)
         // Only the arguments say so, and a /resume inside moves on: never stopped on this.

@@ -1,10 +1,10 @@
 import type { ExternalOrigin } from '../../lib/sessionSearch/externals/types.js'
 
 /**
- * How core finds an engine's conversations on this machine that Harness did not start, which process holds one
+ * How search finds an engine's conversations on this machine that Harness did not start, which process holds one
  * open, and whether a turn is running there: adoption (Cmd-P, opening one here, and stopping its owner first).
- * Declared data, applied in core by the kit (kit/adoption.ts): taking a conversation over stops a process, so it
- * never waits on an engine worker (docs/design/2026-10-08-engine-launch.md, (c5)).
+ * Declared data, applied in search by the kit (kit/adoption.ts). Core owns takeover consent, cancellation and
+ * signals; unavailable or uncertain observations hold adoption (docs/design/2026-10-09-external-session-boundary.md).
  */
 export interface AdoptionContract {
   /**

@@ -41,8 +41,6 @@ describe('the core API services stand on', () => {
       } as unknown as CoreApiDeps['registry'],
       stoppedAgents: { list: vi.fn(() => [row('stopped')]) } as unknown as CoreApiDeps['stoppedAgents'],
       databaseHistory: vi.fn(),
-      externalSessions: { list: vi.fn(), scan: vi.fn() } as unknown as CoreApiDeps['externalSessions'],
-      openSessions: { known: vi.fn(), fresh: vi.fn() } as unknown as CoreApiDeps['openSessions'],
       syncSession: vi.fn(),
       runtimeModels: vi.fn(async () => []),
       viewerChanged: vi.fn(),
@@ -99,8 +97,6 @@ describe('the core API services stand on', () => {
     expect(core.agents.live().map((s) => s.agentId)).toEqual(['live'])
     expect(core.agents.displayName).toBe(projectDisplayName)
     expect(core.transcripts.databaseHistory).toBe(deps.databaseHistory)
-    expect(core.external.sessions).toBe(deps.externalSessions)
-    expect(core.external.open).toBe(deps.openSessions)
     expect(core.agents.byAgent('live')?.agentId).toBe('live')
     expect(core.agents.byAgent('gone')).toBeUndefined()
     expect(core.agents.resolve('s-live')?.agentId).toBe('live')

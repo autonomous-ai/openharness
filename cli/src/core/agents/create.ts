@@ -35,13 +35,10 @@ import { DEFAULT_HARNESS_PERMISSION, freshHarnessEnvironment } from '../../lib/h
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { folderTrust } from '../../engines/launchPrep.js'
-import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
-import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/external.js'
 import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import type { TmuxBackend } from '../../lib/tmuxBackend.js'
 import { TMUX_SESSION_ENV_MIN, tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
-import type { Adoption } from './adopt.js'
 import { prepareInstructionWrites, scmLaunchEnv } from '../../scm/scmProjects.js'
 import { mergedLaunchEnv } from './launchEnv.js'
 import type { createPaneWatcher } from './newPane.js'
@@ -57,9 +54,7 @@ export interface CreateAgentDeps {
   /** The tmux backend; null where the configuration lists no tmux. */
   tmuxBackend: TmuxBackend | null
   registry: typeof registry
-  adoptableSession: Adoption['adoptableSession']
-  heldBy: Adoption['heldBy']
-  takeOverWhenIdle: Adoption['takeOverWhenIdle']
+  externalResume: CreateAgent
   watchNewPane: ReturnType<typeof createPaneWatcher>
   announceSession: (session: RegisteredSession) => void
   attachDsh: (session: RegisteredSession) => void
@@ -87,26 +82,14 @@ export interface CreateAgentDeps {
 }
 
 export function createAgentCreator({
-  tmuxBackend, registry, adoptableSession, heldBy, takeOverWhenIdle, watchNewPane, announceSession, attachDsh,
+  tmuxBackend, registry, externalResume, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
   gridSetup, privateGridName, dshLaunch,
 }: CreateAgentDeps) {
-  const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, scmLaunchRecord }) => {
+  const createAgent: CreateAgent = async input => {
+    if (input.resumeSessionId) return externalResume(input)
+    let { engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, scmLaunchRecord } = input
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
-    // A conversation Harness did not start opens in its own folder, under its own title — taken over
-    // from the terminal that has it, when asked to.
-    let owner: SessionOwner | null = null
-    let ownerBusy = false
-    let resumeArgs: readonly string[] = []
-    if (resumeSessionId) {
-      const adopted = await adoptableSession(resumeSessionId, engine, takeOver ?? null)
-      if (!adopted.ok) return adopted
-      cwd = adopted.cwd
-      name = name ?? (adopted.title || null)
-      owner = adopted.owner
-      ownerBusy = adopted.busy
-      resumeArgs = adopted.launchArgs
-    }
     if (blocksFolder(cwd)) return { ok: false, error: 'WORKTREE_BUSY' }
     try {
       if (!statSync(cwd).isDirectory()) return { ok: false, error: 'CWD_NOT_FOUND' }
@@ -282,29 +265,13 @@ export function createAgentCreator({
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
-    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencode ? opencode.opencodeMajorVersion() : null) : []), ...resumeArgs]
+    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencode ? opencode.opencodeMajorVersion() : null) : [])]
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
-    // Stopped mid-turn, the resumed conversation is told to carry on — by an engine that can open
-    // with a message; any other resumes where it stopped and waits.
-    const waitFor = owner && takeOver === 'wait' && ownerBusy ? owner : null
-    const firstPrompt = prompt ?? (owner && !waitFor && ownerBusy && supportsFirstPrompt(engine) ? 'continue' : null)
-    const launchOptions = { bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), ...(resumeSessionId ? { resumeSessionId } : {}), ...(waitFor ? { waitForPid: { pid: waitFor.pid, name: engineLabel(engine) } } : {}), terminalHint: { machineName: terminalHintMachineName() } }
+    const firstPrompt = prompt
+    const launchOptions = { bypassPermission, ...(permissionMode ? { permissionMode } : {}), extraArgs: extraArgs.length ? extraArgs : undefined, installIfMissing, clearEnv, cwd, harnessNode: dsh ? true : undefined, ...(firstPrompt ? { firstPrompt } : {}), terminalHint: { machineName: terminalHintMachineName() } }
     const command = buildEngineCommandArgv(engine, launchOptions)
     const argv = buildEngineLaunchArgv(engine, launchOptions)
-    // The terminal's process goes last, once nothing here can refuse or fail the launch — the command
-    // is built — stopped now, or, to wait for its turn, left running for the pane to wait on.
-    if (owner && !waitFor && resumeSessionId) {
-      const held = await heldBy(resumeSessionId, owner)
-      if (held === 'other') {
-        return { ok: false, error: 'SESSION_OPEN_ELSEWHERE', detail: 'It moved to another process just now. Close it there, then open it here.' }
-      }
-      // Quit in its terminal meanwhile: it is free, and nothing is stopped.
-      if (held === 'same' && !await stopSessionOwner(owner)) {
-        return { ok: false, error: 'SESSION_STOP_FAILED', detail: 'The terminal that has it did not quit. Close it there, then open it here.' }
-      }
-      if (held === 'same') console.log(`[agent] take over ${sid(resumeSessionId)} · pid ${owner.pid} stopped${ownerBusy ? ' mid-turn' : ''}`)
-    }
     // A tmux route is enough to stream its screen. Register it before looking for a process so both
     // loopback and relayed Desktop clients can attach while the login shell/installer is still busy.
     // `tmuxBackend` exists whenever the CONFIG lists tmux — it is never a probe of the binary, so a
@@ -325,7 +292,7 @@ export function createAgentCreator({
       sessionLabel: label,
       argv,
       env: freshHarnessEnvironment(engine, mergedLaunchEnv(mergedLaunchEnv(gridLaunch?.env ?? (codexHome ? profileEnvironment(engine, codexHome) : undefined), dshEnv),
-        scmLaunchEnv(scmLaunchRecord)), !!grid || !!resumeSessionId,
+        scmLaunchEnv(scmLaunchRecord)), !!grid,
         permissionMode ?? (bypassPermission ? DEFAULT_HARNESS_PERMISSION : 'ask')),
       grid: grid ? { baseUrl: grid.baseUrl, model: grid.model ?? null } : null,
       gridLaunchRecord: grid && gridLaunch ? { override: grid, webSearch: gridLaunch.webSearch } : null,
@@ -354,9 +321,7 @@ export function createAgentCreator({
     announceSession(pending)
     if (pending.dsh) attachDsh(pending)
 
-    // A pane waiting out another terminal's turn may wait as long as that turn takes.
-    void watchNewPane(engine, pending, spawned, command, installIfMissing, waitFor ? 24 * 60 * 60_000 : undefined)
-    if (waitFor && resumeSessionId) void takeOverWhenIdle(pending.agentId, waitFor, resumeSessionId)
+    void watchNewPane(engine, pending, spawned, command, installIfMissing, undefined)
     console.log(`[agent] create pane open · ${engine} · agent ${pending.agentId}`)
     return { ok: true, session: pending }
   }

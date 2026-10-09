@@ -1,3 +1,4 @@
+import { externalReadFailed } from '../evidence.js'
 /**
  * Muse: `<home>/sessions/YYYY/MM/DD/<id>/session.jsonl`, one append-only log per session. Nothing in
  * the path names the project: the first record, the session's metadata, carries `workspace_root`,
@@ -78,7 +79,7 @@ export async function museOwnRun(path: string, sessionId: string): Promise<boole
   await forEachLine(path, 0, ({ text: line }) => {
     const own = ownRecord(line, sessionId)
     if (own?.run && own.kind === 'started') ran = true
-  }, { skip: (head) => ran || !head.includes(sessionId), shouldStop: () => ran }).catch(() => undefined)
+  }, { skip: (head) => ran || !head.includes(sessionId), shouldStop: () => ran }).catch(error => { externalReadFailed(error, 'record'); return undefined })
   return ran
 }
 
@@ -170,6 +171,7 @@ export function museProvider(options: MuseOptions): ExternalProvider {
       const claims: OwnerClaim[] = []
       for (const row of await view.list()) {
         if (!engineProcessMatch(row, 'muse', NO_FILE_OWNERS).score) continue
+        if (view.alive(row.pid)) externalReadFailed(new Error('only launch arguments identify this live process'), 'current owner')
         const sessionId = resumeSessionId('muse', row.args)
         // Only the arguments say so, and a /resume inside moves on: never stopped on this.
         if (sessionId) claims.push({ sessionId, pid: row.pid, record: known.get(sessionId) ?? '', fromArgs: true })

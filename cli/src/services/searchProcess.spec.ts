@@ -83,6 +83,7 @@ describe('search in its own process', () => {
     const { dataDir, options } = setup()
     const agent = conversation(dataDir, 'a heron')
     options.onConnected!(core([agent]))
+    await Promise.resolve(); await Promise.resolve()
     options.onConnected!({ query: vi.fn(async () => { throw new Error('the core went away') }) })
     options.onConnected!({ query: vi.fn(async () => ({ error: 'UNKNOWN_QUERY' })) })
     options.onEvent!({ kind: 'touch', sessionId: SESSION })
@@ -92,10 +93,12 @@ describe('search in its own process', () => {
   })
 
   it('without an index (no node:sqlite) says search is off, as the core would', async () => {
-    const { options } = setup({ start: () => {} })
+    const { options } = setup({ start: () => ({}) })
     const off = { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false }
     expect(await options.requests.session_search({ query: 'anything' }, ASKER)).toEqual(off)
     expect(await options.requests.session_tail({ sessionId: SESSION }, ASKER)).toEqual(off)
+    expect(await options.requests.external_inspect({ engine: 'claude', sessionId: SESSION }, ASKER)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
+    expect(await options.requests.external_inspect({}, ASKER)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
     options.onEvent!({ kind: 'touch', sessionId: SESSION })
   })
 
@@ -103,7 +106,7 @@ describe('search in its own process', () => {
     const { stop, service } = setup()
     service.stop()
     expect(stop).toHaveBeenCalledOnce()
-    const unindexed = setup({ start: () => {} })
+    const unindexed = setup({ start: () => ({}) })
     unindexed.service.stop()
     expect(unindexed.stop).toHaveBeenCalledOnce()
   })
@@ -111,7 +114,7 @@ describe('search in its own process', () => {
   it('runs on a core API of the agents the core last named, answering what search never asks as nothing', async () => {
     const live = { agentId: 'live', active: true, displayName: 'Live one' }
     const stopped = { agentId: 'stopped', active: false }
-    const api = searchCoreApi('/data', () => [live, stopped] as never, [])
+    const api = searchCoreApi('/data', () => [live, stopped] as never)
     expect(api.dataDir).toBe('/data')
     expect(api.agents.all()).toEqual([live, stopped])
     expect(api.agents.live()).toEqual([live])
@@ -134,7 +137,6 @@ describe('search in its own process', () => {
     await expect(api.questions.answerReviewed({} as never)).resolves.toBe(false)
     expect(api.transcripts.databaseHistory({ engine: 'claude' } as never)).toBeUndefined()
     expect(await api.transcripts.lastTurn('s1')).toBeNull()
-    expect(api.external.sessions.list()).toEqual([])
     await expect(api.account.mintGridName()).resolves.toBeNull()
     await expect(api.account.accessToken()).rejects.toThrow('search holds no credential')
     await expect(api.account.privateGridName()).resolves.toBeNull()
@@ -158,9 +160,31 @@ describe('search in its own process', () => {
     expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'search', socketPath: '/data/daemon-1.sock' }))
   })
 
-  it('reaches the core as `search`, through the socket and token it was given', () => {
+  it('reaches the core as `search`, through the socket and token it was given', async () => {
     const { options } = setup()
     expect(options).toMatchObject({ name: 'search', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests).sort()).toEqual(['session_search', 'session_tail'])
+    expect(Object.keys(options.requests).sort()).toEqual(['external_inspect', 'session_search', 'session_tail'])
+    expect(await options.requests.external_inspect({ engine: 'claude', sessionId: SESSION }, ASKER)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
   })
+})
+
+it('discards an old core reply after disconnect, replacement or shutdown', async () => {
+  let options!: ServiceProcessOptions, captured!: ReturnType<typeof searchCoreApi>
+  const service = runSearchService({ dataDir: '/fixture/data', socketPath: '/fixture/socket', machineId: 'fixture', token: 'fixture', providers: [],
+    start: core => { captured = core as ReturnType<typeof searchCoreApi>; return {} },
+    run: given => { options = given; return { stop: vi.fn() } },
+  })
+  const pending: Array<(value: Record<string, unknown>) => void> = []
+  const connection = () => ({ query: vi.fn(() => new Promise<Record<string, unknown>>(resolve => pending.push(resolve))) })
+  options.onConnected!(connection())
+  options.onDisconnected!()
+  pending.shift()!({ agents: [{ agentId: 'old' }] }); await Promise.resolve(); await Promise.resolve()
+  expect(captured.agents.all()).toEqual([])
+  options.onConnected!(connection()); options.onConnected!(connection())
+  pending[1]({ agents: [{ agentId: 'current' }] }); await Promise.resolve(); await Promise.resolve()
+  pending[0]({ agents: [{ agentId: 'stale' }] }); await Promise.resolve(); await Promise.resolve()
+  expect(captured.agents.all()).toMatchObject([{ agentId: 'current' }])
+  options.onConnected!(connection()); service.stop()
+  pending[2]({ agents: [{ agentId: 'late' }] }); await Promise.resolve(); await Promise.resolve()
+  expect(captured.agents.all()).toEqual([])
 })

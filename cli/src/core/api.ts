@@ -33,7 +33,7 @@ import type { SessionRecaps } from '../lib/recapReads.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
 import { projectDisplayName, type registry, type RegisteredSession } from '../lib/registry.js'
 import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
-import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
+import { externalUnavailable, type ExternalSessionAnswer, type ExternalSessionRequest } from '../lib/externalSessionWire.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
 import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
@@ -202,11 +202,6 @@ export interface CoreApi {
     /** A session's last turn as its engine recorded it: what was asked and the final answer; null when
      *  there is none yet. Read from the end of its transcript, bounded (core/transcripts/lastTurn.ts). */
     lastTurn(sessionId: string): Promise<LastTurnText | null>
-  }
-  /** Conversations on this machine that Harness did not start, and which of them a process has open. */
-  external: {
-    sessions: Pick<ExternalSessions, 'list' | 'scan'>
-    open: Pick<OpenSessions, 'known' | 'fresh'>
   }
   /** The sign-in the core holds for every service: a service never holds a credential itself. */
   account: {
@@ -590,11 +585,13 @@ export const ORCHESTRATOR_FALLBACKS: PortFallbacks<OrchestratorPort> = { roleOf:
 /** The core's calls into session search: index a session at its turn boundaries, forget a purged
  *  conversation, the title it indexed for one being adopted, and stopping its sweeps. The apps' own
  *  requests (`session_search`, `session_tail`) are its `ServiceRequests`, not the core's calls. */
-export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'deleteHistory' | 'session' | 'stop'>
+export type SearchPort = Pick<SessionSearchIndex, 'touch' | 'deleteHistory' | 'session' | 'stop'> & {
+  inspect(request: ExternalSessionRequest): Promise<ExternalSessionAnswer>
+}
 
 /** What the core gets when search fails: nothing indexed and no title. */
 export const SEARCH_FALLBACKS: PortFallbacks<SearchPort> = {
-  touch: undefined, deleteHistory: undefined, session: undefined, stop: undefined,
+  touch: undefined, deleteHistory: undefined, session: undefined, stop: undefined, inspect: later(externalUnavailable()),
 }
 
 /*
@@ -1336,8 +1333,6 @@ export interface CoreApiDeps {
   registry: Pick<typeof registry, 'list' | 'byAgent' | 'resolve' | 'advertised' | 'terminalAvailable'>
   stoppedAgents: Pick<StoppedAgentStore, 'list'>
   databaseHistory: CoreApi['transcripts']['databaseHistory']
-  externalSessions: CoreApi['external']['sessions']
-  openSessions: CoreApi['external']['open']
   syncSession: CoreApi['agents']['sync']
   runtimeModels: CoreApi['agents']['runtimeModels']
   viewerChanged: CoreApi['clients']['viewerChanged']
@@ -1385,7 +1380,7 @@ export interface CoreApiDeps {
 }
 
 export function createCoreApi({
-  dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
+  dataDir, registry, stoppedAgents, databaseHistory, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
   runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, lastTurn, turnCard, turnSummary,
@@ -1423,7 +1418,6 @@ export function createCoreApi({
     turns,
     questions,
     transcripts: { databaseHistory, lastTurn },
-    external: { sessions: externalSessions, open: openSessions },
     account: { mintGridName, accessToken, lane, observerKey, privateGridName, machineName, backend, onNotice, signedIn, environment, machines },
     clients: {
       viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer, hasWindow, devicesChanged, dialWatching,

@@ -229,7 +229,6 @@ describe('the core\'s doors, across the link', () => {
     ])
     // What the devices never ask answers as every other service's does.
     expect(api.transcripts.databaseHistory({} as RegisteredSession)).toBeUndefined()
-    expect(api.external.sessions.list()).toEqual([])
     await expect(api.account.mintGridName()).resolves.toBeNull()
     // Gone from the core: told nothing, and a bridge's ask says it did not go.
     f.options().onDisconnected!()

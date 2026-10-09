@@ -170,7 +170,7 @@ export function createAgentRestarter({
       const restartPermission = await downgradedPermission(session,
         await bypassPermissionFor(session, () => liveBypassPermission(session)), 'restart')
       const outcome = await restartAgent(
-        { engine, sessionId: session.sessionId },
+        { engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
         restartPermission.bypassPermission === true,
         { ...paneSwapDeps(session, runtime, built.overrides, restartPermission.permissionMode ?? null), isCurrent: current },
       )

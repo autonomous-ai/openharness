@@ -1,3 +1,4 @@
+import { externalEvidenceActive, externalReadFailed } from '../evidence.js'
 /**
  * Grok: one folder per conversation, `<GROK_HOME>/sessions/<group>/<id>/`, where the group is the
  * folder it ran in (URL-encoded, or a slug and hash with the path in `.cwd` when that is too long).
@@ -55,7 +56,7 @@ const skip = (reason: GrokSkip): GrokRead => ({ kind: 'skip', reason })
  * throws, so a scan's memo keeps nothing of it and the next scan reads it again.
  */
 async function jsonFile(path: string): Promise<unknown> {
-  const source = await readFile(path, 'utf8').catch(() => null)
+  const source = await readFile(path, 'utf8').catch(error => { externalReadFailed(error, 'record'); return null })
   return source === null ? undefined : JSON.parse(source)
 }
 
@@ -75,7 +76,7 @@ function update(line: string): { kind: string; at: number | null; event: string 
  * mid-file starts mid-line, so its first line is never read.
  */
 async function fromEnd<T>(path: string, pick: (line: string) => T | null): Promise<T | null> {
-  const size = (await stat(path).catch(() => null))?.size ?? 0
+  const size = (await stat(path).catch(error => { externalReadFailed(error, 'record'); return null }))?.size ?? 0
   for (const bytes of TAIL_BYTES) {
     const lines = (await readTail(path, bytes)).split('\n')
     for (let i = lines.length - 1; i >= (size > bytes ? 1 : 0); i--) {
@@ -92,7 +93,8 @@ async function prompted(path: string): Promise<boolean> {
   let found = false
   try {
     await forEachLine(path, 0, () => { found = true }, { skip: (head) => !PROMPT.test(head), shouldStop: () => found })
-  } catch {
+  } catch (error) {
+    externalReadFailed(error, 'conversation stream')
     return false
   }
   return found
@@ -200,7 +202,7 @@ export function grokProvider(options: GrokOptions): ExternalProvider {
             fileStamp(join(dir, 'summary.json')), fileStamp(join(dir, 'prompt_context.json')),
           ])
           const fingerprint = `${stamp.stamp}|${summary?.stamp ?? '-'}|${context?.stamp ?? '-'}`
-          const read = await ctx.memo(`grok:${dir}`, fingerprint, () => readGrokSession(dir, entry.name)).catch(() => null)
+          const read = await ctx.memo(`grok:${dir}`, fingerprint, () => readGrokSession(dir, entry.name)).catch(error => { externalReadFailed(error, 'record'); return null })
           await ctx.pace()
           // Half-written: nothing was remembered, and the next scan reads it again.
           if (read?.kind !== 'session' || ctx.excluded(read.cwd)) continue
@@ -215,33 +217,53 @@ export function grokProvider(options: GrokOptions): ExternalProvider {
     async owners(view: ProcessView): Promise<OwnerClaim[]> {
       const listed = await readJson(join(options.home, 'active_sessions.json'))
       // Grok itself starts over from an empty list when this file is corrupt.
-      if (!Array.isArray(listed) || !listed.length) return []
+      if (!Array.isArray(listed) && listed !== null) externalReadFailed(new Error('invalid active sessions'), 'owner record')
+      if ((!Array.isArray(listed) || !listed.length) && !externalEvidenceActive()) return []
       const byPid = new Map<number, Array<{ sessionId: string; cwd: string; at: number }>>()
-      for (const item of listed) {
+      for (const item of Array.isArray(listed) ? listed : []) {
         const entry = record(item)
         const sessionId = text(entry?.session_id)
         const pid = entry?.pid
-        if (!UUID.test(sessionId) || typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) continue
-        byPid.set(pid, [...byPid.get(pid) ?? [], { sessionId, cwd: text(entry?.cwd), at: epochMs(entry?.opened_at) ?? 0 }])
+        if (!UUID.test(sessionId) || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff) {
+          externalReadFailed(new Error('invalid active session'), 'owner record'); continue
+        }
+        const at = epochMs(entry?.opened_at)
+        if (externalEvidenceActive() && (!Number.isFinite(at) || at! <= 0)) {
+          externalReadFailed(new Error('missing owner start'), 'owner record'); continue
+        }
+        byPid.set(pid, [...byPid.get(pid) ?? [], { sessionId, cwd: text(entry?.cwd), at: at ?? 0 }])
       }
       const rows = new Map((await view.list()).map((row) => [row.pid, row]))
       const ownership = agentCommandOwnershipSnapshot()
       const claims: OwnerClaim[] = []
       for (const [pid, held] of byPid) {
         const row = rows.get(pid)
+        if (externalEvidenceActive() && !row && view.alive(pid)) externalReadFailed(new Error('missing owner process'), 'owner process')
         // An entry outlives a crash, and its pid can be reused: only a live Grok counts.
         if (!row || !view.alive(pid) || !isGrok(row, ownership)) continue
+        if (externalEvidenceActive() && (!Number.isFinite(row.started) || row.started! <= 0)) {
+          externalReadFailed(new Error('missing process start'), 'owner process'); continue
+        }
         // An entry opened before the process that has its pid started was an earlier process's. An
         // entry that does not say when it was opened is kept.
         const current = held.filter((entry) => !entry.at || row.started === undefined || entry.at + START_SLACK_MS >= row.started)
         if (!current.length) continue
         const app = shared(row)
         // A terminal's Grok has one session open: an older entry under its pid is a crashed Grok's.
-        const open = app ? current : [current.reduce((newest, entry) => (entry.at >= newest.at ? entry : newest))]
+        const newest = current.reduce((latest, entry) => entry.at >= latest.at ? entry : latest)
+        if (!app && externalEvidenceActive() && new Set(current.filter(entry => entry.at === newest.at)
+          .map(entry => JSON.stringify([entry.sessionId, entry.cwd]))).size > 1) {
+          externalReadFailed(new Error('ambiguous current process record'), 'current owner'); continue
+        }
+        const open = app ? current : [newest]
         for (const entry of open) {
           const stream = await streamOf(options.home, entry.sessionId, entry.cwd)
           claims.push({ sessionId: entry.sessionId, pid, record: stream ?? '', ...(app ? { app: true } : {}) })
         }
+      }
+      if (externalEvidenceActive()) for (const row of rows.values()) {
+        if (view.alive(row.pid) && isGrok(row, ownership) && !claims.some(claim => claim.pid === row.pid))
+          externalReadFailed(new Error('no current process record'), 'current owner')
       }
       return claims
     },

@@ -229,7 +229,7 @@ export function createAgentRetargeter({
       const retargetPermission = await downgradedPermission(session,
         await bypassPermissionFor(session, () => liveBypassPermission(session)), 'retarget')
       const outcome = await restartAgent(
-        { engine: session.engine, sessionId: session.sessionId },
+        { engine: session.engine, sessionId: session.sessionId, ...(session.resumeOnly ? { resumeOnly: true as const } : {}) },
         retargetPermission.bypassPermission === true,
         paneSwapDeps(session, pane, built.overrides, retargetPermission.permissionMode ?? null),
       )
