@@ -320,6 +320,13 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
   /// The sign-in sheet raised from here is up — see [_signInHere].
   bool _signingIn = false;
 
+  /// The code's space — "Preparing your code…", then the code — so it can be
+  /// brought into view ([_codeSpace]).
+  final _codeKey = GlobalKey();
+
+  /// The code's space has appeared once; after that, the scroll is the person's.
+  bool _codeAppeared = false;
+
   /// No pairing to be had from this daemon — asking stopped for good.
   bool _stopped = false;
   String? _connected;
@@ -720,11 +727,13 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
     // changed right after it appeared would be one scanned without it.
     if (!_signInAsked) {
       return [
-        SizedBox(
-          height: qrSide,
-          child: Align(
-            alignment: AlignmentDirectional.centerStart,
-            child: Text('Preparing your code…', style: _note()),
+        _codeSpace(
+          SizedBox(
+            height: qrSide,
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Text('Preparing your code…', style: _note()),
+            ),
           ),
         ),
       ];
@@ -736,12 +745,14 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
       signIn: _signIn,
     ).toString();
     return [
-      Align(
-        alignment: AlignmentDirectional.centerStart,
-        // Dimmed once it has done its job, so nobody scans a spent code.
-        child: Opacity(
-          opacity: _connected == null && !_stopped ? 1 : .25,
-          child: PhonePairQr(data: link, side: qrSide),
+      _codeSpace(
+        Align(
+          alignment: AlignmentDirectional.centerStart,
+          // Dimmed once it has done its job, so nobody scans a spent code.
+          child: Opacity(
+            opacity: _connected == null && !_stopped ? 1 : .25,
+            child: PhonePairQr(data: link, side: qrSide),
+          ),
         ),
       ),
       if (_remoteMachineId case final machineId?)
@@ -766,6 +777,29 @@ class _AddPhoneDialogState extends State<AddPhoneDialog> {
           ),
         ),
     ];
+  }
+
+  /// [child] in the code's space, scrolled into view the first time it appears.
+  ///
+  /// At a large text size or in a short window the steps above push the code —
+  /// what the dialog is for — below the fold. It is brought up only as far as
+  /// it takes, so where it already shows nothing moves; and only the once, so
+  /// a new code or a dimmed one never pulls back a person who scrolled up.
+  Widget _codeSpace(Widget child) {
+    if (!_codeAppeared) {
+      _codeAppeared = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final space = _codeKey.currentContext;
+        if (_closed || space == null) return;
+        unawaited(
+          Scrollable.ensureVisible(
+            space,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd,
+          ),
+        );
+      });
+    }
+    return KeyedSubtree(key: _codeKey, child: child);
   }
 
   /// A line under a step's title: smaller and quieter than the title.
