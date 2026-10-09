@@ -561,7 +561,7 @@ export function buildEngineLaunchArgv(
   // of this launch is that the agent's environment is the one the user asked for.
   // Then the grid's PATH entry at the FRONT (its dir holds only `grid`), and — for a DSH agent — Harness's
   // Node at the END, only when the shell found none. The two never meet: one prepends, one appends.
-  const prelude = enginePrelude + clearEnvPrelude(opts.clearEnv) + gridPanePrelude(gridBinary) + (opts.harnessNode ? harnessNodePrelude(runtimeNode) : '')
+  const prelude = enginePrelude + clearEnvPrelude(opts.clearEnv) + gridPanePrelude(gridBinary) + noDevtoolsPrelude() + (opts.harnessNode ? harnessNodePrelude(runtimeNode) : '')
   // rc files (notably nvm) call getcwd() before running this command. Start the shell in a safe
   // directory and enter the selected workspace only after those files have loaded: an IDE can replace
   // a workspace inode between the desktop picker resolving it and tmux spawning the pane.
@@ -683,6 +683,8 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     // (a spec exercising the script, a wrapper piped somewhere) the engine's own status is the answer.
     + '  if ! [ -t 0 ]; then exit "$harness_status"; fi\n'
     + ENGINE_INPUT_DRAIN_SH
+    // The person's own shell gets back the developer folder they had (`noDevtoolsPrelude`).
+    + '  if [ "${HARNESS_DEVELOPER_DIR:-}" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n'
     + `  printf '\\n%s\\n' ${shellSingleQuote(`harness: ${command} exited ($harness_status). This pane is a shell now — run ${command} again, or stop the pane.`).replace('($harness_status)', `('"$harness_status"')`)}\n`
     + `  exec ${shellSingleQuote(shellPath)}${loginArgs}\n`
     + '}\n'
@@ -990,6 +992,57 @@ export function gridPanePrelude(binary: string): string {
     ? [`PATH=${shellSingleQuote(dirname(binary))}"\${PATH:+:$PATH}"`, 'export PATH', 'hash -r 2>/dev/null || true']
     : []
   return [...onPath, `${GRID_NO_UPDATE_CHECK_VAR}=1`, `export ${GRID_NO_UPDATE_CHECK_VAR}`, ''].join('\n')
+}
+
+/** Where the developer tools are looked for; the specs point these at folders of their own. */
+export interface DevtoolsPlaces {
+  xcodeSelect: string
+  /** Where Apple's command line developer tools install. */
+  commandLineTools: string
+  selectLink: string
+}
+
+const MAC_DEVTOOLS: DevtoolsPlaces = {
+  xcodeSelect: '/usr/bin/xcode-select',
+  commandLineTools: '/Library/Developer/CommandLineTools',
+  selectLink: '/var/db/xcode_select_link',
+}
+
+/**
+ * Keeps an agent from bringing up Apple's "Install Command Line Developer Tools" dialog.
+ *
+ * On a Mac without the developer tools, `/usr/bin/git`, `python3`, `make`, `cc`, `xcrun`, `xcodebuild`
+ * and the rest are stubs that open that dialog and fail. Agents run them unasked: on a fresh Mac (the
+ * activation VM, 2026-10-09) OpenCode ran `python3` for the first workspace's starter task, and a real
+ * Claude Code and Codex pair brought it up too, over the person's first session. Given a
+ * `DEVELOPER_DIR` that does not exist, every stub fails at once with "xcrun: error: missing
+ * DEVELOPER_DIR path" instead, and no dialog (measured on that VM). It is the folder the tools
+ * install to, so once they are installed they work, in a pane already open too. An environment
+ * variable reaches what PATH could not: the login shells agents run commands in (`path_helper` puts
+ * /usr/bin first again; stand-ins on PATH were bypassed that way, and raced when panes opened
+ * together) and absolute `/usr/bin/…` calls.
+ *
+ * A Mac with the tools or Xcode, and every other system, only pays for `[ -x ]`, `[ -d ]` and `[ -e ]`
+ * tests: `xcode-select -p` (which answers without a dialog) runs only when none of the usual places
+ * exists, in a command substitution, out of a Ctrl+Z's reach (`STOP_PROOF_FUNCTIONS`). A
+ * `DEVELOPER_DIR` already set is the person's own choice and stays.
+ *
+ * `HARNESS_DEVELOPER_DIR=1` marks the one set here. A launch that inherits it (a daemon restarted from
+ * such a pane) decides again, and a pane that turns into the person's shell after its engine
+ * (`harness_after`) drops both: Xcode installed meanwhile would otherwise fail there. An explicit
+ * `xcode-select --install` still opens Apple's installer with it set (measured on the VM).
+ */
+export function noDevtoolsPrelude(places: DevtoolsPlaces = MAC_DEVTOOLS): string {
+  const xcodeSelect = shellSingleQuote(places.xcodeSelect)
+  return [
+    'if [ "${HARNESS_DEVELOPER_DIR:-}" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi',
+    `if [ -x ${xcodeSelect} ] && [ -z "\${DEVELOPER_DIR:-}" ] && [ ! -d ${shellSingleQuote(`${places.commandLineTools}/usr/bin`)} ] && [ ! -e ${shellSingleQuote(places.selectLink)} ] && ! harness_devtools=$(${xcodeSelect} -p 2>/dev/null); then`,
+    `  DEVELOPER_DIR=${shellSingleQuote(places.commandLineTools)}`,
+    '  HARNESS_DEVELOPER_DIR=1',
+    '  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR',
+    'fi',
+    '',
+  ].join('\n')
 }
 
 /** Install if needed, then run an exact native argv from an existing interactive prompt.
