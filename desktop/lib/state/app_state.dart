@@ -1070,6 +1070,27 @@ class AppNotifier extends ChangeNotifier {
       readiness.needsTerminal ||
       readiness.plan.any((item) => item.requiresTerminal);
 
+  /// A computer new to Harness builds its first workspace behind the welcome tour, as soon as the app
+  /// is ready, so the agents have started and OpenCode's task is typed by the time the tour hands
+  /// over: OpenCode's own first start took about 12 s after the tour had ended (fresh macOS VM,
+  /// 2026-10-09). The workspace joins this run when it appears ([FirstArrival.run]).
+  ///
+  /// Off under test unless a test turns it on: its wait for the machine is a timer a widget test would
+  /// find still pending.
+  @visibleForTesting
+  bool firstArrivalBehindTour = !kUnderTest;
+
+  void _firstArrivalBehindTour() {
+    if (!firstArrivalBehindTour ||
+        viewer != null ||
+        !_setupTour ||
+        status != AppStatus.authenticated ||
+        !firstArrival.pending) {
+      return;
+    }
+    unawaited(firstArrival.run(this));
+  }
+
   /// The tour has shown its last slide with everything done: show the app.
   void finishSetupTour() {
     if (!_setupTour) return;
@@ -3154,6 +3175,7 @@ class AppNotifier extends ChangeNotifier {
     this.agentUnread.addListener(_announceUnreadToDial);
     experimentalFeatures.addListener(_devicesExperimentChanged);
     addListener(_syncDeviceHosts);
+    addListener(_firstArrivalBehindTour);
     _autoRenameTabs = appearancePrefsStore.value.autoRenameTabs;
     appearancePrefsStore.addListener(_autoRenameChanged);
   }

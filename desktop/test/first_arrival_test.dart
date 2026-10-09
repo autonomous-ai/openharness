@@ -350,6 +350,28 @@ void main() {
       expect(await arrival.run(app, machineWait: Duration.zero), isFalse);
     });
 
+    test('a second call joins the run under way', () async {
+      final arrival = FirstArrival(_MemoryStore())..begin(downloads: true);
+      await arrival.restore();
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+      addTearDown(app.dispose);
+      final first = arrival.run(
+        app,
+        machineWait: const Duration(milliseconds: 300),
+      );
+      expect(arrival.running, isTrue);
+      expect(arrival.pending, isFalse);
+      // The workspace's call, with none of its own settings: it waits for the same run.
+      final joined = arrival.run(app);
+      expect(await Future.wait([first, joined]), [false, false]);
+      expect(arrival.running, isFalse);
+      expect(await arrival.run(app), isFalse, reason: 'spent');
+    });
+
     test('the person taking over first stops it and spends the mark', () async {
       final arrival = FirstArrival(_MemoryStore())..begin(downloads: true);
       await arrival.restore();
