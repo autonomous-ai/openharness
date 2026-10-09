@@ -8,12 +8,12 @@ import type { Server } from 'node:http'
 const failures = vi.hoisted(() => new Map<string, string>())
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
-  const guarded = (name: 'stat' | 'opendir') => async (path: string, ...args: unknown[]) => {
+  const guarded = (name: 'lstat' | 'opendir') => async (path: string, ...args: unknown[]) => {
     const code = failures.get(`${name}:${path}`)
     if (code) throw Object.assign(new Error('controlled filesystem failure'), { code })
     return Reflect.apply(fs[name], fs, [path, ...args])
   }
-  return { ...fs, stat: guarded('stat'), opendir: guarded('opendir') }
+  return { ...fs, lstat: guarded('lstat'), opendir: guarded('opendir') }
 })
 
 let root = ''
@@ -76,6 +76,7 @@ async function fixture(options: { waitOnResolution?: number } = {}) {
   }
   const current = () => registry.byAgent(agent.agentId)!
   return { home, store, hook, current, registered, logs, markDeleted, resume: () => resume(),
+    knownHome: (home: string) => registry.setHermesHome(agent.agentId, home),
     seed: (sessionId: string) => registry.register({ engine: 'hermes', sessionId, tmuxPane: '%1', cwd: root, processIdentity }),
   }
 }
@@ -97,6 +98,37 @@ it('holds an unreadable store without binding and retries after the store recove
   f.store(f.home, [[wanted, 'cli']])
   await vi.waitFor(() => expect(f.current().sessionId).toBe(wanted), { timeout: 4_000 })
   expect(f.registered).toHaveBeenCalledOnce()
+})
+
+it.each(['\0tool', 'cli\0tool', 'x'.repeat(129)])('holds a malformed original source without accepting its text prefix: %j', async source => {
+  const f = await fixture()
+  const own = '20261009_120000_aabbcc'
+  f.store(f.home, [[own, source]])
+  await f.hook(own)
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  expect(f.current().sessionId).toBe('')
+  expect(f.registered).not.toHaveBeenCalled()
+})
+
+it('includes the known custom home and cannot authorize its hook from a different home', async () => {
+  const f = await fixture()
+  const own = '20261009_120000_aabbcc'
+  const custom = join(root, 'custom-home')
+  f.knownHome(custom)
+  f.store(f.home, [[own, 'cli']])
+  mkdirSync(custom); writeFileSync(join(custom, 'state.db'), 'unreadable custom store')
+  await f.hook(own)
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
+  expect(f.current().sessionId).toBe('')
+  f.store(custom, [])
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('source in its known home'))).toBe(true), { timeout: 4_000 })
+  expect(f.registered).not.toHaveBeenCalled()
+  f.store(custom, [[own, 'tool']])
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('ambiguous across homes'))).toBe(true), { timeout: 4_000 })
+  expect(f.current().sessionId).toBe('')
+  f.store(f.home, [])
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('ignored · hermes_subagent'))).toBe(true), { timeout: 4_000 })
+  expect(f.registered).not.toHaveBeenCalled()
 })
 
 it('holds incomplete source pools, then rejects a proven delegated session after recovery', async () => {
@@ -157,13 +189,13 @@ it('recovers an equal-time parent after its child has already been held', async 
   expect(f.registered).toHaveBeenCalledOnce()
 })
 
-it.each(['stat', 'opendir'] as const)('holds incomplete %s evidence, then discovers the recovered profile afresh', async operation => {
+it.each(['lstat', 'opendir'] as const)('holds incomplete %s evidence, then discovers the recovered profile afresh', async operation => {
   const f = await fixture()
   f.store(f.home, [])
   const wanted = '20261009_120000_333333'
   const first = join(f.home, 'profiles', 'a'), second = join(f.home, 'profiles', 'b')
   f.store(first, [[wanted, 'cli']]); f.store(second, [[wanted, 'cli']])
-  failures.set(operation === 'stat' ? `stat:${join(first, 'state.db')}` : `opendir:${join(f.home, 'profiles')}`, 'EACCES')
+  failures.set(operation === 'lstat' ? `lstat:${join(first, 'state.db')}` : `opendir:${join(f.home, 'profiles')}`, 'EACCES')
   await f.hook(wanted)
   await vi.waitFor(() => expect(f.logs.some(line => line.includes('held · Hermes session source is unavailable'))).toBe(true))
   expect(f.current().sessionId).toBe('')

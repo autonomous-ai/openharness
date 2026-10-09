@@ -24,8 +24,8 @@ try {
     const path = join(folder, 'state.db')
     if (workload === 'unavailable' && i === count - 1) { writeFileSync(path, 'unavailable store'); continue }
     const db = new DatabaseSync(path)
-    db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, started_at REAL)')
-    if (i === 0) db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run('20261009_120000_abcd', cwd, 1791547200)
+    db.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT, started_at REAL, source TEXT)')
+    if (i === 0) db.prepare("INSERT INTO sessions VALUES (?, ?, ?, 'cli')").run('20261009_120000_abcd', cwd, 1791547200)
     db.close()
   }
   const { findLiveSession } = await import('../../src/lib/sessionRepair.js')

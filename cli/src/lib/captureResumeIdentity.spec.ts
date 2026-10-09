@@ -40,6 +40,13 @@ it('captures a database-backed engine id read off the live process', async () =>
   vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'live' })
   expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'live', source: 'stop-repair' })
 })
+it('captures and preserves the exact Hermes home before stopping its process', async () => {
+  vi.mocked(engineKeepsTranscriptFile).mockReturnValue(false)
+  Object.assign(row, { engine: 'hermes', hermesHome: '/known-home' })
+  vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'live', hermesHome: '/known-home' })
+  expect(await captureResumeIdentity(row)).toMatchObject({ sessionId: 'live', hermesHome: '/known-home', source: 'stop-repair' })
+  expect(findLiveSession).toHaveBeenCalledWith('hermes', '/work', expect.any(Number), expect.objectContaining({ hermesHome: '/known-home' }))
+})
 it.each([null, '/stale'])('repairs a known id with missing or invalid path %s', async transcriptPath => {
   Object.assign(row, { sessionId: 'known', transcriptPath, codexHome: '/profile' })
   vi.mocked(validTranscriptPath).mockImplementation((_, path) => path === '/found')

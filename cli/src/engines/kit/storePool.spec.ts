@@ -1,5 +1,5 @@
 /** Real private SQLite pools and controlled native races. No owner daemon, engine or home. */
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -23,6 +23,11 @@ vi.mock('node:perf_hooks', async original => {
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs,
+    lstat: async (path: string) => {
+      const code = control.failures.get(`lstat:${path}`)
+      if (code) throw Object.assign(new Error('controlled file inspection failure'), { code })
+      return fs.lstat(path)
+    },
     stat: async (path: string) => {
       const code = control.failures.get(`stat:${path}`)
       if (code) throw Object.assign(new Error('controlled inspection failure'), { code })
@@ -39,15 +44,17 @@ vi.mock('node:fs/promises', async original => {
 })
 vi.mock('node:fs', async original => {
   const fs = await original<typeof import('node:fs')>()
-  return { ...fs, statSync: (...args: Parameters<typeof fs.statSync>) => {
-    const code = control.failures.get(`statSync:${args[0]}`)
+  const guarded = (name: 'statSync' | 'lstatSync') => (...args: Parameters<typeof fs.statSync>) => {
+    const code = control.failures.get(`${name}:${args[0]}`)
     if (code) throw Object.assign(new Error('controlled verification failure'), { code })
-    return fs.statSync(...args)
-  } }
+    return fs[name](...args)
+  }
+  return { ...fs, statSync: guarded('statSync'), lstatSync: guarded('lstatSync') }
 })
 vi.mock('../../lib/sqliteRead.js', async original => {
   const sqlite = await original<typeof import('../../lib/sqliteRead.js')>()
   return { ...sqlite, sqliteReadAll: async (...args: Parameters<typeof sqlite.sqliteReadAll>) => {
+    if (args[1].includes('sqlite_schema') || args[1].includes('pragma_table_xinfo')) return sqlite.sqliteReadAll(...args)
     control.queries.push({ path: args[0], options: args[3] ?? {} })
     const answer = control.result ?? await sqlite.sqliteReadAll(...args)
     await control.afterQuery?.(args[0])
@@ -63,7 +70,7 @@ let Database: {
   new(path: string): { exec(sql: string): void; prepare(sql: string): { run(...args: unknown[]): void }; close(): void }
 }
 const id = '20261009_120000_aaaa', other = '20261009_120001_bbbb'
-const query = { sql: 'SELECT id FROM sessions WHERE cwd = ? LIMIT 2', params: ['/fixture/work'], maxRows: 2, maxBuffer: 4096 }
+const query = { sql: 'SELECT id FROM sessions WHERE cwd = ? LIMIT 2', params: ['/fixture/work'], maxRows: 2, maxBuffer: 4096, columns: ['id', 'cwd'] }
 function store(dir: string, ids: string[] = [id]): string {
   mkdirSync(dir, { recursive: true })
   const path = join(dir, 'state.db')
@@ -165,6 +172,40 @@ it('deduplicates aliases to one physical store but retains all path evidence', a
   await held(find())
 })
 
+it.each(['symlink', 'hardlink'])('holds a database %s whose actual live WAL is outside the declared home', async kind => {
+  store(home)
+  const target = store(join(root, 'outside'), [])
+  const writer = new Database(target)
+  try {
+    writer.exec('PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;')
+    writer.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?)').run(other, 'cli', '/fixture/work', 1791547200)
+    const profile = join(home, 'profiles', 'linked')
+    mkdirSync(profile, { recursive: true })
+    if (kind === 'symlink') symlinkSync(target, join(profile, 'state.db'))
+    else linkSync(target, join(profile, 'state.db'))
+    await held(find())
+    expect(control.queries).toHaveLength(0)
+  } finally { writer.close() }
+})
+
+it.each(['wal', 'journal'])('holds a linked %s instead of trusting lexical sidecar evidence', async kind => {
+  store(home)
+  const target = join(root, 'sidecar')
+  writeFileSync(target, 'controlled journal')
+  symlinkSync(target, join(home, `state.db-${kind}`))
+  await held(find())
+})
+
+it('fences a regular database changed to a symlink during the query', async () => {
+  const path = store(home)
+  control.afterQuery = () => {
+    control.afterQuery = undefined
+    const target = join(root, 'moved.db')
+    renameSync(path, target); symlinkSync(target, path)
+  }
+  await held(find())
+})
+
 it.each(['store', 'profile', 'wal', 'journal'])('holds a new %s appearing while another store is queried', async change => {
   store(home)
   const unwritten = join(home, 'profiles', 'unwritten')
@@ -235,11 +276,11 @@ it.each(['missing', 'transient'] as const)('keeps unavailable SQLite %s distinct
 it('holds malformed ids and unexpectedly unbounded query results', async () => {
   store(home)
   for (const value of [null, 42, '../escape', 'x'.repeat(10_000)]) {
-    control.result = { ok: true, rows: [{ id: value }], via: 'builtin' }
+    control.result = { ok: true, rows: [{ id: value, source: 'cli', cwd: '/fixture/work', started_at: 1791547200 }], via: 'builtin' }
     await held(find())
   }
   control.result = { ok: true, rows: [{ id }, { id }, { id }], via: 'builtin' }
-  await expect(find()).rejects.toThrow('row limit')
+  await expect(read()).rejects.toThrow('row limit')
 })
 
 it('shares one deadline across stores and passes the remaining budget to SQLite', async () => {
@@ -248,11 +289,95 @@ it('shares one deadline across stores and passes the remaining budget to SQLite'
   control.afterQuery = () => { control.now = 2_001 }
   await expect(find()).rejects.toThrow('deadline')
   expect(control.queries).toHaveLength(1)
-  expect(control.queries[0].options).toEqual({ busyTimeoutMs: 250, cliTimeoutMs: 2000, maxBuffer: 4096 })
+  expect(control.queries[0].options).toEqual({ busyTimeoutMs: 250, cliTimeoutMs: 2000, maxBuffer: 40 * 1024 * 1024 })
 })
 
 it('holds a failed final inspection even after a successful SQL query', async () => {
   const path = store(home)
-  control.afterQuery = () => { control.failures.set(`statSync:${path}`, 'EACCES') }
+  control.afterQuery = () => { control.failures.set(`lstatSync:${path}`, 'EACCES') }
   await held(find())
+})
+
+it.each(['main', 'wal', 'journal', 'aggregate'])('bounds %s database bytes before SQLite executes a query', async kind => {
+  const path = store(home)
+  if (kind === 'aggregate') {
+    truncateSync(path, 33 * 1024 * 1024)
+    truncateSync(store(join(home, 'profiles', 'second'), []), 33 * 1024 * 1024)
+  } else {
+    const target = kind === 'main' ? path : `${path}-${kind}`
+    if (target !== path) writeFileSync(target, '')
+    truncateSync(target, 65 * 1024 * 1024)
+  }
+  await expect(find()).rejects.toThrow('64 MiB read limit')
+  expect(control.queries).toEqual([])
+})
+
+it('refuses an oversized unindexed sessions table after a bounded prefix without sorting it', async () => {
+  const path = store(home, [])
+  update(path, `WITH RECURSIVE rows(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM rows WHERE n<8193)
+    INSERT INTO sessions SELECT printf('20261009_120000_%04x', n), 'cli', '/fixture/work', 1791547200 FROM rows`)
+  await expect(find()).rejects.toThrow('row limit')
+})
+
+it.each(['view', 'virtual', 'generated'])('holds a %s sessions schema before running its control query', async kind => {
+  mkdirSync(home)
+  const db = new Database(join(home, 'state.db'))
+  if (kind === 'view') db.exec("CREATE VIEW sessions AS SELECT 'id' AS id, 'cli' AS source, '/fixture/work' AS cwd, 1791547200 AS started_at")
+  else if (kind === 'virtual') db.exec('CREATE VIRTUAL TABLE sessions USING fts5(id, source, cwd, started_at)')
+  else db.exec("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT GENERATED ALWAYS AS ('cli') VIRTUAL, cwd TEXT, started_at REAL)")
+  db.close()
+  await held(find())
+  expect(control.queries).toEqual([])
+})
+
+it('requires an indexed point key for hook source lookups', async () => {
+  mkdirSync(home)
+  const db = new Database(join(home, 'state.db'))
+  db.exec('CREATE TABLE sessions (id TEXT, source TEXT)'); db.close()
+  const { HERMES_SOURCE } = await import('../hermes/contract.js')
+  await held(pool(declared, home, { sql: HERMES_SOURCE.query, params: [id], maxRows: 1, maxBuffer: 4096,
+    columns: ['id', 'source'], pointKey: 'id' }))
+  expect(control.queries).toEqual([])
+})
+
+it.each([`${id}\0suffix`, `${id}${'a'.repeat(256)}`])('never projects a malformed stored id into a valid prefix: %j', async malformed => {
+  store(home, [malformed])
+  await held(find())
+})
+
+it.each(['\0tool', 'cli\0tool', null, 'x'.repeat(129)])('holds malformed native source bytes during repair: %j', async source => {
+  const path = store(home)
+  const db = new Database(path)
+  db.prepare('UPDATE sessions SET source = ?').run(source); db.close()
+  await held(find())
+})
+
+it('checks the custom home and never repairs a different home into its process', async () => {
+  store(home)
+  const custom = join(root, 'custom')
+  mkdirSync(custom); writeFileSync(join(custom, 'state.db'), 'unreadable')
+  const known = () => repair('hermes', '/fixture/work', Date.parse('2026-10-09T11:59:00Z'), { hermesHome: custom })
+  await held(known())
+  rmSync(join(custom, 'state.db')); store(custom, [])
+  expect(await known()).toBeNull()
+  update(join(custom, 'state.db'), `INSERT INTO sessions VALUES ('${other}', 'cli', '/fixture/work', 1791547200)`)
+  expect(await known()).toEqual({ sessionId: other, hermesHome: custom })
+})
+
+it('cannot bind a delegated row through directory repair, and retries when an interactive row appears', async () => {
+  const path = store(home)
+  update(path, "UPDATE sessions SET source = 'tool'")
+  const row = { engine: 'hermes', agentId: 'fixture-agent', sessionId: '', cwd: '/fixture/work', runtimes: [],
+    processIdentity: { pid: 4242, executable: 'hermes', startMarker: '2026-10-09T11:59:00Z' } } as unknown as import('../../lib/registry.js').RegisteredSession
+  const register = vi.fn(() => null)
+  const deps = { registry: { byProcess: () => row, bySession: () => undefined, has: () => false, register },
+    homes: { hermes: home } } as unknown as import('../../core/agents/bind.js').BindDeps
+  const observed = { engine: 'hermes', cwd: '/fixture/work', runtimes: [], primaryRuntimeKey: '',
+    args: 'hermes', resumeSessionId: null, processIdentity: row.processIdentity! } as import('../../lib/terminalAgentDiscovery.js').DiscoveredTerminalAgent
+  const binding = (await import('../../core/agents/bind.js')).createBinding(deps)
+  await binding.bindObservedAgent(observed)
+  expect(register).not.toHaveBeenCalled()
+  update(path, `INSERT INTO sessions VALUES ('${other}', 'cli', '/fixture/work', 1791547200)`)
+  await binding.bindObservedAgent(observed)
+  expect(register).toHaveBeenCalledWith(expect.objectContaining({ sessionId: other, hermesHome: home }))
 })
