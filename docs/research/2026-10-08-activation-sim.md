@@ -457,6 +457,18 @@ without developer tools. Every one finished two sessions, and no dialog appeared
 \* OpenCode's free model itself: its footer read "Muse Spark 1.3 Free · 1m 17s" and "2m 38s" in
 those runs, against 8–15 s an hour earlier. The flow around it was immediate.
 
+**Would another free model help the slow runs?** No. OpenCode's ten free models were each run three
+times on the starter task (`opencode run -m <model>`, a fresh folder and home each, side by side,
+2026-10-09):
+- **The default, `muse-spark-1.3-contributor-free`:** 13.3, 11.7 and 7.1 s, the page made each time.
+  This is the model that took 77 s and 158 s in the matrix an hour earlier.
+- **`space-bunny-free`** (9–11 s) and **`big-pickle`** (8–12 s): as fast, not faster.
+- **The rest:** slower, or failed to make the page (`ling-*`, `fledge-alpha-free`,
+  `nemotron-3.5-lightning-free`).
+
+The slow runs were the default model under load at that moment. Pinning another model would risk
+a first session failing when OpenCode changes its free list, for no steady gain.
+
 **Rig note:** the VM has no developer tools, so it raises Apple's dialog for anything that runs
 `git`. Returning users of Claude Code or Codex have them, so a dialog seen there is the rig's, not
 theirs.
