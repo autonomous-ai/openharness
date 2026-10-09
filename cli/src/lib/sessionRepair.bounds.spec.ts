@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { constants } from 'node:buffer'
 import { mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
@@ -11,7 +11,12 @@ import type { StopAgentServiceDeps } from './stopAgentService.js'
 
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, open: vi.fn(actual.open), opendir: vi.fn(actual.opendir), stat: vi.fn(actual.stat) }
+  return { ...actual, open: vi.fn(actual.open), opendir: vi.fn(actual.opendir), stat: vi.fn(actual.stat),
+    readdir: vi.fn(actual.readdir), readlink: vi.fn(actual.readlink) }
+})
+vi.mock('node:child_process', async original => {
+  const actual = await original<typeof import('node:child_process')>()
+  return { ...actual, execFile: vi.fn(actual.execFile) }
 })
 vi.mock('./tmux.js', async original => ({ ...await original<object>(), processRows: vi.fn() }))
 vi.mock('./deleteAgentFallback.js', () => ({ checkPidRuntime: vi.fn(), terminateDeletedAgent: vi.fn() }))
@@ -38,6 +43,10 @@ beforeEach(async () => {
   vi.mocked(fs.open).mockReset().mockImplementation(actual.open)
   vi.mocked(fs.opendir).mockReset().mockImplementation(actual.opendir)
   vi.mocked(fs.stat).mockReset().mockImplementation(actual.stat)
+  vi.mocked(fs.readdir).mockReset().mockImplementation(actual.readdir)
+  vi.mocked(fs.readlink).mockReset().mockImplementation(actual.readlink)
+  const processes = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+  vi.mocked(execFile).mockReset().mockImplementation(processes.execFile)
   root = mkdtempSync(join(tmpdir(), 'identity-bounds-'))
   const homes = { HOME: join(root, 'home'), ADAPTER_DATA_DIR: join(root, 'data'),
     CLAUDE_PROJECTS_DIR: join(root, 'claude', 'projects'), CODEX_HOME: join(root, 'codex'),
@@ -129,6 +138,40 @@ describe('complete bounded evidence before choosing a conversation', () => {
     const path = transcript()
     file(join(root, 'claude', 'projects', 'other.jsonl'), JSON.stringify({ cwd: '/elsewhere' }) + '\n' + 'x'.repeat(2 * 1024 * 1024))
     await expect(scan()).resolves.toEqual({ sessionId: SID, transcriptPath: path })
+  })
+
+  it.each(['claude', 'codex', 'codex-profile'])('rechecks %s home authority after an awaited native lookup', async mode => {
+    const moved = join(root, 'new-home')
+    const homes = await import('./engineHomes.js')
+    const codex = mode !== 'claude'
+    const header = (id: string) => JSON.stringify({ type: 'session_meta', payload: { id, cwd: CWD } }) + '\n'
+    const own = codex ? file(join(root, 'codex', 'sessions', `rollout-${SID}.jsonl`), header(SID)) : transcript()
+    const other = codex ? file(join(moved, 'sessions', `rollout-${OTHER}.jsonl`), header(OTHER))
+      : file(join(moved, 'projects', 'work', `${OTHER}.jsonl`), body())
+    if (codex) {
+      // Both native OS paths are fixtures; never inspect an actual process's descriptors.
+      vi.mocked(fs.readdir).mockResolvedValueOnce(['0', '1'] as never)
+      vi.mocked(fs.readlink).mockResolvedValueOnce(own).mockResolvedValueOnce(other)
+      vi.mocked(execFile).mockImplementationOnce(((...args: unknown[]) => {
+        (args.at(-1) as (error: null, out: string, err: string) => void)(null, `n${own}\nn${other}\n`, '')
+        return {}
+      }) as never)
+    }
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    let adopted = false
+    vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
+      if (String(name) === own && !adopted) {
+        adopted = true
+        homes.adoptEngineHomes(codex ? { CODEX_HOME: moved } : { CLAUDE_CONFIG_DIR: moved },
+          { claudeHome: join(root, 'claude'), codexHome: join(root, 'codex') })
+      }
+      return actual.open(name, flags, mode)
+    })
+    const result = codex ? repair.findLiveSession('codex', CWD, START,
+      { pid: 77, ...(mode === 'codex-profile' ? { codexHome: join(root, 'codex') } : {}) }) : scan()
+    if (mode === 'codex-profile') await expect(result).resolves.toEqual({ sessionId: SID, transcriptPath: own })
+    else await expect(result).rejects.toThrow('known session homes changed')
+    expect(adopted).toBe(true)
   })
 })
 

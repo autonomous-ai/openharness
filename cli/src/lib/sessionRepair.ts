@@ -325,12 +325,19 @@ async function storeSession(
   const scan = scanMeta(engine, store.scan, cwd)
   if ('record' in store.live) {
     const exact = opts?.pid ? await processSessionOf(engine, opts.pid, cwd, startedAtMs) : null
-    return exact ?? fileEngineSession(repairRoots(engine), cwd, startedAtMs, scan,
-      { ...opts, ...(store.scan.from === 'head' ? { excludedDirectory: store.scan.childFolder } : {}) })
+    if (exact) return exact
   }
   const sessions = repairRoots(engine, opts?.codexHome)
-  if (opts?.pid) return openFileSessionOf(engine, opts.pid, sessions, cwd)
-  return fileEngineSession(sessions, cwd, startedAtMs, scan, opts)
+  const found = opts?.pid && 'open' in store.live
+    ? await openFileSessionOf(engine, opts.pid, sessions, cwd)
+    : await fileEngineSession(sessions, cwd, startedAtMs, scan,
+      { ...opts, ...(store.scan.from === 'head' ? { excludedDirectory: store.scan.childFolder } : {}) })
+  // The login shell may adopt another home during any native read. Its unseen candidates
+  // invalidate this pool; an explicit profile remains independent of unrelated homes.
+  if (repairRoots(engine, opts?.codexHome).join('\0') !== sessions.join('\0')) {
+    throw new IdentityReadUnavailable('the known session homes changed during discovery')
+  }
+  return found
 }
 
 export async function findLiveSession(

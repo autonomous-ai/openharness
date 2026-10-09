@@ -21,6 +21,7 @@ mutations = [
     ('invalid process start accepted', repair, "|| !Number.isFinite(Date.parse(record[rule.start]))", '', bounds),
     ('first home wins', repair, '    result = found\n', '    return found\n', bounds),
     ('authoritative claim read too early', repair, 'const recheck = [...records.filter(record => record.file !== selected), ...records.filter(record => record.file === selected)]', 'const recheck = records', bounds),
+    ('home adoption ignored during lookup', repair, "if (repairRoots(engine, opts?.codexHome).join('\\0') !== sessions.join('\\0'))", 'if (false)', bounds),
     ('unbounded known homes', repair, 'if (roots.length > 64)', 'if (false)', bounds),
     ('process claim not rechecked', repair, 'if (await read(file) !== text)', 'if (false)', bounds),
     ('replaced inode accepted', scan, 'const now = await current.stat()', 'const now = before', bounds),
