@@ -1702,15 +1702,14 @@ class _PaneContent extends StatelessWidget {
           // Launch progress/failure describes the engine, not permission to
           // type into its terminal. Connection and control ownership still
           // gate input independently in TerminalPanel/TerminalSession.
-          // A held harness's terminal is the daemon's waiting shell, which
-          // ignores what is typed: nothing there reaches the agent.
+          // A held harness stays writable: the app hears of the daemon starting
+          // it a moment late, and the pane may already be the agent's.
           readOnly:
               machine == null ||
               needsLink ||
               offline ||
               agent == null ||
-              !agent.terminalAvailable ||
-              agent.launchState == 'held',
+              !agent.terminalAvailable,
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
           onClose: single && !swarmMode ? null : close,

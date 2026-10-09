@@ -199,10 +199,11 @@ void main() {
   );
 
   testWidgets(
-    'a held harness whose waiting shell is up says Waiting, and takes no typing',
+    'a held harness whose waiting shell is up says Waiting, and still takes typing',
     (tester) async {
-      // The daemon's waiting pane is a live shell (`heldPaneArgv`) that ignores
-      // input: what is typed there would be lost.
+      // The daemon's waiting pane is a live shell (`heldPaneArgv`). The app hears
+      // of the start a moment after it, when the pane is already the agent's: a
+      // VM run had the person locked out of a running agent under "Waiting".
       await app.handleEventForTest('m', {
         'type': 'agent_synced',
         'payload': {
@@ -225,7 +226,7 @@ void main() {
       expect(find.textContaining('close this pane to cancel'), findsWidgets);
       expect(
         tester.widget<TerminalPanel>(find.byType(TerminalPanel)).readOnly,
-        isTrue,
+        isFalse,
       );
       await tester.pumpWidget(const SizedBox());
     },

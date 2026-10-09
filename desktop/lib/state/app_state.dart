@@ -3,7 +3,7 @@ import '../core/permission_modes.dart';
 import 'dart:async';
 import 'dart:io'
     show Directory, FileSystemEntity, FileSystemEntityType, Platform, exit, pid;
-import 'dart:math' show Random;
+import 'dart:math' show Random, min;
 
 import 'package:dio/dio.dart';
 
@@ -349,7 +349,18 @@ class MachineState {
   // connect. The CLI owns E2EE entirely now; this is just "is trust established yet", not a
   // crypto/pairing state the app has any data for.
   bool needsLink = false;
-  List<Agent> agents = [];
+  List<Agent> _agents = [];
+
+  /// This machine's agents. Every change counts in [agentsRevision].
+  List<Agent> get agents => _agents;
+  set agents(List<Agent> value) {
+    _agents = value;
+    agentsRevision++;
+  }
+
+  /// Moves with every change of [agents]: a list read before one is older than it
+  /// ([AppNotifier._syncAgentsIfChanged]).
+  int agentsRevision = 0;
   AgentLoadStatus agentLoadStatus = AgentLoadStatus.idle;
   bool agentsRefreshing = false;
   String? agentsLoadError;
@@ -922,6 +933,16 @@ class AppNotifier extends ChangeNotifier {
   // (agent_synced/agent_created/agent_renamed/agent_deleted) that normally keep it live — catches the
   // rare case a push event was dropped. Runs silently: see _syncAgentsIfChanged.
   final Map<String, Timer> _agentSyncTimers = {};
+
+  /// Machines with a harness the daemon holds back ([_watchHeldLaunches]).
+  final Map<String, Timer> _heldSyncTimers = {};
+
+  /// Reads in a row that found nothing new, per machine ([_watchHeldLaunches]).
+  final Map<String, int> _heldSyncRounds = {};
+
+  /// How often a machine with a held harness is read again ([_watchHeldLaunches]).
+  @visibleForTesting
+  Duration heldLaunchSyncInterval = const Duration(seconds: 3);
   // Keeps the local `harness` daemon alive for the whole app run — started once after the first
   // successful bootstrap (see `ensureCliDaemonReady`), cancelled on dispose. Cancelling only stops this
   // Dart-side loop; the daemon itself self-daemonizes and must keep running after the app quits.
@@ -7140,13 +7161,67 @@ class AppNotifier extends ChangeNotifier {
 
   void _stopAgentSyncTimer(String machineId) {
     _agentSyncTimers.remove(machineId)?.cancel();
+    _heldSyncTimers.remove(machineId)?.cancel();
+    _heldSyncRounds.remove(machineId);
   }
 
   void _stopAllAgentSyncTimers() {
-    for (final timer in _agentSyncTimers.values) {
+    for (final timer in [
+      ..._agentSyncTimers.values,
+      ..._heldSyncTimers.values,
+    ]) {
       timer.cancel();
     }
     _agentSyncTimers.clear();
+    _heldSyncTimers.clear();
+    _heldSyncRounds.clear();
+  }
+
+  /// Reads a machine's agents again while one of them is held: after [heldLaunchSyncInterval], then
+  /// twice as long each time nothing changed, up to ten times it (3, 6, 12, 24, then 30 s), one read
+  /// at a time.
+  ///
+  /// The daemon starts a held harness by itself (a conversation it could not yet verify, a move
+  /// waiting for a turn to end), but the start reaches the app only with its next agent sync: on a
+  /// fresh VM (2026-10-09) the reopened conversations ran for a minute under "Waiting", until the
+  /// [agentSyncInterval] tick. The quiet re-read ([_syncAgentsIfChanged]) brings it within seconds;
+  /// a hold that lasts (a turn running for minutes) costs a list every half minute.
+  void _watchHeldLaunches(MachineState machine) {
+    final machineId = machine.machine.machineId;
+    final held =
+        machine.connectionStatus == ConnectionStatus.connected &&
+        machine.agents.any((agent) => agent.launchState == 'held');
+    if (!held) {
+      _heldSyncTimers.remove(machineId)?.cancel();
+      _heldSyncRounds.remove(machineId);
+      return;
+    }
+    if (_heldSyncTimers.containsKey(machineId)) return;
+    final round = _heldSyncRounds[machineId] ?? 0;
+    _heldSyncTimers[machineId] = Timer(
+      heldLaunchSyncInterval * min(1 << min(round, 4), 10),
+      () {
+        final current = machineStates[machineId];
+        if (current == null) {
+          _heldSyncTimers.remove(machineId);
+          _heldSyncRounds.remove(machineId);
+          return;
+        }
+        final before = current.agentsRevision;
+        unawaited(
+          _syncAgentsIfChanged(current).whenComplete(() {
+            if (_heldSyncTimers[machineId]?.isActive == false) {
+              _heldSyncTimers.remove(machineId);
+            }
+            if (machineStates[machineId] != current) return;
+            _heldSyncRounds[machineId] = current.agentsRevision == before
+                ? round + 1
+                : 0;
+            _watchHeldLaunches(current);
+          }),
+        );
+      },
+    );
   }
 
   /// Silent safety-net reconciliation, ticked every [agentSyncInterval] while a machine is connected.
@@ -7165,6 +7240,7 @@ class AppNotifier extends ChangeNotifier {
     }
     final connection = _conn(machine.machine.machineId);
     final nameRevision = machine._agentRevision;
+    final listRevision = machine.agentsRevision;
     try {
       final response = await connection.request(
         'agents_list',
@@ -7174,6 +7250,8 @@ class AppNotifier extends ChangeNotifier {
       if (!_machineDiscoveryCurrent(machine, revision, discoveryRevision)) {
         return;
       }
+      // A push that landed while this was asked is newer than the answer.
+      if (machine.agentsRevision != listRevision) return;
       final agents = _agentSnapshot(
         machine,
         (response['agents'] as List<dynamic>? ?? [])
@@ -9697,6 +9775,7 @@ class AppNotifier extends ChangeNotifier {
       _cancelTurnActivity(machine.machine.machineId, agentId);
     }
     machine.agents = agents;
+    _watchHeldLaunches(machine);
     for (final agent in agents) {
       _reconcileAgentActivity(machine, agent, previous[agent.id]);
       if (previous[agent.id]?.name != agent.name) {
@@ -9810,6 +9889,7 @@ class AppNotifier extends ChangeNotifier {
     }
     machine.agentLoadStatus = AgentLoadStatus.loaded;
     machine.agentsLoadError = null;
+    _watchHeldLaunches(machine);
     _syncViewerPane(machine, agent);
     // A terminal that adopted an engine, or let one go: the tiles already
     // attached to it keep their stream and change their face. The dial's
