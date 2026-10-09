@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import '../core/local_key_value_store.dart';
 import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
+import '../logging/app_log.dart';
 import '../terminal/terminal_session.dart';
 import 'app_state.dart';
 import 'harness_placement.dart';
@@ -115,6 +116,8 @@ class FirstArrival {
     unawaited(_write('done'));
   }
 
+  static void _log(String line) => appLog.info('onboarding', line);
+
   Future<void> _write(String value) async {
     try {
       await _storage?.write(key, value);
@@ -133,6 +136,7 @@ class FirstArrival {
   }) async {
     if (!pending) return false;
     _running = true;
+    final started = _now();
     try {
       // Someone whose account already has a desk elsewhere keeps it.
       if (app.allPanes.isNotEmpty) {
@@ -153,7 +157,10 @@ class FirstArrival {
         sessions: sessions,
         installed: installed,
       );
-      debugPrint('first arrival: $plan');
+      _log(
+        'first arrival: $plan after ${_now().difference(started).inMilliseconds} ms '
+        '(${sessions.length} recent, installed $installed)',
+      );
       if (plan.isEmpty || app.allPanes.isNotEmpty) {
         _finish();
         return false;
@@ -162,6 +169,10 @@ class FirstArrival {
           ? await _openFresh(app, machineId, plan, starterWait)
           : await _openSessions(app, machineId, plan.tabs);
       _finish();
+      _log(
+        'first arrival: ${opened ? 'opened' : 'opened nothing'} in '
+        '${_now().difference(started).inMilliseconds} ms',
+      );
       return opened;
     } finally {
       _running = false;
@@ -237,7 +248,7 @@ class FirstArrival {
         );
         if (error != null) {
           // Started since it was listed, or its folder went: the rest still open.
-          debugPrint('first arrival: $session not opened: ${refusal ?? error}');
+          _log('first arrival: $session not opened: ${refusal ?? error}');
           continue;
         }
         tabId ??= app.activeSwarmId;
@@ -266,7 +277,7 @@ class FirstArrival {
         label: externalEngineName(plan.fresh.first),
       );
     } catch (error) {
-      debugPrint('first arrival: no project folder: $error');
+      _log('first arrival: no project folder: $error');
       return false;
     }
     final tabId = app.activeSwarmId;
@@ -282,7 +293,7 @@ class FirstArrival {
         placement: HarnessPlacement.currentTab,
       );
       if (error != null) {
-        debugPrint('first arrival: $engine not started: $error');
+        _log('first arrival: $engine not started: $error');
         continue;
       }
       lead ??= app.allPanes
@@ -300,7 +311,15 @@ class FirstArrival {
     }
     app.focusPane(lead.id);
     if (plan.typesStarterTask) {
-      unawaited(typeWhenReady(lead, starterTask, wait: starterWait));
+      unawaited(
+        typeWhenReady(lead, starterTask, wait: starterWait).then(
+          (typed) => _log(
+            typed
+                ? 'first arrival: starter task typed into ${plan.fresh.first}'
+                : 'first arrival: ${plan.fresh.first} never showed its box; nothing typed',
+          ),
+        ),
+      );
     }
     return true;
   }
