@@ -658,7 +658,7 @@ class PetRowViewer extends StatelessWidget {
   /// The dial scenes shown, with their labels. Asking falls back to the small
   /// pet when the daemon sends no asking frames.
   static const _dial = [
-    ('Rest', 'small'),
+    ('Idle', 'small'),
     ('Working', 'working'),
     ('Asking', 'asking'),
   ];

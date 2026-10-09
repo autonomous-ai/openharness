@@ -39,15 +39,16 @@ export interface PetSheet {
 }
 
 // Which sheet row plays each of the dial's states. The user picks them; without a choice it is the petdex reading.
-export type PetState = 'rest' | 'working' | 'listening' | 'sending' | 'asking'
+export type PetState = 'rest' | 'working' | 'listening' | 'sending' | 'asking' | 'relaxing'
 export type PetRows = Record<PetState, PetRow>
-export const PET_STATES: readonly PetState[] = ['rest', 'working', 'listening', 'sending', 'asking']
+export const PET_STATES: readonly PetState[] = ['rest', 'working', 'listening', 'sending', 'asking', 'relaxing']
 export const DEFAULT_PET_ROWS: Readonly<PetRows> = {
   rest: 'idle',
   working: 'running',
   listening: 'review',
   sending: 'waving',
   asking: 'waiting',
+  relaxing: 'idle', // follows the rest row unless chosen (pickPetRows)
 }
 
 export type PetSheetErrorCode = 'NOT_PNG' | 'BAD_SIZE' | 'NO_FRAMES' | 'NO_REST' | 'NO_WORKING' | 'TOO_BIG' | 'TOO_MANY'
@@ -143,7 +144,7 @@ export function parsePetSheet(png: Buffer): PetSheet {
   return { cellW, cellH, rows }
 }
 
-// The rows the pack is made from: the choice over the defaults, without judging them. A listening, sending or asking
+// The rows the pack is made from: the choice over the defaults, without judging them. A listening, sending, asking or relaxing
 // row with no frames falls back to the rest row (with the default rest, idle: the petdex reading).
 export function pickPetRows(sheet: PetSheet, choice: Partial<PetRows> = {}): PetRows {
   const picked = { ...DEFAULT_PET_ROWS }
@@ -151,7 +152,8 @@ export function pickPetRows(sheet: PetSheet, choice: Partial<PetRows> = {}): Pet
     const row = choice[state]
     if (row && PET_ROWS.includes(row)) picked[state] = row
   }
-  for (const state of ['listening', 'sending', 'asking'] as const) {
+  if (!(choice.relaxing && PET_ROWS.includes(choice.relaxing))) picked.relaxing = picked.rest
+  for (const state of ['listening', 'sending', 'asking', 'relaxing'] as const) {
     if (sheet.rows[picked[state]].length === 0) picked[state] = picked.rest
   }
   return picked

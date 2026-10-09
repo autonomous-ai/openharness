@@ -26,6 +26,8 @@ export interface ConvertedPet {
   listening: PetScene
   sending: PetScene
   failed: PetScene
+  /** Pack version 2: the scene a dial plays while it relaxes. */
+  relaxing: PetScene
   warnings: string[]
 }
 
@@ -295,11 +297,12 @@ function scaleFrame(f: RgbaFrame, cols: number, rows: number, nearestSample: boo
 export function convertPet(sheet: PetSheet, choice?: Partial<PetRows>): ConvertedPet {
   const rows = sheet.rows
   const chosen = resolvePetRows(sheet, choice)
-  const sceneRows: Record<'working' | 'listening' | 'sending' | 'failed', PetRow> = {
+  const sceneRows: Record<'working' | 'listening' | 'sending' | 'failed' | 'relaxing', PetRow> = {
     working: chosen.working,
     listening: chosen.listening,
     sending: chosen.sending,
     failed: rows.failed.length > 0 ? 'failed' : chosen.rest,
+    relaxing: chosen.relaxing,
   }
   // The rest loop waves once every few cycles only when it is petdex's idle row, the one the waving row answers.
   const waves = chosen.rest === 'idle'
@@ -372,7 +375,7 @@ export function convertPet(sheet: PetSheet, choice?: Partial<PetRows>): Converte
   const listening = scene(sceneRows.listening)
   const sending = scene(sceneRows.sending)
   const failed = scene(sceneRows.failed)
-  return {
+  const pet: ConvertedPet = {
     palette: palette.entries565.map((v, i) => (i === 0 ? 0 : panelOrder(v))),
     frames,
     small: {
@@ -388,6 +391,10 @@ export function convertPet(sheet: PetSheet, choice?: Partial<PetRows>): Converte
     listening,
     sending,
     failed,
+    relaxing: { frames: [], stepMs: STEP_MS, dx: 0, dy: 0 },
     warnings,
   }
+  // Last, so the frames only this scene uses come after every other: a version 1 pack leaves them out (encodePack).
+  pet.relaxing = scene(chosen.relaxing)
+  return pet
 }

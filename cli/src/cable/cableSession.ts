@@ -1672,7 +1672,8 @@ export class CableSession {
     if (this.petTransfer || this.transfer) return
     for (const id of plan.send) {
       if (this.petErrors.has(id)) continue
-      const pack = await store.pack(id).catch((error: unknown) => {
+      // The newest version both sides know: a dial that says pets:1 gets the version 1 pack of the very same id.
+      const pack = await store.pack(id, Math.min(this.petDialMax, PACK_VERSION)).catch((error: unknown) => {
         this.log(`cable: pet ${id} unreadable: ${error instanceof Error ? error.message : String(error)}`)
         this.petErrors.set(id, 'unreadable')
         return null

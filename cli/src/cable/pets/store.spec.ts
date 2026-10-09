@@ -30,7 +30,7 @@ function sheetPng(seed: number): Buffer {
 }
 
 // What the defaults come to on a sheet with only idle and running drawn.
-const DEFAULT_ROWS_IDLE: PetRows = { rest: 'idle', working: 'running', listening: 'idle', sending: 'idle', asking: 'idle' }
+const DEFAULT_ROWS_IDLE: PetRows = { rest: 'idle', working: 'running', listening: 'idle', sending: 'idle', asking: 'idle', relaxing: 'idle' }
 
 let work: string
 let dir: string
@@ -235,7 +235,10 @@ describe('PetStore', () => {
       const path = join(work, `${label}.png`)
       await writeFile(path, richPng(rows))
       expect((await store.prepare(path)).id).toBe(id)
-      expect(createHash('sha256').update(await store.pack(id)).digest('hex')).toBe(sha)
+      // ...and the version 1 pack is byte for byte what it was; the pack on disk is version 2, with the same id.
+      expect(createHash('sha256').update(await store.pack(id, 1)).digest('hex')).toBe(sha)
+      expect((await store.pack(id))[4]).toBe(2)
+      expect(decodePack(await store.pack(id)).id).toBe(id)
       // Naming the defaults is no choice at all, and neither is naming what they fall back to.
       const named = await store.prepare(path, undefined, { rest: 'idle', working: 'running', listening: 'review', sending: 'waving', asking: 'waiting' })
       expect(named.id).toBe(id)
@@ -248,10 +251,10 @@ describe('PetStore', () => {
     const path = join(work, 'rich.png')
     await writeFile(path, richPng({ 0: 3, 3: 2, 5: 1, 6: 2, 7: 4, 8: 2 }))
     const plain = await store.prepare(path)
-    expect(plain.rows).toEqual({ rest: 'idle', working: 'running', listening: 'review', sending: 'waving', asking: 'waiting' })
+    expect(plain.rows).toEqual({ rest: 'idle', working: 'running', listening: 'review', sending: 'waving', asking: 'waiting', relaxing: 'idle' })
     const swapped = await store.prepare(path, 'Swapped', { working: 'review', listening: 'running', asking: 'jumping' })
     expect(swapped.id).not.toBe(plain.id)
-    const rows: PetRows = { rest: 'idle', working: 'review', listening: 'running', sending: 'waving', asking: 'idle' }
+    const rows: PetRows = { rest: 'idle', working: 'review', listening: 'running', sending: 'waving', asking: 'idle', relaxing: 'idle' }
     expect(swapped.rows).toEqual(rows)
     expect(swapped.sheet.rows.idle.length).toBe(3)
     expect(JSON.parse(await readFile(join(dir, `${swapped.id}.json`), 'utf8'))).toEqual({ name: 'Swapped', rows })
@@ -259,6 +262,68 @@ describe('PetStore', () => {
     expect(decodePack(await store.pack(swapped.id)).working.frames.length).toBe(2)
     // The same choice again is the same pack.
     expect((await store.prepare(path, 'Swapped', { working: 'review', listening: 'running', asking: 'jumping' })).id).toBe(swapped.id)
+  })
+
+  it('relaxing joins the id only when it is not the rest row; the sidecar keeps it', async () => {
+    const path = join(work, 'rich.png')
+    await writeFile(path, richPng({ 0: 3, 3: 2, 5: 1, 6: 2, 7: 4, 8: 2 }))
+    const plain = await store.prepare(path)
+    expect(plain.id).toBe('4ccbe14a80622e7b')
+    // Naming the rest row for relaxing is no choice.
+    expect((await store.prepare(path, undefined, { relaxing: 'idle' })).id).toBe(plain.id)
+    const calm = await store.prepare(path, 'Calm', { relaxing: 'review' })
+    expect(calm.id).not.toBe(plain.id)
+    expect(calm.rows.relaxing).toBe('review')
+    expect(JSON.parse(await readFile(join(dir, `${calm.id}.json`), 'utf8')).rows.relaxing).toBe('review')
+    expect((await store.rows(calm.id))?.relaxing).toBe('review')
+    // It differs from the other choices too, and it is its own scene in the pack.
+    expect((await store.prepare(path, undefined, { relaxing: 'waving' })).id).not.toBe(calm.id)
+    const pack = decodePack(await store.pack(calm.id))
+    expect(pack.relaxing.frames.length).toBe(2)
+    expect(decodePack(await store.pack(calm.id, 1)).relaxing.frames).toEqual([])
+    // A relaxing row with no frames falls back to rest; with another rest, relaxing follows it.
+    expect((await store.prepare(path, undefined, { relaxing: 'jumping' })).rows.relaxing).toBe('idle')
+    const rested = await store.prepare(path, undefined, { rest: 'review' })
+    expect(rested.rows.relaxing).toBe('review')
+    expect(rested.id).toBe((await store.prepare(path, undefined, { rest: 'review', relaxing: 'review' })).id)
+  })
+
+  it('version 1 is made from the kept source for an older dial, with the same id and without storing it', async () => {
+    const a = await store.prepare(await source(95))
+    const v1 = await store.pack(a.id, 1)
+    expect(v1[4]).toBe(1)
+    expect(decodePack(v1).id).toBe(a.id)
+    expect((await readFile(join(dir, `${a.id}.hpet`)))[4]).toBe(2)
+    expect(await hpets()).toEqual([`${a.id}.hpet`])
+    // Without the source there is only the pack that is there.
+    await rm(join(dir, `${a.id}.png`))
+    expect((await store.pack(a.id, 1))[4]).toBe(2)
+  })
+
+  it('a version 2 rebuild that cannot be made falls back to the stored older pack; a source of another pet never replaces it', async () => {
+    const a = await store.prepare(await source(97))
+    const file = join(dir, `${a.id}.hpet`)
+    const v1 = await store.pack(a.id, 1)
+    await writeFile(file, v1) // the pack on disk is version 1
+    // A source that no longer parses: the stored version 1 is handed out as it is.
+    await writeFile(join(dir, `${a.id}.png`), Buffer.from('not a png'))
+    expect(await store.pack(a.id, 2)).toEqual(v1)
+    // A source that makes another pet: not written over the stored pack, and the stored pack is served.
+    await writeFile(join(dir, `${a.id}.png`), sheetPng(98))
+    expect(await store.pack(a.id, 2)).toEqual(v1)
+    expect(await readFile(file)).toEqual(v1)
+    // The stored pack is newer than the dial reads and cannot be remade: that is an error.
+    await writeFile(file, await store.pack(a.id, 2).catch(() => v1))
+    const v2 = Buffer.from(v1)
+    v2[4] = 2
+    await writeFile(file, v2)
+    await expect(store.pack(a.id, 1)).rejects.toThrow()
+  })
+
+  it('a sidecar from before relaxing has it follow the rest row', async () => {
+    const a = await store.prepare(await source(96))
+    await writeFile(join(dir, `${a.id}.json`), JSON.stringify({ name: 'old', rows: { rest: 'idle', working: 'running', listening: 'idle', sending: 'idle', asking: 'idle' } }))
+    expect(await store.rows(a.id)).toEqual(DEFAULT_ROWS_IDLE)
   })
 
   it('refuses an empty chosen rest or working row', async () => {

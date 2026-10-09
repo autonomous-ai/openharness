@@ -14,11 +14,12 @@ import 'pet_source.dart';
 
 /// The dial states a row can be picked for, and their labels.
 const petStateLabels = {
-  'rest': 'Rest',
+  'rest': 'Idle',
   'working': 'Working',
   'listening': 'Listening',
   'sending': 'Sending',
   'asking': 'Asking',
+  'relaxing': 'Relaxing',
 };
 
 /// How long the row picker waits for more changes before asking again.
@@ -229,6 +230,10 @@ class PetEditor extends ChangeNotifier {
   /// The row (by petdex row name) the user has chosen for each state.
   Map<String, String> _rows = const {};
 
+  /// Whether the user picked a Relaxing row. Until then it follows Rest (the
+  /// daemon's default) and is not sent, so changing Rest moves it too.
+  bool _relaxingChosen = false;
+
   /// Whether [_preview] matches [_rows]; false while a new preview is pending
   /// or after it failed, so Apply never sends an outdated pet.
   bool _current = true;
@@ -318,6 +323,7 @@ class PetEditor extends ChangeNotifier {
     _sheet?.dispose();
     _sheet = null;
     _rows = const {};
+    _relaxingChosen = false;
     _current = true;
     _viewed = null;
     playback.clear();
@@ -356,7 +362,7 @@ class PetEditor extends ChangeNotifier {
         name: source.name,
         // A petdex sheet starts on the daemon's own mapping; a loose one on
         // the app's guess, since its rows are not named for what they hold.
-        rows: source.loose ? source.defaultRows : null,
+        rows: source.loose ? _sent(source.defaultRows!) : null,
       );
       if (preview == null) error = controller.petError(deviceKey);
     } on PetSourceError catch (e) {
@@ -397,7 +403,12 @@ class PetEditor extends ChangeNotifier {
   /// choices settle.
   void choose(String state, String row) {
     if (_preview == null || _rows[state] == row) return;
-    _rows = {..._rows, state: row};
+    if (state == 'relaxing') _relaxingChosen = true;
+    _rows = {
+      ..._rows,
+      state: row,
+      if (state == 'rest' && !_relaxingChosen) 'relaxing': row,
+    };
     _current = false;
     // A reply still on its way answers the choices before this one.
     _seq++;
@@ -415,7 +426,7 @@ class PetEditor extends ChangeNotifier {
       deviceKey,
       source.pngPath,
       name: source.name,
-      rows: rows,
+      rows: _sent(rows),
     );
     if (_disposed || seq != _seq || !identical(source, _source)) return;
     if (preview == null) {
@@ -429,6 +440,12 @@ class PetEditor extends ChangeNotifier {
     }
     _notify();
   }
+
+  /// [rows] as the daemon is asked for them: Relaxing only once chosen.
+  Map<String, String> _sent(Map<String, String> rows) => {
+    for (final e in rows.entries)
+      if (e.key != 'relaxing' || _relaxingChosen) e.key: e.value,
+  };
 
   /// Sends the previewed pet to every agent; the edit ends when it is taken.
   Future<void> apply() async {

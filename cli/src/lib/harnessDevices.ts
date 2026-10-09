@@ -21,7 +21,7 @@ export interface HarnessDevicesService {
 export const PET_REQUESTS = DEVICES_REQUESTS.filter((name) => name.startsWith('pet_'))
 // Which sheet row plays each state: a state left out takes the default, a row the sheet format has not is refused.
 const petRow = z.enum(PET_ROWS as [PetRow, ...PetRow[]]).optional()
-const petRows = z.object({ rest: petRow, working: petRow, listening: petRow, sending: petRow, asking: petRow })
+const petRows = z.object({ rest: petRow, working: petRow, listening: petRow, sending: petRow, asking: petRow, relaxing: petRow })
 const petPath = z.object({ path: z.string().min(1).max(4096), name: z.string().max(1024).optional(), rows: petRows.optional() })
 const petApply = z.object({ target: z.string().min(1).max(64), id: z.string().min(1).max(64) })
 const petReset = z.object({ target: z.string().min(1).max(64) })
