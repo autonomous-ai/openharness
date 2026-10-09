@@ -27,10 +27,15 @@ import type { LaunchHome } from '../engines/facets/launch.js'
 import { sessionStoreContracts, sessionStoreOf, type SessionStoreEngine } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
+import { readHomeCatalog, type HomeCatalog } from '../engines/kit/homeCatalog.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 
 /** The homes each engine's person moved (its session store's `sessions.moved.variable`), by engine, as saved. */
 const movedByEngine = Object.fromEntries(Object.keys(sessionStoreContracts).map((engine) => [engine, [] as string[]])) as Record<SessionStoreEngine, string[]>
 let loadedStamp = ''
+// Positive facts only: they can require a hold, never supply roots absent from a fresh read.
+let nativeCatalogFile = ''
+let nativeKnownHomes: HomeCatalog = { claude: [], codex: [] }
 
 const savedFile = (): string => join(env.ADAPTER_DATA_DIR, 'engine-homes.json')
 
@@ -119,6 +124,28 @@ export function sessionRoots(engine: AgentEngine | string, profile?: string | nu
   const below = (home: string): string => own.folder ? join(home, own.folder) : home
   if (followsProfile && profile) return [below(profile)]
   return [below(env[own.setting]), ...movedHomes(engine).map((home) => join(home, moved.folder))]
+}
+
+/** Complete native identity pools cannot use the legacy reader's partial or cached catalog.
+ * Legacy lifecycle callers migrate separately, together with their durable hold/retry handling. */
+export function nativeSessionRoots(engine: AgentEngine | string, profile?: string | null): string[] {
+  const store = sessionStoreOf(engine)
+  if (!store) return []
+  const { own, moved, profile: followsProfile } = store.sessions
+  const below = (home: string): string => own.folder ? join(home, own.folder) : home
+  if (followsProfile && profile) return [below(profile)]
+  const file = savedFile(), read = readHomeCatalog(file)
+  if (nativeCatalogFile !== file) { nativeCatalogFile = file; nativeKnownHomes = { claude: [], codex: [] } }
+  for (const name of Object.keys(sessionStoreContracts) as SessionStoreEngine[]) {
+    // Adoption predates this boundary and can keep an unsaved home in memory. It is a known
+    // competitor: persistence failure must not authorize a default-home uniqueness claim.
+    const known = [...nativeKnownHomes[name], ...movedByEngine[name]]
+    if (known.some(home => !read.homes[name].includes(home))) {
+      throw new IdentityReadUnavailable('the saved engine-home catalog omits a previously observed or unsaved home')
+    }
+  }
+  nativeKnownHomes = { claude: [...read.homes.claude], codex: [...read.homes.codex] }
+  return [below(env[own.setting]), ...read.homes[engine as SessionStoreEngine].map(home => join(home, moved.folder))]
 }
 
 /** Every moved home known: adopted on this boot or an earlier one. */
@@ -246,4 +273,6 @@ export function profileEnvironment(engine: AgentEngine | string, home: string): 
 export function resetEngineHomes(): void {
   for (const homes of Object.values(movedByEngine)) homes.length = 0
   loadedStamp = ''
+  nativeCatalogFile = ''
+  nativeKnownHomes = { claude: [], codex: [] }
 }

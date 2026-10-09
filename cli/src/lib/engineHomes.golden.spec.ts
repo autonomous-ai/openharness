@@ -52,7 +52,7 @@ afterAll(() => {
 it('records declared roots, durable adoption, profiles and bound-home selection', () => {
   const { env } = config
   check('default:own', [homes.ownHomeOf('claude'), homes.ownHomeOf('codex')])
-  check('default:roots', [homes.sessionRoots('claude'), homes.sessionRoots('codex'), homes.sessionRoots('pi')])
+  check('default:roots', [homes.nativeSessionRoots('claude'), homes.nativeSessionRoots('codex'), homes.nativeSessionRoots('pi')])
   check('default:moved', homes.movedEngineHomes())
   check('default:ignored', homes.adoptHomes({ CLAUDE_CONFIG_DIR: dirname(env.CLAUDE_PROJECTS_DIR), CODEX_HOME: `${env.CODEX_HOME}/` }))
   for (const value of ['relative', '~/elsewhere', '   ', undefined]) {
@@ -62,9 +62,9 @@ it('records declared roots, durable adoption, profiles and bound-home selection'
   check('adopt:both', homes.adoptHomes({ CLAUDE_CONFIG_DIR: ` ${claude}/ `, CODEX_HOME: `${codex}/` }))
   check('adopt:saved', JSON.parse(readFileSync(saved(), 'utf8')))
   check('adopt:duplicate', homes.adoptHomes({ CLAUDE_CONFIG_DIR: claude, CODEX_HOME: codex }))
-  check('adopt:roots', [homes.sessionRoots('claude'), homes.sessionRoots('codex')])
+  check('adopt:roots', [homes.nativeSessionRoots('claude'), homes.nativeSessionRoots('codex')])
   check('adopt:home-roots', [homes.homeRoots('CODEX_HOME'), homes.homeRoots('CLAUDE_PROJECTS_DIR')])
-  check('profile:roots', [homes.sessionRoots('claude', profile), homes.sessionRoots('codex', profile), homes.sessionRoots('pi', profile)])
+  check('profile:roots', [homes.nativeSessionRoots('claude', profile), homes.nativeSessionRoots('codex', profile), homes.nativeSessionRoots('pi', profile)])
   check('profile:environment', [homes.profileEnvironment('claude', profile), homes.profileEnvironment('codex', profile), homes.profileEnvironment('pi', profile)])
   check('unknown:moved', [homes.movedHomes('pi'), homes.movedHomes('toString')])
   homes.resetEngineHomes()
