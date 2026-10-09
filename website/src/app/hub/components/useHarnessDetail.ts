@@ -1,7 +1,9 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { communityRequest, emptySocial, CommunityError } from '@/lib/community/client';
+import { commentTotal } from '@/lib/community/comments';
 import type { HarnessComment, OpenHarness, SocialState } from '@/lib/community/types';
+import { useRefreshOnReturn } from './useRefreshOnReturn';
 
 /**
  * One harness page's data and the reader's actions on it. Writes run one at a time, and a read that
@@ -15,7 +17,7 @@ export function useHarnessDetail(id: string, initial: OpenHarness | null, onSign
   /**
    * A publication never changes: once its files are here, a refresh reads only likes, follows and
    * comments. A backend older than `/social` answers 404 there, so the full read tells that apart
-   * from an unpublished harness.
+   * from an unpublished harness. The page draws only the output, so the full read asks for that file.
    */
   const read = useCallback(async () => {
     type Page = { harness?: OpenHarness | null; social: SocialState };
@@ -24,7 +26,7 @@ export function useHarnessDetail(id: string, initial: OpenHarness | null, onSign
         if (!(e instanceof CommunityError && e.status === 404)) throw e;
       }
     }
-    return communityRequest<Page>(`harnesses/${id}`);
+    return communityRequest<Page>(`harnesses/${id}?files=viewer`);
   }, [id]);
   const load = useCallback(async () => {
     if (writing.current) return;
@@ -43,10 +45,10 @@ export function useHarnessDetail(id: string, initial: OpenHarness | null, onSign
   }, [read, initial]);
   useEffect(() => {
     void load();
-    const reload = () => { void load(); };
-    window.addEventListener('focus', reload);
-    return () => { revision.current++; window.removeEventListener('focus', reload); };
+    return () => { revision.current++; };
   }, [load]);
+  const reload = useCallback(() => { void load(); }, [load]);
+  useRefreshOnReturn(reload);
 
   /** Runs one write, reporting whether it succeeded. */
   async function mutate(action: () => Promise<void>): Promise<boolean> {
@@ -63,8 +65,9 @@ export function useHarnessDetail(id: string, initial: OpenHarness | null, onSign
   }
 
   const follow = () => mutate(async () => {
+    if (!harness) return;
     const next = !social.following;
-    await communityRequest(`creators/${harness!.authorId}/follow`, { method: 'PUT', body: { following: next } });
+    await communityRequest(`creators/${harness.authorId}/follow`, { method: 'PUT', body: { following: next } });
     setSocial(value => ({ ...value, following: next }));
   });
   const like = () => mutate(async () => {
@@ -73,12 +76,16 @@ export function useHarnessDetail(id: string, initial: OpenHarness | null, onSign
   });
   const removeComment = (comment: HarnessComment) => mutate(async () => {
     await communityRequest(`harnesses/${id}/comments/${comment.id}`, { method: 'DELETE' });
-    setSocial(value => ({ ...value, comments: value.comments.filter(item => item.id !== comment.id) }));
+    setSocial(value => ({ ...value, comments: value.comments.filter(item => item.id !== comment.id), commentCount: commentTotal(value) - 1 }));
   });
   /** `clientId` makes a retried post return the same comment rather than a second one. */
   const postComment = (body: string, clientId: string, parentId?: string) => mutate(async () => {
     const data = await communityRequest<{ comment: HarnessComment }>(`harnesses/${id}/comments`, { method: 'POST', body: { body, clientId, ...(parentId ? { parentId } : {}) } });
-    setSocial(value => ({ ...value, comments: [...value.comments.filter(item => item.id !== data.comment.id), data.comment] }));
+    // A retried post answers with the comment it already made: replaced, not counted twice.
+    setSocial(value => {
+      const known = value.comments.some(item => item.id === data.comment.id);
+      return { ...value, comments: [...value.comments.filter(item => item.id !== data.comment.id), data.comment], commentCount: commentTotal(value) + (known ? 0 : 1) };
+    });
   });
   const unpublish = () => mutate(async () => {
     await communityRequest(`harnesses/${id}`, { method: 'DELETE' });

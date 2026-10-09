@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
-import { searchMaxChars } from '@/lib/community/search';
+import { searchMaxChars } from '@/lib/community/feed';
 import styles from '../community.module.css';
 
 export type SearchFieldProps = { value: string; onChange: (value: string) => void; onClear: () => void };

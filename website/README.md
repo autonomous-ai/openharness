@@ -16,8 +16,8 @@ retired; only the host routes below were kept.
 | `/os` | The Harness operating system landing page: plain HTML/CSS, local fonts and screenshots in `public/os/` |
 | `/os/latest` | Redirect to the newest complete published OS release; OS tags only, stable preferred, five-minute server lookup cache |
 | `/desktop` | Desktop download page |
-| `/hub`, `/hub/following`, `/hub/yours` | Public three-column gallery, followed creators, and your publications |
-| `/hub/:id` | Full-page output viewer and published conversation, with likes and comments |
+| `/hub`, `/hub/following`, `/hub/yours` | Public three-column gallery, followed creators, and your publications; `?q=`, `?category=` and `?sort=popular` narrow and order them |
+| `/hub/:id` | Full-page output viewer (full screen) beside the published conversation, comments or source files, with likes, a copyable link and the harness's public forks |
 | `/hub/:id/fork`, `/hub/:id/download` | Desktop handoff fallback and an optional project ZIP |
 | `/hub/:id/snapshot` | Public, bounded snapshot consumed by the desktop handoff |
 | `/hub/import` | One-use desktop handoff into a private browser draft |
@@ -35,7 +35,8 @@ The CLI installer is `cli/scripts/install.sh`. The desktop installer's source is
 
 The community requires the corresponding backend release and its four `community_*` collections
 and indexes in `backend/prisma/schema.prisma`. Deploy that backend before exposing the website's
-social and publishing actions. Eighteen local examples remain browsable if
+social and publishing actions. The feed's category, order and forks filters need a backend that
+accepts them (it rejects unknown feed parameters), so deploy the backend first. Eighteen local examples remain browsable if
 the API is unavailable. Their published briefs are labeled as examples; engagement starts at zero.
 
 Push a `vX.Y.Z_web` tag — `make release-web` from the repo root cuts the next one.
