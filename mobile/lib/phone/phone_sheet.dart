@@ -129,9 +129,8 @@ Future<void> showPhoneSheet(
 }
 
 /// The route [showPhoneSheet] pushes, around content of the caller's own — for a sheet that is not
-/// a menu of actions (the download menu of "Get Harness for your computer"). Push it on the root
-/// navigator; held, it can be taken away again ([NavigatorState.removeRoute]) when the page that
-/// opened it goes.
+/// a menu of actions. Push it on the root navigator; held, it can be taken away again
+/// ([NavigatorState.removeRoute]) when the page that opened it goes.
 ModalBottomSheetRoute<T> phoneSheetRoute<T>(
   BuildContext context, {
   required WidgetBuilder builder,

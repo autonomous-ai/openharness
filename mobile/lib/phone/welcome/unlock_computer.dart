@@ -140,11 +140,7 @@ class _UnlockComputerState extends State<UnlockComputer> {
     final machine = widget.machineState.machine;
     final pairCode = code.pairCode;
     if (code.machineId == null || pairCode == null) {
-      setState(
-        () => _error =
-            'That isn’t an Add Phone code. Open Add Phone… on '
-            '${machine.displayName} and scan its code.',
-      );
+      setState(() => _error = 'That’s not the Add Phone code.');
       return;
     }
     if (code.machineId != machine.machineId) {

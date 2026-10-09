@@ -1,7 +1,5 @@
 import 'dart:async';
-import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
@@ -9,225 +7,113 @@ import 'package:share_plus/share_plus.dart';
 
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 
-import '../phone_sheet.dart' show phoneSheetRoute;
 import '../tty.dart';
 import '../tty_controls.dart';
-import 'how_it_works_video.dart';
+import 'scan_to_connect.dart' show kAddPhoneWhere;
 
-/// Where the desktop app is downloaded, for someone typing it on the computer — and every row's
-/// link when the release manifest cannot be read.
+/// Where Harness is downloaded: the website's download page, which offers each computer its own
+/// file — the Mac's, Linux's, the command line's.
 const kDesktopDownloadUrl = 'https://harness.autonomous.ai/desktop';
 
-/// The desktop release manifest: the one the website's download menu and the desktop app's own
-/// updater read, so each row below sends the current build of its file.
-const kDesktopManifestUrl =
-    'https://storage.googleapis.com/s3-autonomous-upgrade-3/harness/desktop/metadata.json';
-
-/// The `harness` command alone, for a computer with no desktop — the website menu's CLI row.
-const kCliInstall =
-    'curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash';
-
-/// One row of the website's download menu: its manifest key, what it says, and its icon.
-typedef DesktopPlatform = ({
-  String key,
-  String label,
-  String note,
-  IconData icon,
-});
-
-/// The website's download menu (autonomous.ai/harness-app), row for row — with a word more on
-/// the two Macs, for somebody who never had to know which theirs is: Apple Silicon is every
-/// M-series Mac.
-const kDesktopPlatforms = <DesktopPlatform>[
-  (
-    key: 'desktop-macos-arm64-dmg',
-    label: 'macOS',
-    note: 'Apple Silicon · M1 or later',
-    icon: Icons.apple,
-  ),
-  (
-    key: 'desktop-macos-dmg',
-    label: 'macOS',
-    note: 'Intel · older Macs',
-    icon: Icons.apple,
-  ),
-  (
-    key: 'desktop-linux-x64',
-    label: 'Linux',
-    note: 'Intel/AMD · Ubuntu, Omarchy and more',
-    icon: LucideIcons.monitor300,
-  ),
-  (
-    key: 'desktop-linux-arm64',
-    label: 'Linux',
-    note: 'ARM · Raspberry Pi, ARM servers',
-    icon: LucideIcons.monitor300,
-  ),
-];
-
-/// Manifest key → the file's URL. Empty when the manifest cannot be read.
-typedef DesktopDownloadsLoader = Future<Map<String, String>> Function();
-
-Future<Map<String, String>> loadDesktopDownloads({Dio? dio}) async {
-  try {
-    final res =
-        await (dio ??
-                Dio(
-                  BaseOptions(
-                    connectTimeout: const Duration(seconds: 10),
-                    receiveTimeout: const Duration(seconds: 10),
-                  ),
-                ))
-            .get<Object?>(kDesktopManifestUrl);
-    final raw = res.data;
-    final data = raw is String ? jsonDecode(raw) : raw;
-    if (data is! Map) return const {};
-    return {
-      for (final MapEntry(:key, :value) in data.entries)
-        if (key is String && value is Map && value['url'] is String)
-          key: value['url'] as String,
-    };
-  } catch (_) {
-    return const {};
-  }
-}
-
-/// **Not yet — set it up**: getting Harness onto the computer, from the phone — three steps, in the
-/// order they are done on the computer, and the scan that ends them.
+/// **Connect your computer** — the page a phone with no computer stands on: signed out (the first
+/// screen, `phone_welcome.dart`), signed in to an account with none (`connect_computer.dart`), and
+/// Computers ▸ Set up another computer. One button, what it takes, and the way for somebody who has
+/// no Harness on the computer yet ([GetHarnessPage]).
 ///
 /// ```
-/// ‹                                          ⚙
-/// Get Harness for
-/// your computer
-/// [status — signed in, the watch for the computer]
+/// harness▌                         (⚙ once signed in: Settings)
+///           Connect your computer
+///   Drive Claude Code and Codex from your phone.
+///   [status]
+///          [ ⊞  Pair computer ]
 ///
-/// 1  Install Harness on your computer.
-///    ┌────────────────────────────────────┐
-///    │ ⇪  Send it to your computer      › │  → the download menu, in a sheet
-///    │    macOS · Linux · Command line    │
-///    └────────────────────────────────────┘
-///    or open harness.autonomous.ai/desktop there.
-/// 2  Open it, and sign in with Google or Apple.
-/// 3  Open Add Phone… and scan its code.
-///    On a Mac, it’s in the Harness menu.
-///    [          Scan to connect           ]
-/// ─────────────────────────────────────────
-/// Try the sample ›
-/// No account or computer needed.
-/// See how it works ▶
+/// HOW IT WORKS
+/// [1] Open Add Phone on your computer
+///     Mac: Harness menu · Linux: Ctrl+Shift+P
+/// [2] Scan its code
+/// [3] You’re connected
+///     End-to-end encrypted.
+///
+///        No Harness yet? Get it ›
 /// ```
 ///
-/// ⚠️ **The download menu is a sheet, not the page (owner, 2026-10-07).** Laid out on the page —
-/// five rows under "Send it to your computer:", then "Then, on your computer:" and its steps — it
-/// read as a catalogue of files: half the first screen went to rows of which a person needs one, and
-/// the scan that ends the set-up was a line of text at the foot, below the screen's edge once the
-/// watch for the computer was up. Folded into step 1, the page is the steps, and the scan is the
-/// button of the step it belongs to.
-class SetUpComputerPage extends StatefulWidget {
+/// Nothing else on it, signed out: the other ways to sign in are the camera's "Can’t scan?", where
+/// a computer with no code or a phone with no camera finds out it needs them, and the sample is
+/// Get it's, for somebody waiting on the computer (owner, 2026-10-09).
+///
+/// Short on purpose (owner, 2026-10-08): a line under a step only where the step cannot be done
+/// without it — where Add Phone is, which account.
+///
+/// ⚠️ **One button, after Orca's (owner, 2026-10-08).** The first screen used to ask "Is Harness on
+/// your computer?" — Yes to the camera, Not yet to a page of download rows, steps and a second scan —
+/// beside Google and Apple: six ways on before anything was explained. Somebody who has Harness
+/// presses Pair computer; somebody who has not follows Get it, and comes back to the same button.
+class SetUpComputerPage extends StatelessWidget {
   const SetUpComputerPage({
     super.key,
     required this.onScan,
+    required this.onGetIt,
     this.onBack,
-    this.onTrySample,
     this.status,
-    this.trailing = const [],
-    this.loadDownloads,
     this.account,
+    this.watching = false,
     this.topTrailing,
     this.scanStatus,
   });
 
-  /// At the right of the top row, across from `‹ Back` — on the home screen, where there is no back,
-  /// the way to Settings (`PhoneSettingsButton`).
-  final Widget? topTrailing;
-
-  /// What the last scan came to — pairing, or why it did not — right under "Scan to connect".
-  ///
-  /// ⚠️ **Under the button that started it, not under the title.** [status] is the page's top, and
-  /// the button further down: on a small phone, scrolled down to press it, the person came back from
-  /// the camera to a page that looked unchanged — the answer had gone in above the screen's edge,
-  /// and pushed the button down besides.
-  final Widget? scanStatus;
-
-  /// The account this phone is signed in to, when it is: the computer has to sign in to the same
-  /// one, and the steps say so by name. Null for a phone not signed in yet — its scan signs it in
-  /// to whichever account the computer chose.
-  final String? account;
-
-  /// Back to the first screen's other answer, once the app is on the computer — or, signed in,
-  /// the scan that pairs this phone with the computer just set up.
+  /// Pair computer: the camera, for the code the computer's Add Phone shows — it pairs this phone
+  /// with it (and, signed out, signs it in).
   final VoidCallback onScan;
 
-  /// Null draws no back button: the page is a home screen, not a pushed one.
+  /// "No Harness yet? Get it ›" — [GetHarnessPage].
+  final VoidCallback onGetIt;
+
+  /// Null draws the wordmark instead of a back button: the page is a home screen, not a pushed one.
   final VoidCallback? onBack;
 
-  /// Opens the offline sample before the user sets up a computer.
-  final VoidCallback? onTrySample;
-
-  /// A line under the title about what is going on — signed in, the watch for the computer.
+  /// Under the words, over the button: what is going on — the watch for the computer once signed
+  /// in, or why the phone was signed out.
   final Widget? status;
 
-  /// Rows after everything else.
-  final List<Widget> trailing;
+  /// The account this phone is signed in to, when it is: the computer has to sign in to the same
+  /// one, and the first step says so by name.
+  final String? account;
 
-  /// Stands in for the manifest in tests. Null reads [kDesktopManifestUrl].
-  final DesktopDownloadsLoader? loadDownloads;
+  /// Whether the page is watching the account for the computer (signed in, at home): it then
+  /// shows up by itself, with no code.
+  final bool watching;
 
-  @override
-  State<SetUpComputerPage> createState() => _SetUpComputerPageState();
-}
+  /// At the right of the top row, across from the wordmark or `‹ Back` — Settings
+  /// (`PhoneSettingsButton`) once signed in.
+  final Widget? topTrailing;
 
-class _SetUpComputerPageState extends State<SetUpComputerPage> {
-  /// Read as the page opens, so a tap in the menu shares at once; a tap before it lands waits for it.
-  late final Future<Map<String, String>> _downloads =
-      (widget.loadDownloads ?? loadDesktopDownloads)();
+  /// What the last scan came to — pairing, or why it did not — right under Pair computer, the
+  /// button that started it.
+  final Widget? scanStatus;
 
-  /// The download menu while it is up — see [_openDownloads].
-  ModalBottomSheetRoute<void>? _menu;
-
-  @override
-  void dispose() {
-    // ⚠️ **The page can go with its menu up.** At home this page is there only while the account
-    // has no computer, so the computer turning up — the 5-second watch — takes it away; the menu is
-    // the root navigator's, and stayed, over the agents. Taken away after this frame: a navigator
-    // is not to be changed while the tree is being torn down.
-    final menu = _menu;
-    if (menu != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // The whole app going in the same frame takes the navigator, and the menu, with it.
-        final navigator = menu.navigator;
-        if (navigator != null && navigator.mounted && menu.isActive) {
-          navigator.removeRoute(menu);
-        }
-      });
-    }
-    super.dispose();
-  }
-
-  /// Step 1's download menu, in a sheet. One at a time: a second tap while it rises is not a
-  /// second sheet.
-  Future<void> _openDownloads() async {
-    if (_menu != null) return;
-    final menu = phoneSheetRoute<void>(
-      context,
-      builder: (_) => SafeArea(child: _DownloadMenu(downloads: _downloads)),
-    );
-    _menu = menu;
-    try {
-      await Navigator.of(context, rootNavigator: true).push(menu);
-    } finally {
-      _menu = null;
-    }
-  }
-
-  /// Step 2. Signed in, the account is named: a computer signed in to another one never shows up
-  /// here, and nothing else on the page says so.
-  String get _signInStep => switch (widget.account) {
-    final account? =>
-      'Open it, and sign in with Google or Apple, as $account — the account '
-          'on this phone.',
-    null => 'Open it, and sign in with Google or Apple.',
+  /// The steps, signed out: open Add Phone (and where it is), scan its code. Signed in: sign in on
+  /// the computer with the same account — it then turns up by itself, with no code — and Add Phone,
+  /// and where it is, for one that does not.
+  ///
+  /// ⚠️ **Where Add Phone is is said either way.** Signed in, it was left out as needed only for the
+  /// scan — and that is exactly when it is needed: a computer whose account already has this phone
+  /// does not open Add Phone by itself, and one slow to read the phone's key does not turn up.
+  ({String title, String? note}) get _firstStep => switch (account) {
+    null => (title: 'Open Add Phone on your computer', note: kAddPhoneWhere),
+    _ when watching => (
+      title: 'Sign in on your computer',
+      note: 'With the same account.',
+    ),
+    // From Computers nothing above names the account.
+    final account => (
+      title: 'Sign in on your computer',
+      note: 'With $account.',
+    ),
   };
+
+  ({String title, String? note}) get _secondStep => account == null
+      ? (title: 'Scan its code', note: null)
+      : (title: 'Not showing up? Scan its code', note: kAddPhoneWhere);
 
   @override
   Widget build(BuildContext context) {
@@ -238,124 +124,86 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         // One row whatever is in it: the back button's height, so the page starts at the same place
-        // with a back, a trailing control, both, or neither.
+        // with a back or the wordmark, a trailing control or none.
         SizedBox(
           height: 44,
           child: Row(
             children: [
-              if (widget.onBack case final onBack?)
-                TtyBackButton(onPressed: onBack),
+              if (onBack case final onBack?)
+                TtyBackButton(onPressed: onBack)
+              else
+                const Padding(
+                  padding: EdgeInsets.only(left: Tty.origin),
+                  child: _Wordmark(),
+                ),
               const Spacer(),
-              ?widget.topTrailing,
+              ?topTrailing,
             ],
           ),
         ),
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.fromLTRB(Tty.origin, 8, Tty.origin, 24),
+            padding: const EdgeInsets.fromLTRB(Tty.origin, 32, Tty.origin, 28),
             children: [
-              Text(
-                'Get Harness for\nyour computer',
-                style: tty
-                    .style(size: TtySize.display, weight: FontWeight.w600)
-                    .copyWith(height: 34 / 28, letterSpacing: -0.6),
+              const _Hero(
+                title: 'Connect your computer',
+                body: 'Drive Claude Code and Codex from your phone.',
               ),
-              if (widget.status case final status?) ...[
+              if (status case final status?) ...[
                 const SizedBox(height: 18),
                 status,
               ],
-              const SizedBox(height: 28),
-              // ⚠️ **Sign in, and with which buttons.** The desktop app opens signed out, and shows
-              // no code until it is signed in — "Then open it, and scan the code it shows" sent
-              // people to an Add Phone that only said "Sign in to add your phone.". Google or Apple
-              // by name: its third way, "Scan with your phone", needs a phone already signed in.
-              _SetUpStep(
-                number: 1,
-                text: 'Install Harness on your computer.',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _SendButton(onTap: () => unawaited(_openDownloads())),
-                    const SizedBox(height: 8),
-                    Text.rich(
-                      TextSpan(
-                        children: [
-                          const TextSpan(text: 'or open '),
-                          TextSpan(
-                            text: kDesktopDownloadUrl.replaceFirst(
-                              'https://',
-                              '',
-                            ),
-                            style: tty.style(size: TtySize.meta),
-                          ),
-                          const TextSpan(text: ' there.'),
-                        ],
-                      ),
-                      style: faint,
-                    ),
-                  ],
+              const SizedBox(height: 26),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 300),
+                  child: TtyPrimaryButton(
+                    key: const ValueKey('set-up-scan'),
+                    icon: LucideIcons.qrCode300,
+                    label: 'Pair computer',
+                    onPressed: onScan,
+                  ),
                 ),
               ),
-              _SetUpStep(number: 2, text: _signInStep),
-              _SetUpStep(
-                number: 3,
-                text: 'Open Add Phone… and scan its code.',
-                note: 'On a Mac, it’s in the Harness menu.',
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // The page's one filled button: the scan is what the set-up comes to.
-                    TtyPrimaryButton(
-                      key: const ValueKey('set-up-scan'),
-                      label: 'Scan to connect',
-                      onPressed: widget.onScan,
-                    ),
-                    if (widget.scanStatus case final scanStatus?) ...[
-                      const SizedBox(height: 10),
-                      scanStatus,
-                    ],
-                  ],
+              if (scanStatus case final scanStatus?) ...[
+                const SizedBox(height: 10),
+                scanStatus,
+              ],
+              const SizedBox(height: 40),
+              Text(
+                'HOW IT WORKS',
+                style: faint.copyWith(
+                  fontSize: 11.5,
+                  letterSpacing: 1.1,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
               const SizedBox(height: 4),
-              Container(height: 1, color: tty.dim.withValues(alpha: 0.6)),
-              const SizedBox(height: 6),
-              // Not at the computer, or not yet: the sample, and what it is like in 30 seconds —
-              // after the steps, which are what this page is for.
-              if (widget.onTrySample case final onTrySample?)
-                TtyTap(
-                  onTap: onTrySample,
-                  semanticsLabel:
-                      'Try the sample. No account or computer needed.',
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TtyText('Try the sample ›', size: TtySize.row),
-                        const SizedBox(height: 4),
-                        Text('No account or computer needed.', style: faint),
-                      ],
-                    ),
-                  ),
-                ),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Transform.translate(
-                  // The button's own inset, so its words sit on the gutter.
-                  offset: const Offset(-12, 0),
-                  child: TtyTextButton(
-                    label: 'See how it works ▶',
-                    color: tty.faint,
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const HowItWorksVideoPage(),
-                      ),
-                    ),
-                  ),
+              _HowItWorksRow(
+                number: 1,
+                title: _firstStep.title,
+                note: _firstStep.note,
+              ),
+              _HowItWorksRow(
+                number: 2,
+                title: _secondStep.title,
+                note: _secondStep.note,
+              ),
+              const _HowItWorksRow(
+                number: 3,
+                title: 'You’re connected',
+                note: 'End-to-end encrypted.',
+                last: true,
+              ),
+              const SizedBox(height: 24),
+              Center(
+                child: _TextLink(
+                  key: const ValueKey('set-up-get-it'),
+                  lead: 'No Harness yet? ',
+                  action: 'Get it ›',
+                  onTap: onGetIt,
                 ),
               ),
-              ...widget.trailing,
             ],
           ),
         ),
@@ -364,58 +212,256 @@ class _SetUpComputerPageState extends State<SetUpComputerPage> {
   }
 }
 
-/// One numbered step: the number in the terminal's green in a column of its own, the words beside
-/// it wrapping under themselves rather than under the number — then [note], quieter, and what the
-/// step is done with ([child]): the download menu, the scan.
-class _SetUpStep extends StatelessWidget {
-  const _SetUpStep({
-    required this.number,
-    required this.text,
-    this.note,
-    this.child,
+/// **Get it** — Harness onto the computer, from the phone: the download page, sent to the computer
+/// (a phone cannot install it), then back to Pair computer.
+///
+/// ```
+/// ‹
+///      Get Harness on your computer
+///          For Mac and Linux.
+///      [ ⇪  Send to my computer ]
+///   or open harness.autonomous.ai/desktop on it
+///   ─────────────────────────────────────
+///        Installed? Pair computer ›
+///      Try the sample while you wait
+/// ```
+///
+/// The page sends the website, not a file: it offers each computer its own download (Mac, Linux,
+/// the command line), which a phone cannot tell apart.
+class GetHarnessPage extends StatelessWidget {
+  const GetHarnessPage({
+    super.key,
+    required this.onBack,
+    required this.onPair,
+    this.onTrySample,
   });
 
-  final int number;
-  final String text;
-  final String? note;
-  final Widget? child;
+  final VoidCallback onBack;
+
+  /// "Pair computer ›": the camera, the same as the button on [SetUpComputerPage].
+  final VoidCallback onPair;
+
+  /// The offline sample — what Harness is like, for somebody waiting on the computer to install.
+  final VoidCallback? onTrySample;
+
+  /// The share sheet with the download page: AirDrop to the Mac beside you, or Messages or email to
+  /// yourself, opened on the computer. Anchored to the button for iPad, where the sheet is a popover.
+  Future<void> _sendLink(BuildContext button) async {
+    final box = button.findRenderObject() as RenderBox?;
+    final origin = box == null || !box.attached
+        ? null
+        : box.localToGlobal(Offset.zero) & box.size;
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          uri: Uri.parse(kDesktopDownloadUrl),
+          subject: 'Get Harness for your computer',
+          sharePositionOrigin: origin,
+        ),
+      );
+    } catch (_) {
+      // No share sheet came up: the address under the button is the way on, and the button can be
+      // pressed again.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    AppTheme.watch(context);
+    final tty = Tty.of(context);
+    final faint = tty.style(color: tty.faint, size: TtySize.meta);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TtyBackButton(onPressed: onBack),
+        ),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(Tty.origin, 32, Tty.origin, 28),
+            children: [
+              const _Hero(
+                title: 'Get Harness on your computer',
+                body: 'For Mac and Linux.',
+              ),
+              const SizedBox(height: 26),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 300),
+                  child: Builder(
+                    builder: (button) => _SolidButton(
+                      key: const ValueKey('get-it-send'),
+                      icon: LucideIcons.share300,
+                      label: 'Send to my computer',
+                      onPressed: () => unawaited(_sendLink(button)),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text.rich(
+                TextSpan(
+                  children: [
+                    const TextSpan(text: 'or open '),
+                    TextSpan(
+                      text: kDesktopDownloadUrl.replaceFirst('https://', ''),
+                      style: tty.style(size: TtySize.meta),
+                    ),
+                    const TextSpan(text: ' on it'),
+                  ],
+                ),
+                textAlign: TextAlign.center,
+                style: faint,
+              ),
+              const SizedBox(height: 40),
+              Container(height: 1, color: tty.dim.withValues(alpha: 0.6)),
+              const SizedBox(height: 20),
+              // Nothing about signing in there: the desktop app asks for it itself, and opens Add
+              // Phone by itself once it is.
+              Center(
+                child: _TextLink(
+                  key: const ValueKey('get-it-pair'),
+                  lead: 'Installed? ',
+                  action: 'Pair computer ›',
+                  onTap: onPair,
+                ),
+              ),
+              if (onTrySample case final onTrySample?)
+                Center(
+                  child: _TextLink(
+                    key: const ValueKey('get-it-sample'),
+                    action: 'Try the sample while you wait',
+                    onTap: onTrySample,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A page's title and the sentence under it, centred.
+class _Hero extends StatelessWidget {
+  const _Hero({required this.title, required this.body});
+
+  final String title;
+  final String body;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    final style = tty.style(size: TtySize.row);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 24),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          title,
+          textAlign: TextAlign.center,
+          style: tty
+              .style(size: 24, weight: FontWeight.w600)
+              .copyWith(height: 1.25, letterSpacing: -0.4),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          body,
+          textAlign: TextAlign.center,
+          style: tty.style(color: tty.faint, size: 14).copyWith(height: 1.55),
+        ),
+      ],
+    );
+  }
+}
+
+/// `harness▌`: the app's name and the terminal's cursor, where a home screen has no back.
+class _Wordmark extends StatelessWidget {
+  const _Wordmark();
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TtyText('harness', size: TtySize.row, weight: FontWeight.w600),
+        Container(
+          width: 8,
+          height: 16,
+          margin: const EdgeInsets.only(left: 2),
+          color: tty.green,
+        ),
+      ],
+    );
+  }
+}
+
+/// One row of HOW IT WORKS: its number in a raised square, what to do, and a quieter line under it
+/// when one is needed — a rule between rows.
+class _HowItWorksRow extends StatelessWidget {
+  const _HowItWorksRow({
+    required this.number,
+    required this.title,
+    this.note,
+    this.last = false,
+  });
+
+  final int number;
+  final String title;
+  final String? note;
+  final bool last;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14),
+      decoration: BoxDecoration(
+        border: last
+            ? null
+            : Border(bottom: BorderSide(color: tty.dim.withValues(alpha: 0.6))),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // One digit in a monospace face: every number is the same width, so the steps' words
-          // line up without a column of fixed width that a larger text size would outgrow.
-          Text(
-            '$number',
-            style: style.copyWith(
-              color: tty.green,
-              fontWeight: FontWeight.w600,
+          Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: ttyRaised(tty),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              '$number',
+              style: tty.style(color: tty.faint, size: TtySize.meta),
             ),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(text, style: style),
-                if (note case final note?)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 3),
+                // Centred on the number's square while it is one line; wraps under itself after.
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 28),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
                     child: Text(
-                      note,
-                      style: tty.style(color: tty.faint, size: TtySize.meta),
+                      title,
+                      style: tty.style(
+                        size: TtySize.row,
+                        weight: FontWeight.w600,
+                      ),
                     ),
                   ),
-                if (child case final child?)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 12),
-                    child: child,
+                ),
+                if (note case final note?)
+                  Text(
+                    note,
+                    style: tty
+                        .style(color: tty.faint, size: TtySize.meta)
+                        .copyWith(height: 1.45),
                   ),
               ],
             ),
@@ -426,58 +472,57 @@ class _SetUpStep extends StatelessWidget {
   }
 }
 
-/// Step 1's door to the download menu: what it does, and for which computers — on the raised
-/// ground the menu's own rows stand on.
-class _SendButton extends StatelessWidget {
-  const _SendButton({required this.onTap});
+/// A small centred link: faint words, and the part that acts in the terminal's green — "No Harness
+/// yet? Get it ›", "Pair computer ›". With no [lead] at all the whole link is the
+/// faint words ("Try the sample while you wait").
+class _TextLink extends StatelessWidget {
+  const _TextLink({
+    super.key,
+    required this.action,
+    required this.onTap,
+    this.lead,
+  });
 
+  final String? lead;
+  final String action;
   final VoidCallback onTap;
-
-  /// `macOS · Linux · Command line`: the menu's computers, read off the menu itself.
-  static final _kinds = [
-    ...{for (final platform in kDesktopPlatforms) platform.label},
-    'Command line',
-  ].join(' · ');
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(12),
-      child: ColoredBox(
-        color: ttyRaised(tty),
-        child: TtyTap(
-          key: const ValueKey('set-up-send'),
-          onTap: onTap,
-          semanticsLabel: 'Send it to your computer: $_kinds',
+    final lead = this.lead;
+    return Semantics(
+      button: true,
+      label: '${lead ?? ''}$action',
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onTap();
+        },
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 14, 12),
-            child: Row(
-              children: [
-                Icon(LucideIcons.share300, size: 22, color: tty.faint),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Send it to your computer',
-                        style: tty.style(
-                          size: TtySize.row,
-                          weight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        _kinds,
-                        style: tty.style(color: tty.faint, size: TtySize.meta),
-                      ),
-                    ],
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  if (lead != null) TextSpan(text: lead),
+                  TextSpan(
+                    text: action,
+                    style: lead == null
+                        ? null
+                        : tty.style(
+                            color: tty.green,
+                            size: TtySize.meta,
+                            weight: FontWeight.w600,
+                          ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Icon(LucideIcons.chevronRight300, size: 18, color: tty.faint),
-              ],
+                ],
+              ),
+              textAlign: TextAlign.center,
+              style: tty.style(color: tty.faint, size: TtySize.meta),
             ),
           ),
         ),
@@ -486,193 +531,75 @@ class _SendButton extends StatelessWidget {
   }
 }
 
-/// The download menu, in its sheet: the website's (autonomous.ai/harness-app), row for row — with
-/// a word more on the two Macs. A row SENDS its file (AirDrop to the Mac beside you, or Messages or
-/// email to yourself) because a phone cannot install it; the command line is copied.
-class _DownloadMenu extends StatefulWidget {
-  const _DownloadMenu({required this.downloads});
-
-  /// The page's read of the manifest — see `_SetUpComputerPageState._downloads`.
-  final Future<Map<String, String>> downloads;
-
-  @override
-  State<_DownloadMenu> createState() => _DownloadMenuState();
-}
-
-class _DownloadMenuState extends State<_DownloadMenu> {
-  bool _copied = false;
-  Timer? _copiedTimer;
-
-  @override
-  void dispose() {
-    _copiedTimer?.cancel();
-    super.dispose();
-  }
-
-  /// The share sheet with [platform]'s file: AirDrop straight to the computer beside you, or
-  /// Messages or email to yourself. Anchored to the row for iPad, where the sheet is a popover.
-  Future<void> _send(BuildContext row, DesktopPlatform platform) async {
-    final box = row.findRenderObject() as RenderBox?;
-    final origin = box == null || !box.attached
-        ? null
-        : box.localToGlobal(Offset.zero) & box.size;
-    final url = (await widget.downloads)[platform.key] ?? kDesktopDownloadUrl;
-    try {
-      await SharePlus.instance.share(
-        ShareParams(
-          uri: Uri.parse(url),
-          subject: 'Harness for ${platform.label} (${platform.note})',
-          sharePositionOrigin: origin,
-        ),
-      );
-    } catch (_) {
-      // No share sheet came up: the menu stays as it was, and the row can be tapped again.
-    }
-  }
-
-  void _copy() {
-    unawaited(Clipboard.setData(const ClipboardData(text: kCliInstall)));
-    HapticFeedback.selectionClick();
-    _copiedTimer?.cancel();
-    setState(() => _copied = true);
-    _copiedTimer = Timer(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _copied = false);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tty = Tty.of(context);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // The sheet's title, as the app's other sheets set theirs; no Cancel — a tap outside it,
-        // or a drag down, puts it away.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(Tty.origin, 14, Tty.origin, 2),
-          child: Text(
-            'Send it to your computer',
-            style: tty.style(size: TtySize.title, weight: FontWeight.w600),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(Tty.origin, 0, Tty.origin, 12),
-          child: Text(
-            'AirDrop it to a Mac nearby, or send it to yourself.',
-            style: tty.style(color: tty.faint, size: TtySize.meta),
-          ),
-        ),
-        Flexible(
-          child: ListView(
-            key: const ValueKey('set-up-downloads'),
-            shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(Tty.origin, 0, Tty.origin, 12),
-            children: [
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: ttyRaised(tty),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Column(
-                    children: [
-                      for (final platform in kDesktopPlatforms)
-                        Builder(
-                          builder: (row) => _DownloadRow(
-                            icon: platform.icon,
-                            label: platform.label,
-                            note: platform.note,
-                            action: LucideIcons.share300,
-                            actionLabel: 'Send',
-                            onTap: () => unawaited(_send(row, platform)),
-                          ),
-                        ),
-                      _DownloadRow(
-                        icon: LucideIcons.squareTerminal300,
-                        // Not "CLI": the one row a newcomer would have to look up.
-                        label: 'Command line',
-                        note: _copied
-                            ? 'copied'
-                            : 'curl -fsSL …/install.sh | bash',
-                        noteColor: _copied ? tty.green : null,
-                        action: LucideIcons.copy300,
-                        actionLabel: 'Copy',
-                        onTap: _copy,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// One row of the menu: its icon, what it is and for which computer, and what a tap does.
-class _DownloadRow extends StatelessWidget {
-  const _DownloadRow({
+/// [TtyPrimaryButton]'s shape in the terminal's ink rather than its green: a page's one action when
+/// it is not the scan — Send to my computer.
+class _SolidButton extends StatefulWidget {
+  const _SolidButton({
+    super.key,
     required this.icon,
     required this.label,
-    required this.note,
-    required this.action,
-    required this.actionLabel,
-    required this.onTap,
-    this.noteColor,
+    required this.onPressed,
   });
 
   final IconData icon;
   final String label;
-  final String note;
-  final Color? noteColor;
-  final IconData action;
-  final String actionLabel;
-  final VoidCallback onTap;
+  final VoidCallback onPressed;
+
+  @override
+  State<_SolidButton> createState() => _SolidButtonState();
+}
+
+class _SolidButtonState extends State<_SolidButton> {
+  bool _down = false;
 
   @override
   Widget build(BuildContext context) {
     final tty = Tty.of(context);
+    final fill = _down
+        ? Color.alphaBlend(Colors.black.withValues(alpha: 0.14), tty.text)
+        : tty.text;
     return Semantics(
       button: true,
-      label: '$actionLabel $label, $note',
+      label: widget.label,
       excludeSemantics: true,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 14, 10),
+        onTapDown: (_) => setState(() => _down = true),
+        onTapCancel: () => setState(() => _down = false),
+        onTapUp: (_) => setState(() => _down = false),
+        onTap: () {
+          HapticFeedback.lightImpact();
+          widget.onPressed();
+        },
+        child: Container(
+          constraints: const BoxConstraints(minHeight: TtyPrimaryButton.height),
+          padding: const EdgeInsets.symmetric(
+            horizontal: Tty.origin,
+            vertical: 10,
+          ),
+          decoration: BoxDecoration(
+            color: fill,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          alignment: Alignment.center,
           child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(icon, size: 22, color: tty.faint),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: tty.style(
-                        size: TtySize.row,
-                        weight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      note,
-                      style: tty.style(
-                        color: noteColor ?? tty.faint,
-                        size: TtySize.meta,
-                      ),
-                    ),
-                  ],
+              Icon(widget.icon, size: 20, color: tty.ground),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  widget.label,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
+                  style: tty.style(
+                    color: tty.ground,
+                    weight: FontWeight.w600,
+                    size: TtySize.title,
+                  ),
                 ),
               ),
-              const SizedBox(width: 12),
-              Icon(action, size: 18, color: tty.faint),
             ],
           ),
         ),

@@ -30,9 +30,9 @@ dependencies:
   dio: ^5.11.0
   # The relay socket every machine is reached over (`ws/`).
   web_socket_channel: ^3.0.3
-  # "Continue with Google / Apple" opens the SSO page in the app — SFSafariViewController,
-  # a Custom Tab (`viewer/sign_in_browser.dart`) — and the terminal opens links a program
-  # printed (`terminal/terminal_link_opener.dart`).
+  # "Continue with Google / Apple" opens the SSO page in an Android Custom Tab
+  # (`viewer/sign_in_browser.dart`; iOS's is native, `SignInPageChannel`), and the terminal
+  # opens links a program printed (`terminal/terminal_link_opener.dart`).
   url_launcher: ^6.3.2
   # X25519/HKDF/ChaCha20-Poly1305 for the end-to-end encryption this app
   # terminates itself, being a viewer (`e2ee/`).

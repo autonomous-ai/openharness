@@ -133,9 +133,8 @@ void main() {
     expect(links.codes, isEmpty);
     expect(unlocked, isEmpty);
     // Says what to scan instead: the computer's own Add Phone code.
-    expect(find.textContaining('isn’t an Add Phone code'), findsOneWidget);
     expect(
-      find.textContaining('Open Add Phone… on studio and scan its code.'),
+      find.textContaining('That’s not the Add Phone code.'),
       findsOneWidget,
     );
   });

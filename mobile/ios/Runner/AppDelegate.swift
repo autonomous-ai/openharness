@@ -1,5 +1,5 @@
+import AuthenticationServices
 import Flutter
-import SafariServices
 import UIKit
 import UserNotifications
 
@@ -96,23 +96,32 @@ enum DeviceNameChannel {
   }
 }
 
-/// `harness/sign_in_page` — the SSO page, in an SFSafariViewController over the app (Dart:
-/// `lib/viewer/sign_in_browser.dart`). url_launcher's in-app page tells Dart nothing once its first
-/// load is over, so a page closed with Done left its sign-in waiting out five minutes behind
-/// "Waiting for Google…" and a Cancel. Here Done — or a swipe down — is said back: `closed`, with the
-/// id Dart opened the page with.
+/// `harness/sign_in_page` — the SSO page, in an ASWebAuthenticationSession over the app (Dart:
+/// `lib/viewer/sign_in_browser.dart`).
+///
+/// Not an SFSafariViewController, as it was: since iOS 11 that keeps cookies of its own, apart from
+/// Safari's, so the Google accounts the phone was signed in to were never there and every "Continue
+/// with Google" began on an empty sign-in form. This session shares Safari's — not ephemeral — at
+/// the price of iOS's "“Harness” Wants to Use … to Sign In" before the page.
+///
+/// The page's last screen goes on to [returnScheme] (Dart: `signInReturnUrl`), and the session takes
+/// the page down there by itself. Cancel — the alert's or the page's — is said back: `closed`, with
+/// the id Dart opened the page with.
 ///
 /// `open` answers once the page is on its way up; `close` takes it down and says nothing, since Dart
 /// asked.
-final class SignInPageChannel: NSObject, SFSafariViewControllerDelegate,
-  UIAdaptivePresentationControllerDelegate
-{
+final class SignInPageChannel: NSObject, ASWebAuthenticationPresentationContextProviding {
   private static var shared: SignInPageChannel?
+
+  /// Dart's `signInReturnUrl`: the loopback's last page goes there once the redirect is in.
+  private static let returnScheme = "ai.autonomous.harness.signin"
 
   private let registrar: FlutterPluginRegistrar
   private let channel: FlutterMethodChannel
-  /// The page up now, and the id Dart opened it with; nil once it is closed or taken down.
-  private var page: (controller: SFSafariViewController, id: Int)?
+  /// The page up now, the id Dart opened it with, and its own number here, which is what its session
+  /// ends with — Dart's ids start over on a hot restart. Nil once it is closed or taken down.
+  private var page: (session: ASWebAuthenticationSession, id: Int, serial: Int)?
+  private var serial = 0
 
   static func register(with registry: FlutterPluginRegistry) {
     guard let registrar = registry.registrar(forPlugin: "HarnessSignInPage") else { return }
@@ -142,7 +151,7 @@ final class SignInPageChannel: NSObject, SFSafariViewControllerDelegate,
       }
       open(url, id: id, result: result)
     case "close":
-      if let controller = take() { Self.takeDown(controller, animated: true) }
+      take()?.cancel()
       result(nil)
     default:
       result(FlutterMethodNotImplemented)
@@ -151,67 +160,51 @@ final class SignInPageChannel: NSObject, SFSafariViewControllerDelegate,
 
   private func open(_ url: URL, id: Int, result: @escaping FlutterResult) {
     // One page at a time: one an earlier sign-in left up goes first, without a word to Dart.
-    guard let old = take(), old.presentingViewController != nil else {
-      present(url, id: id, result: result)
-      return
-    }
-    Self.takeDown(old, animated: false) { self.present(url, id: id, result: result) }
-  }
-
-  private func present(_ url: URL, id: Int, result: @escaping FlutterResult) {
-    var presenter = registrar.viewController
-    while let presented = presenter?.presentedViewController, !presented.isBeingDismissed {
-      presenter = presented
-    }
-    guard let presenter else {
+    take()?.cancel()
+    guard window() != nil else {
       result(FlutterError(code: "no-ui", message: "Nothing on screen to open it over", details: nil))
       return
     }
-    let controller = SFSafariViewController(url: url)
-    controller.delegate = self
-    // Shown as a sheet, it can also be swiped away, which its own delegate does not hear.
-    controller.presentationController?.delegate = self
-    page = (controller, id)
-    presenter.present(controller, animated: true)
+    serial += 1
+    let serial = serial
+    let session = ASWebAuthenticationSession(
+      url: url, callbackURLScheme: Self.returnScheme
+    ) { [weak self] _, error in
+      DispatchQueue.main.async { self?.ended(serial, cancelled: error != nil) }
+    }
+    session.presentationContextProvider = self
+    // Safari's cookies, and with them the accounts the phone is already signed in to.
+    session.prefersEphemeralWebBrowserSession = false
+    page = (session, id, serial)
+    guard session.start() else {
+      page = nil
+      result(FlutterError(code: "no-ui", message: "The sign-in page would not open", details: nil))
+      return
+    }
     result(nil)
   }
 
   /// The page, no longer this channel's to watch.
-  private func take() -> SFSafariViewController? {
-    let controller = page?.controller
+  private func take() -> ASWebAuthenticationSession? {
+    let session = page?.session
     page = nil
-    return controller
+    return session
   }
 
-  /// Dismisses [controller] — once it is up, when it is still animating in: UIKit drops a dismiss
-  /// made during a presentation, and the page would stay up over a sign-in that had ended.
-  private static func takeDown(
-    _ controller: UIViewController, animated: Bool, then: (() -> Void)? = nil
-  ) {
-    if controller.isBeingPresented, let coordinator = controller.transitionCoordinator,
-      coordinator.animate(
-        alongsideTransition: nil,
-        completion: { _ in controller.dismiss(animated: animated, completion: then) })
-    {
-      return
-    }
-    controller.dismiss(animated: animated, completion: then)
-  }
-
-  /// The person closed [controller] — if it is still the page up, Dart is told.
-  private func closedByPerson(_ controller: UIViewController) {
-    guard let page, page.controller === controller else { return }
+  /// Session [serial] is over. Only a cancel by the person — or an error, which leaves no page either
+  /// — is Dart's to hear: at [returnScheme] the redirect is already in, and a `close` was Dart's own.
+  private func ended(_ serial: Int, cancelled: Bool) {
+    guard let page, page.serial == serial else { return }
     self.page = nil
-    channel.invokeMethod("closed", arguments: page.id)
+    if cancelled { channel.invokeMethod("closed", arguments: page.id) }
   }
 
-  // Done. The dismiss is url_launcher's own: harmless when the page has already gone by itself.
-  func safariViewControllerDidFinish(_ controller: SFSafariViewController) {
-    closedByPerson(controller)
-    controller.dismiss(animated: true)
+  /// The app's window, for the page to come up over.
+  private func window() -> UIWindow? {
+    registrar.viewController?.view.window
   }
 
-  func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-    closedByPerson(presentationController.presentedViewController)
+  func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+    window() ?? ASPresentationAnchor()
   }
 }

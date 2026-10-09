@@ -78,11 +78,7 @@ class _PairingWithCodeState extends State<PairingWithCode> {
     if (scanned == null) return;
     final pairCode = scanned.pairCode;
     if (scanned.machineId == null || pairCode == null) {
-      setState(
-        () => _error =
-            'That isn’t an Add Phone code. Open Add Phone… on $name and scan '
-            'its code.',
-      );
+      setState(() => _error = 'That’s not the Add Phone code.');
       return;
     }
     if (scanned.machineId != widget.machineId) {

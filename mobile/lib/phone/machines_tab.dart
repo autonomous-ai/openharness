@@ -211,8 +211,8 @@ class _Body extends StatelessWidget {
     );
   }
 
-  /// The set-up page over this list — downloads, steps, and a scan that pairs — for a computer not
-  /// on the account yet.
+  /// Connect your computer over this list — the download link, the steps, and a scan that pairs —
+  /// for a computer not on the account yet.
   void _setUpComputer(BuildContext context) => unawaited(
     Navigator.of(context).push(
       phoneRoute(

@@ -5,16 +5,16 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness_mobile/auth/auth_session.dart';
 import 'package:harness_mobile/core/config.dart';
+import 'package:harness_mobile/phone/tty_controls.dart';
 import 'package:harness_mobile/phone/welcome/connect_code.dart';
 import 'package:harness_mobile/phone/welcome/phone_welcome.dart';
 import 'package:harness_mobile/phone/welcome/scan_to_connect.dart';
 import 'package:harness_mobile/phone/welcome/set_up_computer.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
-import 'viewer/fake_http.dart';
-
-/// The first screen: what Harness is, one question, and its two answers — scan the code the
-/// desktop app shows, or get Harness onto the computer.
+/// The first screen: Connect your computer — one button, Pair computer, that scans the code the
+/// desktop app shows; Get it behind it for a computer with no Harness yet; and the other ways to sign
+/// in behind the camera's "Can’t scan?".
 void main() {
   group('ConnectCode', () {
     test('reads the desktop app\'s link, all of it in the fragment', () {
@@ -73,11 +73,20 @@ void main() {
   });
   tearDown(() => notifier.dispose());
 
-  Future<void> pump(WidgetTester tester, {Widget? camera}) async {
+  Future<void> pump(
+    WidgetTester tester, {
+    Widget? camera,
+    Future<Object?> Function(BuildContext context)? onTrySample,
+  }) async {
+    // A phone's height, so the whole page is on screen.
+    tester.view.devicePixelRatio = 1;
+    tester.view.physicalSize = const Size(430, 1400);
+    addTearDown(tester.view.reset);
     await tester.pumpWidget(
       MaterialApp(
         home: PhoneWelcome(
           notifier: notifier,
+          onTrySample: onTrySample,
           sendCode: (email) async => sent.add(email),
           signIn: (_, _) async {},
           signInWithScan: (code) async {
@@ -86,146 +95,107 @@ void main() {
             if (scanFails case final error?) throw error;
           },
           scanCamera: camera ?? const SizedBox(),
-          loadDownloads: () async => const {},
         ),
       ),
     );
     await tester.pump();
   }
 
-  testWidgets('one question, two answers, and nothing else', (tester) async {
-    await pump(tester);
-    expect(find.text('Is Harness on your computer?'), findsOneWidget);
-    expect(find.text('Yes — scan to connect'), findsOneWidget);
-    expect(find.text('Not yet — set it up'), findsOneWidget);
+  Future<void> pairComputer(WidgetTester tester) async {
+    await tester.tap(find.byKey(const ValueKey('set-up-scan')));
+    await tester.pump();
+    expect(find.byType(ScanToConnectPage), findsOneWidget);
+  }
+
+  ScanToConnectPage camera(WidgetTester tester) =>
+      tester.widget<ScanToConnectPage>(find.byType(ScanToConnectPage));
+
+  Future<void> openOtherWays(WidgetTester tester) async {
+    await tester.tap(find.text('Can’t scan? Sign in another way'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('welcome-other-ways-title')), findsOneWidget);
+  }
+
+  testWidgets('one button, how it works, Get it, and nothing else', (
+    tester,
+  ) async {
+    await pump(tester, onTrySample: (_) async => null);
+    expect(find.text('Connect your computer'), findsOneWidget);
+    expect(find.text('Pair computer'), findsOneWidget);
+    for (final line in [
+      'Open Add Phone on your computer',
+      kAddPhoneWhere,
+      'Scan its code',
+      'You’re connected',
+    ]) {
+      expect(find.text(line), findsOneWidget, reason: line);
+    }
+    expect(find.byKey(const ValueKey('set-up-get-it')), findsOneWidget);
+    // The accounts are behind the camera's "Can’t scan?", and the sample behind Get it.
+    expect(find.text('Continue with Google'), findsNothing);
     expect(find.text('Continue with email'), findsNothing);
-    expect(find.text('Try it first'), findsNothing);
+    expect(find.byKey(const ValueKey('get-it-sample')), findsNothing);
+    expect(find.text('Is Harness on your computer?'), findsNothing);
   });
 
   testWidgets(
-    'not yet: three steps, the website\'s download menu in step 1, each row sent to the computer',
+    'Get it: the download page, sent to the computer, then back to Pair computer',
     (tester) async {
-      // A phone's height, so the whole page is on screen.
-      tester.view.devicePixelRatio = 1;
-      tester.view.physicalSize = const Size(430, 1400);
-      addTearDown(tester.view.reset);
-      await pump(tester);
-      await tester.tap(find.text('Not yet — set it up'));
-      await tester.pump();
-      expect(find.byType(SetUpComputerPage), findsOneWidget);
-      for (final line in [
-        'Install Harness on your computer.',
-        'Open it, and sign in with Google or Apple.',
-        'Open Add Phone… and scan its code.',
-        'Scan to connect',
-      ]) {
-        expect(find.text(line), findsOneWidget, reason: line);
-      }
-      expect(
-        find.textContaining('harness.autonomous.ai/desktop'),
-        findsOneWidget,
-      );
-
-      // Step 1's button opens the menu, row for row.
-      expect(find.text('macOS · Linux · Command line'), findsOneWidget);
-      expect(find.text('curl -fsSL …/install.sh | bash'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('set-up-send')));
-      await tester.pumpAndSettle();
-      for (final row in [
-        'Apple Silicon · M1 or later',
-        'Intel · older Macs',
-        'Intel/AMD · Ubuntu, Omarchy and more',
-        'ARM · Raspberry Pi, ARM servers',
-        'curl -fsSL …/install.sh | bash',
-      ]) {
-        expect(find.text(row), findsOneWidget, reason: row);
-      }
-      expect(find.text('macOS'), findsNWidgets(2));
-      expect(find.text('Linux'), findsNWidgets(2));
-      expect(find.text('Command line'), findsOneWidget);
-
-      // The CLI row copies the website's command, and says so.
-      String? copied;
+      String? shared;
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
+        const MethodChannel('dev.fluttercommunity.plus/share'),
         (call) async {
-          if (call.method == 'Clipboard.setData') {
-            copied = (call.arguments as Map)['text'] as String?;
-          }
-          return null;
+          shared = (call.arguments as Map)['uri'] as String?;
+          return 'dev.fluttercommunity.plus/share/dismissed';
         },
       );
       addTearDown(
         () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-          SystemChannels.platform,
+          const MethodChannel('dev.fluttercommunity.plus/share'),
           null,
         ),
       );
-      await tester.tap(find.text('curl -fsSL …/install.sh | bash'));
+      await pump(tester);
+      await tester.tap(find.byKey(const ValueKey('set-up-get-it')));
       await tester.pump();
-      expect(copied, kCliInstall);
+      expect(find.byType(GetHarnessPage), findsOneWidget);
+      expect(find.text('Get Harness on your computer'), findsOneWidget);
+      expect(find.text('For Mac and Linux.'), findsOneWidget);
       expect(
-        kCliInstall,
-        'curl -fsSL https://harness.autonomous.ai/cli/install.sh | bash',
+        find.textContaining('harness.autonomous.ai/desktop'),
+        findsOneWidget,
       );
-      expect(find.text('copied'), findsOneWidget);
-      await tester.pump(const Duration(seconds: 2));
-      expect(find.text('copied'), findsNothing);
+      // No sample to offer, no link to it.
+      expect(find.byKey(const ValueKey('get-it-sample')), findsNothing);
 
-      // A tap above the sheet puts it away, onto the steps.
-      await tester.tapAt(const Offset(215, 40));
-      await tester.pumpAndSettle();
-      expect(find.text('curl -fsSL …/install.sh | bash'), findsNothing);
+      // The page goes, not a file: the computer's browser picks its own download.
+      await tester.tap(find.byKey(const ValueKey('get-it-send')));
+      await tester.pump();
+      await tester.pump();
+      expect(shared, kDesktopDownloadUrl);
+      expect(kDesktopDownloadUrl, 'https://harness.autonomous.ai/desktop');
 
-      // Back is the first screen.
+      // Installed: the camera, and back from it is Get it, and back from that the first screen.
+      await tester.tap(find.byKey(const ValueKey('get-it-pair')));
+      await tester.pump();
+      expect(find.byType(ScanToConnectPage), findsOneWidget);
       await tester.tap(find.bySemanticsLabel('Back'));
       await tester.pump();
-      expect(find.text('Is Harness on your computer?'), findsOneWidget);
+      expect(find.byType(GetHarnessPage), findsOneWidget);
+      await tester.tap(find.bySemanticsLabel('Back'));
+      await tester.pump();
+      expect(find.text('Connect your computer'), findsOneWidget);
     },
   );
-
-  test('each row\'s file comes from the desktop release manifest', () async {
-    final manifest = FakeHttp({
-      kDesktopManifestUrl: (
-        status: 200,
-        body: {
-          'desktop-macos-arm64-dmg': {
-            'version': '1.2.6',
-            'url': 'https://cdn.autonomous.ai/harness/desktop/1.2.6/Harness-macos-arm64.dmg',
-          },
-          'desktop-linux-x64': {
-            'url': 'https://cdn.example/Harness-linux-x64.AppImage',
-          },
-          'broken': 'not an entry',
-        },
-      ),
-    });
-    final downloads = await loadDesktopDownloads(dio: manifest.dio());
-    expect(downloads, {
-      'desktop-macos-arm64-dmg': 'https://cdn.autonomous.ai/harness/desktop/1.2.6/Harness-macos-arm64.dmg',
-      'desktop-linux-x64': 'https://cdn.example/Harness-linux-x64.AppImage',
-    });
-    // Every row names a key the manifest publishes.
-    expect(kDesktopPlatforms.map((p) => p.key), [
-      'desktop-macos-arm64-dmg',
-      'desktop-macos-dmg',
-      'desktop-linux-x64',
-      'desktop-linux-arm64',
-    ]);
-    // Offline: no files, and every row falls back to the download page.
-    expect(await loadDesktopDownloads(dio: FakeHttp({}).dio()), isEmpty);
-  });
 
   testWidgets('a scanned code fills in the account and sends its code', (
     tester,
   ) async {
     await pump(tester);
-    await tester.tap(find.text('Yes — scan to connect'));
-    await tester.pump();
-    final page = tester.widget<ScanToConnectPage>(
-      find.byType(ScanToConnectPage),
-    );
-    page.onCode(ConnectCode.parse(ConnectCode.link('ada@example.com'))!);
+    await pairComputer(tester);
+    camera(
+      tester,
+    ).onCode(ConnectCode.parse(ConnectCode.link('ada@example.com'))!);
     await tester.pump();
     await tester.pump();
     expect(sent, ['ada@example.com']);
@@ -238,12 +208,8 @@ void main() {
     (tester) async {
       scanGate = Completer<void>();
       await pump(tester);
-      await tester.tap(find.text('Yes — scan to connect'));
-      await tester.pump();
-      final page = tester.widget<ScanToConnectPage>(
-        find.byType(ScanToConnectPage),
-      );
-      page.onCode(
+      await pairComputer(tester);
+      camera(tester).onCode(
         ConnectCode.parse(
           ConnectCode.link(
             'ada@example.com',
@@ -255,6 +221,18 @@ void main() {
       );
       await tester.pump();
       expect(find.text('Signing in…'), findsOneWidget);
+      // Not while the scan signs in: the other way would start a second.
+      expect(
+        tester
+            .widget<TtyTextButton>(
+              find.widgetWithText(
+                TtyTextButton,
+                'Can’t scan? Sign in another way',
+              ),
+            )
+            .onPressed,
+        isNull,
+      );
       scanGate!.complete();
       await tester.pump();
       expect(scanned, ['hnh_one']);
@@ -269,15 +247,12 @@ void main() {
   ) async {
     scanFails = Exception('That code has expired. Scan the new one.');
     await pump(tester);
-    await tester.tap(find.text('Yes — scan to connect'));
-    await tester.pump();
-    tester
-        .widget<ScanToConnectPage>(find.byType(ScanToConnectPage))
-        .onCode(
-          ConnectCode.parse(
-            ConnectCode.link('ada@example.com', signIn: 'hnh_old'),
-          )!,
-        );
+    await pairComputer(tester);
+    camera(tester).onCode(
+      ConnectCode.parse(
+        ConnectCode.link('ada@example.com', signIn: 'hnh_old'),
+      )!,
+    );
     await tester.pump();
     await tester.pump();
     await tester.pump();
@@ -286,12 +261,89 @@ void main() {
     expect(find.text('Check your email'), findsOneWidget);
   });
 
-  testWidgets('no code at hand: email instead', (tester) async {
+  testWidgets('can’t scan: the other ways, in a sheet over the camera', (
+    tester,
+  ) async {
     await pump(tester);
-    await tester.tap(find.text('Yes — scan to connect'));
-    await tester.pump();
-    await tester.tap(find.text('Use email instead'));
-    await tester.pump();
+    await pairComputer(tester);
+    await openOtherWays(tester);
+    expect(find.text('Continue with Google'), findsOneWidget);
+    expect(find.text('Continue with Apple'), findsOneWidget);
+    await tester.tap(find.text('Continue with email'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('welcome-other-ways-title')), findsNothing);
     expect(find.text('Your email'), findsOneWidget);
+    // Back from the email is the camera it was chosen over.
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byType(ScanToConnectPage), findsOneWidget);
+  });
+
+  testWidgets('a code read under the sheet takes it down and signs in', (
+    tester,
+  ) async {
+    await pump(tester);
+    await pairComputer(tester);
+    await openOtherWays(tester);
+    // The camera runs on under the sheet.
+    camera(tester).onCode(
+      ConnectCode.parse(
+        ConnectCode.link(
+          'ada@example.com',
+          machineId: 'mac',
+          pairCode: 'K7QM4XPT9D2W',
+          signIn: 'hnh_one',
+        ),
+      )!,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('welcome-other-ways-title')), findsNothing);
+    expect(scanned, ['hnh_one']);
+    expect(sent, isEmpty);
+    expect(notifier.pendingPairing, (machineId: 'mac', code: 'K7QM4XPT9D2W'));
+  });
+
+  testWidgets(
+    'a computer\'s own sign-in QR read under the sheet: the sheet goes, then sign in first',
+    (tester) async {
+      await pump(tester);
+      await pairComputer(tester);
+      await openOtherWays(tester);
+      final code = 'hnq_${'a' * 43}';
+      camera(tester).onSignInCode!(SignInCode(code));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('welcome-other-ways-title')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('welcome-sign-in-first')),
+        findsOneWidget,
+      );
+      expect(notifier.pendingComputerSignIn, code);
+      // Back is the camera, and the computer's code is let go there.
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byType(ScanToConnectPage), findsOneWidget);
+      expect(notifier.pendingComputerSignIn, isNull);
+    },
+  );
+
+  testWidgets('the sample, from Get it, comes back to Get it', (tester) async {
+    var samples = 0;
+    await pump(
+      tester,
+      onTrySample: (_) async {
+        samples++;
+        return 'set-up';
+      },
+    );
+    await tester.tap(find.byKey(const ValueKey('set-up-get-it')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('get-it-sample')));
+    await tester.pump();
+    await tester.pump();
+    expect(samples, 1);
+    expect(find.byType(GetHarnessPage), findsOneWidget);
   });
 }

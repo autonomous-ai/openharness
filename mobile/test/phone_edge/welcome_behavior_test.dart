@@ -89,9 +89,6 @@ void main() {
               if (scanFails) throw StateError('expired');
             },
             scanCamera: const SizedBox(),
-            loadDownloads: () async => const {
-              'desktop-macos-arm64-dmg': 'https://example.com/harness.dmg',
-            },
           ),
         ),
       );
@@ -99,13 +96,20 @@ void main() {
       return (app: app, sent: sent, scans: scans);
     }
 
+    /// Pair computer, then the camera's "Can’t scan?" sheet, then its email.
+    Future<void> toEmail(WidgetTester tester) async {
+      await tester.tap(find.byKey(const ValueKey('set-up-scan')));
+      await frames(tester);
+      await tester.tap(find.text('Can’t scan? Sign in another way'));
+      await frames(tester);
+      await tester.tap(find.text('Continue with email'));
+      await frames(tester);
+    }
+
     testWidgets('a wrong email, then a short code, then a wrong one, then the '
         'right one', (tester) async {
       final (:app, :sent, scans: _) = await welcome(tester);
-      await tester.tap(find.text('Yes — scan to connect'));
-      await frames(tester);
-      await tester.tap(find.text('Use email instead'));
-      await frames(tester);
+      await toEmail(tester);
 
       await tester.enterText(find.byType(TextField), 'not-an-email');
       await tester.tap(find.text('Send code'));
@@ -139,13 +143,17 @@ void main() {
       await frames(tester);
       expect(sent, hasLength(2));
 
-      // Change email, then Back all the way out.
+      // Change email, then Back all the way out: the camera the email was chosen over, then the
+      // first screen.
       await tester.tap(find.text('Change email'));
       await frames(tester);
       expect(find.text('Your email'), findsOneWidget);
       await tester.binding.handlePopRoute();
       await frames(tester);
-      expect(find.text('Yes — scan to connect'), findsOneWidget);
+      expect(find.text('Scan the code on your computer'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await frames(tester);
+      expect(find.text('Connect your computer'), findsOneWidget);
       await close(tester, app);
     });
 
@@ -153,10 +161,7 @@ void main() {
       tester,
     ) async {
       final (:app, sent: _, scans: _) = await welcome(tester);
-      await tester.tap(find.text('Yes — scan to connect'));
-      await frames(tester);
-      await tester.tap(find.text('Use email instead'));
-      await frames(tester);
+      await toEmail(tester);
       await tester.enterText(find.byType(TextField), 'ada@example.com');
       await tester.testTextInput.receiveAction(TextInputAction.go);
       await frames(tester);
@@ -166,32 +171,34 @@ void main() {
       await close(tester, app);
     });
 
-    testWidgets('set up first, then scan from there, then back', (
+    testWidgets('Get it first, then Pair computer from there, then back', (
       tester,
     ) async {
       final (:app, sent: _, scans: _) = await welcome(tester);
-      await tester.tap(find.text('Not yet — set it up'));
+      await tapInView(tester, find.byKey(const ValueKey('set-up-get-it')));
       await frames(tester);
-      await tapInView(tester, find.text('Scan to connect'));
+      await tapInView(tester, find.byKey(const ValueKey('get-it-pair')));
       await frames(tester);
       expect(find.text('Scan the code on your computer'), findsOneWidget);
-      // Back from the camera is the steps it was opened from, and back from those the question.
+      // Back from the camera is Get it, where it was opened, and back from that the first screen.
       await tester.tap(find.bySemanticsLabel(RegExp('Back')).first);
       await frames(tester);
-      expect(find.text('Get Harness for\nyour computer'), findsOneWidget);
+      expect(find.text('Get Harness on your computer'), findsOneWidget);
       await tester.tap(find.bySemanticsLabel(RegExp('Back')).first);
       await frames(tester);
-      expect(find.text('Yes — scan to connect'), findsOneWidget);
+      expect(find.text('Connect your computer'), findsOneWidget);
       await close(tester, app);
     });
 
-    testWidgets('the visible sample action leads back to setup', (
-      tester,
-    ) async {
+    testWidgets('the sample, on Get it, leads back to Get it', (tester) async {
       final (:app, sent: _, scans: _) = await welcome(tester, sample: 'set-up');
-      await tester.tap(find.text('Try the sample'));
+      // Not on the first screen: it is for somebody waiting on the computer to install.
+      expect(find.text('Try the sample while you wait'), findsNothing);
+      await tapInView(tester, find.byKey(const ValueKey('set-up-get-it')));
       await frames(tester);
-      expect(find.text('Get Harness for\nyour computer'), findsOneWidget);
+      await tapInView(tester, find.text('Try the sample while you wait'));
+      await frames(tester);
+      expect(find.text('Get Harness on your computer'), findsOneWidget);
       await close(tester, app);
     });
   });
@@ -257,12 +264,11 @@ void main() {
                 if (fails) throw StateError('expired');
               },
               scanCamera: const SizedBox(),
-              loadDownloads: () async => const {},
             ),
           ),
         );
         await frames(tester);
-        await tester.tap(find.text('Yes — scan to connect'));
+        await tester.tap(find.byKey(const ValueKey('set-up-scan')));
         await frames(tester);
         tester
             .widget<ScanToConnectPage>(find.byType(ScanToConnectPage))
@@ -285,10 +291,10 @@ void main() {
     });
   });
 
-  // The old page (email the steps, a Terminal/Mac tab, four commands) is the set-up page now,
-  // plus a sample to try while waiting — see connect_computer_test.dart for the signed-in half.
+  // The old page (email the steps, a Terminal/Mac tab, four commands) is Connect your computer
+  // now, with the sample on Get it — see connect_computer_test.dart for the signed-in half.
   testWidgets(
-    'set up your computer: the download menu, and the sample while you wait',
+    'set up your computer: Get it, and the sample while you wait',
     (tester) async {
       setPhone(tester, largePhone);
       final app = edgeApp(noMachines: true);
@@ -299,47 +305,38 @@ void main() {
             notifier: app,
             signedIn: false,
             onTrySample: (_) async => samples++,
-            loadDownloads: () async => const {},
           ),
         ),
       );
       await frames(tester);
-      expect(find.text('Send it to your computer'), findsOneWidget);
+      expect(find.text('Connect your computer'), findsOneWidget);
+      // Not watching: nothing says it is waiting for the computer.
+      expect(find.text('Waiting for your computer…'), findsNothing);
       expect(find.text('Email me the setup link'), findsNothing);
-      await tapInView(tester, find.text('Try the sample ›'));
+      await tapInView(tester, find.byKey(const ValueKey('set-up-get-it')));
+      await frames(tester);
+      await tapInView(tester, find.text('Try the sample while you wait'));
       await frames(tester);
       expect(samples, 1);
       await close(tester, app);
     },
   );
 
-  testWidgets('the set-up page: send the app, copy the CLI, see how it works', (
+  testWidgets('Get it: the download page goes to the share sheet', (
     tester,
   ) async {
     setPhone(tester, largePhone);
     await tester.pumpWidget(
       phoneApp(
         Scaffold(
-          body: SetUpComputerPage(
-            onScan: () {},
-            onBack: () {},
-            loadDownloads: () async => const {},
-          ),
+          body: GetHarnessPage(onBack: () {}, onPair: () {}),
         ),
       ),
     );
     await frames(tester);
-    // The download menu is step 1's sheet.
-    await tester.tap(find.byKey(const ValueKey('set-up-send')));
+    await tester.tap(find.byKey(const ValueKey('get-it-send')));
     await frames(tester);
-    await tester.tap(find.text('Apple Silicon · M1 or later'));
-    await frames(tester);
-    expect(platformCalls.where((call) => call.contains('share')), isNotEmpty);
-    await tester.tap(find.text('Command line'));
-    await tester.pump();
-    expect(find.text('copied'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 3));
-    expect(find.text('copied'), findsNothing);
+    expect(platformCalls.where((call) => call.contains('share')), hasLength(1));
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 3));
   });
