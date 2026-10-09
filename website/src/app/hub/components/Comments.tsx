@@ -1,5 +1,6 @@
 'use client';
 import { useRef, useState } from 'react';
+import { commentTotal, threadComments } from '@/lib/community/comments';
 import type { HarnessComment, SocialState } from '@/lib/community/types';
 import { SignIn } from './Header';
 import styles from '../community.module.css';
@@ -23,7 +24,7 @@ function Comment({ comment, busy, canReply, onReply, onRemove }: { comment: Harn
   </article>;
 }
 
-/** The conversation under a harness: the comments, and a form to add one or reply to one. */
+/** The conversation under a harness: the comments, each reply under its thread, and a form to add one or reply to one. */
 export function Comments({ social, ready, busy, onRetry, onRemove, onPost }: Props) {
   const [draft, setDraft] = useState(''), [replyTo, setReplyTo] = useState<HarnessComment | null>(null);
   // Kept across a failed post, so a retry of the same text is recognised as the same comment.
@@ -38,7 +39,8 @@ export function Comments({ social, ready, busy, onRetry, onRemove, onPost }: Pro
   return <>
     {!ready && <p className={styles.notice}>Comments are unavailable right now. <button onClick={onRetry}>Retry</button></p>}
     {ready && !social.comments.length && <p className={styles.notice}>What would you make from here?</p>}
-    {social.comments.map(comment => <Comment key={comment.id} comment={comment} busy={busy} canReply={social.signedIn} onReply={() => reply(comment)} onRemove={() => onRemove(comment)} />)}
+    {ready && commentTotal(social) > social.comments.length && <p className={styles.notice}>Showing the latest {social.comments.length} of {commentTotal(social)} comments.</p>}
+    {threadComments(social.comments).map(comment => <Comment key={comment.id} comment={comment} busy={busy} canReply={social.signedIn} onReply={() => reply(comment)} onRemove={() => onRemove(comment)} />)}
     {social.signedIn ? <form className={styles.commentForm} onSubmit={event => { event.preventDefault(); void submit(); }}>
       <label htmlFor="comment">{replyTo ? `Reply to ${replyTo.authorName}` : 'Join the conversation'}</label>
       {replyTo && <button type="button" className={styles.replyButton} onClick={() => reply(null)}>Cancel reply</button>}

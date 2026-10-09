@@ -1,4 +1,4 @@
-import { searchFromParams } from '@/lib/community/search';
+import { feedViewFromParams, type FeedViewParams } from '@/lib/community/feed';
 import Feed from '../components/Feed';
-type Props = { searchParams: Promise<{ q?: string | string[] }> };
-export default async function YoursPage({ searchParams }: Props) { return <Feed mine initialQuery={await searchFromParams(searchParams)} />; }
+type Props = { searchParams: Promise<FeedViewParams> };
+export default async function YoursPage({ searchParams }: Props) { return <Feed mine initialView={await feedViewFromParams(searchParams)} />; }
