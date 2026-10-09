@@ -25,7 +25,8 @@ import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
 import { HERMES_HOMES, hermesDbPath } from '../engines/hermes/contract.js'
 import { listStoreHomes } from '../engines/kit/storeHomes.js'
-import { loadEngine, type InProcessModules } from '../engines/inProcess.js'
+import { museSessionIdentity, piSessionFolder, readPiHead } from '../engines/repairIdentities.js'
+import { PI_SESSION_ID } from '../engines/pi/contract.js'
 import { transcriptOf, processSessionOf as nativeProcessSession } from '../engines/identities.js'
 import { COPILOT_CWD } from '../engines/copilot/contract.js'
 import { recordCwd } from '../engines/kit/sessionLocation.js'
@@ -183,23 +184,6 @@ export async function sameDir(a: string, b: string): Promise<boolean> {
  */
 interface TranscriptMeta { cwd: string | null; sessionId?: string }
 
-const str = (v: unknown): string => (typeof v === 'string' ? v : '')
-
-/**
- * True once a muse session has opened a RUN — the lifecycle a conversation is made of.
- *
- * Not "has a prompt": a scheduled run is a real turn whose prompt is empty, because the scheduler
- * triggered it rather than a person. `payload.kind` is what separates the two lifecycles that share the
- * name `started`; a `task` one is scheduler bookkeeping and several fire inside a single run.
- */
-function hasRun(lines: string[], museEvent: InProcessModules['muse']['museEvent']): boolean {
-  for (const line of lines) {
-    const record = museEvent(line)
-    if (record?.scope === 'run' && str(record.event.kind) === 'started') return true
-  }
-  return false
-}
-
 async function fileEngineSession(
   root: string | string[],
   cwd: string,
@@ -330,34 +314,27 @@ export async function findLiveSession(
   const real = await realpath(cwd).catch(() => cwd)
   const dirs = real === cwd ? [cwd] : [cwd, real]
   const dirList = placeholders(dirs.length)
-  // Muse's transcript interpretation still lives with its optional reader
-  // (engines/inProcess.ts); Hermes's homes are declared (engines/hermes/contract.ts). An engine whose code could not be loaded has no repair answer: its process stays
-  // unbound, as when nothing is found.
+  // Native identity is eager. Optional interpretation cannot keep a process unbound.
   switch (engine) {
     case 'pi':
       return fileEngineSession(join(env.PI_HOME, 'agent', 'sessions'), cwd, startedAtMs, readTranscriptMeta, opts)
     case 'commandcode':
       return fileEngineSession(join(env.COMMANDCODE_HOME, 'projects'), cwd, startedAtMs, readTranscriptMeta, opts)
     case 'muse': {
-      const muse = await loadEngine('muse')
-      if (!muse) return null
       // Muse's hooks never fire, so this scan is the ONLY way a muse pane is ever bound. The tree is
       // `sessions/YYYY/MM/DD/<session-uuid>/session.jsonl` (4 levels — exactly MAX_DEPTH) and nothing in
       // the path names the project: `workspace_root` in the first record is the only link. Sub-agent
       // files live one level deeper under `subagent/`, and must never be adopted as agents of their own.
       return fileEngineSession(join(env.MUSE_HOME, 'sessions'), cwd, startedAtMs, async (path) => {
         if (path.includes(`${sep}subagent${sep}`)) return null
-        const lines = (await readFile(path, 'utf-8').catch(() => '')).split('\n')
-        const root = muse.museWorkspaceRoot(lines[0] ?? '')
-        if (!root) return null
         // Muse opens sessions of its OWN under the same workspace_root — memory reminders
         // (`memory_reminder_child_session_linked`) are the ones seen live. They are indistinguishable from
         // the user's session by path, workspace or birth time, and being younger they WIN the `born` tier:
         // measured, the daemon tailed an 11-line reminder session while the real conversation ran on in
         // another file, so web and device received nothing at all. What separates them is that a session
         // being conversed in has opened a RUN.
-        if (!hasRun(lines, muse.museEvent)) return null
-        return { cwd: root, sessionId: basename(dirname(path)) }
+        const identity = await museSessionIdentity(path, root => sameDir(root, cwd))
+        return identity ? { ...identity, sessionId: basename(dirname(path)) } : null
       }, opts)
     }
     case 'amp':
@@ -486,12 +463,8 @@ export async function findResumedTranscript(
   if (engine === 'pi') {
     // Pi allocates an ID before its first reply creates the file. Look up that
     // exact ID again at Close, including after exit, without guessing by mtime.
-    if (!opts?.cwd || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9]$/.test(sessionId)
-      || sessionId.endsWith('.jsonl')) throw new Error('The Pi conversation location is unavailable.')
-    // Pi's own code names its folders and reads its files (engines/inProcess.ts): without it, the location is not known.
-    const pi = await loadEngine('pi')
-    if (!pi) throw new Error('The Pi conversation location is unavailable.')
-    const { piSessionFolder, readPiHead } = pi
+    if (!opts?.cwd || !PI_SESSION_ID.test(sessionId)) throw new Error('The Pi conversation location is unavailable.')
+    // The folder and header are native identity, available even when Pi's history reader cannot load.
     const directory = join(env.PI_HOME, 'agent', 'sessions', piSessionFolder(opts.cwd))
     let files: string[]
     try { files = await readdir(directory) } catch (error) {

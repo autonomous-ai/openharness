@@ -319,6 +319,11 @@ export function createBinding({
         bornOnly: true,
         pid: observed.processIdentity.pid,
         codexHome: agent.codexHome ?? undefined,
+      }).catch(error => {
+        // A native store can be unreadable or exceed a safe identity bound. That holds this
+        // process alone; rejecting onObserved would abort the serial discovery/readiness pass.
+        console.log(`[discovery] ${sid(agent.agentId)} binding held · ${error instanceof Error ? error.message : error}`)
+        return null
       })
       if (!found || registry.has(found.sessionId) || isRecentlyDeleted(found.sessionId)) return
       sessionId = found.sessionId

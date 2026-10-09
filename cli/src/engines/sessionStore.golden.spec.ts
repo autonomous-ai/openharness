@@ -14,8 +14,8 @@
  *  - what Stop captures before a pause, and which finder the handoff asks for each engine.
  *
  * Each case runs with `process.platform` pinned to darwin and to linux, and linux's are stored where they
- * differ. File birth times are a property of the filesystem, so only sessions born after their process are
- * recorded; the `wrote` tier is the unit specs'.
+ * differ. Fixture birth/mtime and the clock are fixed: running both platform passes under load must not
+ * age a "new" transcript beyond the process-start slack. The `wrote` tier is the unit specs'.
  *
  * `RECORD_SESSION_STORE_GOLDEN=1` writes the fixture. Record it again only for a change meant to alter what
  * core finds, and say so in that change.
@@ -26,6 +26,17 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
+
+const fixtureClock = vi.hoisted(() => ({ root: '', now: Date.parse('2026-10-09T00:00:00Z') }))
+vi.mock('fs/promises', async original => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, stat: async (path: string, ...args: unknown[]) => {
+    const result = await Reflect.apply(fs.stat, fs, [path, ...args])
+    return String(path).startsWith(fixtureClock.root + '/')
+      ? new Proxy(result, { get: (value, key) => key === 'birthtimeMs' || key === 'mtimeMs' ? fixtureClock.now : Reflect.get(value, key) })
+      : result
+  } }
+})
 
 // The record holds a UTC record read against a process started in local time, so the answer depends on the zone.
 // It was recorded in America/New_York; pinned here, it is the same on every host (Linux CI runs in UTC, run 37828754630).
@@ -75,6 +86,8 @@ let paths: Record<string, string> = {}
 
 beforeAll(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'session-store-golden-')))
+  fixtureClock.root = root
+  vi.useFakeTimers({ toFake: ['Date'], now: fixtureClock.now })
   for (const name of VARS) saved[name] = process.env[name]
   process.env.ADAPTER_DATA_DIR = join(root, 'data')
   process.env.CLAUDE_PROJECTS_DIR = join(root, 'claude', 'projects')
@@ -127,6 +140,7 @@ beforeAll(async () => {
 })
 
 afterAll(() => {
+  vi.useRealTimers()
   for (const name of VARS) {
     if (saved[name] === undefined) delete process.env[name]
     else process.env[name] = saved[name]
