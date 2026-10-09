@@ -22,8 +22,8 @@ harness connections call github GET https://api.github.com/user
 
 The list is the Grid app's: the connector gateway's `GET /v1/grid/connectors`.
 Signed in (`harness login`), the page follows that live list; signed out or
-offline it shows the bundled snapshot, `catalog.json`, limited to the services
-this computer signs in to by itself. `os/tools/update-connector-catalog.py`
+offline it shows the bundled snapshot, `catalog.json`; signed out, the services
+that need the gateway wait for `harness login`. `os/tools/update-connector-catalog.py`
 rebuilds the snapshot and its icons from the gateway. Codes are Grid's; a
 connection saved under an earlier code (`apollo`, `supermetrics_marketing`) is
 read under Grid's (`apollo_io`, `supermetrics`).
@@ -52,8 +52,8 @@ out, the page says so instead of offering Connect. A service the gateway does
 not offer to this account shows "Not available yet".
 
 GitHub, Slack, Asana, HubSpot, Gmail, Google Calendar, Google Drive, Figma
-(`figma-api-app`). Signed out, these are not listed; the page says
-`harness login` shows them.
+(`figma-api-app`). Signed out, they are listed with their Connect button
+disabled and "Needs harness login".
 
 **Add custom** takes any remote MCP server URL: one that asks for sign-in uses the
 `dcr` path, one with static headers (a personal token) is saved as given.

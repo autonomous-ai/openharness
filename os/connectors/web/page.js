@@ -51,6 +51,12 @@ function card(item) {
   } else if (item.state !== "not_connected") {
     if (item.state === "reconnect" && !item.custom) actions.append(button("Reconnect", () => connect(item)));
     actions.append(button("×", () => confirmDisconnect(item), "icon", "Disconnect " + item.name));
+  } else if (item.reason) {
+    // Signs in through the Harness account: shown, but not yet connectable.
+    actions.append(node("span", item.reason, "hint"));
+    const add = button("+", () => {}, "icon plus", item.reason);
+    add.disabled = true;
+    actions.append(add);
   } else {
     actions.append(button("+", () => connect(item), "icon plus", "Connect " + item.name));
   }

@@ -54,12 +54,12 @@ def custom_code(name, taken):
 def services(offered=None):
     """{code: item} the page offers. Signed in, the gateway's live list (the Grid
     app's); otherwise the bundled snapshot. A service either list says can sign in
-    from this computer does so; one that needs the gateway is shown only when the
-    gateway offers it, or when it cannot be asked (offline)."""
-    signed_in = gateway.session() is not None
+    from this computer does so. One that needs the gateway is left out only when
+    the gateway, asked, does not offer it; signed out it is shown, waiting for
+    harness login."""
     items = {}
     for code, item in store.CATALOG.items():
-        if item["auth"] == "dcr" or (signed_in and not offered):
+        if item["auth"] == "dcr" or not offered:
             items[code] = dict(item)
     for code, row in (offered or {}).items():
         auth, url = row.get("auth_type"), row.get("mcp_url") or ""
@@ -146,11 +146,13 @@ def catalog(vault, offered=None):
     """The page's cards: every service, connected first, then custom servers."""
     tokens = vault.tokens()
     known = services(offered)
+    signed_in = gateway.session() is not None
     items = []
     for code, item in known.items():
         card = vault.status(code, tokens.get(code) or {})
         card.update(name=item["label"], description=item["description"], auth=item["auth"], custom=False,
-                    icon="/icons/" + ICONS[code] if code in ICONS else "")
+                    icon="/icons/" + ICONS[code] if code in ICONS else "",
+                    reason="" if item["auth"] == "dcr" or signed_in else "Needs harness login")
         items.append(card)
     for code, token in tokens.items():
         if code in known:
@@ -162,7 +164,7 @@ def catalog(vault, offered=None):
                     auth="custom" if custom else token.get("source", "dcr"), custom=custom,
                     icon="/icons/" + ICONS[code] if code in ICONS else "")
         items.append(card)
-    return {"connections": items, "signed_in": gateway.session() is not None}
+    return {"connections": items, "signed_in": signed_in}
 
 
 class PageServer(ThreadingHTTPServer):

@@ -9,6 +9,7 @@ h1{font-size:26px;font-weight:700;margin:0 0 4px}.intro{margin:0;color:#a3a3a3}
 button,input,textarea{font:inherit}
 button{min-height:36px;border-radius:8px;border:1px solid #333;background:#1f1f1f;color:inherit;padding:6px 14px;cursor:pointer;white-space:nowrap}
 button:hover{border-color:#5b6bff}button:disabled{opacity:.5;cursor:wait}
+.plus:disabled{opacity:.35;cursor:not-allowed;border-color:#1d2450}
 button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible{outline:2px solid #6b7bff;outline-offset:2px}
 .primary{background:#2f45d8;border-color:#3d55ff;color:#fff;font-weight:600}.primary:hover{background:#3a51ea}
 .danger{background:#5c1f1f;border-color:#8a2c2c;color:#fff}

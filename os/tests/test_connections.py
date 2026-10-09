@@ -379,17 +379,16 @@ class ConnectorGateway(Case):
         self.assertIsNone(self.vault.token("github"))
         self.assertEqual(server.calls[-1], ("connectors/disconnect", {"connector": "github"}))
 
-    def test_signed_out_the_page_offers_only_what_this_computer_signs_in_to(self):
+    def test_signed_out_the_gateway_services_wait_for_harness_login(self):
         self.gateway(signed_in=False)
         page = connections.catalog(self.vault)
         cards = {c["connector"]: c for c in page["connections"]}
         self.assertFalse(page["signed_in"])
-        self.assertNotIn("github", cards)
-        self.assertNotIn("slack", cards)
-        self.assertEqual(cards["linear"]["auth"], "dcr")
-        self.assertEqual({c["auth"] for c in page["connections"]}, {"dcr"})
+        for code in ("github", "gmail", "google_calendar", "google_drive"):
+            self.assertEqual(cards[code]["reason"], "Needs harness login", code)
+        self.assertEqual((cards["linear"]["auth"], cards["linear"]["reason"]), ("dcr", ""))
         with self.assertRaisesRegex(store.StoreError, "harness login"):
-            connections.sign_in_for(self.vault, "slack")
+            connections.sign_in_for(self.vault, "slack").prepare()
 
     def test_signed_in_the_page_follows_the_gateway_and_still_prefers_this_computer(self):
         self.gateway()
