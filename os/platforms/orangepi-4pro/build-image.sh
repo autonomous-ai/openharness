@@ -21,10 +21,10 @@ attach_image "$OUT"
 [[ -f $MNT/etc/harness-base.json && -x $MNT$PREFIX/bin/labwc ]] || { echo "$BASE is not a build-base.sh image." >&2; exit 1; }
 
 HARNESS_WL_PREFIX=$PREFIX "$HERE/install-session.sh" "$MNT" "$RUNTIME" "$ACCOUNT"
-# OpenCode, the version the ARM package pins. Claude Code too, by hn's own install recipe
+# install-session.sh bundles OpenCode in /usr. Claude Code is preinstalled by hn's own recipe
 # (cli/src/lib/engineInstall.ts), so the first Claude harness need not wait for a download;
 # other agents install from hn when chosen.
-chroot "$MNT" su - "$ACCOUNT" -c "npm_config_prefix=\$HOME/.local npm install -g --no-audit --no-fund opencode-ai@$OPENCODE @anthropic-ai/claude-code >/dev/null 2>&1"
+chroot "$MNT" su - "$ACCOUNT" -c "npm_config_prefix=\$HOME/.local npm install -g --no-audit --no-fund @anthropic-ai/claude-code >/dev/null 2>&1"
 CLAUDE=$(chroot "$MNT" su - "$ACCOUNT" -c '$HOME/.local/bin/claude --version' | cut -d' ' -f1)
 python3 - "$MNT/etc/harness-image.json" "$MNT/etc/harness-base.json" "$SOURCE" "$OPENCODE" "$CLAUDE" <<'PY'
 import json, subprocess, sys
@@ -42,6 +42,6 @@ for leftover in "home/$ACCOUNT/.ssh/authorized_keys" "home/$ACCOUNT/.harness" "r
     [[ ! -e $MNT/$leftover ]] || { echo "Unexpected build-host state: $leftover" >&2; exit 1; }
 done
 chroot "$MNT" /usr/lib/harness/hn --version
-chroot "$MNT" su - "$ACCOUNT" -c '$HOME/.local/bin/opencode --version'
+chroot "$MNT" su - "$ACCOUNT" -c '/usr/bin/opencode --version'
 df -h "$MNT" | tail -1
 release_image

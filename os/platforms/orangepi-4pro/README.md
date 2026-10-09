@@ -15,7 +15,7 @@ update feed is generated, and the board keeps Debian's own system updates.
 | Base | Arch Linux, LTS kernel | Orange Pi Debian 12, vendor kernel 5.15 |
 | Compositor | labwc 0.20.2 on Arch's wlroots 0.20 | the same labwc source and patch, built with wlroots 0.20.2 and newer Wayland libraries into `/opt/harness-wl` |
 | Rendering | GPU | CPU (`WLR_RENDERER=pixman`): the PowerVR GPU has no open driver |
-| OpenCode | Arch's 2.x | the official 1.x ARM release pinned in `os/packaging/fedora/opencode.lock.json`; the skel config is restated in OpenCode 1's `permission` form |
+| OpenCode | Arch's 2.x at `/usr/bin/opencode` | the official 1.x ARM release pinned in `os/packaging/fedora/opencode.lock.json`, bundled as the Fedora package does (`opencode_payload.py`: `/usr/lib/harness-opencode`, `/usr/bin/opencode`, where first use starts it); the skel config is restated in OpenCode 1's `permission` form |
 | Claude Code | installed by hn when first chosen | preinstalled with hn's recipe (`npm install -g @anthropic-ai/claude-code`); version recorded in `/etc/harness-image.json` |
 | System profile | `arch` | `debian`: `hn-os` and `harness install/upgrade/rollback` refuse PC system operations, as on Fedora |
 | Screen lock | gtklock | not available on Debian 12 (Super+l and the idle lock do nothing yet) |

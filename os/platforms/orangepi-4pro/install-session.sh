@@ -29,6 +29,15 @@ if info.get('architecture') != 'aarch64' or info.get('dirty') is not False:
 module.validate_runtime = lambda runtime, commit: info
 commit = subprocess.check_output(['git', '-c', f'safe.directory={source}', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
 module.stage(source, runtime, destination, commit)
+# OpenCode as the Fedora package bundles it: the locked ARM release, checksum- and ELF-checked,
+# at /usr/lib/harness-opencode with /usr/bin/opencode, where first use (`hn-os try`) starts it.
+payload_spec = importlib.util.spec_from_file_location('opencode_payload', source / 'os/tools/opencode_payload.py')
+payload = importlib.util.module_from_spec(payload_spec)
+payload_spec.loader.exec_module(payload)
+lock = payload.read_lock(source / 'os/packaging/fedora/opencode.lock.json')
+prepared = destination.parent / 'opencode'
+payload.prepare(lock, destination.parent / 'archives', prepared)
+payload.stage(prepared, destination, lock)
 # A non-arch profile makes hn-os and `harness install|upgrade|rollback` refuse the PC system
 # operations, as the Fedora package does. Debian keeps its own system updates.
 path = destination / 'usr/share/harness-os/runtime.json'
