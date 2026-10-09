@@ -142,13 +142,13 @@ const installedFixture = (scratch: string) => {
   return { home, node: join(scratch, "node") };
 };
 
-const runFinale = (mode: "standalone" | "desktop", pathHasBin: boolean) => {
+const runFinale = (mode: "standalone" | "desktop", pathHasBin: boolean, script = finaleOf) => {
   const source = readFileSync(installer, "utf8");
   const scratch = mkdtempSync(join(tmpdir(), "harness-finale-"));
   try {
     const { home, node } = installedFixture(scratch);
     const bin = join(home, ".local", "bin");
-    return spawnSync("/bin/sh", ["-c", finaleOf(source)], {
+    return spawnSync("/bin/sh", ["-c", script(source)], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -192,6 +192,23 @@ describe("scripts/install.sh: what it says once it is done", () => {
   it("the PATH reminder still comes after the guide when ~/.local/bin is not on PATH", () => {
     const out = runFinale("standalone", false).stdout;
     expect(out.indexOf("harness --help")).toBeLessThan(out.indexOf("'harness' is installed in ~/.local/bin"));
+  }, 20_000);
+
+  // The installer puts ~/.local/bin on its own PATH while it runs (the tmux step): the advice is about
+  // the terminal it runs in. Checked against its own, it never printed, and on a fresh Mac the `hn`
+  // it said to type was "command not found" (macOS VM, 2026-10-09).
+  const finaleAfterInstallOf = (source: string) =>
+    source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# Shared by every download")) +
+    'export PATH="$BIN_DIR:$PATH"\n' +
+    source.slice(source.indexOf("# 5. Final verification"));
+
+  it("starts with a command this terminal can run, and says how to get `hn` by name, whatever the install did to its own PATH", () => {
+    const out = runFinale("standalone", false, finaleAfterInstallOf).stdout;
+    expect(out).toMatch(/^ {6}~\/\.local\/bin\/hn +# start locally; no login required$/m);
+    expect(out).toContain("'harness' is installed in ~/.local/bin");
+    const onPath = runFinale("standalone", true, finaleAfterInstallOf).stdout;
+    expect(onPath).toMatch(/^ {6}hn {29}# start locally; no login required$/m);
+    expect(onPath).not.toContain("'harness' is installed in ~/.local/bin");
   }, 20_000);
 
   it("desktop mode gets the one line and no guide: the app takes the person through sign-in", () => {
@@ -896,7 +913,7 @@ describe("scripts/install.sh command contract", () => {
   // The helpers plus the grid step alone, as one runnable unit.
   const gridStepOf = (source: string) =>
     source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-    source.slice(source.indexOf("# 3b. The managed grid"), source.indexOf("# 4. Ensure ~/.local/bin"));
+    source.slice(source.indexOf("# 3b. The managed grid"), source.indexOf("# 3c. hn's binary"));
 
   it("installs the managed grid after the CLI and before PATH, as a step the install can survive", () => {
     const source = readFileSync(installer, "utf8");
@@ -1067,7 +1084,7 @@ describe("scripts/install.sh: hn", () => {
   // The constants and helpers (install_hn among them), then step 3c alone.
   const hnStepOf = (source: string) =>
     source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-    source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
+    source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 3d. OpenCode"));
 
   it("installs hn after the grid and before PATH, as a step the install can survive", () => {
     const source = readFileSync(installer, "utf8");
@@ -1259,5 +1276,68 @@ describe("scripts/install.sh: hn", () => {
       }
       expect(readdirSync(bin).sort()).toEqual(['harness', 'hn']);
     } finally { rmSync(scratch, { recursive: true, force: true }); }
+  }, 20_000);
+});
+
+describe("scripts/install.sh: OpenCode for hn's first window", () => {
+  // The constants (NEW_COMPUTER among them), then step 3d alone.
+  const openCodeStepOf = (source: string) =>
+    source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# Shared by every download")) +
+    source.slice(source.indexOf("# 3d. OpenCode"), source.indexOf("# 4. Ensure ~/.local/bin"));
+
+  // OpenCode's own installer, as served: a script for bash that puts the binary in ~/.opencode/bin.
+  const run = (mode: string, { agent = "", installs = true } = {}) => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-opencode-"));
+    try {
+      const home = join(scratch, "home");
+      mkdirSync(home, { recursive: true });
+      if (agent) mkdirSync(join(home, agent), { recursive: true });
+      writeCommand(scratch, "curl", [
+        `printf '%s\\n' "$*" >> '${join(scratch, "curl-invocations")}'`,
+        installs
+          ? `printf '%s\\n' 'mkdir -p "$HOME/.opencode/bin"' 'printf "#!/bin/sh\\n" > "$HOME/.opencode/bin/opencode"' 'chmod +x "$HOME/.opencode/bin/opencode"'`
+          : "exit 7",
+      ]);
+      const result = spawnSync("/bin/sh", ["-c", openCodeStepOf(readFileSync(installer, "utf8"))], {
+        encoding: "utf8",
+        env: { ...process.env, HOME: home, INSTALL_MODE: mode, PATH: `${scratch}:/usr/bin:/bin` },
+      });
+      let curl = "";
+      try { curl = readFileSync(join(scratch, "curl-invocations"), "utf8"); } catch { /* never asked */ }
+      const marked = existsSync(join(home, ".harness", "tui", "first-run"));
+      return { result, curl, marked, opencode: join(home, ".opencode", "bin", "opencode") };
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  };
+
+  it("downloads it on a computer with no agent and no Harness, with the CLI's recipe, into ~/.opencode/bin", () => {
+    const { result, curl, marked } = run("standalone");
+    expect(result.status).toBe(0);
+    expect(curl).toContain("https://opencode.ai/install");
+    expect(marked, "hn's first start opens OpenCode (tui/src/first_run.rs)").toBe(true);
+    expect(result.stdout).toContain("✓ OpenCode ready");
+    const source = readFileSync(installer, "utf8");
+    expect(source.slice(source.indexOf("# 3d. OpenCode"), source.indexOf("# 4. Ensure ~/.local/bin"))).toContain("bash -s -- --no-modify-path");
+  }, 20_000);
+
+  it("leaves it alone where there is an agent or Harness already, and to the app under --desktop", () => {
+    for (const agent of [".claude", ".codex", ".harness/cli", ".config/opencode"]) {
+      const { result, curl, marked } = run("standalone", { agent });
+      expect(result.status, agent).toBe(0);
+      expect(curl, agent).toBe("");
+      expect(marked, agent).toBe(false);
+    }
+    for (const mode of ["desktop", "host"]) {
+      const { curl, marked } = run(mode);
+      expect(curl, mode).toBe("");
+      expect(marked, mode).toBe(false);
+    }
+  }, 20_000);
+
+  it("survives a download that fails: says a pane will install it, and the install goes on", () => {
+    const { result } = run("standalone", { installs: false });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("OpenCode will be installed when hn first starts it");
   }, 20_000);
 });

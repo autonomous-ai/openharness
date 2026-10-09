@@ -434,9 +434,7 @@ mod tests {
             assert!(matches!(&app.welcome.forms[&tab].draft.project,
                 Project::Folder(path) if path == "/srv/remote-project"));
             crate::input::handle(&mut app, crossterm::event::Event::Paste("keep this remote task".into()));
-            event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-            assert_eq!(app.welcome.forms[&tab].focus, Field::Create);
-            assert!(app.welcome.forms[&tab].error.is_empty(), "task Enter only selects Start");
+            // One Enter with a task submits it.
             event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
             let form = &app.welcome.forms[&tab];
             assert_eq!(form.draft.machine, "remote");
@@ -483,8 +481,6 @@ mod tests {
         form.focus = Field::Task;
         store_form(&mut app, form);
         render(&mut app);
-        event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(app.welcome.forms[&tab].focus, Field::Create);
         event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         assert!(app.welcome.forms[&tab].error.contains("cannot start with a task"));
         event(&mut app, KeyCode::Esc, KeyModifiers::NONE);

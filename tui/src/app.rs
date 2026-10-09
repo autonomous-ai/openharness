@@ -713,6 +713,8 @@ pub struct App {
     /// A disposable USB session offers direct try, install and network actions on its home.
     pub os_live: bool,
     pub os_welcome: crate::os_welcome::State,
+    /// A computer's first hn opening OpenCode with a task typed (first_run.rs).
+    pub first_run: crate::first_run::State,
     pub os_first_use: bool,
     /// While a command runs in another session (`-t work:2`): the session to come back to.
     pub swap_back: Option<u32>,
@@ -941,6 +943,7 @@ impl App {
             os_session: std::env::var("HARNESS_OS").as_deref() == Ok("1"),
             os_live: std::env::var("HARNESS_OS").as_deref() == Ok("1") && std::env::var("HARNESS_OS_LIVE").as_deref() == Ok("1"),
             os_welcome: Default::default(),
+            first_run: Default::default(),
             os_first_use: std::env::var("HARNESS_OS_FIRST_USE").as_deref() == Ok("1"),
             wait_channels: HashMap::new(),
             cli_held: std::collections::VecDeque::new(),
@@ -5753,6 +5756,12 @@ impl App {
         if !(self.tabs.len() == 1 && self.tabs[0].root.is_none()) { self.shell_asked = true; return }
         if self.link(&self.fleet.local_id).is_none() { return }
         self.shell_asked = true;
+        // A computer's first hn, as the installer marked it: OpenCode with a task typed, not a shell
+        // (first_run.rs). Not when `hn new` named a folder or a command.
+        if self.start_session.as_ref().is_none_or(|s| s.cwd.is_none() && s.command.is_none()) && crate::first_run::take() {
+            crate::first_run::start(self);
+            return;
+        }
         // The desk's first shell: where hn was started (-c: where it was asked to), running what
         // `hn new` asked for.
         let start = self.start_session.take().unwrap_or_default();
@@ -6329,6 +6338,7 @@ impl App {
 
     pub fn on_tick(&mut self) {
         crate::os_welcome::tick(self);
+        crate::first_run::tick(self);
         self.run_start_then();
         crate::new_harness::welcome_tick(self);
         self.ask_said();

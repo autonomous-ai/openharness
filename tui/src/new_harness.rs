@@ -495,9 +495,16 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
         .and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
     let what = saved_agent(&saved);
     let engine = what.engine.clone();
+    // The home folder itself is nobody's project: hn's first shell starts there, and a fresh Mac's
+    // first harness wrote its files straight into it (macOS VM, 2026-10-09). A new project, as the
+    // desktop app makes one, unless the person chooses the folder (a terminal keeps it: set_engine).
+    let home = app.homes.get(&machine).cloned().or_else(|| {
+        (machine == app.fleet.local_id || crate::local::is_local(&machine)).then(|| std::env::var("HOME").ok()).flatten()
+    });
     let project = cwd
         .or_else(|| saved["projects"][&machine].as_str().map(str::to_string))
         .or_else(|| current.map(|a| a.cwd.clone()).filter(|p| !p.is_empty()))
+        .filter(|p| what.engine == "terminal" || home.as_deref().is_none_or(|h| p.trim_end_matches('/') != h.trim_end_matches('/')))
         .map(Project::Folder)
         .unwrap_or_else(|| Project::New(String::new()));
     let permission = saved["permissions"][&engine]
@@ -1487,6 +1494,9 @@ pub fn key(app: &mut App, mut form: Box<Form>, key: KeyEvent) {
             KeyCode::Enter if !key.modifiers.intersects(KeyModifiers::ALT | KeyModifiers::SHIFT) => {
                 form.focus = Field::Create;
                 form.child = None;
+                // With a task, Enter starts it: the second Enter, on Start, was the step a newcomer
+                // stopped at (macOS VM, 2026-10-09). Without one it still steps to Start.
+                launch = !form.draft.task.trim().is_empty();
             }
             _ if form.blocked(Field::Task).is_none() => {
                 form.task_editor.key(&mut form.draft.task, key, form.task_area.width.max(1) as usize);
@@ -2334,6 +2344,37 @@ mod tests {
         assert_eq!(form.focus, Field::Task);
     }
 
+    // The second Enter, on Start, was where a newcomer stopped (macOS VM, 2026-10-09).
+    #[tokio::test]
+    async fn enter_in_a_task_starts_it_and_an_empty_task_steps_to_start() {
+        let mut app = app();
+        let mut form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some("/home/dev/project".into()), Surface::Dialog).unwrap();
+        key(&mut app, form, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        form = take_active(&mut app).unwrap();
+        assert_eq!(form.focus, Field::Create, "no task: Enter steps to Start");
+        assert!(form.attempt.is_none() && !form.starting);
+        form.focus = Field::Task;
+        form.draft.task = "make a small web page".into();
+        key(&mut app, form, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let form = take_active(&mut app).unwrap();
+        assert!(form.attempt.is_some() || form.starting || !form.error.is_empty(), "the task was submitted");
+    }
+
+    // The home folder is nobody's project: a fresh Mac's first harness wrote into it.
+    #[tokio::test]
+    async fn the_home_folder_is_a_new_project_unless_the_harness_is_a_terminal() {
+        let mut app = app();
+        let home = std::env::var("HOME").unwrap();
+        app.homes.insert(crate::local::MACHINE.into(), home.clone());
+        let form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some(format!("{home}/")), Surface::Dialog).unwrap();
+        assert!(matches!(&form.draft.project, Project::New(name) if name.is_empty()), "{:?}", form.draft.project);
+        let form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some(format!("{home}/work")), Surface::Dialog).unwrap();
+        assert!(matches!(&form.draft.project, Project::Folder(path) if path.ends_with("/work")));
+        let mut form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some(home.clone()), Surface::Dialog).unwrap();
+        set_engine(&mut form, "terminal");
+        assert!(matches!(&form.draft.project, Project::Folder(path) if *path == home), "a shell still opens at home");
+    }
+
     #[tokio::test]
     async fn offline_submission_explains_recovery_and_preserves_the_task_on_both_surfaces() {
         for window in [false, true] {
@@ -2345,10 +2386,7 @@ mod tests {
             let mut form = make_form(&mut app, Some(crate::local::MACHINE.into()), Some("/home/dev/project".into()), surface).unwrap();
             assert!(form.local_only);
             form.draft.task = "Keep my offline task".into();
-            key(&mut app, form, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-            let form = take_active(&mut app).unwrap();
-            assert_eq!(form.focus, Field::Create);
-            assert!(form.error.is_empty());
+            // One Enter with a task submits it, and says why it could not start.
             key(&mut app, form, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
             let form = take_active(&mut app).unwrap();
             assert!(form.error.contains("harness start"));
