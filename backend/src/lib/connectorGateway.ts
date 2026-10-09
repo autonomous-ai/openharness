@@ -11,16 +11,16 @@
  *   computer → POST /api/connectors/refresh (signed in) {connector} → a new token
  *
  * As the Grid control plane does it (autonomous-grid-be grid_networks/connectors.py), with the same
- * requests and answers: the account's tokens are kept here (ConnectorCredential, sealed with
- * CONNECTOR_ENCRYPTION_KEY), so any of its computers renews them by naming the service, and
- * disconnecting forgets them here. A sign-in in progress (its state, PKCE verifier and, once exchanged,
- * its one-time result for the computer) lives in Redis for ten minutes, under hashed keys.
+ * requests and answers: the account's tokens are kept here (ConnectorCredential), so any of its
+ * computers renews them by naming the service, and disconnecting forgets them here. A sign-in in
+ * progress (its state, PKCE verifier and, once exchanged, its one-time result for the computer) lives in
+ * Redis for ten minutes, under hashed keys.
  *
- * The apps' config is the Grid control plane's `config-connector-auth.json` shape, given as a file
- * (CONNECTOR_AUTH_FILE) or inline (CONNECTOR_AUTH_JSON): never in git.
+ * The apps' config lives in MongoDB (`connector_apps`), edited directly or written from a file in the
+ * Grid control plane's `config-connector-auth.json` shape by `npm run connectors:import <file>`. Like
+ * the tokens, it is kept as it is: this database is private.
  */
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'crypto'
-import { readFileSync } from 'fs'
+import { createHash, randomBytes, timingSafeEqual } from 'crypto'
 import { pub } from './bus.js'
 import { prisma } from './prisma.js'
 import { env } from '../config/env.js'
@@ -92,60 +92,80 @@ export function parseConfig(raw: string): Record<string, ConnectorApp> {
   return apps
 }
 
-let cached: { apps: Record<string, ConnectorApp> } | null = null
+const CONFIG_CACHE_MS = 60_000
+let cached: { at: number, apps: Record<string, ConnectorApp> } | null = null
 
-/** The configured apps; none (the gateway off) when no config is given. Read once per process. */
-export function apps(): Record<string, ConnectorApp> {
-  if (cached) return cached.apps
-  let raw = env.CONNECTOR_AUTH_JSON
-  if (!raw && env.CONNECTOR_AUTH_FILE) {
-    try { raw = readFileSync(env.CONNECTOR_AUTH_FILE, 'utf8') } catch (error) {
-      logger.error('connector gateway: cannot read CONNECTOR_AUTH_FILE', { error: String(error) })
-    }
-  }
-  try { cached = { apps: raw ? parseConfig(raw) : {} } } catch (error) {
-    logger.error('connector gateway: invalid connector config', { error: String(error) })
-    cached = { apps: {} }
-  }
-  return cached.apps
+type AppRow = {
+  code: string, label: string, description: string, imageUrl: string, clientId: string, clientSecret: string,
+  authUrl: string, tokenUrl: string, refreshUrl: string, userinfoUrl: string, scopes: string[], authStyle: string,
+  pkce: boolean, refresh: boolean, authParams: unknown, extra: unknown,
 }
 
-/** For tests: forget the parsed config. */
+const record = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {})
+
+function fromRow(row: AppRow): ConnectorApp {
+  const extra = record(row.extra)
+  return {
+    code: row.code, label: row.label || row.code, description: row.description, imageUrl: row.imageUrl,
+    clientId: row.clientId, clientSecret: row.clientSecret,
+    authUrl: row.authUrl, tokenUrl: row.tokenUrl, refreshUrl: row.refreshUrl, userinfoUrl: row.userinfoUrl,
+    scopes: row.scopes, authStyle: row.authStyle, pkce: row.pkce, refresh: row.refresh,
+    authParams: Object.fromEntries(Object.entries(record(row.authParams)).map(([k, v]) => [k, str(v)])),
+    tokenField: str(extra.token_field), mcpUrl: str(extra.mcp_url), mcpAuthHeader: str(extra.mcp_auth_header),
+  }
+}
+
+/**
+ * The services this gateway signs in to: the enabled rows of `connector_apps`, read a minute at a time
+ * (a row edited in Compass or written by `npm run connectors:import` is live within a minute, no deploy).
+ */
+export async function apps(): Promise<Record<string, ConnectorApp>> {
+  if (cached && Date.now() - cached.at < CONFIG_CACHE_MS) return cached.apps
+  const rows = await prisma.connectorApp.findMany({ where: { enabled: true } }) as AppRow[]
+  const loaded: Record<string, ConnectorApp> = {}
+  for (const row of rows) loaded[row.code] = fromRow(row)
+  cached = { at: Date.now(), apps: loaded }
+  return loaded
+}
+
+/** Forget the cached apps: after an import, and in tests. */
 export function resetConfig(): void { cached = null }
 
-function app(code: unknown): ConnectorApp {
-  const found = typeof code === 'string' ? apps()[code] : undefined
+/**
+ * Write a config-connector-auth.json document's `app` entries into `connector_apps`. Replaces a service
+ * already there; leaves the others. Returns the codes written.
+ */
+export async function importApps(raw: string): Promise<string[]> {
+  const parsed = parseConfig(raw)
+  const document = record(JSON.parse(raw))
+  for (const [code, config] of Object.entries(parsed)) {
+    const entry = record(record(document.connectors)[code])
+    const fields = {
+      enabled: true, label: config.label, description: config.description, imageUrl: config.imageUrl,
+      clientId: config.clientId, clientSecret: config.clientSecret,
+      authUrl: config.authUrl, tokenUrl: config.tokenUrl, refreshUrl: config.refreshUrl, userinfoUrl: config.userinfoUrl,
+      scopes: config.scopes, authStyle: config.authStyle, pkce: config.pkce, refresh: config.refresh,
+      authParams: config.authParams,
+      extra: { ...record(entry.extra), ...(config.tokenField ? { token_field: config.tokenField } : {}),
+        ...(config.mcpUrl ? { mcp_url: config.mcpUrl } : {}), ...(config.mcpAuthHeader ? { mcp_auth_header: config.mcpAuthHeader } : {}) },
+    }
+    await prisma.connectorApp.upsert({ where: { code }, create: { code, ...fields }, update: fields })
+  }
+  resetConfig()
+  return Object.keys(parsed).sort()
+}
+
+async function app(code: unknown): Promise<ConnectorApp> {
+  const found = typeof code === 'string' ? (await apps())[code] : undefined
   if (!found) throw new GatewayError('This service does not sign in through Harness.', 'UNKNOWN_CONNECTOR', 404)
   return found
-}
-
-/** AES-256-GCM, version.iv.tag.ciphertext, as lib/machineCredential.ts seals, under its own key. */
-function sealKey(): Buffer {
-  const value = Buffer.from(env.CONNECTOR_ENCRYPTION_KEY ?? '', 'base64')
-  if (value.length !== 32) throw new GatewayError('Connections through Harness are not set up on this server.', 'GATEWAY_NOT_CONFIGURED', 503)
-  return value
-}
-
-export function seal(value: unknown): string {
-  const iv = randomBytes(12)
-  const cipher = createCipheriv('aes-256-gcm', sealKey(), iv)
-  const body = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()])
-  return ['v1', iv.toString('base64url'), cipher.getAuthTag().toString('base64url'), body.toString('base64url')].join('.')
-}
-
-export function unseal(envelope: string): Record<string, unknown> {
-  const [version, iv, tag, body, extra] = envelope.split('.')
-  if (version !== 'v1' || !iv || !tag || !body || extra) throw new Error('Invalid connector credential')
-  const decipher = createDecipheriv('aes-256-gcm', sealKey(), Buffer.from(iv, 'base64url'))
-  decipher.setAuthTag(Buffer.from(tag, 'base64url'))
-  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(body, 'base64url')), decipher.final()]).toString('utf8'))
 }
 
 /** What the account's Connectors page lists for these services, with its own state. Never a secret. */
 export async function list(userId: string): Promise<Record<string, unknown>[]> {
   const rows = await prisma.connectorCredential.findMany({ where: { userId }, select: { connector: true, accountName: true, expiresAt: true, connectedAt: true } })
   const mine = new Map(rows.map(row => [row.connector, row]))
-  return Object.values(apps()).map(a => {
+  return Object.values(await apps()).map(a => {
     const row = mine.get(a.code)
     return {
       code: a.code, label: a.label, description: a.description, image_url: a.imageUrl,
@@ -157,8 +177,10 @@ export async function list(userId: string): Promise<Record<string, unknown>[]> {
 }
 
 async function keep(userId: string, connector: string, token: Record<string, unknown>): Promise<void> {
-  const sealed = seal({ access_token: token.access_token, refresh_token: token.refresh_token, token_type: token.token_type, scope: token.scope, expires_at: token.expires_at })
-  const fields = { sealed, accountName: str(token.account_name), expiresAt: Number(token.expires_at) || 0 }
+  const fields = {
+    accessToken: str(token.access_token), refreshToken: str(token.refresh_token), tokenType: str(token.token_type) || 'Bearer',
+    scope: str(token.scope), accountName: str(token.account_name), expiresAt: Number(token.expires_at) || 0,
+  }
   await prisma.connectorCredential.upsert({ where: { userId_connector: { userId, connector } }, create: { userId, connector, ...fields }, update: fields })
 }
 
@@ -170,8 +192,7 @@ interface FlowState { userId: string, connector: string, pickup: string, verifie
 interface PickupRecord { userId: string, connector: string, status: 'pending' | 'ready' | 'failed', error?: string, token?: Record<string, unknown> }
 
 export async function start(userId: string, connector: unknown): Promise<Record<string, unknown>> {
-  const config = app(connector)
-  sealKey() // A sign-in this server could not keep is not started.
+  const config = await app(connector)
   const state = STATE_PREFIX + randomBytes(24).toString('base64url')
   const pickup = randomBytes(24).toString('base64url')
   const verifier = config.pkce ? randomBytes(48).toString('base64url') : ''
@@ -270,7 +291,7 @@ export async function callback(body: { code?: unknown, state?: unknown, error?: 
   const raw = taken?.[0]?.[1] as string | null | undefined
   if (!raw) throw new GatewayError('This sign-in has ended. Start it again from Harness.', 'STATE_EXPIRED', 410)
   const flow = JSON.parse(raw) as FlowState
-  const config = app(flow.connector)
+  const config = await app(flow.connector)
   const save = (record: PickupRecord) => pub.set(pickupKey(flow.pickup), JSON.stringify(record), 'EX', TTL_SEC)
   if (body.error || !str(body.code)) {
     await save({ userId: flow.userId, connector: config.code, status: 'failed', error: str(body.error) === 'access_denied' ? 'The sign-in was cancelled.' : 'The service did not complete the sign-in.' })
@@ -313,13 +334,13 @@ export async function poll(userId: string, pickupCode: unknown): Promise<Record<
  * expires; a revoked one asks for connecting again and leaves the row for the next sign-in to replace.
  */
 export async function refresh(userId: string, connector: unknown): Promise<Record<string, unknown>> {
-  const config = app(connector)
+  const config = await app(connector)
   const row = await prisma.connectorCredential.findUnique({ where: { userId_connector: { userId, connector: config.code } } })
   if (!row) throw new GatewayError('This service is not connected. Connect it again.', 'NOT_CONNECTED', 404)
-  const held = unseal(row.sealed)
-  const refreshToken = str(held.refresh_token)
+  const refreshToken = row.refreshToken
   if (!refreshToken || !config.refresh) {
-    return tokenFor(config, { ...held, expires_in: undefined }, refreshToken, row.accountName, Number(held.expires_at) || 0)
+    const held = { access_token: row.accessToken, token_type: row.tokenType, scope: row.scope }
+    return tokenFor(config, held, refreshToken, row.accountName, row.expiresAt)
   }
   const payload = await tokenRequest(config, { grant_type: 'refresh_token', refresh_token: refreshToken }, true)
   const token = tokenFor(config, payload, refreshToken, row.accountName)
@@ -329,7 +350,7 @@ export async function refresh(userId: string, connector: unknown): Promise<Recor
 
 /** Forget the account's sign-in here. Revoking access at the service is the service's own setting. */
 export async function disconnect(userId: string, connector: unknown): Promise<Record<string, unknown>> {
-  const config = app(connector)
+  const config = await app(connector)
   const { count } = await prisma.connectorCredential.deleteMany({ where: { userId, connector: config.code } })
   return { connector: config.code, disconnected: count > 0 }
 }

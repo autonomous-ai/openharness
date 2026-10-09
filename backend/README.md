@@ -107,22 +107,24 @@ registered with them are used, with the same requests and answers as the Grid co
 
 To turn it on:
 
-1. **The apps' config**, never in git: the Grid control plane's `config-connector-auth.json` shape
-   (`{"connectors": {"github": {"auth_type": "app", "client_id", "client_secret", "auth_url",
-   "token_url", "scopes", …}}}`), as a file (`CONNECTOR_AUTH_FILE`) or inline (`CONNECTOR_AUTH_JSON`,
-   for a k8s secret). Only `auth_type: app` entries are used. Production's are the `app` entries of
-   Grid prod's `/var/lib/grid-apis/config-connector-auth.json`; staging's, Grid dev's.
-2. **`CONNECTOR_ENCRYPTION_KEY`**: 32 random bytes as base64 (`openssl rand -base64 32`), its own key.
-   It seals the tokens kept per account (`ConnectorCredential`). Losing it means everyone connects again.
-3. **`CONNECTOR_REDIRECT_URI`**: the page every one of those apps allows. Production keeps the default,
+1. **`CONNECTOR_REDIRECT_URI`**: the page every one of those apps allows. Production keeps the default,
    `https://www.autonomous.ai/connector/callback`; staging,
    `https://staging.autonomousdev.xyz/connector/callback`.
-4. **The index** for `ConnectorCredential` (`npx prisma db push` creates `connector_credentials` and its
-   unique `userId + connector` index).
-5. **The Autonomous web callback page** forwards a state that starts `harness_` to
-   `POST /api/connectors/callback`, as it forwards `grid_` to Grid (see the PR that added this gateway).
+2. **The collections**: `prisma db push` (run at startup) creates `connector_apps` and
+   `connector_credentials` with their unique indexes. Both are kept as they are, not encrypted: the
+   database is private.
+3. **The apps**, one row per service in `connector_apps` (`code`, `clientId`, `clientSecret`, `authUrl`,
+   `tokenUrl`, `scopes`, `extra: {mcp_url, token_field, mcp_auth_header}`, `enabled`…): edited in
+   Compass, or written from a file with `npm run connectors:import <config-connector-auth.json>` (the
+   backend's `DATABASE_URL`). The file is the Grid control plane's shape; only `auth_type: app` entries
+   are written. Production's are the `app` entries of Grid prod's
+   `/var/lib/grid-apis/config-connector-auth.json`; staging's, Grid dev's. The file is never in git.
+   Running it again replaces those services; the gateway sees any change within a minute.
+   `enabled: false` switches a service off.
+4. **The Autonomous web callback page** forwards a state that starts `harness_` to
+   `POST /api/connectors/callback`, as it forwards `grid_` to Grid (ecm-website v1.28.18).
 
-Unset, the gateway lists no service and starts no sign-in; nothing else changes.
+With no row in `connector_apps`, the gateway lists no service and starts no sign-in; nothing else changes.
 
 ## Persistence
 

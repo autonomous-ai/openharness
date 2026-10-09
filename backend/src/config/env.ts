@@ -89,15 +89,8 @@ const envSchema = z.object({
   // the backend authenticates the manager's dial-in socket (/api/manager-ws) against that apiKey and
   // picks a manager on create by capacity (machines.managerId → managers). See lib/managers.ts.
 
-  // The connector gateway (lib/connectorGateway.ts): the OAuth apps Autonomous registered with GitHub,
-  // Slack, Google and the others that let no computer register its own, in the Grid control plane's
-  // config-connector-auth.json shape. A file path, or the JSON inline (a k8s secret). Neither → the
-  // gateway answers that no service signs in through it. Never in git.
-  CONNECTOR_AUTH_FILE: z.string().optional(),
-  CONNECTOR_AUTH_JSON: z.string().optional(),
-  // Seals each account's tokens kept for those services (ConnectorCredential): 32 random bytes as
-  // base64 (`openssl rand -base64 32`), its own key. Unset → the gateway starts no sign-in.
-  CONNECTOR_ENCRYPTION_KEY: z.string().optional(),
+  // The connector gateway (lib/connectorGateway.ts): its OAuth apps (GitHub, Slack, Google…) live in
+  // MongoDB (`connector_apps`), edited directly or written by `npm run connectors:import <file>`.
   // The redirect every one of those apps allows: the Autonomous web page, which forwards a `harness_`
   // state here (POST /api/connectors/callback). Staging: https://staging.autonomousdev.xyz/connector/callback.
   CONNECTOR_REDIRECT_URI: z.string().url().default('https://www.autonomous.ai/connector/callback'),

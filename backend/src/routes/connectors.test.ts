@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => {
     }),
   }
   // The account's kept sign-ins (ConnectorCredential), by userId + connector.
-  type Row = { userId: string, connector: string, sealed: string, accountName: string, expiresAt: number, connectedAt: Date }
+  type Row = { userId: string, connector: string, accessToken: string, refreshToken: string, tokenType: string, scope: string, accountName: string, expiresAt: number, connectedAt: Date }
   const rows = new Map<string, Row>()
   const id = (where: { userId_connector: { userId: string, connector: string } }) => `${where.userId_connector.userId}/${where.userId_connector.connector}`
   const connectorCredential = {
@@ -40,15 +40,23 @@ const mocks = vi.hoisted(() => {
       const had = rows.delete(`${where.userId}/${where.connector}`); return { count: had ? 1 : 0 }
     }),
   }
-  return { store, pub, rows, prisma: { connectorCredential }, auth: vi.fn() }
+  // connector_apps, by code.
+  const appRows = new Map<string, Record<string, unknown>>()
+  const connectorApp = {
+    findMany: vi.fn(async ({ where }: { where: { enabled: boolean } }) => [...appRows.values()].filter(row => row.enabled === where.enabled)),
+    upsert: vi.fn(async ({ where, create, update }: { where: { code: string }, create: Record<string, unknown>, update: Record<string, unknown> }) => {
+      const row = appRows.has(where.code) ? { ...appRows.get(where.code)!, ...update } : create
+      appRows.set(where.code, row); return row
+    }),
+  }
+  return { store, pub, rows, appRows, prisma: { connectorCredential, connectorApp }, auth: vi.fn() }
 })
 vi.mock('../lib/bus.js', () => ({ pub: mocks.pub }))
 vi.mock('../lib/prisma.js', () => ({ prisma: mocks.prisma }))
 vi.mock('../lib/ssoAuth.js', async original => ({ ...await original<typeof import('../lib/ssoAuth.js')>(), authenticateAccessToken: mocks.auth }))
-vi.mock('../config/env.js', () => {
-  return { env: { NODE_ENV: 'test', CONNECTOR_REDIRECT_URI: 'https://www.autonomous.ai/connector/callback', CONNECTOR_AUTH_FILE: undefined,
-    CONNECTOR_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
-    CONNECTOR_AUTH_JSON: JSON.stringify({ connectors: {
+vi.mock('../config/env.js', () => ({ env: { NODE_ENV: 'test', CONNECTOR_REDIRECT_URI: 'https://www.autonomous.ai/connector/callback' } }))
+/** The apps, in the Grid config-connector-auth.json shape `npm run connectors:import` takes. */
+const CONFIG = JSON.stringify({ connectors: {
       github: { auth_type: 'app', label: 'GitHub', client_id: 'gh-client', client_secret: 'gh-secret', auth_url: 'https://github.com/login/oauth/authorize',
         token_url: 'https://github.com/login/oauth/access_token', scopes: ['repo', 'read:user'], userinfo_url: 'https://api.github.com/user', mcp_url: 'https://api.githubcopilot.com/mcp/' },
       gmail: { auth_type: 'app', label: 'Gmail', client_id: 'g-client', client_secret: 'g-secret', auth_url: 'https://accounts.google.com/o/oauth2/v2/auth',
@@ -58,10 +66,9 @@ vi.mock('../config/env.js', () => {
       slack: { auth_type: 'app', client_id: 's', client_secret: 's-secret', auth_url: 'https://slack.com/oauth/v2/authorize', token_url: 'https://slack.com/api/oauth.v2.access',
         extra: { token_field: 'authed_user.access_token', mcp_url: 'https://mcp.slack.com/mcp' } },
       linear: { auth_type: 'dcr', mcp_url: 'https://mcp.linear.app/mcp' },
-    } }) } }
-})
+} })
 import { connectorRoutes } from './connectors.js'
-import { resetConfig } from '../lib/connectorGateway.js'
+import { importApps, resetConfig } from '../lib/connectorGateway.js'
 import { registerAuthMiddleware } from '../middlewares/authMiddleware.js'
 import { errorHandler } from '../middlewares/errorHandler.js'
 
@@ -74,7 +81,8 @@ describe('the connector gateway', () => {
   const owner = { authorization: 'Bearer owner' }
 
   beforeEach(async () => {
-    vi.clearAllMocks(); mocks.store.clear(); mocks.rows.clear(); resetConfig(); fetched = []
+    vi.clearAllMocks(); mocks.store.clear(); mocks.rows.clear(); mocks.appRows.clear(); resetConfig(); fetched = []
+    expect(await importApps(CONFIG)).toEqual(['github', 'gmail', 'notion', 'slack'])
     mocks.auth.mockImplementation(async (token: string) => ({ sub: token === 'stranger' ? 'stranger' : 'owner', email: 'o@example.com', role: 'user', autonomousEnv: 'prod' }))
     answer = (url) => url.includes('/user')
       ? Response.json({ login: 'octo' })
@@ -118,12 +126,9 @@ describe('the connector gateway', () => {
       mcp_entry: { url: 'https://api.githubcopilot.com/mcp/', headers: { Authorization: 'Bearer gho-1' } } })
     expect(JSON.stringify(ready)).not.toContain('gh-secret')
     expect((await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data.status).toBe('expired')
-    // Nothing of the sign-in is left in Redis; the account's sign-in is kept, sealed.
+    // Nothing of the sign-in is left in Redis; the account's sign-in is kept for renewing.
     expect(mocks.store.size).toBe(0)
-    const kept = mocks.rows.get('owner/github')!
-    expect(kept.accountName).toBe('octo')
-    expect(kept.sealed.startsWith('v1.')).toBe(true)
-    expect(kept.sealed).not.toContain('gho-1')
+    expect(mocks.rows.get('owner/github')).toMatchObject({ accountName: 'octo', accessToken: 'gho-1', tokenType: 'bearer' })
     const listed = (await app.inject({ method: 'GET', url: '/api/connectors', headers: owner })).json().data.connectors
     expect(listed.find((row: { code: string }) => row.code === 'github')).toMatchObject({ status: 'connected', account_name: 'octo' })
     const theirs = (await app.inject({ method: 'GET', url: '/api/connectors', headers: { authorization: 'Bearer stranger' } })).json().data.connectors
@@ -179,6 +184,15 @@ describe('the connector gateway', () => {
     await post('/api/connectors/callback', { code: 'c', state: new URL(started.authorize_url).searchParams.get('state') }, {})
     const ready = (await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data
     expect(ready).toMatchObject({ access_token: 'xoxp-user', mcp_entry: { url: 'https://mcp.slack.com/mcp', headers: { Authorization: 'Bearer xoxp-user' } } })
+  })
+
+  it('keeps the apps in connector_apps; a disabled one is not served', async () => {
+    const github = mocks.appRows.get('github')!
+    expect(github).toMatchObject({ clientId: 'gh-client', clientSecret: 'gh-secret', enabled: true })
+    expect(mocks.appRows.has('linear')).toBe(false)
+    expect(mocks.appRows.get('slack')!.extra).toEqual({ token_field: 'authed_user.access_token', mcp_url: 'https://mcp.slack.com/mcp' })
+    mocks.appRows.set('github', { ...github, enabled: false }); resetConfig()
+    expect((await post('/api/connectors/start', { connector: 'github' })).statusCode).toBe(404)
   })
 
   it('stores only hashes of the state and the pickup code', async () => {
