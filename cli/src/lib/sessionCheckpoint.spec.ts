@@ -74,11 +74,36 @@ it.each(['before', 'during'] as const)('backs up a Pi transcript first written %
   } finally { pi.restore() }
 })
 
-it.each(['known', 'resumed', 'unreadable', 'ambiguous', 'unreadable store'] as const)('does not replace %s Pi history with only a screen', async state => {
+it('closes a resumed Pi chat that never wrote a conversation file, keeping its screen', async () => {
+  // Found on a real machine: a Pi chat stopped before its first reply and resumed carries resumeOnly,
+  // an ID, no transcript path and no file anywhere. Close was refused for good ("conversation file is
+  // unavailable") though there was no history to lose.
+  const pi = await piSession()
+  try {
+    row.resumeOnly = true
+    await expect(store.save(row)).rejects.toThrow('Could not save this terminal')
+    await store.save(row, { screen: 'Waiting for the first reply' })
+    const saved = await manifest()
+    expect(saved.source).toBeNull()
+    expect(JSON.parse(await readFile(join(directory, saved.file), 'utf8'))).toMatchObject({ engine: 'pi', screen: 'Waiting for the first reply' })
+  } finally { pi.restore() }
+})
+
+it('still refuses a resumed Pi chat whose history file is gone once it was backed up', async () => {
+  const pi = await piSession()
+  try {
+    await writeFile(pi.path, pi.history)
+    await store.save(row)
+    await rm(pi.path)
+    row.resumeOnly = true
+    await expect(store.save(row, { screen: 'Still visible' })).rejects.toThrow('conversation file is unavailable')
+  } finally { pi.restore() }
+})
+
+it.each(['known', 'unreadable', 'ambiguous', 'unreadable store'] as const)('does not replace %s Pi history with only a screen', async state => {
   const pi = await piSession()
   try {
     if (state === 'known') row.transcriptPath = pi.path
-    if (state === 'resumed') row.resumeOnly = true
     if (state === 'unreadable') await writeFile(pi.path, '{partial')
     if (state === 'unreadable store') {
       const folder = join(pi.path, '..')
