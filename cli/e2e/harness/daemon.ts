@@ -105,8 +105,14 @@ const inside = (root: string, path: string): boolean => {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
 }
 
-/** The engines whose hooks a daemon under test may install: the two the fake engines stand in for. */
-const HOOK_ENGINES = new Set(['claude', 'codex'])
+/** Native-hook acceptance may opt in only with every destination explicitly under its private root. */
+const NATIVE_HOOK_PATHS: Record<string, readonly string[]> = {
+  cursor: ['CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR'], opencode: ['OPENCODE_PLUGIN_DIR'],
+  kilo: ['KILO_PLUGIN_DIR'], pi: ['PI_HOME'], amp: ['AMP_PLUGIN_DIR', 'AMP_SESSIONS_DIR'],
+  hermes: ['HERMES_HOME'], devin: ['DEVIN_CONFIG_PATH'], commandcode: ['COMMANDCODE_HOME'],
+  grok: ['GROK_HOME'], agy: ['AGY_CONFIG_DIR'], copilot: ['COPILOT_HOME'],
+}
+const HOOK_ENGINES = new Set(['claude', 'codex', ...Object.keys(NATIVE_HOOK_PATHS)])
 /** The shell profiles a login shell in a pane reads, where a person moves an engine's home. */
 const PROFILES = { ZDOTDIR: ['.zshenv', '.zprofile', '.zshrc', '.zlogin'], HOME: ['.bash_profile', '.bash_login', '.profile', '.bashrc'] }
 
@@ -122,7 +128,7 @@ export function assertHooksContained(root: string, env: NodeJS.ProcessEnv): void
   if (env.DISABLE_HOOK_INSTALL === 'true') return
   const engines = (env.HOOK_INSTALL_ENGINES ?? '').split(',').map((name) => name.trim()).filter(Boolean)
   if (!engines.length || engines.some((name) => !HOOK_ENGINES.has(name))) {
-    throw new Error(`HOOK_INSTALL_ENGINES is ${env.HOOK_INSTALL_ENGINES ?? 'unset'}: a daemon under test installs Claude Code's and Codex's hooks alone (claude,codex)`)
+    throw new Error(`HOOK_INSTALL_ENGINES is ${env.HOOK_INSTALL_ENGINES ?? 'unset'}: a daemon under test must name supported hook engines with isolated destinations`)
   }
   const refuse = (what: string, path: string | undefined): never => {
     throw new Error(`${what} is ${path ?? 'unset'}: a daemon under test installs hooks only inside ${root}`)
@@ -134,6 +140,9 @@ export function assertHooksContained(root: string, env: NodeJS.ProcessEnv): void
   check('CODEX_HOME', env.CODEX_HOME)
   if (env.CLAUDE_CONFIG_DIR !== undefined) check('CLAUDE_CONFIG_DIR', env.CLAUDE_CONFIG_DIR)
   check('ZDOTDIR', env.ZDOTDIR)
+  for (const engine of engines) for (const name of NATIVE_HOOK_PATHS[engine] ?? []) check(name, env[name])
+  // OpenCode's TUI plugin is a sibling of its legacy plugin directory.
+  if (engines.includes('opencode')) check('OpenCode plugin parent', dirname(env.OPENCODE_PLUGIN_DIR!))
   // Not a hook, but what routes every hook: a record outside the root would send the person's hooks here.
   if (env.HARNESS_HOOK_ROUTES_DIR !== undefined) check('HARNESS_HOOK_ROUTES_DIR', env.HARNESS_HOOK_ROUTES_DIR)
   for (const [folder, names] of Object.entries(PROFILES) as Array<[keyof typeof PROFILES, string[]]>) {

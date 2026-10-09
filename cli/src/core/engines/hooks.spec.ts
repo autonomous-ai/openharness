@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import * as hooks from '../../lib/hooks.js'
+import * as hooks from '../../engines/nativeHooks.js'
 import { engineHooks } from '../../engines/hooks.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
@@ -19,14 +19,14 @@ vi.mock('../../lib/engineHomes.js', () => ({
   adoptHomes: vi.fn(() => ({ claude: null, codex: null })),
   movedHomes: vi.fn(() => []),
 }))
-// The other engines' installers load through the loader; a test may make that load fail.
-const loading = vi.hoisted(() => ({ fail: false }))
+// Native installation must finish even when optional interpretation cannot be loaded.
+const loading = vi.hoisted(() => ({ stalled: false }))
 vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
-  return { ...actual, loadEngine: vi.fn((name: 'hooks') => loading.fail ? Promise.resolve(null) : actual.loadEngine(name)) }
+  return { ...actual, loadEngine: vi.fn(() => loading.stalled ? new Promise(() => {}) : Promise.resolve(null)) }
 })
 vi.mock('../../lib/terminalAgentDiscovery.js', async (real) => ({ ...await real<object>(), processRows: vi.fn(async () => []) }))
-vi.mock('../../lib/hooks.js', async (real) => ({
+vi.mock('../../engines/nativeHooks.js', async (real) => ({
   ...await real<object>(),
   installCursorHooks: vi.fn(),
   installOpencodePlugin: vi.fn(),
@@ -343,29 +343,29 @@ describe('installing every engine\'s hooks', () => {
     hooks.installCopilotHooks,
   ]
   beforeEach(() => { vi.spyOn(console, 'warn').mockImplementation(() => {}) })
-  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); loading.fail = false })
+  afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks(); loading.stalled = false })
 
-  it('points all thirteen at the bound port, the other engines\' through their installers loaded once', async () => {
+  it('points all thirteen at the bound port without loading optional code', async () => {
     await installEngineHooks(4242)
     for (const install of installs) expect(install).toHaveBeenCalledWith(4242)
     expect(console.warn).not.toHaveBeenCalled()
-    expect(loadEngine).toHaveBeenCalledTimes(1)
-    expect(loadEngine).toHaveBeenCalledWith('hooks')
+    expect(loadEngine).not.toHaveBeenCalled()
   })
 
-  it('installs OpenCode\'s plugin before an OpenCode spawn, and says when its installer could not be loaded', async () => {
+  it('installs OpenCode\'s plugin before a spawn without loading optional code', async () => {
     expect(await installOpencodePluginBeforeSpawn(4242)).toBe(true)
     expect(hooks.installOpencodePlugin).toHaveBeenCalledWith(4242)
-    loading.fail = true
-    expect(await installOpencodePluginBeforeSpawn(4242)).toBe(false)
-    expect(hooks.installOpencodePlugin).toHaveBeenCalledTimes(1)
+    loading.stalled = true
+    expect(await installOpencodePluginBeforeSpawn(4242)).toBe(true)
+    expect(hooks.installOpencodePlugin).toHaveBeenCalledTimes(2)
+    expect(loadEngine).not.toHaveBeenCalled()
   })
 
-  it('in the order they always ran: Claude Code and Codex in line, then the others, as one awaited step', async () => {
+  it('installs synchronously in the original order before returning the completion promise', async () => {
     const order: string[] = []
     for (const [index, install] of installs.entries()) vi.mocked(install).mockImplementationOnce(() => { order.push(String(index)) })
     const done = installEngineHooks(4242)
-    expect(order).toEqual(['0', '1'])
+    expect(order).toEqual(installs.map((_, index) => String(index)))
     await done
     expect(order).toEqual(installs.map((_, index) => String(index)))
   })
@@ -384,16 +384,12 @@ describe('installing every engine\'s hooks', () => {
     expect(hooks.installCursorHooks).not.toHaveBeenCalled()
   })
 
-  it('with the other engines\' installers unable to load: theirs skipped and named, Claude Code\'s and Codex\'s installed', async () => {
-    loading.fail = true
+  it.each([false, true])('installs every vendor with optional imports unavailable (stalled=%s)', async (stalled) => {
+    loading.stalled = stalled
     await installEngineHooks(4242, { environment: {} })
-    expect(engineHooks.claude.install).toHaveBeenCalledWith(4242)
-    expect(engineHooks.codex.install).toHaveBeenCalledWith(4242)
-    for (const install of installs.slice(2)) expect(install).not.toHaveBeenCalled()
-    for (const vendor of ['cursor', 'opencode', 'kilo', 'pi', 'amp', 'hermes', 'devin', 'commandcode', 'grok', 'agy', 'copilot']) {
-      expect(console.warn).toHaveBeenCalledWith(`[hooks] ${vendor} install skipped · its installer could not be loaded`)
-    }
-    expect(console.warn).toHaveBeenCalledTimes(11)
+    for (const install of installs) expect(install).toHaveBeenCalledWith(4242)
+    expect(loadEngine).not.toHaveBeenCalled()
+    expect(console.warn).not.toHaveBeenCalled()
   })
 
   // lib/engineHomes.ts: with CLAUDE_CONFIG_DIR or CODEX_HOME in the person's profile, no agent ever bound.

@@ -27,7 +27,7 @@ const MODULES = {
   /** Their pane and dialog readers, the twelve in one: lib/legacyScreen.ts with lib/legacyPane.ts,
    *  lib/questionPane.ts and the eight `askQuestion.ts`. A pane is read on every poll of one of their sessions. */
   screens: () => import('../lib/legacyScreen.js'),
-  /** Their hook installers, eleven in one file (lib/hooks.ts): run once, as the core starts. */
+  /** Legacy compatibility entry. Native installation is eager; core never requests this chunk. */
   hooks: () => import('../lib/hooks.js'),
   /** The database engines' conversations read whole (lib/databaseHistory.ts), for what the core hands on. */
   databaseHistory: () => import('../lib/databaseHistory.js'),

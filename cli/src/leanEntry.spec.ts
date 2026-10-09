@@ -88,13 +88,11 @@ describe('the lean bundle a release carries', () => {
   })
 
   it.each([
-    // Each a string its module alone holds: lib/questionPane.ts's, lib/hooks.ts's (its Amp plugin's), Amp's thread
-    // export's (engines/amp/threadExport.ts), and the name the bundle keeps for Cursor's sub-agents' reader
+    // Each a string its module alone holds: lib/questionPane.ts's, Amp's thread export's (engines/amp/threadExport.ts), and the name the bundle keeps for Cursor's sub-agents' reader
     // (engines/cursor/subagent.ts), Devin's switch reader (engines/devin/runtimeProfile.ts), the compatibility
     // wrappers for agy's lock lookup and Cursor discovery, and Hermes's optional adoption reader. Core
     // identity and discovery use eager declarations/kit mechanics instead of those optional wrappers.
     ['pane readers', 'Native screen reader must be injected'],
-    ['hook installers', 'Mirrors this Amp thread to the machine adapter'],
     ['own code: Amp\'s', 'AMP_DISABLE_PLUGINS'],
     ['own code: Cursor\'s', '"loadCursorReplayTaskLinks"'],
     ['runtime profiles: Devin\'s', '"devinModelCommandResult"'],
@@ -106,6 +104,16 @@ describe('the lean bundle a release carries', () => {
     // core's own, which Node reads only then.
     expect([...files].some(([name, code]) => name.startsWith('core-') && code.includes(marker))).toBe(true)
     expect([...loads('core')].filter((name) => files.get(name)!.includes(marker))).toEqual([])
+  })
+
+  it('loads native hook declarations eagerly without importing the optional compatibility entry', () => {
+    const core = loads('core')
+    // This is native source data written into Amp's plugin file, not Amp's optional transcript reader.
+    // Readiness and launch must not depend on an import() before the core can install that file.
+    const declaration = 'Mirrors this Amp thread to the machine adapter'
+    expect([...core].filter(name => files.get(name)!.includes(declaration))).toHaveLength(1)
+    expect([...core].some(name => name.startsWith('core-hooks-'))).toBe(false)
+    expect([...files.keys()].some(name => name.startsWith('core-hooks-'))).toBe(true)
   })
 
   it('gives the core its own code and none of the CLI\'s commands, which parsing cli.js cost it', () => {

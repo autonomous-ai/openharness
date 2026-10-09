@@ -181,3 +181,26 @@ existing engine/timestamp prefix, avoiding same-clock collisions across calls,
 daemon processes and restarts. Discovery still accepts both old and new names;
 existing panes are neither renamed nor removed. All native fixtures use private
 homes, shell history and sockets. Final validation and review are pending.
+
+
+## Later follow-ups and remaining safety work
+
+The same-millisecond label fix landed in [#1091](https://github.com/autonomous-ai/openharness/pull/1091).
+The capture authority fence landed in [#1093](https://github.com/autonomous-ai/openharness/pull/1093).
+Kilo and Hermes adoption/control boundaries landed in [#1095](https://github.com/autonomous-ai/openharness/pull/1095)
+and [#1097](https://github.com/autonomous-ai/openharness/pull/1097).
+Eager native identity and Muse/Pi repair landed in [#1104](https://github.com/autonomous-ai/openharness/pull/1104)
+and [#1106](https://github.com/autonomous-ai/openharness/pull/1106).
+OpenCode's version/model control extraction landed in [#1110](https://github.com/autonomous-ai/openharness/pull/1110)
+as `ee33093971d27e9dcda7f2ae8c35f54b61cec0bb` at 11:30:10 UTC, with all automatic checks and independent review.
+Their detailed evidence is in the dated identity, repair, capture, Kilo and OpenCode notes beside this one.
+No release has occurred.
+
+The six original phases have landed. The architectural bar is not complete. Native hook installation now
+has its own [golden-first extraction and fault evidence](2026-10-09-native-hook-installation.md).
+The required next work is bounded asynchronous executable/version preparation, explicit held preparation
+and durable launch intent, retarget authority across native writes, unreadable/unconfirmed native mutation
+handling, and the OpenCode v2 Close checkpoint audit. The precise gaps are recorded in
+[OpenCode control](2026-10-09-opencode-control.md). Remaining shared-control work includes bounded identity
+scans, Cursor pending-task persistence, agy turn backstop/control facts, input verification declarations,
+and the final unavailable-service/readiness audit. Line counts do not establish any of those properties.
