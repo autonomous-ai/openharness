@@ -46,10 +46,11 @@ export function createLaunchHelpers({ prepareApiTools, launchOverridesDeps, setG
   // pasted since takes effect, and a removed API is refused rather than kept on its old key: the models
   // service reads them as it builds the launch (`buildLaunchOverrides`, `refresh`).
   const relaunchOverrides = async (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
+    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, session.agentId)
+    if (!result.ok) return result
     await prepareInstructionWrites(session.cwd)
     prepareApiTools(session.cwd, session.engine)
-    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, session.agentId)
-    if (result.ok && session.externalResume?.request.engine === session.engine) {
+    if (session.externalResume?.request.engine === session.engine) {
       result.overrides.extraArgs.push(...session.externalResume.session?.launchArgs ?? [])
     }
     return result

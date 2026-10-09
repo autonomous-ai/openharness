@@ -37,6 +37,15 @@ function setup() {
 describe('relaunch helpers', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
+  it.each(['store', 'models'])('leaves instruction files alone while %s is unavailable', async unavailable => {
+    const { deps, helpers } = setup()
+    const refused = { ok: false as const, error: 'SERVICE_UNAVAILABLE', detail: 'Waiting for preparation.', unavailable }
+    vi.mocked(buildLaunchOverrides).mockResolvedValueOnce(refused)
+    expect(await helpers.relaunchOverrides(session())).toEqual(refused)
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
+    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+  })
+
   it('relaunches with eager control when optional OpenCode code cannot load', async () => {
     const { deps, helpers } = setup()
     vi.mocked(loadEngine).mockImplementation(() => new Promise(() => {}))

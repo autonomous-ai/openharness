@@ -78,7 +78,6 @@ export function createAgentForker({
     const opencode = engine === 'opencode' ? opencodeLaunch : null
 
     const label = buildHarnessSessionLabel(engine)
-    await prepareInstructionWrites(source.cwd)
     // Fork the source's saved harness context. Workspace templates and init are not run again.
     let dshEnv: Record<string, string> | undefined
     let dshArgs: string[] = []
@@ -127,6 +126,7 @@ export function createAgentForker({
       console.warn(`[agent] fork refused · ${engine} · ${forkRefusal.detail}`)
       return { ok: false, ...forkRefusal }
     }
+    await prepareInstructionWrites(source.cwd)
     prepareApiTools(source.cwd, engine)
     const command = buildEngineCommandArgv(engine, launchOptions)
     const argv = buildEngineLaunchArgv(engine, launchOptions)
