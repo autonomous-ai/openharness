@@ -253,9 +253,70 @@ restored every harness with no prompt.
     `prefetch-warm-wip`. The screenshots of the whole flow are in
     `docs/research/2026-10-08-onboarding-flow/index.html`.
 
+## The onboarding build (2026-10-09)
+
+The redesign approved on 2026-10-08 (renders in `docs/research/2026-10-08-onboarding-redesign/`),
+built on branch `first-run-onboarding`, desktop only:
+
+- **Setup tour.** Seven slides while a fresh Mac sets up, one quiet line at the bottom with the time
+  left and ▸ Details. It waits for setup and for the agent downloads, then opens Harness by itself at
+  the end of the slide on screen. Help ▸ Welcome Tour shows it again.
+- **Downloads beside setup.** On a computer with no agent: OpenCode (curl, 11–13 s) and Codex plus
+  Claude Code (one `npm install -g` into `~/.local` once setup's Node is there, 25–29 s).
+- **First workspace** (`desktop/lib/state/first_arrival.dart`), once, on a computer that never had
+  Harness: no agent → OpenCode left with "make a small web page that shows today's date" typed but
+  not sent, Codex and Claude Code stacked on the right on their own sign-in screens. Claude Code or
+  Codex conversations → the ones nothing is running, by last activity: the latest of each agent side
+  by side, then the next three in a second tab, mixing the agents.
+
+### Persona matrix (macOS VM, final build)
+
+Claude Code and Codex are the e2e fake engines with real-format transcripts in `~/.claude/projects`
+and `~/.codex/sessions`; a "running" conversation is held by a live process the daemon recognises
+(a `~/.claude/sessions/<pid>.json` record, or a process named codex holding its rollout open).
+OpenCode is the real one. History is listed most recent first (c = Claude Code, x = Codex).
+"First arrival" is from the workspace showing to the last pane open. The none, c6, cx-run and repair
+rows are from the rerun after the review fixes; the rest from the run before them.
+
+| Persona | Agents | History (running) | Opened | First arrival |
+|---|---|---|---|---|
+| none | — | — | OpenCode + Codex + Claude Code, task typed | 6.8 s |
+| oc | OpenCode | — | OpenCode, task typed | 2.1 s |
+| c | Claude Code | — | Claude Code | 3.2 s |
+| x | Codex | — | Codex | 3.3 s |
+| cx | both | — | Claude Code + Codex | 2.4 s |
+| c6 | Claude Code | c c c c c c | 2 + 3 | 4.5 s |
+| x4 | Codex | x x x x | 2 + 2 | 3.5 s |
+| cx-conly | both | c c c | 2 + 1 | 3.7 s |
+| cx-run | both | c x c c x c x (first two running) | c2 + x4, then c3 c5 x6 | 4.8 s |
+| cx-allrun | both | c x (both running) | fresh Claude Code + Codex | 3.5 s |
+| oc-c | OpenCode, Claude Code | c c | 2 Claude Code | 3.0 s |
+| oc-x-run | OpenCode, Codex | x x x (first running) | x1 + x2 | 3.4 s |
+| c1 | Claude Code | c | 1 | 2.7 s |
+| cx-mix | both | x c c c c x | x0 + c1, then c2 c3 x5 | 4.2 s |
+| cli-first | CLI installed from a terminal first | c x | nothing: the New Harness box, as today | — |
+| repair | existing user, managed Node gone | c x | nothing: no tour, no first workspace, the New Harness box | — |
+
+New user end to end with the tour: launch → Harness opens by itself at 45 s (all three agents
+downloaded) → three panes at 52–53 s → task typed at 65 s, when OpenCode's own screen is up.
+
+Found and fixed on the way:
+
+- Adding a pane resets the tab's layout for that pane count, so the three-pane layout is applied
+  once the third pane is in.
+- Codex's first start on a fresh Mac took 9.4 s and held Claude Code behind it; a tab's later panes
+  now start together.
+- Two creates of one engine started together collide in the daemon: tmux sessions are named
+  `harness-<engine>-<millisecond>` ("duplicate session"). First arrival never starts two of one
+  engine at once. **The daemon should make that name unique** (left for the core refactor).
+- Real Claude Code cannot reach `api.anthropic.com` from Node inside this VM (ECONNRESET; curl works,
+  the host's Node works), so its pane shows "Unable to connect" there. The VM's network, not the
+  product.
+
 ## Next
 
-- Merge #1047, then #1052 (rebased on main) and #1061; release desktop and CLI.
+- #1061 merged. #1047, #1052, #1067 and #1069 are carried by the onboarding PR (branch
+  `first-run-onboarding`); release desktop and CLI after it.
 - Background install (#1054) is parked as a draft after five reviews found cross-process lock races;
   it saves ~10–25 s on the first harness. Options in the PR: the desktop holds a create until that
   agent's install finished (no pane lock), npm-prefix plus per-agent locks, or drop it.
