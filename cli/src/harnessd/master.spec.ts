@@ -572,7 +572,7 @@ describe('runMaster', { timeout: 60_000 }, () => {
         env: { ...process.env, HARNESSD_SERVICES: 'search' },
         exit: (code) => exits.push(code), onSignal: (signal, listener) => signals.set(signal, listener),
       })
-      const said = (): Array<Record<string, string>> => existsSync(seen) ? readFileSync(seen, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : []
+      const said = (): Array<Record<string, string>> => jsonLines(seen)
       await until('search to say it staged a build', () => said().some((line) => line.role === 'service:search' && line.what === 'staged'))
       // Long enough for a handover the master had asked for to reach the core.
       await new Promise((resolve) => setTimeout(resolve, 500))

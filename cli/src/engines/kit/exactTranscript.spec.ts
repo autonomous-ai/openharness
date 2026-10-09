@@ -225,6 +225,27 @@ describe('exact resume uses complete native evidence', () => {
     })
     await expect(repair.findResumedTranscript(engine, ID, { cwd })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   })
+  it.each(['codex', 'pi'] as const)('fences the %s descriptor when an ordinary ancestor directory is replaced and restored', async engine => {
+    const cwd = path('work'); mkdirSync(cwd)
+    const { piSessionFolder } = await import('../repairIdentities.js')
+    const relative = engine === 'codex' ? ['codex', 'sessions', `rollout-${ID}.jsonl`]
+      : ['pi', 'agent', 'sessions', piSessionFolder(cwd), `day_${ID}.jsonl`]
+    const body = (id: string) => JSON.stringify(engine === 'codex'
+      ? { type: 'session_meta', payload: { id, cwd, source: 'cli' } } : { type: 'session', id, cwd }) + '\n'
+    file(path('anchor', ...relative), body(OTHER)); file(path('alternate', ...relative), body(ID))
+    if (engine === 'pi') (await import('../../config/env.js')).env.PI_HOME = path('anchor', 'pi')
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
+      // The sessions directory and transcript retain their own metadata: only an ancestor is renamed.
+      // Both opens see the alternate descriptor while the visible path is restored after each open.
+      renameSync(path('anchor'), path('holding')); renameSync(path('alternate'), path('anchor'))
+      const handle = await actual.open(name, flags, mode)
+      renameSync(path('anchor'), path('alternate')); renameSync(path('holding'), path('anchor'))
+      return handle
+    })
+    await expect(repair.findResumedTranscript(engine, ID, { codexHome: path('anchor', 'codex'), cwd }))
+      .rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  })
   it.each(['root', 'ancestor', 'chained target', 'relative parent'] as const)('holds a directory listing redirected through a %s alias and restored', async kind => {
     const relative = kind === 'relative parent'
     claude('conflict', relative ? path('target-a', 'home') : path('target-a'))
