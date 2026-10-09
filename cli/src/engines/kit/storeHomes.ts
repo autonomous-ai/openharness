@@ -1,8 +1,8 @@
 /**
  * The homes of an engine that keeps one store per home, as its contract declares them: the default, then each
  * profile folder below it that has a store (Hermes: `~/.hermes` and `~/.hermes/profiles/<name>`). Listed for
- * whoever reads those stores: the hook server's admission, repair and the readers share one listing per
- * declaration, reused for its `ttlMs`.
+ * optional readers, which may reuse a listing for its `ttlMs`. Session control uses storePool.ts:
+ * a home listing by itself cannot prove a fresh, complete set of database claims.
  *
  * Moved from engines/hermes/home.ts (`listHermesHomes`), unchanged but for the declaration it reads.
  */
@@ -22,7 +22,7 @@ export interface StoreHomes {
 
 const listings = new WeakMap<StoreHomes, { at: number; homes: string[] }>()
 
-/** Fresh evidence for admission. An incomplete profile list cannot authorize a profile binding. */
+/** Compatibility listing; even complete listings need database evidence before session control. */
 export async function readStoreHomes(declared: StoreHomes, defaultHome: string): Promise<{ homes: string[]; complete: boolean }> {
   const homes = [defaultHome]
   let complete = true

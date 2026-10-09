@@ -25,8 +25,8 @@ export const HERMES_HISTORY_ID_RE =
 
 /**
  * Hermes keeps one store per home: `hermes -p <name>` runs against `~/.hermes/profiles/<name>`, with its own
- * `state.db` (engines/hermes/home.ts). Listed by the kit (kit/storeHomes.ts) for the hook server, repair and the
- * readers alike.
+ * `state.db` (engines/hermes/home.ts). Session control verifies fresh pools in kit/storePool.ts;
+ * optional readers may reuse the kit/storeHomes.ts listing for ttlMs.
  */
 export const HERMES_HOMES: StoreHomes = { profiles: 'profiles', store: hermesDbPath, max: 64, ttlMs: 30_000 }
 
@@ -43,7 +43,7 @@ export const HERMES_HOMES: StoreHomes = { profiles: 'profiles', store: hermesDbP
  */
 export const HERMES_SOURCE: StoreSourceRule = {
   id: /^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/,
-  query: 'SELECT source FROM sessions WHERE id = ?;',
+  query: 'SELECT substr(source, 1, 129) AS source FROM sessions WHERE id = ? LIMIT 2;',
   column: 'source',
   interactive: ['', 'cli', 'tui'],
   maxBuffer: 1 << 20,

@@ -1,0 +1,19 @@
+# Fresh, complete Hermes store evidence
+
+Hermes repair used a 30-second profile cache and converted both failed reads and multiple rows in one database into no match. A newly created or unreadable competing profile could therefore make an ambiguous conversation appear unique. Hook admission read a fresh listing but accepted the first default or profile result before proving the remaining stores readable. These violate the daemon separation requirement that unavailable identity evidence preserve the current conversation and pending intent.
+
+The former-code golden was recorded in `bc6540795` before production changes. It covers 16 observations through native source declarations, home listing and live repair, with Linux, UTC, fixed time, private homes and built-in SQLite. Host process probes and optional engine loading are forbidden. Re-recording after integrating main `902ab6038` passed without changing the artifact. Proven empty and ambiguous repair pools retain the former result; unsafe incomplete evidence has separate regression assertions.
+
+## Control evidence
+
+`engines/kit/storePool.ts` streams at most 64 profile entries and includes default, populated and unwritten homes. It captures directory and native database/WAL/rollback-journal metadata, verifies read-only bounded queries, and rechecks all positive and negative claims before returning. Physical aliases count once; every alias path remains part of the proof. A changed, unreadable, nonregular or oversized pool raises the eager typed identity hold. The selected store's metadata is checked last, without a later native await. Lookup never initializes a home or database.
+
+Each poll has a shared two-second work budget. SQLite gets the remaining CLI deadline and at most 250 ms of synchronous busy wait. Cached native handles now honor each caller's requested busy timeout. Result counts and text lengths are bounded in SQL. Filesystem calls and synchronous SQLite execution are not cancellable; this is bounded work and change detection, not a hard wall-clock or atomic multi-file snapshot guarantee. Contention or a changed pool retries from fresh evidence.
+
+Repair queries every store and retains all matching rows, including multiple rows inside one store. Only a complete unique result can bind. Hook admission verifies the complete pool before accepting or rejecting its source; missing rows and conflicting homes remain pending with their reason. Existing core admission ordering, process fences, Stop tombstones and retry ownership remain in force. Optional history listing caches are outside this control path; the separate optional reader's registry promotion still needs its own authority audit in the completion checklist.
+
+## Validation plan
+
+Run typecheck, architecture, core/services and harnessd per-file coverage, affected native/SQLite/hook/repair tests and unchanged identity goldens. Run serial resume coverage alone. The private bundled Hermes lane runs with its optional module absent and stalled, checking readiness, unreadable later profiles, conflicting records, child rejection and automatic recovery. Mutation checks first require a green baseline and then assertion failures for disconnected declarations/callers, incomplete evidence, ambiguity, deadlines and stale results. Compare CPU, latency and RSS on identical private stores against main. Independent exact-head review and automatic CI precede the authorized merge. No release.
+
+Implementation began after the baseline was verified at 15:12 UTC on October 9. The first focused pass completed at 15:18 UTC: 149 tests, typecheck, architecture and unchanged goldens passed. Later validation, matched cost, review, waiting and merge are recorded with the PR. This item does not complete the entire native-identity group or the overall daemon checklist.

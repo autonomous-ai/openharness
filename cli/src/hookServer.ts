@@ -9,9 +9,10 @@ import { join } from 'node:path'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
-import { HERMES_HOMES, HERMES_SOURCE, hermesDbPath } from './engines/hermes/contract.js'
-import { readStoreHomes } from './engines/kit/storeHomes.js'
-import { isInteractiveSource, readStoreSessionSource } from './engines/kit/storeSource.js'
+import { HERMES_HOMES, HERMES_SOURCE } from './engines/hermes/contract.js'
+import { readStorePool } from './engines/kit/storePool.js'
+import { isInteractiveSource } from './engines/kit/storeSource.js'
+import { IdentityReadUnavailable } from './engines/kit/identityScan.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { processIdentityKey } from './lib/terminalRuntime.js'
@@ -366,21 +367,22 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
 
 /** Read source evidence without binding. Unreadable stores never authorize a conversation. */
 async function inspectHermesKind(sessionId: string): Promise<AdmissionDecision<string | undefined>> {
-  const { homes, complete } = await readStoreHomes(HERMES_HOMES, env.HERMES_HOME)
-  let unavailable = false
-  for (const home of homes) {
-    if (home !== env.HERMES_HOME && !complete) unavailable = true
-    const answer = await readStoreSessionSource(HERMES_SOURCE, hermesDbPath(home), sessionId)
-    if (answer === null) continue
-    if (typeof answer === 'object') { unavailable = true; continue }
-    if (!isInteractiveSource(HERMES_SOURCE, answer)) return { kind: 'reject', reason: 'hermes_subagent' }
-    // An earlier unreadable home may hold the same id; preserve the declared lookup order.
-    if (!unavailable) return { kind: 'accept', value: home === env.HERMES_HOME ? undefined : home }
-    break
+  if (!HERMES_SOURCE.id.test(sessionId)) return { kind: 'accept', value: undefined }
+  try {
+    const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
+      sql: HERMES_SOURCE.query, params: [sessionId], maxRows: 1, maxBuffer: HERMES_SOURCE.maxBuffer,
+    })
+    if (!found.length) return { kind: 'hold', reason: 'Waiting for the Hermes session source record; keeping the current conversation.' }
+    if (found.length !== 1) return { kind: 'hold', reason: 'Hermes session source is ambiguous across homes; keeping the current conversation.' }
+    const { home, row } = found[0]
+    const source = row[HERMES_SOURCE.column]
+    if (typeof source !== 'string' || source.length > 128) throw new IdentityReadUnavailable('the Hermes source record is invalid')
+    if (!isInteractiveSource(HERMES_SOURCE, source)) return { kind: 'reject', reason: 'hermes_subagent' }
+    return { kind: 'accept', value: home === env.HERMES_HOME ? undefined : home }
+  } catch (error) {
+    if (!(error instanceof IdentityReadUnavailable)) throw error
+    return { kind: 'hold', reason: `Hermes session source is unavailable; keeping the current conversation. ${error.message}` }
   }
-  return { kind: 'hold', reason: unavailable || !complete
-    ? 'Hermes session source is unavailable; keeping the current conversation.'
-    : 'Waiting for the Hermes session source record; keeping the current conversation.' }
 }
 
 export interface HookServerOptions {

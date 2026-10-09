@@ -1,16 +1,38 @@
 /** Private daemon, hook credential, process, tmux and Hermes home throughout. */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { afterEach, expect, it, onTestFailed } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest'
+import { readLeanBundle } from '../src/harnessd/leanBundle.js'
 import { LocalClient } from './harness/client.js'
-import { IsolatedDaemon, until } from './harness/daemon.js'
+import { CLI_ROOT, IsolatedDaemon, until } from './harness/daemon.js'
+import { withLean } from './harness/release.js'
 
 let daemon: IsolatedDaemon | undefined
 let client: LocalClient | undefined
+let scratch: string, bundle: string
+beforeAll(() => {
+  scratch = mkdtempSync(join(tmpdir(), 'hermes-admission-bundle-'))
+  bundle = join(scratch, 'build', 'cli.js')
+  execFileSync(process.execPath, ['build-bundle.mjs'], { cwd: CLI_ROOT,
+    env: { ...process.env, BUNDLE_OUT_DIR: dirname(bundle) }, stdio: 'pipe' })
+}, 120_000)
 afterEach(async () => { client?.close(); await daemon?.close(); client = undefined; daemon = undefined })
+afterAll(() => { if (scratch) rmSync(scratch, { recursive: true, force: true }) })
 
-it('holds unverified Hermes hooks while core remains ready, then rejects a child and admits a verified conversation', async () => {
-  const d = daemon = await IsolatedDaemon.create()
+it.each(['missing', 'stalled'] as const)('keeps Hermes admission pending and core ready with %s optional code, then recovers the complete store pool', async mode => {
+  const text = readFileSync(bundle, 'utf8')
+  const lean = readLeanBundle(Buffer.from(text))!
+  const files = Object.fromEntries([...lean.files].map(([name, value]) => [name, value.toString('utf8')]))
+  const chunks = Object.keys(files).filter(name => name.startsWith('core-inProcess-') && files[name]!.includes('HermesReader'))
+  expect(chunks).toHaveLength(1)
+  if (mode === 'missing') delete files[chunks[0]!]
+  else files[chunks[0]!] = "console.error('[fixture] Hermes reader stalled'); await new Promise(() => {});\n"
+  const scriptPath = join(scratch, mode, 'cli.js')
+  mkdirSync(dirname(scriptPath), { recursive: true })
+  writeFileSync(scriptPath, withLean(text, files), { mode: 0o755 })
+  const d = daemon = await IsolatedDaemon.create({ scriptPath })
   onTestFailed(() => console.log(d.log()))
   d.env.HERMES_HOME = join(d.root, 'hermes')
   d.env.HERMES_PATH = join(d.root, 'bin', 'hermes')
@@ -61,7 +83,24 @@ setInterval(() => {}, 1000)
     + 'CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, finish_reason TEXT, reasoning TEXT);')
   const insert = db.prepare('INSERT INTO sessions VALUES (?, ?, ?, 0)')
   insert.run(child, 'tool', cwd); insert.run(own, 'cli', cwd); db.close()
+  const profile = join(d.env.HERMES_HOME, 'profiles', 'later')
+  mkdirSync(profile, { recursive: true })
+  const otherStore = join(profile, 'state.db')
+  writeFileSync(otherStore, 'unreadable competing profile')
+  // A healthy default row cannot bypass a later unavailable home, even with optional readers gone.
+  await new Promise(resolve => setTimeout(resolve, 1_200))
+  expect((await row()).sessionId).toBeFalsy()
+  expect((await fetch(`http://127.0.0.1:${d.port}/api/health`)).ok).toBe(true)
+  rmSync(otherStore)
+  const competing = new DatabaseSync(otherStore)
+  competing.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, cwd TEXT, started_at REAL)')
+  competing.prepare('INSERT INTO sessions VALUES (?, ?, ?, 0)').run(own, 'cli', cwd)
+  competing.close()
   await until('automatic source recheck to reject the child', () => d.log().includes('ignored · hermes_subagent') || null, 10_000, 100)
+  await until('complete but ambiguous parent pool', () => d.log().includes('ambiguous across homes') || null, 10_000, 100)
+  expect((await row()).sessionId).toBeFalsy()
+  const resolved = new DatabaseSync(otherStore)
+  resolved.exec('DELETE FROM sessions'); resolved.close()
   await until('automatic parent binding after rejecting the child', async () => (await row()).sessionId === own || null, 10_000, 100)
   expect(d.coresStarted()).toBe(1)
 }, 90_000)

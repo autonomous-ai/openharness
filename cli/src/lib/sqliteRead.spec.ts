@@ -64,6 +64,15 @@ withCli('sqliteReadAll', () => {
   ]
   const withBuiltin = hasBuiltin ? it : it.skip
 
+  withBuiltin('applies each caller deadline to a cached native handle', async () => {
+    overrideBuiltinSqlite(undefined)
+    for (const busyTimeoutMs of [250, 7, 250]) {
+      expect(await sqliteReadAll(db, 'PRAGMA busy_timeout;', [], { busyTimeoutMs })).toEqual({
+        ok: true, via: 'builtin', rows: [{ timeout: busyTimeoutMs }],
+      })
+    }
+  })
+
   for (const [via, select] of paths) {
     describe(`via ${via}`, () => {
       beforeEach(select)

@@ -23,8 +23,8 @@ import { identityBytes, identityEntries, identityFile, identityHead, identitySca
 import { findSessionFileOf, sessionIdentityMetaOf } from '../engines/sessionFiles.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
-import { HERMES_HOMES, hermesDbPath } from '../engines/hermes/contract.js'
-import { listStoreHomes } from '../engines/kit/storeHomes.js'
+import { HERMES_HOMES, HERMES_HISTORY_ID_RE } from '../engines/hermes/contract.js'
+import { readStorePool } from '../engines/kit/storePool.js'
 import { museSessionIdentity, piSessionFolder, readPiHead } from '../engines/repairIdentities.js'
 import { PI_SESSION_ID } from '../engines/pi/contract.js'
 import { transcriptOf, processSessionOf as nativeProcessSession } from '../engines/identities.js'
@@ -431,19 +431,17 @@ export async function findLiveSession(
       // never rebind a profile agent after a restart (openharness#191). Each store is asked on its
       // own and the answers are pooled, so two homes claiming the same cwd is ambiguous — exactly as
       // two rows in one store already are — rather than "whichever home was listed first".
-      const homes = await listStoreHomes(HERMES_HOMES, env.HERMES_HOME)
-      const found: RepairedSession[] = []
-      for (const home of homes) {
-        const one = await dbEngineSession(
-          hermesDbPath(home),
-          `SELECT id FROM sessions WHERE cwd IN (${dirList}) AND started_at >= ?`
-            + ' ORDER BY started_at DESC LIMIT 2;',
-          [...dirs, Math.trunc(sinceMs / 1000)],
-        )
-        if (one) found.push({ ...one, hermesHome: home })
-        if (found.length > 1) return null
+      const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
+        sql: `SELECT substr(id, 1, 129) AS id FROM sessions WHERE cwd IN (${dirList}) AND started_at >= ?`
+          + ' ORDER BY started_at DESC LIMIT 2;',
+        params: [...dirs, Math.trunc(sinceMs / 1000)], maxRows: 2, maxBuffer: 4096,
+      })
+      for (const { row } of found) {
+        if (typeof row.id !== 'string' || !HERMES_HISTORY_ID_RE.test(row.id)) {
+          throw new IdentityReadUnavailable('a Hermes store contains an invalid conversation id')
+        }
       }
-      return found[0] ?? null
+      return found.length === 1 ? { sessionId: found[0].row.id as string, hermesHome: found[0].home } : null
     }
     case 'devin':
       // created_at is epoch SECONDS (integer).
