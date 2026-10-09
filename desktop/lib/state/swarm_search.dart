@@ -2283,7 +2283,7 @@ class SwarmSearchController extends ChangeNotifier {
         sessionId: external.sessionId,
       ));
       if (external.open || previewed?.openElsewhere == true) {
-        // One in a terminal can be moved here: opening it asks how.
+        // One in a terminal can be moved here: opening it moves it.
         final where = previewed?.openIn ?? external.openIn;
         if (where == 'terminal') return null;
         if (where == 'harness') return 'Already in Harness';
