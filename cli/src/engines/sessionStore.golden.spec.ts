@@ -597,7 +597,21 @@ describe('core finds sessions where it did before Claude Code and Codex declared
       expect(Object.keys(actual), platform).toEqual(Object.keys(golden))
       for (const [section, cases] of Object.entries(golden)) {
         expect(Object.keys(actual[section]!).sort(), `${platform} · ${section}`).toEqual(Object.keys(cases).sort())
-        for (const [key, value] of Object.entries(cases)) expect(actual[section]![key], `${platform} · ${section} · ${key}`).toEqual(value)
+        for (const [key, value] of Object.entries(cases)) {
+          // Safety correction: an existing unusable process record is not proof of absence. Keep
+          // the former artifact intact, assert its exact old answer, and name every changed case.
+          const held = new Map<string, string>(['default homes', 'moved homes'].flatMap(home => [
+            ...['no id', 'no start', 'unreadable'].map(name => [
+              `process record · ${home} · ${name}`, 'the process record is incomplete or invalid',
+            ] as const),
+            [`process record · ${home} · no transcript`, 'the process names a conversation whose transcript is unavailable'] as const,
+            [`process record · ${home} · another folder`, 'the current process record names a different working directory'] as const,
+          ]))
+          const reason = section === 'find' ? held.get(key) : undefined
+          if (reason) expect(value, `${platform} · ${key} · former refusal`).toBeNull()
+          expect(actual[section]![key], `${platform} · ${section} · ${key}`)
+            .toEqual(reason ? { threw: `Conversation identity is held: ${reason}.` } : value)
+        }
       }
     }
   }, 120_000)

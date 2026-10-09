@@ -6,6 +6,7 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 
 let row: RegisteredSession
 let service: CloseAgentService
@@ -64,6 +65,21 @@ it('checkpoint failure retains the session and reports the failure', async () =>
   vi.mocked(deps.checkpoint).mockRejectedValue(Object.assign(new Error('Disk full'), { code: 'HISTORY_NOT_SAVED' }))
   expect(await service.request(request())).toMatchObject({ error: 'HISTORY_NOT_SAVED', detail: 'Disk full' })
   expect(registry.byAgent(row.agentId)).toBe(row)
+})
+it('a queued Close preserves its intent and reason while native identity is unavailable, then retries', async () => {
+  vi.mocked(deps.stop).mockRejectedValueOnce(new IdentityReadUnavailable('the process record is incomplete'))
+  await expect(service.request(request('after_task'))).resolves.toEqual({ deferred: true })
+  const plan = row.closePlan!
+  await service.tick()
+  time += 5_000
+  await service.tick()
+  expect(registry.byAgent(row.agentId)?.closePlan).toEqual({ ...plan,
+    state: 'waiting', detail: 'Conversation identity is held: the process record is incomplete.' })
+  expect(deps.checkpoint).not.toHaveBeenCalled()
+  await service.tick()
+  expect(deps.stop).toHaveBeenCalledTimes(2)
+  expect(deps.checkpoint).toHaveBeenCalledOnce()
+  expect(registry.byAgent(row.agentId)).toBeUndefined()
 })
 it('cleanup requires open-tab support and checks again after history is saved', async () => {
   const close = { ...request('now'), onlyIfHidden: true }

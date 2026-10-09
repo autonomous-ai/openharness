@@ -39,7 +39,20 @@ async function check(key: string, run: () => unknown | Promise<unknown>): Promis
   try { value = await run() } catch (error) { value = { error: (error as Error).message } }
   if (typeof value === 'symbol') value = '<unsettled>'
   captured[key] = JSON.parse(JSON.stringify(value ?? null).split(clock.root).join('<root>'))
-  if (!RECORD) expect({ key, value: captured[key] }).toEqual({ key, value: expected[key] })
+  if (!RECORD) {
+    // Explicit safety corrections only: keep the former nulls in the artifact, but do not
+    // let an incomplete identity remove a possible competitor from a discovery pool.
+    const held: Record<string, string> = {
+      'muse:malformed': 'the workspace header is incomplete or invalid',
+      'muse:noWorkspace': 'the workspace header is incomplete or invalid',
+      'muse:wrongEnvelope': 'the workspace header is incomplete or invalid',
+      'muse:incomplete': 'the run identity is incomplete or invalid',
+    }
+    const reason = held[key]
+    if (reason) expect(expected[key], `${key} · former answer`).toBeNull()
+    expect({ key, value: captured[key] }).toEqual({ key,
+      value: reason ? { error: `Conversation identity is held: ${reason}.` } : expected[key] })
+  }
 }
 
 beforeAll(async () => {

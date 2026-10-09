@@ -25,7 +25,7 @@ mutations = [
     ('Pi core header disconnected', 'src/lib/sessionRepair.ts', 'const head = await readPiHead(join(directory, file))', 'const head = null', golden),
     ('Muse core identity disconnected', 'src/lib/sessionRepair.ts', 'const identity = await museSessionIdentity(path, root => sameDir(root, cwd))', 'const identity = null', golden),
     ('Muse waits on optional code', 'src/lib/sessionRepair.ts', 'const identity = await museSessionIdentity', "await (await import('../engines/inProcess.js')).loadEngine('muse')\n        const identity = await museSessionIdentity", eager),
-    ('Read bound mistaken for absence', 'src/engines/kit/sessionIdentity.ts', "throw new Error('The conversation identity exceeds the bounded read; discovery is held.')", 'return null', bounded),
+    ('Read bound mistaken for absence', 'src/engines/kit/sessionIdentity.ts', "throw new IdentityReadUnavailable('the run identity exceeds the bounded read')", 'return null', bounded),
     ('One hold aborts discovery', 'src/core/agents/bind.ts', 'binding held · ${error instanceof Error ? error.message : error}`)\n        return null', 'binding held · ${error instanceof Error ? error.message : error}`)\n        throw error', bind),
     ('Stop capture erased by live snapshot', 'src/lib/stoppedAgents.ts', 'session = { ...session, transcriptPath: previous.transcriptPath }', 'session = { ...session, transcriptPath: null }', stop),
     ('Saved path crosses a conversation', 'src/lib/stoppedAgents.ts', 'session.sessionId === previous.sessionId && session.engine === previous.engine', 'session.engine === previous.engine', saved),

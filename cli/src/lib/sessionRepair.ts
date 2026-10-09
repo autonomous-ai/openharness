@@ -15,12 +15,12 @@
  */
 
 import { execFile } from 'child_process'
-import { readdir, readFile, readlink, realpath, stat } from 'fs/promises'
-import { basename, dirname, join, relative, sep } from 'path'
+import { readdir, readlink, realpath, stat } from 'fs/promises'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
-import { headBytes } from '../engines/kit/continuation.js'
-import { findSessionFileOf, sessionMetaOf } from '../engines/sessionFiles.js'
+import { identityBytes, identityEntries, identityFile, identityHead, identityScanBudget, IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { findSessionFileOf, sessionIdentityMetaOf } from '../engines/sessionFiles.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
 import { HERMES_HOMES, hermesDbPath } from '../engines/hermes/contract.js'
@@ -59,22 +59,27 @@ export interface RepairedSession {
 
 interface TranscriptFile { path: string; mtimeMs: number; birthMs: number }
 
-/** Every `.jsonl` under `root`, newest first, capped. Checkpoint/sidecar files are not transcripts. */
-async function transcripts(root: string, depth = 0): Promise<TranscriptFile[]> {
-  if (depth > MAX_DEPTH) return []
-  let entries
-  try { entries = await readdir(root, { withFileTypes: true }) } catch { return [] }
-  const out: TranscriptFile[] = []
-  for (const entry of entries) {
+/** Collect a complete bounded pool. Truncation must never make two conversations look like one. */
+async function transcripts(root: string, budget: { remaining: number }, out: TranscriptFile[], excluded?: string, depth = 0): Promise<void> {
+  for await (const entry of identityEntries(root, budget, depth === 0)) {
     const full = join(root, entry.name)
-    if (entry.isDirectory()) { out.push(...await transcripts(full, depth + 1)); continue }
+    if (entry.isDirectory()) {
+      if (entry.name === excluded) continue
+      if (depth >= MAX_DEPTH) throw new IdentityReadUnavailable('the transcript depth limit was reached')
+      await transcripts(full, budget, out, excluded, depth + 1)
+      continue
+    }
     if (!entry.name.endsWith('.jsonl') || entry.name.includes('.checkpoints.')) continue
+    if (out.length >= MAX_FILES) throw new IdentityReadUnavailable('the transcript count limit was reached')
     try {
       const info = await stat(full)
+      if (!info.isFile()) throw new IdentityReadUnavailable('a transcript is not a regular file')
       out.push({ path: full, mtimeMs: info.mtimeMs, birthMs: info.birthtimeMs || info.mtimeMs })
-    } catch { /* vanished mid-scan */ }
+    } catch (error) {
+      if (error instanceof IdentityReadUnavailable) throw error
+      throw new IdentityReadUnavailable('a transcript could not be inspected')
+    }
   }
-  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, MAX_FILES)
 }
 
 /**
@@ -93,24 +98,39 @@ const CWD_SCAN_CHARS = 256 * 1024
  * store declares it: `scan.sidechain`). One bounded read (256 KB — transcripts run to hundreds of MB) shared by
  * every file engine that declares its cwd in-file. Without a flag it stops at the first cwd, exactly as it always did.
  */
-async function readTranscriptHead(path: string, sidechain: string | null): Promise<{ cwd: string; side: boolean | undefined } | null> {
+async function readTranscriptHead(path: string, sidechain: string | null, requestedCwd?: string): Promise<{ cwd: string; side: boolean | undefined } | null> {
   try {
     // Preserve the existing UTF-16 character budget, including non-ASCII paths. Four
     // UTF-8 bytes per code unit is sufficient even when the cutoff splits a surrogate
     // pair; a byte budget equal to the character budget would silently shrink the scan.
-    const head = (await headBytes(path, CWD_SCAN_CHARS * 4)).toString('utf-8').slice(0, CWD_SCAN_CHARS)
+    const bytes = await identityBytes(path, CWD_SCAN_CHARS * 4 + 1)
+    const text = bytes.subarray(0, CWD_SCAN_CHARS * 4).toString('utf-8')
+    const head = text.slice(0, CWD_SCAN_CHARS)
+    const complete = bytes.length <= CWD_SCAN_CHARS * 4 && text.length <= CWD_SCAN_CHARS
+      && head.split('\n').length <= CWD_SCAN_LINES
     let cwd = ''
     let side: boolean | undefined
+    let malformed = false
     for (const line of head.split('\n', CWD_SCAN_LINES)) {
       if (!line.trim()) continue
       let obj: Record<string, unknown>
-      try { obj = JSON.parse(line) as Record<string, unknown> } catch { continue }
+      try { obj = JSON.parse(line) as Record<string, unknown> } catch { malformed = true; continue }
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) { malformed = true; continue }
       if (!cwd && typeof obj.cwd === 'string' && obj.cwd) cwd = obj.cwd
+      if (cwd && !isAbsolute(cwd)) throw new IdentityReadUnavailable('the transcript working directory is invalid')
       if (sidechain && side === undefined && typeof obj[sidechain] === 'boolean') side = obj[sidechain] as boolean
-      if (cwd && (!sidechain || side !== undefined)) break
+      if (cwd && requestedCwd && !await sameDir(cwd, requestedCwd)) return { cwd, side }
+      if (side === true || (cwd && (!sidechain || side !== undefined))) return { cwd, side }
+    }
+    if (!complete) throw new IdentityReadUnavailable('the transcript header exceeds the read limit')
+    if (!cwd || (sidechain && side === undefined && malformed)) {
+      throw new IdentityReadUnavailable('the transcript header is incomplete or invalid')
     }
     return { cwd, side }
-  } catch { return null }
+  } catch (error) {
+    if (error instanceof IdentityReadUnavailable) throw error
+    throw new IdentityReadUnavailable('a transcript header could not be read')
+  }
 }
 
 async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> {
@@ -132,10 +152,10 @@ async function readTranscriptMeta(path: string): Promise<TranscriptMeta | null> 
  * `first`: the file's first record (engines/sessionFiles.ts), whose id is the session's (the file name only holds
  * it), and never a child's: a subagent's rollout must never become an agent of its own.
  */
-function scanMeta(engine: AgentEngine, scan: SessionStoreContract['scan']): (path: string) => Promise<TranscriptMeta | null> {
+function scanMeta(engine: AgentEngine, scan: SessionStoreContract['scan'], cwd: string): (path: string) => Promise<TranscriptMeta | null> {
   if (scan.from === 'first') {
     return async (path) => {
-      const meta = sessionMetaOf(engine, path)
+      const meta = await sessionIdentityMetaOf(engine, path)
       return meta && !meta.isSubagent ? { cwd: meta.cwd, sessionId: meta.id || undefined } : null
     }
   }
@@ -144,7 +164,7 @@ function scanMeta(engine: AgentEngine, scan: SessionStoreContract['scan']): (pat
     // legitimately sit under a folder of the child's name.
     const root = sessionRoots(engine).find((one) => !relative(one, path).startsWith('..'))
     if (root !== undefined && relative(root, path).split(sep).includes(scan.childFolder)) return null
-    const head = await readTranscriptHead(path, scan.sidechain)
+    const head = await readTranscriptHead(path, scan.sidechain, cwd)
     return head && head.side !== true && head.cwd ? { cwd: head.cwd } : null
   }
 }
@@ -189,14 +209,18 @@ async function fileEngineSession(
   cwd: string,
   startedAtMs: number,
   readMeta: (path: string) => Promise<TranscriptMeta | null>,
-  opts?: { bornOnly?: boolean },
+  opts?: { bornOnly?: boolean; excludedDirectory?: string },
 ): Promise<RepairedSession | null> {
   const since = startedAtMs - START_SLACK_MS
   const born: RepairedSession[] = []
   const wrote: RepairedSession[] = []
   // Several roots are one pool, newest first: one conversation in each of two homes is two agents, as in one.
-  const files = typeof root === 'string' ? await transcripts(root)
-    : (await Promise.all(root.map((one) => transcripts(one)))).flat().sort((a, b) => b.mtimeMs - a.mtimeMs)
+  const files: TranscriptFile[] = []
+  const budget = identityScanBudget()
+  for (const directory of typeof root === 'string' ? [root] : root) {
+    await transcripts(directory, budget, files, opts?.excludedDirectory)
+  }
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
   for (const file of files) {
     if (file.mtimeMs < since) break // sorted newest-first: everything after is older still
     const meta = await readMeta(file.path)
@@ -266,8 +290,10 @@ async function copilotDirectoryScan(
 ): Promise<RepairedSession | null> {
   return fileEngineSession(join(env.COPILOT_HOME, 'session-state'), cwd, startedAtMs, async (path) => {
     if (basename(path) !== 'events.jsonl') return null
-    const head = (await readFile(path, 'utf8').catch(() => '')).split('\n', 5)
-    const root = recordCwd(head, COPILOT_CWD)
+    const head = await identityHead(path, 5)
+    const root = recordCwd(head.lines, COPILOT_CWD)
+    if (!root || !isAbsolute(root)) throw new IdentityReadUnavailable(head.complete
+      ? 'the session header is incomplete or invalid' : 'the session header exceeds the read limit')
     return root ? { cwd: root, sessionId: basename(dirname(path)) } : null
   }, opts)
 }
@@ -289,10 +315,11 @@ async function storeSession(
   startedAtMs: number,
   opts?: { bornOnly?: boolean; pid?: number; codexHome?: string },
 ): Promise<RepairedSession | null> {
-  const scan = scanMeta(engine, store.scan)
+  const scan = scanMeta(engine, store.scan, cwd)
   if ('record' in store.live) {
     const exact = opts?.pid ? await processSessionOf(engine, opts.pid, cwd, startedAtMs) : null
-    return exact ?? fileEngineSession(sessionRoots(engine), cwd, startedAtMs, scan, opts)
+    return exact ?? fileEngineSession(sessionRoots(engine), cwd, startedAtMs, scan,
+      { ...opts, ...(store.scan.from === 'head' ? { excludedDirectory: store.scan.childFolder } : {}) })
   }
   const sessions = sessionRoots(engine, opts?.codexHome)
   if (opts?.pid) return openFileSessionOf(engine, opts.pid, sessions, cwd)
@@ -335,7 +362,7 @@ export async function findLiveSession(
         // being conversed in has opened a RUN.
         const identity = await museSessionIdentity(path, root => sameDir(root, cwd))
         return identity ? { ...identity, sessionId: basename(dirname(path)) } : null
-      }, opts)
+      }, { ...opts, excludedDirectory: 'subagent' })
     }
     case 'amp':
       // The transcripts scanned here are the adapter's own — Amp keeps no conversation on disk, so its
@@ -356,7 +383,11 @@ export async function findLiveSession(
         const group = dirname(sessionDir)
         let root = ''
         try { root = decodeURIComponent(basename(group)) } catch { /* hashed layout below */ }
-        if (!root.startsWith('/')) root = (await readFile(join(group, '.cwd'), 'utf8').catch(() => '')).trim()
+        if (!root.startsWith('/')) root = (await identityFile(join(group, '.cwd')).catch(error => {
+          if (error instanceof IdentityReadUnavailable) throw error
+          throw new IdentityReadUnavailable('the session working directory is unavailable')
+        })).trim()
+        if (!isAbsolute(root)) throw new IdentityReadUnavailable('the session working directory is invalid')
         return root ? { cwd: root, sessionId: basename(sessionDir) } : null
       }, opts)
     case 'opencode':
@@ -572,7 +603,7 @@ export async function openFileSessionOf(
     if (!live.open.file.test(path)) continue
     const real = await realpath(path).catch(() => path)
     if (!roots.some((root) => real.startsWith(`${root}${sep}`))) continue
-    const meta = sessionMetaOf(engine, real)
+    const meta = await sessionIdentityMetaOf(engine, real)
     if (!meta || meta.isSubagent || !meta.id || !meta.cwd || !await sameDir(meta.cwd, cwd)) continue
     found.set(real, { sessionId: meta.id, transcriptPath: real })
   }
@@ -590,28 +621,58 @@ export async function processSessionOf(engine: AgentEngine, pid: number, cwd: st
   if (!live || !('record' in live)) return null
   if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAtMs)) return null
   const rule = live.record
+  let result: RepairedSession | null = null
+  const records: { file: string; text: string | null }[] = []
+  const read = (file: string) => identityFile(file).catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  })
   for (const sessions of sessionRoots(engine)) {
-    const found = await processRecord(engine, rule, join(dirname(sessions), rule.folder, `${pid}${rule.suffix}`), pid, cwd, startedAtMs)
-    if (found) return found
+    const file = join(dirname(sessions), rule.folder, `${pid}${rule.suffix}`)
+    const text = await read(file)
+    records.push({ file, text })
+    if (text === null) continue
+    const found = await processRecord(engine, rule, text, pid, cwd, startedAtMs)
+    if (!found) continue
+    if (result && (result.sessionId !== found.sessionId || result.transcriptPath !== found.transcriptPath)) {
+      throw new IdentityReadUnavailable('current process records name different conversations')
+    }
+    result = found
   }
-  return null
+  // A conversation can change inside the same process while another home is being read.
+  // Recheck absent/stale claims too: a newly created claim invalidates the earlier pool.
+  for (const { file, text } of records) {
+    if (await read(file) !== text) throw new IdentityReadUnavailable('the process records changed during discovery')
+  }
+  return result
 }
 
 type ProcessRecordRule = Extract<SessionStoreContract['live'], { record: unknown }>['record']
 
-async function processRecord(engine: AgentEngine, rule: ProcessRecordRule, file: string, pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null> {
+async function processRecord(engine: AgentEngine, rule: ProcessRecordRule, text: string, pid: number, cwd: string, startedAtMs: number): Promise<RepairedSession | null> {
   try {
-    const record = JSON.parse(await readFile(file, 'utf8'))
+    const record = JSON.parse(text)
+    if (!record || typeof record !== 'object' || Array.isArray(record)
+      || !Number.isSafeInteger(record[rule.pid]) || record[rule.pid] <= 0 || typeof record[rule.start] !== 'string'
+      || !Number.isFinite(Date.parse(record[rule.start]))
+      || typeof record[rule.cwd] !== 'string' || !isAbsolute(record[rule.cwd])
+      || typeof record[rule.id] !== 'string' || !record[rule.id]) {
+      throw new IdentityReadUnavailable('the process record is incomplete or invalid')
+    }
     const start = record[rule.start]
     const folder = record[rule.cwd]
     const sessionId = record[rule.id]
     // Claude's procStart is UTC in current builds, while older builds used the host's local ps format.
     // Both represent the exact second, not the metadata file's modification time or a recycled PID.
-    if (record[rule.pid] !== pid || typeof start !== 'string'
-      || ![Date.parse(start), Date.parse(`${start} UTC`)].includes(startedAtMs)
-      || typeof folder !== 'string' || !await sameDir(folder, cwd)
-      || typeof sessionId !== 'string') return null
+    if (record[rule.pid] !== pid || ![Date.parse(start), Date.parse(`${start} UTC`)].includes(startedAtMs)) return null
+    if (!await sameDir(folder, cwd)) throw new IdentityReadUnavailable('the current process record names a different working directory')
     const transcriptPath = await findResumedTranscript(engine, sessionId)
-    return transcriptPath ? { sessionId, transcriptPath } : null
-  } catch { return null }
+    if (!transcriptPath) throw new IdentityReadUnavailable('the process names a conversation whose transcript is unavailable')
+    return { sessionId, transcriptPath }
+  } catch (error) {
+    if (error instanceof IdentityReadUnavailable) throw error
+    if (error instanceof SyntaxError) throw new IdentityReadUnavailable('the process record is incomplete or invalid')
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw new IdentityReadUnavailable('the process record could not be read')
+  }
 }

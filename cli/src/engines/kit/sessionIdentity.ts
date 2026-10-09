@@ -1,6 +1,6 @@
 /** Small native identity records needed by session control, independent of optional readers. */
-import { resolve } from 'node:path'
-import { headBytes } from './continuation.js'
+import { isAbsolute, resolve } from 'node:path'
+import { identityBytes, IdentityReadUnavailable } from './identityScan.js'
 
 export const UNSETTLED: unique symbol = Symbol('unsettled')
 type Field = readonly string[]
@@ -59,18 +59,27 @@ export async function readSessionHeader(rule: SessionHeader, read: (bytes: numbe
  * if relevant evidence lies beyond it, the caller holds the lookup instead of guessing a sibling. */
 export async function readRunIdentity(rule: RunIdentity, path: string, matches: (cwd: string) => Promise<boolean>): Promise<{ cwd: string } | null> {
   for (const bytes of rule.bytes) {
-    const head = await headBytes(path, bytes + 1)
+    const head = await identityBytes(path, bytes + 1).catch(error => {
+      if (error instanceof IdentityReadUnavailable) throw error
+      throw new IdentityReadUnavailable('the workspace identity could not be read')
+    })
     const complete = head.length <= bytes
     const lines = head.subarray(0, bytes).toString('utf8').split('\n')
     if (!complete) lines.pop()
     if (!lines.length) continue
     const cwd = valueAt(parsed(lines[0]!), rule.cwd)
-    if (typeof cwd !== 'string' || !cwd || !await matches(cwd)) return null
+    if (typeof cwd !== 'string' || !isAbsolute(cwd)) throw new IdentityReadUnavailable('the workspace header is incomplete or invalid')
+    if (!await matches(cwd)) return null
+    let malformed = false
     for (const line of lines) {
       const record = parsed(line)
+      if (line.trim() && record === null) malformed = true
       if (rule.run.every(part => valueAt(record, part.field) === part.value)) return { cwd }
     }
-    if (complete) return null
+    if (complete) {
+      if (malformed) throw new IdentityReadUnavailable('the run identity is incomplete or invalid')
+      return null
+    }
   }
-  throw new Error('The conversation identity exceeds the bounded read; discovery is held.')
+  throw new IdentityReadUnavailable('the run identity exceeds the bounded read')
 }

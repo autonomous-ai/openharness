@@ -25,11 +25,11 @@ it('expands a head for later identity and accepts a complete final line without 
 })
 it('holds when a run marker lies beyond the bound, instead of ruling out a competing conversation', async () => {
   const path = pathFor(header + ' '.repeat(200) + '\n' + run)
-  await expect(readRunIdentity(rule, path, async () => true)).rejects.toThrow('discovery is held')
+  await expect(readRunIdentity(rule, path, async () => true)).rejects.toThrow('identity is held')
 })
 it('holds when even the first line exceeds the bound', async () => {
   const path = pathFor(JSON.stringify({ padding: 'x'.repeat(200), header: { cwd: '/work' } }) + '\n' + run)
-  await expect(readRunIdentity(rule, path, async () => true)).rejects.toThrow('discovery is held')
+  await expect(readRunIdentity(rule, path, async () => true)).rejects.toThrow('identity is held')
 })
 it('a file from another workspace cannot hold this workspace on a late marker', async () => {
   const matches = vi.fn(async () => false)
@@ -37,12 +37,15 @@ it('a file from another workspace cannot hold this workspace on a late marker', 
   await expect(readRunIdentity(rule, path, matches)).resolves.toBeNull()
   expect(matches).toHaveBeenCalledExactlyOnceWith('/work')
 })
-it.each(['', 'bad\n', 'null\n', '[]\n', '{"header":[]}\n', header + '{"run":{"kind":"task"}}'])('refuses a complete file without identity: %j', async text => {
-  await expect(readRunIdentity(rule, pathFor(text), async () => true)).resolves.toBeNull()
+it.each(['', 'bad\n', 'null\n', '[]\n', '{"header":[]}\n', header + '{"run":'])('holds an incomplete or invalid identity: %j', async text => {
+  await expect(readRunIdentity(rule, pathFor(text), async () => true)).rejects.toThrow('identity is held')
+})
+it('excludes a complete background task with a valid workspace header', async () => {
+  await expect(readRunIdentity(rule, pathFor(header + '{"run":{"kind":"task"}}'), async () => true)).resolves.toBeNull()
 })
 it('keeps native I/O failure distinct from an absent run', async () => {
   const path = pathFor(''); rmSync(path)
-  await expect(readRunIdentity(rule, path, async () => true)).rejects.toMatchObject({ code: 'ENOENT' })
+  await expect(readRunIdentity(rule, path, async () => true)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
   await expect(readPiHead(path)).resolves.toBe(UNSETTLED)
   mkdirSync(path)
   await expect(readPiHead(path)).resolves.toBe(UNSETTLED)

@@ -13,7 +13,7 @@ vi.mock('fs/promises', async importOriginal => {
 
 const LIMIT = 256 * 1024
 const CWD = '/fixture/工作/📘'
-const META = JSON.stringify({ type: 'session', cwd: CWD })
+const META = JSON.stringify({ type: 'session', cwd: CWD, isSidechain: false })
 let directory: string
 beforeEach(() => { directory = mkdtempSync(join(tmpdir(), 'repair-meta-')) })
 afterEach(() => {
@@ -51,7 +51,7 @@ describe('bounded session metadata discovery', () => {
   it.each([19, 20])('keeps the 20-line limit with %i bookkeeping lines', async count => {
     const { read } = await fixture(Array(count).fill('{}').join('\n') + '\n' + META + '\n')
     if (count === 19) await expect(read()).resolves.toMatchObject({ sessionId: 'session-id' })
-    else await expect(read()).resolves.toBeNull()
+    else await expect(read()).rejects.toThrow('header exceeds the read limit')
   })
 
   it.each([0, 1])('keeps the UTF-16 character boundary with metadata ending %i characters after the limit', async overflow => {
@@ -61,7 +61,7 @@ describe('bounded session metadata discovery', () => {
     expect(Buffer.byteLength(text)).toBeGreaterThan(LIMIT)
     const { read } = await fixture(text)
     if (overflow === 0) await expect(read()).resolves.toMatchObject({ sessionId: 'session-id' })
-    else await expect(read()).resolves.toBeNull()
+    else await expect(read()).rejects.toThrow('header exceeds the read limit')
   })
 
   it('keeps the first declared directory authoritative', async () => {
@@ -85,7 +85,7 @@ describe('bounded session metadata discovery', () => {
     try {
       await expect(read()).resolves.toMatchObject({ sessionId: 'session-id' })
       expect(reads).toHaveBeenCalledTimes(1)
-      expect(reads.mock.calls[0].slice(1)).toEqual([0, LIMIT * 4, 0])
+      expect(reads.mock.calls[0].slice(1)).toEqual([0, LIMIT * 4 + 1, 0])
       expect(handle.fd).toBe(-1)
     } finally { if (handle.fd !== -1) await handle.close() }
   })
@@ -104,26 +104,26 @@ describe('bounded session metadata discovery', () => {
     } finally { if (handle.fd !== -1) await handle.close() }
   })
 
-  it('returns no binding and closes the handle after a read error', async () => {
+  it('holds identity and closes the handle after a read error', async () => {
     const { path, read } = await fixture(META + '\n')
     const actual = await vi.importActual<typeof import('fs/promises')>('fs/promises')
     const handle = await actual.open(path, 'r')
     vi.spyOn(handle, 'read').mockRejectedValueOnce(new Error('fixture read failure'))
     vi.mocked(fs.open).mockResolvedValueOnce(handle)
     try {
-      await expect(read()).resolves.toBeNull()
+      await expect(read()).rejects.toThrow('header could not be read')
       expect(handle.fd).toBe(-1)
     } finally { if (handle.fd !== -1) await handle.close() }
   })
 
-  it('stops and closes the handle if the file reaches EOF before its stated size', async () => {
+  it('holds and closes the handle if the file reaches EOF before its stated size', async () => {
     const { path, read } = await fixture(META + '\n')
     const actual = await vi.importActual<typeof import('fs/promises')>('fs/promises')
     const handle = await actual.open(path, 'r')
     vi.spyOn(handle, 'read').mockResolvedValueOnce({ bytesRead: 0, buffer: Buffer.alloc(0) })
     vi.mocked(fs.open).mockResolvedValueOnce(handle)
     try {
-      await expect(read()).resolves.toBeNull()
+      await expect(read()).rejects.toThrow('record ended during the read')
       expect(handle.fd).toBe(-1)
     } finally { if (handle.fd !== -1) await handle.close() }
   })
