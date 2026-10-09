@@ -85,7 +85,7 @@ The matched four-agent/two-active performance sample (`20261009T025602.069419Z-2
 
 Time accounting (UTC): production and review corrections through 02:44; the final test-only readiness correction at 02:52. Final local checks ran 02:52:58–about 02:55; performance ran 02:56:02–02:57:12. Main advanced with a lockfile correction; integration and independent review completed about 03:00. Final CI waiting ended about 03:03; the merge helper started at 03:03:27. Request time since 23:26:41 includes all diagnosis, implementation, review and waiting, not just Actions. Publication remains zero.
 
-## Item 5: external sessions (in progress)
+## Item 5: external sessions
 
 PR [#1081](https://github.com/autonomous-ai/openharness/pull/1081) moves provider and process observations into search, including when SQLite indexing is unavailable. Core retains policy, alias reservations, verified signals, durable admission, cancellation and dispatch. An unavailable reader leaves an inert held pane with a reason. Once admitted, crash restore and Stop/Open use the core's exact conversation identity without search.
 
@@ -99,7 +99,13 @@ The first broad receipt passed core/harnessd/resume/portability coverage but fai
 
 The second review tightened the authority to signal further. A final coherent ownership/activity record is required for idle consent. Unknown activity stays held for idle/wait and cannot generate a continuation prompt under explicit takeover. Every signal, including KILL after the TERM grace period, takes the strict durable reservation check even for an unchanged intent. Same-PID claims for unrelated conversations and Codex-prefix helper processes cannot become stoppable exact owners. Regression tests cross the real registry and controller with synthetic OS signals. The new search request typing and two early-return coverage gaps found in the final gate are corrected; the failed combined receipt remains failed. Its affected, harnessd, resume and portability checks passed, and both adoption plus the two corrected inline-search e2e cases passed separately.
 
-Implementation and diagnosis began after the usage merge at 03:03:42 UTC and continued through 05:11. Final gates and independent approval are pending. All local daemons, homes and tmux servers are disposable. Publication remains zero.
+Independent review approved production head `1aced4484` against main `e130ad8e1`, including the coherent activity proof, per-signal durable reservation check, contradictory owner claims and real engine process identity. The final main integration changes no CLI source. Automatic CI [37887475290](https://github.com/autonomous-ai/openharness/actions/runs/37887475290) passed every selected check including `ci/required`.
+
+Final broad receipt `20261009T051228.567255Z-74018` passed typecheck, 1,785 core tests at per-file 100% statements and branches, 265 harnessd tests with one existing skip at 100%, 1,004 affected tests including architecture and the unchanged goldens, 298 resume tests at 100%, and the portability gate at 100%. The two corrected inline-search e2e cases passed. The new strict restart case initially requested a second pane operation before adoption committed its route; its test-only correction completes one private turn first and passes in isolation. The failed combined e2e receipt remains failed. The final adoption lane is rerun after that correction; broad production evidence remains applicable because the final change touches only that test and this note.
+
+A two-agent soak/chaos smoke passed in 105.0 seconds (`20261009T051533.050394Z-3315`). The matched performance run passed in 70.7 seconds (`20261009T051852.532251Z-32229`): empty/idle/active core CPU was 0.75/1.65/6.91% of one logical CPU, mean RSS 81.2/95.1/98.8 MiB and event-loop p95 11.07/11.08/11.12 ms. Both turns completed with p95 6.976 seconds. The preceding usage baseline was 0.55/1.50/6.94%, 82.5/95.9/101.7 MiB and 7.015 seconds, on the same Node, machine, tmux and four-agent/two-active workload. These ten-second windows measure only the core PID, exclude services, engines, tmux and USB, and support neither a new threshold nor a long-term growth claim.
+
+Time accounting (UTC): implementation and diagnosis began after the usage merge at 03:03:42 and production corrections ended at 05:11. Independent production approval followed at about 05:13; the final test-only readiness correction passed at 05:14. Final broad local validation ran 05:12:28–05:17:21, overlapping the short soak/chaos run. The matched measurement ran 05:18:52–05:20:03. Final test/documentation review and head checks follow before the authorized merge. All daemons, homes and tmux servers used for testing are disposable. Publication remains zero.
 
 ## Added core follow-up
 
