@@ -37,6 +37,7 @@ import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
 import '../bootstrap/agent_prefetch.dart';
 import '../bootstrap/environment_provisioner.dart';
+import '../bootstrap/setup_progress.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/sleep_aware.dart';
@@ -1041,6 +1042,112 @@ class AppNotifier extends ChangeNotifier {
   /// racing the first.
   bool get environmentSetupInFlight => _environmentSetupInFlight;
   bool get environmentInstallRequested => _environmentInstallRequested;
+
+  // --- Setup tour (onboarding redesign, 2026-10-08) -----------------------
+  // A fresh computer whose setup installs with nobody at the keyboard sees a
+  // tour of Harness instead of the install screen, with the install as one
+  // line under it (`widgets/setup_tour.dart`). Everything else about setup is
+  // unchanged; these three members are the whole of the tour's state here.
+  bool _setupTour = false;
+
+  /// Whether RootShell shows the setup tour in place of whatever [status]
+  /// would show. Set when launch takes the unattended install path; cleared
+  /// by [finishSetupTour] once the tour has opened Harness. It also gives way,
+  /// for good, as soon as setup needs a person — a Terminal password, manual
+  /// mode, or the method choice — because those are the existing setup
+  /// screen's job.
+  bool get setupTourShowing {
+    if (_setupTour && _setupNeedsPerson(environmentReadiness)) {
+      _setupTour = false;
+    }
+    return _setupTour;
+  }
+
+  static bool _setupNeedsPerson(EnvironmentReadiness readiness) =>
+      readiness.mode == EnvironmentSetupMode.manual ||
+      readiness.phase == EnvironmentSetupPhase.chooseMethod ||
+      readiness.needsTerminal ||
+      readiness.plan.any((item) => item.requiresTerminal);
+
+  /// The tour has shown its last slide with everything done: show the app.
+  void finishSetupTour() {
+    if (!_setupTour) return;
+    _setupTour = false;
+    notifyListeners();
+  }
+
+  /// What is still downloading beside setup (see [SetupDownloads]). The tour
+  /// opens Harness only once this says done as well as setup. The agent
+  /// downloads set `.value` here; nothing pending is the default, so a
+  /// computer with nothing to download opens as soon as setup is finished.
+  final ValueNotifier<SetupDownloads> setupDownloads = ValueNotifier(
+    SetupDownloads.none,
+  );
+
+  /// How long the agent downloads beside setup usually take from their start: OpenCode 13.5 s,
+  /// then Codex and Claude Code once setup's Node is in place, 47 s in all (fresh macOS VM,
+  /// 2026-10-09). The tour counts down from it.
+  @visibleForTesting
+  static const agentDownloadsExpected = Duration(seconds: 50);
+
+  /// The longest the tour waits for them: past this the first harness installs whatever is left in
+  /// its own pane, as it would for anyone, rather than keep a new person on the tour.
+  @visibleForTesting
+  static const agentDownloadsCap = Duration(minutes: 3);
+
+  Timer? _agentDownloadsTick;
+
+  /// Feeds [setupDownloads] from [agentPrefetch] once it has started: pending at once, so the tour
+  /// cannot open before the downloads are counted, and done when they settle or [agentDownloadsCap]
+  /// passes.
+  void _publishAgentDownloads() {
+    final prefetch = agentPrefetch;
+    if (prefetch == null || !prefetch.started || _agentDownloadsTick != null) {
+      return;
+    }
+    final began = DateTime.now();
+    late final void Function() publish;
+    void stop() {
+      _agentDownloadsTick?.cancel();
+      prefetch.progress.removeListener(publish);
+    }
+
+    publish = () {
+      if (_disposed) return stop();
+      final progress = prefetch.progress.value;
+      final elapsed = DateTime.now().difference(began);
+      final lines = [agentDownloadsLine(progress)];
+      if (progress.finished || elapsed >= agentDownloadsCap) {
+        stop();
+        setupDownloads.value = SetupDownloads(lines: lines);
+        return;
+      }
+      final left = agentDownloadsExpected - elapsed;
+      setupDownloads.value = SetupDownloads.pending(
+        left: left > const Duration(seconds: 3)
+            ? left
+            : const Duration(seconds: 3),
+        lines: lines,
+      );
+    };
+    prefetch.progress.addListener(publish);
+    _agentDownloadsTick = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => publish(),
+    );
+    publish();
+  }
+
+  /// `Agents: OpenCode ✓ · Codex ✓ · Claude Code downloading`, for the tour's Details.
+  @visibleForTesting
+  static String agentDownloadsLine(AgentDownloads progress) {
+    final parts = [
+      for (final engine in const ['opencode', 'codex', 'claude'])
+        '${engine == 'claude' ? 'Claude Code' : engineIdentity(engine).label} '
+            '${progress.settled.contains(engine) ? '✓' : 'downloading'}',
+    ];
+    return 'Agents: ${parts.join(' · ')}';
+  }
 
   // The daemon's own advertised local-ws endpoint — the dial target for EVERY machine's data plane
   // now, not just this computer's own one (see src/lib/remoteRelay.ts in the harness CLI repo: a
@@ -4167,7 +4274,11 @@ class AppNotifier extends ChangeNotifier {
         if (result.plan.any((item) => item.step == EnvironmentStep.harness)) {
           agentPrefetch?.start();
           firstArrival.begin(downloads: agentPrefetch?.started ?? false);
+          _publishAgentDownloads();
         }
+        // Nobody needs to act on this install, so it runs under the setup
+        // tour rather than on the install screen.
+        _setupTour = true;
         status = AppStatus.preparingEnvironment;
         result = await _installUnattended(result);
       }
@@ -4976,30 +5087,6 @@ class AppNotifier extends ChangeNotifier {
         );
     }
     _startDaemonSupervision(discovery);
-  }
-
-  /// A first task typed on the setup screen while this computer was being
-  /// prepared. A new user sat 45–65 s on "Preparing this computer" before
-  /// they could type anything (fresh macOS VM, 2026-10-08); now the first New
-  /// Harness box opens with it, and starts it at once when it was sent.
-  String _setupTask = '';
-  bool _setupTaskQueued = false;
-  String get setupTask => _setupTask;
-  bool get setupTaskQueued => _setupTaskQueued;
-
-  void setSetupTask(String text, {bool queued = false}) {
-    _setupTask = text;
-    _setupTaskQueued = queued && text.trim().isNotEmpty;
-    notifyListeners();
-  }
-
-  /// The setup screen's task, once: the first box takes it.
-  ({String task, bool start})? takeSetupTask() {
-    final task = _setupTask;
-    final start = _setupTaskQueued;
-    _setupTask = '';
-    _setupTaskQueued = false;
-    return task.trim().isEmpty ? null : (task: task, start: start);
   }
 
   /// Settings › Devices could not see the local network. Without a paired
@@ -11296,7 +11383,10 @@ class AppNotifier extends ChangeNotifier {
     if (!creation.awaitingConfirmation &&
         prefetchedEngine is String &&
         machine.isLocalMachine) {
-      final download = agentPrefetch?.waitFor(prefetchedEngine, agentPrefetchWait);
+      final download = agentPrefetch?.waitFor(
+        prefetchedEngine,
+        agentPrefetchWait,
+      );
       if (download != null) {
         await download;
         final moved = creation.background
@@ -16803,6 +16893,8 @@ class AppNotifier extends ChangeNotifier {
       cli.waitingNote.removeListener(_loginWaitingChanged);
     }
     _closeOwnerMemories();
+    _agentDownloadsTick?.cancel();
+    setupDownloads.dispose();
     experimentalFeatures.dispose();
     deviceHosts.dispose();
     viewer?.auth.dispose();

@@ -7,11 +7,19 @@ import 'package:flutter/foundation.dart';
 /// Where the downloads beside setup stand, for the setup tour's bottom line.
 @immutable
 class AgentDownloads {
-  const AgentDownloads({this.total = 0, this.done = 0, this.finished = false});
+  const AgentDownloads({
+    this.total = 0,
+    this.done = 0,
+    this.finished = false,
+    this.settled = const {},
+  });
 
   /// Agents being downloaded (0 when nothing was started: the computer already has an agent).
   final int total;
   final int done;
+
+  /// The engines whose download has settled, for the tour's Details.
+  final Set<String> settled;
 
   /// Every download has settled, whether it put its agent in place or not.
   final bool finished;
@@ -97,7 +105,12 @@ class AgentPrefetch {
     final claude = _track('claude', npm);
     _progress.value = const AgentDownloads(total: 3);
     _everything = Future.wait([opencode, codex, claude]).then((_) {
-      _progress.value = const AgentDownloads(total: 3, done: 3, finished: true);
+      _progress.value = AgentDownloads(
+        total: 3,
+        done: 3,
+        finished: true,
+        settled: Set.unmodifiable(_settled),
+      );
     });
   }
 
@@ -106,7 +119,11 @@ class AgentPrefetch {
     final future = work.whenComplete(() {
       _settled.add(engine);
       if (!_progress.value.finished) {
-        _progress.value = AgentDownloads(total: 3, done: _settled.length);
+        _progress.value = AgentDownloads(
+          total: 3,
+          done: _settled.length,
+          settled: Set.unmodifiable(_settled),
+        );
       }
     });
     _downloads[engine] = future;

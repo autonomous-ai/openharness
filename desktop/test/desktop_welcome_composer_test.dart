@@ -125,9 +125,6 @@ void main() {
     bool withPane = false,
     bool mac = false,
     MemoryStore? storage,
-    String? setupTask,
-    bool setupQueued = false,
-    bool settle = true,
   }) async {
     final old = newHarnessOpensInBox;
     newHarnessOpensInBox = true;
@@ -148,7 +145,6 @@ void main() {
     }
     await app.projectHistory.select('m', '/work/openharness');
     if (withPane) app.adoptSessionForTest(terminal('a0', []));
-    if (setupTask != null) app.setSetupTask(setupTask, queued: setupQueued);
     if (mac) {
       updates.clear();
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -160,13 +156,7 @@ void main() {
       );
     }
     await mount(tester, app, map, native: mac);
-    if (settle) {
-      await tester.pumpAndSettle();
-    } else {
-      for (var i = 0; i < 20; i++) {
-        await tester.pump(const Duration(milliseconds: 50));
-      }
-    }
+    await tester.pumpAndSettle();
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox());
       app.dispose();
@@ -206,36 +196,6 @@ void main() {
       expect(box(tester).task, '123 work on this');
     },
   );
-
-  // A task typed on the setup screen while the computer was being prepared.
-  testWidgets('a task sent during setup starts as soon as the box opens', (
-    tester,
-  ) async {
-    await setup(
-      tester,
-      setupTask: 'make a small web page',
-      setupQueued: true,
-      settle: false,
-    );
-    for (var i = 0; i < 60 && connection.starts.isEmpty; i++) {
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-    expect(connection.starts.single['prompt'], 'make a small web page');
-    connection.complete();
-    await tester.pump(const Duration(milliseconds: 100));
-    expect(app.takeSetupTask(), isNull);
-  });
-
-  testWidgets('a task typed during setup but not sent waits in the box', (
-    tester,
-  ) async {
-    await setup(tester, setupTask: 'make a small web page');
-    expect(box(tester).task, 'make a small web page');
-    expect(connection.starts, isEmpty);
-  });
 
   testWidgets('Cmd-P round trip opens a fresh form with successful defaults', (
     tester,

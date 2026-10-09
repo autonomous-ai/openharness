@@ -556,17 +556,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
           if (await app.firstArrival.run(app)) return;
           if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
         }
-        final setup = app.takeSetupTask();
         await _newAgent(
-          task: setup?.task,
           stillCurrent: () =>
               _canShowWelcomeComposer && app.activeSwarmId == tab,
         );
-        if (setup?.start == true) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            unawaited(_newHarnessFormKey.currentState?.startWhenReady());
-          });
-        }
       } finally {
         _welcomeEntryScheduled = false;
         // Switching tabs while defaults load must schedule the new page too.
@@ -2672,7 +2665,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // treats a lost reply as proof that the session stopped. A replaced
       // session must not inherit a choice made for the old one.
       return targets.every((target) {
-        final current = app.stateOf(target.$1)?.agents
+        final current = app
+            .stateOf(target.$1)
+            ?.agents
             .where((agent) => agent.id == target.$2.id)
             .firstOrNull;
         return current == null ||

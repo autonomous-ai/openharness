@@ -7,6 +7,7 @@ import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
 import 'package:harness/bootstrap/agent_prefetch.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
+import 'package:harness/bootstrap/setup_progress.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
@@ -353,6 +354,72 @@ void main() {
 
     test('an unattended setup installing the Harness CLI starts it', () async {
       expect(await startedFor([EnvironmentPlanItem.harnessCli]), isTrue);
+    });
+
+    Future<GuestTestApp> tourFor({required Duration nodeWait}) async {
+      final app = GuestTestApp(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        cliLogin: _FakeCliLogin(),
+        environmentProvisioner: _Provisioner(
+          _review([EnvironmentPlanItem.harnessCli]),
+        ),
+        agentPrefetch: AgentPrefetch(
+          start: (_, _) async => _Install()..finish(0),
+          skip: () => false,
+          installed: (_) => false,
+          managedNode: () => null,
+          nodePoll: const Duration(milliseconds: 10),
+          nodeWait: nodeWait,
+        ),
+      );
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      await pumpEventQueue();
+      return app;
+    }
+
+    test(
+      'the tour waits for the downloads, one Details line naming each agent',
+      () async {
+        final app = await tourFor(nodeWait: const Duration(minutes: 5));
+        final downloads = app.setupDownloads.value;
+        expect(
+          downloads.done,
+          isFalse,
+          reason: 'Codex and Claude Code wait for Node',
+        );
+        expect(downloads.left, isNotNull);
+        expect(downloads.lines, [
+          'Agents: OpenCode ✓ · Codex downloading · Claude Code downloading',
+        ]);
+      },
+    );
+
+    test('and lets it open once they have settled', () async {
+      final app = await tourFor(nodeWait: Duration.zero);
+      await app.agentPrefetch!.everything;
+      await pumpEventQueue();
+      final downloads = app.setupDownloads.value;
+      expect(downloads.done, isTrue);
+      expect(downloads.lines, ['Agents: OpenCode ✓ · Codex ✓ · Claude Code ✓']);
+    });
+
+    test('a computer with nothing to download never holds the tour', () async {
+      final app = GuestTestApp(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+        cliLogin: _FakeCliLogin(),
+        environmentProvisioner: _Provisioner(
+          _review([EnvironmentPlanItem.harnessCli]),
+        ),
+        agentPrefetch: AgentPrefetch(skip: () => true),
+      );
+      addTearDown(app.dispose);
+      await app.bootstrap();
+      expect(app.setupDownloads.value, SetupDownloads.none);
     });
 
     test('a setup that does not install the CLI does not', () async {
