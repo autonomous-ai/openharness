@@ -452,6 +452,21 @@ describe('the daemon\'s shape', () => {
     }
   })
 
+  it('native launch control is eager and reaches only engine declarations', () => {
+    for (const entry of ['core/agents/create.ts', 'core/agents/fork.ts', 'core/agents/retarget.ts',
+      'core/agents/launch.ts', 'core/agents/launches.ts', 'core/agents/externalPreflight.ts',
+      'lib/launchOverrides.ts', 'engines/launchControl.ts', 'engines/kit/nativeVersion.ts', 'engines/kit/nativeSessionModel.ts']) {
+      const imports = importsFor(entry, readFileSync(join(SRC, entry), 'utf8'))
+      expect(imports.filter(one => one.dynamic || /inProcess\.js$/.test(one.from)), entry).toEqual([])
+    }
+    expect([...closureOf('engines/launchControl.ts').keys()].filter(theirs)).toEqual([])
+    for (const entry of ['engines/kit/nativeVersion.ts', 'engines/kit/nativeSessionModel.ts']) {
+      expect([...closureOf(entry).keys()].filter(file => /^engines\/(?!kit\/)/.test(file)), entry).toEqual([])
+    }
+    const main = readFileSync(join(SRC, 'core/main.ts'), 'utf8')
+    expect(main).not.toMatch(/\bengineNow\s*\(\s*['"]opencode['"]/)
+  })
+
   it('the gateway reaches the core only through core/api.ts: never a core module, the registry, cli.ts or the socket', () => {
     // It speaks to the core through GatewayPort and GatewayEvents alone, so that it can run in a process of
     // its own (step 10, R2) without taking any of the core with it.

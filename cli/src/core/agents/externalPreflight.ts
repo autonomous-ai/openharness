@@ -1,5 +1,4 @@
 /** Verify a resumable launch before asking an external terminal to quit. */
-import { loadEngine } from '../../engines/inProcess.js'
 import { engineHooks } from '../../engines/hooks.js'
 import { buildEngineCommandArgv, refusePermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
@@ -17,8 +16,7 @@ export function createExternalPreflight(deps: {
     if (deps.blocksFolder(session.cwd)) return { detail: 'Waiting for the workspace operation to finish.' }
     const refused = await refusePermissionFlagIfUnsupported(row.engine, row)
     if (refused) return refused
-    if (row.engine === 'opencode' && (!await loadEngine('opencode')
-      || !deps.hooksDisabled && !await deps.installOpencodePlugin(deps.hookPort))) {
+    if (row.engine === 'opencode' && !deps.hooksDisabled && !await deps.installOpencodePlugin(deps.hookPort)) {
       return { detail: 'Waiting for OpenCode’s launch support to become available.' }
     }
     if (row.codexHome && !deps.hooksDisabled) engineHooks.codex.installIn(deps.hookPort, row.codexHome)

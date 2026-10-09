@@ -12,7 +12,7 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 11: docs/design/2026-10-03-harnessd.md).
  */
 import type { BackendSocket } from '../../backendSocket.js'
-import { loadEngine } from '../../engines/inProcess.js'
+import * as opencodeLaunch from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { probeGatewayRuntime } from '../../lib/gatewayRuntime.js'
 import { describeGridLaunch, gridEnvVarNames } from '../../lib/gridLaunchWire.js'
@@ -126,10 +126,7 @@ export function createAgentRetargeter({
     // sqlite3 (`applyOpencodeSessionModel`).
     const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
       && (!!grid || !!remembered?.includes('/'))
-    // OpenCode's version and its session's model are OpenCode's own code, loaded for OpenCode alone
-    // (engines/inProcess.ts), as the launch overrides above loaded it: without it, the move is refused.
-    const opencode = session.engine === 'opencode' ? await loadEngine('opencode') : null
-    if (session.engine === 'opencode' && !opencode) return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
+    const opencode = session.engine === 'opencode' ? opencodeLaunch : null
     const opencodeMajor = opencode ? opencode.opencodeMajorVersion() : null
     if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !binaryOnPath('sqlite3')) {
       return {

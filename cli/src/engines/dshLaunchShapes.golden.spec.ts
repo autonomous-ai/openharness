@@ -38,7 +38,7 @@ vi.mock('../lib/createAgentPane.js', () => ({
   }),
 }))
 vi.mock('../lib/tmuxVersion.js', async (real) => ({ ...await real<object>(), tmuxSupportsSessionEnv: vi.fn(async () => pane.tmux) }))
-vi.mock('../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
+vi.mock('../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
 vi.mock('../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 // A create's and a fork's label is new each time, and their session's runtime is keyed on it: one per engine here.
 vi.mock('../lib/harnessSessionLabel.js', async (real) => ({ ...await real<object>(), buildHarnessSessionLabel: vi.fn((engine: string) => `harness-${engine}-golden`) }))

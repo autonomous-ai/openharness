@@ -39,7 +39,7 @@ vi.mock('../lib/createAgentPane.js', () => ({
   }),
 }))
 vi.mock('../lib/tmuxVersion.js', async (real) => ({ ...await real<object>(), tmuxSupportsSessionEnv: vi.fn(async () => pane.tmux) }))
-vi.mock('../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
+vi.mock('../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 2) }))
 vi.mock('../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/launch-shapes.golden.json', import.meta.url))
