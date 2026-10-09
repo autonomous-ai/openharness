@@ -75,7 +75,7 @@ import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from '../lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from '../lib/tmuxAgentDiscovery.js'
 import { installedDsh, invalidateInstalledDsh } from '../dsh/installed.js'
-import { prepareHarnessLaunch } from '../dsh/runtime.js'
+import { dshThrough } from './agents/dshThrough.js'
 import { ApiConnections } from '../lib/apiConnections.js'
 import { rememberSavedApis } from '../lib/gridAssignment.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
@@ -124,6 +124,9 @@ import { createForgetSession } from './agents/forget.js'
 import { createBinding } from './agents/bind.js'
 import { createDiscoveryHandlers } from './agents/discovery.js'
 import { createLaunchHelpers, gridLaunchThrough } from './agents/launch.js'
+import { AgentRestartCoordinator } from '../lib/restartAgent.js'
+import { createPaneOperations } from './agents/paneOperations.js'
+import { createRestoreLaunch } from './agents/restoreLaunch.js'
 import { createHeldLaunches, heldPaneArgv } from './agents/heldLaunches.js'
 import { createCancel, createCancelRequest } from './turns/cancel.js'
 import { createPaneWatcher } from './agents/newPane.js'
@@ -143,7 +146,7 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
 import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
-import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
+import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -408,6 +411,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   coreLink.onUpdate((version) => { void daemonBoot.applyStagedUpdate(version) })
   // Agents held until the service their launch asks is ready, and the passes that launch them
   // (core/agents/heldLaunches.ts): the boot's restore of only those agents, set where tmux is there to restore into.
+  const restorePanes = createPaneOperations()
+  const restartJobs = new AgentRestartCoordinator()
+  const forgetRestartRevision = (agentId: string): void => restartJobs.forget(agentId)
+  const restoreRevision = (agentId: string): number => restartJobs.revision(agentId)
+  let restoreCancelled = (_agentId: string): boolean => false
   let restoreOnly: ((only: ReadonlySet<string>) => Promise<RestoreSummary>) | null = null
   const heldLaunches = createHeldLaunches({
     registry,
@@ -547,6 +555,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Reading and writing panes through control leases (core/terminals/control.ts).
   const terminalControl = createTerminalControl({ resolve: (target) => registry.resolve(target), terminals })
   const pinnedControls = terminalControl.pinnedControls
+  restoreCancelled = (agentId) => pinnedControls.has(agentId)
   const invalidateTerminalControl = terminalControl.invalidateTerminalControl
   const captureTerminal = terminalControl.captureTerminal
   const submitTerminal = terminalControl.submitTerminal
@@ -1215,7 +1224,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     outOfProcess, experiments, onWant: { collaboration: () => teamsLink.on() } })
   backend.onAccountNotice = (notice) => experimentHooks.notice(notice)
   // What the Store in its own process tells the core: an install's progress, and that what is installed changed (core/storeLink.ts).
-  const storeLink = createStoreLink(coreApi, invalidateInstalledDsh)
+  const storeLink = createStoreLink(coreApi, invalidateInstalledDsh, (type, payload) => serviceLinks.call('store', type, payload))
+  storeLink.onReady(() => { void heldLaunches.restoreHeld('store') })
   // What the core keeps of models in its own process for frames and keystrokes, and how it asks it the rest (core/modelsLink.ts).
   const modelsLink = createModelsLink(coreApi, (type, payload) => serviceLinks.call('models', type, payload), (frame) => serviceLinks.notify('models', frame))
   // The devices in their own process (core/devicesLink.ts): told what the windows say, asked ⌘K, and told it
@@ -1345,7 +1355,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   else serviceHost.start('teams', inline!.startTeamsInCore, coreApi, TEAMS_FALLBACKS, TEAMS_REQUESTS)
   // The harnesses installed here, and installing, updating and removing one (services/store.ts): in this
   // process, or beside the viewers in theirs (services/storeProcess.ts).
-  if (!outOfProcess.has('store')) serviceHost.serve('store', inline!.startStore, coreApi, STORE_REQUESTS)
+  if (outOfProcess.has('store')) ports.store = storeLink.port
+  else serviceHost.start('store', (core, installedPorts) => inline!.startStoreInCore(core, installedPorts, () => { void heldLaunches.restoreHeld('store') }), coreApi, STORE_FALLBACKS, STORE_REQUESTS)
   // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts): in this
   // process, or in the edge host (services/usageProcess.ts).
   if (!outOfProcess.has('usage')) serviceHost.serve('usage', inline!.startUsage, coreApi, USAGE_REQUESTS)
@@ -1450,6 +1461,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
   const forgetSession = createForgetSession({
+    onRemoved: (agentId) => forgetRestartRevision(agentId),
     relaunchMarks,
     registry,
     stoppedAgents,
@@ -1482,7 +1494,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // A terminal is never the dial's business, and `syncSession` forces that for it anyway.
     announceSession: session => announceSession(session, { device: false }),
     invalidateTerminalControl,
-    forgetInput: agentId => { teams.forget(agentId); input.forget(agentId); deviceInput.forget(agentId) },
+    forgetInput: agentId => { forgetRestartRevision(agentId); teams.forget(agentId); input.forget(agentId); deviceInput.forget(agentId) },
     detachDsh,
     syncRecapPool,
     warn: (message, error) => console.warn(message, error),
@@ -1506,6 +1518,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     deviceInput,
     homes: { copilot: env.COPILOT_HOME, grok: env.GROK_HOME, agy: env.AGY_HOME },
   })
+  binding.whileChanging((agentId) => restorePanes.busy(agentId))
   const pendingForkInherit = binding.pendingForkInherit
   const handleRegistered = binding.handleRegistered
   const bindObservedAgent = binding.bindObservedAgent
@@ -1655,7 +1668,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dataDir: env.ADAPTER_DATA_DIR,
   })
   // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
-  const engineHooks = createEngineHooks({ tmuxBackend, agentReconciler, registry })
+  const engineHooks = createEngineHooks({ tmuxBackend, agentReconciler, registry, panePending: restorePanes.pending })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onCommandBar: routedCommandBar(backend),
     onAutonomousDeviceRequest: async (method, target, body) => {
@@ -1923,20 +1936,15 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Grid and saved-API launches are built by the models service (core/agents/launch.ts `gridLaunchThrough`): a
   // launch on one while models is down is refused, and one on the engine's own login never asks it.
   const gridLaunch = gridLaunchThrough(() => ports.models ?? MODELS_OFF)
+  const dshLaunch = dshThrough({ store: () => ports.store ?? STORE_OFF,
+    nameOf: id => installedDsh(id)?.manifest.name, account: () => ({ privateGrid: backend.gridName() }) })
   const launchOverridesDeps: LaunchOverridesDeps = {
     machine: gridLaunchMachine,
     gridLaunch,
     writeGridConfigDir,
     tmuxSupportsSessionEnv,
     installCodexHooks: (codexHome) => { if (!env.DISABLE_HOOK_INSTALL) engineHookFacets.codex.installIn(hookPort, codexHome) },
-    dshLaunch: (id, workspace, engine, runtimeKey) => {
-      const installed = installedDsh(id)
-      if (!installed) {
-        console.warn(`[dsh] ${id} is not installed on this machine · cannot restore its harness context`)
-        return null
-      }
-      return prepareHarnessLaunch(installed, workspace, engine, runtimeKey, { privateGrid: backend.gridName() }, null)
-    },
+    dshLaunch: dshLaunch.relaunch,
   }
   // What a relaunch needs to bring a pane back (core/agents/launch.ts). Declared before the restore
   // pass below, which calls these for every pane it rebuilds.
@@ -1962,9 +1970,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   } catch (error) {
     console.warn(`[repair] cwd repair skipped · ${error instanceof Error ? error.message : error}`)
   }
-  // Bundled harness installation is the Store's. Wait for its first preparation before restore reads
-  // the index, with a deadline so a broken Store never prevents ordinary agents from coming back.
-  if (outOfProcess.has('store') && !await storeLink.ready()) console.warn('[store] preparation unavailable · restoring with the installed harnesses')
   watcher.start()
   await cursorDiscovery.start()
   // What a restored agent's engine writes from here on is live: the first attach of each folds its
@@ -1993,6 +1998,11 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    try {
     const backend = tmuxBackend
     const restoreDeps: RestoreAgentsDeps = {
+      cancelled: (agentId) => restoreCancelled(agentId),
+      revision: (agentId) => restoreRevision(agentId),
+      paneOperation: restorePanes.run,
+      paneAllocations: restorePanes.runMany,
+      paneBusy: restorePanes.busy,
       retainStopped: retainExitedSession,
       keepAbandoned: keepAbandonedConversation,
       registry,
@@ -2001,56 +2011,42 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // A new tmux server hands out `%N` from zero again, so a stale id can name someone's shell;
       // and a pane that outlived the daemon in a session discovery no longer lists still has its
       // engine, which a second pane resuming the same session would collide with.
-      ...tmuxSurvey(() => listTmuxPanes(), lookupPaneEngineProcess),
-      buildLaunch: async (entry, opts) => {
-        // A folder that went away with the reboot (an unmounted volume, a workspace deleted while the
-        // daemon was down) is a named failure on the tile, not a pane that prints an error and exits.
-        const missing = workspaceMissing(entry.cwd)
-        if (missing) return { error: missing.error, detail: missing.detail }
-        // Mirrors `agent_create`: the same grid env/argv (and the same vendor variables cleared), or
-        // the same Codex profile with its hooks installed; the install check runs inside the pane's
-        // own shell.
-        const built = await relaunchOverrides(entry)
-        // Models could not be asked: the agent waits for it, held, never failed (core/agents/heldLaunches.ts).
-        if (!built.ok) return built.unavailable ? { held: built.unavailable } : { error: built.error, detail: built.detail }
-        if (opts.resumeSessionId) {
-          try { prepareSessionResume(entry) } catch (error) {
-            return { error: 'RESUME_PREPARATION_FAILED', detail: error instanceof Error ? error.message : String(error) }
-          }
-        }
-        // Before the pane comes up rather than after: restore has no later hook per agent, and a
-        // pane that fails to come up is reported failed by the frame regardless of this field.
-        refreshGridWebSearch(entry.agentId, built.overrides)
-        const { env: launchEnv, extraArgs, clearEnv } = built.overrides
-        // The engine may have been downgraded while the daemon was down. Coming back in Ask beats
-        // coming back as a pane of help text, and beats not coming back at all.
-        const permission = await downgradedPermission(entry, entry.bypassPermission === true, 'restore')
-        const argv = buildEngineLaunchArgv(entry.engine, {
-          ...opts,
-          bypassPermission: permission.bypassPermission === true,
-          ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
-          installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
-          ...(entry.cwd ? { cwd: entry.cwd } : {}),
-          ...(extraArgs.length ? { extraArgs } : {}),
-          ...(clearEnv.length ? { clearEnv } : {}),
-          ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
-        })
-        return { argv, ...(Object.keys(launchEnv).length ? { env: launchEnv } : {}) }
-      },
-      createPane: async (entry, launch) => {
+      survey: () => tmuxSurvey(() => listTmuxPanes(), lookupPaneEngineProcess),
+      liveProcess: (entry, runtime) => tmuxSurvey(() => listTmuxPanes(), lookupPaneEngineProcess).liveProcess(entry, runtime),
+      buildLaunch: createRestoreLaunch({
+        workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch,
+        downgradedPermission: (entry) => downgradedPermission(entry, entry.bypassPermission === true, 'restore'),
+        launch: (entry, opts, overrides, permission) => {
+          const { env: launchEnv, extraArgs, clearEnv } = overrides
+          const argv = buildEngineLaunchArgv(entry.engine, {
+            ...opts,
+            bypassPermission: permission.bypassPermission === true,
+            ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
+            installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
+            ...(entry.cwd ? { cwd: entry.cwd } : {}),
+            ...(extraArgs.length ? { extraArgs } : {}),
+            ...(clearEnv.length ? { clearEnv } : {}),
+            ...(launchEnv.HARNESS_DSH ? { harnessNode: true } : {}),
+          })
+          return { argv, ...(Object.keys(launchEnv).length ? { env: launchEnv } : {}) }
+        },
+      }),
+      createPane: async (entry, launch, control) => {
         const created = await backend.create({
           cwd: homedir(),
           label: buildHarnessSessionLabel(entry.engine),
           command: launch.argv,
+          ...control,
           ...(launch.env ? { env: launch.env } : {}),
         })
         return created.state === 'succeeded'
           ? { ok: true, runtime: created.runtime }
           : { ok: false, reason: created.reason }
       },
-      respawn: async (runtime, launch) => {
+      respawn: async (runtime, launch, control) => {
         const result = await backend.respawn(runtime, {
           command: launch.argv,
+          ...control,
           cwd: homedir(),
           ...(launch.env ? { env: launch.env } : {}),
         })
@@ -2064,7 +2060,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
       // A grid's or a saved API's launch asks models: not before the core is ready (core/agents/heldLaunches.ts).
-      needs: (entry) => entry.gridLaunch ? 'models' : null,
+      needs: (entry) => [...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : [])],
       waitingLaunch: (_entry, held) => ({ argv: heldPaneArgv(held.detail) }),
       killPane: async (runtime) => { await backend.kill(runtime) },
     }
@@ -2237,6 +2233,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Creating an agent (core/agents/create.ts).
   backend.onCreateAgent = createAgentCreator({
+    dshLaunch,
     tmuxBackend,
     registry,
     adoptableSession,
@@ -2263,6 +2260,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Forking an agent (core/agents/fork.ts).
   backend.onForkAgent = createAgentForker({
+    dshLaunch,
     tmuxBackend,
     registry,
     mirror,
@@ -2277,14 +2275,14 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Swapping a pane's engine process, for restart and retarget (core/agents/swap.ts).
   const paneSwap = createPaneSwap({
+    restartJobs,
     byAgent: (agentId) => registry.byAgent(agentId),
     tmuxBackend,
     prepareSessionResume,
     keepAbandonedConversation,
   })
-  const restartJobs = paneSwap.restartJobs
   // A message sent while an engine is being replaced waits for the new one instead of being refused.
-  terminals.whileChanging((agentId) => restartJobs.busy(agentId))
+  terminals.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId))
   const sameRestartTarget = paneSwap.sameRestartTarget
   const paneSwapDeps = paneSwap.paneSwapDeps
   const liveBypassPermission = paneSwap.liveBypassPermission
@@ -2292,7 +2290,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Moving a running agent onto a grid, or back to its own login (core/agents/retarget.ts).
   backend.onRetargetAgent = createAgentRetargeter({
     readScreen: screens.read,
-    purgeBusy: (agentId) => backend.purgeAgentService?.busy(agentId),
+    purgeBusy: (agentId) => restorePanes.busy(agentId) || backend.purgeAgentService?.busy(agentId),
     tmuxBackend,
     registry,
     runtimeProfiles,
@@ -2311,6 +2309,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
+    settlePane: restorePanes.settle,
     registry,
     stoppedAgents,
     restartJobs,
@@ -2335,7 +2334,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     relaunchMarks,
   })
   const stopJobs = lifecycle.stopJobs
-  binding.whileChanging((agentId) => restartJobs.busy(agentId) || stopJobs.has(agentId))
+  restoreCancelled = (agentId) => stopJobs.has(agentId) || pinnedControls.has(agentId) || (restartJobs.operation(agentId) !== undefined && restartJobs.operation(agentId) !== 'restart')
+  binding.whileChanging((agentId) => restorePanes.busy(agentId) || restartJobs.busy(agentId) || stopJobs.has(agentId))
   const stopAgent = lifecycle.stopAgent
   backend.stopProvider = createStopRequest({ byAgent: (id) => registry.byAgent(id), stop: stopAgent })
   backend.purgeAgentService = lifecycle.purgeAgentService
@@ -2365,7 +2365,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const restartAgent = createAgentRestarter({
     restartJobs,
     registry,
-    purgeBusy: (agentId) => backend.purgeAgentService?.busy(agentId),
+    purgeBusy: (agentId) => restorePanes.busy(agentId) || backend.purgeAgentService?.busy(agentId),
     stopJobs,
     pinnedControls,
     tmuxBackend,

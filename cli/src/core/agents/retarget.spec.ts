@@ -68,7 +68,7 @@ function setup(row: RegisteredSession | null = agent(), over: Partial<RetargetDe
     relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { gridLaunchRecord: { override: grid, webSearch: 'off' } } })) as never,
     downgradedPermission: vi.fn(async (_s, bypass: boolean) => ({ bypassPermission: bypass, permissionMode: null })) as never,
     agentReconciler: { holdRoute: vi.fn(), releaseRoute: vi.fn() },
-    restartJobs: { busy: vi.fn(() => false) } as never,
+    restartJobs: { busy: vi.fn(() => false), cancel: vi.fn() } as never,
     paneSwapDeps: vi.fn(() => ({})) as never,
     liveBypassPermission: vi.fn(async () => true),
     announceSession: vi.fn(),
@@ -86,6 +86,20 @@ describe('retargeting an agent', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
   describe('refusals before anything is touched', () => {
+    it('invalidates an older restore as soon as retarget takes control', async () => {
+      const { deps, retarget, release } = setup()
+      await retarget({ agentId: 'a1', grid })
+      expect(deps.restartJobs.cancel).toHaveBeenCalledExactlyOnceWith('a1')
+      expect(vi.mocked(deps.restartJobs.cancel).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(deps.relaunchOverrides).mock.invocationCallOrder[0])
+      expect(release).toHaveBeenCalledOnce()
+    })
+    it('rechecks a pane operation that began while the screen was being read', async () => {
+      const purgeBusy = vi.fn().mockReturnValueOnce(false).mockReturnValue(true)
+      const { retarget, deps } = setup(agent(), { purgeBusy })
+      expect(await retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_BUSY' })
+      expect(deps.acquireTerminalControl).not.toHaveBeenCalled()
+      expect(deps.relaunchOverrides).not.toHaveBeenCalled()
+    })
     it('for an agent being purged, no tmux, no agent, no tmux pane or no process to validate', async () => {
       expect(await setup(agent(), { purgeBusy: () => true }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'AGENT_BUSY' })
       expect(await setup(agent(), { tmuxBackend: null }).retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })

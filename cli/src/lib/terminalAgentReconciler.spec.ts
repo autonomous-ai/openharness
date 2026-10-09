@@ -412,12 +412,14 @@ describe('restart route hold', () => {
       probe: async () => probe([{ instanceId: 'tmux:default', result: { state: 'available', roots: [] } }]),
     })
     const routeKey = terminalRouteKey(tmux)
-    reconciler.holdRoute(routeKey)
+    const releaseOld = reconciler.holdRoute(routeKey)
+    const releaseCurrent = reconciler.holdRoute(routeKey)
+    releaseOld()
     await reconciler.trigger()
     expect(onDormant).not.toHaveBeenCalled()
     expect(validate).not.toHaveBeenCalled()
 
-    reconciler.releaseRoute(routeKey)
+    releaseCurrent()
     await reconciler.trigger()
     await reconciler.trigger()
 

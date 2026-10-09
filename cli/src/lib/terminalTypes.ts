@@ -56,7 +56,13 @@ export type TerminalActionResult =
   | { state: 'failed'; dispatch: 'not_started' | 'rejected'; reason: string }
   | { state: 'unknown'; dispatch: 'possibly_executed'; reason: string }
 
-export interface TerminalCreateRequest {
+/** Optional core authority, checked after backend waits immediately before a command is sent. */
+export interface TerminalDispatchControl {
+  current?: () => boolean
+  onDispatch?: () => void
+}
+
+export interface TerminalCreateRequest extends TerminalDispatchControl {
   cwd?: string
   label?: string
   /** argv (binary first) to run instead of the backend's default shell, e.g. an engine CLI launch. */
@@ -77,7 +83,7 @@ export interface TerminalCreateRequest {
  * grid must not look to the user like the agent was replaced. Only the process is replaced, because
  * its environment is the thing being changed and a process's environment cannot be edited in place.
  */
-export interface TerminalRespawnRequest {
+export interface TerminalRespawnRequest extends TerminalDispatchControl {
   cwd?: string
   command: string[]
   env?: Record<string, string>

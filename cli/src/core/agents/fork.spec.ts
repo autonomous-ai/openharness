@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
-import { harnessLaunchOrRefusal } from '../../dsh/runtime.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { buildEngineLaunchArgv, refusePermissionFlagIfUnsupported, supportsNamedAgent } from '../../lib/engineLaunch.js'
@@ -13,12 +12,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgentForker, type ForkAgentDeps } from './fork.js'
 
 vi.mock('../../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
-vi.mock('../../dsh/runtime.js', async (real) => ({
-  ...await real<object>(),
-  forkRuntimeKey: vi.fn(() => 'source-key'),
-  harnessLaunchOrRefusal: vi.fn((prepare: () => unknown) => { prepare(); return { ok: true, launch: { env: { HARNESS_DSH: 'blender' }, args: ['--dsh'] } } }),
-  prepareHarnessLaunch: vi.fn(),
-}))
+
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
@@ -41,6 +35,8 @@ vi.mock('../../scm/scmProjects.js', async (real) => {
   return { ...actual, prepareInstructionWrites: vi.fn(actual.prepareInstructionWrites) }
 })
 vi.mock('../../lib/forkAgent.js', async (real) => ({ ...await real<object>(), planFork: vi.fn(() => ({ ok: true, level: 'native', forkSessionId: 's1' })) }))
+
+const launchDsh = vi.fn<ForkAgentDeps['dshLaunch']['launch']>(async () => ({ ok: true, launch: { env: { HARNESS_DSH: 'blender' }, args: ['--dsh'] } }))
 
 const root = mkdtempSync(join(tmpdir(), 'core-fork-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -72,6 +68,7 @@ function setup(row: RegisteredSession | null = source(), over: Partial<ForkAgent
       ok: true as const, overrides: { env: (session.codexHome ? { CODEX_HOME: session.codexHome } : {}) as Record<string, string>, extraArgs: [] as string[], clearEnv: [] as string[] },
     })),
     gridName: () => 'grid-me',
+    dshLaunch: { launch: launchDsh },
     ...over,
   }
   return { deps, fork: createAgentForker(deps) }
@@ -104,7 +101,7 @@ describe('forking an agent', () => {
     expect(await setup().fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'FORK_UNSUPPORTED', detail: 'amp cannot fork' })
     expect(await setup(source({ dsh: 'blender' } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ error: 'INVALID_DSH' })
     vi.mocked(installedDsh).mockReturnValue({ manifest: { name: 'Blender' } } as never)
-    vi.mocked(harnessLaunchOrRefusal).mockReturnValueOnce({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' } as never)
+    launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' } as never)
     expect(await setup(source({ dsh: 'blender' } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' })
     vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     vi.mocked(refusePermissionFlagIfUnsupported).mockResolvedValueOnce({ error: 'PERMISSION_MODE_UNSUPPORTED', detail: 'no --auto' } as never)
@@ -187,7 +184,7 @@ describe('forking an agent', () => {
       .toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
     // No instruction files prepared, no harness runtime folder, no relaunch overrides, no pane.
     expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    expect(harnessLaunchOrRefusal).not.toHaveBeenCalled()
+    expect(launchDsh).not.toHaveBeenCalled()
     expect(refused.deps.relaunchOverrides).not.toHaveBeenCalled()
     expect(createAndRegisterPane).not.toHaveBeenCalled()
     vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)

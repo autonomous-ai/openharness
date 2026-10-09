@@ -23,6 +23,7 @@ import type { RelaunchMarks } from '../transcripts/relaunch.js'
 type Frame = { type: string; payload: Record<string, unknown> }
 
 export interface ForgetDeps {
+  onRemoved?: (agentId: string) => void
   registry: Pick<typeof registry, 'resolve' | 'unbindSession' | 'removeAgent' | 'remove'>
   stoppedAgents: Pick<StoppedAgentStore, 'save'>
   syncRecapPool: () => void
@@ -51,7 +52,7 @@ export interface ForgetDeps {
 export function createForgetSession({
   registry, stoppedAgents, syncRecapPool, normalizers, turnStartedAt, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
   clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, teams, input,
-  deviceInput, detachDsh, mirror, clients, dataDir,
+  deviceInput, detachDsh, mirror, clients, dataDir, onRemoved,
 }: ForgetDeps) {
   /** Release a mutable session binding, or remove the process-owned agent everywhere. */
   const forgetSession = (
@@ -94,7 +95,7 @@ export function createForgetSession({
     teams.forget(doomed?.agentId ?? sessionId)
     input.forget(doomed?.agentId ?? sessionId)
     deviceInput.forget(doomed?.agentId ?? sessionId)
-    if (!opts.keepAgent) detachDsh(announceId)
+    if (!opts.keepAgent) { detachDsh(announceId); onRemoved?.(announceId) }
     mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
     if (opts.keepAgent) return
     clients.send({ type: 'agent_deleted', payload: { agentId: announceId, retained: !!doomed } }) // web tab

@@ -36,6 +36,18 @@ it('saves history before removing the runtime, joins concurrent stops, and clear
 it('missing identities are harmless and never allocate or signal anything', async () => {
   await createStopAgentService(deps)('missing'); expect(deps.forgetSession).not.toHaveBeenCalled(); expect(terminateDeletedAgent).not.toHaveBeenCalled()
 })
+it('cancels immediately, then joins the core pane commit before capturing the runtime to stop', async () => {
+  let committed!: () => void
+  deps.settlePane = vi.fn(() => new Promise<void>(done => { committed = done }))
+  const stopping = createStopAgentService(deps)(row.agentId)
+  expect(deps.stopJobs.has(row.agentId)).toBe(true)
+  await vi.waitFor(() => expect(deps.settlePane).toHaveBeenCalledWith(row.agentId))
+  expect(captureResumeIdentity).not.toHaveBeenCalled()
+  row.runtimes = [{ backend: 'tmux', paneId: '%90' }]
+  committed()
+  await stopping
+  expect(deps.tmuxBackend!.kill).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%90' })
+})
 it('storage failure leaves the live process and registry untouched', async () => {
   vi.spyOn(stoppedAgents, 'save').mockImplementation(() => { throw new Error('disk full') })
   await expect(createStopAgentService(deps)(row.agentId)).rejects.toThrow('disk full')

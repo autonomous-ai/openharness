@@ -5,29 +5,18 @@ import { createStoreLink } from './storeLink.js'
 describe('the Store in its own process, as the core hears it', () => {
   afterEach(() => vi.useRealTimers())
 
-  it('waits for preparation, refreshes the index first and remembers it for restore', async () => {
-    vi.useFakeTimers()
-    const installed = vi.fn()
-    const link = createStoreLink(fakeCore(), installed)
-    const first = link.ready()
-    const second = link.ready()
-    expect(link.answer('prepared', {})).toEqual({ read: true })
-    expect(installed).toHaveBeenCalledOnce()
-    expect(await first).toBe(true)
-    expect(await second).toBe(true)
-    expect(await link.ready()).toBe(true)
-    expect(vi.getTimerCount()).toBe(0)
-  })
-
-  it('lets ordinary agents restore when the Store is unavailable, and accepts a late preparation', async () => {
-    vi.useFakeTimers()
-    const link = createStoreLink(fakeCore(), vi.fn())
-    const waiting = link.ready(50)
+  it('refreshes the installed index before notifying held launches; readiness never waits', () => {
+    const order: string[] = []
+    const link = createStoreLink(fakeCore(), () => order.push('installed'))
+    const off = link.onReady(() => order.push('ready'))
     link.answer('installed', {})
-    await vi.advanceTimersByTimeAsync(50)
-    expect(await waiting).toBe(false)
+    expect(order).toEqual(['installed'])
     link.answer('prepared', {})
-    expect(await link.ready()).toBe(true)
+    expect(order).toEqual(['installed', 'installed', 'ready'])
+    off()
+    link.answer('prepared', {})
+    expect(order).toEqual(['installed', 'installed', 'ready', 'installed'])
+    expect(link).not.toHaveProperty('ready')
   })
   it('pushes an install\'s progress to the apps, and reads the installed index again when told it changed', () => {
     const core = fakeCore()
@@ -45,5 +34,43 @@ describe('the Store in its own process, as the core hears it', () => {
     for (const status of [undefined, 'clone', ['clone'], null]) expect(link.answer('installStatus', { status })).toEqual({ error: 'BAD_STATUS' })
     expect(core.clients.dshInstallStatus).not.toHaveBeenCalled()
     expect(link.answer('credentials', {})).toEqual({ error: 'UNKNOWN_QUERY' })
+  })
+})
+
+describe('checked Store launch replies', () => {
+  const request = { dsh: 'test/draw', workspace: '/workspace', engine: 'claude' as const, key: 'agent', account: {} }
+  const materialized = { ok: true, created: [], kept: ['existing'], warnings: [] }
+  const launched = { ok: true, launch: { env: { HARNESS_DSH: 'test/draw' }, args: ['--context'] } }
+  it('round trips valid launches and refusals through the real link', async () => {
+    const call = vi.fn().mockResolvedValueOnce(materialized).mockResolvedValueOnce(launched)
+    const link = createStoreLink(fakeCore(), vi.fn(), call)
+    expect(await link.port.dshMaterialize(request)).toEqual(materialized)
+    expect(await link.port.dshLaunch(request)).toEqual(launched)
+    expect(call.mock.calls).toEqual([['dshMaterialize', request], ['dshLaunch', request]])
+    for (const refused of [
+      { ok: false, error: 'DSH_NOT_INSTALLED', detail: 'missing' },
+      { ok: false, error: 'DSH_UNAVAILABLE', detail: 'waiting', unavailable: 'store', holdScope: 'workspace', thrown: 'Error: waiting' },
+    ]) {
+      call.mockResolvedValue(refused)
+      expect(await link.port.dshMaterialize(request)).toEqual(refused)
+      expect(await link.port.dshLaunch(request)).toEqual(refused)
+    }
+  })
+  it('a down Store or malformed answer cannot become an unprepared launch', async () => {
+    const call = vi.fn()
+    const link = createStoreLink(fakeCore(), vi.fn(), call)
+    const common = [null, [], false, {}, { ok: false }, { ok: false, error: 1 },
+      { ok: false, error: 'x', detail: 1 }, { ok: false, error: 'x', detail: 'x', unavailable: 'models' },
+      { ok: false, error: 'x', detail: 'x', thrown: 1 }, { ok: false, error: 'x', detail: 'x', holdScope: 'process' }, { error: 'SERVICE_UNAVAILABLE' }]
+    for (const bad of [...common, { ok: true }, { ...materialized, created: [1] }, { ...materialized, kept: null }, { ...materialized, warnings: [1] }]) {
+      call.mockResolvedValue(bad)
+      await expect(link.port.dshMaterialize(request)).rejects.toThrow('the store service is unavailable')
+    }
+    for (const bad of [...common, { ok: true }, { ok: true, launch: { env: [] } },
+      { ok: true, launch: { env: { KEY: 3 }, args: [] } }, { ok: true, launch: { env: {}, args: [1] } }]) {
+      call.mockResolvedValue(bad)
+      await expect(link.port.dshLaunch(request)).rejects.toThrow('the store service is unavailable')
+    }
+    await expect(createStoreLink(fakeCore(), vi.fn()).port.dshLaunch(request)).rejects.toThrow('the store service is unavailable')
   })
 })

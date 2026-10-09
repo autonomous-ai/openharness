@@ -41,7 +41,7 @@ describe('the Store in its own process', () => {
     const { options, api, handle, service } = setup()
     expect(handle).toBe(service)
     expect(options).toMatchObject({ name: 'store', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS].sort())
+    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshMaterialize', 'dshLaunch'].sort())
     await expect(api.account.accessToken()).rejects.toThrow('store holds no credential')
   })
 
@@ -74,6 +74,67 @@ describe('the Store in its own process', () => {
     runStoreService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
     expect(options.name).toBe('store')
-    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS].sort())
+    expect(Object.keys(options.requests).sort()).toEqual([...STORE_REQUESTS, 'dshMaterialize', 'dshLaunch'].sort())
   })
+})
+
+describe('the Store launch port on its process wire', () => {
+  const request = { dsh: 'test/draw', workspace: '/workspace', engine: 'claude', key: 'agent', account: {} }
+  const setup = () => {
+    const launch = { dshMaterialize: vi.fn(async () => ({ ok: true as const, created: [], kept: [], warnings: [] })),
+      dshLaunch: vi.fn(async () => ({ ok: true as const, launch: { env: {}, args: [] } })) }
+    runStoreService({ dataDir: '/data', socketPath: '/socket', machineId: 'm', token: 't', start: () => ({}), launch })
+    return { launch, requests: vi.mocked(runServiceProcess).mock.calls.at(-1)![0].requests }
+  }
+  it('checks context, private grid and fork identity, and strips unrelated data', async () => {
+    const { launch, requests } = setup()
+    for (const account of [{}, { privateGrid: null }, { privateGrid: '' }, { privateGrid: 'private' }]) {
+      expect(await requests.dshMaterialize!({ ...request, account, secret: 'not forwarded' }, ASKER)).toMatchObject({ ok: true })
+      expect(launch.dshMaterialize).toHaveBeenLastCalledWith({ dsh: request.dsh, workspace: request.workspace, key: request.key, engine: request.engine, account })
+    }
+    for (const forkOf of [undefined, { agentId: 'source', dshRuntime: null }, { agentId: 'source', dshRuntime: 'runtime' }]) {
+      expect(await requests.dshLaunch!({ ...request, forkOf }, ASKER)).toMatchObject({ ok: true })
+      expect(launch.dshLaunch).toHaveBeenLastCalledWith({ ...request, ...(forkOf ? { forkOf } : {}) })
+    }
+  })
+  it('rejects malformed requests before package work starts', async () => {
+    const { launch, requests } = setup()
+    const bad = [{ dsh: '' }, { dsh: 1 }, { workspace: null }, { engine: 'terminal' }, { engine: 'unknown' },
+      { account: null }, { account: [] }, { account: { privateGrid: 42 } }]
+    for (const over of bad) {
+      expect(await requests.dshMaterialize!({ ...request, ...over }, ASKER)).toMatchObject({ error: 'INVALID_DSH' })
+      expect(await requests.dshLaunch!({ ...request, ...over }, ASKER)).toMatchObject({ error: 'INVALID_DSH' })
+    }
+    for (const over of [{ key: '' }, { forkOf: null }, { forkOf: [] }, { forkOf: { agentId: '' } },
+      { forkOf: { agentId: 'source' } }, { forkOf: { agentId: 'source', dshRuntime: 3 } }]) {
+      expect(await requests.dshLaunch!({ ...request, ...over }, ASKER)).toMatchObject({ error: 'INVALID_DSH' })
+    }
+    expect(launch.dshMaterialize).not.toHaveBeenCalled()
+    expect(launch.dshLaunch).not.toHaveBeenCalled()
+  })
+  it('notifies held launches after a completed preparation and tolerates the core going away', async () => {
+    const { launch, requests } = setup()
+    const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
+    const query = vi.fn(async () => ({}))
+    options.onConnected!({ query })
+    query.mockClear()
+    await requests.dshMaterialize!(request, ASKER)
+    await requests.dshLaunch!(request, ASKER)
+    expect(query.mock.calls).toEqual([['prepared'], ['prepared']])
+    query.mockRejectedValue(new Error('core gone'))
+    await requests.dshMaterialize!(request, ASKER)
+    await requests.dshLaunch!(request, ASKER)
+    launch.dshMaterialize.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', unavailable: 'store', detail: 'unconfirmed' } as never)
+    launch.dshLaunch.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', unavailable: 'store', detail: 'unconfirmed' } as never)
+    await requests.dshMaterialize!(request, ASKER)
+    await requests.dshLaunch!(request, ASKER)
+    expect(query).toHaveBeenCalledTimes(4)
+    query.mockResolvedValue({})
+    launch.dshMaterialize.mockResolvedValueOnce({ ok: false, error: 'DSH_MATERIALIZE_FAILED', detail: 'init failed' } as never)
+    launch.dshLaunch.mockResolvedValueOnce({ ok: false, error: 'DSH_RUNTIME_FAILED', detail: 'runtime failed' } as never)
+    await requests.dshMaterialize!(request, ASKER)
+    await requests.dshLaunch!(request, ASKER)
+    expect(query).toHaveBeenCalledTimes(6)
+  })
+
 })

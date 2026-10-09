@@ -71,6 +71,16 @@ describe('forgetting a session', () => {
     expect(marks.size).toBe(0)
   })
 
+  it('forgets lifecycle epochs only when the agent is removed', () => {
+    const { deps } = setup()
+    const onRemoved = vi.fn()
+    const forget = createForgetSession({ ...deps, onRemoved })
+    forget('a1', { keepAgent: true })
+    expect(onRemoved).not.toHaveBeenCalled()
+    forget('a1')
+    expect(onRemoved).toHaveBeenCalledWith('a1')
+  })
+
   it('releases a session and keeps its agent: everything per-session goes, the agent and its tiles stay', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { deps, forgetSession } = setup()

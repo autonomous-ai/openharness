@@ -8,7 +8,7 @@
  * on, and the master brings it back.
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
 import { LocalClient, type Frame } from './harness/client.js'
@@ -18,10 +18,10 @@ const HARNESS = 'e2e/installed-here'
 const FIRST = 'e2e/installed-first'
 
 /** A harness in a git repository of its own, whose setup says a line: what `dsh_install` clones and sets up. */
-function repository(d: IsolatedDaemon, id = HARNESS, name = 'Installed Here', gate?: { ready: string; release: string }): string {
+function repository(d: IsolatedDaemon, id = HARNESS, name = 'Installed Here', gate?: { ready: string; release: string }, initialization?: string): string {
   const dir = join(d.root, `repo-${id.replace('/', '-')}`)
   mkdirSync(dir, { recursive: true })
-  writeFileSync(join(dir, 'harness.json'), JSON.stringify({ spec: 1, id, name, engine: 'claude', toolchain: { setup: './setup.sh' } }))
+  writeFileSync(join(dir, 'harness.json'), JSON.stringify({ spec: 1, id, name, engine: 'claude', toolchain: { setup: './setup.sh' }, ...(initialization ? { workspace: { init: './init.mjs' } } : {}) }))
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
   // Found by QA on a quiet machine: hold setup while the core reads the uninstalled index. A
   // warming loop can cross the install's completion and mistake a successful create for a failure.
@@ -32,6 +32,7 @@ function repository(d: IsolatedDaemon, id = HARNESS, name = 'Installed Here', ga
     setTimeout(() => { console.error('test did not release the install setup'); process.exit(1); }, 30000);
   `)}\n` : ''
   writeFileSync(join(dir, 'setup.sh'), `#!/bin/sh\necho setting up\n${wait}`, { mode: 0o755 })
+  if (initialization) writeFileSync(join(dir, 'init.mjs'), `#!/usr/bin/env node\n${initialization}`, { mode: 0o755 })
   const git = (...args: string[]) => execFileSync('git', ['-C', dir, ...args], { env: { ...process.env, HOME: d.env.HOME, GIT_CONFIG_NOSYSTEM: '1' } })
   git('init', '-q', '-b', 'main')
   git('add', '.')
@@ -48,10 +49,10 @@ const connected = (d: IsolatedDaemon) => d.log().split('[services] store connect
 const row = async (client: LocalClient, agentId: string) =>
   ((await client.request<{ agents: Array<Record<string, any>> }>('agents_list', { includeStopped: true }, 30_000)).agents)
     .find((agent) => agent.id === agentId)
-async function create(d: IsolatedDaemon, client: LocalClient, folder: string, dsh?: string): Promise<Record<string, any>> {
+async function create(d: IsolatedDaemon, client: LocalClient, folder: string, dsh?: string, engine: 'claude' | 'codex' = 'claude'): Promise<Record<string, any>> {
   const cwd = join(d.projectsDir, folder)
   mkdirSync(cwd, { recursive: true })
-  const created = await client.request('agent_create', { engine: 'claude', cwd, bypassPermission: true, ...(dsh ? { dsh } : {}) }, 90_000)
+  const created = await client.request('agent_create', { engine, cwd, bypassPermission: true, ...(dsh ? { dsh } : {}) }, 90_000)
   expect(created.error, JSON.stringify(created)).toBeUndefined()
   return until(`${folder} to bind`, async () => {
     const found = await row(client, created.agent.id)
@@ -67,8 +68,8 @@ async function turn(client: LocalClient, agentId: string, content: string): Prom
 describe('the Store in its own process, beside the viewers', () => {
   let daemon: IsolatedDaemon | undefined
   afterEach(async () => { await daemon?.close(); daemon = undefined })
-  const fresh = async () => {
-    const d = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000' } })
+  const fresh = async (env: Record<string, string> = {}) => {
+    const d = await IsolatedDaemon.create({ env: { HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '200', HARNESSD_SERVICE_MAX_BACKOFF_MS: '1000', ...env } })
     daemon = d
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`) })
     await d.start()
@@ -137,4 +138,85 @@ describe('the Store in its own process, beside the viewers', () => {
     expect(d.coresStarted()).toBe(1)
     client.close()
   })
+  it.each(['killed', 'hung'] as const)('Store %s at boot: readiness and plain launches proceed, package agents wait prepared', async how => {
+    const d = await fresh({ HARNESSD_SERVICE_HEARTBEAT_TIMEOUT_MS: '3000', HARNESSD_SERVICE_STOP_GRACE_MS: '100' })
+    let client = await LocalClient.connect(d)
+    expect(await client.request('dsh_install', { url: repository(d) }, 180_000)).toMatchObject({ ok: true })
+    const agents = [await create(d, client, 'held-claude', HARNESS), await create(d, client, 'held-codex', HARNESS, 'codex')]
+    const stopped = await create(d, client, 'stop-while-store-is-held', HARNESS)
+    for (const agent of [...agents, stopped]) await turn(client, agent.id, 'before the reboot')
+    const hold = join(d.root, 'hold-store')
+    writeFileSync(hold, '')
+    d.env.HARNESSD_TEST_HOLD_CONNECT = `store:${hold}`
+    client.close()
+    await d.stop()
+    await d.tmux.run('kill-server')
+    const started = Date.now()
+    await d.start()
+    expect(Date.now() - started).toBeLessThan(15_000)
+    client = await LocalClient.connect(d)
+    for (const agent of agents) {
+      await until('a package launch held for Store', async () => (await row(client, agent.id))?.launch?.state === 'held' || null, 10_000, 100)
+      expect(await row(client, agent.id)).toMatchObject({ status: 'offline', launch: { state: 'held', service: 'store' } })
+    }
+    const stopReply = await client.request('agent_delete', { agentId: stopped.id }, 10_000)
+    expect(stopReply.error, JSON.stringify(stopReply)).toBeUndefined()
+    await until('Stop completes while Store is unavailable', async () => (await row(client, stopped.id))?.status === 'stopped' || null, 10_000, 100)
+    const pid = viewersPid(d)!
+    process.kill(pid, how === 'killed' ? 'SIGKILL' : 'SIGSTOP')
+    await until('Store supervised back', () => viewersPid(d) !== pid || null, 30_000, 100)
+    const plain = await create(d, client, 'plain-during-store-outage')
+    await turn(client, plain.id, 'ready without the Store')
+    const cwd = join(d.projectsDir, 'refused-package')
+    mkdirSync(cwd)
+    const refused = await client.request('agent_create', { engine: 'claude', cwd, dsh: HARNESS, bypassPermission: true }, 10_000)
+    expect(refused).toMatchObject({ error: 'DSH_UNAVAILABLE' })
+    expect(readdirSync(cwd)).toEqual([])
+    for (const agent of agents) expect(await row(client, agent.id)).toMatchObject({ launch: { state: 'held' } })
+    rmSync(hold)
+    for (const agent of agents) {
+      await until('the prepared package resumes its conversation', async () => {
+        const now = await row(client, agent.id)
+        return now?.status === 'active' && now.sessionId === agent.sessionId && now.launch?.state === 'ready' || null
+      }, 90_000, 250)
+      await turn(client, agent.id, 'after Store recovery')
+    }
+    expect(await row(client, stopped.id)).toMatchObject({ status: 'stopped', sessionId: stopped.sessionId })
+    expect(d.log()).not.toContain('could not build its launch')
+    expect(d.coresStarted()).toBe(2)
+    client.close()
+  })
+
+  it('a Store killed during init preserves uncertain work and never repeats it under a new create label', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const release = join(d.root, 'release-init')
+    const cwd = join(d.projectsDir, 'interrupted-init')
+    mkdirSync(cwd)
+    const script = `import fs from 'node:fs';
+      fs.appendFileSync('attempts', 'once\\n'); fs.writeFileSync('init-ready', 'ready');
+      const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { fs.writeFileSync('init-done', 'done'); clearInterval(timer); } }, 20);
+      setTimeout(() => { clearInterval(timer); process.exit(2); }, 30000).unref();`
+    expect(await client.request('dsh_install', { url: repository(d, HARNESS, 'Interrupted Init', undefined, script) }, 180_000)).toMatchObject({ ok: true })
+    const request = { engine: 'claude', cwd, dsh: HARNESS, bypassPermission: true }
+    const creating = client.request('agent_create', request, 45_000)
+    try {
+      await until('init writes its first part', () => existsSync(join(cwd, 'init-ready')) || null, 20_000, 50)
+      process.kill(viewersPid(d)!, 'SIGKILL')
+      expect(await creating).toMatchObject({ error: 'DSH_UNAVAILABLE' })
+      await until('the replacement Store connects', () => connected(d) >= 2 || null, 20_000, 100)
+      const retry = await client.request('agent_create', request, 10_000)
+      expect(retry).toMatchObject({ error: 'DSH_UNAVAILABLE', detail: expect.stringContaining('unconfirmed') })
+      expect(readFileSync(join(cwd, 'attempts'), 'utf8')).toBe('once\n')
+      expect(existsSync(join(cwd, '.harness', 'runtime'))).toBe(false)
+      const plain = await create(d, client, 'plain-after-interrupted-init')
+      await turn(client, plain.id, 'workspace uncertainty is isolated')
+      expect(d.coresStarted()).toBe(1)
+    } finally {
+      writeFileSync(release, 'finish')
+      await until('the isolated orphaned init finishes', () => existsSync(join(cwd, 'init-done')) || null, 10_000, 50)
+      client.close()
+    }
+  })
+
 })
