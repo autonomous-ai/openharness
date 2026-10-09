@@ -35,7 +35,7 @@ describe('former runtime manager state and control golden', () => {
     })) vi.stubEnv(key, value)
     vi.resetModules()
     const { RuntimeProfileManager } = await import('./runtimeProfile.js')
-    const { LegacyRuntimeProfileManager } = await import('./runtimeProfileManager.js')
+    const { RuntimeProfileState } = await import('./runtimeProfileState.js')
     const { loadEngine } = await import('../engines/inProcess.js')
     const { encodeRuntimeProfile } = await import('../engines/kit/runtime.js')
     for (const engine of engines) if (engine !== 'claude' && engine !== 'codex') await loadEngine(engine)
@@ -86,7 +86,7 @@ describe('former runtime manager state and control golden', () => {
       answers[engine] = states
     }
     // The supervised core has no pilot reader. It still owns confirmation, waiters and cleanup.
-    const generic = new LegacyRuntimeProfileManager(() => undefined), g = value('codex', 'generic')
+    const generic = new RuntimeProfileState(() => undefined), g = value('codex', 'generic')
     const target: RuntimeProfile = { id: 'runtime-v1:generic:codex:chosen@high', sessionId: 'generic', engine: 'codex', model: 'chosen', effort: 'high' }
     generic.beginControl(g, target)
     generic.confirmEffort(g.sessionId, 'high')

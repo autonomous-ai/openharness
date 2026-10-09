@@ -7,3 +7,5 @@ export { GrokNormalizer, grokMessagesToEvents, lastGrokTurnText } from './normal
 export { parseGrokFooterProfile } from './runtimeProfile.js'
 export { findGrokTranscript } from './session.js'
 export { grokProvider } from '../../lib/sessionSearch/externals/grok.js'
+
+export { createRuntimeProfileReader } from './profileReader.js'

@@ -198,7 +198,7 @@ import { forgetAgentProject } from '../lib/agentProject.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
 import type { AgentUsageTarget } from '../lib/agentUsageWire.js'
-import { LegacyRuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfileManager.js'
+import { RuntimeProfileState, type RuntimeModelOption } from '../lib/runtimeProfileState.js'
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
@@ -624,7 +624,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
   const runtimeProfiles = createRuntimeProfiles({
-    legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
+    local: new RuntimeProfileState(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
     handles: isolatedRuntime,
     resolve: id => registry.resolve(id), transport: runtimeTransport })
   const questionControls = createQuestionControls({

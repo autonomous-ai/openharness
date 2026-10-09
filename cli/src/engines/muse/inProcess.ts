@@ -7,3 +7,5 @@ export { MuseNormalizer, lastMuseTurnText, museMessagesToEvents } from './normal
 export { parseMuseSettings } from './runtimeProfile.js'
 export { museEvent, museWorkspaceRoot } from './normalizer.js'
 export { museProvider } from '../../lib/sessionSearch/externals/muse.js'
+
+export { createRuntimeProfileReader } from './profileReader.js'

@@ -255,7 +255,7 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['core/engines/cursorTasks.ts', '(o3)'],
   ['core/turns/agyBackstop.ts', '(o3)'],
   // What the core reads of their model and effort, and how a switch of theirs would be driven.
-  ['lib/runtimeProfileManager.ts', '(o4)'],
+  ['lib/runtimeProfileState.ts', '(o4)'],
   ['lib/runtimeControl.ts', '(o4)'],
   // Where their conversations are: the registry's layouts and Cursor's homes, declared; bind's finders and
   // repair's readers, loaded; Cursor's discovery and its queued Tasks, built on first use; Hermes's store.
@@ -323,7 +323,7 @@ describe('the daemon\'s shape', () => {
 
   it('runtime profile authority and wire values load contracts without vendor profile implementations', () => {
     for (const entry of ['core/engines/runtimeSessions.ts', 'core/engines/runtimeProfiles.ts',
-      'core/engines/runtimeTransport.ts', 'lib/runtimeProfileWire.ts', 'lib/runtimeProfileManager.ts']) {
+      'core/engines/runtimeTransport.ts', 'lib/runtimeProfileWire.ts', 'lib/runtimeProfileState.ts']) {
       expect([...closureOf(entry).keys()].filter(file => /^engines\/(claude|codex)\//.test(file)), entry).toEqual([])
       expect(closureOf(entry).has('lib/runtimeProfile.ts'), entry).toBe(false)
     }

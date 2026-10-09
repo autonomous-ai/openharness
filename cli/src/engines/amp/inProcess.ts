@@ -6,3 +6,5 @@
 export { AmpNormalizer, ampMessagesToEvents, lastAmpTurnText } from './normalizer.js'
 export { ampThreadToEvents, readAmpThread } from './threadExport.js'
 export { parseAmpSession } from './runtimeProfile.js'
+
+export { createRuntimeProfileReader } from './profileReader.js'

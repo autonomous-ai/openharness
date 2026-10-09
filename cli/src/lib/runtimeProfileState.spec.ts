@@ -5,10 +5,11 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { env } from '../config/env.js'
 import { runtime as claudeRuntime } from '../engines/claude/runtimeProfile.js'
 import type { RegisteredSession } from './registry.js'
-import { LegacyRuntimeProfileManager } from './runtimeProfileManager.js'
+import { RuntimeProfileState } from './runtimeProfileState.js'
 import { RuntimeProfileManager } from './runtimeProfile.js'
 import { parseRuntimeProfile } from './runtimeProfileWire.js'
 import { engineNow, loadEngine, OTHER_ENGINES } from '../engines/inProcess.js'
+import type { InlineRuntimeContext } from '../engines/facets/inlineRuntime.js'
 
 // A test may say an engine's code could not be loaded.
 vi.mock('../engines/inProcess.js', async (real) => {
@@ -27,12 +28,32 @@ afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 beforeAll(async () => { for (const engine of OTHER_ENGINES) await loadEngine(engine) })
 
 describe('another engine whose code could not be loaded', () => {
+  it('contains a missing or throwing reader factory while core confirmation and cleanup still work', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    for (const createRuntimeProfileReader of [undefined, () => { throw new Error('broken facet') }]) {
+      vi.mocked(engineNow).mockReturnValue({ createRuntimeProfileReader } as never)
+      vi.mocked(loadEngine).mockResolvedValue({ createRuntimeProfileReader } as never)
+      const manager = new RuntimeProfileState(() => undefined), agent = session('cursor')
+      manager.hydrate(agent, [])
+      expect(manager.ingestPane(agent, 'Auto · 10%', true)).toBe(false)
+      expect(manager.ingestPane(agent, 'Auto · 10%', true)).toBe(false)
+      expect(await manager.ingestConfig(agent)).toBe(false)
+      manager.confirmEffort(agent.sessionId, 'high')
+      expect(manager.getState(agent.sessionId).effort).toBe('high')
+      manager.forget(agent.sessionId)
+      expect(manager.getState(agent.sessionId).model).toBeNull()
+    }
+    expect(console.warn).toHaveBeenCalledTimes(2)
+    vi.mocked(engineNow).mockReset()
+    vi.mocked(loadEngine).mockReset()
+  })
+
   it('reads nothing of its panes, config files or catalog, and leaves its chips as they were', async () => {
-    const manager = new LegacyRuntimeProfileManager(() => undefined)
+    const manager = new RuntimeProfileState(() => undefined)
     vi.mocked(engineNow).mockReturnValue(null)
     vi.mocked(loadEngine).mockResolvedValue(null as never)
     try {
-      for (const engine of ['devin', 'hermes', 'commandcode', 'opencode', 'kilo', 'pi', 'grok', 'agy'] as const) {
+      for (const engine of ['cursor', 'devin', 'hermes', 'commandcode', 'opencode', 'kilo', 'pi', 'grok', 'agy'] as const) {
         const agent = { ...session(engine), sessionId: `${engine}-s` }
         expect(manager.ingestPane(agent, 'any pane', true), engine).toBe(false)
         expect(manager.getState(agent.sessionId), engine).toMatchObject({ model: null, effort: null })
@@ -49,6 +70,108 @@ describe('another engine whose code could not be loaded', () => {
   })
 })
 
+describe('late optional profile observations', () => {
+  it('cannot commit a staged transcript after forget or newer live evidence', () => {
+    for (const forget of [true, false]) {
+      const manager = new RuntimeProfileManager(), agent = session('codex')
+      const line = (model: string) => JSON.stringify({ type: 'turn_context', payload: { model, reasoning_effort: 'high' } })
+      manager.hydrate(agent, [line('first')])
+      const stage = manager.beginHydrate(agent)
+      stage.ingest(line('old-history'))
+      if (forget) manager.forget(agent.sessionId)
+      else manager.ingest(agent, line('latest'), true)
+      const before = manager.getState(agent.sessionId)
+      stage.commit()
+      expect(manager.getState(agent.sessionId)).toEqual(before)
+    }
+  })
+
+  it('keeps the session version and control confirmation private until a stage commits', async () => {
+    const manager = new RuntimeProfileState(() => ({ ...claudeRuntime,
+      transcript(context) {
+        context.session.cliVersion = 'staged-version'
+        context.state.model = 'staged-model'
+        if (context.control) context.control.modelConfirmed = true
+      },
+    })), agent = session('claude')
+    const target = { id: 'runtime-v1:conversation:claude:staged-model@high', sessionId: agent.sessionId,
+      engine: agent.engine, model: 'staged-model', effort: 'high' }
+    manager.beginControl(agent, target)
+    const stage = manager.beginHydrate(agent)
+    stage.ingest('{}')
+    expect(agent.cliVersion).toBe('1.0.0')
+    vi.useFakeTimers()
+    const waiting = manager.waitForModel(agent.sessionId, 15)
+    await vi.advanceTimersByTimeAsync(15)
+    expect(await waiting).toBe(false)
+    stage.commit()
+    expect(agent.cliVersion).toBe('staged-version')
+    expect(await manager.waitForModel(agent.sessionId, 15)).toBe(true)
+    manager.forget(agent.sessionId)
+  })
+
+  it('cannot recreate state when its module finishes loading after forget', async () => {
+    const manager = new RuntimeProfileState(() => undefined), agent = session('hermes')
+    let finish!: (value: Awaited<ReturnType<typeof loadEngine<'hermes'>>>) => void
+    const module = await loadEngine('hermes')
+    const read = vi.fn(async ({ state }: InlineRuntimeContext) => {
+      state.model = 'late-model'; state.effort = 'high'; return true
+    })
+    vi.mocked(loadEngine).mockReturnValueOnce(new Promise(resolve => { finish = resolve }) as never)
+    const pending = manager.ingestConfig(agent)
+    manager.forget(agent.sessionId)
+    finish({ ...module!, createRuntimeProfileReader: () => ({ engine: 'hermes', target: () => null, config: read }) })
+    expect(await pending).toBe(false)
+    expect(read).not.toHaveBeenCalled()
+    expect(manager.getState(agent.sessionId)).toMatchObject({ model: null, effort: null })
+  })
+
+  it('does not replace a confirmed effort with a config read started earlier', async () => {
+    let finish!: (effort: string) => void
+    const configuredEffort = vi.fn(() => new Promise<string>(resolve => { finish = resolve }))
+    const manager = new RuntimeProfileState(() => ({ ...claudeRuntime, configuredEffort })), agent = session('claude')
+    manager.hydrate(agent, [])
+    const pending = manager.ingestConfig(agent)
+    manager.confirmEffort(agent.sessionId, 'high')
+    finish('low')
+    expect(await pending).toBe(false)
+    expect(manager.getState(agent.sessionId).effort).toBe('high')
+  })
+
+  it('does not notify for a read completed after the session was forgotten', async () => {
+    vi.useFakeTimers()
+    let finish!: (effort: string) => void
+    const configuredEffort = () => new Promise<string>(resolve => { finish = resolve })
+    const manager = new RuntimeProfileState(() => ({ ...claudeRuntime, configuredEffort })), agent = session('claude')
+    manager.hydrate(agent, [])
+    manager.confirmEffort(agent.sessionId, 'high')
+    const changed = vi.fn(); manager.onChanged = changed
+    const pending = manager.ingestConfig(agent)
+    manager.forget(agent.sessionId)
+    finish('low')
+    expect(await pending).toBe(false)
+    await vi.advanceTimersByTimeAsync(120)
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('discards a config answer for a different native home on the same mutable row', async () => {
+    const module = await loadEngine('hermes')
+    let finish!: () => void
+    const config = vi.fn(async ({ state }: InlineRuntimeContext) => {
+      await new Promise<void>(resolve => { finish = resolve })
+      state.model = 'old-home-model'; state.effort = 'high'; return true
+    })
+    vi.mocked(loadEngine).mockResolvedValueOnce({ ...module!, createRuntimeProfileReader: () => ({ engine: 'hermes', target: () => null, config }) })
+    const manager = new RuntimeProfileState(() => undefined), agent = { ...session('hermes'), hermesHome: '/tmp/first-profile' }
+    const pending = manager.ingestConfig(agent)
+    await vi.waitFor(() => expect(config).toHaveBeenCalledOnce())
+    agent.hermesHome = '/tmp/replacement-profile'
+    finish()
+    expect(await pending).toBe(false)
+    expect(manager.getState(agent.sessionId)).toMatchObject({ model: null, effort: null })
+  })
+})
+
 describe('runtime profiles without the pilot implementations', () => {
   it.each([
     ['amp', 'amp-session.jsonl'], ['amp', 'amp-session-queued.jsonl'],
@@ -58,7 +181,7 @@ describe('runtime profiles without the pilot implementations', () => {
     // Audit the removed fallback against recordings, not formats inferred from Claude. None of these
     // native records contributed profile metadata through that reader; their own config/panes do.
     expect(lines.map(line => claudeRuntime.decode(JSON.parse(line))).filter(Boolean)).toEqual([])
-    const manager = new LegacyRuntimeProfileManager(() => undefined)
+    const manager = new RuntimeProfileState(() => undefined)
     const agent = session(engine)
     manager.hydrate(agent, lines)
     expect(manager.getState(agent.sessionId)).toEqual({
@@ -67,7 +190,7 @@ describe('runtime profiles without the pilot implementations', () => {
   })
 
   it('keeps Pi metadata in its native footer and never treats answer text as Claude commands', () => {
-    const manager = new LegacyRuntimeProfileManager(() => undefined)
+    const manager = new RuntimeProfileState(() => undefined)
     const agent = session('pi')
     // These metadata records are copied from the Pi 0.82.1 recording in pi/normalizer.spec.ts.
     const lines = [
@@ -110,7 +233,7 @@ describe('runtime profiles without the pilot implementations', () => {
         schema_version: 1, provider: 'meta', model: 'muse-spark-1.2-contributor',
       }))
       writeFileSync(join(env.AMP_STATE_DIR, 'session.json'), JSON.stringify({ agentMode: 'medium' }))
-      const manager = new LegacyRuntimeProfileManager(() => undefined)
+      const manager = new RuntimeProfileState(() => undefined)
       for (const [engine, model, effort] of [
         ['muse', 'muse-spark-1.2-contributor', 'high'], ['amp', 'medium', 'auto'],
       ] as const) {
@@ -125,7 +248,7 @@ describe('runtime profiles without the pilot implementations', () => {
   })
 
   it('still reads the captured agy footer and the registry-supplied CLI version', () => {
-    const manager = new LegacyRuntimeProfileManager(() => undefined), agent = session('agy')
+    const manager = new RuntimeProfileState(() => undefined), agent = session('agy')
     manager.hydrate(agent, [])
     manager.ingestPane(agent, fixture('permission-agy.txt'), true)
     expect(parseRuntimeProfile(manager.selectedModel(agent))).toMatchObject({
