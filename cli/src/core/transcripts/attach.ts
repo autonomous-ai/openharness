@@ -174,6 +174,7 @@ export function createAttach({
     const historyEvents: LiveEvent[] = []
     let historyTurnOpen = false
     let historySuperseded = false
+    let historyCurrent: (() => boolean) | undefined
     let observed = false
     sideRead('device', session.sessionId, () => { observed = !!device()?.needsTranscript(session.agentId, session.sessionId, session.engine) })
     const observe = observed
@@ -362,6 +363,8 @@ export function createAttach({
       const revision = normalizer.turnRevision
       let observedRevision = revision
       let current = true
+      historyCurrent = () => paneReadIdentity(resolve(agentId)) === identity
+        && agyNormalizers.get(sessionId) === normalizer && normalizer.turnRevision === observedRevision
       const capturing = captureTerminal(agentId, 60)
       await Promise.all([
         runtimeProfiles.capturePane(session, () => capturing, 60, true),
@@ -475,6 +478,8 @@ export function createAttach({
     // Any fold of a transcript with content counts too: the watcher now tails it from the end, so a later
     // replay could only send history out again as if it were live.
     if (replayLive || lines.length || fromEnd?.content) replayedFirstTurn.add(session.sessionId)
+    // Installing the file watcher also yields. The final history consumer must still own the capture.
+    if (historyCurrent && !historyCurrent()) historySuperseded = true
     if (!historySuperseded && initialEvents.length) {
       emit(session.sessionId, initialEvents)
       console.log(`[agent] ${sid(session.agentId)} replayed the first turn its transcript already held · ${initialEvents.length} events`)

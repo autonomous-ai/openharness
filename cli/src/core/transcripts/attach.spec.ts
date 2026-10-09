@@ -700,6 +700,27 @@ describe('attaching a session', () => {
       },
     )
 
+    it.each(['new turn', 'binding', 'forgotten'] as const)(
+      'keeps captured agy history fenced through watcher installation: %s', async change => {
+        for (const pane of [IDLE_AGY, 'working\n  esc to cancel']) {
+          const run = setup({ settled: vi.fn() }), s = session('agy', transcript([{ events: [started()], open: true }]))
+          vi.mocked(run.deps.captureTerminal).mockResolvedValue(pane)
+          let finish!: () => void
+          vi.mocked(run.deps.watcher.addSession).mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+          const pending = run.attach.attachSession(s)
+          await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalled())
+          const normalizer = run.normalizers.agyNormalizers.get(s.sessionId)!
+          if (change === 'new turn') normalizer.ingest(JSON.stringify({ open: true }))
+          if (change === 'binding') bindings.set(s.agentId, { ...s, boundAt: 2 })
+          if (change === 'forgotten') run.normalizers.agyNormalizers.delete(s.sessionId)
+          finish()
+          await pending
+          expect(run.deps.emit, pane).not.toHaveBeenCalled()
+          expect(run.deps.settled, pane).not.toHaveBeenCalled()
+        }
+      },
+    )
+
     it('tells the recaps when the last turn was already over at attach, never for one open or killed', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})
       const settled = vi.fn()
