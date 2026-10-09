@@ -433,7 +433,7 @@ void main() {
   );
 
   testWidgets(
-    'one open in a terminal is offered, and opening it asks how to move it here',
+    'one open in a terminal is offered, and opening it moves it here without asking',
     (tester) async {
       newHarnessOpensInBox = true;
       addTearDown(() => newHarnessOpensInBox = false);
@@ -490,26 +490,74 @@ void main() {
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
       expect(
-        connection.creates.single,
+        connection.creates.first,
         containsPair('resumeSessionId', 'e-busy'),
       );
-      expect(connection.creates.single.containsKey('takeOver'), isFalse);
-      expect(
-        find.text('Codex is working on it in a terminal.'),
-        findsOneWidget,
-      );
-      expect(find.byKey(const Key('take-over-wait')), findsOneWidget);
-
-      await tester.tap(find.byKey(const Key('take-over-now')));
-      await tester.pump(const Duration(milliseconds: 100));
+      expect(connection.creates.first.containsKey('takeOver'), isFalse);
+      // Mid-turn in its terminal: it moves here when the turn ends, with no question.
       await tester.pump(const Duration(milliseconds: 100));
       expect(connection.creates, hasLength(2));
-      expect(connection.creates.last, containsPair('takeOver', 'now'));
+      expect(connection.creates.last, containsPair('takeOver', 'wait'));
       expect(
         connection.creates.last,
         containsPair('resumeSessionId', 'e-busy'),
       );
-      expect(find.byKey(const Key('take-over-now')), findsNothing);
+      expect(find.text('Move to Harness'), findsNothing);
+      expect(app.panes.map((pane) => pane.agentId), ['moved']);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'one between turns in a terminal moves here at once: its terminal quits, nothing is asked',
+    (tester) async {
+      newHarnessOpensInBox = true;
+      addTearDown(() => newHarnessOpensInBox = false);
+      final connection = TailConnection(
+        {
+          '': [
+            _external(
+              'e-idle',
+              'Fix the stuck pane',
+              const Duration(minutes: 1),
+              open: true,
+              openIn: 'terminal',
+            ),
+          ],
+        },
+        tail: (_) => {'rows': [], 'hasMore': false, 'total': 0},
+        create: (payload) => payload['takeOver'] == null
+            ? {
+                'creationId': payload['creationId'],
+                'state': 'failed',
+                'failure': {
+                  'code': 'SESSION_OPEN_IN_TERMINAL',
+                  'detail': 'It is open in Claude Code in a terminal.',
+                },
+              }
+            : {
+                'creationId': payload['creationId'],
+                'state': 'created',
+                'agent': {
+                  'id': 'moved',
+                  'name': 'Fix the stuck pane',
+                  'engine': 'claude',
+                },
+              },
+      );
+      final app = createApp(
+        connected: true,
+        connectionForTest: (_) => connection,
+      );
+      addTearDown(app.dispose);
+      await mount(tester, app);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.text('Fix the stuck pane'));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(connection.creates, hasLength(2));
+      expect(connection.creates.last, containsPair('takeOver', 'idle'));
+      expect(find.text('Move to Harness'), findsNothing);
       expect(app.panes.map((pane) => pane.agentId), ['moved']);
       await tester.pumpWidget(const SizedBox());
     },

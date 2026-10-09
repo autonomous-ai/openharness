@@ -101,7 +101,7 @@ import '../state/toolbar_notices.dart';
 import '../widgets/machine_actions.dart';
 import '../widgets/rename_agent_dialog.dart';
 import '../widgets/delete_agent_dialog.dart';
-import '../widgets/take_over_dialog.dart';
+import '../state/take_over.dart';
 import '../widgets/fork_agent_dialog.dart';
 import '../widgets/restart_agent_action.dart';
 import '../widgets/new_agent_dialog.dart';
@@ -3810,35 +3810,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
         takeOver: takeOver,
       );
     } on SwarmResumeFailure catch (failure) {
-      // Open in a terminal: ask whether to move it here — and, mid-turn,
-      // whether to wait for the turn or stop it. Asked again when a turn
-      // started between the question and the answer.
-      final ask =
+      // Open in a terminal: Enter moves it here, without a question (the owner,
+      // 2026-10-09: "why do we need to confirm? just move"). Between turns its
+      // terminal quits and it opens here; mid-turn it moves when the turn ends,
+      // and the pane says so (Ctrl-C there leaves it in the terminal). Asked of
+      // the daemon again as a wait when a turn started in between.
+      final move =
           failure.canTakeOver &&
+          failure.destination.external != null &&
           (takeOver == null || (takeOver == TakeOver.idle && failure.busy));
-      if (ask && failure.destination.external != null) {
-        TakeOver? choice;
-        await _dialog(() async {
-          choice = await askTakeOver(
-            context,
-            title: failure.destination.title,
-            engine: failure.destination.external!.engine,
-            busy: failure.busy,
-            machine: failure.destination.machineLabel.isEmpty
-                ? null
-                : failure.destination.machineLabel,
-            keymap: _keymap,
-          );
-        });
-        if (choice case final choice? when mounted) {
-          await _activateSearch(
-            selected,
-            target,
-            split: split,
-            placement: placement,
-            takeOver: choice,
-          );
-        }
+      if (move && mounted) {
+        await _activateSearch(
+          selected,
+          target,
+          split: split,
+          placement: placement,
+          takeOver: failure.busy ? TakeOver.wait : TakeOver.idle,
+        );
         return;
       }
       _showResumeFailure(failure, target: target, placement: placement);
