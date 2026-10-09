@@ -146,7 +146,7 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
 import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
-import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
+import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -194,7 +194,9 @@ import { TranscriptPager } from '../lib/transcriptPages.js'
 import { AgentCreationReceipts } from '../lib/agentCreationReceipt.js'
 import { agentFrame, lastActivityAt, type AgentFrame } from '../lib/agentFrame.js'
 import { forgetAgentProject } from '../lib/agentProject.js'
-import { agentTokenUsage } from '../lib/agentTokenUsage.js'
+import { createUsageLink } from './usageLink.js'
+import type { UsageSnapshots } from './usageLink.js'
+import type { AgentUsageTarget } from '../lib/agentUsageWire.js'
 import { LegacyRuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfileManager.js'
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
@@ -352,12 +354,15 @@ let activityFrameContextRef: ((s: RegisteredSession) => ActivityFrame | null) | 
 
 let dshFrameContextRef: ((s: RegisteredSession) => AgentDshContext | null) | null = null
 
+/** Aggregate snapshots only; populated after the optional usage port is composed. */
+let usagePortRef: UsageSnapshots | null = null
+
 /** Set by runForeground once models can be asked: what an agent's frame says of its grid. */
 let gridAnnotationRef: ((grid: AgentGridTarget) => GridAnnotation | null) | null = null
 
 function projectFrame(s: RegisteredSession, selectedModel: string | null): Promise<AgentFrame> {
   return agentFrame(s, {
-    tokenUsage: agentTokenUsage.get(s),
+    tokenUsage: usagePortRef?.get(s) ?? null,
     selectedModel,
     terminalAvailable: registry.terminalAvailable(s.agentId),
     dsh: dshFrameContextRef?.(s) ?? null,
@@ -653,7 +658,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   const syncSession = agentEvents.syncSession
   const announceRename = agentEvents.announceRename
-  agentTokenUsage.onChanged = agentEvents.onTokenUsageChanged
   const announceSession = agentEvents.announceSession
 
   // Conversations on this machine that Harness did not start, found where each engine keeps them so
@@ -1252,6 +1256,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // What the core tells the recaps in their own process, and reads back from what they said (core/recapsLink.ts).
   const recapsLink = createRecapsLink({ notify: (frame, opts) => serviceLinks.notify('recaps', frame, opts), buffered: () => serviceLinks.buffered('recaps'),
     call: (type, payload) => serviceLinks.call('recaps', type, payload), clients: coreApi.clients, lastTurn: coreApi.transcripts.lastTurn })
+  const usageLink = createUsageLink({ call: payload => ports.usage?.read(payload.target as AgentUsageTarget) ?? Promise.resolve({}), changed: agentEvents.onTokenUsageChanged })
   const serviceLinks = createServiceLinks({
     token: serviceToken,
     owned: Object.fromEntries([...outOfProcess].map((name) => [name, requestsOf[name] ?? []])),
@@ -1275,7 +1280,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       : service === 'wifi' ? wifiLink.answer(query, payload)
       : service === 'handoff' ? answerConversationQuery(coreApi, query, payload)
       : service === 'shell' ? answerShellQuery(coreApi, query, payload)
-      : service === 'recaps' ? recapsLink.answer(query, payload) : answerAgentQuery(coreApi, query)),
+      : service === 'recaps' ? recapsLink.answer(query, payload) : answerAgentQuery(coreApi, query, payload)),
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire); a viewer stream's answers.
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload) },
@@ -1290,6 +1295,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
+      if (service === 'usage') usageLink.connected()
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
       if (service === 'devices') devicesLink.connected()
@@ -1299,6 +1305,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void heldLaunches.restoreHeld(service)
     },
     disconnected: (service) => {
+      if (service === 'usage') usageLink.disconnected()
       engineReaders.disconnected(service)
       liveTransport.disconnected(service)
       runtimeTransport.disconnected(service)
@@ -1361,7 +1368,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   else serviceHost.start('store', (core, installedPorts) => inline!.startStoreInCore(core, installedPorts, () => { void heldLaunches.restoreHeld('store') }), coreApi, STORE_FALLBACKS, STORE_REQUESTS)
   // This machine's Claude and Codex rate limits, read with its own credentials (services/usage.ts): in this
   // process, or in the edge host (services/usageProcess.ts).
-  if (!outOfProcess.has('usage')) serviceHost.serve('usage', inline!.startUsage, coreApi, USAGE_REQUESTS)
+  if (outOfProcess.has('usage')) ports.usage = { read: target => serviceLinks.call('usage', 'agentUsage', { target }), stop: () => {} }
+  else serviceHost.start('usage', inline!.startUsageInCore, coreApi, USAGE_FALLBACKS, USAGE_REQUESTS)
+  usagePortRef = usageLink.port
+  backend.tokenUsageProvider = target => usageLink.port.get(target)
+  coreApi.usage = target => usageLink.readSnapshot(target, coreApi.agents.all())
+
   // This machine's and each agent's resources, for the Monitor and the list's readings (services/monitor.ts):
   // in this process, or in the edge host (services/monitorProcess.ts), asked through its port (core/monitorLink.ts).
   if (outOfProcess.has('monitor')) ports.monitor = createMonitorLink((type, payload) => serviceLinks.call('monitor', type, payload))
@@ -1439,7 +1451,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Everything the funnel feeds exists now: install it, and deliver what waited.
   funnel.arm({
     bySession: (sessionId) => registry.bySession(sessionId),
-    tokenUsage: agentTokenUsage,
+    tokenUsage: { changed: target => usageLink.port.changed(target) },
     agentIdFor,
     turnActivity,
     isSubagentSession,
@@ -1897,7 +1909,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     liveFor,
     has: (sessionId) => registry.has(sessionId),
     bySession: (sessionId) => registry.bySession(sessionId),
-    tokenUsage: agentTokenUsage,
+    tokenUsage: { changed: target => usageLink.port.changed(target) },
     device: () => wifiCore.feed,
     runtimeProfiles,
     normalizers,
@@ -2449,6 +2461,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // next daemon's dial, and esptool, fail as if the hardware had died.
     ['the devices', () => ports.devices?.stop()],
     // The successor starts its own viewers for the agents it restores; ours must not hold the ports.
+    ['usage observations', () => { usageLink.port.stop(); ports.usage?.stop() }],
     ['the viewers', () => ports.viewers?.stop()], ['the gateway', () => gateway.stop()],
     // A graceful close releases the backend's one-machine claim, given a moment before the reclaim.
     ['the backend', () => backend.stop()], ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
@@ -2498,6 +2511,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await localWsServer.close()
     hookServer.close()
     nativeControls.close()
+    usageLink.port.stop(); ports.usage?.stop()
     await ports.viewers?.stop()
     await gateway.stop()
     await backend.stop()

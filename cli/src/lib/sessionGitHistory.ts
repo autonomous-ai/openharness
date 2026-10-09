@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { env } from '../config/env.js'
 import type { RegisteredSession } from './registry.js'
 import type { SessionGitContext } from './sessionGitContext.js'
-import { validPullRequestUrl, validWorkPath, type WorkPullRequest } from './sessionWork.js'
+import { validPullRequestUrl, validWorkPath } from './sessionWorkWire.js'
+import type { WorkPullRequest } from './sessionWork.js'
 import type { PullRequestResult } from './gitPullRequest.js'
 
 export type WorkBranch = { cwd: string; remote: string | null; branch: string; at: string }

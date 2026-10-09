@@ -252,7 +252,7 @@ describe('the core API services stand on', () => {
   })
 
   it('starts with every port empty: a service fills its own when it starts', () => {
-    expect(emptyPorts()).toEqual({ store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null })
+    expect(emptyPorts()).toEqual({ usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null })
     expect(emptyPorts()).not.toBe(emptyPorts())
   })
 

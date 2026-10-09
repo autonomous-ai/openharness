@@ -1,3 +1,4 @@
+import { USAGE_FALLBACKS } from './core/api.js'
 import * as gitPullRequest from './lib/gitPullRequest.js'
 import * as sessionGitPullRequest from './lib/sessionGitPullRequest.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1287,7 +1288,7 @@ describe('BackendSocket outbound queue', () => {
         body: { seven_day: { utilization: 42 } },
       },
     ]
-    serveOn(socket, (host) => host.serve('usage', (core) => startUsage(core, { read: async () => readings }), fakeCore(), USAGE_REQUESTS))
+    serveOn(socket, (host) => host.start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { read: async () => readings }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS))
     socket.connect()
     const ws = wsMock.instances[0]
     ws.open()
@@ -3473,7 +3474,7 @@ describe('the connect burst with no network', () => {
     bindAgentList(socket)
     // A grid name that never comes, as a grid read that never lands; and a vendor that never answers, asked
     // of the usage service beside models.
-    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).serve('usage', (core) => startUsage(core, { read: () => new Promise(() => {}) }), fakeCore(), USAGE_REQUESTS)
+    serveModels(socket, { account: { privateGridName: () => new Promise<null>(() => {}) } }).start('usage', (core, ports) => { ports.usage = { read: async () => ({}), stop: () => {} }; return startUsage(core, { read: () => new Promise(() => {}) }) }, fakeCore(), USAGE_FALLBACKS, USAGE_REQUESTS)
     const frames: Array<Record<string, unknown>> = []
     socket.registerLocalClient('local:burst', { sendFrame: (frame) => { frames.push(frame); return true }, sendBinary: () => true })
 
