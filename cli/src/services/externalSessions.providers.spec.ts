@@ -200,12 +200,14 @@ it.each([
   expect(await test.inspect()).toMatchObject({ ok: false })
 })
 
-it('a record-less Claude in a folder of the same project may hold it: above, below, or another worktree of its repository', async () => {
+it('a record-less Claude elsewhere in the same repository may hold it; one merely above or below, outside one, cannot', async () => {
   const test = unplaced()
+  // `/resume` never lists a subfolder's conversations: a TUI left open in the home folder (no repository)
+  // holds nothing in a project below it, nor one in a folder below the conversation's.
   const below = join(test.cwd, 'packages', 'app'); mkdirSync(below, { recursive: true })
-  for (const folder of [below, test.root]) {
+  for (const folder of [test.root, below]) {
     test.state.cwds.set(202, folder)
-    expect(await test.inspect(), folder).toMatchObject(unverified)
+    expect(await test.inspect(), folder).toMatchObject({ ok: true, owner: null })
   }
   // The conversation's folder is a worktree; the process works in the repository it was added from.
   const main = join(test.root, 'main'); mkdirSync(join(main, '.git', 'worktrees', 'project'), { recursive: true })
@@ -218,6 +220,10 @@ it('a record-less Claude in a folder of the same project may hold it: above, bel
     test.state.cwds.set(202, folder)
     expect(await test.inspect(), folder).toMatchObject({ ok: true, owner: null })
   }
+  // The conversation began in a subfolder of a repository whose root the process works in: one store.
+  rmSync(join(test.cwd, '.git')); mkdirSync(join(test.root, '.git'))
+  test.state.cwds.set(202, test.root)
+  expect(await test.inspect()).toMatchObject(unverified)
 })
 
 it('a fork names only its parent: a record-less `--fork-session` is placed by its folder', async () => {

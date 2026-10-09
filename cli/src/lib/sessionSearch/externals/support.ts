@@ -289,13 +289,14 @@ export async function gitCommonDir(folder: string, stop: string = dirname(homedi
 }
 
 /**
- * Whether a process working in [a] might list a conversation of [b] in its own picker. Kept wide on purpose:
- * the same folder, one inside the other, or two worktrees (or folders) of one repository, since Claude Code's
- * `/resume` lists a repository's worktrees together. Only folders this far apart are told apart.
+ * Whether a process working in [a] might list a conversation of [b] in its own picker: Claude Code's `/resume`
+ * lists its own folder's, and newer versions its repository's worktrees too, so the same folder or one git
+ * store. Never a folder merely above or below: a TUI left open in the home folder is common, and counting
+ * every folder below it would hold every adoption on the machine again, the bug this check replaced.
  */
 export async function sameProject(a: string, b: string, stop?: string): Promise<boolean> {
   const [x, y] = await Promise.all([folderKey(a), folderKey(b)])
-  if (within(x, y) || within(y, x)) return true
+  if (x === y) return true
   const [left, right] = await Promise.all([gitCommonDir(x, stop), gitCommonDir(y, stop)])
   return left !== null && left === right
 }

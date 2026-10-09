@@ -265,8 +265,12 @@ describe('processes', () => {
     // The default ceiling is the folder holding the homes.
     expect(await gitCommonDir(dirname(homedir()))).toBeNull()
 
+    expect(await sameProject(`${main}/`, main, '/')).toBe(true)
+    // Within one repository by its store; a folder merely above or below, outside one, is another project.
     expect(await sameProject(main, join(main, 'src', 'deep'), '/')).toBe(true)
     expect(await sameProject(join(main, 'src', 'deep'), main, '/')).toBe(true)
+    expect(await sameProject(dir, join(dir, 'nested', 'a'), dir)).toBe(false)
+    expect(await sameProject(join(dir, 'nested', 'a'), dir, dir)).toBe(false)
     expect(await sameProject(join(tree, 'src'), join(main, 'src'), '/')).toBe(true)
     expect(await sameProject(sub, main, '/')).toBe(false)
     expect(await sameProject(odd, join(dir, 'nested', 'a'), '/')).toBe(false)
