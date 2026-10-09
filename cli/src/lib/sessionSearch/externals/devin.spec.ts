@@ -273,7 +273,7 @@ describe('Devin owners', () => {
     const provider = devinProvider({ home })
     const processes = view([{ ...devin(501), started: S0 * 1000 }, { ...devin(502, '-r brisk-otter'), started: S0 * 1000 }])
     expect(await provider.owners!(processes)).toHaveLength(1)
-    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: true, value: [{ pid: 501 }, { pid: 502, fromArgs: true }] })
+    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
     writeFileSync(join(locks, 'brisk-otter.lock'), '{"pid":')
     expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
   })

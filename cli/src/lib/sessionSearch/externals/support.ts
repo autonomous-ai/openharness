@@ -62,7 +62,9 @@ export async function readText(path: string): Promise<string> {
 /** A JSON file's value, or null when it is missing, unreadable or being written. */
 export async function readJson(path: string): Promise<unknown> {
   try {
-    return JSON.parse(await readFile(path, 'utf8'))
+    const value: unknown = JSON.parse(await readFile(path, 'utf8'))
+    if (value === null) externalReadFailed(new Error('null document'), 'record')
+    return value
   } catch (error) {
     externalReadFailed(error, 'record')
     return null

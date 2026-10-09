@@ -203,6 +203,7 @@ async function argvClaims(view: ProcessView, recordOf: (sessionId: string) => st
   const claims: OwnerClaim[] = []
   for (const row of await view.list()) {
     if (!engineProcessMatch(row, 'pi', NO_FILE_OWNERS).score) continue
+    if (view.alive(row.pid)) externalReadFailed(new Error('only launch arguments identify this live process'), 'current owner')
     const sessionId = resumeSessionId('pi', row.args)
     // Only the arguments say so, and Pi can move to another session inside: never stopped on this.
     if (sessionId) claims.push({ sessionId, pid: row.pid, record: recordOf(sessionId), fromArgs: true })

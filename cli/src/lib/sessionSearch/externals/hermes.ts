@@ -311,11 +311,12 @@ export async function hermesLeases(home: string): Promise<HermesLease[]> {
     const pid = entry?.pid
     const started = entry?.process_start_time
     // A gateway's lease names a chat's key, not a stored session.
-    if (!HERMES_HISTORY_ID_RE.test(sessionId) || text(entry?.surface).startsWith('gateway')) continue
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
+    if (text(entry?.surface).startsWith('gateway')) continue
+    if (!HERMES_HISTORY_ID_RE.test(sessionId)) { externalReadFailed(new Error('invalid lease session'), 'owner record'); continue }
+    if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff) {
       externalReadFailed(new Error('invalid lease PID'), 'owner record'); continue
     }
-    leases.push({ sessionId, pid, ...(typeof started === 'number' && started > 0 ? { started: started * 1000 } : {}) })
+    leases.push({ sessionId, pid, ...(typeof started === 'number' && Number.isFinite(started) && started > 0 ? { started: started * 1000 } : {}) })
   }
   return leases
 }
@@ -447,7 +448,7 @@ export function hermesProvider(options: HermesOptions): ExternalProvider & Count
       // A lease is exact, so it is read first and wins over the same session named in arguments.
       for (const home of homes) {
         for (const lease of await hermesLeases(home.home)) {
-          if (externalEvidenceActive() && (lease.started === undefined || byPid.get(lease.pid)?.started === undefined) && view.alive(lease.pid)) {
+          if (externalEvidenceActive() && (!Number.isFinite(lease.started) || !Number.isFinite(byPid.get(lease.pid)?.started)) && view.alive(lease.pid)) {
             externalReadFailed(new Error('missing owner generation'), 'owner record'); continue
           }
           if (!view.alive(lease.pid) || !leaseHeldBy(lease, byPid.get(lease.pid))) continue
@@ -460,6 +461,9 @@ export function hermesProvider(options: HermesOptions): ExternalProvider & Count
       // The id a process was started on: it may have moved to another conversation since (`/resume`).
       for (const row of processes) {
         if (!isHermes(row)) continue
+        if (view.alive(row.pid) && ![...claims.values()].some(claim => claim.pid === row.pid && !claim.fromArgs)) {
+          externalReadFailed(new Error('no exact lease for a live process'), 'current owner')
+        }
         const sessionId = resumeSessionId('hermes', row.args)
         if (!sessionId) continue
         const profile = argvProfile(row.args)

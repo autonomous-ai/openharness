@@ -47,11 +47,11 @@ it.each(['claude', 'grok'] as const)('%s admission requires complete owner recor
     test.write({ ...test.valid, [time]: value })
     expect(await test.reader.inspect(test.request), `${time}=${value}`).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
   }
-  for (const value of [undefined, '', 42]) {
+  for (const value of [undefined, '', 'invalid id!', 42]) {
     test.write({ ...test.valid, [session]: value })
     expect(await test.reader.inspect(test.request), `${session}=${value}`).toMatchObject({ ok: false })
   }
-  for (const value of [undefined, '101', 0, -1, 1.5]) {
+  for (const value of [undefined, '101', 0, -1, 1.5, 0x80000000]) {
     test.write({ ...test.valid, pid: value })
     expect(await test.reader.inspect(test.request), `pid=${value}`).toMatchObject({ ok: false })
   }
@@ -61,5 +61,7 @@ it.each(['claude', 'grok'] as const)('%s admission requires complete owner recor
     expect(await test.reader.inspect(test.request), `process.started=${value}`).toMatchObject({ ok: false })
   }
   test.process.started = started + 60_000
+  expect(await test.reader.inspect(test.request)).toMatchObject({ ok: false })
+  test.process.executable = 'sh'; test.process.args = 'sh'
   expect(await test.reader.inspect(test.request)).toMatchObject({ ok: true, owner: null })
 })

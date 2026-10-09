@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { BackendSocket } from '../../backendSocket.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { externalSessionRequest, externalUnavailable, type ExternalSessionAnswer, type ExternalSessionRequest } from '../../lib/externalSessionWire.js'
-import { externalReservations, externalResumePending, type ExternalResumeIntent } from '../../lib/externalResume.js'
+import { externalReservations, externalResumeIds, externalResumePending, type ExternalResumeIntent } from '../../lib/externalResume.js'
 import { buildHarnessSessionLabel } from '../../lib/harnessSessionLabel.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { terminalRouteKey } from '../../lib/terminalRuntime.js'
@@ -42,6 +42,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
   const due = new Map<string, number>()
   const held = (id: string, except?: string) => !!deps.registry.externalConflict([id], except) || deps.stopped().some(row => externalReservations(row).includes(id))
   const inspect = createExternalInspector({ call: deps.inspect, generation: deps.generation })
+  const occupied = (row: RegisteredSession) => externalResumeIds(row.externalResume).some(id => held(id, row.agentId))
   const hold = (row: RegisteredSession, detail: string) => {
     if (row.launch?.state === 'held' && row.launch.detail === detail) return
     const changed = deps.registry.setLaunch(row.agentId, { state: 'held', service: 'search', detail })
@@ -49,7 +50,8 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
   }
   const advance = async (initial: RegisteredSession) => {
     let row = initial
-    const current = () => !stopped && !deps.cancelled(row.agentId) && identity(deps.registry.byAgent(row.agentId)) === identity(row)
+    const current = () => !stopped && !deps.cancelled(row.agentId) && !occupied(row)
+      && identity(deps.registry.byAgent(row.agentId)) === identity(row)
     const commit = (intent: ExternalResumeIntent) => {
       if (!current()) return false
       const changed = deps.registry.setExternalResume(row.agentId, intent)
@@ -59,6 +61,7 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
     }
     const intent = row.externalResume!
     if (intent.phase === 'cancelled') { await cancel(row, () => !stopped); return }
+    if (occupied(row)) { hold(row, 'This conversation is already open or saved in another harness.'); return }
     if (!current() || row.launch?.state !== 'held' || row.processIdentity) return
     if (!await deps.waiting(row) || !current()) { if (current()) hold(row, 'Waiting to verify this adoption’s terminal pane.'); return }
     let answer = await inspect(intent.request)
@@ -81,8 +84,10 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
       if (!commit({ ...row.externalResume!, phase: 'quitting', owner })) return
       let interrupted = false
       const same = async () => {
+        // The pane probe can wait on tmux. Take the decisive owner/turn evidence after it.
+        if (!await deps.waiting(row) || !current()) return false
         answer = await inspect(intent.request)
-        if (!current() || !answer.ok || !answer.session || !await deps.waiting(row) || !current()) return false
+        if (!current() || !answer.ok || !answer.session) return false
         const fresh = adoptionDecision(intent.request.sessionId, intent.request.engine, intent.takeOver, answer, id => held(id, row.agentId))
         interrupted = answer.busy
         return fresh.ok && answer.session.sessionId === session.sessionId && answer.session.cwd === session.cwd
@@ -104,7 +109,12 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
       }
       if (!current()) return
     }
+    if (!await deps.waiting(row) || !current()) {
+      if (current()) hold(row, 'Waiting to verify this adoption’s terminal pane.')
+      return
+    }
     // Neither an exited PID nor an earlier free answer proves this conversation is still free.
+    // No asynchronous work may separate this final read from the durable admission.
     answer = await inspect(intent.request)
     if (!current()) return
     const final = adoptionDecision(intent.request.sessionId, intent.request.engine, intent.takeOver, answer, id => held(id, row.agentId))
@@ -113,10 +123,6 @@ export function createExternalResumes(deps: ExternalResumeDeps) {
       || answer.session.cwd !== session.cwd || answer.session.transcriptPath !== session.transcriptPath
       || JSON.stringify(answer.session.launchArgs) !== JSON.stringify(session.launchArgs)) {
       hold(row, 'The conversation changed while preparing to open it. Waiting to verify it again.'); return
-    }
-    if (!await deps.waiting(row) || !current()) {
-      if (current()) hold(row, 'Waiting to verify this adoption’s terminal pane.')
-      return
     }
     if (!commit({ ...row.externalResume!, phase: 'admitted', session: answer.session })) return
     deps.announce(row)

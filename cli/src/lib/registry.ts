@@ -696,15 +696,19 @@ function validatedRows(values: readonly unknown[]): RegisteredSession[] | null {
   const rows: RegisteredSession[] = []
   const agents = new Set<string>()
   const sessions = new Set<string>()
+  const provisionalSessions = new Set<string>()
   const processes = new Set<string>()
   const routes = new Set<string>()
   for (const value of values) {
     const row = strictPersistedRow(value)
     if (!row || agents.has(row.agentId)) return null
     agents.add(row.agentId)
+    // A waiting adoption is an intention, not ownership. A real hook may bind while search is
+    // unavailable; that fact holds the intention without surrendering the process's binding.
+    const claimed = externalResumePending(row.externalResume) ? provisionalSessions : sessions
     for (const id of new Set(externalReservations(row))) {
-      if (sessions.has(id)) return null
-      sessions.add(id)
+      if (claimed.has(id)) return null
+      claimed.add(id)
     }
     if (row.processIdentity) {
       const key = processIdentityKey(row.engine, row.processIdentity)
@@ -1676,7 +1680,9 @@ class Registry {
     const agentId = processAgent?.agentId ?? ''
     // An inert adoption pane cannot bind a hook before core has admitted its external conversation.
     if (processAgent?.externalResume && processAgent.externalResume.phase !== 'admitted') return null
-    if (this.externalConflict([sessionId], agentId)?.externalResume) return null
+    const admittedAlias = this.list().find(row => row.agentId !== agentId && row.externalResume?.phase === 'admitted'
+      && row.sessionId !== sessionId && externalReservations(row).includes(sessionId))
+    if (admittedAlias) return null
     if (
       !sessionId
       || !agentId
@@ -1731,6 +1737,9 @@ class Registry {
       console.log(`[registry] session ${sessionId.slice(0, 8)} moved from agent ${stolenFrom.agentId.slice(0, 8)} to ${agentId.slice(0, 8)}`)
       const wasDormant = !stolenFrom.active
       this.releaseBinding(stolenFrom)
+      // The verified canonical conversation moved. Its old row no longer owns the admission or
+      // its aliases, and cannot later replay that resume as though it still owned the conversation.
+      if (stolenFrom.externalResume) { delete stolenFrom.externalResume; delete stolenFrom.resumeOnly }
       if (wasDormant) {
         orphaned = { agentId: stolenFrom.agentId, sessionId }
         this.drop(stolenFrom)
@@ -2476,7 +2485,9 @@ class Registry {
         // claimed its conversation since the core's last read; refuse admission inside this lock.
         for (const [id, value] of currentRows) {
           const intent = parseExternalResume(value.externalResume)
-          if (!intent || intent.phase === 'cancelled' || this.persistedBaseline.get(id) === rowFingerprint(value)) continue
+          // Every strict admission/signal/dispatch transition earns permission here. Ordinary
+          // observations may persist a held provisional overlap; they never authorize a signal.
+          if (id !== externalAgentId || !intent || intent.phase === 'cancelled' || this.persistedBaseline.get(id) === rowFingerprint(value)) continue
           const claims = new Set(externalReservations(value as unknown as RegisteredSession))
           for (const [otherId, otherValue] of latest) {
             if (otherId === id) continue

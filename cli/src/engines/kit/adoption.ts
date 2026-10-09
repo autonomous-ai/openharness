@@ -5,6 +5,7 @@
  * nothing else: it never writes, never starts the engine, and never logs a process's arguments (they can carry a key).
  */
 import { join } from 'node:path'
+import { externalEvidenceActive, externalReadFailed } from '../../lib/sessionSearch/evidence.js'
 
 import { agentCommandOwnershipSnapshot } from '../../lib/engineBin.js'
 import { absoluteFolder, entries, fileStamp, firstLine, parseLine, readHead, readJson, readTail, readText, record, text } from '../../lib/sessionSearch/externals/support.js'
@@ -147,7 +148,7 @@ export async function turnOpen(path: string, tail: Tail, unknown: boolean | null
   return unknown
 }
 
-async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { records: unknown }>['records'], dirs: string[], view: ProcessView): Promise<OwnerClaim[]> {
+async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { records: unknown }>['records'], pattern: RegExp, dirs: string[], view: ProcessView): Promise<OwnerClaim[]> {
   const claims: OwnerClaim[] = []
   for (const dir of dirs) {
     const records = (await entries(dir)).filter((file) => file.isFile() && file.name.endsWith(owners.suffix))
@@ -158,14 +159,31 @@ async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { re
       const path = join(dir, file.name)
       const row = record(await readJson(path))
       const pid = row?.[owners.pid]
+      if (externalEvidenceActive() && (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || pid > 0x7fffffff
+        || !pattern.test(text(row?.[owners.id])))) {
+        externalReadFailed(new Error('incomplete owner record'), 'owner record'); continue
+      }
       if (typeof pid !== 'number' || !text(row?.[owners.id]) || !view.alive(pid)) continue
       // A record outlives a crash, and its pid can be handed to anything after — a shell in another tab. Only a
       // process of this engine already running when the record says it started still has it.
       const process = processes.get(pid)
+      if (!process && externalEvidenceActive()) externalReadFailed(new Error('missing owner process'), 'owner process')
       if (!process || engineProcessMatch(process, engine as never, ownership).score <= 0) continue
       const started = row?.[owners.started]
+      if (externalEvidenceActive() && (typeof started !== 'number' || !Number.isFinite(started) || started <= 0
+        || !Number.isFinite(process.started) || process.started! <= 0)) {
+        externalReadFailed(new Error('incomplete owner incarnation'), 'owner record'); continue
+      }
       if (process.started !== undefined && typeof started === 'number' && process.started > started + owners.slackMs) continue
       claims.push({ sessionId: text(row?.[owners.id]), pid, record: path })
+    }
+  }
+  if (externalEvidenceActive()) {
+    const ownership = agentCommandOwnershipSnapshot()
+    for (const process of await view.list()) {
+      if (!view.alive(process.pid) || engineProcessMatch(process, engine as never, ownership).score <= 0) continue
+      const ids = new Set(claims.filter(claim => claim.pid === process.pid).map(claim => claim.sessionId))
+      if (ids.size !== 1) externalReadFailed(new Error('no unambiguous current process record'), 'current owner')
     }
   }
   return claims
@@ -234,7 +252,7 @@ export function adoptionProvider(engine: ExternalEngine, contract: AdoptionContr
       return found
     },
     owners: (view: ProcessView) => 'records' in owners
-      ? recordOwners(engine, owners.records, places.records?.() ?? places.roots().map((root) => join(root, '..', owners.records.folder)), view)
+      ? recordOwners(engine, owners.records, head.id.pattern, places.records?.() ?? places.roots().map((root) => join(root, '..', owners.records.folder)), view)
       : openFileOwners(owners.open, view),
     async busy(owner): Promise<boolean | null> {
       if ('tail' in busy) return turnOpen(owner.record, busy.tail, null)

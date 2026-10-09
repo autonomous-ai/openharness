@@ -171,6 +171,7 @@ export function museProvider(options: MuseOptions): ExternalProvider {
       const claims: OwnerClaim[] = []
       for (const row of await view.list()) {
         if (!engineProcessMatch(row, 'muse', NO_FILE_OWNERS).score) continue
+        if (view.alive(row.pid)) externalReadFailed(new Error('only launch arguments identify this live process'), 'current owner')
         const sessionId = resumeSessionId('muse', row.args)
         // Only the arguments say so, and a /resume inside moves on: never stopped on this.
         if (sessionId) claims.push({ sessionId, pid: row.pid, record: known.get(sessionId) ?? '', fromArgs: true })

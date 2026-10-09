@@ -23,9 +23,9 @@ const fact = () => ({ engine: 'claude' as const, sessionId: 'canonical', aliases
 async function load() { vi.resetModules(); const mod = await import('./registry.js'); mod.registry.load(); return mod.registry }
 const disk = (): RegisteredSession[] => JSON.parse(readFileSync(join(root, 'registry.json'), 'utf8'))
 const write = (rows: RegisteredSession[]) => writeFileSync(join(root, 'registry.json'), JSON.stringify(rows), { mode: 0o600 })
-const pending = async () => {
+const pending = async (extra: Partial<ExternalResumeIntent> = {}) => {
   const registry = await load()
-  const row = registry.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%1' }], externalResume: intent() })!
+  const row = registry.openPendingAgent({ engine: 'claude', cwd: null, runtimes: [{ backend: 'tmux', paneId: '%1' }], externalResume: intent(extra) })!
   expect(row).toBeTruthy()
   return { registry, row }
 }
@@ -62,10 +62,41 @@ it('refuses process discovery and hooks for an inert route, across engines too',
   expect(registry.byAgent(row.agentId)).toMatchObject({ sessionId: '', processIdentity: null, launch: { state: 'held' } })
   registry.setExternalResume(row.agentId, intent({ session: fact() }))
   const other = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } })!
-  const before = readFileSync(join(root, 'registry.json'), 'utf8')
-  expect(registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') })).toBeNull()
-  expect(registry.byAgent(other.entry.agentId)?.sessionId).toBe('')
-  expect(readFileSync(join(root, 'registry.json'), 'utf8')).toBe(before)
+  expect(registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') })?.entry.agentId).toBe(other.entry.agentId)
+  expect(registry.byAgent(other.entry.agentId)?.sessionId).toBe('canonical')
+  expect(disk()).toEqual(expect.arrayContaining([
+    expect.objectContaining({ agentId: row.agentId, sessionId: '', externalResume: expect.objectContaining({ phase: 'waiting' }) }),
+    expect.objectContaining({ agentId: other.entry.agentId, sessionId: 'canonical' }),
+  ]))
+  expect(registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' }))).toBeNull()
+})
+
+it('keeps a verified binding even when a provisional reservation appeared on disk after discovery', async () => {
+  const { registry, row } = await pending()
+  const provisional = disk()[0]
+  registry.removeAgent(row.agentId)
+  const other = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } })!
+  write([...disk(), provisional])
+  expect(registry.register({ engine: 'claude', sessionId: 'alias', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') })?.entry.agentId).toBe(other.entry.agentId)
+  expect(disk()).toHaveLength(2)
+  expect(registry.byAgent(row.agentId)?.externalResume?.phase).toBe('waiting')
+  expect(registry.bySession('alias')?.agentId).toBe(other.entry.agentId)
+})
+
+it('transfers an admitted canonical binding normally and releases its old aliases atomically', async () => {
+  const { registry, row } = await pending()
+  registry.setExternalResume(row.agentId, intent({ session: fact(), phase: 'admitted' }))
+  const original = { pid: 7001, executable: 'claude', startMarker: 'fixture' }
+  registry.updateProcessIdentity(row.agentId, original)
+  registry.setActive(row.agentId, true)
+  expect(registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%1', transcriptPath: join(root, 'record.jsonl'), processIdentity: original })).toBeTruthy()
+  const other = registry.openProcessAgent({ engine: 'claude', tmuxPane: '%2', cwd: root, processIdentity: { pid: 7002, executable: 'claude', startMarker: 'fixture' } })!
+  expect(registry.register({ engine: 'claude', sessionId: 'canonical', tmuxPane: '%2', transcriptPath: join(root, 'record.jsonl') })?.entry.agentId).toBe(other.entry.agentId)
+  expect(registry.byAgent(row.agentId)?.externalResume).toBeUndefined()
+  expect(registry.externalConflict(['alias'])).toBeUndefined()
+  const reboot = await load()
+  expect(reboot.bySession('canonical')?.agentId).toBe(other.entry.agentId)
+  expect(reboot.byAgent(row.agentId)?.externalResume).toBeUndefined()
 })
 
 it('never revives a cancelled intent, changes its request or escalates its takeover consent', async () => {
@@ -82,14 +113,16 @@ it('never revives a cancelled intent, changes its request or escalates its takeo
   expect(reboot.finishExternalCancellation(row.agentId)).toBe(false)
 })
 
-it('refuses an alias claimed on disk after its read, leaving both durable owners untouched', async () => {
-  const { registry, row } = await pending()
+it.each(['waiting', 'quitting', 'prepared', 'sent', 'admitted'] as const)('refuses an alias claimed on disk before %s, leaving both durable owners untouched', async phase => {
+  const { registry, row } = await pending({ takeOver: 'idle' })
+  const pinned = intent({ takeOver: 'idle', session: fact(), owner: { process: { engine: 'claude', pid: 101, tty: '/dev/fixture-terminal', record: '/fixture/record' }, generation: 'ps:1' } })
   const previous = disk()[0]
   const foreign = { ...previous, agentId: 'foreign-owner', externalResume: undefined, sessionId: 'canonical', boundAt: 1,
     runtimes: [{ backend: 'tmux' as const, paneId: '%2' }], primaryRuntimeKey: 'tmux\u0000%2', tmuxPane: '%2', launch: { state: 'ready' as const }, active: true }
   write([previous, foreign])
   const before = readFileSync(join(root, 'registry.json'), 'utf8')
-  expect(() => registry.setExternalResume(row.agentId, intent({ phase: 'admitted', session: fact() }))).toThrow('another durable owner')
+  expect(() => registry.setExternalResume(row.agentId, { ...pinned, phase: phase === 'prepared' || phase === 'sent' ? 'quitting' : phase,
+    ...(phase === 'prepared' || phase === 'sent' ? { signal: phase } : {}) })).toThrow('another durable owner')
   expect(readFileSync(join(root, 'registry.json'), 'utf8')).toBe(before)
   expect(registry.byAgent(row.agentId)).toMatchObject({ sessionId: '', externalResume: { phase: 'waiting' } })
 })

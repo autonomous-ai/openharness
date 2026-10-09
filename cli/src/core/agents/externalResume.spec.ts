@@ -174,6 +174,25 @@ it('rechecks reservations and metadata before signalling and before committing a
   }
 })
 
+it.each(['binding', 'stopped'] as const)('a new %s fences signals even after the final owner read, and holds without another service read', async kind => {
+  const test = setup(); test.inspect.mockImplementation(async request => held(request))
+  vi.mocked(test.deps.stopOwner!).mockImplementation(async (_owner, control) => {
+    expect(await control.same()).toBe(true)
+    if (kind === 'binding') test.rows.set('other', { agentId: 'other', sessionId: 'conversation' } as RegisteredSession)
+    else vi.mocked(test.deps.stopped).mockReturnValue([{ sessionId: 'conversation' }])
+    expect(control.current()).toBe(false)
+    expect(() => control.beforeSignal?.('SIGTERM')).toThrow('Signal intent could not be saved')
+    return false
+  })
+  const id = await test.stage({ takeOver: 'idle' }); await test.controller.settled()
+  expect(test.rows.get(id)?.externalResume?.signal).toBeUndefined()
+  test.inspect.mockClear()
+  await vi.advanceTimersByTimeAsync(4000); await test.controller.settled()
+  expect(test.inspect).not.toHaveBeenCalled()
+  expect(test.rows.get(id)?.launch).toMatchObject({ state: 'held', detail: expect.stringContaining('another harness') })
+  expect(test.deps.launch).not.toHaveBeenCalled()
+})
+
 it('Stop cancels a slow read without waiting, closes only its inert pane and durably removes before forgetting', async () => {
   const test = setup(), reading = defer<ExternalSessionAnswer>()
   test.inspect.mockResolvedValueOnce(externalUnavailable()).mockReturnValueOnce(reading.promise)

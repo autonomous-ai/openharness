@@ -97,6 +97,7 @@ describe('search in its own process', () => {
     const off = { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false }
     expect(await options.requests.session_search({ query: 'anything' }, ASKER)).toEqual(off)
     expect(await options.requests.session_tail({ sessionId: SESSION }, ASKER)).toEqual(off)
+    expect(await options.requests.external_inspect({ engine: 'claude', sessionId: SESSION }, ASKER)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
     options.onEvent!({ kind: 'touch', sessionId: SESSION })
   })
 
@@ -158,10 +159,11 @@ describe('search in its own process', () => {
     expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'search', socketPath: '/data/daemon-1.sock' }))
   })
 
-  it('reaches the core as `search`, through the socket and token it was given', () => {
+  it('reaches the core as `search`, through the socket and token it was given', async () => {
     const { options } = setup()
     expect(options).toMatchObject({ name: 'search', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     expect(Object.keys(options.requests).sort()).toEqual(['external_inspect', 'session_search', 'session_tail'])
+    expect(await options.requests.external_inspect({ engine: 'claude', sessionId: SESSION }, ASKER)).toMatchObject({ ok: false, error: 'SEARCH_UNAVAILABLE' })
   })
 })
 

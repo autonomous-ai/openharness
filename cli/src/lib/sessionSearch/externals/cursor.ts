@@ -1,4 +1,4 @@
-import { externalReadFailed } from '../evidence.js'
+import { externalEvidenceActive, externalReadFailed } from '../evidence.js'
 /**
  * Cursor (`cursor-agent`, also `agent`): a chat is `<configDir>/chats/<md5(folder)>/<id>/`, holding its
  * `store.db` (SQLite, WAL) and `meta.json`, which says its title, when it last moved, the folder it
@@ -330,11 +330,13 @@ export function cursorProvider(options: CursorOptions): ExternalProvider {
           const chatDir = dirname(store)
           const sessionId = basename(chatDir)
           if (basename(store) !== 'store.db' || !UUID.test(sessionId) || !BUCKET.test(basename(dirname(chatDir)))) continue
-          if (!roots.has(dirname(dirname(chatDir))) || held.has(sessionId)) continue
-          held.add(sessionId)
+          const key = externalEvidenceActive() ? store : sessionId
+          if (!roots.has(dirname(dirname(chatDir))) || held.has(key)) continue
+          held.add(key)
           claims.push({ sessionId, pid: row.pid, record: store, ...app })
         }
         if (held.size) continue
+        externalReadFailed(new Error('no current open store for a live process'), 'current owner')
         // No chat store open (yet, or `lsof` could not say): the chat its arguments name.
         const resumed = resumeSessionId('cursor', row.args)
         // A guess: an in-app `/resume` leaves the arguments naming the first chat. Never stopped on it.

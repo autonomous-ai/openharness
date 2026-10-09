@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, existsSync } from 'node:fs'
+import { mkdirSync, readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { isolatedTmux, type IsolatedTmux } from '../testing/isolatedTmux.js'
 import { resolveBinaryOnPath } from './binaryOnPath.js'
@@ -12,12 +13,17 @@ import { resetTmuxVersionCache } from './tmuxVersion.js'
 // Neither TMUX nor the default socket inherited from a coding session may take precedence.
 describe.skipIf(!resolveBinaryOnPath('tmux'))('external adoption on a private tmux server', () => {
   let tmux: IsolatedTmux
+  let home: string
   beforeAll(async () => {
+    home = mkdtempSync(join(tmpdir(), 'adoption-tmux-home-'))
+    vi.stubEnv('HOME', home); vi.stubEnv('ZDOTDIR', home)
     tmux = await isolatedTmux()
     vi.stubEnv('TMUX', undefined); vi.stubEnv('TMUX_PANE', undefined); vi.stubEnv('TMUX_TMPDIR', tmux.root)
     resetTmuxVersionCache()
+    // Start with the helper's explicit empty config before any bare backend call can create it.
+    await tmux.run('new-session', '-d', '-s', 'fixture-anchor', '/bin/sleep', '300')
   })
-  afterAll(async () => { await tmux?.close(); vi.unstubAllEnvs(); resetTmuxVersionCache() })
+  afterAll(async () => { await tmux?.close(); if (home) rmSync(home, { recursive: true, force: true }); vi.unstubAllEnvs(); resetTmuxVersionCache() })
   const backend = new TmuxBackend(undefined, () => 'adoption-test', () => {})
   const waiting = async (token: string) => {
     const pane = await backend.create({ label: `harness-fixture-${randomUUID()}`, command: heldPaneArgv('Waiting for fixture.', token) })

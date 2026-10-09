@@ -6,7 +6,7 @@ import { ExternalSessions, OpenSessions, externalSessionCatalog, type ExternalSe
   type SessionOwner } from '../lib/sessionSearch/external.js'
 import { externalEvidence } from '../lib/sessionSearch/evidence.js'
 import { harnessTtys, processTtys, processView, scanMemo } from '../lib/sessionSearch/externals/support.js'
-import type { RunningProcess } from '../lib/sessionSearch/externals/types.js'
+import type { OwnerClaim, RunningProcess } from '../lib/sessionSearch/externals/types.js'
 
 export interface ExternalReaderOptions extends ExternalSessionsOptions {
   open?: Omit<OpenSessionsOptions, 'providers'>
@@ -56,8 +56,11 @@ export function createExternalSessions(options: ExternalReaderOptions) {
       const view = (options.open?.view ?? processView)()
       // The process table precedes ownership evidence, so a recycled PID cannot inherit that evidence.
       const processes = await view.list()
-      const claims = (await provider.owners!(view)).filter(claim =>
+      const matching = (claims: readonly OwnerClaim[]) => claims.filter(claim =>
         [session.sessionId, ...session.aliases ?? []].includes(claim.sessionId))
+      const signature = (claims: readonly OwnerClaim[]) => JSON.stringify([...new Set(claims.map(claim =>
+        JSON.stringify([claim.sessionId, claim.pid, claim.record, !!claim.app, !!claim.fromArgs])))].sort())
+      const claims = matching(await provider.owners!(view))
       const pids = new Set(claims.map(claim => claim.pid))
       if (pids.size > 1) throw new Error('conflicting owners')
       const exact = claims.filter(claim => !claim.fromArgs)
@@ -75,6 +78,11 @@ export function createExternalSessions(options: ExternalReaderOptions) {
         ...(tty && harness?.has(tty) ? { harness: true } : {}), ...(tty && !harness ? { unverified: true } : {}),
         ...(claim.fromArgs ? { fromArgs: true } : {}) }
       const activity = await externalEvidence(async () => await provider.busy?.(owner) ?? true, true)
+      // A process can switch conversations while terminal/activity reads wait. Its PID surviving
+      // does not prove it still owns this conversation. Re-read ownership with a fresh process view.
+      const fresh = (options.open?.view ?? processView)()
+      await fresh.list()
+      if (signature(matching(await provider.owners!(fresh))) !== signature(claims)) throw new Error('owner changed during observation')
       const identity = generation(claim.pid, processes)
       if (!identity && tty && !owner.harness && !owner.fromArgs && !owner.unverified) throw new Error('unverified process incarnation')
       // Unknown activity cannot grant an idle takeover. Explicit take-over-now still requires ownership.

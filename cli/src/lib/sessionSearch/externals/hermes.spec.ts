@@ -455,6 +455,12 @@ describe('Hermes owners', () => {
     expect(observed).toMatchObject({ ok: true, value: [{ pid: 501 }, { pid: 502 }] })
     writeFileSync(join(root, 'runtime', 'active_sessions.json'), JSON.stringify({ entries: [{ ...leases[0], pid: 'unfinished' }] }))
     expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
+    for (const malformed of [null, { entries: [null] }, { entries: [{}] }, { entries: [{ pid: 501 }] }, { entries: [{ ...leases[0], process_start_time: null }] }]) {
+      writeFileSync(join(root, 'runtime', 'active_sessions.json'), JSON.stringify(malformed))
+      expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
+    }
+    writeFileSync(join(root, 'runtime', 'active_sessions.json'), JSON.stringify({ entries: [{ surface: 'gateway-chat', session_id: 'not-a-store-id' }] }))
+    expect(await externalEvidence(() => provider.owners!(view([])))).toMatchObject({ ok: true, value: [] })
     main.close(); work.close()
   })
 

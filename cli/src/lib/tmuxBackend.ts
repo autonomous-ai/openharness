@@ -303,6 +303,9 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       (error, stdout) => resolve({ error, stdout }))
     }))
     if (!result.error && !result.stdout.trim() || result.error && (isNoTmuxServerError(result.error.message) || /can't find pane: %\d+/.test(result.error.message))) return TERMINAL_ACTION_SUCCEEDED
+    // if-shell can evaluate against the active pane when its target has already gone. A mismatch
+    // is an idempotent close only when an authoritative inventory confirms this exact pane is gone.
+    if (await this.paneAbsent(runtime)) return TERMINAL_ACTION_SUCCEEDED
     return terminalActionNotStarted('The waiting pane no longer has this adoption identity')
   }
 
@@ -320,7 +323,12 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // check completed. Only authoritative inventory makes that an idempotent success.
     // Use all panes here: discovery deliberately hides sessions that were renamed
     // or created elsewhere, and their absence from discovery is not proof of exit.
-    const absent = await new Promise<boolean>(resolve => {
+    if (await this.paneAbsent(runtime)) return TERMINAL_ACTION_SUCCEEDED
+    return legacyActionResult(false, 'tmux pane close')
+  }
+
+  private paneAbsent(runtime: TmuxRuntimeRef): Promise<boolean> {
+    return new Promise<boolean>(resolve => {
       run('tmux', ['list-panes', '-a', '-F', '#{pane_id}'], { timeout: 2_000 }, (error, stdout) => {
         if (error) { resolve(isNoTmuxServerError(error.message)); return }
         const ids = stdout.trim().split('\n').filter(Boolean)
@@ -328,8 +336,6 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
         resolve(ids.length > 0 && ids.every(id => /^%\d+$/.test(id)) && !ids.includes(runtime.paneId))
       })
     })
-    if (absent) return TERMINAL_ACTION_SUCCEEDED
-    return legacyActionResult(false, 'tmux pane close')
   }
 
   /**

@@ -66,14 +66,14 @@ describe('the session search service', () => {
       expect(SessionSearchStore.open).toHaveBeenCalledWith(join('/data', SESSION_SEARCH_FILE))
       expect(index.started).toBe(true)
       expect(index.opts.openSessions).toBe(readers.open)
-      expect(Object.keys(requests ?? {})).toEqual([...SEARCH_REQUESTS, 'external_inspect'])
+      expect(Object.keys(requests ?? {})).toEqual([...SEARCH_REQUESTS])
     })
 
     it('leaves the port empty, and says so, on a Node without node:sqlite', () => {
       const { core } = setup()
       vi.mocked(SessionSearchStore.open).mockReturnValueOnce(null)
       const ports = emptyPorts()
-      expect(startSearch(core, ports)).toHaveProperty('external_inspect')
+      expect(startSearch(core, ports)).toEqual({})
       expect(ports.search?.inspect).toBeTypeOf('function')
       expect(console.warn).toHaveBeenCalledWith('[search] node:sqlite is not available on this Node — session search is off')
     })
@@ -212,7 +212,8 @@ describe('the session search service', () => {
 it('keeps external inspection available without SQLite and sends every port through the owned readers/index', async () => {
   const { core, ports, requests, readers } = setup()
   const request = { engine: 'claude', sessionId: 'conversation' }
-  expect(await requests.external_inspect(request, ASKER)).toEqual({ ok: true })
+  expect(Object.keys(requests)).toEqual([...SEARCH_REQUESTS])
+  expect(await ports.search!.inspect(request)).toEqual({ ok: true })
   expect(readers.inspect).toHaveBeenCalledWith(request)
   const options = vi.mocked(createExternalSessions).mock.calls.at(-1)![0]
   expect(options.title?.('conversation')).toBe('Indexed')
@@ -222,6 +223,7 @@ it('keeps external inspection available without SQLite and sends every port thro
   const withoutIndex = vi.mocked(createExternalSessions).mock.calls.at(-1)![0]
   expect(withoutIndex.title?.('named')).toBe('Name')
   expect(withoutIndex.title?.('unnamed')).toBeUndefined()
-  expect(await offline.external_inspect(request, ASKER)).toEqual({ ok: true })
+  expect(offline).toEqual({})
+  expect(await ports.search!.inspect(request)).toEqual({ ok: true })
   ports.search!.touch('conversation'); ports.search!.deleteHistory('conversation'); expect(ports.search!.session('conversation')).toBeUndefined(); ports.search!.stop()
 })

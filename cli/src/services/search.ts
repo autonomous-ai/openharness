@@ -58,7 +58,7 @@ export function startSearch(core: CoreApi, ports: CorePorts, options?: ExternalR
     touch: id => index?.touch(id), deleteHistory: id => index?.deleteHistory(id), session: id => index?.session(id),
     inspect: readers.inspect, stop: () => index?.stop(),
   }
-  return { ...(index ? searchRequests(index) : {}), external_inspect: async payload => ({ ...await readers.inspect(payload) }) }
+  return index ? searchRequests(index) : {}
 }
 
 function openIndex(core: CoreApi, readers: ReturnType<typeof createExternalSessions>): SessionSearchIndex | null {

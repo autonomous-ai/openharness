@@ -10,6 +10,7 @@
 import type { CoreApi } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import { databaseHistory } from '../lib/databaseHistory.js'
+import { externalUnavailable } from '../lib/externalSessionWire.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
@@ -101,7 +102,8 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
     machineId: options.machineId,
     token: options.token,
     // The same handlers as in the core's process (services/search.ts `searchRequests`).
-    requests: { ...Object.fromEntries(SEARCH_REQUESTS.map(type => [type, () => off])), ...answers },
+    requests: { ...Object.fromEntries(SEARCH_REQUESTS.map(type => [type, () => off])), ...answers,
+      external_inspect: async payload => ({ ...(await index?.inspect(payload) ?? externalUnavailable()) }) },
     onEvent: (payload) => {
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
       if (!sessionId || !index) return

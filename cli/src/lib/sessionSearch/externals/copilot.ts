@@ -1,4 +1,4 @@
-import { externalReadFailed } from '../evidence.js'
+import { externalEvidenceActive, externalReadFailed } from '../evidence.js'
 /**
  * GitHub Copilot CLI: one folder per conversation, `<COPILOT_HOME>/session-state/<id>/`, holding its
  * event stream (`events.jsonl`, whose first line is `session.start`) and `workspace.yaml` (its folder
@@ -316,6 +316,7 @@ export function copilotProvider(options: CopilotOptions): ExternalProvider {
     async owners(view: ProcessView): Promise<OwnerClaim[]> {
       // Each pid's newest lock: the session it is in now.
       const newest = new Map<number, { sessionId: string; at: number }>()
+      const tied = new Set<number>()
       for (const entry of await entries(root)) {
         if (!entry.isDirectory() || !UUID.test(entry.name)) continue
         for (const file of await entries(join(root, entry.name))) {
@@ -323,25 +324,36 @@ export function copilotProvider(options: CopilotOptions): ExternalProvider {
           const stamp = pid > 0 ? await fileStamp(join(root, entry.name, file.name)) : null
           if (!stamp) continue
           const held = newest.get(pid)
+          if (!held || stamp.mtime > held.at) tied.delete(pid)
+          else if (stamp.mtime === held.at && entry.name !== held.sessionId) tied.add(pid)
           if (!held || stamp.mtime > held.at || (stamp.mtime === held.at && entry.name > held.sessionId)) {
             newest.set(pid, { sessionId: entry.name, at: stamp.mtime })
           }
         }
       }
-      if (!newest.size) return []
+      if (!newest.size && !externalEvidenceActive()) return []
       const rows = new Map((await view.list()).map((row) => [row.pid, row]))
       const ownership = agentCommandOwnershipSnapshot()
       const claims: OwnerClaim[] = []
       for (const [pid, held] of newest) {
         const row = rows.get(pid)
+        if (externalEvidenceActive() && !row && view.alive(pid)) externalReadFailed(new Error('missing owner process'), 'owner process')
         // A crash leaves its lock behind, and the pid can be reused: only a live Copilot counts.
         const kind = row && view.alive(pid) ? copilotProcess(row, ownership) : null
+        if (kind && externalEvidenceActive() && (!Number.isFinite(row!.started) || tied.has(pid))) {
+          externalReadFailed(new Error('ambiguous owner lock'), 'owner record'); continue
+        }
         // A lock older than the process that has its pid was left by an earlier one.
         if (!kind || (row!.started !== undefined && held.at + START_SLACK_MS < row!.started)) continue
         claims.push({
           sessionId: held.sessionId, pid, record: join(root, held.sessionId, 'events.jsonl'),
           ...(kind === 'server' ? { app: true } : {}),
         })
+      }
+      if (externalEvidenceActive()) for (const row of rows.values()) {
+        if (view.alive(row.pid) && copilotProcess(row, ownership) && !claims.some(claim => claim.pid === row.pid)) {
+          externalReadFailed(new Error('no current lock for a live process'), 'current owner')
+        }
       }
       return claims
     },

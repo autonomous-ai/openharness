@@ -174,14 +174,18 @@ export function devinProvider(options: DevinOptions): ExternalProvider & Countin
         // A lock outlives a crash, and its pid can be handed to anything after, another Devin among
         // them: one written before the process under its pid began was that earlier process's.
         const row = byPid.get(lock.pid)
+        if (externalEvidenceActive() && !row && view.alive(lock.pid)) externalReadFailed(new Error('missing owner process'), 'owner process')
         if (!row || !view.alive(lock.pid) || !isDevin(row)) continue
-        if (row.started === undefined) externalReadFailed(new Error('missing owner start time'), 'owner record')
+        if (!Number.isFinite(row.started)) externalReadFailed(new Error('missing owner start time'), 'owner record')
         if (row.started !== undefined && lock.written < row.started - LOCK_SLACK_MS) continue
         add(sessionId, row, false)
       }
       // The id a process was started on, where no lock says more: it may have moved on since.
       for (const row of processes) {
         if (!isDevin(row)) continue
+        if (view.alive(row.pid) && ![...claims.values()].some(claim => claim.pid === row.pid && !claim.fromArgs)) {
+          externalReadFailed(new Error('no exact lock for a live process'), 'current owner')
+        }
         const sessionId = resumeSessionId('devin', row.args)
         if (sessionId) add(sessionId, row, true)
       }

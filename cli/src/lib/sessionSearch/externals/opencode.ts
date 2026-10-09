@@ -167,6 +167,7 @@ export function opencodeProvider(options: OpencodeOptions): ExternalProvider & C
       const claims: OwnerClaim[] = []
       for (const row of processes) {
         if (!isEngine(row)) continue
+        if (view.alive(row.pid)) externalReadFailed(new Error('only launch arguments identify this live process'), 'current owner')
         const sessionId = resumeSessionId(engine, row.args)
         if (!sessionId) continue
         // The session it was started on: the TUI may have switched to another since.
