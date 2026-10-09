@@ -1,0 +1,35 @@
+{
+  "cursor:existing": "<root>/cursor/projects/project/agent-transcripts/aaaaaaaa-1111-4222-8333-000000000001/aaaaaaaa-1111-4222-8333-000000000001.jsonl",
+  "cursor:missing": null,
+  "cursor:invalid": null,
+  "cursor:validation-rejected": null,
+  "cursor:groups": "<root>/cursor/projects/project/agent-transcripts/aaaaaaaa-1111-4222-8333-000000000001/aaaaaaaa-1111-4222-8333-000000000001.jsonl",
+  "copilot:existing": "<root>/copilot/session-state/aaaaaaaa-1111-4222-8333-000000000003/events.jsonl",
+  "copilot:missing": null,
+  "copilot:invalid": null,
+  "agy:existing": "<root>/agy/brain/aaaaaaaa-1111-4222-8333-000000000003/.system_generated/logs/transcript_full.jsonl",
+  "agy:missing": null,
+  "agy:invalid": null,
+  "grok:encoded": "<root>/grok/sessions/%2Fwork%2Fencoded/aaaaaaaa-1111-4222-8333-000000000005/updates.jsonl",
+  "grok:hashed": "<root>/grok/sessions/hashed-workspace/aaaaaaaa-1111-4222-8333-000000000006/updates.jsonl",
+  "grok:other-workspace": null,
+  "grok:missing": null,
+  "grok:no-workspace": null,
+  "copilot:newest-lock": "aaaaaaaa-1111-4222-8333-000000000012",
+  "copilot:no-lock": null,
+  "copilot:invalid-pid": null,
+  "agy:held-lock": "aaaaaaaa-1111-4222-8333-000000000013",
+  "agy:no-lock": null,
+  "agy:invalid-pid": null,
+  "discovery:found": [
+    [
+      "aaaaaaaa-1111-4222-8333-000000000021",
+      "<root>/pending/projects/project/agent-transcripts/aaaaaaaa-1111-4222-8333-000000000021/aaaaaaaa-1111-4222-8333-000000000021.jsonl"
+    ],
+    [
+      "aaaaaaaa-1111-4222-8333-000000000022",
+      "<root>/pending/projects/project/agent-transcripts/aaaaaaaa-1111-4222-8333-000000000022/aaaaaaaa-1111-4222-8333-000000000022.jsonl"
+    ]
+  ],
+  "discovery:stopped": false
+}

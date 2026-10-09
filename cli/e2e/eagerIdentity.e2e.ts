@@ -1,6 +1,6 @@
 /** Real core and process discovery with optional native modules absent or unable to finish loading. */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest'
@@ -64,11 +64,16 @@ console.log('fixture-${engine}-ready'); setInterval(() => {}, 1000);
   const copilot = await create('copilot')
   await until('Copilot binding from its lock with no optional reader', async () => (await rows()).find(row => row.id === copilot.id)?.sessionId === first || null, 30_000, 100)
   const pid = Number(readFileSync(join(d.root, 'copilot.pid'), 'utf8'))
+  const unknown = join(d.env.COPILOT_HOME, 'session-state', '99999999-1111-4222-8333-444444444444', `inuse.${pid}.lock`)
+  mkdirSync(unknown, { recursive: true })
   const folder = join(d.env.COPILOT_HOME, 'session-state', next); mkdirSync(folder, { recursive: true })
   writeFileSync(join(folder, 'events.jsonl'), JSON.stringify({ type: 'session.start', data: { context: { cwd } } }) + '\n')
   const lock = join(folder, `inuse.${pid}.lock`); writeFileSync(lock, '')
   const newer = new Date(Date.now() + 2000); utimesSync(lock, newer, newer)
-  await until('Copilot in-process resume without a hook or reader', async () => (await rows()).find(row => row.id === copilot.id)?.sessionId === next || null, 30_000, 100)
+  // A competing native location that cannot be read must retain the old binding,
+  // without stopping discovery of the Cursor siblings below.
+  await until('Copilot binding held for its incomplete lock pool', () => d.log().includes('binding held · Conversation identity is held: a native identity location is not a regular file'), 30_000, 100)
+  expect((await rows()).find(row => row.id === copilot.id)?.sessionId).toBe(first)
   // The two Copilot bindings already occupy reader slots. Three more pending Cursor sessions
   // saturate the four-slot pool before the final Cursor is asked to locate its transcript.
   const cursorId = 'cccccccc-1111-4222-8333-444444444444'
@@ -86,12 +91,24 @@ console.log('fixture-${engine}-ready'); setInterval(() => {}, 1000);
     await until('the binding is visible before optional attachment completes', async () =>
       (await rows()).find(row => row.id === cursor.id)?.sessionId === sessionId || null, 5000, 100)
   }
-  const transcript = join(d.env.CURSOR_HOME, 'projects', 'p', 'agent-transcripts', cursorId, `${cursorId}.jsonl`)
-  mkdirSync(dirname(transcript), { recursive: true }); writeFileSync(transcript, '{}\n')
+  const heldCursorId = 'dddddddd-1111-4222-8333-444444444444'
+  const transcript = join(d.env.CURSOR_HOME, 'projects', 'p', 'agent-transcripts', heldCursorId, `${heldCursorId}.jsonl`)
+  // The first candidate's native read fails while a sibling's transcript is ready.
+  // Neither optional readers nor this failed location may own the polling loop.
+  mkdirSync(transcript, { recursive: true })
+  const siblingId = cursorId
+  const siblingTranscript = join(d.env.CURSOR_HOME, 'projects', 'p', 'agent-transcripts', siblingId, `${siblingId}.jsonl`)
+  mkdirSync(dirname(siblingTranscript), { recursive: true }); writeFileSync(siblingTranscript, '{}\n')
+  await until('the pending Cursor native read to hold', () => d.log().includes(`transcript ${heldCursorId} held`), 15_000, 100)
+  await until('the sibling transcript to publish while another lookup is held', () =>
+    readFileSync(join(d.dataDir, 'registry.json'), 'utf8').includes(siblingTranscript), 15_000, 100)
+  rmdirSync(transcript); writeFileSync(transcript, '{}\n')
   await until('Cursor location committed while its optional reader is unavailable', () => {
     const registry = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8'))
     return JSON.stringify(registry).includes(transcript) || null
   }, 15_000, 100)
+  rmdirSync(unknown)
+  await until('Copilot in-process resume after its native pool recovers', async () => (await rows()).find(row => row.id === copilot.id)?.sessionId === next || null, 30_000, 100)
   expect((await fetch(`http://127.0.0.1:${d.port}/api/health`)).ok).toBe(true)
   expect(d.coresStarted()).toBe(1)
 }, 120_000)

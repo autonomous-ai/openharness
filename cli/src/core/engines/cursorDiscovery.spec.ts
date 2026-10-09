@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createCursorDiscovery, type CursorDiscovery } from './cursorDiscovery.js'
-import { validTranscriptPath } from '../../lib/registry.js'
+import { inspectTranscriptPath } from '../../lib/registry.js'
 
 vi.mock('../../engines/inProcess.js', () => ({ engineNow: () => { throw new Error('optional engine unavailable') } }))
-vi.mock('../../lib/registry.js', () => ({ validTranscriptPath: vi.fn(() => true) }))
+vi.mock('../../lib/registry.js', () => ({ inspectTranscriptPath: vi.fn(() => true) }))
 const root = mkdtempSync(join(tmpdir(), 'core-cursor-discovery-'))
 let discovery: CursorDiscovery
 
@@ -21,6 +21,7 @@ it('uses the declared data layout and registry validation without loading an eng
   await discovery.start()
   await discovery.add(id)
   expect(found).toHaveBeenCalledExactlyOnceWith(id, path)
-  expect(validTranscriptPath).toHaveBeenCalledExactlyOnceWith('cursor', path)
+  expect(inspectTranscriptPath).toHaveBeenCalledTimes(2)
+  expect(inspectTranscriptPath).toHaveBeenLastCalledWith('cursor', path)
   discovery.remove(id)
 })
