@@ -89,6 +89,12 @@ const envSchema = z.object({
   // the backend authenticates the manager's dial-in socket (/api/manager-ws) against that apiKey and
   // picks a manager on create by capacity (machines.managerId → managers). See lib/managers.ts.
 
+  // The connector gateway (lib/connectorGateway.ts): its OAuth apps (GitHub, Slack, Google…) live in
+  // MongoDB (`connector_apps`), edited directly or written by `npm run connectors:import <file>`.
+  // The redirect every one of those apps allows: the Autonomous web page, which forwards a `harness_`
+  // state here (POST /api/connectors/callback). Staging: https://staging.autonomousdev.xyz/connector/callback.
+  CONNECTOR_REDIRECT_URI: z.string().url().default('https://www.autonomous.ai/connector/callback'),
+
   // Autonomous SSO (OAuth2 Authorization Code + PKCE). The backend exchanges the code, then hands
   // the SSO access token to the web. Control-plane REST + web WS validate that token through the
   // Autonomous profile API instead of minting a second backend-owned session JWT.
