@@ -1810,6 +1810,32 @@
   ],
   [
    "grok",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000036",
+   [
+    {
+     "engine": "grok",
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000036",
+     "transcriptPath": "<root>/home/.grok/sessions/hashed-group/0b6f4f2e-6c1a-4c55-9a51-000000000036/updates.jsonl",
+     "cwd": "/work/g",
+     "source": "terminal-resume",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "grok"
+     },
+     "hookEvent": "TerminalResumeDiscovery"
+    }
+   ]
+  ],
+  [
+   "grok",
    "0b6f4f2e-6c1a-4c55-9a51-000000000039",
    []
   ],
@@ -2287,6 +2313,16 @@
   [
    "let go",
    null
+  ]
+ ],
+ "pending cursor transcripts": [
+  [
+   "0b6f4f2e-6c1a-4c55-9a51-000000000061",
+   "<root>/home/.cursor/projects/golden-existing/agent-transcripts/0b6f4f2e-6c1a-4c55-9a51-000000000061/0b6f4f2e-6c1a-4c55-9a51-000000000061.jsonl"
+  ],
+  [
+   "0b6f4f2e-6c1a-4c55-9a51-000000000062",
+   "<root>/home/.cursor/projects/golden-later/agent-transcripts/0b6f4f2e-6c1a-4c55-9a51-000000000062/0b6f4f2e-6c1a-4c55-9a51-000000000062.jsonl"
   ]
  ]
 }

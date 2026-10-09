@@ -9,7 +9,7 @@ import { probeGatewayRuntime } from './gatewayRuntime.js'
 import { gridAssignmentProcess, type GridAssignment, type GridAssignmentProcess } from './gridAssignmentWire.js'
 import { readProcessEnv } from './processEnv.js'
 import { probeProfileHome } from '../engines/discoveries.js'
-import { loadEngine } from '../engines/inProcess.js'
+import { probeHermesHome } from '../engines/identities.js'
 import { probeDsh } from '../dsh/probe.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
@@ -272,12 +272,8 @@ export async function probeTerminalAgents(
     }
     // And, for Codex, the profile it runs under — a fact about the process the row cannot otherwise learn.
     agent.codexHome = await probeProfileHome(agent.processIdentity, agent.engine)
-    // …and, for Hermes, the home — same cached read, and it beats looking the session up in every store. Read by
-    // Hermes's own code, loaded for a Hermes process alone (engines/inProcess.ts); without it the process could
-    // not be read, which never overwrites what the registry knows.
-    agent.hermesHome = agent.engine === 'hermes'
-      ? await (await loadEngine('hermes'))?.probeHermesHome(agent.processIdentity, agent.engine)
-      : null
+    // Hermes's declared profile is read eagerly from the same verified process environment.
+    agent.hermesHome = await probeHermesHome(agent.processIdentity, agent.engine)
     // And the DSH it was created as — same read, so a pane the daemon did not create is labelled too.
     agent.dsh = await probeDsh(agent.processIdentity)
   }))

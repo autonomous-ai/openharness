@@ -1050,11 +1050,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       hookEvent: 'TranscriptDiscovered',
     })
     if (!result) return
-    void attachSession(result.entry, false, true).then((attached) => {
-      if (!attached) return
-      syncRecapPool()
-      syncSession(result.entry)
-    }).catch((err) => {
+    // The file is authoritative now. Publishing its binding must not wait for an optional reader.
+    syncRecapPool()
+    syncSession(result.entry)
+    void attachSession(result.entry, false, true).catch((err) => {
       console.error('[cursor-discovery] attach failed:', err instanceof Error ? err.message : err)
     })
   })
@@ -1480,6 +1479,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
   const forgetSession = createForgetSession({
+    forgetAttach: attach.forget,
     onRemoved: (agentId) => forgetRestartRevision(agentId),
     relaunchMarks,
     registry,

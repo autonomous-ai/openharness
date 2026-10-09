@@ -42,7 +42,7 @@ const DEFAULT_CONCURRENCY = 4
 
 export class AttachTracker<E> {
   /** Every attach that has been asked for and not finished — waiting for a slot or running. */
-  private readonly inFlight = new Map<string, { run: Promise<boolean>; subject: AttachSubject<E>; since: number | null }>()
+  private readonly inFlight = new Map<string, { run: Promise<boolean>; subject: AttachSubject<E>; since: number | null; identity?: string }>()
   private readonly waiting: Array<() => void> = []
   private running = 0
   private readonly concurrency: number
@@ -62,16 +62,18 @@ export class AttachTracker<E> {
    * returns THAT one's result and `start` is never called; a `reset` waits for it, then runs `start`.
    * Either way `start` runs only once a slot is free.
    */
-  async attach(session: AttachSubject<E>, reset: boolean, start: () => Promise<boolean>): Promise<boolean> {
+  async attach(session: AttachSubject<E>, reset: boolean, start: () => Promise<boolean>, identity?: string): Promise<boolean> {
     // A loop, not an if: two resets waiting on the same attach would otherwise both start at once.
     // The key is read once: `session` is the registry's live object and unbinding blanks its sessionId
     // mid-attach, so reading it again later would miss the entry and leave it behind for good.
     const key = session.sessionId
     for (let pending = this.inFlight.get(key); pending; pending = this.inFlight.get(key)) {
-      if (!reset) return pending.run
+      // A path discovered during the first probe is a new attach, not a join of the obsolete one.
+      // Still serialize it: interpretation that has started writing must finish before its replacement.
+      if (!reset && pending.identity === identity) return pending.run
       await pending.run.catch(() => false)
     }
-    const entry = { run: Promise.resolve(false), subject: session, since: null as number | null }
+    const entry = { run: Promise.resolve(false), subject: session, since: null as number | null, identity }
     entry.run = this.runWhenFree(entry, start).finally(() => {
       if (this.inFlight.get(key) === entry) this.inFlight.delete(key)
     })

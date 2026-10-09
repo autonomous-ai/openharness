@@ -22,10 +22,11 @@
  */
 
 import { readdirSync, realpathSync, statSync } from 'node:fs'
-import { isAbsolute, join } from 'node:path'
+import { join } from 'node:path'
 import { env } from '../../config/env.js'
-import { HERMES_HISTORY_ID_RE, HERMES_HOMES, hermesDbPath } from './contract.js'
+import { HERMES_HISTORY_ID_RE, HERMES_HOMES, HERMES_PROFILE, hermesDbPath } from './contract.js'
 import { forgetStoreHomes, listStoreHomes } from '../kit/storeHomes.js'
+import { profileFromEnv } from '../kit/processFacts.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import type { AgentEngine } from '../types.js'
 
@@ -117,7 +118,5 @@ export function hermesHomeFromEnv(
   defaultHome = env.HERMES_HOME,
 ): string | null {
   if (engine !== 'hermes') return null
-  const home = processEnv.HERMES_HOME
-  if (!home || !isAbsolute(home) || home.length > 4096 || /[\x00-\x1f\x7f]/.test(home)) return null
-  return sameHermesHome(home, defaultHome) ? null : home
+  return profileFromEnv(HERMES_PROFILE, processEnv, defaultHome)
 }
