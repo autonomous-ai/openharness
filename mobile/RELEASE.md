@@ -130,8 +130,9 @@ may lack symbolicated stacks until the matching symbols are supplied.
 | `1.0.1 (59)` | 2026-10-07 | TestFlight. Onboarding gets exits and shorter sign-in waits (`fix/mobile-onboarding-exits`), on top of 58. Built from `feat/mobile-ios-android` at `421c54d3` |
 | `1.0.1 (60)` | 2026-10-07 | TestFlight. Onboarding hardened: one pairing at a time, Scan again and a way out of slow waits, sign-out clears the last account's computers; computer set-up in three steps; iOS local network usage description. Uploaded with the Xcode account (`release-ios.sh`); Xcode again reported the non-blocking missing WebRTC dSYM. Built from `feat/mobile-ios-android` at `1d58a94e` |
 | `1.0.2 (61)` | 2026-10-08 | TestFlight. Shows when a computer is asleep instead of loading, polls faster while all are asleep and adds a refresh button; reopens the terminal before the agent list on reconnect; the key strip leads with a question's key hints, Codex glyph hints (`⇧←`) included. ASC refused it as `1.0.1 (61)`: 1.0.1 had been approved, which closes its train, so it went up as 1.0.2. Built from `feat/mobile-ios-android` at `99e17f3d` |
+| `1.0.2 (62)` | 2026-10-09 | TestFlight. One-button Connect your computer onboarding (`feat/connect-your-computer`); Google sign-in on iOS reuses Safari's signed-in accounts; swipe left opens Computers and New Harness moves into Find, which opens with the keyboard down. Built from `feat/mobile-ios-android` at `bf8c4b4c` |
 
-`pubspec.yaml` is now at `1.0.2+62`, the next build number. Build 61 (1.0.2) is the last iOS upload and 60
+`pubspec.yaml` is now at `1.0.2+63`, the next build number. Build 62 (1.0.2) is the last iOS upload and 60
 the last to both TestFlight and Play (54 went up outside this record, 53 went to Play only); do not upload any of them again. 1.0.1 is approved, so its train is closed: new builds go up as 1.0.2. Check App Store Connect before uploading if another release has happened meanwhile.
 
 ### Why the app is iPhone-only
