@@ -401,6 +401,46 @@ Official desktop 1.2.62 with CLI 0.3.73 on fresh VMs (faster opening released; n
 | real Claude Code and Codex, not signed in | 40 s | 56 s | 139 s |
 | OpenCode only | 41 s | 54 s | 27 s |
 
+## Returning users, and where it stops paying (2026-10-09)
+
+Main's app and CLI on fresh VMs, with signed-in Claude Code and Codex (the e2e fake engines) and
+their recent conversations in the CLIs' own record shapes:
+
+| Persona | Workspace | First result | Second session |
+|---|---|---|---|
+| Claude Code signed in, no history | 41 s | 46 s | 3 s |
+| Claude Code signed in, Codex not | 41 s | 46 s | 2 s |
+| both, 5 recent conversations (2 tabs reopened) | 41 s | 46 s (was lost) | 2 s; the next day too |
+| Codex, 2 recent conversations | 41 s | 46 s (was lost) | 2 s |
+
+**Before #1119:**
+- The daemon held the reopened conversations a moment, then started them. The app heard of the
+  start only at its 60 s agent sync.
+- For that minute the panes said "Waiting" over running agents. Read only since #1117, they lost
+  the first task typed into them.
+
+**#1119:**
+- A held harness is read again (3 s, backing off) until the daemon starts it.
+- It stays writable.
+
+Also fixed today:
+- #1116: ⌘P Enter moves a conversation from a terminal without a dialog.
+- #1117: a held pane says "Waiting" and why.
+- #1094: no developer-tools dialog in agent panes.
+
+**Where it stops paying.** Every persona now reaches its workspace at 40–41 s. The first result
+follows at 46 s with a signed-in agent, or 52–57 s on OpenCode's free model, where the model's own
+answer is the rest. No UI step remains between opening the app and typing.
+
+What is left is first-run setup itself: the CLI, Node and tmux downloaded before the workspace
+opens. The one lever named for it (finding 23) is shipping Node and the CLI inside the app, about
+11 s, at the cost of a larger universal app and signing an embedded Node. That is a packaging
+decision, not an onboarding iteration.
+
+**Rig note:** the VM has no developer tools, so it raises Apple's dialog for anything that runs
+`git`. Returning users of Claude Code or Codex have them, so a dialog seen there is the rig's, not
+theirs.
+
 ## Next
 
 - #1061 merged. #1047, #1052, #1067 and #1069 are carried by the onboarding PR (branch
