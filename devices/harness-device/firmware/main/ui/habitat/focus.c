@@ -227,7 +227,10 @@ static const ht_pet_scene_t *relaxing_scene(const ht_character_face_t *f, const 
     const ht_pet_t *pet = pet_for(f);
     if (!pet || !pet->relaxing_scene || f->voice || pet_holds(f) || f->mood == HT_CHARACTER_LISTENING) return NULL;
     if ((recap && *recap) || (f->activity && *f->activity) || (f->status && *f->status)) return NULL;
-    return pet_state(f, recap) == HT_PET_IDLE ? pet->relaxing_scene : NULL;
+    // Done with no recap relaxes too: an agent whose turn just ended rests in DONE, which is where most resting
+    // faces are (owner, 2026-10-09: the Devices tab's Codex kept the old face after its turn).
+    const ht_pet_state_t state = pet_state(f, recap);
+    return state == HT_PET_IDLE || state == HT_PET_DONE ? pet->relaxing_scene : NULL;
 }
 static void scene_origin(const ht_pet_scene_t *sc, int bias, int *x, int *y);
 /*

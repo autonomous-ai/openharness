@@ -754,7 +754,7 @@ static void focus_face(void)
                     ht_character_face(&scene, &c, &f, 0xffff, layout == 0 ? "Shipped the retry queue." : "");
                     const ht_run_t *mark = &scene.runs[1];
                     if (pet->working_scene && layout == 1 && state != HT_PET_ASKING) continue;   // the scene: below
-                    if (pet->relaxing_scene && layout == 2 && (state == HT_PET_IDLE || state == HT_PET_WORKING)) continue;   // relaxing: below
+                    if (pet->relaxing_scene && layout == 2 && (state == HT_PET_IDLE || state == HT_PET_DONE || state == HT_PET_WORKING)) continue;   // relaxing: below
                     int fr = pet_frame(pet, &mark->sprite);
                     assert(fr >= 0);
                     if (mark->sprite.height != pet->h) {   // a larger drawing: its whole box is under the title
@@ -1317,8 +1317,9 @@ static void focus_face(void)
             // Two waves and the arm down and up, 18 steps (owner, 2026-10-06): the loop wraps at 18, not 24.
             assert(mp->step_ms[0] == 217 && ht_pet_steps(mp) == 18);
             {
-                // (done, not idle: idle with nothing to show is the relaxing face; every state plays this one loop)
-                ht_character_face_t g = {.recipient = "x", .engine = "muse", .activity = "", .status = "", .hint = "",
+                // (with a status line: an idle or done agent with nothing to show is the relaxing face; every
+                // state plays this one loop)
+                ht_character_face_t g = {.recipient = "x", .engine = "muse", .activity = "", .status = "Ready", .hint = "",
                     .detail = "", .mood = HT_CHARACTER_DONE, .clock_ms = 18 * 217 + 1};
                 ht_scene_t a, b; ht_scene_clear(&a, 0); ht_scene_clear(&b, 0);
                 ht_character_face(&a, &c, &g, 0xffff, "");
