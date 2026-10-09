@@ -54,6 +54,11 @@ describe('opening a Codex conversation Harness did not start', () => {
       const now = await row(client, opened.agent.id)
       return now?.sessionId === kept && now.status === 'active' ? now : null
     }, 60_000, 500)
+    // Binding is announced while held restore is still committing its route. Finish a real turn
+    // before asking for a second pane operation, as the already-running restart tests do.
+    const ended = client.next(frame => frame.type === 'turn_ended' && frame.agentId === opened.agent.id, 45_000)
+    client.send('message', { agentId: opened.agent.id, content: 'Adopted conversation before the update' })
+    await ended
     // An engine update can remove resume. The coordinator must carry the adoption's strict
     // resume requirement into the real pane swap instead of falling back to a new conversation.
     const wrapper = join(d.root, 'bin', 'codex')
