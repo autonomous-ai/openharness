@@ -7,7 +7,7 @@ import { pathToFileURL } from 'url'
 /** Pi and OpenCode register through generated source, so pin its process-owned wire contract directly. */
 const dirs: string[] = []
 const version = vi.hoisted(() => ({ major: 1 as number | null }))
-vi.mock('../engines/opencode/version.js', () => ({ opencodeMajorVersion: () => version.major }))
+vi.mock('../engines/launchControl.js', () => ({ opencodeMajorVersion: () => version.major }))
 beforeEach(() => {
   version.major = 1
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })

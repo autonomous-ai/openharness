@@ -17,7 +17,7 @@ import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
 import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import type { DshThrough } from './dshThrough.js'
-import { loadEngine } from '../../engines/inProcess.js'
+import * as opencodeLaunch from '../../engines/launchControl.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineLabel } from '../../lib/agentNames.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
@@ -116,15 +116,8 @@ export function createAgentCreator({
       console.warn(`[agent] create refused · ${engine} · ${refusal.detail}`)
       return { ok: false, ...refusal }
     }
-    // Which OpenCode is installed decides its argv: v2's TUI exits on v1's flags. Its probe is OpenCode's own code,
-    // loaded for an OpenCode launch alone (engines/inProcess.ts), here before anything is written: without it the
-    // launch is refused, never given a guessed argv.
-    const opencode = engine === 'opencode' ? await loadEngine('opencode') : null
-    if (engine === 'opencode' && !opencode) {
-      const detail = 'OpenCode\'s code could not be loaded'
-      console.warn(`[agent] create opencode refused · ${detail}`)
-      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail }
-    }
+    // Native version and model control are eager; optional readers never decide whether a launch can proceed.
+    const opencode = engine === 'opencode' ? opencodeLaunch : null
     // Harness-created sessions are easy to distinguish from a user's organic tmux sessions while
     // retaining the engine and a collision-resistant creation suffix for diagnostics. Computed
     // before the grid block because a file-configured engine keys its config directory on it.

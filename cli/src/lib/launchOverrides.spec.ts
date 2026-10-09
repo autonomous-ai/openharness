@@ -109,17 +109,15 @@ describe('buildLaunchOverrides — a relaunch comes back where the agent was', (
     expect(calls).toEqual([])
   })
 
-  it('refuses an OpenCode launch whose code could not be loaded, and asks the machine for the engine it launches', async () => {
-    vi.mocked(loadEngine).mockResolvedValueOnce(null)
-    expect(await buildLaunchOverrides(deps().d, 'opencode', {}, 'agent-1')).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
-    vi.mocked(loadEngine).mockClear()
+  it('builds OpenCode overrides without optional code and uses the requested engine facts', async () => {
+    vi.mocked(loadEngine).mockImplementation(() => new Promise(() => {}))
+    expect(await buildLaunchOverrides(deps().d, 'opencode', {}, 'agent-1')).toMatchObject({ ok: true })
     const machine = vi.fn((_engine: string) => ({ hermesSystemManaged: false }))
     await buildLaunchOverrides(deps({ machine }).d, 'claude', { gridLaunch: GRID, subscriptionModel: 'opus' }, 'agent-1')
-    expect(loadEngine).not.toHaveBeenCalled()
     expect(machine.mock.calls.every(([engine]) => engine === 'claude')).toBe(true)
     await buildLaunchOverrides(deps({ machine }).d, 'opencode', { agent: 'reviewer' }, 'agent-1')
-    expect(loadEngine).toHaveBeenCalledWith('opencode')
     expect(machine).toHaveBeenLastCalledWith('opencode')
+    expect(loadEngine).not.toHaveBeenCalled()
   })
 
   it('never lets the key into argv', async () => {

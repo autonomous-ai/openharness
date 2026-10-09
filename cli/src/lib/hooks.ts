@@ -6,7 +6,7 @@ import { cursorConfigDir, cursorDataDir } from '../engines/cursor/home.js'
 import { env } from '../config/env.js'
 import { VERSION } from '../version.js'
 import { hermesConfigHomes } from '../engines/hermes/home.js'
-import { opencodeMajorVersion } from '../engines/opencode/version.js'
+import { opencodeMajorVersion } from '../engines/launchControl.js'
 import { command, isOurs, writeJsonAtomic, type HookBlock, type Settings } from '../engines/kit/notifyHooks.js'
 
 const GROK_HOOKS_PATH = join(env.GROK_HOME, 'hooks', 'harness.json')

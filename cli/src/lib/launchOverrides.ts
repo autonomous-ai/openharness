@@ -13,7 +13,6 @@
  */
 
 import { join } from 'node:path'
-import { loadEngine } from '../engines/inProcess.js'
 import type { AgentEngine } from '../engines/types.js'
 import { subscriptionModelLaunch } from './subscriptionModel.js'
 import { ownLoginProviderArgs } from '../engines/launches.js'
@@ -142,19 +141,10 @@ export async function validateLaunchOverrides(
   engine: AgentEngine,
   source: LaunchSource,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string; unavailable?: string }> {
-  const unloaded = await opencodeUnloaded(engine)
-  if (unloaded) return unloaded
   if (!source.gridLaunch) return { ok: true }
   const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(engine) })
   if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
   return tmuxRefusal(deps, engine, source.gridLaunch)
-}
-
-/** Which OpenCode is installed decides its argv (`machine`), read by OpenCode's own probe: loaded for an OpenCode
- *  launch alone (engines/inProcess.ts), and the launch refused without it rather than given a guess. */
-async function opencodeUnloaded(engine: AgentEngine): Promise<{ ok: false; error: string; detail: string } | null> {
-  if (engine !== 'opencode' || await loadEngine('opencode')) return null
-  return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
 }
 
 /** Only a launch that SETS variables needs the tmux that can set them. */
@@ -225,9 +215,6 @@ async function buildBaseLaunchOverrides(
   source: LaunchSource,
   configKey: string,
 ): Promise<LaunchOverridesResult> {
-  // Checked first, as every relaunch was before its grid launch moved to models (validateLaunchOverrides).
-  const unloaded = await opencodeUnloaded(engine)
-  if (unloaded) return unloaded
   // Coming back to the engine's own login undoes TWO things the grid launch set, and they are
   // undone separately because the engine remembers them differently.
   //

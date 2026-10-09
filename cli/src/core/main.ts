@@ -5,7 +5,8 @@ import { createModelControls } from './engines/modelControls.js'
 import { masterRunsEngineModelControl } from '../harnessd/services.js'
 import { createScreens } from './engines/screens.js'
 import { createScreenTransport } from './engines/screenTransport.js'
-import { engineNow, inProcessScreen, preloadEngine } from '../engines/inProcess.js'
+import { inProcessScreen, preloadEngine } from '../engines/inProcess.js'
+import { opencodeMajorVersion } from '../engines/launchControl.js'
 import { masterRunsEngineScreen } from '../harnessd/services.js'
 import { createSubmissions } from './engines/submissions.js'
 import { createNativeControls } from './engines/nativeControls.js'
@@ -1946,7 +1947,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    */
   const gridLaunchMachine = (engine: AgentEngine): GridLaunchMachine => ({
     hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR),
-    opencodeMajor: engine === 'opencode' ? engineNow('opencode', 'an OpenCode launch was built')?.opencodeMajorVersion() ?? null : null,
+    opencodeMajor: engine === 'opencode' ? opencodeMajorVersion() : null,
   })
 
   /**
