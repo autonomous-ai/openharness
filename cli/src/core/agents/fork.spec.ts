@@ -82,6 +82,16 @@ describe('forking an agent', () => {
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
+  it('does not open instruction files or install API notes while its harness waits for the Store', async () => {
+    vi.mocked(installedDsh).mockReturnValueOnce({ manifest: { name: 'Fixture' } } as never)
+    launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', detail: 'Waiting for the Store.', unavailable: 'store' })
+    const { fork, deps } = setup(source({ dsh: 'fixture/tools' }))
+    expect(await fork({ agentId: 'a1', name: null, prompt: null })).toMatchObject({ ok: false, error: 'DSH_UNAVAILABLE' })
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
+    expect(deps.prepareApiTools).not.toHaveBeenCalled()
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+  })
+
   it('refuses without tmux, an agent, a folder, or with a grid or a turn in progress', async () => {
     expect(await setup(source(), { tmuxBackend: null }).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'TMUX_UNAVAILABLE' })
     expect(await setup(null).fork({ agentId: 'a1', name: null, prompt: null })).toEqual({ ok: false, error: 'AGENT_NOT_FOUND' })

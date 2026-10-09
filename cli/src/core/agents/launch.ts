@@ -30,6 +30,8 @@ export function gridLaunchThrough(models: () => Pick<ModelsPort, 'gridLaunch'>) 
 }
 
 export interface LaunchHelperDeps {
+  /** Capture dispatch authority before a service can yield to Stop or a replacement binding. */
+  authority: (agentId: string) => () => boolean
   /** Writes the saved APIs' tool instructions into the agent's folder before it launches. */
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
   launchOverridesDeps: LaunchOverridesDeps
@@ -38,17 +40,27 @@ export interface LaunchHelperDeps {
   setTail: (sessionId: string, offset: number) => void
 }
 
-export function createLaunchHelpers({ prepareApiTools, launchOverridesDeps, setGridLaunch, setTail }: LaunchHelperDeps) {
+export function createLaunchHelpers({ authority, prepareApiTools, launchOverridesDeps, setGridLaunch, setTail }: LaunchHelperDeps) {
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
   // workspace and named agent come from the row: a retarget must not silently drop the harness the
   // agent is, or bring a pane opened as `harness-compute` back as a general session.
   // An agent on a saved API's model relaunches with that API's endpoint and key as saved now, so a key
   // pasted since takes effect, and a removed API is refused rather than kept on its old key: the models
   // service reads them as it builds the launch (`buildLaunchOverrides`, `refresh`).
-  const relaunchOverrides = async (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
+  const relaunchOverrides = async (session: RegisteredSession, source: LaunchSource = session, operationCurrent: () => boolean = () => true): Promise<LaunchOverridesResult> => {
+    const dispatchCurrent = authority(session.agentId)
+    const current = () => operationCurrent() && dispatchCurrent()
+    session = structuredClone(session)
+    const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
+    if (!current()) return changed
+    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, session.agentId, current)
+    if (!current()) return changed
+    if (!result.ok && (result.unavailable || result.error === 'AGENT_CHANGED')) return result
+    // Saved-API instructions remain available after an ordinary semantic refusal, as before.
+    // A missing dependency or revoked operation must leave these files untouched.
     await prepareInstructionWrites(session.cwd)
+    if (!current()) return changed
     prepareApiTools(session.cwd, session.engine)
-    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, session.agentId)
     if (result.ok && session.externalResume?.request.engine === session.engine) {
       result.overrides.extraArgs.push(...session.externalResume.session?.launchArgs ?? [])
     }

@@ -5,6 +5,7 @@ import { dshRootDir, installedDsh as lookup } from '../dsh/installed.js'
 import { materializeWorkspace } from '../dsh/materialize.js'
 import { forkRuntimeKey, prepareHarnessLaunch } from '../dsh/runtime.js'
 import { dshPreparations, type PrepareDsh } from '../dsh/preparation.js'
+import { prepareInstructionWrites } from '../scm/scmProjects.js'
 
 const detail = (error: unknown) => error instanceof Error ? error.message : String(error)
 
@@ -19,6 +20,9 @@ export function storeLaunchPort(installedDsh: typeof lookup = lookup,
       try {
         return await prepare(workspace, { kind: 'materialize', ...request, package: installed }, async () => {
           try {
+            // Admission to the durable preparation precedes SCM edits too. Core must not open
+            // tracked instruction files for writing while this service is unavailable.
+            await prepareInstructionWrites(workspace)
             const { created, kept, warnings } = await materializeWorkspace(installed, workspace, account, engine)
             return { ok: true as const, created, kept, warnings }
           }
@@ -35,6 +39,9 @@ export function storeLaunchPort(installedDsh: typeof lookup = lookup,
       try {
         return await prepare(workspace, { kind: 'launch', ...request, package: installed }, async () => {
           try {
+            // Admission to the durable preparation precedes SCM edits too. Core must not open
+            // tracked instruction files for writing while this service is unavailable.
+            await prepareInstructionWrites(workspace)
             const sourceKey = forkOf ? forkRuntimeKey({ cwd: workspace, ...forkOf }) : null
             return { ok: true as const, launch: prepareHarnessLaunch(installed, workspace, engine, key, account, sourceKey) }
           } catch (error) { return { ok: false as const, error: 'DSH_RUNTIME_FAILED', detail: detail(error), thrown: String(error) } }

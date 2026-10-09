@@ -18,6 +18,9 @@ import { stopSessionOwner, type SessionOwner } from '../../lib/sessionSearch/ext
 import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import { tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
+import { prepareInstructionWrites } from '../../scm/scmProjects.js'
+
+vi.mock('../../scm/scmProjects.js', async real => ({ ...await real<object>(), prepareInstructionWrites: vi.fn(async () => {}) }))
 
 vi.mock('../../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
 vi.mock('../../dsh/manifest.js', async (real) => ({ ...await real<object>(), dshPinnedPermissionMode: vi.fn(() => null) }))
@@ -184,6 +187,7 @@ describe('creating an agent', () => {
       expect(await create(request({ dsh: 'blender', grid }))).toEqual({ ok: false, error: 'GRID_UNAVAILABLE', detail: 'models is down' })
       expect(materializeWorkspace).not.toHaveBeenCalled()
       expect(preTrustClaudeProject).not.toHaveBeenCalled()
+      expect(prepareInstructionWrites).not.toHaveBeenCalled()
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })
 

@@ -60,6 +60,12 @@ export type LaunchOverridesResult =
   | { ok: true; overrides: LaunchOverrides }
   | { ok: false; error: string; detail: string; unavailable?: string; holdScope?: 'workspace' }
 
+/** A preparation has consulted every required service; committing performs only local writes.
+ * Keep the closure private to this attempt: it contains the current credentials, never a cache. */
+export type LaunchPreparationResult =
+  | { ok: true; commit: () => Promise<LaunchOverridesResult> }
+  | Extract<LaunchOverridesResult, { ok: false }>
+
 export interface LaunchOverridesDeps {
   /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
   machine: (engine: AgentEngine) => GridLaunchMachine
@@ -166,11 +172,30 @@ export async function buildLaunchOverrides(
   engine: AgentEngine,
   source: LaunchSource,
   configKey: string,
+  current: () => boolean = () => true,
 ): Promise<LaunchOverridesResult> {
-  const base = await buildBaseLaunchOverrides(deps, engine, source, configKey)
+  const prepared = await prepareLaunchOverrides(deps, engine, source, configKey, current)
+  return prepared.ok ? prepared.commit() : prepared
+}
+
+/** Ask dependencies before writing a live pane's configuration or installing profile hooks.
+ * A models answer followed by an unavailable Store used to overwrite the old grid files first. */
+export async function prepareLaunchOverrides(
+  deps: LaunchOverridesDeps,
+  engine: AgentEngine,
+  source: LaunchSource,
+  configKey: string,
+  current: () => boolean = () => true,
+): Promise<LaunchPreparationResult> {
+  const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
+  if (!current()) return changed
+  source = structuredClone(source)
+  const machine = { ...deps.machine(engine) }
+  const base = await prepareBaseLaunchOverrides({ ...deps, machine: () => machine }, engine, source, configKey)
+  if (!current()) return changed
   if (!base.ok) return base
-  let overrides = base.overrides
   if (source.dsh && !source.cwd) return { ok: false, error: 'DSH_WORKSPACE_MISSING', detail: `${source.dsh} has no saved workspace` }
+  let dsh: Extract<DshLaunchAnswer, { ok: true }>['launch'] | undefined
   if (source.dsh && source.cwd) {
     let prepared: DshLaunchAnswer | null
     try {
@@ -178,43 +203,51 @@ export async function buildLaunchOverrides(
     } catch (error) {
       return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: String(error) }
     }
+    if (!current()) return changed
     if (!prepared) return { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${source.dsh} is not installed on this machine` }
     if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
       ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}),
       ...(prepared.holdScope ? { holdScope: prepared.holdScope } : {}) }
-    const dsh = prepared.launch
-    // The DSH's variables layer over the grid's or the profile's; `HARNESS_*` are the daemon's own
-    // and a manifest cannot set them (see `dshLaunch`), so nothing here can shadow a grid credential.
-    overrides = {
-      ...overrides,
-      env: { ...overrides.env, ...dsh.env },
-      extraArgs: [...overrides.extraArgs, ...dsh.args],
+    dsh = prepared.launch
+  }
+  let committed = false
+  return { ok: true, commit: async () => {
+    if (!current()) return changed
+    if (committed) return { ok: false, error: 'LAUNCH_PREPARATION_USED', detail: 'Launch preparation must be requested again before another attempt.' }
+    committed = true
+    const written = await base.commit()
+    if (!current()) return changed
+    if (!written.ok) return written
+    let overrides = written.overrides
+    if (dsh) {
+      // The service's harness environment layers over the base exactly as in a fresh create.
+      overrides = { ...overrides, env: { ...overrides.env, ...dsh.env }, extraArgs: [...overrides.extraArgs, ...dsh.args] }
     }
-  }
-  // The workspace's own SCM binding layers last: it is the daemon's, like `HARNESS_*`, and neither a
-  // grid nor a DSH has a say in which workspace the pane is bound to. Nothing for git, so a git row's
-  // overrides are exactly what they were.
-  const scmEnv = scmLaunchEnv(source.scmLaunch)
-  if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
-  // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
-  // engine with a contract could have had it recorded (create refuses the rest, AGENT_UNSUPPORTED),
-  // so the guard is for a row edited by hand — it relaunches as a general session rather than
-  // handing the engine a flag it does not know. The same guard covers an opencode agent created on
-  // v1 and relaunched on v2, whose TUI has no `--agent`: a resumed v2 session keeps the agent it
-  // stored (`session_v2.agent`), so nothing is lost by not naming it.
-  const opencodeMajor = deps.machine(engine).opencodeMajor ?? null
-  if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
-    overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
-  }
-  return { ok: true, overrides: { ...overrides, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
+    // The workspace's own SCM binding layers last: it is the daemon's, like `HARNESS_*`, and neither a
+    // grid nor a DSH has a say in which workspace the pane is bound to. Nothing for git, so a git row's
+    // overrides are exactly what they were.
+    const scmEnv = scmLaunchEnv(source.scmLaunch)
+    if (scmEnv) overrides = { ...overrides, env: { ...overrides.env, ...scmEnv } }
+    // The named agent rides every relaunch, in the same argv slot `agent_create` put it in. Only an
+    // engine with a contract could have had it recorded (create refuses the rest, AGENT_UNSUPPORTED),
+    // so the guard is for a row edited by hand — it relaunches as a general session rather than
+    // handing the engine a flag it does not know. The same guard covers an opencode agent created on
+    // v1 and relaunched on v2, whose TUI has no `--agent`: a resumed v2 session keeps the agent it
+    // stored (`session_v2.agent`), so nothing is lost by not naming it.
+    const opencodeMajor = machine.opencodeMajor ?? null
+    if (source.agent && supportsNamedAgent(engine, opencodeMajor)) {
+      overrides = { ...overrides, extraArgs: [...overrides.extraArgs, ...namedAgentArgs(engine, source.agent, opencodeMajor)] }
+    }
+    return { ok: true, overrides: { ...overrides, clearEnv: [...overrides.clearEnv, ...harnessEnvToClear(overrides.env)] } }
+  } }
 }
 
-async function buildBaseLaunchOverrides(
+async function prepareBaseLaunchOverrides(
   deps: LaunchOverridesDeps,
   engine: AgentEngine,
   source: LaunchSource,
   configKey: string,
-): Promise<LaunchOverridesResult> {
+): Promise<LaunchPreparationResult> {
   // Coming back to the engine's own login undoes TWO things the grid launch set, and they are
   // undone separately because the engine remembers them differently.
   //
@@ -250,44 +283,48 @@ async function buildBaseLaunchOverrides(
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
     const tmux = await tmuxRefusal(deps, engine, built.override)
     if (!tmux.ok) return tmux
-    const env: Record<string, string> = { ...built.launch.env }
-    if (built.launch.configDir) {
-      const { envVar, files, pointAt, links } = built.launch.configDir
-      try {
-        const dir = await deps.writeGridConfigDir(configKey, files, links ?? [])
-        // Pi is handed the directory; OpenCode's OPENCODE_CONFIG wants the file inside it.
-        env[envVar] = pointAt ? join(dir, pointAt) : dir
-      } catch (error) {
-        const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
-        return { ok: false, error: 'GRID_CONFIG_FAILED', detail }
+    return { ok: true, commit: async () => {
+      const env: Record<string, string> = { ...built.launch.env }
+      if (built.launch.configDir) {
+        const { envVar, files, pointAt, links } = built.launch.configDir
+        try {
+          const dir = await deps.writeGridConfigDir(configKey, files, links ?? [])
+          // Pi is handed the directory; OpenCode's OPENCODE_CONFIG wants the file inside it.
+          env[envVar] = pointAt ? join(dir, pointAt) : dir
+        } catch (error) {
+          const detail = `could not write ${engine}'s grid configuration · ${error instanceof Error ? error.message : error}`
+          return { ok: false, error: 'GRID_CONFIG_FAILED', detail }
+        }
       }
-    }
-    // Derived from what this launch actually provides (the config-dir variable included), so an
-    // inherited vendor key never outranks the grid the engine was handed.
-    return {
-      ok: true,
-      overrides: {
-        env,
-        extraArgs: [...built.launch.args],
-        clearEnv: gridConflictingEnvToClear({ env }),
-        gridLaunchRecord: { override: built.override, webSearch: built.launch.webSearch },
-        ...(built.launch.sessionModel ? { sessionModel: built.launch.sessionModel } : {}),
-      },
-    }
+      // Derived from what this launch actually provides (the config-dir variable included), so an
+      // inherited vendor key never outranks the grid the engine was handed.
+      return {
+        ok: true,
+        overrides: {
+          env,
+          extraArgs: [...built.launch.args],
+          clearEnv: gridConflictingEnvToClear({ env }),
+          gridLaunchRecord: { override: built.override, webSearch: built.launch.webSearch },
+          ...(built.launch.sessionModel ? { sessionModel: built.launch.sessionModel } : {}),
+        },
+      }
+    } }
   }
   if (source.codexHome) {
     // A Codex agent on a profile OTHER than this machine's default reads hooks.json from THAT folder,
     // not the one `harness login` installed into — without this it fires no hook at all. Idempotent.
-    deps.installCodexHooks(source.codexHome)
-    return {
-      ok: true,
-      overrides: {
-        env: { ...profileEnvironment(engine, source.codexHome), ...(ownLogin?.env ?? {}) },
-        extraArgs: [...(ownLogin?.extraArgs ?? [])],
-        clearEnv: [],
-      },
-    }
+    const home = source.codexHome
+    return { ok: true, commit: async () => {
+      deps.installCodexHooks(home)
+      return {
+        ok: true,
+        overrides: {
+          env: { ...profileEnvironment(engine, home), ...(ownLogin?.env ?? {}) },
+          extraArgs: [...(ownLogin?.extraArgs ?? [])],
+          clearEnv: [],
+        },
+      }
+    } }
   }
-  if (ownLogin) return { ok: true, overrides: ownLogin }
-  return { ok: true, overrides: noOverrides() }
+  return { ok: true, commit: async () => ({ ok: true, overrides: ownLogin ?? noOverrides() }) }
 }

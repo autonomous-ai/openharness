@@ -161,7 +161,7 @@ export function createAgentRestarter({
     // half, and an agent moved here by a retarget has nothing in the session env at all), or its
     // Codex profile. Refused before anything is killed, so a restart that cannot honour the grid
     // leaves the running process alone.
-    const built = await relaunchOverrides(session)
+    const built = await relaunchOverrides(session, session, current)
     if (!current()) return changed
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail }
 

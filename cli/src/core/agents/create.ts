@@ -125,7 +125,6 @@ export function createAgentCreator({
     // `TmuxBackend.inventory()`): the panes this daemon creates carry its tag, which goes with them into
     // any session the person moves them to.
     const label = buildHarnessSessionLabel(engine)
-    await prepareInstructionWrites(cwd)
     // Prepare the harness workspace, then bind its session context to the selected engine.
     // Missing packages or invalid runtimes refuse the launch before the agent is started.
     let dshEnv: Record<string, string> | undefined
@@ -272,6 +271,7 @@ export function createAgentCreator({
     // answered and refused (`SPAWN_FAILED`) — see createAgentPane.ts. Registration itself is retried
     // there: a stale registry entry from a previous tmux-server generation occasionally collides with
     // a freshly-minted pane id, and that collision clears on its own on the very next pane.
+    await prepareInstructionWrites(cwd)
     prepareApiTools(cwd, engine)
     // Mutually exclusive with a grid (backendSocket.ts refuses the two together): a chosen Codex
     // profile becomes the new session's CODEX_HOME (its session store's variable, lib/engineHomes.ts

@@ -6,7 +6,7 @@ import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.j
 
 interface RestoreLaunchDeps {
   workspaceMissing(cwd: string | null | undefined): { error: string; detail: string } | null
-  relaunchOverrides(entry: RegisteredSession): Promise<LaunchOverridesResult>
+  relaunchOverrides(entry: RegisteredSession, source: RegisteredSession, current: () => boolean): Promise<LaunchOverridesResult>
   downgradedPermission(entry: RegisteredSession): Promise<{ permissionMode?: string | null; bypassPermission?: boolean }>
   prepareSessionResume(entry: RegisteredSession): void
   refreshGridWebSearch(agentId: string, overrides: LaunchOverrides): void
@@ -20,8 +20,9 @@ export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps[
       detail: entry.launch?.state === 'held' ? entry.launch.detail : 'Waiting to verify this external conversation.' }
     const missing = deps.workspaceMissing(entry.cwd)
     if (missing) return missing
-    const built = await deps.relaunchOverrides(entry)
+    const built = await deps.relaunchOverrides(entry, entry, current)
     if (!current()) return { cancelled: true }
+    if (!built.ok && built.error === 'AGENT_CHANGED') return { cancelled: true }
     if (!built.ok) return built.unavailable
       ? { held: built.unavailable, detail: built.detail, holdScope: built.holdScope }
       : { error: built.error, detail: built.detail }

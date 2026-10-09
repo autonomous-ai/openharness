@@ -3,8 +3,10 @@ import { installedDsh } from '../dsh/installed.js'
 import { materializeWorkspace } from '../dsh/materialize.js'
 import { forkRuntimeKey, prepareHarnessLaunch } from '../dsh/runtime.js'
 import type { PrepareDsh } from '../dsh/preparation.js'
+import { prepareInstructionWrites } from '../scm/scmProjects.js'
 import { storeLaunchPort } from './storeLaunch.js'
 
+vi.mock('../scm/scmProjects.js', () => ({ prepareInstructionWrites: vi.fn(async () => {}) }))
 vi.mock('../dsh/installed.js', () => ({ installedDsh: vi.fn(), dshRootDir: () => '/unused' }))
 vi.mock('../dsh/materialize.js', () => ({ materializeWorkspace: vi.fn() }))
 vi.mock('../dsh/runtime.js', () => ({ forkRuntimeKey: vi.fn(() => 'source-runtime'), prepareHarnessLaunch: vi.fn() }))
@@ -19,6 +21,7 @@ describe('the Store owns package preparation', () => {
     const refused = { ok: false, error: 'DSH_NOT_INSTALLED', detail: 'test/draw is not installed on this machine' }
     expect(await port.dshMaterialize(request)).toEqual(refused)
     expect(await port.dshLaunch(request)).toEqual(refused)
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
     expect(materializeWorkspace).not.toHaveBeenCalled()
     expect(prepareHarnessLaunch).not.toHaveBeenCalled()
   })
@@ -36,6 +39,9 @@ describe('the Store owns package preparation', () => {
     expect(forkRuntimeKey).toHaveBeenCalledWith({ cwd: request.workspace, agentId: 'source', dshRuntime: null })
     expect(prepareHarnessLaunch).toHaveBeenLastCalledWith(pkg, request.workspace, request.engine, request.key, request.account, 'source-runtime')
     expect(materializeWorkspace).toHaveBeenCalledOnce()
+    expect(prepareInstructionWrites).toHaveBeenCalledTimes(3)
+    expect(prepareInstructionWrites).toHaveBeenCalledWith(request.workspace)
+    expect(vi.mocked(prepareInstructionWrites).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(materializeWorkspace).mock.invocationCallOrder[0])
   })
   it('returns package errors without bringing down the service, with both historical error forms', async () => {
     const port = storeLaunchPort(() => pkg, run)
@@ -53,6 +59,7 @@ describe('the Store owns package preparation', () => {
     for (const answer of [await port.dshMaterialize(request), await port.dshLaunch(request)]) {
       expect(answer).toEqual({ ok: false, error: 'DSH_UNAVAILABLE', unavailable: 'store', holdScope: 'workspace', detail: 'Previous workspace preparation is unconfirmed' })
     }
+    expect(prepareInstructionWrites).not.toHaveBeenCalled()
     expect(materializeWorkspace).not.toHaveBeenCalled()
     expect(prepareHarnessLaunch).not.toHaveBeenCalled()
   })
