@@ -7,7 +7,7 @@ import { IdentityReadUnavailable } from './identityScan.js'
 export type HomeCatalog = { claude: string[]; codex: string[] }
 export type HomeCatalogRead = { homes: HomeCatalog; text: string | null; version: string | null }
 const MAX_BYTES = 64 * 1024
-const MAX_HOMES = 63 // The default home occupies the remaining slot in the 64-root native pool.
+export const MAX_CATALOG_HOMES = 63 // The default home occupies the remaining slot in the 64-root native pool.
 const stamp = (s: Stats) => `${s.dev}:${s.ino}:${s.mode}:${s.uid}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`
 const unavailable = (reason: string) => new IdentityReadUnavailable(`the saved engine-home catalog ${reason}`)
 const missing = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
@@ -61,7 +61,7 @@ function parse(text: string): HomeCatalog {
     const homes = (value as Record<string, unknown>)[engine]
     if (homes === undefined) continue
     if (!Array.isArray(homes)) throw unavailable('has an invalid home list')
-    if (homes.length > MAX_HOMES) throw new IdentityReadUnavailable('the known session-home limit was reached')
+    if (homes.length > MAX_CATALOG_HOMES) throw new IdentityReadUnavailable('the known session-home limit was reached')
     for (const home of homes) {
       if (typeof home !== 'string' || home.length > 4096 || home.includes('\0') || !isAbsolute(home)) {
         throw unavailable('contains an invalid home')
@@ -115,4 +115,3 @@ export function readHomeCatalog(file: string): HomeCatalogRead {
     }
   }
 }
-

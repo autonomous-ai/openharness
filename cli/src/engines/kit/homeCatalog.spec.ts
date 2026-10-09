@@ -97,8 +97,14 @@ describe('fresh complete native home evidence', () => {
   it.each(['bytes', 'homes', 'path'])('bounds the complete catalog: %s', limit => {
     write(limit === 'bytes' ? '{}'.padEnd(65537, ' ') : { codex: limit === 'homes'
       ? Array.from({ length: 64 }, (_, n) => path(String(n))) : ['/' + 'x'.repeat(4096)] })
+    expect(() => readHomeCatalog(catalog())).toThrow(/limit|oversized|invalid home/)
     expect(() => homes.nativeSessionRoots('codex')).toThrow(/limit|oversized|invalid home/)
     if (limit === 'bytes') expect(fs.openSync).not.toHaveBeenCalled()
+  })
+
+  it('bounds the raw list before deduplicating repeated homes', () => {
+    write({ codex: Array.from({ length: 64 }, () => path('same')) })
+    expect(() => readHomeCatalog(catalog())).toThrow('known session-home limit')
   })
 
   it('holds a catalog that disappears or drops a previously observed home, then recovers', () => {
@@ -109,6 +115,46 @@ describe('fresh complete native home evidence', () => {
     expect(() => homes.nativeSessionRoots('codex')).toThrow('previously observed or unsaved home')
     write({ codex: [path('a'), path('b')] })
     expect(homes.nativeSessionRoots('codex')).toHaveLength(3)
+  })
+
+  it('retains a competing home observed by a valid held read across A -> B -> A recovery', async () => {
+    const own = transcript(path('codex')); transcript(path('b'))
+    write({ codex: [path('a')] })
+    await expect(repair.findResumedTranscript('codex', ID)).resolves.toBe(own)
+    write({ codex: [path('b')] })
+    await expect(repair.findResumedTranscript('codex', ID)).rejects.toThrow('previously observed or unsaved home')
+    write({ codex: [path('a')] })
+    await expect(repair.findResumedTranscript('codex', ID)).rejects.toThrow('previously observed or unsaved home')
+    write({ codex: [path('a'), path('b')] })
+    await expect(repair.findResumedTranscript('codex', ID)).rejects.toThrow('more than one transcript')
+  })
+
+  it('retains a bounded overflow fact when successive valid catalogs reveal too many homes', () => {
+    const first = Array.from({ length: 63 }, (_, n) => path(`observed-${n}`))
+    write({ codex: first }); expect(homes.nativeSessionRoots('codex')).toHaveLength(64)
+    write({ codex: [path('one-more')] })
+    expect(() => homes.nativeSessionRoots('codex')).toThrow('known session-home limit')
+    write({ codex: first })
+    expect(() => homes.nativeSessionRoots('codex')).toThrow('known session-home limit')
+  })
+
+  it('holds an oversized legacy list before copying or iterating it', () => {
+    const legacy = Array.from({ length: 64 }, (_, n) => path(`legacy-${n}`))
+    write({ codex: legacy }); homes.movedHomes('codex')
+    write({ codex: [] })
+    let visited = false
+    const iterator = Array.prototype[Symbol.iterator]
+    Array.prototype[Symbol.iterator] = function (this: unknown[]) {
+      if (this.length === 64 && this[0] === legacy[0]) {
+        visited = true
+        throw new Error('oversized legacy list must not be visited')
+      }
+      return iterator.call(this)
+    }
+    try {
+      expect(() => homes.nativeSessionRoots('codex')).toThrow('known session-home limit')
+      expect(visited).toBe(false)
+    } finally { Array.prototype[Symbol.iterator] = iterator }
   })
 
   it('does not exclude a known competitor after legacy adoption failed to persist', async () => {
@@ -173,12 +219,17 @@ describe('fresh complete native home evidence', () => {
     expect(fs.closeSync).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['append', 'rename'])('rejects a catalog changed by %s during its descriptor read', kind => {
+  it.each(['append', 'rename', 'ancestor replacement'])('rejects a catalog changed by %s during its descriptor read', kind => {
     write({ codex: [path('a')] })
     vi.mocked(fs.readSync).mockImplementationOnce((fd, buffer, options) => {
       const count = actual.readSync(fd, buffer, options)
       if (kind === 'append') actual.appendFileSync(catalog(), ' ')
-      else { actual.writeFileSync(path('replacement'), '{}'); actual.renameSync(path('replacement'), catalog()) }
+      else if (kind === 'rename') { actual.writeFileSync(path('replacement'), '{}'); actual.renameSync(path('replacement'), catalog()) }
+      else {
+        // Moving the ordinary parent preserves the opened file's inode/ctime. Only the
+        // pathname fence can notice that a different catalog now occupies its old path.
+        actual.renameSync(path('data'), path('saved-data')); write({})
+      }
       return count
     })
     expect(() => readHomeCatalog(catalog())).toThrow('changed during its read')
