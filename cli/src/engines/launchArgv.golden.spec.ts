@@ -409,12 +409,12 @@ async function overridesCases(): Promise<Record<string, unknown>> {
       tmuxSupportsSessionEnv: async () => true,
       installCodexHooks: (home) => { calls.push(`installCodexHooks ${home}`) },
       readCodexConfig: (path) => { calls.push(`readCodexConfig ${path}`); return config },
-      dshLaunch: (dsh, workspace, eng, key) => {
+      dshLaunch: async (dsh, workspace, eng, key) => {
         calls.push(`dshLaunch ${dsh} ${workspace} ${eng} ${key}`)
         // As dsh/runtime.ts prepareHarnessLaunch ends: the package's argv, then the engine's context and env flags.
         const launchEnv = { HARNESS_DSH: dsh, HARNESS_WORKSPACE: workspace, HARNESS_CONTEXT_FILE: `${workspace}/.harness/runtime/${key}/CONTEXT.md`, STUDIO_MODE: 'pro "x"' }
         const adapter = harnessAdapter(eng)
-        return { env: launchEnv, args: ['--studio', ...(adapter.contextArgs?.(launchEnv.HARNESS_CONTEXT_FILE) ?? []), ...(adapter.envArgs?.(launchEnv) ?? [])] }
+        return { ok: true, launch: { env: launchEnv, args: ['--studio', ...(adapter.contextArgs?.(launchEnv.HARNESS_CONTEXT_FILE) ?? []), ...(adapter.envArgs?.(launchEnv) ?? [])] } }
       },
       ...deps,
     }, engine, source, 'agent-0001')

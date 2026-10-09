@@ -150,9 +150,11 @@ export function createAgentRetargeter({
     if (!capture) return { ok: false, error: 'TMUX_FAILED' }
     if (!(await readScreen(session, capture))?.pane.idle) return { ok: false, error: 'AGENT_BUSY' }
     // Nothing may type into the pane while it is being replaced.
-    if (restartJobs.busy(session.agentId)) return { ok: false, error: 'AGENT_BUSY' }
+    if (purgeBusy(session.agentId) || restartJobs.busy(session.agentId)) return { ok: false, error: 'AGENT_BUSY' }
     const release = acquireTerminalControl(session.agentId)
     if (!release) return { ok: false, error: 'AGENT_BUSY' }
+    // The old restore watcher stays cancelled after this control pin is released.
+    restartJobs.cancel(session.agentId)
     // The grid's env and argv, config directory written (keyed on the agent, so moving it between
     // grids rewrites one directory) — or nothing at all for a move back to the engine's own login
     // (clearing uses set-environment, which every supported tmux has). Built from the override the

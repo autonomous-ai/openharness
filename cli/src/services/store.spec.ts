@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DshInstallProgress } from '../dsh/install.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { STORE_REQUESTS, startStore, type StoreDeps } from './store.js'
+import { storeLaunchPort } from './storeLaunch.js'
+import { emptyPorts } from '../core/api.js'
+import { STORE_REQUESTS, startStore, startStoreInCore, type StoreDeps } from './store.js'
+
+vi.mock('./storeLaunch.js', () => ({ storeLaunchPort: vi.fn() }))
 
 const ASKER = { local: true, owner: true }
 
@@ -22,6 +26,36 @@ describe('the store service', () => {
   it('prepares the release-owned harnesses before answering requests', () => {
     const { deps } = setup()
     expect(deps.prepare).toHaveBeenCalledOnce()
+  })
+  it('installs the same launch port in the explicit inline mode', () => {
+    const ports = emptyPorts()
+    expect(Object.keys(startStoreInCore(fakeCore(), ports)).sort()).toEqual([...STORE_REQUESTS].sort())
+    expect(ports.store).toMatchObject({ dshMaterialize: expect.any(Function), dshLaunch: expect.any(Function) })
+  })
+  it('wakes waiting workspaces on every confirmed inline outcome, including a released failure', async () => {
+    const request = { dsh: 'test/package', workspace: '/unused', engine: 'claude' as const, key: 'agent', account: {} }
+    const confirmed = { ok: false as const, error: 'DSH_MATERIALIZE_FAILED', detail: 'init failed' }
+    const uncertain = { ...confirmed, unavailable: 'store' as const }
+    const launch = { dshMaterialize: vi.fn(async () => confirmed), dshLaunch: vi.fn(async () => confirmed) }
+    vi.mocked(storeLaunchPort).mockReturnValue(launch)
+    const prepared = vi.fn()
+    const ports = emptyPorts()
+    for (const notify of [undefined, prepared]) {
+      startStoreInCore(fakeCore(), ports, notify)
+      await ports.store!.dshMaterialize(request)
+      await ports.store!.dshLaunch(request)
+    }
+    expect(prepared).toHaveBeenCalledTimes(2)
+    launch.dshMaterialize.mockResolvedValueOnce(uncertain)
+    launch.dshLaunch.mockResolvedValueOnce(uncertain)
+    await ports.store!.dshMaterialize(request)
+    await ports.store!.dshLaunch(request)
+    expect(prepared).toHaveBeenCalledTimes(2)
+    launch.dshMaterialize.mockResolvedValueOnce({ ok: true, created: [], kept: [], warnings: [] } as never)
+    launch.dshLaunch.mockResolvedValueOnce({ ok: true, launch: { env: {}, args: [] } } as never)
+    await ports.store!.dshMaterialize(request)
+    await ports.store!.dshLaunch(request)
+    expect(prepared).toHaveBeenCalledTimes(4)
   })
   it('answers exactly the requests it declares', () => {
     expect(Object.keys(setup().requests).sort()).toEqual([...STORE_REQUESTS].sort())

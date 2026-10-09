@@ -207,8 +207,8 @@ const EDGE: RegExp[] = [
   // The recaps' own parts: the mirror that cuts each turn's recap and card, and the notification policy it
   // shares with the questions the core tells it of (services/recaps.ts).
   /^lib\/(commander|agentNotifications)\.ts$/,
-  // The Store's and the viewers' parts of dsh; the launch path (installed, manifest, launch, runtime, …) is the core's.
-  /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts)\.ts$/,
+  // Package execution belongs to the Store; core retains the installed index and launch contracts.
+  /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts|runtime|materialize|shell|preparation)\.ts$/,
   // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.
   /^lib\/sessionSearch\/(?!external\.ts$|externals\/)/,
   // Downloading builds: the updater's, in a process the master runs (services/updaterProcess.ts). The core

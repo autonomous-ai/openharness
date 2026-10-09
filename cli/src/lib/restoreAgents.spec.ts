@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentLaunch, ProcessIdentity, RegisteredSession } from './registry.js'
+import { registry as realRegistry, type AgentLaunch, type ProcessIdentity, type RegisteredSession } from './registry.js'
 import type { TerminalRuntimeRef, TmuxRuntimeRef } from './terminalTypes.js'
 import { GRID_CREDENTIAL_REQUIRED, heldLaunch, restoreAgents, tmuxSurvey, type RestoreAgentsDeps, type RestoreLaunch, type RestoreLaunchResult } from './restoreAgents.js'
 import type { GridLaunchOverride } from './gridLaunch.js'
+import { createStopAgentService, type StopAgentServiceDeps } from './stopAgentService.js'
+import { AgentRestartCoordinator } from './restartAgent.js'
+import { createHeldLaunches } from '../core/agents/heldLaunches.js'
+import { createPaneSwap } from '../core/agents/swap.js'
+import { createPaneOperations } from '../core/agents/paneOperations.js'
+
+vi.mock('./captureResumeIdentity.js', () => ({ captureResumeIdentity: async (entry: RegisteredSession) => entry }))
 
 const GRID: GridLaunchOverride = {
   networkId: 'grid-abc',
@@ -119,17 +126,19 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
       }
       return launch
     },
-    createPane: async (entry, launch) => {
+    createPane: async (entry, launch, control) => {
       note(`createPane:${entry.agentId}`)
       h.launched.push({ agentId: entry.agentId, launch })
       h.paneCreates++
       if (opts.failCreate) return { ok: false, reason: 'tmux said no' }
+      control?.onDispatch?.()
       return { ok: true, runtime: { backend: 'tmux', paneId: h.nextPane.shift() ?? '%99' } }
     },
-    respawn: async (runtime, launch) => {
+    respawn: async (runtime, launch, control) => {
       note(`respawn:${runtime.paneId}:${launch.argv.join(' ')}`)
       h.launched.push({ agentId: 'respawn', launch })
       h.respawns++
+      control?.onDispatch?.()
       return { ok: true }
     },
     probeProcess: async (runtime) => {
@@ -156,6 +165,232 @@ function harness(rows: RegisteredSession[], opts: { livePanes?: string[]; aliveP
  *  hint, so "settled" means at least `watches` releases and the LAST one came from a finally. */
 const settled = (h: Harness, watches: number, successes = 0) =>
   vi.waitFor(() => { expect(h.released.length).toBe(watches + successes) })
+
+describe('restore ownership across asynchronous work', () => {
+  const deferred = <T>() => {
+    let resolve!: (value: T) => void
+    return { promise: new Promise<T>(done => { resolve = done }), resolve }
+  }
+  const held = () => row({ launch: heldLaunch('store'), dsh: 'test/package' })
+
+  it('Stop beginning during Store preparation cancels restore before Stop removes the row', async () => {
+    const h = harness([held()], { alivePanes: ['%3'] })
+    const prepared = deferred<RestoreLaunchResult>()
+    const saving = deferred<void>()
+    const build = vi.fn(() => prepared.promise)
+    h.deps.buildLaunch = build
+    h.deps.only = new Set(['agent-a'])
+    const stopJobs = new Map<string, Promise<void>>()
+    h.deps.cancelled = id => stopJobs.has(id)
+    const stop = createStopAgentService({
+      registry: { resolve: (id: string) => h.rows.get(id) }, stopJobs,
+      restartJobs: new AgentRestartCoordinator(), stoppedAgents: { save: vi.fn() },
+    } as unknown as StopAgentServiceDeps)
+    const restoring = restoreAgents(h.deps)
+    await vi.waitFor(() => expect(build).toHaveBeenCalledOnce())
+    const checkpoint = vi.fn(async () => { await saving.promise; throw new Error('test checkpoint cancelled') })
+    const stopping = stop('agent-a', { checkpoint })
+    const ended = expect(stopping).rejects.toThrow('test checkpoint cancelled')
+    await vi.waitFor(() => expect(checkpoint).toHaveBeenCalledOnce())
+    expect(h.rows.get('agent-a')?.launch?.state).toBe('held')
+    prepared.resolve({ argv: ['must-not-launch'] })
+    expect((await restoring).restored).toEqual([])
+    expect(h.respawns).toBe(0)
+    saving.resolve()
+    await ended
+  })
+
+  it('a boot watch keeps the same epoch after pane-swap wiring is installed', async () => {
+    const h = harness([row()])
+    const restartJobs = new AgentRestartCoordinator()
+    const probe = deferred<ProcessIdentity | null>()
+    h.deps.revision = id => restartJobs.revision(id)
+    h.deps.probeProcess = () => probe.promise
+    await restoreAgents(h.deps)
+    const swap = createPaneSwap({ restartJobs, byAgent: h.deps.registry.byAgent, tmuxBackend: null,
+      prepareSessionResume: () => {}, keepAbandonedConversation: () => {} })
+    expect(swap.restartJobs).toBe(restartJobs)
+    probe.resolve(identity(8))
+    await settled(h, 1, 1)
+    expect(h.rows.get('agent-a')?.processIdentity).toEqual(identity(8))
+  })
+
+  it('a completed retarget invalidates the old watch even after its pin is released', async () => {
+    const h = harness([row()], { settleMs: 10_000 })
+    const jobs = new AgentRestartCoordinator()
+    const sleeping = deferred<void>()
+    const sleep = vi.fn(() => sleeping.promise)
+    let pinned = false
+    h.deps.revision = id => jobs.revision(id)
+    h.deps.cancelled = () => pinned
+    h.deps.sleep = sleep
+    h.probes.set('%0', [identity(8)])
+    h.states.set('%0', ['gone'])
+    await restoreAgents(h.deps)
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalledOnce())
+    pinned = true
+    jobs.cancel('agent-a')
+    pinned = false
+    sleeping.resolve()
+    await settled(h, 1)
+    expect(h.respawns).toBe(1)
+    expect(h.calls.some(call => call.startsWith('unbind:'))).toBe(false)
+  })
+
+  it('the held retry still runs inside its own restart coordinator job', async () => {
+    const h = harness([held()], { alivePanes: ['%3'] })
+    const jobs = new AgentRestartCoordinator()
+    h.deps.revision = id => jobs.revision(id)
+    h.deps.cancelled = () => false
+    h.probes.set('%3', [identity(7)])
+    const retry = createHeldLaunches({ registry: h.deps.registry, log: vi.fn(),
+      restore: only => restoreAgents({ ...h.deps, only }) })
+    await retry.boot(async () => {})
+    expect(await jobs.run('agent-a', async () => {
+      expect(jobs.busy('agent-a')).toBe(true)
+      return retry.restartHeld('agent-a')!
+    })).toMatchObject({ ok: true, resumed: true })
+    await settled(h, 1, 1)
+  })
+
+  it.each(['allocation', 'respawn'] as const)('Stop joins only the dispatched %s and captures its committed pane', async phase => {
+    const h = harness([held()], { alivePanes: phase === 'respawn' ? ['%3'] : [] })
+    const operations = createPaneOperations()
+    const stopJobs = new Map<string, Promise<void>>()
+    h.deps.paneOperation = operations.run
+    h.deps.paneAllocations = operations.runMany
+    h.deps.paneBusy = operations.busy
+    h.deps.cancelled = id => stopJobs.has(id)
+    h.deps.only = new Set(['agent-a'])
+    h.deps.waitingLaunch = () => ({ argv: ['wait'] })
+    const reply = deferred<void>()
+    const dispatched = vi.fn()
+    const mark = vi.fn()
+    h.deps.engineStarted = mark
+    if (phase === 'allocation') h.deps.createPane = async (_entry, launch, control) => {
+      expect(launch.argv).toEqual(['wait'])
+      expect(control?.current?.()).toBe(true)
+      dispatched()
+      await reply.promise
+      return { ok: true, runtime: { backend: 'tmux', paneId: '%10' } }
+    }
+    else h.deps.respawn = async (_runtime, _launch, control) => {
+      expect(operations.busy('agent-a')).toBe(true)
+      expect(control?.current?.()).toBe(true)
+      control?.onDispatch?.()
+      expect(mark).toHaveBeenCalledWith('session-a')
+      expect(h.calls).toContain('hold:tmux\u0000%3')
+      dispatched()
+      await reply.promise
+      return { ok: true }
+    }
+    const stop = createStopAgentService({
+      registry: { resolve: (id: string) => h.rows.get(id) }, stopJobs, settlePane: operations.settle,
+      restartJobs: new AgentRestartCoordinator(), stoppedAgents: { save: vi.fn() },
+    } as unknown as StopAgentServiceDeps)
+    const restoring = restoreAgents(h.deps)
+    await vi.waitFor(() => expect(dispatched).toHaveBeenCalledOnce())
+    const checkpoint = vi.fn(async (entry: RegisteredSession) => {
+      expect(entry.runtimes).toEqual([{ backend: 'tmux', paneId: phase === 'allocation' ? '%10' : '%3' }])
+      throw new Error('test checkpoint cancelled')
+    })
+    const ended = expect(stop('agent-a', { checkpoint })).rejects.toThrow('test checkpoint cancelled')
+    await Promise.resolve()
+    expect(checkpoint).not.toHaveBeenCalled()
+    reply.resolve()
+    await restoring
+    await ended
+    if (phase === 'allocation') {
+      expect(h.respawns).toBe(0)
+      expect(mark).not.toHaveBeenCalled()
+    }
+  })
+
+  it('an old watcher cannot release a newer route hold or undo a competing lifecycle generation', async () => {
+    const h = harness([row()])
+    const jobs = new AgentRestartCoordinator()
+    h.deps.revision = id => jobs.revision(id)
+    const probe = deferred<ProcessIdentity | null>()
+    const probing = vi.fn(() => probe.promise)
+    h.deps.probeProcess = probing
+    let generation = 0
+    let held = false
+    const releases: number[] = []
+    h.deps.holdRoute = () => {
+      const own = ++generation
+      held = true
+      return () => { releases.push(own); if (own === generation) held = false }
+    }
+    await restoreAgents(h.deps)
+    await vi.waitFor(() => expect(probing).toHaveBeenCalledOnce())
+    h.deps.holdRoute('tmux\u0000%0', 1000)
+    await jobs.run('agent-a', async () => ({ ok: false, error: 'new restart' }))
+    probe.resolve(identity(7))
+    await vi.waitFor(() => expect(releases).toEqual([1]))
+    expect(held).toBe(true)
+    expect(h.calls.some(call => call.startsWith('updateIdentity'))).toBe(false)
+    expect(h.respawns).toBe(1)
+  })
+
+  it.each(['create', 'respawn', 'reason'] as const)('a replacement during awaited pane %s is never overwritten', async operation => {
+    const h = harness([held()], { alivePanes: operation === 'create' ? [] : ['%3'] })
+    h.deps.only = new Set(['agent-a'])
+    const pending = deferred<void>()
+    const waiting = vi.fn(async () => { await pending.promise })
+    h.deps.engineStarted = vi.fn()
+    if (operation === 'create') h.deps.createPane = async () => { await waiting(); return { ok: true, runtime: { backend: 'tmux', paneId: '%new' } } }
+    else h.deps.respawn = async () => { await waiting(); return { ok: true } }
+    if (operation === 'reason') {
+      h.deps.waitingLaunch = (_entry, launch) => ({ argv: ['wait', launch.detail] })
+      h.deps.buildLaunch = async () => ({ held: 'store', detail: 'Review unconfirmed initialization', holdScope: 'workspace' })
+    }
+    const result = restoreAgents(h.deps)
+    await vi.waitFor(() => expect(waiting).toHaveBeenCalledOnce())
+    const replacement = row({ sessionId: 'replacement', launch: { state: 'ready' } })
+    h.rows.set('agent-a', replacement)
+    pending.resolve()
+    expect(await result).toMatchObject({ restored: [], held: [], failed: [] })
+    expect(h.rows.get('agent-a')).toEqual(replacement)
+    expect(h.deps.engineStarted).not.toHaveBeenCalled()
+    expect(h.calls.some(call => /updateRuntimes|setLaunch/.test(call))).toBe(false)
+  })
+
+  it.each([false, true])('fresh fallback preserves the conversation and exact held reason: terminal %s', async terminalHost => {
+    const h = harness([row({ terminalHost })])
+    h.deps.keepAbandoned = vi.fn()
+    const build = h.deps.buildLaunch
+    h.deps.buildLaunch = (entry, opts) => opts.resumeSessionId ? build(entry, opts)
+      : Promise.resolve({ held: 'store', detail: 'Workspace preparation is unconfirmed; review required.', holdScope: 'workspace' })
+    h.deps.waitingLaunch = (_entry, launch) => ({ argv: ['wait', launch.detail] })
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    await settled(h, 1)
+    expect(h.rows.get('agent-a')).toMatchObject({ sessionId: 'session-a', engine: 'claude',
+      launch: { state: 'held', detail: 'Workspace preparation is unconfirmed; review required.' } })
+    expect(h.calls).toContain('respawn:%0:wait Workspace preparation is unconfirmed; review required.')
+    expect(h.deps.keepAbandoned).not.toHaveBeenCalled()
+    expect(h.calls.some(call => /unbind|releaseEngine|inheritName/.test(call))).toBe(false)
+  })
+
+  it.each([false, true])('fresh fallback cannot respawn or archive after replacement during preparation: terminal %s', async terminalHost => {
+    const h = harness([row({ terminalHost })])
+    h.deps.keepAbandoned = vi.fn()
+    const pending = deferred<RestoreLaunchResult>()
+    const build = h.deps.buildLaunch
+    const fresh = vi.fn(() => pending.promise)
+    h.deps.buildLaunch = (entry, opts) => opts.resumeSessionId ? build(entry, opts) : fresh()
+    h.states.set('%0', [{ dead: true }])
+    await restoreAgents(h.deps)
+    await vi.waitFor(() => expect(fresh).toHaveBeenCalledOnce())
+    const replacement = row({ sessionId: 'replacement' })
+    h.rows.set('agent-a', replacement)
+    pending.resolve({ argv: ['stale'] })
+    await settled(h, 1)
+    expect(h.rows.get('agent-a')).toEqual(replacement)
+    expect(h.respawns).toBe(1)
+    expect(h.deps.keepAbandoned).not.toHaveBeenCalled()
+  })
+})
 
 describe('restoreAgents — a survey that could not tell', () => {
   it('asks a probe that could not answer again, and judges the row by the answer it then gives', async () => {
@@ -192,6 +427,23 @@ describe('restoreAgents — a survey that could not tell', () => {
     expect(h.calls.filter((call) => /releaseEngine|createPane/.test(call))).toEqual([])
   })
 
+  it('each held restore reads a fresh tmux inventory, preserving its pane until it actually disappears', async () => {
+    const h = harness([row({ launch: heldLaunch('store') })])
+    let panes: Array<{ tmuxPane: string }> = []
+    const list = vi.fn(async () => ({ ok: true as const, panes }))
+    h.deps.survey = () => tmuxSurvey(list, async () => ({ ok: false, unknown: false }))
+    h.deps.only = new Set(['agent-a'])
+    h.deps.buildLaunch = async () => ({ held: 'store' })
+    await restoreAgents(h.deps)
+    panes = [{ tmuxPane: '%0' }]
+    await restoreAgents(h.deps)
+    expect(h.paneCreates).toBe(1)
+    panes = []
+    await restoreAgents(h.deps)
+    expect(h.paneCreates).toBe(2)
+    expect(list).toHaveBeenCalledTimes(3)
+  })
+
   it('the tmux survey reads one pane listing, again only after a read that failed', async () => {
     const listings: Array<{ ok: true; panes: Array<{ tmuxPane: string }> } | { ok: false }> = [
       { ok: false }, { ok: true, panes: [{ tmuxPane: '%3' }] },
@@ -219,17 +471,14 @@ describe('restoreAgents — which agents get a pane back', () => {
 
     expect(summary).toEqual({ restored: ['agent-a'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
-    // Every registry write of phase 1 happens inside the one transaction, in this order.
-    expect(h.calls.slice(0, 5)).toEqual([
-      'clearIdentity:agent-a@tx',
-      'createPane:agent-a@tx',
-      'hold:tmux\u0000%0@tx',
-      'updateRuntimes:agent-a:%0@tx',
-      'setLaunch:agent-a:starting@tx',
+    // Waiting shell allocation is outside the atomic route commit; engine dispatch follows it.
+    expect(h.calls.slice(0, 7)).toEqual([
+      'createPane:agent-a', 'updateRuntimes:agent-a:%0@tx', 'setLaunch:agent-a:held@tx',
+      'clearIdentity:agent-a', 'hold:tmux\u0000%0', 'respawn:%0:claude --resume session-a', 'setLaunch:agent-a:starting',
     ])
     await settled(h, 1, 1)
     // The route is released BEFORE the hint so the pass it triggers sees the pane again.
-    expect(h.calls.slice(5)).toEqual([
+    expect(h.calls.slice(7)).toEqual([
       'updateIdentity:agent-a:500',
       'clearRemainOnExit:%0',
       'release:tmux\u0000%0',
@@ -250,7 +499,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     await settled(h, 1, 1)
   })
 
-  it('says a rebuilt pane runs a new engine on its conversation, and only once the pane is up', async () => {
+  it('marks a new engine at dispatch, before it can attach, and never for a refused creation', async () => {
     const h = harness([row(), row({ agentId: 'agent-b', sessionId: 'session-b', tmuxPane: '%1' })])
     h.probes.set('%0', [null, identity(500)])
     h.probes.set('%1', [null, identity(501)])
@@ -258,7 +507,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     let panes = 0
     const createPane = h.deps.createPane
     // The second pane cannot be opened: its conversation keeps whatever engine it had.
-    const summary = await restoreAgents({ ...h.deps, engineStarted, createPane: async (entry, launch) => (++panes === 2 ? { ok: false, reason: 'no room' } : createPane(entry, launch)) })
+    const summary = await restoreAgents({ ...h.deps, engineStarted, createPane: async (entry, launch, control) => (++panes === 2 ? { ok: false, reason: 'no room' } : createPane(entry, launch, control)) })
     expect(summary.restored).toEqual(['agent-a'])
     expect(engineStarted.mock.calls).toEqual([['session-a']])
     await settled(h, 1, 1)
@@ -296,7 +545,7 @@ describe('restoreAgents — which agents get a pane back', () => {
     h.probes.set('%0', [identity(7)])
     const summary = await restoreAgents(h.deps)
     expect(summary).toEqual({ restored: ['gridded'], skipped: [], failed: [], held: [], unsurveyed: [] })
-    expect(h.launched).toEqual([{ agentId: 'gridded', launch: { argv: ['claude', '--resume', 'session-a', '--grid', 'grid-abc'], env: { GRID_API_KEY: 'gridkey-abc123' } } }])
+    expect(h.launched).toEqual([{ agentId: 'gridded', launch: { argv: [] } }, { agentId: 'respawn', launch: { argv: ['claude', '--resume', 'session-a', '--grid', 'grid-abc'], env: { GRID_API_KEY: 'gridkey-abc123' } } }])
     await settled(h, 1, 1)
   })
 
@@ -306,8 +555,8 @@ describe('restoreAgents — which agents get a pane back', () => {
     h.probes.set('%0', [null, identity(8)])
     await restoreAgents(h.deps)
     await settled(h, 1, 1)
-    expect(h.launched.map((l) => l.launch.env)).toEqual([{ GRID_API_KEY: 'gridkey-abc123' }, { GRID_API_KEY: 'gridkey-abc123' }])
-    expect(h.launched[1].launch.argv).toEqual(['claude', '--grid', 'grid-abc'])
+    expect(h.launched.slice(1).map((l) => l.launch.env)).toEqual([{ GRID_API_KEY: 'gridkey-abc123' }, { GRID_API_KEY: 'gridkey-abc123' }])
+    expect(h.launched[2].launch.argv).toEqual(['claude', '--grid', 'grid-abc'])
   })
 
   it('does not relaunch a grid agent whose credential was never persisted, and marks it so', async () => {
@@ -325,15 +574,17 @@ describe('restoreAgents — which agents get a pane back', () => {
     const h = harness([row({ agentId: 'gridded', grid: { baseUrl: GRID.baseUrl, model: null }, gridLaunch: GRID })], { refuseLaunch: true })
     const summary = await restoreAgents(h.deps)
     expect(summary.failed).toEqual([{ agentId: 'gridded', reason: 'no way to point it at a grid' }])
-    expect(h.paneCreates).toBe(0)
-    expect(h.calls).toEqual(['clearIdentity:gridded@tx', 'setLaunch:gridded:failed:GRID_ENGINE_UNSUPPORTED@tx'])
+    expect(h.paneCreates).toBe(1)
+    expect(h.respawns).toBe(0)
+    expect(h.launched[0].launch.argv).toEqual([])
+    expect(h.calls.at(-1)).toBe('setLaunch:gridded:failed:GRID_ENGINE_UNSUPPORTED')
   })
 
   it('a Codex profile agent comes back under its own CODEX_HOME', async () => {
     const h = harness([row({ agentId: 'profiled', engine: 'codex', codexHome: '/home/u/.codex-work' })])
     h.probes.set('%0', [identity(9)])
     await restoreAgents(h.deps)
-    expect(h.launched[0].launch.env).toEqual({ CODEX_HOME: '/home/u/.codex-work' })
+    expect(h.launched[1].launch.env).toEqual({ CODEX_HOME: '/home/u/.codex-work' })
     await settled(h, 1, 1)
   })
 
@@ -429,6 +680,57 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect(h.rows.get('second')?.launch).toEqual(HELD)
   })
 
+  it('asks a failed Store only once when each harness also needs models', async () => {
+    const h = harness([gridRow('first', { launch: HELD, dsh: 'test/draw' }), gridRow('second', { launch: HELD, dsh: 'test/draw' })])
+    withModels(h)
+    h.deps.needs = () => ['models', 'store']
+    const asks: string[] = []
+    h.deps.buildLaunch = async entry => { asks.push(entry.agentId); return { held: 'store' } }
+    const summary = await restoreAgents(h.deps)
+    expect(asks).toEqual(['first'])
+    expect(summary.held).toEqual(['first', 'second'])
+    expect(summary.failed).toEqual([])
+    expect(h.rows.get('first')?.launch).toEqual(heldLaunch('store'))
+    expect(h.rows.get('second')?.launch).toEqual(heldLaunch('store'))
+  })
+
+  it.each(['removed', 'stopped', 'moved', 'rebound'] as const)('a held restore cannot undo a session %s while preparation was in flight', async change => {
+    const entry = gridRow('gridded', { launch: HELD })
+    const h = harness([entry], { alivePanes: ['%47'] })
+    withModels(h)
+    h.deps.only = new Set(['gridded'])
+    h.deps.buildLaunch = async () => {
+      if (change === 'removed') h.rows.delete('gridded')
+      else {
+        const row = h.rows.get('gridded')!
+        h.rows.set('gridded', { ...row, ...(change === 'stopped' ? { launch: undefined } : change === 'rebound'
+          ? { sessionId: 'new-session' } : { runtimes: [{ backend: 'tmux', paneId: '%99' }], primaryRuntimeKey: 'tmux\u0000%99' }) })
+      }
+      return { argv: ['must-not-run'] }
+    }
+    const summary = await restoreAgents(h.deps)
+    expect(summary.restored).toEqual([])
+    expect(h.calls.filter(call => call.startsWith('respawn:'))).toEqual([])
+    expect(h.paneCreates).toBe(0)
+  })
+
+  it('keeps an unconfirmed workspace held with its exact reason while other workspaces can launch', async () => {
+    const h = harness([gridRow('first', { launch: HELD }), gridRow('second', { launch: HELD })], { alivePanes: ['%45', '%46'] })
+    withModels(h)
+    h.deps.only = new Set(['first', 'second'])
+    const original = h.deps.buildLaunch
+    h.deps.buildLaunch = async (entry, opts) => entry.agentId === 'first'
+      ? { held: 'store', holdScope: 'workspace', detail: 'Workspace preparation is unconfirmed; review required.' }
+      : original(entry, opts)
+    h.probes.set('%46', [identity(8)])
+    const summary = await restoreAgents(h.deps)
+    expect(summary.held).toEqual(['first'])
+    expect(summary.restored).toEqual(['second'])
+    expect(h.rows.get('first')?.launch).toMatchObject({ state: 'held', service: 'store', detail: 'Workspace preparation is unconfirmed; review required.' })
+    expect(h.calls).toContain('respawn:%45:wait Workspace preparation is unconfirmed; review required.')
+    await settled(h, 1, 1)
+  })
+
   it('never fails or skips a held agent: the next restore holds it again, its pane gone with a reboot', async () => {
     const h = harness([gridRow('gridded', { launch: HELD, resumeOnly: true })])
     withModels(h)
@@ -473,7 +775,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect(h.launches).toEqual([{ agentId: 'gridded' }])
   })
 
-  it('holds an agent whose fresh relaunch needs a service that cannot be asked, in its pane, never failed', async () => {
+  it.each([false, true])('holds an agent whose service and waiting pane are unavailable (throwing reply %s)', async throws => {
     const h = harness([gridRow('gridded')])
     withModels(h, [undefined as never, 'held'])
     h.probes.set('%0', [null, null])
@@ -482,15 +784,25 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     await settled(h, 1)
     expect(h.calls).toContain(`respawn:%0:wait ${HELD.state === 'held' ? HELD.detail : ''}`)
     expect(h.rows.get('gridded')?.launch).toEqual(HELD)
-    // A waiting pane that cannot be had is the one failure left.
+    // A waiting pane that cannot be had preserves the conversation and both reasons.
     const stuck = harness([gridRow('gridded')])
     withModels(stuck, [undefined as never, 'held'])
-    stuck.deps.respawn = async () => ({ ok: false })
+    const respawn = stuck.deps.respawn
+    let dispatched = false
+    stuck.deps.respawn = async (...args) => { if (dispatched) { if (throws) throw new Error('test uncertain reply'); return { ok: false } }; dispatched = true; return respawn(...args) }
     stuck.probes.set('%0', [null, null])
     stuck.states.set('%0', [{ dead: true }])
     await restoreAgents(stuck.deps)
     await settled(stuck, 1)
-    expect(stuck.rows.get('gridded')?.launch).toMatchObject({ state: 'failed', error: 'ENGINE_DID_NOT_START', detail: expect.stringContaining('unknown reason') })
+    expect(stuck.rows.get('gridded')).toMatchObject({ sessionId: 'session-gridded', launch: { state: 'held', service: 'models', detail: expect.stringContaining(throws ? 'test uncertain reply' : 'unknown reason') } })
+    expect(stuck.calls.some(call => /unbind:|inheritName:/.test(call))).toBe(false)
+    // Even a missing waiting shell is recoverable once preparation can be asked again.
+    stuck.deps.only = new Set(['gridded'])
+    stuck.deps.respawn = respawn
+    stuck.probes.set('%1', [identity(12)])
+    expect((await restoreAgents(stuck.deps)).restored).toEqual(['gridded'])
+    await settled(stuck, 2, 1)
+    expect(stuck.rows.get('gridded')?.sessionId).toBe('session-gridded')
   })
 
   it('holds a terminal whose adopted engine needs a service to come back, too', async () => {
@@ -515,7 +827,7 @@ describe('restoreAgents — waiting for the engine', () => {
     h.states.set('%0', [{ dead: true }])
     await restoreAgents(h.deps)
     await settled(h, 1)
-    expect(h.respawns).toBe(0)
+    expect(h.respawns).toBe(1)
     expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
     expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_FAILED' })
     expect(h.calls).not.toContain('unbind:session-a')
@@ -536,13 +848,13 @@ describe('restoreAgents — waiting for the engine', () => {
     await restoreAgents(h.deps)
     await settled(h, 1, 1)
 
-    expect(h.respawns).toBe(1)
+    expect(h.respawns).toBe(2)
     expect(h.launches).toEqual([
       { agentId: 'agent-a', resumeSessionId: 'session-a' },
       { agentId: 'agent-a' },
     ])
-    const tail = h.calls.slice(5)
-    expect(tail.slice(0, 3)).toEqual(['inheritName:session-a->agent-a', 'unbind:session-a', 'respawn:%0:claude'])
+    const tail = h.calls.slice(7)
+    expect(tail.slice(0, 4)).toEqual(['inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
     expect(tail).toContain('updateIdentity:agent-a:9')
     expect(h.rows.get('agent-a')?.launch).toEqual({ state: 'starting' })
   })
@@ -570,10 +882,10 @@ describe('restoreAgents — waiting for the engine', () => {
     await restoreAgents(h.deps)
     await settled(h, 1, 1)
 
-    expect(h.respawns).toBe(1)
+    expect(h.respawns).toBe(2)
     expect(h.launches.map((l) => l.resumeSessionId ?? 'fresh')).toEqual(['session-a', 'fresh'])
-    const tail = h.calls.slice(5)
-    expect(tail.slice(0, 4)).toEqual(['updateIdentity:agent-a:7', 'inheritName:session-a->agent-a', 'unbind:session-a', 'respawn:%0:claude'])
+    const tail = h.calls.slice(7)
+    expect(tail.slice(0, 5)).toEqual(['updateIdentity:agent-a:7', 'inheritName:session-a->agent-a', 'unbind:session-a', 'hold:tmux\u0000%0', 'respawn:%0:claude'])
     expect(tail).toContain('updateIdentity:agent-a:8')
     expect(tail).toContain('clearRemainOnExit:%0')
     // remain-on-exit was NOT cleared before the first engine died — that is what kept the pane.
@@ -587,7 +899,7 @@ describe('restoreAgents — waiting for the engine', () => {
     h.states.set('%0', [{ dead: true }])
     await restoreAgents(h.deps)
     await settled(h, 1)
-    expect(h.respawns).toBe(0)
+    expect(h.respawns).toBe(1)
     expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'ENGINE_DID_NOT_START' })
   })
 
@@ -596,7 +908,7 @@ describe('restoreAgents — waiting for the engine', () => {
     h.states.set('%0', [{ dead: true }, { dead: true }])
     await restoreAgents(h.deps)
     await settled(h, 1)
-    expect(h.respawns).toBe(1)
+    expect(h.respawns).toBe(2)
     expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'ENGINE_DID_NOT_START' })
   })
 
@@ -605,7 +917,7 @@ describe('restoreAgents — waiting for the engine', () => {
     h.states.set('%0', [{ dead: true }])
     await restoreAgents(h.deps)
     await settled(h, 1)
-    expect(h.respawns).toBe(0)
+    expect(h.respawns).toBe(1)
     expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'ENGINE_DID_NOT_START' })
   })
 
@@ -636,7 +948,7 @@ describe('restoreAgents — waiting for the engine', () => {
     h.states.set('%0', ['unknown', 'unknown', 'unknown'])
     await restoreAgents(h.deps)
     await settled(h, 1, 1)
-    expect(h.respawns).toBe(0)
+    expect(h.respawns).toBe(1)
     expect(h.calls.some((call) => call.startsWith('unbind:'))).toBe(false)
     expect(h.calls).toContain('triggerHint:%0')
   })
@@ -679,11 +991,8 @@ describe('restoreAgents — terminals', () => {
     expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
     expect(h.calls).toEqual([
-      'clearIdentity:term-1@tx',
-      'createPane:term-1@tx',
-      'updateRuntimes:term-1:%0@tx',
-      'setLaunch:term-1:ready@tx',
-      'clearRemainOnExit:%0@tx',
+      'createPane:term-1', 'updateRuntimes:term-1:%0@tx', 'setLaunch:term-1:held@tx',
+      'clearIdentity:term-1', 'respawn:%0:terminal', 'setLaunch:term-1:ready', 'clearRemainOnExit:%0',
     ])
     expect(h.rows.get('term-1')?.launch).toEqual({ state: 'ready' })
   })
@@ -720,7 +1029,7 @@ describe('restoreAgents — terminals', () => {
     h.states.set('%0', [{ dead: false, engineExit: 1 }, { dead: false }, { dead: false }, { dead: false }])
     await restoreAgents(h.deps)
     await settled(h, 1, 1)
-    expect(h.respawns).toBe(1)
+    expect(h.respawns).toBe(2)
     expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }, { agentId: 'agent-a' }])
   })
 
@@ -730,7 +1039,7 @@ describe('restoreAgents — terminals', () => {
     expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.calls[0]).toBe('releaseEngine:term-1')
     expect(h.launches).toEqual([{ agentId: 'term-1' }])
-    expect(h.launched[0].launch.argv[0]).toBe('terminal')
+    expect(h.launched[1].launch.argv[0]).toBe('terminal')
     expect(h.rows.get('term-1')).toMatchObject({ engine: 'terminal', launch: { state: 'ready' } })
   })
 
@@ -742,10 +1051,10 @@ describe('restoreAgents — terminals', () => {
     expect(summary).toEqual({ restored: ['term-1'], skipped: [], failed: [], held: [], unsurveyed: [] })
     expect(h.calls).not.toContain('releaseEngine:term-1')
     expect(h.launches).toEqual([{ agentId: 'term-1', resumeSessionId: 'ses_kept' }])
-    expect(h.launched[0].launch.argv).toEqual([engine, '--resume', 'ses_kept'])
+    expect(h.launched[1].launch.argv).toEqual([engine, '--resume', 'ses_kept'])
     await settled(h, 1, 1)
     expect(h.rows.get('term-1')).toMatchObject({ engine, terminalHost: true, sessionId: 'ses_kept' })
-    expect(h.respawns).toBe(0)
+    expect(h.respawns).toBe(1)
   })
 
   it('reopens the terminal, never a fresh engine, when the conversation it was resuming is refused', async () => {
@@ -789,7 +1098,7 @@ it('restores a confirmed strict-resume pane by exact resume, and never falls bac
   expect(h.paneCreates).toBe(1)
   expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'session-a' }])
   await settled(h, 1)
-  expect(h.respawns).toBe(0)
+  expect(h.respawns).toBe(1)
   expect(h.rows.get('agent-a')?.launch).toMatchObject({ state: 'failed', error: 'RESUME_FAILED' })
   expect(h.calls).not.toContain('unbind:session-a')
 })
@@ -802,4 +1111,109 @@ it('archives an engine that exited while the daemon was down without overwriting
   expect(h.deps.retainStopped).toHaveBeenCalledWith(entry, true)
   expect(h.paneCreates).toBe(0)
   expect(h.respawns).toBe(0)
+})
+
+
+describe('missing held panes against the durable registry', () => {
+  it.each([['cycle', false], ['chain failure', false], ['cycle', true], ['chain failure', true], ['outside selection', true]] as const)('preserves every row through a recycled route %s (held pass %s)', async (mode, only) => {
+    const old = mode === 'cycle' ? ['%1', '%0'] : mode === 'chain failure' ? ['%2', '%0', '%1'] : ['%3', '%0']
+    const entries = old.map(paneId => realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId }], cwd: '/tmp' })!)
+    try {
+      for (const entry of entries) realRegistry.setLaunch(entry.agentId, heldLaunch('store'))
+      const h = harness(entries)
+      h.deps.registry = realRegistry
+      if (only) h.deps.only = new Set((mode === 'outside selection' ? entries.slice(0, 1) : entries).map(entry => entry.agentId))
+      h.deps.buildLaunch = async () => ({ held: 'store' })
+      h.deps.log = vi.fn()
+      if (mode === 'chain failure') {
+        const create = h.deps.createPane
+        h.deps.createPane = async (entry, launch, control) => entry.agentId === entries[2].agentId
+          ? { ok: false, reason: 'test allocation failed' } : create(entry, launch, control)
+      }
+      const result = await restoreAgents(h.deps)
+      expect(realRegistry.list().map(entry => entry.agentId).sort()).toEqual(entries.map(entry => entry.agentId).sort())
+      expect(entries.map(entry => realRegistry.byAgent(entry.agentId)?.tmuxPane)).toEqual(mode === 'cycle' ? ['%0', '%1'] : old)
+      expect(entries.every(entry => realRegistry.byAgent(entry.agentId)?.launch?.state === 'held')).toBe(true)
+      expect(entries.every(entry => realRegistry.byAgent(entry.agentId)?.active === false)).toBe(true)
+      expect(h.respawns).toBe(0)
+      if (mode !== 'cycle') expect(h.deps.log).toHaveBeenCalledWith(expect.stringContaining('left intact for review'))
+      if (mode === 'chain failure') expect(result.failed).toHaveLength(1)
+      // The synchronous batch has released durable writes before its returned Promise settles.
+      const committing = realRegistry.transaction(() => realRegistry.setLaunch(entries[0].agentId, heldLaunch('store')))
+      expect(() => realRegistry.setClosePlan(entries[0].agentId, null)).not.toThrow()
+      await committing
+    } finally { for (const entry of entries) realRegistry.removeAgent(entry.agentId) }
+  })
+
+  it('an allocated waiting row stays inactive while a service answer is outstanding', async () => {
+    const entry = realRegistry.openPendingAgent({ engine: 'claude', runtimes: [{ backend: 'tmux', paneId: '%44' }] })!
+    let finish!: (value: RestoreLaunchResult) => void
+    try {
+      realRegistry.setLaunch(entry.agentId, heldLaunch('store'))
+      const h = harness([entry])
+      h.deps.registry = realRegistry
+      h.deps.only = new Set([entry.agentId])
+      h.deps.buildLaunch = vi.fn(() => new Promise<RestoreLaunchResult>(done => { finish = done }))
+      const restoring = restoreAgents(h.deps)
+      await vi.waitFor(() => expect(h.deps.buildLaunch).toHaveBeenCalledOnce())
+      expect(realRegistry.byAgent(entry.agentId)).toMatchObject({ active: false, launch: { state: 'held' }, tmuxPane: '%0' })
+      finish({ held: 'store' })
+      await restoring
+      expect(realRegistry.byAgent(entry.agentId)?.active).toBe(false)
+    } finally { realRegistry.removeAgent(entry.agentId) }
+  })
+
+  it('an unrelated live pane pin cannot block missing held recovery', async () => {
+    const h = harness([row({ launch: heldLaunch('store') }), row({ agentId: 'pinned', runtimes: [{ backend: 'tmux', paneId: '%91' }] })], { alivePanes: ['%91'] })
+    h.deps.only = new Set(['agent-a'])
+    h.deps.cancelled = id => id === 'pinned'
+    h.probes.set('%0', [identity(8)])
+    expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
+    await settled(h, 1, 1)
+  })
+
+  it('an overlapping core pane operation retries after the sole prepared notice', async () => {
+    const h = harness([row({ launch: heldLaunch('store') })])
+    const operations = createPaneOperations()
+    h.deps.paneAllocations = operations.runMany
+    h.deps.paneBusy = operations.busy
+    let finish!: () => void
+    const previous = operations.run('agent-a', () => new Promise<void>(done => { finish = done }))
+    h.probes.set('%0', [identity(8)])
+    const held = createHeldLaunches({ registry: h.deps.registry, restore: only => restoreAgents({ ...h.deps, only }), log: () => {} })
+    await held.boot(async () => {})
+    expect(await held.restoreHeld('store')).toMatchObject({ retry: true })
+    expect(h.paneCreates).toBe(0)
+    finish()
+    await previous
+    await vi.waitFor(() => expect(h.rows.get('agent-a')?.processIdentity).toEqual(identity(8)), { timeout: 2_000 })
+    expect(h.paneCreates).toBe(1)
+  })
+
+  it('Stop cancels undispatched allocation work and joins only the bounded in-flight group', async () => {
+    const entries = Array.from({ length: 8 }, (_, i) => row({ agentId: `a${i}`, launch: heldLaunch('store'), runtimes: [{ backend: 'tmux', paneId: `%${i + 40}` }] }))
+    const h = harness(entries)
+    const operations = createPaneOperations()
+    h.deps.paneAllocations = operations.runMany
+    h.deps.paneBusy = operations.busy
+    h.deps.only = new Set(entries.map(entry => entry.agentId))
+    let stopped = false
+    h.deps.cancelled = () => stopped
+    const replies: Array<() => void> = []
+    h.deps.createPane = async entry => {
+      await new Promise<void>(done => { replies.push(done) })
+      return { ok: true, runtime: { backend: 'tmux', paneId: `%${entry.agentId.slice(1)}` } }
+    }
+    const restoring = restoreAgents(h.deps)
+    await vi.waitFor(() => expect(replies).toHaveLength(4))
+    expect(entries.every(entry => operations.busy(entry.agentId))).toBe(true)
+    stopped = true
+    const joined = operations.settle('a0')
+    for (const reply of replies) reply()
+    await restoring
+    await joined
+    expect(replies).toHaveLength(4)
+    expect(h.rows.get('a0')?.runtimes).toEqual([{ backend: 'tmux', paneId: '%0' }])
+    expect(h.respawns).toBe(0)
+  })
 })

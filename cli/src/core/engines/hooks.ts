@@ -20,6 +20,8 @@ import type { TerminalRuntimeRef } from '../../lib/terminalTypes.js'
 type ResolveHookAgent = NonNullable<HookServerHandlers['resolveHookAgent']>
 
 export interface EngineHookDeps {
+  /** Only the core's short pane dispatch/commit, never service preparation or an engine watch. */
+  panePending?: (agentId: string) => Promise<unknown> | undefined
   /** Hints name tmux panes; without tmux there is nothing they can point at. */
   tmuxBackend: unknown
   agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'trigger'>
@@ -44,7 +46,7 @@ type HookQuery = Parameters<ResolveHookAgent>[0]
 const recordKey = (session: RegisteredSession | undefined): string =>
   session ? `${session.agentId}\u0000${session.processIdentity?.pid ?? ''}\u0000${session.processIdentity?.startMarker ?? ''}` : ''
 
-export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: EngineHookDeps) {
+export function createEngineHooks({ tmuxBackend, agentReconciler, registry, panePending }: EngineHookDeps) {
   /**
    * The agents on the hinted panes: those whose recorded process the caller descends from, the rest,
    * and of the rest those with no live process recorded at all (none yet, or one that has exited).
@@ -138,6 +140,19 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry }: En
     if (!choice.agent && choice.reason === 'none' && (found.unrecorded.length || overdue)) {
       onWait?.()
       await recordChanged(resolved, engine)
+      const again = await matchCaller(resolved, engine, ancestry)
+      if (!again) return null
+      found = again
+      choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
+    }
+    // Cursor may admit a unique runtime without recorded ancestry. A hook from the engine just
+    // dispatched there must not rewrite its row before that pane operation has committed its route.
+    // Acknowledge now so the hook client never falls back to writing the registry itself.
+    for (;;) {
+      const pending = choice.agent && panePending?.(choice.agent.agentId)
+      if (!pending) break
+      onWait?.()
+      try { await pending } catch { return null }
       const again = await matchCaller(resolved, engine, ancestry)
       if (!again) return null
       found = again

@@ -2318,7 +2318,9 @@ class Registry {
     }, options.holdSavesMs)
     timer?.unref?.()
     try {
-      return await apply()
+      const result = apply()
+      // A synchronous batch commits before another microtask can acknowledge a close intent.
+      return result instanceof Promise ? await result : result
     } finally {
       clearTimeout(timer)
       release()
