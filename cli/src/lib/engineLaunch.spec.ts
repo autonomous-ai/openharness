@@ -1266,8 +1266,7 @@ describe('buildEngineLaunchArgv — the grid the pane finds', () => {
   it('leaves PATH alone when grid is only a name on it, but still turns the update check off', () => {
     const script = launchScriptOf(buildEngineLaunchArgv('claude', {}, '/bin/zsh', undefined, 'grid'))
 
-    // The developer-tools stand-ins change PATH only on a Mac without the tools (noDevtoolsPrelude).
-    expect(script.replace(NO_DEVTOOLS, '')).not.toContain('export PATH')
+    expect(script).not.toContain('export PATH')
     expect(script).toContain('GRID_NO_UPDATE_CHECK=1')
   })
 

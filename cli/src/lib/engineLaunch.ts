@@ -992,107 +992,45 @@ export function gridPanePrelude(binary: string): string {
   return [...onPath, `${GRID_NO_UPDATE_CHECK_VAR}=1`, `export ${GRID_NO_UPDATE_CHECK_VAR}`, ''].join('\n')
 }
 
-/**
- * The names under /usr/bin that, on macOS 26, are one stub (78 hard links to one file) for Apple's
- * command line developer tools.
- */
-export const DEVTOOLS_STUBS = [
-  'DeRez', 'GetFileInfo', 'ResMerger', 'Rez', 'SetFile', 'SplitForks', 'ar', 'as', 'asa', 'bison', 'bm4',
-  'c++', 'c++filt', 'c89', 'c99', 'cc', 'clang', 'clang++', 'clangd', 'cmpdylib', 'codesign_allocate',
-  'cpp', 'ctags', 'ctf_insert', 'dsymutil', 'dwarfdump', 'dyld_info', 'flex', 'flex++', 'g++',
-  'gatherheaderdoc', 'gcc', 'gcov', 'git', 'git-receive-pack', 'git-shell', 'git-upload-archive',
-  'git-upload-pack', 'gm4', 'gnumake', 'gperf', 'hdxml2manxml', 'headerdoc2html', 'indent',
-  'install_name_tool', 'ld', 'lex', 'libtool', 'lipo', 'lldb', 'llvm-g++', 'llvm-gcc', 'lorder', 'm4',
-  'make', 'mig', 'nm', 'nmedit', 'objdump', 'otool', 'pagestuff', 'pip3', 'python3', 'ranlib',
-  'resolveLinks', 'rpcgen', 'segedit', 'size', 'sourcekit-lsp', 'strings', 'strip', 'swift', 'swiftc',
-  'unifdef', 'unifdefall', 'vtool', 'xml2man', 'yacc',
-]
-
 /** Where the developer tools are looked for; the specs point these at folders of their own. */
 export interface DevtoolsPlaces {
   xcodeSelect: string
-  systemBin: string
+  /** Where Apple's command line developer tools install. */
   commandLineTools: string
   selectLink: string
 }
 
 const MAC_DEVTOOLS: DevtoolsPlaces = {
   xcodeSelect: '/usr/bin/xcode-select',
-  systemBin: '/usr/bin',
-  commandLineTools: '/Library/Developer/CommandLineTools/usr/bin',
+  commandLineTools: '/Library/Developer/CommandLineTools',
   selectLink: '/var/db/xcode_select_link',
-}
-
-/**
- * A stand-in for one of [DEVTOOLS_STUBS], named by the link it is run through: the real tool once the
- * developer tools are installed, else one of that name later on PATH than the system's, else a
- * message and 127, the status of a command that is not there.
- */
-function devtoolsStandIn(places: DevtoolsPlaces): string {
-  return [
-    '#!/bin/sh',
-    '# Harness: on a Mac without the command line developer tools, stands in for the system stub of this name.',
-    'harness_tool=${0##*/}',
-    `if ${shellSingleQuote(places.xcodeSelect)} -p >/dev/null 2>&1; then exec ${shellSingleQuote(places.systemBin)}/"$harness_tool" "$@"; fi`,
-    'harness_here=${0%/*}',
-    'harness_past=0',
-    'set -f',
-    'IFS=:',
-    'for harness_dir in $PATH; do',
-    `  if [ "$harness_dir" = ${shellSingleQuote(places.systemBin)} ]; then harness_past=1; continue; fi`,
-    '  [ "$harness_past" = 1 ] && [ "$harness_dir" != "$harness_here" ] && [ -f "$harness_dir/$harness_tool" ] && [ -x "$harness_dir/$harness_tool" ] && exec "$harness_dir/$harness_tool" "$@"',
-    'done',
-    `printf '%s\\n' "$harness_tool: this needs Apple's command line developer tools, which this Mac does not have." 'Install them with: xcode-select --install' >&2`,
-    'exit 127',
-    '',
-  ].join('\n')
 }
 
 /**
  * Keeps an agent from bringing up Apple's "Install Command Line Developer Tools" dialog.
  *
- * On a Mac without the developer tools, `/usr/bin/git`, `python3`, `make`, `cc` and the rest of
- * [DEVTOOLS_STUBS] are a stub that opens that dialog and fails. Agents run them unasked: on a fresh
- * Mac (the activation VM, 2026-10-09) OpenCode ran `python3` for the first workspace's starter task,
- * and the dialog came up over the person's first session. In an agent's pane on such a Mac, a folder
- * of stand-ins goes on PATH just before /usr/bin; tools earlier on PATH (Homebrew's, python.org's)
- * are untouched. The agent reads what is missing and how to install it, as it would for any missing
- * command. The stand-ins are written once, out of a Ctrl+Z's reach (`STOP_PROOF_FUNCTIONS`), into a
- * folder named for their version. Once the tools are installed a stand-in runs the real one, and the
- * next pane goes without them.
+ * On a Mac without the developer tools, `/usr/bin/git`, `python3`, `make`, `cc`, `xcrun`, `xcodebuild`
+ * and the rest are stubs that open that dialog and fail. Agents run them unasked: on a fresh Mac (the
+ * activation VM, 2026-10-09) OpenCode ran `python3` for the first workspace's starter task, and a real
+ * Claude Code and Codex pair brought it up too, over the person's first session. Given a
+ * `DEVELOPER_DIR` that does not exist, every stub fails at once with "xcrun: error: missing
+ * DEVELOPER_DIR path" instead, and no dialog (measured on that VM). It is the folder the tools
+ * install to, so once they are installed they work, in a pane already open too. An environment
+ * variable reaches what PATH could not: the login shells agents run commands in (`path_helper` puts
+ * /usr/bin first again; stand-ins on PATH were bypassed that way, and raced when panes opened
+ * together) and absolute `/usr/bin/…` calls.
  *
- * A Mac with the tools or Xcode, and every other system, only pays for `[ -d ]` and `[ -e ]` tests:
- * `xcode-select -p` (which answers without a dialog) runs only when none of the usual places exists.
+ * A Mac with the tools or Xcode, and every other system, only pays for `[ -x ]`, `[ -d ]` and `[ -e ]`
+ * tests: `xcode-select -p` (which answers without a dialog) runs only when none of the usual places
+ * exists, in a command substitution, out of a Ctrl+Z's reach (`STOP_PROOF_FUNCTIONS`). A
+ * `DEVELOPER_DIR` already set is the person's own choice and stays.
  */
 export function noDevtoolsPrelude(places: DevtoolsPlaces = MAC_DEVTOOLS): string {
-  const write = [
-    'mkdir -p "$harness_nodev"',
-    `printf %s ${shellSingleQuote(devtoolsStandIn(places))} >"$harness_nodev/stand-in.$$"`,
-    'chmod 755 "$harness_nodev/stand-in.$$"',
-    'mv -f "$harness_nodev/stand-in.$$" "$harness_nodev/stand-in"',
-    `for harness_tool in ${DEVTOOLS_STUBS.map(shellSingleQuote).join(' ')}; do ln -sf stand-in "$harness_nodev/$harness_tool" || exit 1; done`,
-    ': >"$harness_nodev/ready"',
-  ].join(' && ')
   const xcodeSelect = shellSingleQuote(places.xcodeSelect)
   return [
-    `if [ -x ${xcodeSelect} ] && [ -z "\${DEVELOPER_DIR:-}" ] && [ ! -d ${shellSingleQuote(places.commandLineTools)} ] && [ ! -e ${shellSingleQuote(places.selectLink)} ] && ! harness_devtools=$(${xcodeSelect} -p 2>/dev/null); then`,
-    '  harness_nodev="$HOME/.harness/runtime/no-devtools-1"',
-    `  harness_sysbin=${shellSingleQuote(places.systemBin)}`,
-    `  [ -e "$harness_nodev/ready" ] || harness_devtools=$( (${write}) 2>/dev/null ) || :`,
-    '  case ":$PATH:" in',
-    '    *":$harness_nodev:"*) ;;',
-    '    *":$harness_sysbin:"*)',
-    '      if [ -e "$harness_nodev/ready" ]; then',
-    '        harness_path=":$PATH:"',
-    '        harness_before=${harness_path%%":$harness_sysbin:"*}',
-    '        harness_after=${harness_path#*":$harness_sysbin:"}',
-    '        harness_path="$harness_before:$harness_nodev:$harness_sysbin:$harness_after"',
-    '        harness_path=${harness_path#:}',
-    '        PATH=${harness_path%:}',
-    '        export PATH',
-    '      fi',
-    '      ;;',
-    '  esac',
+    `if [ -x ${xcodeSelect} ] && [ -z "\${DEVELOPER_DIR:-}" ] && [ ! -d ${shellSingleQuote(`${places.commandLineTools}/usr/bin`)} ] && [ ! -e ${shellSingleQuote(places.selectLink)} ] && ! harness_devtools=$(${xcodeSelect} -p 2>/dev/null); then`,
+    `  DEVELOPER_DIR=${shellSingleQuote(places.commandLineTools)}`,
+    '  export DEVELOPER_DIR',
     'fi',
     '',
   ].join('\n')

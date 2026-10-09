@@ -382,18 +382,24 @@ Command Line Developer Tools" dialog came up during the first session. Cause, tr
 - Agents run them unasked: OpenCode ran `python3` for the starter task, and a real Claude Code and
   Codex pair brought it up in one run of three.
 
-Agent panes on such a Mac now get stand-ins on PATH just before `/usr/bin`. Each one:
-- runs the real tool once the tools are installed;
-- else runs one later on PATH;
-- else tells the agent what is missing and how to install it (exit 127, no dialog).
+Agent panes on such a Mac now get `DEVELOPER_DIR=/Library/Developer/CommandLineTools`, where the tools
+install. Measured on a fresh VM without them:
+- every stub (`git`, `python3`, `make`, `xcrun`, `xcodebuild`) fails at once with "xcrun: error:
+  missing DEVELOPER_DIR path", and no dialog;
+- the variable survives the login shells agents run commands in, and covers absolute `/usr/bin` calls;
+- once the tools are installed, the same folder works, in panes already open too.
 
-VM runs with this CLI (fresh macOS, no developer tools), two new users and two with real Claude Code
-and Codex:
-- no dialog in any run;
-- Codex, Claude Code and OpenCode all carry the stand-ins on PATH just before `/usr/bin`;
-- `git`, `python3`, `make`, `cc` and `swift` with a pane's PATH answer 127 and the message;
-- the bare stub (`/usr/bin/python3`) still brings the dialog up, which is what the stand-ins keep agents from;
-- first result 57 s in three runs and 79 s in the fourth (free-model variance).
+A first version put 78 stand-ins on PATH instead. Its review found two failures, both confirmed:
+- `path_helper` in a login shell put `/usr/bin` back in front of them;
+- about 40% of panes opening together came up without them.
+
+Official desktop 1.2.62 with CLI 0.3.73 on fresh VMs (faster opening released; no dialog in any run):
+
+| Persona | Workspace | First result | Second session |
+|---|---|---|---|
+| nothing installed | 41 s | 57 s | 20 s; next day, a follow-up in 25 s |
+| real Claude Code and Codex, not signed in | 40 s | 56 s | 139 s |
+| OpenCode only | 41 s | 54 s | 27 s |
 
 ## Next
 
