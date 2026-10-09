@@ -19,6 +19,10 @@ abstract interface class RelayCodec {
   /// P2P terminal channel (or before the welcome).
   int get terminalP2pVersion;
 
+  /// The machine's `features.p2pViewer` from its welcome: 1 when it streams viewer surfaces over
+  /// the P2P channel, else 0.
+  int get p2pViewerVersion;
+
   /// The frame as it may cross the relay. Null when it must travel sealed and the session is not
   /// up yet — it must then not go at all: sent in the clear it leaks, and a terminal frame is
   /// rejected by the relay outright.

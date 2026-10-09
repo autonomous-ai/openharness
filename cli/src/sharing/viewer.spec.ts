@@ -63,6 +63,18 @@ describe('private viewer capture', () => {
     expect(child.kill).toHaveBeenCalledWith('SIGTERM'); expect(m.rm).toHaveBeenCalledWith('/tmp/share-viewer-fixture', { recursive: true, force: true })
     await expect(capture.capture()).rejects.toThrow('disconnected')
   })
+  it('hands a subclass only its own page session\'s events', async () => {
+    const events: Array<[string, unknown]> = []
+    class Listening extends ViewerCapture { protected override onEvent(method: string, params: unknown) { events.push([method, params]) } }
+    capture = new Listening()
+    await capture.start('http://localhost:1234/')
+    events.length = 0
+    const emit = (message: object) => m.sockets[0].emit('message', Buffer.from(JSON.stringify(message)))
+    emit({ method: 'Page.screencastFrame', sessionId: 'another-tab', params: { data: 'theirs' } })
+    emit({ method: 'Page.screencastFrame', sessionId: 'session', params: { data: 'ours' } })
+    emit({ method: 'Page.frameNavigated', sessionId: 'session' })
+    expect(events).toEqual([['Page.screencastFrame', { data: 'ours' }], ['Page.frameNavigated', {}]])
+  })
   it('handles unavailable browsers, invalid targets, navigation failures and invalid screenshots', async () => {
     await expect(capture.start('file:///tmp/x')).rejects.toThrow('no live viewer')
     m.exists.mockReturnValue(false)

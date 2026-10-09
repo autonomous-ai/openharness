@@ -18,7 +18,7 @@
  */
 import { RelayConnectError } from '../lib/relayFrames.js'
 import { decodeGatewayBinary, encodeGatewayBinary, GatewayBinary, GATEWAY_CALLS } from '../lib/gatewayWire.js'
-import { decodeTerminalLocal, encodeTerminalLocal } from '../lib/terminalBinary.js'
+import { decodeTerminalLocal, encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { answerAccountQuery } from './accountQueries.js'
 import { guestMachineList, withStaleMarker } from '../lib/machineListReply.js'
 import type { GatewayMachines } from './api.js'
@@ -131,6 +131,12 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
   }
   const bulk = (kind: string, payload: Record<string, unknown>): boolean => up && fits() && send(kind, payload)
   const reachableClient = (connId: string): boolean => up && clients.has(connId)
+  const binaryFor = (kind: GatewayBinary, connId: string, clear: TerminalBinaryClear): boolean => {
+    if (!reachableClient(connId) || !fits()) return false
+    const local = encodeTerminalLocal(clear)
+    const bytes = local && encodeGatewayBinary(kind, connId, local)
+    return !!bytes && deps.notifyBinary(bytes)
+  }
   const need = (): void => {
     if (up || seen || asked) return
     asked = true
@@ -185,12 +191,9 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     reply: (connId, type, requestId, payload) => { send('reply', { connId, type, requestId, payload }) },
     target: (connId, type, payload) => up && linkUp && clients.has(connId) && bulk('target', { connId, type, payload }),
     terminal: (connId, type, payload) => reachableClient(connId) && bulk('terminal', { connId, type, payload }),
-    terminalBinary: (connId, clear) => {
-      if (!reachableClient(connId) || !fits()) return false
-      const local = encodeTerminalLocal(clear)
-      const bytes = local && encodeGatewayBinary(GatewayBinary.remote, connId, local)
-      return !!bytes && deps.notifyBinary(bytes)
-    },
+    terminalBinary: (connId, clear) => binaryFor(GatewayBinary.remote, connId, clear),
+    // Only a viewer frame goes under the viewer kind: the gateway sends that kind on the viewer channel alone.
+    viewerBinary: (connId, clear) => clear.kind === TerminalBinaryKind.viewerFrame && binaryFor(GatewayBinary.viewer, connId, clear),
     observer: (connId, type, payload) => up && linkUp && send('observer', { connId, type, payload }),
     windowOpened: (surface) => { send('windowOpened', { surface }) },
     localClients: (windows) => { localClients = windows; send('localClients', { windows }) },
@@ -455,6 +458,8 @@ export function createGatewayLink(deps: GatewayLinkDeps) {
     const decoded = decodeGatewayBinary(raw)
     if (!decoded) return
     if (decoded.kind === GatewayBinary.window) { windows.get(decoded.id)?.sink.sendBinary(decoded.bytes); return }
+    // A viewer surface's frames only go to the gateway: one coming from it is no client's input.
+    if (decoded.kind !== GatewayBinary.remote) return
     const clear = decodeTerminalLocal(decoded.bytes)
     if (clear) void events.binary(decoded.id, clear)
   }

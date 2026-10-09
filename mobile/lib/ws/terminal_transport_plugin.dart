@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'relay_codec.dart';
+import 'viewer_p2p.dart';
 
 /// Which wire a frame is forced onto, when the plugin asks for one rather than
 /// leaving the choice to its own routing table.
@@ -79,6 +80,9 @@ abstract interface class TerminalTransportPlugin {
   /// Inside the outbound FIFO, once the codec sealed the frame. Same contract as
   /// [sendJson]; may wait briefly for backpressure to clear.
   Future<bool> sendBinary(Uint8List localFrame, Uint8List sealedFrame);
+
+  /// The viewer surface's channel on this wire; null for a wire without one.
+  ViewerP2p? get viewer;
 
   /// The socket is gone (closed, redialing, or refused). Tear the wire down.
   void dispose({bool notifyPeer = false});

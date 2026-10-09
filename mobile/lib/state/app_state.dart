@@ -37,6 +37,7 @@ import '../notify/done_notice.dart';
 import '../notify/system_notices.dart';
 import '../settings/config_store.dart';
 import '../stats/harness_stats.dart';
+import '../surface/p2p_viewer_transport.dart';
 import '../terminal/terminal_session.dart';
 import '../terminal/remote_media_download.dart';
 import '../widgets/engine_identity.dart' show allEngines, engineIdentity;
@@ -3991,6 +3992,60 @@ class AppNotifier extends ChangeNotifier {
         ),
       );
 
+  /// One request of a remote viewer surface (cli/src/lib/interactiveViewer.ts). Owner-only on the
+  /// machine; sealed end to end like every machine request. Over the p2p viewer channel when it
+  /// is up ([P2pViewerTransport]), the WS `viewer_surface` request otherwise.
+  Future<Map<String, dynamic>> viewerSurface(
+    String machineId,
+    String agentId,
+    Map<String, dynamic> payload,
+  ) {
+    final key = '$machineId/$agentId/${payload['surfaceId']}';
+    final request = {...payload, 'agentId': agentId};
+    if (payload['op'] == 'close') {
+      final transport = _viewerTransports.remove(key);
+      return transport != null
+          ? transport(request)
+          : _viewerSurfaceWs(machineId, request);
+    }
+    final transport = _viewerTransports[key] ??= P2pViewerTransport(
+      p2p: () => _viewerConn(machineId)?.viewerP2p,
+      ws: (payload) => _viewerSurfaceWs(machineId, payload),
+      states: _surfaceStates.stream
+          .where((state) => state.$1 == machineId)
+          .map((state) => state.$2),
+    );
+    return transport(request);
+  }
+
+  final _viewerTransports = <String, P2pViewerTransport>{};
+
+  /// The machines' `surface_state`/`surface_error` frames: the answers to a pushed surface.
+  final _surfaceStates =
+      StreamController<(String, Map<String, dynamic>)>.broadcast();
+
+  WsConn? _viewerConn(String machineId) {
+    final connection = _conn(machineId);
+    return connection.isReady ? connection : null;
+  }
+
+  Future<Map<String, dynamic>> _viewerSurfaceWs(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) {
+    final connection = _viewerConn(machineId);
+    if (connection == null) {
+      return Future.error(
+        StateError('Reconnect this machine to open its viewer.'),
+      );
+    }
+    return connection.request(
+      'viewer_surface',
+      payload: payload,
+      timeout: const Duration(seconds: 25),
+    );
+  }
+
   Future<Map<String, dynamic>> teamRequest(
     String machineId,
     Map<String, dynamic> payload,
@@ -5909,6 +5964,10 @@ class AppNotifier extends ChangeNotifier {
     if (machine == null) return;
     final type = event['type'] as String? ?? '';
     final payload = (event['payload'] as Map<String, dynamic>?) ?? {};
+    if (type == 'surface_state' || type == 'surface_error') {
+      _surfaceStates.add((machineId, {...payload, 'type': type}));
+      return;
+    }
     // Only terminal protocol frames visit the session pool. Heartbeats, dial
     // scroll and discovery events must not await every retained terminal.
     // Each session still sees terminal frames: ready replies match their own

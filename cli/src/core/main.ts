@@ -711,6 +711,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     runtimeModels,
     viewerChanged: () => {}, // nothing in the core forwards to a viewer: the viewers follow their own (services/viewers.ts)
     viewerFrame: (connId, type, payload) => backendRef?.sendViewerFrame(connId, type, payload) ?? false,
+    // Viewers in this process hand a pushed surface's frame parts straight to the gateway's port; with no
+    // gateway, the push stops and the client long-polls over WS.
+    viewerBinary: (connId, part) => backendRef?.gateway?.viewerBinary(connId, part) ?? false,
     gridNamed: (name) => backendRef?.setHarnessGridName(name),
     gridModelsChanged: () => { void backendRef?.pushGridModels() },
     privateGridName: async () => backendRef?.gridName() ?? null,
@@ -1267,7 +1270,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // The gateway's own traffic: its remote clients and what they sent, and its comings and goings; and what
     // the devices tell the core (a turn, a frame for the windows, a dial on the wire); a viewer stream's answers.
     notice: (service, payload) => { if (service === 'gateway') gatewayLink?.notice(payload); else if (service === 'devices') devicesLink.notice(payload); else if (service === 'wifi') wifiLink.notice(payload); else if (service === 'viewers') viewersLink.notice(payload); else if (service === 'recaps') recapsLink.notice(payload) },
-    binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes) },
+    binary: (service, bytes) => { if (service === 'gateway') gatewayLink?.binary(bytes); else if (service === 'viewers') viewersLink.binary(bytes) },
     connected: (service) => {
       engineReaders.connected(service)
       liveTransport.connected(service)

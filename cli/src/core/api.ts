@@ -33,8 +33,8 @@ import type { RuntimeModelOption } from '../lib/runtimeProfile.js'
 import type { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
 import type { SessionSearchIndex } from '../lib/sessionSearch/indexer.js'
 import type { StoppedAgentStore } from '../lib/stoppedAgents.js'
-import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
-import { VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
+import { TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { SURFACE_UP_TYPES, VIEWER_UP_TYPES } from '../lib/viewerFrames.js'
 import type { RouteAnswer } from '../localWsServer.js'
 import type { SwarmPromptScopes } from '../teams/promptScope.js'
 import type { DeviceInputStatus } from './deviceInput.js'
@@ -235,9 +235,15 @@ export interface CoreApi {
     /** An agent's viewer moved: the windows' viewer panes forward to the new one. */
     viewerChanged(agentId: string): void
     /** A frame of a viewer stream for the one connection that opened it (`viewer_response`, `viewer_data`,
-     *  `viewer_ack`, `viewer_end`, `viewer_close`): false when it cannot reach that connection. Only those
-     *  types; the core drops any other. */
+     *  `viewer_ack`, `viewer_end`, `viewer_close`), or a pushed surface's answer (`surface_state`,
+     *  `surface_error`): false when it cannot reach that connection. Only those types; the core drops any other. */
     viewerFrame(connId: string, type: string, payload: Record<string, unknown>): boolean
+    /** One part of a pushed surface's frame, for that client's `viewer-v1` channel (the gateway's
+     *  `viewerBinary`). Only a viewer frame; the core drops any other kind. False, which ends the push, only
+     *  where the refusal can be seen: the gateway in this process, or a link to the core that is gone. From
+     *  the viewers' own process a gateway's refusal is silent; the push's 5 s ack timeout recovers, or the
+     *  client's fallback to the WS long-poll stops it. */
+    viewerBinary(connId: string, part: TerminalBinaryClear): boolean
     /** The account's grid has a name: the models picker answers with it at once. */
     gridNamed(name: string): void
     /** What the models picker lists may have changed (a local model started or stopped, grid set up):
@@ -1073,6 +1079,9 @@ export interface GatewayPort {
    *  there; false when it could not be sent. */
   terminal(connId: string, type: string, payload: Record<string, unknown>): boolean
   terminalBinary(connId: string, clear: TerminalBinaryClear): boolean
+  /** A viewer surface's frame part for one remote client, sealed to it, only ever on its `viewer-v1` P2P
+   *  channel; false when that connection has none. */
+  viewerBinary(connId: string, clear: TerminalBinaryClear): boolean
   /** Share's frame to an observer: plaintext to the relay, sealed by Share itself. */
   observer(connId: string, type: string, payload: Record<string, unknown>): boolean
   /** A window opened on this computer: the backend counts it as the person's session at once, or when
@@ -1315,6 +1324,7 @@ export interface CoreApiDeps {
   runtimeModels: CoreApi['agents']['runtimeModels']
   viewerChanged: CoreApi['clients']['viewerChanged']
   viewerFrame: CoreApi['clients']['viewerFrame']
+  viewerBinary: CoreApi['clients']['viewerBinary']
   gridNamed: CoreApi['clients']['gridNamed']
   gridModelsChanged: CoreApi['clients']['gridModelsChanged']
   dshInstallStatus: CoreApi['clients']['dshInstallStatus']
@@ -1360,7 +1370,7 @@ export interface CoreApiDeps {
 export function createCoreApi({
   dataDir, registry, stoppedAgents, databaseHistory, externalSessions, openSessions, syncSession, runtimeModels, viewerChanged,
   gridNamed, gridModelsChanged, dshInstallStatus, mintGridName, accessToken, lane, observerKey, observer, privateGridName, machineName, backend, onNotice,
-  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, machine, activityText,
+  runtimeProfile, setRuntime, fork, create, dsh, windows, daemon, turns, questions, terminals = TERMINALS_OFF, conversations = CONVERSATIONS_OFF, viewerFrame, viewerBinary, machine, activityText,
   signedIn, environment, machines, sendLocal, sendToWindow, hasWindow, devicesChanged, dialWatching, wifi, lastTurn, turnCard, turnSummary,
   log = (line) => console.warn(line),
 }: CoreApiDeps): CoreApi {
@@ -1401,8 +1411,9 @@ export function createCoreApi({
     clients: {
       viewerChanged, gridNamed, gridModelsChanged, dshInstallStatus, windows, observer, hasWindow, devicesChanged, dialWatching,
       // A viewers process speaks to the core as a service: what it may send a client is a viewer stream's
-      // frame, decided here, never whatever it names.
-      viewerFrame: (connId, type, payload) => VIEWER_UP_TYPES.has(type) && viewerFrame(connId, type, payload),
+      // frame, a pushed surface's answer or its frame's parts, decided here, never whatever it names.
+      viewerFrame: (connId, type, payload) => (VIEWER_UP_TYPES.has(type) || SURFACE_UP_TYPES.has(type)) && viewerFrame(connId, type, payload),
+      viewerBinary: (connId, part) => part.kind === TerminalBinaryKind.viewerFrame && viewerBinary(connId, part),
       sendLocal: (frame) => {
         if (windowFrames.has(frame?.type)) sendLocal(frame)
         else refused(frame?.type)

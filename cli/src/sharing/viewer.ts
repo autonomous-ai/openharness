@@ -70,9 +70,11 @@ export class ViewerCapture {
     this.ws.on('error', () => this.failPending())
     this.ws.on('close', () => this.failPending())
     this.ws.on('message', raw => {
-      let message: { id?: number; method?: string; sessionId?: string; result?: Payload; error?: unknown }
+      let message: { id?: number; method?: string; sessionId?: string; params?: Payload; result?: Payload; error?: unknown }
       try { message = JSON.parse(raw.toString()) } catch { return }
       if (message.method === 'Page.loadEventFired' && message.sessionId === this.session) this.loaded?.()
+      // Page events for subclasses (the interactive viewer's screencast). Only our page's session.
+      if (message.method && message.sessionId === this.session) this.onEvent(message.method, message.params ?? {})
       const entry = this.pending.get(message.id ?? -1)
       if (!entry) return
       this.pending.delete(message.id!); clearTimeout(entry.timer)
@@ -106,6 +108,9 @@ export class ViewerCapture {
     this.loaded = null
   }
   private loaded: (() => void) | null = null
+  /** A CDP event from this renderer's page. The read-only Share renderer needs none. */
+  protected onEvent(_method: string, _params: Payload): void {}
+
   protected call(method: string, params: Payload = {}): Promise<Payload> {
     return new Promise((resolve, reject) => {
       if (this.closed || this.ws?.readyState !== WebSocket.OPEN) { reject(new Error('The viewer renderer disconnected.')); return }

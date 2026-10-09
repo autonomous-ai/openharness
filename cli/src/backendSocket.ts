@@ -35,7 +35,7 @@ import { agentFrame, type AgentDshContext, type AgentFrame } from './lib/agentFr
 import { agentTokenUsage } from './lib/agentTokenUsage.js'
 import { terminalHandoffRequest } from './lib/terminalHandoff.js'
 import { OwnerCommands, OWNER_COMMAND_TYPES, ROUTE_COMMAND_TYPES } from './lib/ownerCommands.js'
-import { VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
+import { SURFACE_DOWN_TYPES, VIEWER_DOWN_TYPES } from './lib/viewerFrames.js'
 import type { TerminalStreamManager } from './lib/terminalStreamManager.js'
 import { encodeTerminalLocal, type TerminalBinaryClear } from './lib/terminalBinary.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType, PAIR_REQUESTS, PLATE_REQUEST, rpcResultType, type DownTransport } from './lib/relayFrames.js'
@@ -847,8 +847,10 @@ export class BackendSocket {
       return
     }
 
-    if (type.startsWith('viewer_')) {
-      if (VIEWER_DOWN_TYPES.has(type) && owner) this.viewerStreams?.frame(connId, type, payload)
+    // A pushed surface's control frames, from the client's viewer channel alone (the gateway's rule), go the
+    // same way as a viewer stream's.
+    if (type.startsWith('viewer_') || SURFACE_DOWN_TYPES.has(type)) {
+      if (owner && (VIEWER_DOWN_TYPES.has(type) || SURFACE_DOWN_TYPES.has(type))) this.viewerStreams?.frame(connId, type, payload)
       return
     }
 

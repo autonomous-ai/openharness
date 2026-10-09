@@ -177,7 +177,32 @@ describe('the gateway in its own process, as the core sees it', () => {
     link.binary(encodeGatewayBinary(GatewayBinary.remote, 'phone-1', local)!)
     link.binary(encodeGatewayBinary(GatewayBinary.remote, 'phone-1', new Uint8Array([1, 2]))!)
     link.binary(new Uint8Array([9, 9]))
+    // A viewer surface's frames only ever go the other way: one from the gateway is no client's input.
+    link.binary(encodeGatewayBinary(GatewayBinary.viewer, 'phone-1', local)!)
     expect(heard.binary.mock.calls).toEqual([['phone-1', bytesOf('ls\r')]])
+  })
+
+  it('hands a viewer surface\'s frame parts to the gateway, only for a client it can reach', () => {
+    const { link, binary, setBuffered } = setup()
+    const frame: TerminalBinaryClear = {
+      kind: TerminalBinaryKind.viewerFrame, streamId: STREAM, seq: 4, compressed: false, bytes: new Uint8Array([255, 216]),
+      viewer: { part: 0, parts: 1, width: 390, height: 844, scale: 3 },
+    }
+    link.connected()
+    // Nobody registered: nothing goes.
+    expect(link.port.viewerBinary('phone-1', frame)).toBe(false)
+    register(link, 'phone-1')
+    expect(link.port.viewerBinary('phone-1', frame)).toBe(true)
+    // Only a viewer frame goes as one: a terminal's bytes never take the viewer channel.
+    expect(link.port.viewerBinary('phone-1', bytesOf('hi'))).toBe(false)
+    expect(binary).toHaveLength(1)
+    const framed = decodeGatewayBinary(binary[0])!
+    expect(framed).toMatchObject({ kind: GatewayBinary.viewer, id: 'phone-1' })
+    expect(decodeTerminalLocal(framed.bytes)).toEqual(frame)
+    // A gateway that reads nothing: dropped, not held.
+    setBuffered(GATEWAY_BUFFER_LIMIT + 1)
+    expect(link.port.viewerBinary('phone-1', frame)).toBe(false)
+    expect(binary).toHaveLength(1)
   })
 
   it('a gateway that goes takes the relay with it: every remote client, the link and the devices watching', async () => {

@@ -9,9 +9,9 @@
  * passed on as it comes, and its answers go back to that one connection when the viewers send them
  * (`CoreApi.clients.viewerFrame`). While the viewers are off, hung behind a full socket or failing, a
  * stream is refused at once with `viewer_close`, so a client never waits out its own timeout for a viewer
- * nobody is serving, and a surface is answered unavailable.
+ * nobody is serving, a surface is answered unavailable, and a pushed surface's frame `surface_error`.
  */
-import { viewerStreamId } from '../lib/viewerFrames.js'
+import { SURFACE_DOWN_TYPES, viewerStreamId } from '../lib/viewerFrames.js'
 import { VIEWERS_UNAVAILABLE, type ViewersPort } from './api.js'
 
 export interface ViewerStreams {
@@ -37,6 +37,17 @@ export function createViewerStreams(
   return {
     frame: (connId, type, payload) => {
       if (viewers()?.stream(connId, type, payload)) return
+      // A pushed surface's frame: the client would otherwise wait on a push nobody runs, its keepalive unanswered.
+      // Told in the push's own words (the open and input it named), so it falls back to its WS poll.
+      if (SURFACE_DOWN_TYPES.has(type)) {
+        const { surfaceId, open, input } = payload
+        if (type !== 'surface_close' && viewerStreamId(surfaceId)) {
+          send(connId, 'surface_error', { surfaceId, error: 'VIEWERS_UNAVAILABLE', detail: NOT_SERVED,
+            // An input that got here reached no viewer, so the client may send it again over WS (`unapplied`).
+            ...(viewerStreamId(open) ? { open } : {}), ...(viewerStreamId(input) ? { input, unapplied: true } : {}) })
+        }
+        return
+      }
       // A close needs no answer; any other frame of a stream nobody holds now ends it on the client's side.
       if (type !== 'viewer_close' && viewerStreamId(payload.streamId)) send(connId, 'viewer_close', { streamId: payload.streamId, error: NOT_SERVED })
     },

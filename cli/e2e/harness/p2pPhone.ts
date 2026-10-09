@@ -4,7 +4,7 @@
 import { WebSocket } from 'ws'
 import { RelaySessionCrypto } from '../../src/lib/e2ee/relayClient.js'
 import { TerminalP2pInitiator, TERMINAL_P2P_SIGNAL_TYPES } from '../../src/lib/terminalP2p.js'
-import type { TerminalBinaryClear } from '../../src/lib/terminalBinary.js'
+import { TerminalBinaryKind, type TerminalBinaryClear } from '../../src/lib/terminalBinary.js'
 import type { Frame } from './client.js'
 import { until } from './daemon.js'
 import type { PhoneMachine } from './fleet.js'
@@ -15,6 +15,10 @@ export class P2pPhone {
   readonly frames: Array<{ frame: Frame; transport: Transport }> = []
   readonly binaries: Array<{ frame: TerminalBinaryClear; transport: Transport }> = []
   readonly errors: string[] = []
+  /** Whole viewer frames from the `viewer-v1` channel, reassembled from their parts, in arrival order. */
+  readonly viewerFrames: Array<{ streamId: string; seq: number; jpeg: Buffer; width: number; height: number; scale: number }> = []
+  /** Parts of the frame being assembled, by seq: a part of a newer seq drops an unfinished older frame. */
+  private readonly viewerParts = new Map<number, Buffer[]>()
   readonly peer: TerminalP2pInitiator
   private readonly crypto: RelaySessionCrypto
   private readonly ws: WebSocket
@@ -28,6 +32,7 @@ export class P2pPhone {
       policy: { enabled: true, protocolVersion: 1, stunUrls: [], openWaitMs: 1_500 },
       sendSignal: (type, payload) => this.send(type, { ...payload }, 'relay'),
       onData: data => this.receive(data, typeof data !== 'string', 'p2p'),
+      onViewerData: data => this.receiveViewer(data),
     })
     this.ws.on('error', error => this.errors.push(error.message))
     this.ws.on('open', () => this.ws.send(JSON.stringify({ type: 'machine_select', payload: { machineId: machine.machineId } })))
@@ -72,6 +77,22 @@ export class P2pPhone {
     }
   }
 
+  get p2pViewerVersion(): number { return this.crypto.p2pViewerVersion }
+
+  /** The machine sends only binary frame parts on the viewer channel; anything else is an error here. */
+  private receiveViewer(data: string | Buffer): void {
+    const part = typeof data === 'string' ? null : this.crypto.decryptTerminal(Buffer.from(data))
+    if (!part || part.kind !== TerminalBinaryKind.viewerFrame || !part.viewer) { this.errors.push('viewer channel carried something else'); return }
+    for (const seq of this.viewerParts.keys()) if (seq < part.seq) this.viewerParts.delete(seq)
+    const parts = this.viewerParts.get(part.seq) ?? []
+    parts[part.viewer.part] = Buffer.from(part.bytes)
+    this.viewerParts.set(part.seq, parts)
+    if (parts.filter(Boolean).length < part.viewer.parts) return
+    this.viewerParts.delete(part.seq)
+    const { width, height, scale } = part.viewer
+    this.viewerFrames.push({ streamId: part.streamId, seq: part.seq, jpeg: Buffer.concat(parts), width, height, scale })
+  }
+
   async negotiate(): Promise<void> {
     this.peer.start()
     if (!await this.peer.waitUntilReady(15_000)) throw new Error(`P2P did not connect: ${this.peer.negotiationDetail}`)
@@ -84,6 +105,17 @@ export class P2pPhone {
       // Never hide a failed P2P send by substituting relay: this test proves the actual channel.
       if (!this.peer.send(wire)) throw new Error('P2P send failed')
     } else this.ws.send(wire)
+  }
+
+  /** A sealed `surface_*` frame on the viewer channel, never substituted by the relay. */
+  sendViewer(type: string, payload: Record<string, unknown>): void {
+    if (!this.peer.sendViewer(JSON.stringify(this.crypto.wrapOutgoing({ type, payload })))) throw new Error('viewer channel send failed')
+  }
+
+  /** Closes only the viewer channel, as a client whose viewer channel died: the peer connection stays. */
+  closeViewer(): void {
+    // Test-only reach into the initiator: it has no public way to drop one channel.
+    (this.peer as unknown as { viewerChannel: { close(): void } | null }).viewerChannel?.close()
   }
 
   sendBinary(frame: TerminalBinaryClear): void {

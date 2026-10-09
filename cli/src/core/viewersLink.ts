@@ -31,6 +31,8 @@
  * request is, if it is down or slower than a client waits.
  */
 import type { AgentDshContext } from '../lib/agentFrame.js'
+import { decodeGatewayBinary, GatewayBinary } from '../lib/gatewayWire.js'
+import { decodeTerminalLocal } from '../lib/terminalBinary.js'
 import { viewerStreamId } from '../lib/viewerFrames.js'
 import { VIEWERS_UNAVAILABLE, type CoreApi, type ViewersPort } from './api.js'
 import type { ServiceFrame } from './serviceLinks.js'
@@ -116,9 +118,22 @@ export function createViewersLink(core: Pick<CoreApi, 'agents' | 'clients'>, not
     return { kept: true }
   }
 
+  /**
+   * A pushed surface's frame part from the process, `[viewer][connId][part]`: read here once and handed to
+   * whichever gateway is live (`clients.viewerBinary`), its own process's link or the one in this process.
+   * Handing the bytes to the gateway's link alone dropped every part when the gateway ran here
+   * (`HARNESSD_SERVICES=viewers`), while the push went on producing frames nobody received.
+   */
+  const binary = (raw: Uint8Array): void => {
+    const decoded = decodeGatewayBinary(raw)
+    const part = decoded?.kind === GatewayBinary.viewer ? decodeTerminalLocal(decoded.bytes) : null
+    if (part) core.clients.viewerBinary(decoded!.id, part)
+  }
+
   return {
     port,
     notice,
+    binary,
     /** The core's answers to the viewers' questions (core/serviceLinks.ts `answer`, for `viewers`). */
     answer(query: string, payload: Record<string, unknown>): Record<string, unknown> {
       // Every agent the core has with a harness, dormant ones too: the ones it attaches at start.

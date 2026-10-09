@@ -80,6 +80,14 @@ const Set<String> encryptedDownTypes = {
   'terminal_scroll',
   'terminal_chunked_upload_begin',
   'terminal_chunked_upload_cancel',
+  // A remote viewer surface's frames and input (cli/src/lib/interactiveViewer.ts) — owner-only.
+  'viewer_surface',
+  // A viewer surface over the data channel or the relay (cli/src/lib/viewerFrames.ts
+  // `SURFACE_DOWN_TYPES`): its input and acks are the person's, owner-only.
+  'surface_open',
+  'surface_input',
+  'surface_ack',
+  'surface_close',
   'p2p_offer',
   'p2p_answer',
   'p2p_ice_candidate',

@@ -531,6 +531,25 @@ describe('viewer forwarding authentication', () => {
     await socket.unregisterLocalClient('local:viewer')
     await socket.stop()
   })
+
+  it('hands an owner\'s sealed surface frame from its viewer channel to the viewers, and drops a device\'s', async () => {
+    const socket = relaySocket('token')
+    const handle = vi.fn()
+    socket.viewerStreams = { frame: handle, surface: vi.fn(), closed: vi.fn(), closedAll: vi.fn() }
+    const role = vi.spyOn(gatewayOf(socket).e2ee, 'sessionRole').mockReturnValue('device')
+    const open = { surfaceId: 'f'.repeat(32), agentId: 'a', width: 390, height: 844 }
+    await dispatchDown(socket, sealedDown(socket, 'remote', 'surface_open', open).frame, 'remote', 'p2p')
+    expect(handle).not.toHaveBeenCalled()
+    role.mockReturnValue('web')
+    for (const type of ['surface_open', 'surface_input', 'surface_ack', 'surface_close']) {
+      await dispatchDown(socket, sealedDown(socket, 'remote', type, open).frame, 'remote', 'p2p')
+      expect(handle).toHaveBeenLastCalledWith('remote', type, open)
+    }
+    // The machine's own answers are never taken from a client.
+    await dispatchDown(socket, sealedDown(socket, 'remote', 'surface_state', open).frame, 'remote', 'p2p')
+    expect(handle).toHaveBeenCalledTimes(4)
+    await socket.stop()
+  })
 })
 
 const wsMock = vi.hoisted(() => {

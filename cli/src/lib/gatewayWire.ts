@@ -15,6 +15,9 @@ export const enum GatewayBinary {
   remote = 1,
   /** A window here working on another machine through the gateway (`WindowRelay`): its terminal's bytes. */
   window = 2,
+  /** A viewer surface's frame parts (lib/viewerFrameParts.ts), viewers process → core → gateway, in the local
+   *  framing. The gateway only ever sends them on the client's `viewer-v1` P2P channel, never the relay. */
+  viewer = 3,
 }
 
 /** The longest id a binary frame carries: a backend connection id, a Wi-Fi device's, or a window's. */
@@ -33,7 +36,7 @@ export function encodeGatewayBinary(kind: GatewayBinary, id: string, bytes: Uint
 }
 
 export function decodeGatewayBinary(raw: Uint8Array): { kind: GatewayBinary; id: string; bytes: Uint8Array } | null {
-  if (raw.length < 3 || (raw[0] !== GatewayBinary.remote && raw[0] !== GatewayBinary.window)) return null
+  if (raw.length < 3 || raw[0] < GatewayBinary.remote || raw[0] > GatewayBinary.viewer) return null
   const length = (raw[1] << 8) | raw[2]
   if (length === 0 || length > MAX_ID_BYTES || raw.length < 3 + length) return null
   return { kind: raw[0], id: new TextDecoder().decode(raw.subarray(3, 3 + length)), bytes: raw.subarray(3 + length) }

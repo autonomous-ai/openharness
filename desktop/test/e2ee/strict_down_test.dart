@@ -46,6 +46,13 @@ Future<RelaySessionCrypto> _session(Map<String, Object> features) async {
 }
 
 void main() {
+  test('welcome features.p2pViewer: 1 reads as 1, absent or anything else as 0', () async {
+    expect((await _session({'p2pViewer': 1, 'terminalP2p': 1})).p2pViewerVersion, 1);
+    expect((await _session({'terminalP2p': 1})).p2pViewerVersion, 0);
+    expect((await _session({'p2pViewer': '1'})).p2pViewerVersion, 0);
+    expect((await _session({'p2pViewer': 2})).p2pViewerVersion, 0);
+  });
+
   test('team capabilities and peer content are always sealed', () async {
     for (final features in [
       <String, Object>{},

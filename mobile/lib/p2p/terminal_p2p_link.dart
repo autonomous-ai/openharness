@@ -9,6 +9,13 @@ import 'terminal_p2p_policy.dart';
 
 const terminalP2pChannel = 'terminal-v1';
 
+/// The viewer surface's channel, on the terminal's peer connection: one
+/// negotiation serves both. A passenger — its close or error only ends the
+/// viewer stream (which falls back to the relay), never the link. Opened only
+/// for a caller that reads viewer data: a machine from before it refuses the
+/// label, which crashed the CLI's werift initiator.
+const viewerP2pChannel = 'viewer-v1';
+
 /// Covers BOTH peers' gathering plus a TURN allocation — see the CLI's own note on
 /// why 10s was too tight. A terminal opened before the channel is ready falls back
 /// to the relay after `openWaitMs` regardless, so a long budget costs nothing visible.
@@ -84,6 +91,14 @@ abstract interface class TerminalP2pLink {
   /// frame). False means the caller must put the frame on the relay instead.
   bool send(Object data);
 
+  /// The viewer channel is open and under the send-buffer ceiling. Always false
+  /// on a link created without `onViewerData`.
+  bool get viewerReady;
+
+  /// [send] on the viewer channel. A failure ends only the viewer (reported as
+  /// `onViewerState(false)`), never the link. False means use the relay.
+  bool sendViewer(Object data);
+
   /// [send], but a failure caused purely by backpressure gets one bounded chance to
   /// drain first — a burst of upload chunks can cross the ceiling well before the
   /// network has moved any of it.
@@ -106,6 +121,8 @@ abstract interface class TerminalP2pLinkFactory {
     void Function(String reason)? onUnavailable,
     void Function(String step, Duration elapsed)? onStep,
     bool upgrade = false,
+    TerminalP2pDataSink? onViewerData,
+    void Function(bool open)? onViewerState,
   });
 }
 

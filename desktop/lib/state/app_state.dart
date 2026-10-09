@@ -25,6 +25,7 @@ import '../api/api_client.dart';
 import '../viewer/sign_in_browser.dart';
 import '../viewer/direct_link.dart';
 import '../viewer/viewer_services.dart';
+import '../viewer/p2p_viewer_transport.dart';
 import '../viewer/viewer_location.dart';
 import '../viewer/group_sync.dart' show GroupSyncOutcome;
 import '../auth/auth_session.dart';
@@ -6107,31 +6108,64 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// The browser controls only a linked, owned machine's managed viewer. Requests fail while
-  /// disconnected rather than replaying old clicks after a new connection takes over.
+  /// disconnected rather than replaying old clicks after a new connection takes over. Over the
+  /// p2p viewer channel when it is up ([P2pViewerTransport]; never on the native app, which has
+  /// no p2p plugin), the WS `viewer_surface` request otherwise.
   Future<Map<String, dynamic>> viewerSurface(
     String machineId,
     String agentId,
     Map<String, dynamic> payload,
   ) {
+    final key = '$machineId/$agentId/${payload['surfaceId']}';
+    final request = {...payload, 'agentId': agentId};
+    if (payload['op'] == 'close') {
+      final transport = _viewerTransports.remove(key);
+      return transport != null
+          ? transport(request)
+          : _viewerSurfaceWs(machineId, request);
+    }
+    final transport = _viewerTransports[key] ??= P2pViewerTransport(
+      p2p: () => _viewerConn(machineId)?.viewerP2p,
+      ws: (payload) => _viewerSurfaceWs(machineId, payload),
+      states: _surfaceStates.stream
+          .where((state) => state.$1 == machineId)
+          .map((state) => state.$2),
+    );
+    return transport(request);
+  }
+
+  final _viewerTransports = <String, P2pViewerTransport>{};
+
+  /// The machines' `surface_state`/`surface_error` frames: the answers to a pushed surface.
+  final _surfaceStates =
+      StreamController<(String, Map<String, dynamic>)>.broadcast();
+
+  WsConn? _viewerConn(String machineId) {
     final machine = machineStates[machineId];
     if (machine == null ||
         machine.machine.isShared ||
         machine.needsLink ||
         machine.nodeOnline == false ||
         machine.connectionStatus != ConnectionStatus.connected) {
-      return Future.error(
-        StateError('Reconnect this machine to open its viewer.'),
-      );
+      return null;
     }
     final connection = _conn(machineId);
-    if (!connection.isReady) {
+    return connection.isReady ? connection : null;
+  }
+
+  Future<Map<String, dynamic>> _viewerSurfaceWs(
+    String machineId,
+    Map<String, dynamic> payload,
+  ) {
+    final connection = _viewerConn(machineId);
+    if (connection == null) {
       return Future.error(
         StateError('Reconnect this machine to open its viewer.'),
       );
     }
     return connection.request(
       'viewer_surface',
-      payload: {...payload, 'agentId': agentId},
+      payload: payload,
       timeout: const Duration(seconds: 25),
     );
   }
@@ -15763,6 +15797,10 @@ class AppNotifier extends ChangeNotifier {
     }
     final type = event['type'] as String? ?? '';
     final payload = (event['payload'] as Map<String, dynamic>?) ?? {};
+    if (type == 'surface_state' || type == 'surface_error') {
+      _surfaceStates.add((machineId, {...payload, 'type': type}));
+      return;
+    }
     if (type == 'orchestrator_changed') {
       _orchestratorProjects['$machineId/${payload['id']}']?.changed();
       return;

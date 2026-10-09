@@ -129,6 +129,7 @@ describe('remote-password link + relay session crypto (interop with the real E2e
       expect(crypto.handleWelcome(welcome.payload as Record<string, unknown>)).toBe(true)
       expect(crypto.ready).toBe(true)
       expect(crypto.terminalP2pVersion).toBe(1)
+      expect(crypto.p2pViewerVersion).toBe(1)
       expect(crypto.strictDown).toBe(true)
 
       // A daemon that says strictDown gets the formerly-plaintext RPCs sealed, and opens them.

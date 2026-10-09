@@ -19,7 +19,9 @@ import 'package:web/web.dart';
 class _Responder {
   _Responder() {
     pc.ondatachannel = ((RTCDataChannelEvent event) {
-      channel.complete(event.channel..binaryType = 'arraybuffer');
+      final opened = event.channel..binaryType = 'arraybuffer';
+      labels.add(opened.label);
+      (opened.label == viewerP2pChannel ? viewer : channel).complete(opened);
     }).toJS;
     pc.onicecandidate = ((RTCPeerConnectionIceEvent event) {
       final candidate = event.candidate;
@@ -36,6 +38,8 @@ class _Responder {
 
   final pc = RTCPeerConnection();
   final channel = Completer<RTCDataChannel>();
+  final viewer = Completer<RTCDataChannel>();
+  final labels = <String>[];
   final offers = <String>[];
   final aborts = <String>[];
   final _pending = <Map<String, Object?>>[];
@@ -49,10 +53,7 @@ class _Responder {
   };
 
   void _toLink(Map<String, Object?> candidate) => unawaited(
-    link.handleSignal(
-      'p2p_ice_candidate',
-      _envelope({'candidate': candidate}),
-    ),
+    link.handleSignal('p2p_ice_candidate', _envelope({'candidate': candidate})),
   );
 
   Future<void> signal(String type, Map<String, dynamic> payload) async {
@@ -139,7 +140,10 @@ void main() {
   test('opens a direct channel the machine can read', () async {
     final machine = await open();
 
-    expect(states, [TerminalP2pLinkState.connecting, TerminalP2pLinkState.open]);
+    expect(states, [
+      TerminalP2pLinkState.connecting,
+      TerminalP2pLinkState.open,
+    ]);
     expect(responder.link.transport, TerminalP2pTransport.direct);
     // A keyframe outgrows the default 256 KiB; the offer must ask for more.
     expect(responder.offers.single, contains('a=max-message-size:524288'));
@@ -161,6 +165,116 @@ void main() {
       '{"type":"terminal_input"}',
       [1, 2, 3],
     ]);
+  });
+
+  test('a caller that reads no viewer data opens no viewer channel', () async {
+    await open();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(responder.labels, [terminalP2pChannel]);
+    expect(responder.link.viewerReady, isFalse);
+    expect(responder.link.sendViewer('x'), isFalse);
+  });
+
+  group('with a viewer', () {
+    late List<Object> viewerReceived;
+    late List<bool> viewerStates;
+
+    setUp(() {
+      viewerReceived = [];
+      viewerStates = [];
+      responder.link = BrowserTerminalP2pLink(
+        policy: const TerminalP2pPolicy(stunUrls: [], openWaitMs: 2500),
+        sendSignal: (type, payload) =>
+            unawaited(responder.signal(type, payload)),
+        onData: received.add,
+        onState: (state, _, _) => states.add(state),
+        onViewerData: viewerReceived.add,
+        onViewerState: viewerStates.add,
+      );
+    });
+
+    Future<RTCDataChannel> openViewer() async {
+      await open();
+      final machine = await responder.viewer.future.timeout(
+        const Duration(seconds: 5),
+      );
+      await until(() => responder.link.viewerReady);
+      expect(responder.link.viewerReady, isTrue);
+      return machine;
+    }
+
+    test(
+      'the machine sees both channels, and data flows on viewer-v1',
+      () async {
+        final machine = await openViewer();
+        expect(
+          responder.labels,
+          unorderedEquals([terminalP2pChannel, viewerP2pChannel]),
+        );
+        expect(viewerStates, [true]);
+
+        final upstream = <Object?>[];
+        machine.onmessage = ((MessageEvent event) {
+          final data = event.data;
+          upstream.add(
+            data.isA<JSString>()
+                ? (data as JSString).toDart
+                : (data as JSArrayBuffer).toDart.asUint8List().toList(),
+          );
+        }).toJS;
+        expect(responder.link.sendViewer('{"type":"viewer_input"}'), isTrue);
+        expect(responder.link.sendViewer(Uint8List.fromList([4, 5])), isTrue);
+        await until(() => upstream.length == 2);
+        expect(upstream, [
+          '{"type":"viewer_input"}',
+          [4, 5],
+        ]);
+
+        machine.send('{"type":"viewer_frame"}'.toJS);
+        machine.send(Uint8List.fromList([6]).toJS);
+        await until(() => viewerReceived.length == 2);
+        expect(viewerReceived.first, '{"type":"viewer_frame"}');
+        expect(viewerReceived.last, [6]);
+        expect(
+          received,
+          isEmpty,
+          reason: 'nothing of the viewer reaches onData',
+        );
+      },
+    );
+
+    test(
+      'its close reports the viewer closed and spares the terminal',
+      () async {
+        final machine = await openViewer();
+        final terminal = await responder.channel.future;
+
+        machine.close();
+        await until(() => viewerStates.length == 2);
+
+        expect(viewerStates, [true, false]);
+        expect(responder.link.viewerReady, isFalse);
+        expect(responder.link.sendViewer('x'), isFalse);
+        expect(responder.link.isReady, isTrue);
+        expect(states.last, TerminalP2pLinkState.open);
+        final upstream = <Object?>[];
+        terminal.onmessage = ((MessageEvent event) {
+          upstream.add((event.data as JSString).toDart);
+        }).toJS;
+        expect(responder.link.send('still here'), isTrue);
+        await until(() => upstream.isNotEmpty);
+        expect(upstream, ['still here']);
+      },
+    );
+
+    test('stopping closes both', () async {
+      final machine = await openViewer();
+      await responder.link.stop(reason: 'relay_closed');
+      expect(viewerStates, [true, false]);
+      expect(responder.link.sendViewer('late'), isFalse);
+      await until(() => machine.readyState == 'closed');
+      expect(machine.readyState, 'closed');
+    });
   });
 
   test('takes a keyframe larger than the browser default', () async {

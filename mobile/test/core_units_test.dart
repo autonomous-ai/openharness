@@ -994,6 +994,21 @@ void main() {
       expect(DeviceInfo.fromMap('junk'), isNull);
     });
   });
+
+  test('an agent frame carries its viewer, and unsafe viewer URLs are dropped', () {
+    final viewing = Agent.fromJson({
+      'id': 'a', 'name': 'a',
+      'viewerUrl': 'http://127.0.0.1:4100/?file=x.glb',
+      'viewerName': 'Model viewer',
+    });
+    expect(viewing.viewerUrl, 'http://127.0.0.1:4100/?file=x.glb');
+    expect(viewing.viewerName, 'Model viewer');
+    expect(viewing.hasViewer, isTrue);
+    expect(Agent.fromJson({'id': 'a', 'name': 'a', 'viewerUrl': 'javascript:alert(1)'}).viewerUrl, isNull);
+    expect(Agent.fromJson({'id': 'a', 'name': 'a', 'viewerError': 'Viewer stopped'}).hasViewer, isTrue);
+    expect(Agent.fromJson({'id': 'a', 'name': 'a'}).hasViewer, isFalse);
+    expect(viewing.copyWith(name: 'b').viewerUrl, viewing.viewerUrl);
+  });
 }
 
 class _Broken implements LocalKeyValueStore {

@@ -63,14 +63,15 @@ function keyAnswer(answer: Payload): string {
 }
 
 /**
- * What only the devices ask of the core (services/devices.ts, services/wifi.ts), as every other service in
- * its own process answers it: nothing. Shared, so that a member added for the devices is added once for the others.
+ * What only the devices ask of the core (services/devices.ts, services/wifi.ts), or only the viewers (a pushed
+ * surface's frame parts), as every other service in its own process answers it: nothing. Shared, so that a
+ * member added for one service is added once for the others.
  */
 export const UNASKED = {
   machine: { id: () => '', computerId: () => '', name: () => '' },
   activityText: async (): Promise<string | null> => null,
   account: { signedIn: () => false, environment: () => '', machines: async () => ({ status: 503, body: {} }) },
-  clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {}, turnCard: () => {}, turnSummary: () => {} },
+  clients: { sendLocal: () => {}, sendToWindow: () => false, hasWindow: () => false, devicesChanged: () => {}, dialWatching: () => {}, turnCard: () => {}, turnSummary: () => {}, viewerBinary: () => false },
   wifi: WIFI_OFF,
   /** What only the recaps ask (services/recapsProcess.ts): a turn's final answer. */
   lastTurn: async () => null,
@@ -78,7 +79,7 @@ export const UNASKED = {
   machine: CoreApi['machine']
   activityText: CoreApi['agents']['activityText']
   account: Pick<CoreApi['account'], 'signedIn' | 'environment' | 'machines'>
-  clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching' | 'turnCard' | 'turnSummary'>
+  clients: Pick<CoreApi['clients'], 'sendLocal' | 'sendToWindow' | 'hasWindow' | 'devicesChanged' | 'dialWatching' | 'turnCard' | 'turnSummary' | 'viewerBinary'>
   wifi: CoreApi['wifi']
   lastTurn: CoreApi['transcripts']['lastTurn']
 }

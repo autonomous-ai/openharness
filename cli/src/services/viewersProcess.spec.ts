@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CoreApi, CorePorts, ViewersPort } from '../core/api.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
+import { encodeGatewayBinary, GatewayBinary } from '../lib/gatewayWire.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcessOptions } from './process.js'
 import { runViewersService, viewersCoreApi } from './viewersProcess.js'
 
@@ -85,6 +87,32 @@ describe('the viewers in their own process', () => {
     options.onEvent!({ kind: 'stream', connId: 7, type: 'viewer_data' })
     options.onEvent!({ kind: 'stream', connId: 'c1' })
     expect(viewers.port.stream).toHaveBeenCalledTimes(2)
+  })
+
+  it('sends a pushed surface\'s frame parts to the core as binary, for the gateway to put on the client\'s viewer channel', () => {
+    const { api, options } = setup()
+    const part: TerminalBinaryClear = { kind: TerminalBinaryKind.viewerFrame, streamId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', seq: 4, compressed: false,
+      bytes: new Uint8Array([1, 2, 3]), viewer: { part: 0, parts: 1, width: 390, height: 844, scale: 2 } }
+    // Not connected, or connected without binary: the push stops, and the client long-polls instead.
+    expect(api.clients.viewerBinary('c1', part)).toBe(false)
+    options.onConnected!(connection().core)
+    expect(api.clients.viewerBinary('c1', part)).toBe(false)
+    const sendBinary = vi.fn((_bytes: Uint8Array) => true)
+    options.onConnected!({ ...connection().core, sendBinary })
+    expect(api.clients.viewerBinary('c1', part)).toBe(true)
+    expect(sendBinary).toHaveBeenCalledWith(encodeGatewayBinary(GatewayBinary.viewer, 'c1', encodeTerminalLocal(part)!))
+    // A socket that is going refuses it, and so does the sink.
+    sendBinary.mockReturnValueOnce(false)
+    expect(api.clients.viewerBinary('c1', part)).toBe(false)
+    // What cannot be framed is never sent: a part with no stream, a connection id past the wire's limit.
+    expect(api.clients.viewerBinary('c1', { ...part, streamId: 'nope' })).toBe(false)
+    expect(api.clients.viewerBinary('c'.repeat(300), part)).toBe(false)
+    expect(sendBinary).toHaveBeenCalledTimes(2)
+    // A surface's state and errors go as the stream's answers do: a notice the core checks the type of.
+    const notice = vi.fn()
+    options.onConnected!({ ...connection().core, notice })
+    expect(api.clients.viewerFrame('c1', 'surface_state', { surfaceId: 'a' })).toBe(true)
+    expect(notice).toHaveBeenCalledWith('viewer', { connId: 'c1', type: 'surface_state', payload: { surfaceId: 'a' } })
   })
 
   it('ends every stream and surface when the core goes: their connections were that core\'s', () => {
@@ -288,6 +316,7 @@ describe('the viewers in their own process', () => {
     expect(api.clients.observer('observer:x', 'observer_frame', {})).toBe(false)
     // Built on its own, it reaches no client.
     expect(api.clients.viewerFrame('c1', 'viewer_data', {})).toBe(false)
+    expect(api.clients.viewerBinary('c1', { kind: TerminalBinaryKind.viewerFrame, streamId: '', seq: 0, compressed: false, bytes: new Uint8Array() })).toBe(false)
     api.clients.turnCard({ type: 'commander_event', agentId: 'a', dbSessionId: 's', payload: {} })
     api.clients.turnSummary({ type: 'turn_summary' })
   })

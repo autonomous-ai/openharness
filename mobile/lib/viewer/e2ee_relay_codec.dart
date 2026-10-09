@@ -28,6 +28,9 @@ class E2eeRelayCodec implements RelayCodec {
   int get terminalP2pVersion => _session.terminalP2pVersion;
 
   @override
+  int get p2pViewerVersion => _session.p2pViewerVersion;
+
+  @override
   Map<String, dynamic>? encodeFrame(Map<String, dynamic> frame) {
     final type = frame['type'];
     // Before the welcome it is not yet known whether the machine opens [strictDownTypes], and

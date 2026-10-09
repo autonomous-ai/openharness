@@ -15,12 +15,16 @@ import type { GatewayHost, StartedGateway } from './start.js'
 
 const STREAM = '00000000-0000-4000-8000-000000000002'
 const clear: TerminalBinaryClear = { kind: TerminalBinaryKind.input, streamId: STREAM, seq: 3, compressed: false, bytes: new Uint8Array([108, 115]) }
+const viewerFrame: TerminalBinaryClear = {
+  kind: TerminalBinaryKind.viewerFrame, streamId: STREAM, seq: 4, compressed: false, bytes: new Uint8Array([255, 216]),
+  viewer: { part: 0, parts: 1, width: 390, height: 844, scale: 3 },
+}
 
 function stubGateway() {
   const port = {
     connect: vi.fn(), serveThisComputerOnly: vi.fn(), holdRequests: vi.fn(), openRequests: vi.fn(), connected: vi.fn(() => true),
     broadcast: vi.fn(), commander: vi.fn(), user: vi.fn(), reply: vi.fn(), target: vi.fn(() => true), terminal: vi.fn(() => true),
-    terminalBinary: vi.fn(() => true), observer: vi.fn(() => true), windowOpened: vi.fn(), localClients: vi.fn(), local: vi.fn(async () => {}),
+    terminalBinary: vi.fn(() => true), viewerBinary: vi.fn(() => true), observer: vi.fn(() => true), windowOpened: vi.fn(), localClients: vi.fn(), local: vi.fn(async () => {}),
     device: vi.fn(() => true), deviceClient: vi.fn(), stop: vi.fn(async () => {}),
   } satisfies GatewayPort
   const answer = { status: 200, body: { ok: true } }
@@ -161,6 +165,7 @@ describe('the gateway\'s process, spoken to by the core', () => {
     w.link.port.target('phone-1', 'viewer_data', { a: 1 })
     w.link.port.terminal('phone-1', 'terminal_ready', { streamId: STREAM })
     w.link.port.terminalBinary('phone-1', clear)
+    w.link.port.viewerBinary('phone-1', viewerFrame)
     w.link.port.observer('observer:1', 'observer_frame', { b: 2 })
     w.link.port.windowOpened('tui')
     await w.link.port.local('local:w', { type: 'e2ee_pairings_list', payload: {} })
@@ -179,6 +184,8 @@ describe('the gateway\'s process, spoken to by the core', () => {
     expect(port.target).toHaveBeenCalledWith('phone-1', 'viewer_data', { a: 1 })
     expect(port.terminal).toHaveBeenCalledWith('phone-1', 'terminal_ready', { streamId: STREAM })
     expect(port.terminalBinary).toHaveBeenCalledWith('phone-1', clear)
+    expect(port.viewerBinary).toHaveBeenCalledWith('phone-1', viewerFrame)
+    expect(port.terminalBinary).not.toHaveBeenCalledWith('phone-1', viewerFrame)
     expect(port.observer).toHaveBeenCalledWith('observer:1', 'observer_frame', { b: 2 })
     expect(port.windowOpened).toHaveBeenCalledWith('tui')
     expect(port.local).toHaveBeenCalledWith('local:w', { type: 'e2ee_pairings_list', payload: {} })

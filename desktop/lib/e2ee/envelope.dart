@@ -34,6 +34,12 @@ const Set<String> encryptedDownTypes = {
   'agent_close',
   'phone_pair',
   'viewer_surface',
+  // A viewer surface over the data channel or the relay (cli/src/lib/viewerFrames.ts
+  // `SURFACE_DOWN_TYPES`): its input and acks are the person's, owner-only.
+  'surface_open',
+  'surface_input',
+  'surface_ack',
+  'surface_close',
   'api_connections',
   'orchestrator',
   'command_bar',

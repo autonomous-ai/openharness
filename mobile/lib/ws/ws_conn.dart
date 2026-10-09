@@ -11,6 +11,7 @@ import '../logging/startup_trace.dart';
 import '../core/models.dart';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
+import 'viewer_p2p.dart';
 
 typedef AccessTokenProvider = Future<String> Function(
   bool forceRefresh,
@@ -613,6 +614,9 @@ class WsConn {
     'dial_focus',
     'ping',
     'pong',
+    // A rendered viewer's frame polls and input go out at frame rate, and each
+    // reply is somebody's screen.
+    'viewer_surface',
     // Every agent's live chat, pushed to every client selecting the machine
     // (`SessionEvent`/`LiveEvent` in cli/src/lib/normalize.ts). It is what the
     // person typed and what the agent answered — prompts, tool input and
@@ -1036,6 +1040,10 @@ class WsConn {
     // the real onDone -> reconnect path without pretending to be the server.
     await channel.sink.close(4000, 'integration test transport drop');
   }
+
+  /// The plugin's viewer channel for this connection; null without one (the
+  /// local transport, the dev fixture, before the session or after close).
+  ViewerP2p? get viewerP2p => _plugin?.viewer;
 
   void _disposePlugin() {
     final plugin = _plugin;

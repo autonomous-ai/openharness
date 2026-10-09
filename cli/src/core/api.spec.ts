@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { projectDisplayName, type RegisteredSession } from '../lib/registry.js'
+import { TerminalBinaryKind } from '../lib/terminalBinary.js'
 import { CONVERSATIONS_OFF, ACCOUNT_BACKEND_OFF, AGENT_ACTIONS_OFF, createCoreApi, DAEMON_UNKNOWN, DELIVERIES_OFF, DEVICES_FALLBACKS, emptyPorts, LANE_OFF, LONG_ANSWERS, MODELS_OFF, MODELS_REQUESTS, MONITOR_OFF, OBSERVER_KEY_OFF, ORCHESTRATOR_FALLBACKS, RECAPS_FALLBACKS, resolveAgent, SHARING_FALLBACKS, TEAMS_FALLBACKS, TERMINALS_OFF, WIFI_FALLBACKS, WIFI_OFF, type CoreApiDeps } from './api.js'
 import { FAIL, readFallback } from './serviceHost.js'
 
@@ -47,6 +48,7 @@ describe('the core API services stand on', () => {
       runtimeModels: vi.fn(async () => []),
       viewerChanged: vi.fn(),
       viewerFrame: vi.fn(() => true),
+      viewerBinary: vi.fn(() => true),
       gridNamed: vi.fn(),
       gridModelsChanged: vi.fn(),
       dshInstallStatus: vi.fn(),
@@ -114,6 +116,18 @@ describe('the core API services stand on', () => {
     expect(deps.viewerFrame).toHaveBeenCalledWith('c1', 'viewer_data', { streamId: 's' })
     expect(core.clients.viewerFrame('c1', 'agent_synced', {})).toBe(false)
     expect(deps.viewerFrame).toHaveBeenCalledTimes(1)
+    // And a pushed surface's state and errors, sealed to that client like the stream's frames.
+    expect(core.clients.viewerFrame('c1', 'surface_state', { surfaceId: 's' })).toBe(true)
+    expect(core.clients.viewerFrame('c1', 'surface_error', { surfaceId: 's' })).toBe(true)
+    expect(core.clients.viewerFrame('c1', 'surface_open', { surfaceId: 's' })).toBe(false)
+    expect(deps.viewerFrame).toHaveBeenCalledTimes(3)
+    // A surface's frame parts go to the gateway's viewer channel as they are (the gateway takes only that kind).
+    const part = { kind: TerminalBinaryKind.viewerFrame, streamId: 's', seq: 1, compressed: false, bytes: new Uint8Array([1]) }
+    expect(core.clients.viewerBinary('c1', part)).toBe(true)
+    expect(deps.viewerBinary).toHaveBeenCalledWith('c1', part)
+    // Never a terminal's bytes, whatever a viewers process hands it.
+    expect(core.clients.viewerBinary('c1', { ...part, kind: TerminalBinaryKind.output })).toBe(false)
+    expect(deps.viewerBinary).toHaveBeenCalledTimes(1)
     expect(core.clients.dshInstallStatus).toBe(deps.dshInstallStatus)
     expect(core.agents.advertised().map((s) => s.agentId)).toEqual(['live'])
     expect(core.clients.gridNamed).toBe(deps.gridNamed)

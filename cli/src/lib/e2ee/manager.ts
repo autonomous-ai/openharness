@@ -894,7 +894,8 @@ export class E2eeManager {
       epoch: this.epoch,
       // strictDown: this daemon opens a sealed frame of ANY type and refuses unsealed ones from the relay,
       // so a client may seal the types older daemons took in the clear (STRICT_DOWN_TYPES).
-      features: { terminalP2p: 1, viewerForwarding: 1, strictDown: 1 },
+      // p2pViewer: the viewer data channel `viewer-v1` (docs/superpowers/specs/2026-10-08-viewer-p2p-design.md).
+      features: { terminalP2p: 1, viewerForwarding: 1, strictDown: 1, p2pViewer: 1 },
     })))
     this.deps.sendTo(connId, {
       type: 'e2e_welcome',

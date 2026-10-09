@@ -97,7 +97,8 @@ wss.on('connection', ws => ws.on('message', (data, binary) => ws.send(data, {bin
 server.listen(Number(process.env.HARNESS_VIEWER_PORT), '127.0.0.1');`)
   // The daemon's side as the core wires it: the viewers' own serving (services/viewers.ts), reached through
   // the core's streams (core/viewerStreams.ts), as with HARNESSD_SERVICES=none.
-  const served = serveViewers((agentId) => manager.forwardingUrl(agentId), (connId, type, payload) => daemon.sendViewerFrame(connId, type, payload))
+  const served = serveViewers((agentId) => manager.forwardingUrl(agentId), (connId, type, payload) => daemon.sendViewerFrame(connId, type, payload),
+    (connId, part) => daemon.gateway?.viewerBinary(connId, part) ?? false)
   daemon.viewerStreams = createViewerStreams(() => served, (connId, type, payload) => daemon.sendViewerFrame(connId, type, payload))
   const manager = new DshViewerManager({
     onUrl: (agentId, viewerUrl) => {

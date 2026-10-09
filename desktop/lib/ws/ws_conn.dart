@@ -14,6 +14,7 @@ import '../core/models.dart';
 import 'local_daemon_transport.dart';
 import 'relay_codec.dart';
 import 'terminal_transport_plugin.dart';
+import 'viewer_p2p.dart';
 
 typedef AccessTokenProvider = Future<String> Function(
   bool forceRefresh,
@@ -1023,6 +1024,10 @@ class WsConn {
     // the real onDone -> reconnect path without pretending to be the server.
     await channel.sink.close(4000, 'integration test transport drop');
   }
+
+  /// The plugin's viewer channel for this connection; null without one (the
+  /// native desktop, the local transport, before the session or after close).
+  ViewerP2p? get viewerP2p => _plugin?.viewer;
 
   void _disposePlugin() {
     final plugin = _plugin;

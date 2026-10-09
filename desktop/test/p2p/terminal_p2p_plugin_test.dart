@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/terminal/terminal_binary.dart';
 import 'package:harness/ws/terminal_transport_plugin.dart';
+import 'package:harness/ws/viewer_p2p.dart';
 import 'package:harness/web/p2p/terminal_p2p_link.dart';
 
 import 'fakes.dart';
@@ -20,6 +22,26 @@ Map<String, dynamic> ready(String streamId, String requestId) => {
 Iterable<Map<String, dynamic>> p2pResults(FakeHost host) => host.sends
     .where((s) => s.$1['type'] == 'p2p_result')
     .map((s) => s.$1['payload'] as Map<String, dynamic>);
+
+/// Seals by wrapping and opens binary by dropping a 0xEE marker, so a test can
+/// tell the plugin went through the host's codec both ways.
+class _MarkingCodec extends FakeCodec {
+  _MarkingCodec({super.p2pViewerVersion});
+
+  @override
+  Map<String, dynamic>? encodeFrame(Map<String, dynamic> frame) => {
+    'sealed': frame,
+  };
+
+  @override
+  Uint8List? decodeBinary(Uint8List wireFrame) =>
+      wireFrame.isNotEmpty && wireFrame[0] == 0xEE
+      ? Uint8List.sublistView(wireFrame, 1)
+      : null;
+}
+
+Uint8List sealedKeyframe(String streamId) =>
+    Uint8List.fromList([0xEE, ...htrl(TerminalBinaryKind.keyframe, streamId)]);
 
 void main() {
   group('negotiation start', () {
@@ -584,6 +606,308 @@ void main() {
       // Nothing fires afterwards.
       async.elapse(const Duration(hours: 1));
       expect(b.links.created, hasLength(1));
+    });
+  });
+
+  group('viewer channel', () {
+    // A surface id as the machine mints it (32 hex) and the streamId its parts carry.
+    const surface = '33333333333343338333333333333333';
+    const surfaceStream = '33333333-3333-4333-8333-333333333333';
+    const otherSurface = '44444444444444448444444444444444';
+
+    Uint8List part(
+      String streamId, {
+      int seq = 1,
+      int index = 0,
+      int parts = 1,
+      required List<int> bytes,
+    }) => encodeTerminalLocal(
+      TerminalBinaryFrame(
+        kind: TerminalBinaryKind.viewerFrame,
+        streamId: streamId,
+        seq: seq,
+        bytes: Uint8List.fromList(bytes),
+        compressed: false,
+        viewer: (
+          part: index,
+          parts: parts,
+          width: 640,
+          height: 480,
+          centiScale: 200,
+        ),
+      ),
+    )!;
+
+    /// Seals by wrapping and opens binary by dropping a 0xEE marker, so the test
+    /// can tell the plugin went through the host's codec both ways.
+    _MarkingCodec flagged() => _MarkingCodec(p2pViewerVersion: 1);
+
+    /// A loopback part as the codec would have it on the wire.
+    Uint8List onWire(Uint8List local) => Uint8List.fromList([0xEE, ...local]);
+
+    test('no flag: the link has no viewer channel and nothing is sent', () {
+      fakeAsync((async) {
+        final b = bootPlugin(async: async);
+        final link = b.links.last;
+        link.open();
+        flush(async);
+        expect(link.onViewerData, isNull);
+        expect(link.onViewerState, isNull);
+        expect(link.openViewer, throwsStateError, reason: 'single channel');
+        expect(b.plugin.viewer.ready, isFalse);
+        expect(
+          b.plugin.viewer.send('surface_ack', {'surfaceId': surface}),
+          isFalse,
+        );
+        expect(link.viewerSent, isEmpty);
+        b.plugin.dispose();
+      });
+    });
+
+    test('with the flag: send seals one frame onto the viewer channel', () {
+      fakeAsync((async) {
+        final b = bootPlugin(async: async, codec: flagged());
+        final link = b.links.last;
+        link.open();
+        flush(async);
+        expect(b.plugin.viewer.ready, isFalse, reason: 'viewer not open yet');
+        expect(b.plugin.viewer.send('surface_ack', {'seq': 1}), isFalse);
+        link.openViewer();
+        expect(b.plugin.viewer.ready, isTrue);
+        expect(
+          b.plugin.viewer.send('surface_ack', {'surfaceId': surface, 'seq': 3}),
+          isTrue,
+        );
+        expect(jsonDecode(link.viewerSent.single as String), {
+          'sealed': {
+            'type': 'surface_ack',
+            'payload': {'surfaceId': surface, 'seq': 3},
+          },
+        });
+        expect(link.sent, isEmpty, reason: 'never on the terminal channel');
+        expect(
+          b.host.sends.where((s) => s.$1['type'] == 'surface_ack'),
+          isEmpty,
+          reason: 'never on the relay',
+        );
+        link.acceptSends = false;
+        expect(b.plugin.viewer.send('surface_ack', {'seq': 4}), isFalse);
+        b.plugin.dispose();
+      });
+    });
+
+    test('viewer parts are decoded and assembled per surface; nothing else gets through', () {
+      fakeAsync((async) {
+        final b = bootPlugin(async: async, codec: flagged());
+        final link = b.links.last;
+        link.open();
+        link.openViewer();
+        flush(async);
+        final mine = <ViewerFrame>[];
+        final other = <ViewerFrame>[];
+        b.plugin.viewer.frames(surface).listen(mine.add);
+        b.plugin.viewer.frames(otherSurface).listen(other.add);
+        Uint8List sealed(Uint8List local) =>
+            Uint8List.fromList([0xEE, ...local]);
+        link.deliverViewer(
+          sealed(
+            part(surfaceStream, seq: 5, index: 1, parts: 2, bytes: [3, 4]),
+          ),
+        );
+        link.deliverViewer(
+          sealed(
+            part(surfaceStream, seq: 5, index: 0, parts: 2, bytes: [1, 2]),
+          ),
+        );
+        // Not through the codec: dropped.
+        link.deliverViewer(part(surfaceStream, seq: 6, bytes: [9]));
+        // Terminal bytes and text on the viewer channel are not the viewer's.
+        link.deliverViewer(sealed(htrl(TerminalBinaryKind.output, streamA)));
+        link.deliverViewer(jsonEncode(ready(streamA, 'r1')));
+        flush(async);
+        expect(mine, hasLength(1));
+        expect(mine.single.streamId, surfaceStream);
+        expect(mine.single.seq, 5);
+        expect(mine.single.jpeg, [1, 2, 3, 4]);
+        expect(mine.single.scale, 2.0);
+        expect(other, isEmpty);
+        expect(b.host.delivered, isEmpty);
+        expect(b.host.dispatched, isEmpty);
+        b.plugin.dispose();
+      });
+    });
+
+    test(
+      'readiness follows the viewer channel; a demotion leaves it not ready',
+      () {
+        fakeAsync((async) {
+          final b = bootPlugin(async: async, codec: flagged());
+          final link = b.links.last;
+          final states = <bool>[];
+          b.plugin.viewer.readiness.listen(states.add);
+          link.open();
+          link.openViewer();
+          flush(async);
+          link.dropViewer();
+          flush(async);
+          expect(b.plugin.viewer.ready, isFalse);
+          link.openViewer();
+          flush(async);
+          expect(states, [true, false, true]);
+          link.drop('peer_failed');
+          flush(async);
+          expect(states, [true, false, true, false]);
+          expect(b.plugin.viewer.ready, isFalse);
+          expect(b.plugin.viewer.send('surface_ack', {'seq': 1}), isFalse);
+          // The retry's link carries the viewer again.
+          async.elapse(const Duration(seconds: 60));
+          final next = b.links.last;
+          expect(next, isNot(link));
+          next.open();
+          next.openViewer();
+          flush(async);
+          expect(states.last, isTrue);
+          expect(b.plugin.viewer.send('surface_ack', {'seq': 2}), isTrue);
+          expect(next.viewerSent, hasLength(1));
+          b.plugin.dispose();
+          expect(b.plugin.viewer.ready, isFalse);
+        });
+      },
+    );
+
+    test('only a sealed type goes on the viewer channel', () {
+      fakeAsync((async) {
+        final b = bootPlugin(async: async, codec: flagged());
+        final link = b.links.last;
+        link.open();
+        link.openViewer();
+        flush(async);
+        expect(b.plugin.viewer.send('surface_state', {'seq': 1}), isFalse);
+        expect(link.viewerSent, isEmpty);
+        b.plugin.dispose();
+      });
+    });
+
+    test('no flag: the upgrade trial gets no viewer channel either', () {
+      fakeAsync((async) {
+        final b = bootPlugin(async: async);
+        b.links.last.open(transport: TerminalP2pTransport.relay);
+        flush(async);
+        async.elapse(const Duration(seconds: 60));
+        final shadow = b.links.last;
+        expect(shadow.upgrade, isTrue);
+        expect(shadow.onViewerData, isNull);
+        expect(shadow.onViewerState, isNull);
+        b.plugin.dispose();
+      });
+    });
+
+    test(
+      'cancelling a surface\'s frames releases it; asking again starts fresh',
+      () {
+        fakeAsync((async) {
+          final b = bootPlugin(async: async, codec: flagged());
+          final link = b.links.last;
+          link.open();
+          link.openViewer();
+          flush(async);
+          final first = <ViewerFrame>[];
+          final sub = b.plugin.viewer.frames(surface).listen(first.add);
+          link.deliverViewer(
+            onWire(part(surfaceStream, seq: 5, index: 0, parts: 2, bytes: [1])),
+          );
+          flush(async);
+          sub.cancel();
+          flush(async);
+          final again = <ViewerFrame>[];
+          b.plugin.viewer.frames(surface).listen(again.add);
+          link.deliverViewer(
+            onWire(part(surfaceStream, seq: 5, index: 1, parts: 2, bytes: [2])),
+          );
+          flush(async);
+          expect(
+            again,
+            isEmpty,
+            reason: 'the half frame went with the old one',
+          );
+          link.deliverViewer(onWire(part(surfaceStream, seq: 6, bytes: [3])));
+          flush(async);
+          expect(again.single.jpeg, [3]);
+          expect(first, isEmpty);
+          b.plugin.dispose();
+        });
+      },
+    );
+
+    test('dispose reports not ready and ends every stream', () {
+      fakeAsync((async) {
+        final b = bootPlugin(async: async, codec: flagged());
+        final link = b.links.last;
+        final states = <bool>[];
+        var readinessDone = false;
+        var framesDone = false;
+        b.plugin.viewer.readiness.listen(
+          states.add,
+          onDone: () => readinessDone = true,
+        );
+        b.plugin.viewer
+            .frames(surface)
+            .listen((_) {}, onDone: () => framesDone = true);
+        link.open();
+        link.openViewer();
+        flush(async);
+        b.plugin.dispose();
+        flush(async);
+        expect(states, [true, false]);
+        expect(readinessDone, isTrue);
+        expect(framesDone, isTrue);
+      });
+    });
+
+    test('the TURN to direct swap moves the viewer onto the new link', () {
+      fakeAsync((async) {
+        final b = bootPlugin(async: async, codec: flagged());
+        final primary = b.links.last;
+        primary.open(transport: TerminalP2pTransport.relay);
+        primary.openViewer();
+        flush(async);
+        b.host.sendTerminalFrame('terminal_open', {'requestId': 'r1'});
+        flush(async);
+        primary.receive(jsonEncode(ready(streamA, 'r1')));
+        flush(async);
+        final states = <bool>[];
+        b.plugin.viewer.readiness.listen(states.add);
+        async.elapse(const Duration(seconds: 60));
+        final shadow = b.links.last;
+        expect(shadow.upgrade, isTrue);
+        expect(shadow.onViewerData, isNotNull);
+        shadow.open();
+        shadow.openViewer();
+        flush(async);
+        primary.receive(sealedKeyframe(streamA));
+        flush(async);
+        b.plugin.handleInbound('p2p_promote_ack', {
+          'sessionId': shadow.sessionId,
+        });
+        flush(async);
+        expect(primary.stopReason, 'upgraded');
+        expect(states, [true], reason: 're-emitted once on the swap');
+        expect(b.plugin.viewer.ready, isTrue);
+        expect(b.plugin.viewer.send('surface_ack', {'seq': 1}), isTrue);
+        expect(shadow.viewerSent, hasLength(1));
+        expect(primary.viewerSent, isEmpty);
+        final frames = <ViewerFrame>[];
+        b.plugin.viewer.frames(surface).listen(frames.add);
+        shadow.deliverViewer(
+          Uint8List.fromList([
+            0xEE,
+            ...part(surfaceStream, bytes: [7]),
+          ]),
+        );
+        flush(async);
+        expect(frames.single.jpeg, [7]);
+        b.plugin.dispose();
+      });
     });
   });
 }

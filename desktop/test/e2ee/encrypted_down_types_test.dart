@@ -72,6 +72,7 @@ void main() {
       ...namesIn(cli('sharing/protocol.ts'), 'SHARE_REQUEST_TYPES'),
       ...namesIn(cli('teams/wire.ts'), 'TEAM_REQUEST_TYPES'),
       ...namesIn(cli('lib/viewerFrames.ts'), 'VIEWER_DOWN_TYPES'),
+      ...namesIn(cli('lib/viewerFrames.ts'), 'SURFACE_DOWN_TYPES'),
     };
   });
 
@@ -98,11 +99,23 @@ void main() {
       'FLEET_REQUESTS',
       'SHARE_REQUEST_TYPES',
       'VIEWER_DOWN_TYPES',
+      'SURFACE_DOWN_TYPES',
       'PAIR_REQUESTS',
       'PLATE_REQUEST',
       'TEAM_REQUEST_TYPES',
     });
     expect(body, contains('isEncryptedDownType(type)'));
+  });
+
+  test('the viewer surface\'s frames are sealed', () {
+    final surface = namesIn(cli('lib/viewerFrames.ts'), 'SURFACE_DOWN_TYPES');
+    expect(surface, {
+      'surface_open',
+      'surface_input',
+      'surface_ack',
+      'surface_close',
+    });
+    expect(surface.difference(encryptedDownTypes), isEmpty);
   });
 
   test('a machine request this client sends is sealed', () {

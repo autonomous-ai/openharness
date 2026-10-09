@@ -127,4 +127,7 @@ class ObserverRelayCodec implements RelayCodec {
   bool handleRekey(Map<String, dynamic> payload) => false;
   @override
   int get terminalP2pVersion => 0;
+
+  @override
+  int get p2pViewerVersion => 0;
 }

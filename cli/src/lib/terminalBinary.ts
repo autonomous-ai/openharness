@@ -53,6 +53,8 @@ export const enum TerminalBinaryKind {
    *  `imagePaste` — the goal here is only "the pane gets a valid path". Upload (client→CLI) only;
    *  nothing ever sends this back down. */
   pasteFile = 7,
+  /** One part of a viewer surface's JPEG frame, machine → client, on the viewer data channel only (lib/viewerFrameParts.ts). */
+  viewerFrame = 8,
 }
 
 export interface TerminalBinaryClear {
@@ -65,6 +67,8 @@ export interface TerminalBinaryClear {
   rows?: number
   /** Origin of this input, inside the authenticated/encrypted payload. */
   tabId?: string
+  /** viewerFrame only: which part of the JPEG this is, and the surface geometry it was captured at. */
+  viewer?: { part: number; parts: number; width: number; height: number; scale: number }
 }
 
 export interface TerminalBinaryEnvelope {
@@ -99,6 +103,15 @@ function uuidString(bytes: Uint8Array): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
+const VIEWER_META_BYTES = 10
+
+/** The viewer part's bounds, shared by encode and decode so neither accepts what the other refuses. */
+function validViewer(part: number, parts: number, width: number, height: number, centiScale: number): boolean {
+  return Number.isInteger(part) && Number.isInteger(parts) && parts >= 1 && parts <= 16 && part >= 0 && part < parts
+    && Number.isInteger(width) && width >= 1 && width <= 7680 && Number.isInteger(height) && height >= 1 && height <= 7680
+    && Number.isInteger(centiScale) && centiScale >= 50 && centiScale <= 300
+}
+
 function validKind(value: number): value is TerminalBinaryKind {
   return value === TerminalBinaryKind.input
     || value === TerminalBinaryKind.output
@@ -107,6 +120,7 @@ function validKind(value: number): value is TerminalBinaryKind {
     || value === TerminalBinaryKind.paste
     || value === TerminalBinaryKind.imagePaste
     || value === TerminalBinaryKind.pasteFile
+    || value === TerminalBinaryKind.viewerFrame
 }
 
 export function terminalBinaryType(kind: TerminalBinaryKind): string {
@@ -116,6 +130,7 @@ export function terminalBinaryType(kind: TerminalBinaryKind): string {
   if (kind === TerminalBinaryKind.paste) return 'terminal_paste'
   if (kind === TerminalBinaryKind.imagePaste) return 'terminal_paste_image'
   if (kind === TerminalBinaryKind.pasteFile) return 'terminal_paste_file'
+  if (kind === TerminalBinaryKind.viewerFrame) return 'viewer_frame'
   return 'terminal_sync'
 }
 
@@ -147,9 +162,14 @@ export function encodeTerminalPlain(frame: TerminalBinaryClear): Uint8Array | nu
     || frame.kind === TerminalBinaryKind.pasteFile)
     && frame.compressed) return null
   if (frame.kind === TerminalBinaryKind.sync && frame.bytes.length !== 0) return null
+  const viewer = frame.kind === TerminalBinaryKind.viewerFrame ? frame.viewer : undefined
+  if (frame.kind === TerminalBinaryKind.viewerFrame) {
+    if (frame.compressed || !viewer || frame.tabId !== undefined
+      || !validViewer(viewer.part, viewer.parts, viewer.width, viewer.height, Math.round(viewer.scale * 100))) return null
+  }
   const scope = frame.tabId === undefined ? null : Buffer.from(frame.tabId, 'utf8')
   if (scope && (!canCarrySwarm(frame.kind) || !/^[A-Za-z0-9_-]{1,128}$/.test(frame.tabId!))) return null
-  const metaBytes = frame.kind === TerminalBinaryKind.keyframe ? 28 : 24 + (scope ? 1 + scope.length : 0)
+  const metaBytes = frame.kind === TerminalBinaryKind.keyframe ? 28 : viewer ? 24 + VIEWER_META_BYTES : 24 + (scope ? 1 + scope.length : 0)
   const out = new Uint8Array(metaBytes + frame.bytes.length)
   out.set(id, 0)
   const view = new DataView(out.buffer)
@@ -160,6 +180,13 @@ export function encodeTerminalPlain(frame: TerminalBinaryClear): Uint8Array | nu
     view.setUint16(24, frame.cols!, false)
     view.setUint16(26, frame.rows!, false)
   }
+  if (viewer) {
+    view.setUint16(24, viewer.part, false)
+    view.setUint16(26, viewer.parts, false)
+    view.setUint16(28, viewer.width, false)
+    view.setUint16(30, viewer.height, false)
+    view.setUint16(32, Math.round(viewer.scale * 100), false)
+  }
   if (scope) { out[24] = scope.length; out.set(scope, 25) }
   out.set(frame.bytes, metaBytes)
   return out
@@ -169,8 +196,8 @@ export function decodeTerminalPlain(kind: TerminalBinaryKind, flags: number, pla
   if ((flags & ~(FLAG_ZLIB | FLAG_SWARM)) !== 0 || ((flags & FLAG_SWARM) && !canCarrySwarm(kind))
     || ((kind === TerminalBinaryKind.input || kind === TerminalBinaryKind.sync
       || kind === TerminalBinaryKind.paste || kind === TerminalBinaryKind.imagePaste
-      || kind === TerminalBinaryKind.pasteFile) && (flags & FLAG_ZLIB) !== 0)) return null
-  let metaBytes = kind === TerminalBinaryKind.keyframe ? 28 : 24
+      || kind === TerminalBinaryKind.pasteFile || kind === TerminalBinaryKind.viewerFrame) && (flags & FLAG_ZLIB) !== 0)) return null
+  let metaBytes = kind === TerminalBinaryKind.keyframe ? 28 : kind === TerminalBinaryKind.viewerFrame ? 24 + VIEWER_META_BYTES : 24
   let tabId: string | undefined
   if (flags & FLAG_SWARM) {
     const length = plaintext[24]
@@ -183,6 +210,12 @@ export function decodeTerminalPlain(kind: TerminalBinaryKind, flags: number, pla
   const view = new DataView(plaintext.buffer, plaintext.byteOffset, plaintext.byteLength)
   const seq = safeU64(view, 16)
   if (seq == null) return null
+  let viewer: TerminalBinaryClear['viewer']
+  if (kind === TerminalBinaryKind.viewerFrame) {
+    const centi = view.getUint16(32, false)
+    viewer = { part: view.getUint16(24, false), parts: view.getUint16(26, false), width: view.getUint16(28, false), height: view.getUint16(30, false), scale: centi / 100 }
+    if (!validViewer(viewer.part, viewer.parts, viewer.width, viewer.height, centi)) return null
+  }
   return {
     kind,
     streamId: uuidString(plaintext.subarray(0, 16)),
@@ -190,6 +223,7 @@ export function decodeTerminalPlain(kind: TerminalBinaryKind, flags: number, pla
     bytes: plaintext.slice(metaBytes),
     compressed: (flags & FLAG_ZLIB) !== 0,
     ...(tabId === undefined ? {} : { tabId }),
+    ...(viewer ? { viewer } : {}),
     ...(kind === TerminalBinaryKind.keyframe ? { cols: view.getUint16(24, false), rows: view.getUint16(26, false) } : {}),
   }
 }

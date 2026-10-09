@@ -30,6 +30,8 @@ class _BackedUpLink extends FakeTerminalP2pLink {
     super.onUnavailable,
     super.upgrade,
     required super.sessionId,
+    super.onViewerData,
+    super.onViewerState,
   });
 
   @override
@@ -53,6 +55,8 @@ class _Links extends FakeLinkFactory {
     void Function(String reason)? onUnavailable,
     void Function(String step, Duration elapsed)? onStep,
     bool upgrade = false,
+    TerminalP2pDataSink? onViewerData,
+    void Function(bool open)? onViewerState,
   }) {
     onStep?.call('offer-created', const Duration(milliseconds: 5));
     steps.add(upgrade ? 'upgrade' : 'primary');
@@ -65,6 +69,8 @@ class _Links extends FakeLinkFactory {
         onUnavailable: onUnavailable,
         onStep: onStep,
         upgrade: upgrade,
+        onViewerData: onViewerData,
+        onViewerState: onViewerState,
       );
     }
     final link = _BackedUpLink(
@@ -75,6 +81,8 @@ class _Links extends FakeLinkFactory {
       onUnavailable: onUnavailable,
       upgrade: upgrade,
       sessionId: 'backed-up-${created.length + 1}',
+      onViewerData: onViewerData,
+      onViewerState: onViewerState,
     );
     created.add(link);
     return link;

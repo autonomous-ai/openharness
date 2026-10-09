@@ -32,6 +32,8 @@ class FakeTerminalP2pLink implements TerminalP2pLink {
     this.onUnavailable,
     this.upgrade = false,
     required this.sessionId,
+    this.onViewerData,
+    this.onViewerState,
   });
 
   final TerminalP2pPolicy policy;
@@ -40,6 +42,8 @@ class FakeTerminalP2pLink implements TerminalP2pLink {
   final TerminalP2pStateSink? onState;
   final void Function(String reason)? onUnavailable;
   final bool upgrade;
+  final TerminalP2pDataSink? onViewerData;
+  final void Function(bool open)? onViewerState;
 
   @override
   final String sessionId;
@@ -52,6 +56,8 @@ class FakeTerminalP2pLink implements TerminalP2pLink {
   bool? stopNotifiedPeer;
   TerminalP2pTransport? _transport;
   final sent = <Object>[];
+  bool viewerOpen = false;
+  final viewerSent = <Object>[];
   final signals = <(String, Map<String, dynamic>)>[];
   final _waiters = <Completer<bool>>[];
 
@@ -79,6 +85,37 @@ class FakeTerminalP2pLink implements TerminalP2pLink {
       const Duration(milliseconds: 420),
       null,
     );
+  }
+
+  /// The `viewer-v1` channel opened. Only a link created with `onViewerData`
+  /// has one, as on the real links.
+  void openViewer() {
+    if (onViewerData == null) {
+      throw StateError('no viewer channel: created without onViewerData');
+    }
+    _setViewerOpen(true);
+  }
+
+  /// The viewer channel closed under an open link; the terminal is untouched.
+  void dropViewer() => _setViewerOpen(false);
+
+  /// Something arrived over the viewer channel.
+  void deliverViewer(Object data) => onViewerData!(data);
+
+  void _setViewerOpen(bool open) {
+    if (viewerOpen == open) return;
+    viewerOpen = open;
+    onViewerState?.call(open);
+  }
+
+  @override
+  bool get viewerReady => viewerOpen && acceptSends;
+
+  @override
+  bool sendViewer(Object data) {
+    if (!viewerReady) return false;
+    viewerSent.add(data);
+    return true;
   }
 
   /// Never reached open.
@@ -147,6 +184,7 @@ class FakeTerminalP2pLink implements TerminalP2pLink {
     ready = false;
     stopReason = reason;
     stopNotifiedPeer = notifyPeer;
+    _setViewerOpen(false);
     for (final waiter in _waiters.toList()) {
       if (!waiter.isCompleted) waiter.complete(false);
     }
@@ -177,6 +215,8 @@ class FakeLinkFactory implements TerminalP2pLinkFactory {
     void Function(String reason)? onUnavailable,
     void Function(String step, Duration elapsed)? onStep,
     bool upgrade = false,
+    TerminalP2pDataSink? onViewerData,
+    void Function(bool open)? onViewerState,
   }) {
     final link = FakeTerminalP2pLink(
       policy: policy,
@@ -186,6 +226,8 @@ class FakeLinkFactory implements TerminalP2pLinkFactory {
       onUnavailable: onUnavailable,
       upgrade: upgrade,
       sessionId: 'session-${created.length + 1}',
+      onViewerData: onViewerData,
+      onViewerState: onViewerState,
     );
     created.add(link);
     return link;
@@ -193,10 +235,13 @@ class FakeLinkFactory implements TerminalP2pLinkFactory {
 }
 
 class FakeCodec implements RelayCodec {
-  FakeCodec({this.terminalP2pVersion = 1});
+  FakeCodec({this.terminalP2pVersion = 1, this.p2pViewerVersion = 0});
 
   @override
   final int terminalP2pVersion;
+
+  @override
+  final int p2pViewerVersion;
 
   @override
   Map<String, dynamic> helloFrame() => {'type': 'e2e_hello', 'payload': {}};
@@ -338,6 +383,7 @@ Map<String, dynamic> linkMode(String streamId, String mode) => {
 };
 
 /// A plugin with its host and link factory, session already up on the given policy.
+/// [codec], when given, replaces the default one (and [peerVersion] with it).
 ///
 /// Under [async], the plugin's clock is the fake one — `DateTime.now()` is not
 /// faked on its own, and the retry budget and migration sweep read the clock.
@@ -345,8 +391,11 @@ Map<String, dynamic> linkMode(String streamId, String mode) => {
   Map<String, dynamic>? policy = enabledPolicy,
   int peerVersion = 1,
   FakeAsync? async,
+  FakeCodec? codec,
 }) {
-  final host = FakeHost(codec: FakeCodec(terminalP2pVersion: peerVersion));
+  final host = FakeHost(
+    codec: codec ?? FakeCodec(terminalP2pVersion: peerVersion),
+  );
   final links = FakeLinkFactory();
   final epoch = DateTime(2026, 9, 14);
   final plugin = TerminalP2pPlugin(
