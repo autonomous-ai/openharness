@@ -464,12 +464,7 @@ class NewHarnessController extends ChangeNotifier {
         : _autoProject
         ? _generatedProject()
         : const NewHarnessProject.fresh();
-    if (task != null) {
-      this.task = task;
-      // A task handed in (typed while the computer was being prepared, say)
-      // names the suggested project as one typed here does.
-      _followTask();
-    }
+    if (task != null) this.task = task;
     _worktree = draft?.worktree;
     _recoveredWorktreePreference = draft?.worktreePreference;
     _branchRef = draft?.branchRef;
