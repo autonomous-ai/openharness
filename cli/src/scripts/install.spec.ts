@@ -1084,7 +1084,7 @@ describe("scripts/install.sh: hn", () => {
   // The constants and helpers (install_hn among them), then step 3c alone.
   const hnStepOf = (source: string) =>
     source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# 1. Host requirements")) +
-    source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 3d. OpenCode"));
+    source.slice(source.indexOf("# 3c. hn's binary"), source.indexOf("# 4. Ensure ~/.local/bin"));
 
   it("installs hn after the grid and before PATH, as a step the install can survive", () => {
     const source = readFileSync(installer, "utf8");
@@ -1283,10 +1283,10 @@ describe("scripts/install.sh: OpenCode for hn's first window", () => {
   // The constants (NEW_COMPUTER among them), then step 3d alone.
   const openCodeStepOf = (source: string) =>
     source.slice(source.indexOf('METADATA_URL="${HARNESS_METADATA_URL'), source.indexOf("# Shared by every download")) +
-    source.slice(source.indexOf("# 3d. OpenCode"), source.indexOf("# 4. Ensure ~/.local/bin"));
+    source.slice(source.indexOf("# 4b. OpenCode"), source.indexOf("# 5. Final verification"));
 
   // OpenCode's own installer, as served: a script for bash that puts the binary in ~/.opencode/bin.
-  const run = (mode: string, { agent = "", installs = true } = {}) => {
+  const run = (mode: string, { agent = "", installs = true, attended = true } = {}) => {
     const scratch = mkdtempSync(join(tmpdir(), "harness-opencode-"));
     try {
       const home = join(scratch, "home");
@@ -1300,7 +1300,7 @@ describe("scripts/install.sh: OpenCode for hn's first window", () => {
       ]);
       const result = spawnSync("/bin/sh", ["-c", openCodeStepOf(readFileSync(installer, "utf8"))], {
         encoding: "utf8",
-        env: { ...process.env, HOME: home, INSTALL_MODE: mode, PATH: `${scratch}:/usr/bin:/bin` },
+        env: { ...process.env, HOME: home, INSTALL_MODE: mode, PATH: `${scratch}:/usr/bin:/bin`, HARNESS_INSTALL_ATTENDED: attended ? "1" : "" },
       });
       let curl = "";
       try { curl = readFileSync(join(scratch, "curl-invocations"), "utf8"); } catch { /* never asked */ }
@@ -1318,7 +1318,10 @@ describe("scripts/install.sh: OpenCode for hn's first window", () => {
     expect(marked, "hn's first start opens OpenCode (tui/src/first_run.rs)").toBe(true);
     expect(result.stdout).toContain("✓ OpenCode ready");
     const source = readFileSync(installer, "utf8");
-    expect(source.slice(source.indexOf("# 3d. OpenCode"), source.indexOf("# 4. Ensure ~/.local/bin"))).toContain("bash -s -- --no-modify-path");
+    const step = source.indexOf("# 4b. OpenCode");
+    expect(source.slice(step, source.indexOf("# 5. Final verification"))).toContain("bash -s -- --no-modify-path");
+    // After ~/.local/bin is on PATH: stopping a slow download leaves a working PATH.
+    expect(step).toBeGreaterThan(source.indexOf("\nensure_path_rc\n"));
   }, 20_000);
 
   it("leaves it alone where there is an agent or Harness already, and to the app under --desktop", () => {
@@ -1333,6 +1336,10 @@ describe("scripts/install.sh: OpenCode for hn's first window", () => {
       expect(curl, mode).toBe("");
       expect(marked, mode).toBe(false);
     }
+    // Nobody at a terminal (a Docker build, a provisioning script): no agent it did not ask for.
+    const unattended = run("standalone", { attended: false });
+    expect(unattended.curl).toBe("");
+    expect(unattended.marked).toBe(false);
   }, 20_000);
 
   it("survives a download that fails: says a pane will install it, and the install goes on", () => {

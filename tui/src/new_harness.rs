@@ -344,6 +344,13 @@ fn short_path(path: &str, home: &str) -> String {
         path.into()
     }
 }
+/// A machine's home folder: as its daemon reported it, or this computer's own.
+fn machine_home(app: &App, machine: &str) -> Option<String> {
+    app.homes.get(machine).cloned().or_else(|| {
+        (machine == app.fleet.local_id || crate::local::is_local(machine)).then(|| std::env::var("HOME").ok()).flatten()
+    })
+}
+
 fn machine_label(app: &App, machine: &str) -> String {
     if app.fleet.machines.iter().any(|m| m.id == machine && m.local) {
         "local".into()
@@ -495,18 +502,20 @@ fn make_form(app: &mut App, machine: Option<String>, cwd: Option<String>, surfac
         .and_then(|p| app.fleet.agent(&p.machine_id, &p.agent_id));
     let what = saved_agent(&saved);
     let engine = what.engine.clone();
-    // The home folder itself is nobody's project: hn's first shell starts there, and a fresh Mac's
-    // first harness wrote its files straight into it (macOS VM, 2026-10-09). A new project, as the
-    // desktop app makes one, unless the person chooses the folder (a terminal keeps it: set_engine).
-    let home = app.homes.get(&machine).cloned().or_else(|| {
-        (machine == app.fleet.local_id || crate::local::is_local(&machine)).then(|| std::env::var("HOME").ok()).flatten()
-    });
-    let project = cwd
-        .or_else(|| saved["projects"][&machine].as_str().map(str::to_string))
-        .or_else(|| current.map(|a| a.cwd.clone()).filter(|p| !p.is_empty()))
-        .filter(|p| what.engine == "terminal" || home.as_deref().is_none_or(|h| p.trim_end_matches('/') != h.trim_end_matches('/')))
-        .map(Project::Folder)
-        .unwrap_or_else(|| Project::New(String::new()));
+    // The home folder is nobody's project: hn's first shell starts there, and a fresh Mac's first
+    // harness, from that shell, wrote its files straight into it (macOS VM, 2026-10-09). Where the form
+    // was opened from home, a new project, as the desktop app makes one. A project the person chose
+    // (remembered) stays theirs, and a terminal from it opens at home (set_engine, the welcome row).
+    let home = machine_home(app, &machine);
+    let at_home = |p: &String| home.as_deref().is_some_and(|h| p.trim_end_matches('/') == h.trim_end_matches('/'));
+    let project = if cwd.as_ref().is_some_and(at_home) {
+        Project::New(String::new())
+    } else {
+        cwd.or_else(|| saved["projects"][&machine].as_str().map(str::to_string))
+            .or_else(|| current.map(|a| a.cwd.clone()).filter(|p| !p.is_empty() && !at_home(p)))
+            .map(Project::Folder)
+            .unwrap_or_else(|| Project::New(String::new()))
+    };
     let permission = saved["permissions"][&engine]
         .as_str()
         .map(str::to_string)
@@ -578,11 +587,7 @@ fn refresh_form(app: &App, form: &mut Form) {
         form.child_active = false;
         form.trail.clear();
     }
-    form.home = app
-        .homes
-        .get(&form.draft.machine)
-        .cloned()
-        .unwrap_or_default();
+    form.home = machine_home(app, &form.draft.machine).unwrap_or_default();
     if form.draft.what.engine == "terminal"
         && matches!(&form.draft.project,Project::Folder(p) if p.is_empty())
         && !form.home.is_empty()

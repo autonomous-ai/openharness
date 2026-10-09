@@ -1610,6 +1610,7 @@ fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts
         Ok(reply) => {
             if let Some(id) = reply.pointer("/agent/id").and_then(|v| v.as_str()) {
                 if let Some(form_id) = &opts.form_id { crate::new_harness::created(app, form_id, &reply["agent"]); }
+                if opts.first_run { crate::first_run::created(app, &machine, id) }
                 app.fleet.agents.insert((machine.clone(), id.to_string()), crate::fleet::agent_from(&machine, &reply["agent"], None));
                 if reply["agent"]["engine"] == "terminal" { app.shells.insert((machine.clone(), id.to_string())); }
                 // Keep new harnesses in the current window, filling it or splitting beside
@@ -1645,12 +1646,14 @@ fn creation_finished(app: &mut App, machine: String, session: u32, opts: NewOpts
             } else {
                 if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec!["the machine created no harness".into()], 1)); return }
                 if let Some(form_id) = &opts.form_id { crate::new_harness::completed(app, form_id, Some("The machine created no harness — try again".into())); }
+                if opts.first_run { crate::first_run::failed(app) }
                 app.say("The machine created no harness", theme::DANGER)
             }
         }
         Err(e) => {
             if let Some(tx) = app.held_reply.take().filter(|_| opts.print.is_some()) { app.print_new = None; let _ = tx.send((Vec::new(), vec![format!("create harness failed: {e}")], 1)); return }
             if let Some(form_id) = &opts.form_id { crate::new_harness::completed(app, form_id, Some(format!("Could not start it: {e}"))); }
+            if opts.first_run { crate::first_run::failed(app) }
             app.say(format!("Could not start it: {e}"), theme::DANGER)
         }
     }
@@ -3523,6 +3526,8 @@ pub struct NewOpts {
     /// Additional project/permission choices from the interactive draft.
     pub extra: Option<serde_json::Value>, pub form_id: Option<String>,
     pub target: Option<LaunchTarget>,
+    /// A computer's first hn (first_run.rs): told what was made, or that nothing was.
+    pub first_run: bool,
 }
 
 #[derive(Clone, Debug)]

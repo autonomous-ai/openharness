@@ -97,7 +97,7 @@ HN_LAUNCHER="$BIN_DIR/hn"
 ORIGINAL_PATH="$PATH"
 
 # A computer with no coding agent and no Harness yet, before this install changes that: hn's first
-# window opens on OpenCode there, so step 3d downloads it, as the desktop app does during its setup
+# window opens on OpenCode there, so step 4b downloads it, as the desktop app does during its setup
 # (desktop/lib/bootstrap/agent_prefetch.dart `alreadyHasAnAgent`, the same places).
 no_agent_yet() {
   for path in "$HOME/.harness/cli" "$HOME/.claude" "$HOME/.codex" "$HOME/.opencode/bin/opencode" \
@@ -776,17 +776,29 @@ if [ "$INSTALL_MODE" = "standalone" ]; then
   install_hn || echo "  · hn will download itself the first time you run it"
 fi
 
-# 3d. OpenCode, on a computer with no agent at all (NEW_COMPUTER): hn's first window opens on it with
-#     a task typed in, so it is downloaded now rather than in front of the person in that pane. The
-#     CLI's recipe (cli/src/lib/engineInstall.ts) with --no-modify-path, as the desktop app runs it:
-#     Harness finds ~/.opencode/bin itself. Never under --desktop, whose app downloads it beside this
-#     install, and optional: a pane installs it, with the npm fallback, if this does not.
-if [ "$INSTALL_MODE" = "standalone" ] && [ "$NEW_COMPUTER" = 1 ]; then
+# 4. Ensure ~/.local/bin is on PATH (per shell), idempotently — defined up with the other helpers.
+ensure_path_rc
+
+# 4b. OpenCode, on a computer with no agent at all (NEW_COMPUTER) with a person at the terminal (a
+#     Docker build or a provisioning script gets no agent it did not ask for): hn's first window opens
+#     on it with a task typed, so it is downloaded now rather than in front of the person in that pane.
+#     The CLI's recipe (cli/src/lib/engineInstall.ts) with --no-modify-path, as the desktop app runs
+#     it: Harness finds ~/.opencode/bin itself. Never under --desktop, whose app downloads it beside
+#     this install. After step 4, so stopping a slow download leaves a working PATH, and never longer
+#     than three minutes; optional either way: a pane installs it, with the npm fallback.
+#     HARNESS_INSTALL_ATTENDED=1 says a person is there when stdout is not a terminal (the specs).
+if [ "$INSTALL_MODE" = "standalone" ] && [ "$NEW_COMPUTER" = 1 ] \
+    && { [ -t 1 ] || [ "${HARNESS_INSTALL_ATTENDED:-}" = 1 ]; }; then
   # The mark hn's first start takes (tui/src/first_run.rs): OpenCode with a task typed, not a shell.
   mkdir -p "$HOME/.harness/tui" && : > "$HOME/.harness/tui/first-run" || true
   echo "▸ Downloading OpenCode, the free coding agent hn starts with"
-  if curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path >/dev/null 2>&1 \
-      && [ -x "$HOME/.opencode/bin/opencode" ]; then
+  ( curl -fsSL --connect-timeout 20 https://opencode.ai/install | bash -s -- --no-modify-path ) >/dev/null 2>&1 &
+  download=$!
+  waited=0
+  while kill -0 "$download" 2>/dev/null && [ "$waited" -lt 180 ]; do sleep 1; waited=$((waited + 1)); done
+  kill "$download" 2>/dev/null || true
+  wait "$download" 2>/dev/null || true
+  if [ -x "$HOME/.opencode/bin/opencode" ]; then
     # Run once, `--version` only, as the desktop does: macOS checks a new binary on its first run
     # (3.9 s against 0.4 s after, fresh VM, 2026-10-09), which would be hn's first pane's. Never
     # longer than 20 s.
@@ -801,9 +813,6 @@ if [ "$INSTALL_MODE" = "standalone" ] && [ "$NEW_COMPUTER" = 1 ]; then
     echo "  · OpenCode will be installed when hn first starts it"
   fi
 fi
-
-# 4. Ensure ~/.local/bin is on PATH (per shell), idempotently — defined up with the other helpers.
-ensure_path_rc
 
 # 5. Final verification. Use the launcher by absolute path because this process cannot update its
 #    parent shell's PATH. Installation never authenticates or starts the adapter implicitly.

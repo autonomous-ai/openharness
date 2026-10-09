@@ -5757,8 +5757,9 @@ impl App {
         if self.link(&self.fleet.local_id).is_none() { return }
         self.shell_asked = true;
         // A computer's first hn, as the installer marked it: OpenCode with a task typed, not a shell
-        // (first_run.rs). Not when `hn new` named a folder or a command.
-        if self.start_session.as_ref().is_none_or(|s| s.cwd.is_none() && s.command.is_none()) && crate::first_run::take() {
+        // (first_run.rs). Only a plain `hn`: `hn new`, its folder, its command and a chain after it
+        // are asked for, and get them.
+        if self.start_session.is_none() && self.start_then.is_empty() && crate::first_run::take() {
             crate::first_run::start(self);
             return;
         }
