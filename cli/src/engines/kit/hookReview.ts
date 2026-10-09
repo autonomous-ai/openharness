@@ -52,14 +52,51 @@ export function reviewRecords(record: HookReviewRecord, settingsFile: string, se
     const hookIndex = block.hooks.findIndex((hook) => isOurs({ hooks: [hook] }))
     const hook = block.hooks[hookIndex]
     if (hook.type !== 'command' || typeof hook.command !== 'string') continue
+    // A hook edited into a shape Harness does not write is one the engine reads its own way: it asks.
+    if ((hook.timeout !== undefined && typeof hook.timeout !== 'number') || (block.matcher !== undefined && typeof block.matcher !== 'string')) continue
     records.set(`${settingsFile}:${label}:${blockIndex}:${hookIndex}`, reviewHash(record, event, block.matcher, hook))
   }
   return records
 }
 
 const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-/** `hooks.state` as a header path, however its dots are spaced. */
-const tablePath = (table: string): string => table.split('.').map(escape).join(String.raw`[ \t]*\.[ \t]*`)
+/** One key, bare or quoted: `hooks`, `"hooks"` and `'hooks'` name the same table. */
+const segment = (key: string): string => `(?:${escape(key)}|"${escape(key)}"|'${escape(key)}')`
+/** `hooks.state` as a header path, however its dots are spaced and its keys quoted. */
+const tablePath = (table: string): string => table.split('.').map(segment).join(String.raw`[ \t]*\.[ \t]*`)
+/** A key in a header: bare, or a one-line string. */
+const KEY = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')`
+const HEADER = new RegExp(String.raw`^[ \t]*\[\[?[ \t]*${KEY}(?:[ \t]*\.[ \t]*${KEY})*[ \t]*\]\]?[ \t]*(?:#.*)?\r?$`)
+
+/**
+ * The text as it is read for its structure: multi-line strings and a byte order mark blanked to spaces,
+ * newlines kept, so that a line inside a string is never taken for a header or a key, and every offset still
+ * points into the real text. Codex refuses a config.toml that does not parse, every setting in it lost: a
+ * header appended in the wrong place would cost a person far more than a hook review.
+ */
+const structure = (text: string): string => text
+  .replace(/^﻿/, ' ')
+  .replace(/"""[\s\S]*?"""|'''[\s\S]*?'''/g, (string) => string.replace(/[^\n]/g, ' '))
+
+/** How many arrays and inline tables a line opens, less those it closes; its strings and comment left out. */
+const opens = (line: string): number => {
+  const bare = line.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, '').replace(/#.*/, '')
+  return (bare.match(/[[{]/g)?.length ?? 0) - (bare.match(/[\]}]/g)?.length ?? 0)
+}
+
+interface Line { start: number; end: number; text: string }
+/** The table headers, in order: a line of an array or inline table that spans lines (`["a"]`) is a value. */
+function headers(shape: string): Line[] {
+  const found: Line[] = []
+  let depth = 0
+  let start = 0
+  for (const text of shape.split('\n')) {
+    if (depth === 0 && HEADER.test(text)) found.push({ start, end: start + text.length, text })
+    else depth = Math.max(0, depth + opens(text))
+    start += text.length + 1
+  }
+  return found
+}
 
 /** The key a quoted TOML key names; null for an escape JSON does not share. */
 function tomlKey(quoted: string): string | null {
@@ -67,87 +104,92 @@ function tomlKey(quoted: string): string | null {
   try { return JSON.parse(quoted) as string } catch { return null }
 }
 
-/** The text of a table's body: from its header to the next header. */
-const bodyAfter = (text: string, end: number): { body: string; at: number } => {
-  const rest = text.slice(end)
-  const next = rest.search(/^[ \t]*\[/m)
-  return { body: next < 0 ? rest : rest.slice(0, next), at: end }
-}
-
 /**
  * The table, or the table above it, defined in a form a header appended after it could collide with: an
- * inline table, dotted keys, or values in the table's own body. Codex writes `[hooks.state]` with nothing in
- * it, then a header per hook.
+ * inline table, dotted keys, an array of tables, or values in the table's own body. Codex writes
+ * `[hooks.state]` with nothing in it, then a header per hook.
  */
-function definedOtherwise(text: string, table: string): boolean {
-  const [top, ...rest] = table.split('.')
-  const firstHeader = text.search(/^[ \t]*\[/m)
-  const preamble = firstHeader < 0 ? text : text.slice(0, firstHeader)
-  if (new RegExp(String.raw`^[ \t]*${escape(top)}[ \t]*[.=]`, 'm').test(preamble)) return true
-  const sub = rest.join('.')
-  for (const match of text.matchAll(new RegExp(String.raw`^[ \t]*\[[ \t]*${escape(top)}[ \t]*\][^\n]*`, 'gm'))) {
-    const { body } = bodyAfter(text, (match.index ?? 0) + match[0].length)
-    if (new RegExp(String.raw`^[ \t]*${escape(sub.split('.')[0])}[ \t]*[.=]`, 'm').test(body)) return true
-  }
-  for (const match of text.matchAll(new RegExp(String.raw`^[ \t]*\[[ \t]*${tablePath(table)}[ \t]*\][^\n]*`, 'gm'))) {
-    const { body } = bodyAfter(text, (match.index ?? 0) + match[0].length)
-    if (/^[ \t]*[^\s#\[]/m.test(body)) return true
-  }
-  return false
+function definedOtherwise(shape: string, table: string): boolean {
+  const [top, sub] = table.split('.')
+  const list = headers(shape)
+  const body = (i: number): string => shape.slice(list[i].end, list[i + 1]?.start ?? shape.length)
+  const preamble = shape.slice(0, list[0]?.start ?? shape.length)
+  if (new RegExp(String.raw`^[ \t]*${segment(top)}[ \t]*[.=]`, 'm').test(preamble)) return true
+  const topHeader = new RegExp(String.raw`^[ \t]*\[[ \t]*${segment(top)}[ \t]*\]`)
+  const tableHeader = new RegExp(String.raw`^[ \t]*\[[ \t]*${tablePath(table)}[ \t]*\]`)
+  const arrayOfTables = new RegExp(String.raw`^[ \t]*\[\[[ \t]*${segment(top)}(?:[ \t]*\.[ \t]*${segment(sub)})?[ \t]*\]\]`)
+  return list.some((line, i) => arrayOfTables.test(line.text)
+    || (topHeader.test(line.text) && new RegExp(String.raw`^[ \t]*${segment(sub)}[ \t]*[.=]`, 'm').test(body(i)))
+    || (tableHeader.test(line.text) && /^[ \t]*[^\s#]/m.test(body(i))))
 }
 
 /**
  * The config file's text with each record in place: an existing table's hash replaced when it differs, a
- * missing table appended. Null when nothing changes, or when the file defines the table in a form that this
- * could make invalid; the engine then asks the person, as it would anyway.
+ * missing table appended. 'unsafe' when the file defines the table, or a record, in a form this could make
+ * invalid; the engine then asks the person, as it would anyway.
  */
-export function withReviewRecords(text: string, record: HookReviewRecord, records: Map<string, string>): string | null {
-  if (definedOtherwise(text, record.table)) return null
-  const header = new RegExp(String.raw`^[ \t]*\[[ \t]*${tablePath(record.table)}[ \t]*\.[ \t]*("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')[ \t]*\][^\n]*`, 'gm')
-  const field = new RegExp(String.raw`^([ \t]*${escape(record.key)}[ \t]*=[ \t]*)("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')`, 'm')
+export function withReviewRecords(text: string, record: HookReviewRecord, records: Map<string, string>): string | 'unchanged' | 'unsafe' {
+  if (definedOtherwise(structure(text), record.table)) return 'unsafe'
+  const header = new RegExp(String.raw`^[ \t]*\[[ \t]*${tablePath(record.table)}[ \t]*\.[ \t]*("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')[ \t]*\]`)
+  const field = new RegExp(String.raw`^([ \t]*${segment(record.key)}[ \t]*=[ \t]*)([^\n]*)$`, 'm')
+  const value = /^("(?:[^"\\\r\n]|\\.)*"|'[^'\r\n]*')[ \t]*(?:#.*)?\r?$/
   let next = text
   for (const [key, hash] of records) {
-    const found = [...next.matchAll(header)]
-    if (found.some((match) => tomlKey(match[1]) === null)) return null
-    const ours = found.filter((match) => tomlKey(match[1]) === key)
-    if (ours.length > 1) return null
+    const shape = structure(next)
+    const list = headers(shape)
+    const found = list.flatMap((line, i) => {
+      const match = header.exec(line.text)
+      return match ? [{ i, key: tomlKey(match[1]) }] : []
+    })
+    if (found.some((one) => one.key === null)) return 'unsafe'
+    const ours = found.filter((one) => one.key === key)
+    if (ours.length > 1) return 'unsafe'
     if (ours.length === 1) {
-      const { body, at } = bodyAfter(next, (ours[0].index ?? 0) + ours[0][0].length)
-      const line = field.exec(body)
-      if (line && tomlKey(line[2]) === hash) continue
-      const updated = line
-        ? body.replace(field, `$1${JSON.stringify(hash)}`)
-        : `\n${record.key} = ${JSON.stringify(hash)}${body}`
-      next = next.slice(0, at) + updated + next.slice(at + body.length)
+      const at = list[ours[0].i].end
+      const line = field.exec(shape.slice(at, list[ours[0].i + 1]?.start ?? shape.length))
+      if (line) {
+        // Only a one-line string is read and replaced; anything else (a multi-line string, another type) is
+        // a record this does not understand, and a second key beside it would not parse.
+        const from = at + line.index + line[1].length
+        const quoted = value.exec(next.slice(from, at + line.index + line[0].length))
+        if (!quoted) return 'unsafe'
+        if (tomlKey(quoted[1]) === hash) continue
+        next = next.slice(0, from) + JSON.stringify(hash) + next.slice(from + quoted[1].length)
+      } else {
+        next = `${next.slice(0, at)}\n${record.key} = ${JSON.stringify(hash)}${next.slice(at)}`
+      }
       continue
     }
     // A TOML basic string is a JSON string, except that DEL must be escaped too.
     const table = `[${record.table}.${JSON.stringify(key).replace(/\x7f/g, '\\u007f')}]`
     next = `${next.replace(/\s*$/, '')}${next.trim() ? '\n\n' : ''}${table}\n${record.key} = ${JSON.stringify(hash)}\n`
   }
-  return next === text ? null : next
+  return next === text ? 'unchanged' : next
 }
 
 /**
- * Record Harness's own blocks in `settings` (just written to `settingsFile` in `home`) as reviewed in the
- * engine's config file. Created when the engine has not written one yet: a new person's first Codex pane is
- * the one that asks. Never throws: a hook that is not recorded is asked about, as before.
+ * Record Harness's own blocks in the engine's settings file, as the file is on disk now, as reviewed in the
+ * engine's config file: the engine keys and hashes what it reads, so an order or a timeout Harness did not
+ * write itself is recorded as it is. Created when the engine has not written one yet: a new person's first
+ * Codex pane is the one that asks. Never throws: a hook that is not recorded is asked about, as before.
  */
-export function recordReviewed(record: HookReviewRecord, home: string, settingsFile: string, settings: Settings): void {
+export function recordReviewed(record: HookReviewRecord, home: string, settingsFile: string): void {
   const config = join(home, record.file)
   const say = (line: string): string => line.replace('{config}', config)
   try {
+    const settings = JSON.parse(readFileSync(settingsFile, 'utf8')) as Settings
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings) || !settings.hooks || typeof settings.hooks !== 'object') return
     // Codex keys a hook by the real path of CODEX_HOME joined with the file's name (codex-cli 0.162.0): a
     // symlinked home names its target, a symlinked hooks.json in it keeps its own name.
     const records = reviewRecords(record, join(realpathSync(dirname(settingsFile)), basename(settingsFile)), settings)
     if (records.size === 0) return
     const text = existsSync(config) ? readFileSync(config, 'utf8') : ''
-    if (definedOtherwise(text, record.table)) {
+    const next = withReviewRecords(text, record, records)
+    if (next === 'unchanged') return
+    if (next === 'unsafe') {
       console.log(say(record.messages.skipped))
       return
     }
-    const next = withReviewRecords(text, record, records)
-    if (next === null) return
     if (existsSync(config)) replaceConfigFile(config, next)
     else writeFileSync(config, next, { mode: 0o600 })
     console.log(say(record.messages.recorded))

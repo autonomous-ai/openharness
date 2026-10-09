@@ -308,7 +308,10 @@ beforeAll(async () => {
   const { hooks: codex } = await import('./codex/hookContract.js')
   const hashes: Array<[string, string]> = []
   for (const [cmd, token] of commands.filter(([, token]) => token.startsWith('<command codex'))) {
-    for (const { event, matcher } of EVENTS.codex) hashes.push([reviewHash(codex.settings.reviewed!, event, matcher, { command: cmd, timeout: 5 }), `<hash ${event} ${token.slice(1, -1)}>`])
+    for (const { event, matcher } of EVENTS.codex) {
+      // 30: the case that finds Harness's hook current with a timeout of its own, recorded as the file has it.
+      for (const timeout of [5, 30]) hashes.push([reviewHash(codex.settings.reviewed!, event, matcher, { command: cmd, timeout }), `<hash ${event} ${token.slice(1, -1)}${timeout === 5 ? '' : ` timeout ${timeout}`}>`])
+    }
   }
   // The real path first: on macOS the temporary folder is reached through /var, and Codex keys by /private/var.
   tokens = [...hashes, ...commands, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [realpathSync(root), '<root>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]

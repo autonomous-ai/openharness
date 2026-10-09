@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { hooks } from '../codex/hookContract.js'
@@ -84,9 +84,42 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
     expect(withReviewRecords(codex, record, records)).toBe(`${codex}\n[hooks.state."/h/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:new"\n`)
     const stale = '[hooks.state."/h/hooks.json:session_start:0:0"]\nenabled = true\ntrusted_hash = "sha256:old"\n\n[other]\nx = 1\n'
     expect(withReviewRecords(stale, record, records)).toBe(stale.replace('sha256:old', 'sha256:new'))
-    expect(withReviewRecords(stale.replace('sha256:old', 'sha256:new'), record, records)).toBeNull()
+    expect(withReviewRecords(stale.replace('sha256:old', 'sha256:new'), record, records)).toBe('unchanged')
     const noHash = "[hooks.state.'/h/hooks.json:session_start:0:0']\nenabled = true\n"
     expect(withReviewRecords(noHash, record, records)).toBe("[hooks.state.'/h/hooks.json:session_start:0:0']\ntrusted_hash = \"sha256:new\"\nenabled = true\n")
+  })
+
+  it('reads a config’s structure past what only looks like it: strings, CRLF, comments', () => {
+    const records = new Map([['/h/hooks.json:session_start:0:0', 'sha256:new']])
+    const prompt = 'instructions = """\n[hooks.state."/h/hooks.json:session_start:0:0"]\ntrusted_hash = "x"\n"""\n'
+    expect(withReviewRecords(prompt, record, records)).toBe(`${prompt}\n[hooks.state."/h/hooks.json:session_start:0:0"]\ntrusted_hash = "sha256:new"\n`)
+    const crlf = '[hooks.state."/h/hooks.json:session_start:0:0"] # Codex\r\ntrusted_hash = "sha256:old" # was\r\n'
+    expect(withReviewRecords(crlf, record, records)).toBe(crlf.replace('sha256:old', 'sha256:new'))
+  })
+
+  it('records what hooks.json holds on disk: a block of the person’s before Harness’s, another timeout', () => {
+    const codexHome = home()
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    const installed = JSON.parse(readFileSync(join(codexHome, 'hooks.json'), 'utf8'))
+    // Harness's block first, the person's added after it, and a timeout of their own: current, so not rewritten.
+    installed.hooks.UserPromptSubmit = [{ hooks: [{ ...installed.hooks.UserPromptSubmit[0].hooks[0], timeout: 30 }] }, { hooks: [{ type: 'command', command: 'echo theirs' }] }]
+    writeFileSync(join(codexHome, 'hooks.json'), JSON.stringify(installed))
+    rmSync(join(codexHome, 'config.toml'))
+    installHookSettings('codex', hooks.settings, 18473, codexHome)
+    expect(readFileSync(join(codexHome, 'hooks.json'), 'utf8')).toBe(JSON.stringify(installed))
+    const config = readFileSync(join(codexHome, 'config.toml'), 'utf8')
+    const hook = installed.hooks.UserPromptSubmit[0].hooks[0]
+    expect(config).toContain(`[hooks.state.${JSON.stringify(`${codexHome}/hooks.json:user_prompt_submit:0:0`)}]\ntrusted_hash = ${JSON.stringify(reviewHash(record, 'UserPromptSubmit', undefined, hook))}\n`)
+    expect(config).not.toContain('user_prompt_submit:1:0')
+  })
+
+  it('records nothing for hooks that never reached the file', () => {
+    const codexHome = home()
+    writeFileSync(join(codexHome, 'hooks.json'), '[]\n')
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    recordReviewed(record, codexHome, join(codexHome, 'hooks.json'))
+    expect(existsSync(join(codexHome, 'config.toml'))).toBe(false)
   })
 
   it('leaves a config alone that defines the table in a form an appended table could collide with', () => {
@@ -97,7 +130,16 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
       '[hooks]\nstate = {}\n',
       '[hooks.state]\n"/h/hooks.json:session_start:0:0" = { trusted_hash = "x" }\n',
       '[hooks.state."/h/hooks.json:session_start:0:0"]\nx = 1\n\n[hooks.state."/h/hooks.json:session_start:0:0"]\ny = 1\n',
-    ]) expect(withReviewRecords(text, record, records), text).toBeNull()
+      // Spelled with quotes, it is the same table.
+      '["hooks"]\nstate = {}\n',
+      '"hooks" = {}\n',
+      '[hooks."state"."/h/hooks.json:session_start:0:0"]\nx = 1\n\n[hooks.state."/h/hooks.json:session_start:0:0"]\ny = 1\n',
+      // A line of an array is not a header: the root key after it is still in the root table.
+      'paths = [\n["a"]\n]\nhooks = {}\n',
+      '\uFEFFhooks = {}\n',
+      // A record this does not read: a second key beside it would not parse.
+      '[hooks.state."/h/hooks.json:session_start:0:0"]\ntrusted_hash = """sha256:old"""\n',
+    ]) expect(withReviewRecords(text, record, records), text).toBe('unsafe')
     const codexHome = home()
     writeFileSync(join(codexHome, 'config.toml'), '[hooks]\nstate = {}\n')
     const log = vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -136,7 +178,7 @@ describe('Harness’s own Codex hooks, recorded as reviewed', () => {
 
   it('never throws: an unreadable settings path is a hook Codex asks about, as before', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect(() => recordReviewed(record, '/nonexistent-home', '/nonexistent-home/hooks.json', { hooks: {} })).not.toThrow()
+    expect(() => recordReviewed(record, '/nonexistent-home', '/nonexistent-home/hooks.json')).not.toThrow()
     expect(error).toHaveBeenCalled()
   })
 })

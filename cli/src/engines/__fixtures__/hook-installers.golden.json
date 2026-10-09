@@ -1593,8 +1593,7 @@
    {
     "logs": [
      "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
-     "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed"
     ],
     "threw": null
    },
@@ -1610,11 +1609,6 @@
    "moved/codex-work": {
     "type": "dir",
     "mode": "755"
-   },
-   "moved/codex-work/config.toml": {
-    "type": "file",
-    "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -1708,8 +1702,7 @@
    {
     "logs": [
      "log [hooks] installed Codex SessionStart/UserPromptSubmit hooks → <root>/moved/codex-work/hooks.json",
-     "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed",
-     "log [hooks] recorded Harness's own Codex hooks as reviewed → <root>/moved/codex-work/config.toml"
+     "log [hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed"
     ],
     "threw": null
    },
@@ -1725,11 +1718,6 @@
    "moved/codex-work": {
     "type": "dir",
     "mode": "755"
-   },
-   "moved/codex-work/config.toml": {
-    "type": "file",
-    "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2122,7 +2110,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:1:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:1:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",
@@ -2155,7 +2143,7 @@
    "moved/codex-work/config.toml": {
     "type": "file",
     "mode": "600",
-    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn>\"\n"
+    "text": "[hooks.state.\"<root>/moved/codex-work/hooks.json:session_start:0:0\"]\ntrusted_hash = \"<hash SessionStart command codex 19473 installIn timeout 30>\"\n\n[hooks.state.\"<root>/moved/codex-work/hooks.json:user_prompt_submit:0:0\"]\ntrusted_hash = \"<hash UserPromptSubmit command codex 19473 installIn timeout 30>\"\n"
    },
    "moved/codex-work/hooks.json": {
     "type": "file",

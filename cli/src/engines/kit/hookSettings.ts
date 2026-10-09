@@ -71,8 +71,8 @@ export function installHookSettings(engine: HookEngine, settings: HookSettings, 
 
   if (!changed) {
     console.log(say(messages.current))
-    // Installed by an earlier start, or by a release before the engine asked: recorded now.
-    if (settings.reviewed) recordReviewed(settings.reviewed, home, file, current)
+    // Installed by an earlier start, or by a release before the engine asked: recorded now, as the file has it.
+    if (settings.reviewed) recordReviewed(settings.reviewed, home, file)
     return
   }
 
@@ -88,5 +88,5 @@ export function installHookSettings(engine: HookEngine, settings: HookSettings, 
     console.error(say(messages.failed), err)
     return
   }
-  if (settings.reviewed) recordReviewed(settings.reviewed, home, file, current)
+  if (settings.reviewed) recordReviewed(settings.reviewed, home, file)
 }
