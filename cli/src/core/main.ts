@@ -2128,10 +2128,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       await runtimeProfiles.withoutChangeEvents(async () => {
         await Promise.all(registry.advertised().map((session) => runtimeProfiles.ingestConfig(session, true)))
         await watcher.pollAll()
-        await Promise.all(registry.advertised().map(async (session) => {
-          const capture = await captureTerminal(session.agentId, 120)
-          if (capture) await runtimeProfiles.ingestPane(session, capture, true)
-        }))
+        await Promise.all(registry.advertised().map(session => runtimeProfiles.capturePane(session, captureTerminal, 120, true)))
       })
       await syncTerminalTitles()
       const includeDevice = reconcileNeedsDeviceAnnouncement
@@ -2176,9 +2173,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   setInterval(() => {
     for (const session of registry.list()) {
       if (!PANE_POLLED_ENGINES.has(session.engine)) continue
-      void captureTerminal(session.agentId, 60)
-        .then((capture) => capture ? runtimeProfiles.ingestPane(session, capture) : undefined)
-        .catch(() => undefined)
+      void runtimeProfiles.capturePane(session, captureTerminal, 60).catch(() => undefined)
     }
   }, PANE_POLL_MS)
 

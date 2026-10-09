@@ -233,6 +233,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
     runtimeProfiles: {
       transcriptFields: () => [], beginHydrate: () => ({ ingest: () => {}, commit: () => {} }), hydrate: () => {},
       ingestConfig: async () => {}, ingestPane: () => false,
+      capturePane: async () => pane,
     } as never,
     captureTerminal: async () => pane,
     emit: emit as never,

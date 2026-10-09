@@ -38,7 +38,7 @@ export interface AttachDeps {
   cursorDiscovery: Pick<CursorTranscriptDiscovery, 'add'>
   /** The Wi-Fi device's service, wherever it runs (core/wifi.ts): it proves its turns by the raw transcript. */
   device: () => Pick<WifiFeed, 'needsTranscript' | 'observeTranscript'> | undefined
-  runtimeProfiles: Pick<RuntimeProfileManager, 'transcriptFields' | 'hydrate' | 'ingestConfig'> & {
+  runtimeProfiles: Pick<RuntimeProfileManager, 'transcriptFields' | 'hydrate' | 'ingestConfig' | 'capturePane'> & {
     beginHydrate(session: RegisteredSession): ProfileHydration
     ingestPane(session: RegisteredSession, text: string, silent?: boolean): boolean | Promise<boolean>
   }
@@ -302,8 +302,7 @@ export function createAttach({
       const normalizer = new (engine('cursor')!).CursorNormalizer('live', session.sessionId)
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       cursorNormalizers.set(session.sessionId, normalizer)
-      const capture = await captureTerminal(session.agentId, 100)
-      if (capture) await runtimeProfiles.ingestPane(session, capture, true)
+      await runtimeProfiles.capturePane(session, captureTerminal, 100, true)
     } else if (engine('opencode')) {
       // OpenCode has no transcript file — poll its SQLite DB. The reader hydrates silently, then
       // streams new activity into the funnel (the same one the file engines use).
@@ -318,8 +317,7 @@ export function createAttach({
       // The composer footer is the ONLY place OpenCode names its model and reasoning level, so
       // without this a freshly opened agent showed empty chips until the five-minute reconcile came
       // round — which is exactly how long it looked broken for.
-      const ocPane = await captureTerminal(session.agentId, 100)
-      if (ocPane) await runtimeProfiles.ingestPane(session, ocPane, true)
+      await runtimeProfiles.capturePane(session, captureTerminal, 100, true)
     } else if (engine('kilo')) {
       // Kilo is opencode's fork and keeps the same store shape, so it is polled the same way — but from
       // its OWN db and through its own reader, so the two can diverge without one breaking the other.
@@ -346,8 +344,7 @@ export function createAttach({
       const normalizer = new (engine('grok')!).GrokNormalizer()
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       grokNormalizers.set(session.sessionId, normalizer)
-      const capture = await captureTerminal(session.agentId, 60)
-      if (capture) await runtimeProfiles.ingestPane(session, capture, true)
+      await runtimeProfiles.capturePane(session, captureTerminal, 60, true)
     } else if (engine('agy')) {
       const agy = engine('agy')!
       // A JSONL tail like claude/grok. agy announces its model only in the hook payload and its pane
@@ -355,8 +352,7 @@ export function createAttach({
       const normalizer = new agy.AgyNormalizer()
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       agyNormalizers.set(session.sessionId, normalizer)
-      const capture = await captureTerminal(session.agentId, 60)
-      if (capture) await runtimeProfiles.ingestPane(session, capture, true)
+      const capture = await runtimeProfiles.capturePane(session, captureTerminal, 60, true)
       // agy's transcript has no end-of-turn record - only its Stop hook does - so a fold of a FINISHED
       // conversation still reports the last turn as open, and after a daemon restart nothing is ever
       // coming to close it. The pane is the one place the answer exists; ask it.
@@ -412,8 +408,7 @@ export function createAttach({
       await reader.start()
       // Devin's model/effort exist ONLY in its pane footer, so read it now. Without this the chip stayed
       // on Auto until the 5-minute reconcile happened to run — the attach itself said nothing about it.
-      const devinPane = await captureTerminal(session.agentId, 60)
-      if (devinPane) await runtimeProfiles.ingestPane(session, devinPane, true)
+      await runtimeProfiles.capturePane(session, captureTerminal, 60, true)
     } else if (engine('commandcode')) {
       const normalizer = new (engine('commandcode')!).CommandCodeNormalizer('live')
       // Hydrate state silently; never replay history live — except a turn left open, below.

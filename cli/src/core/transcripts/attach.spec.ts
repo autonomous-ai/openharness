@@ -94,9 +94,14 @@ function setup(over: Partial<AttachDeps> = {}) {
       transcriptFields: vi.fn(() => []),
       beginHydrate: vi.fn(() => profile),
       hydrate: vi.fn(),
-      ingestConfig: vi.fn(async () => {}),
-      ingestPane: vi.fn(),
-    } as unknown as AttachDeps['runtimeProfiles'],
+      ingestConfig: vi.fn(async () => false),
+      ingestPane: vi.fn(() => false),
+      capturePane: vi.fn(async (session, capture, lines, silent) => {
+        const text = await capture(session.agentId, lines)
+        if (text) await deps.runtimeProfiles.ingestPane(session, text, silent)
+        return text
+      }),
+    } as AttachDeps['runtimeProfiles'],
     captureTerminal: vi.fn(async () => 'pane'),
     emit: vi.fn(),
     announceTurnAborted: vi.fn(),

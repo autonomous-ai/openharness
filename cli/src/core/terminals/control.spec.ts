@@ -107,6 +107,20 @@ describe('terminal control', () => {
     }
   })
 
+  it('does not begin a capture after the binding changes during lease validation', async () => {
+    const { terminals } = backend()
+    const current = { ...session }
+    const control = createTerminalControl({ resolve: () => current, terminals })
+    await control.submitTerminal(current.agentId, 'first')
+    vi.mocked(terminals.validateLease).mockImplementationOnce(async () => {
+      current.sessionId = 'session-2'
+      return true
+    })
+    expect(await control.captureTerminal(current.agentId)).toBeNull()
+    expect(terminals.captureLease).not.toHaveBeenCalled()
+    expect(terminals.capture).not.toHaveBeenCalled()
+  })
+
   it('keeps a lease while it is used, and takes a new one once it lapses or stops validating', async () => {
     const { fake, terminals } = backend()
     const control = createTerminalControl({ resolve, terminals })
