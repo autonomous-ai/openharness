@@ -113,15 +113,9 @@
    {
     "pending": true
    },
+   [],
    [
-    {
-     "sessionId": "20261008_100009_999999",
-     "engine": "hermes",
-     "hermesHome": null
-    }
-   ],
-   [
-    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check"
+    "[hooks] 20261008 SessionStart held · Waiting for the Hermes session source record; keeping the current conversation."
    ]
   ],
   [
@@ -130,15 +124,9 @@
    {
     "pending": true
    },
+   [],
    [
-    {
-     "sessionId": "20261008_100010_aaaaaa",
-     "engine": "hermes",
-     "hermesHome": "<root>/home/.hermes/profiles/unreadable"
-    }
-   ],
-   [
-    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check · home=<root>/home/.hermes/profiles/unreadable"
+    "[hooks] 20261008 SessionStart held · Hermes session source is unavailable; keeping the current conversation."
    ]
   ]
  ],

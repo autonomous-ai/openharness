@@ -11,7 +11,9 @@ import type { AddressInfo } from 'node:net'
 import { admitHook, hooksFor } from './engines/hooks.js'
 import { HERMES_HOMES, HERMES_SOURCE, hermesDbPath } from './engines/hermes/contract.js'
 import { listStoreHomes } from './engines/kit/storeHomes.js'
-import { isInteractiveSource, storeSessionSource } from './engines/kit/storeSource.js'
+import { isInteractiveSource, readStoreSessionSource } from './engines/kit/storeSource.js'
+import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
+import { paneReadIdentity } from './core/transcripts/readIdentity.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
 import { sid } from './lib/log.js'
@@ -307,8 +309,6 @@ async function verifiedBoundMutation(
  */
 /** How long to keep waiting for an engine to write the transcript it just announced. */
 const TRANSCRIPT_WAIT_MS = 500
-const HERMES_KIND_TRIES = 6
-const HERMES_KIND_WAIT_MS = 120
 const TRANSCRIPT_WAIT_TRIES = 20
 
 function registeredHookProcess(body: RegisterInput, engine: AgentEngine): RegisteredSession | undefined {
@@ -358,42 +358,22 @@ async function awaitTranscript(body: RegisterInput, handlers: HookServerHandlers
   console.warn(`[hooks] ${sid(body.sessionId ?? '?')} announced a transcript that never appeared: ${body.transcriptPath}`)
 }
 
-/**
- * Re-check a hermes session whose `sessions` row had not landed yet, then register it only if it turns
- * out to be the user's own CLI session. Bounded: if the row never appears we register anyway, which is
- * exactly the behaviour before this guard existed.
- */
-async function awaitHermesKind(body: RegisterInput, handlers: HookServerHandlers): Promise<void> {
-  // EVERY home, not just the default. A `hermes -p <name>` session's row lives in that profile's own
-  // store, so asking the default one answered `null` (unknown) six times and fell through — and, worse,
-  // the home found here is the one the whole row then reads its history from (openharness#191). Hermes's homes
-  // and the source that tells a delegated session are declared (engines/hermes/contract.ts) and read by the kit:
-  // admission never waits for Hermes's code.
+/** Read source evidence without binding. Unreadable stores never authorize a conversation. */
+async function inspectHermesKind(sessionId: string): Promise<AdmissionDecision<string | undefined>> {
   const homes = await listStoreHomes(HERMES_HOMES, env.HERMES_HOME)
-  let hermesHome: string | undefined
-  for (let i = 0; i < HERMES_KIND_TRIES; i++) {
-    if (i > 0) await new Promise((resolve) => { const t = setTimeout(resolve, HERMES_KIND_WAIT_MS); t.unref?.() })
-    if (!registeredHookProcess(body, 'hermes')) return
-    if (isRecentlyDeleted(body.sessionId)) return
-    let source: string | null = null
-    for (const home of homes) {
-      const answer = await storeSessionSource(HERMES_SOURCE, hermesDbPath(home), body.sessionId ?? '')
-      if (answer === null) continue          // not in this store — try the next home
-      source = answer
-      if (home !== env.HERMES_HOME) hermesHome = home
-      break
-    }
-    if (source === null) continue
-    if (!isInteractiveSource(HERMES_SOURCE, source)) {
-      console.log(`[hooks] ${sid(body.sessionId ?? '?')} ${body.hookEvent ?? 'session-start'} ignored · hermes_subagent`)
-      return
-    }
+  let unavailable = false
+  for (const home of homes) {
+    const answer = await readStoreSessionSource(HERMES_SOURCE, hermesDbPath(home), sessionId)
+    if (answer === null) continue
+    if (typeof answer === 'object') { unavailable = true; continue }
+    if (!isInteractiveSource(HERMES_SOURCE, answer)) return { kind: 'reject', reason: 'hermes_subagent' }
+    // An earlier unreadable home may hold the same id; preserve the declared lookup order.
+    if (!unavailable) return { kind: 'accept', value: home === env.HERMES_HOME ? undefined : home }
     break
   }
-  const result = registry.register(hermesHome ? { ...body, hermesHome } : body)
-  if (!result) return
-  console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=hermes · isNew=${result.isNew} · after a source check${hermesHome ? ` · home=${hermesHome}` : ''}`)
-  handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound, orphaned: result.orphaned, hookEvent: body.hookEvent })
+  return { kind: 'hold', reason: unavailable
+    ? 'Hermes session source is unavailable; keeping the current conversation.'
+    : 'Waiting for the Hermes session source record; keeping the current conversation.' }
 }
 
 export interface HookServerOptions {
@@ -409,6 +389,7 @@ export function startHookServer(
   options: HookServerOptions = {},
 ): Promise<{ server: http.Server; port: number; localSocket: LocalSocketServer | null }> {
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
+  const admissions = createPendingAdmissions()
   // Filled in once the port is bound: the Host a request must name is the port actually taken.
   let hosts: ReadonlySet<string> = new Set()
   let lastRefusalLogAt = 0
@@ -551,7 +532,21 @@ export function startHookServer(
           // be written yet (measured: a child's hook beat its own INSERT by 110ms). Registering
           // optimistically would hand the parent's pane to a sub-agent.
           answer(200, { pending: true })
-          void awaitHermesKind(body, handlers)
+          const identity = paneReadIdentity(processAgent)
+          admissions.submit(processAgent.agentId, {
+            current: () => !isRecentlyDeleted(body.sessionId)
+              && paneReadIdentity(registeredHookProcess(body, 'hermes')) === identity,
+            inspect: () => inspectHermesKind(body.sessionId!),
+            held: (reason) => console.log(`[hooks] ${sid(body.sessionId!)} ${body.hookEvent ?? 'session-start'} held · ${reason}`),
+            reject: (reason) => console.log(`[hooks] ${sid(body.sessionId!)} ${body.hookEvent ?? 'session-start'} ignored · ${reason}`),
+            accept: (hermesHome) => {
+              const result = registry.register(hermesHome ? { ...body, hermesHome } : body)
+              if (!result) return
+              console.log(`[hooks] ${sid(result.entry.sessionId)} ${body.hookEvent ?? 'session-start'} · engine=hermes · isNew=${result.isNew} · after a source check${hermesHome ? ` · home=${hermesHome}` : ''}`)
+              handlers.onRegistered(result.entry, { isNew: result.isNew, evicted: result.evicted, rebound: result.rebound,
+                orphaned: result.orphaned, hookEvent: body.hookEvent })
+            },
+          })
           return
         }
         if (body.hookEvent === 'UserPromptSubmit') {
@@ -905,6 +900,7 @@ export function startHookServer(
     })
   }
   const server = http.createServer(handle)
+  server.once('close', () => admissions.close())
 
   return new Promise((resolve, reject) => {
     let fellBack = false

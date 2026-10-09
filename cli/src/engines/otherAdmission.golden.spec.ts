@@ -148,9 +148,9 @@ describe('how the core admits a Hermes session and learns its home', () => {
           method: 'POST', headers, body: JSON.stringify({ engine: 'hermes', tmuxPane, sessionId, cwd: '/work/h', hookEvent: 'SessionStart' }),
         })
         const answer = await response.json()
-        // Settled off the HTTP path: registered, or ignored, within the bounded wait for a row.
+        // Settled off the HTTP path: verified, rejected, or explicitly held without a registry write.
         const deadline = Date.now() + 10_000
-        while (!registered.length && !logs.some((line) => line.includes('ignored')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
+        while (!registered.length && !logs.some((line) => line.includes('ignored') || line.includes(' held ·')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
         results.push([label, response.status, answer, [...registered], logs.filter((line) => line.startsWith('[hooks]'))])
       }
       check('admission', results)

@@ -1,13 +1,15 @@
 /**
  * Whether a hook's session is a pane's own or one a session delegated to, read from the engine's store as its
  * contract declares (Hermes: `sessions.source`). A delegated session runs its hooks from the parent's pane, so the
- * hook server settles this before the session may take the pane (hookServer.ts `awaitHermesKind`).
+ * hook server verifies this before the session may take the pane (hookServer.ts `inspectHermesKind`).
  *
- * Moved from engines/hermes/reader.ts (`hermesSessionSource`, `isHermesInteractiveSource`), unchanged but for the
- * declaration it reads. Read through `lib/sqliteRead` like every other query against such a store: the engine
+ * The source rule is declared by the engine. Read through `lib/sqliteRead` like every other query against such a store: the engine
  * writes to it constantly, and the read's busy wait is bounded there so a contended lookup cannot park the daemon.
  */
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { stat } from 'node:fs/promises'
+
+export type StoreSessionSource = string | null | { unavailable: true; reason: 'missing' | 'transient' }
 
 export interface StoreSourceRule {
   /** The ids a pane's own session has. Any other (an editor's) reads as a pane's own: `''`. */
@@ -28,13 +30,23 @@ export interface StoreSourceRule {
  * its row, so an immediate lookup said "not a sub-agent" and the child took over the pane. Callers that can afford
  * to wait should treat null as "ask again shortly".
  */
-export async function storeSessionSource(rule: StoreSourceRule, dbPath: string, sessionId: string): Promise<string | null> {
+export async function readStoreSessionSource(rule: StoreSourceRule, dbPath: string, sessionId: string): Promise<StoreSessionSource> {
   if (!rule.id.test(sessionId)) return ''
+  // A home with no store yet is different from a store whose rows cannot be verified.
+  try { await stat(dbPath) } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : { unavailable: true, reason: 'transient' }
+  }
   const result = await sqliteReadAll(dbPath, rule.query, [sessionId], { maxBuffer: rule.maxBuffer })
-  if (!result.ok) return '' // no reader / db locked — treat as a normal session, exactly as before
+  if (!result.ok) return { unavailable: true, reason: result.reason }
   if (result.rows.length === 0) return null
   const source = result.rows[0]?.[rule.column]
   return typeof source === 'string' ? source : ''
+}
+
+/** Compatibility for optional readers: unknown stays unknown, never an interactive source. */
+export async function storeSessionSource(rule: StoreSourceRule, dbPath: string, sessionId: string): Promise<string | null> {
+  const source = await readStoreSessionSource(rule, dbPath, sessionId)
+  return source !== null && typeof source === 'object' ? null : source
 }
 
 /** Whether a source is a pane's own session's. */
