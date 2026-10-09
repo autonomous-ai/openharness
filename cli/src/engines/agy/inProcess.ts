@@ -7,3 +7,5 @@ export { AgyNormalizer, agyMessagesToEvents, lastAgyTurnText } from './normalize
 export { agyPaneIdle, parseAgyFooterProfile } from './runtimeProfile.js'
 export { agyConversationForPid, findAgyTranscript } from './session.js'
 export { agyProvider } from '../../lib/sessionSearch/externals/agy.js'
+
+export { createRuntimeProfileReader } from './profileReader.js'

@@ -105,8 +105,48 @@ Final broad receipt `20261009T051228.567255Z-74018` passed typecheck, 1,785 core
 
 A two-agent soak/chaos smoke passed in 105.0 seconds (`20261009T051533.050394Z-3315`). The matched performance run passed in 70.7 seconds (`20261009T051852.532251Z-32229`): empty/idle/active core CPU was 0.75/1.65/6.91% of one logical CPU, mean RSS 81.2/95.1/98.8 MiB and event-loop p95 11.07/11.08/11.12 ms. Both turns completed with p95 6.976 seconds. The preceding usage baseline was 0.55/1.50/6.94%, 82.5/95.9/101.7 MiB and 7.015 seconds, on the same Node, machine, tmux and four-agent/two-active workload. These ten-second windows measure only the core PID, exclude services, engines, tmux and USB, and support neither a new threshold nor a long-term growth claim.
 
-Time accounting (UTC): implementation and diagnosis began after the usage merge at 03:03:42 and production corrections ended at 05:11. Independent production approval followed at about 05:13; the final test-only readiness correction passed at 05:14. Final broad local validation ran 05:12:28–05:17:21, overlapping the short soak/chaos run. The matched measurement ran 05:18:52–05:20:03. Final test/documentation review and head checks follow before the authorized merge. All daemons, homes and tmux servers used for testing are disposable. Publication remains zero.
+Time accounting (UTC): implementation and diagnosis began after the usage merge at 03:03:42 and production corrections ended at 05:11. Independent production approval followed at about 05:13; the final test-only readiness correction passed at 05:14. Final broad local validation ran 05:12:28–05:17:21, overlapping the short soak/chaos run. The matched measurement ran 05:18:52–05:20:03. Final delta receipt `20261009T052103.008133Z-46578` passed typecheck and both adoption cases in 51.7 seconds. Independent review approved final head `371910cf4` against `e130ad8e1`; [final automatic CI](https://github.com/autonomous-ai/openharness/actions/runs/37888168905) passed all selected checks including `ci/required`. PR #1081 merged as `4cad218c9` at 05:26:10. The merge helper ran 05:25:56–05:26:10; CI waiting ended about 05:25:45. This item took 2 hours 22 minutes 28 seconds; the whole request through that merge took 5 hours 59 minutes 29 seconds. All daemons, homes and tmux servers used for testing are disposable. Publication remains zero.
 
-## Added core follow-up
+## Item 6: native runtime readers
+
+[PR #1088](https://github.com/autonomous-ai/openharness/pull/1088) removes the legacy
+manager. Former-code commit `996476cf0` recorded 482 other-engine observations and
+the public state/control answers on pinned Linux and Darwin. Both fixture files
+remain unchanged. The eager owner keeps accepted state, control, waiters and
+cleanup; engine facets keep native catalogs, targets and interpretation. Other
+engines remain display-only, with the six unreachable drivers retained.
+
+Independent review required monotonic evidence revisions, current registry-row
+checks, atomic local parser/profile installation after config and tail-hold
+validation, and containment of optional cleanup. It then found the complete
+start/cancel control cycle and late cleanup after forget. These were reproduced
+and corrected; review approved `08fc7d1fa` against `79c658faa`. The final Linux
+shard exposed an old Command Code fixture delivering records before loading the
+reader. Matching production ordering then reproduced a queued-refresh race:
+a queued read could revoke the explicit config read its caller awaited. The
+queue now checks its original read token; core control and confirmation revoke
+that token too. Repeated same-model records in one watcher batch preserve the
+dependent refresh, which reads the latest accepted model. New tests
+cover explicit-read and confirmation supersession; final review/CI are pending.
+
+On `08fc7d1fa`, typecheck, architecture, 1,789 core tests at per-file 100%, 265
+harnessd tests with one existing skip at 100%, 1,770 affected tests with seven
+existing skips, and 298 resume tests at 100% passed. The resume run first timed
+out in the existing 2,050-file fixture under concurrent load; the passing run
+used the previously established one-worker/45-second limits. The attempted
+receipt reuse did not match the inherited environment and reran checks; that
+cost is included in elapsed validation, not hidden. All sixteen wiring mutations
+failed golden assertions. The final three state-owner mutations were repeated;
+one first hit the five-second compilation deadline, then all three failed the
+required assertions with explicit test deadlines. A two-agent half-minute soak
+and half-minute chaos smoke passed in 101.7 seconds. Final receipts and landing
+times will be recorded after the CI correction is reviewed and validated.
+
+## Added core follow-ups
+
+Pane profile polling also needs a session/route snapshot taken before capture:
+the entry-time check cannot reject an older screen if the same registry object
+changed in place during the capture. This pre-existing limitation is independent
+of the runtime extraction's config and staged-history publication checks.
 
 The owner reported that two panes of the same agent started in one millisecond fail. Onboarding avoids it today; the fix belongs in core. The current session-label generator contains only the engine and a millisecond timestamp, so concurrent same-engine creates can collide. Reproduce with a pinned clock, fix the shared label generation, and verify two isolated panes can start together. This is not blocking the completed usage separation.

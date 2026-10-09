@@ -2,7 +2,7 @@
  * What the core reads of the twelve other engines' model and effort, and what a switch of theirs does, recorded
  * from main before their runtime-profile parsers left the core's static imports
  * (docs/design/2026-10-08-other-engines-out-of-core.md, (o4)). Through the core's own entries, wired as core/main.ts
- * wires them for an engine no worker serves (`new LegacyRuntimeProfileManager(() => undefined)`):
+ * wires them for an engine no worker serves (`new RuntimeProfileState(() => undefined)`):
  *
  * - every pane through `ingestPane`, for every engine, from a fresh session: what it reports changed and the state;
  * - every transcript through `hydrate`, and line by line through `ingest` and `transcriptFields`;
@@ -39,7 +39,7 @@ const ENGINES = ['opencode', 'cursor', 'kilo', 'devin', 'hermes', 'amp', 'agy', 
 type Engine = (typeof ENGINES)[number]
 const SPEC_FILES = [
   ...['agy', 'commandcode', 'devin', 'grok', 'hermes', 'kilo', 'opencode', 'pi'].map((e) => `engines/${e}/runtimeProfile.spec.ts`),
-  'lib/runtimeProfile.spec.ts', 'lib/runtimeProfileController.spec.ts', 'lib/runtimeProfileManager.spec.ts',
+  'lib/runtimeProfile.spec.ts', 'lib/runtimeProfileController.spec.ts', 'lib/runtimeProfileState.spec.ts',
 ]
 const NOW = Date.parse('2026-10-08T12:00:00.000Z')
 const fixturesDir = join(SRC, 'lib', '__fixtures__')
@@ -69,15 +69,15 @@ function fixturePanes(): string[] {
   ]
 }
 
-type Manager = InstanceType<Awaited<ReturnType<typeof loadCore>>['LegacyRuntimeProfileManager']>
+type Manager = InstanceType<Awaited<ReturnType<typeof loadCore>>['RuntimeProfileState']>
 async function loadCore() {
-  const { LegacyRuntimeProfileManager } = await import('../lib/runtimeProfileManager.js')
+  const { RuntimeProfileState } = await import('../lib/runtimeProfileState.js')
   const { RuntimeProfileController } = await import('../lib/runtimeControl.js')
   const { encodeRuntimeProfile } = await import('../engines/kit/runtime.js')
-  return { LegacyRuntimeProfileManager, RuntimeProfileController, encodeRuntimeProfile }
+  return { RuntimeProfileState, RuntimeProfileController, encodeRuntimeProfile }
 }
 let core: Awaited<ReturnType<typeof loadCore>>
-const manager = (): Manager => new core.LegacyRuntimeProfileManager(() => undefined)
+const manager = (): Manager => new core.RuntimeProfileState(() => undefined)
 const stateOf = (m: Manager, s: RegisteredSession) => ({ state: m.getState(s.sessionId), selected: m.selectedModel(s) })
 
 let golden: Golden
