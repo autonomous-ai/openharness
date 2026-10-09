@@ -1934,6 +1934,68 @@ static void focus_custom_pet_resting(void)
     pet_store_release_frame();
     pack_unload();
 }
+/*
+ * A VERSION 2 PACK (pet_store.c): a fifth scene, relaxing, after failed. Its pet's resting face is the relaxing face
+ * with that scene (placed as its working scene is, from its dx, dy; the quiet line on the lower arc, nothing in the
+ * middle); a version 1 pack keeps today's resting face (the small pet and the two lines in the middle).
+ */
+static size_t make_v2(uint8_t *out)
+{
+    size_t pos = 22;
+    pos += 1 + 2u * vec_buf[pos];
+    pos += 4;
+    for (int l = 0; l < 3; l++) pos += 1 + 2u * vec_buf[pos];
+    for (int s = 0; s < 4; s++) pos += 7 + 2u * vec_buf[pos];
+    static const uint8_t relax[] = {2, 150, 0, 4, 0, 0xfa, 0xff, 1, 0, 0, 0};   // 2 x 150 ms: frames 1, 0; (4, -6)
+    memcpy(out, vec_buf, pos);
+    memcpy(out + pos, relax, sizeof relax);
+    memcpy(out + pos + sizeof relax, vec_buf + pos, vec_len - pos);
+    out[4] = 2;
+    return vec_len + sizeof relax;
+}
+static void focus_custom_pet_relaxing(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    ht_character_face_t f = custom_face(false, 0);
+    // v1: today's face
+    pack_load(vec_buf, vec_len);
+    ht_scene_t old; ht_scene_clear(&old, 0);
+    ht_character_face(&old, &c, &f, 0xffff, "");
+    assert(old.count == 11 && (old.runs[8].text[0] || old.runs[9].text[0]) && !old.runs[10].arc);
+    assert(old.runs[8].font == &ht_lv_inter_36.base && old.runs[1].sprite.zoom);   // the small pet, drawn zoomed
+    pet_store_release_frame();
+    pack_unload();
+    // v2: the relaxing face
+    static uint8_t b[4096];
+    size_t n = make_v2(b);
+    pack_load(b, n);
+    const ht_pet_t *pet = pet_store_lookup("claude");
+    assert(pet && pet->relaxing_scene && pet->relaxing_scene->steps == 2);
+    const ht_pet_scene_t *rs = pet->relaxing_scene;
+    for (unsigned step = 0; step < 4; step++) {
+        f.clock_ms = 1000 + step * 150;
+        ht_scene_t scene; ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, "");
+        assert(scene.count == 11);                        // no shapes: the eleven runs
+        const ht_run_t *m = &scene.runs[1];
+        unsigned st = f.clock_ms / 150 % 2;
+        assert(m->sprite.cells == pet->cells[rs->loop[st]].cells && !m->sprite.zoom);
+        assert(m->x == (466 - rs->w) / 2 + 4 && m->y == 233 - rs->h / 2 + 4 - 6);
+        for (int i = 3; i < 10; i++) assert(!scene.runs[i].text[0] && !scene.runs[i].sprite.width);
+        assert(scene.runs[10].arc == 2 && scene.runs[10].fg == ht_rgb(0x9a9aa6) && scene.runs[10].text[0]);
+        assert(ht_focus_pet_next_ms(&f, "") == (f.clock_ms / 150 + 1) * 150);
+        ink_inside_r230(&scene);
+    }
+    // working, and a recap, are not relaxing
+    ht_character_face_t w = custom_face(true, 0);
+    ht_scene_t ws; ht_scene_clear(&ws, 0); ht_character_face(&ws, &c, &w, 0xffff, "");
+    assert(ws.runs[1].sprite.cells && !ws.runs[1].sprite.zoom && ws.runs[10].arc == 2 && ws.runs[10].fg == ht_rgb(0x00ff2f));
+    ht_scene_t rc; ht_scene_clear(&rc, 0); ht_character_face(&rc, &c, &f, 0xffff, "Done.");
+    assert(rc.runs[3].text[0] && !rc.runs[10].arc);
+    pet_store_release_frame();
+    pack_unload();
+}
 static void focus_custom_pet_working_alert(void)
 {
     ht_character_t c = {0};
@@ -2049,10 +2111,11 @@ static void focus_swap_mid_scene(void)
 static void custom_pet(void)
 {
     focus_custom_pet_resting();
+    focus_custom_pet_relaxing();
     focus_custom_pet_working_alert();
     focus_custom_ink_inside_r230();
     focus_swap_mid_scene();
-    puts("Custom pet: resting, code-drawn working alert, r 230 clamp and a swap mid-scene PASS");
+    puts("Custom pet: resting, relaxing (v2), code-drawn working alert, r 230 clamp and a swap mid-scene PASS");
 }
 
 int main(int argc, char **argv)

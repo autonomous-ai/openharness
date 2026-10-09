@@ -57,7 +57,15 @@ static void *pet_calloc(size_t n, size_t s)
  * The partial pack being received (s_in) is never visible to lookup.
  */
 
-enum { HEADER = 22, MAX_ENGINES = 8, LOOPS = 3, SCENES = 4, MAX_ID = 17, STEP_MS = 120 };
+/*
+ * The pack versions this build reads (cable_client.c's hello says `pets: 2`). Version 2 is version 1 with a fifth
+ * scene, `relaxing`, right after `failed`, in the same encoding: the resting face laid out like the working one
+ * (focus.c THE RELAXING FACE). The scenes are working, listening, sending, failed (validated, not drawn) and, from
+ * version 2, relaxing.
+ */
+enum { HEADER = 22, MAX_ENGINES = 8, LOOPS = 3, SCENES_V1 = 4, SCENES = 5, MAX_ID = 17, STEP_MS = 120,
+       VERSION_MIN = 1, VERSION_MAX = 2 };
+enum { SC_WORKING, SC_LISTENING, SC_SENDING, SC_FAILED, SC_RELAXING };
 
 typedef struct pack {
     char id[MAX_ID];
@@ -69,8 +77,8 @@ typedef struct pack {
     uint16_t *row_at;
     ht_pet_step_t loops[HT_PET_STATES][HT_PET_STEPS];
     uint16_t step_ms[HT_PET_STATES];
-    ht_pet_scene_t scenes[3];      // working, listening, sending
-    uint8_t *scene_loop[3];
+    ht_pet_scene_t scenes[4];      // working, listening, sending, relaxing
+    uint8_t *scene_loop[4];
     struct pack *next;             // the list release_frame frees
 } pack_t;
 
@@ -91,7 +99,7 @@ static void pack_free(pack_t *p)
     PET_FREE(p->buf);
     PET_FREE(p->frames);
     PET_FREE(p->row_at);
-    for (int i = 0; i < 3; i++) PET_FREE(p->scene_loop[i]);
+    for (int i = 0; i < 4; i++) PET_FREE(p->scene_loop[i]);
     PET_FREE(p);
 }
 
@@ -163,9 +171,10 @@ static struct { uint16_t small[LOOPS][255]; scene_raw_t sc[SCENES]; } s_scratch;
 
 static unsigned gcd(unsigned a, unsigned b) { while (b) { unsigned t = a % b; a = b; b = t; } return a; }
 
-// Build the ht_pet_t of `p` from p->buf. 0 or PET_ERR_SHAPE.
-static int parse(pack_t *p)
+// Build the ht_pet_t of `p` from p->buf, a pack of `version` (VERSION_MIN..VERSION_MAX). 0 or PET_ERR_SHAPE.
+static int parse(pack_t *p, unsigned version)
 {
+    const int scenes = version >= 2 ? SCENES : SCENES_V1;
     rd_t r = {p->buf, p->size, HEADER, false};
     unsigned pal = rd8(&r);
     if (r.bad || pal == 0) return PET_ERR_SHAPE;
@@ -180,7 +189,8 @@ static int parse(pack_t *p)
         for (unsigned i = 0; i < small_n[l]; i++) small[l][i] = rd16(&r);
     }
     scene_raw_t *sc = s_scratch.sc;
-    for (int s = 0; s < SCENES; s++) {
+    memset(sc, 0, sizeof s_scratch.sc);                            // a v1 pack's relaxing scene: absent
+    for (int s = 0; s < scenes; s++) {
         sc[s].n = rd8(&r);
         sc[s].ms = rd16(&r);
         sc[s].dx = (int16_t)rd16(&r);
@@ -234,7 +244,7 @@ static int parse(pack_t *p)
     for (int l = 0; l < LOOPS; l++)
         for (unsigned i = 0; i < small_n[l]; i++)
             if (small[l][i] >= count || small[l][i] > 255) return PET_ERR_SHAPE;
-    for (int s = 0; s < SCENES; s++)
+    for (int s = 0; s < scenes; s++)
         for (unsigned i = 0; i < sc[s].n; i++)
             if (sc[s].idx[i] >= count || sc[s].idx[i] > 255) return PET_ERR_SHAPE;
 
@@ -258,31 +268,37 @@ static int parse(pack_t *p)
     memcpy(p->loops[HT_PET_WORKING], p->loops[HT_PET_IDLE], sizeof p->loops[0]);
     for (int s = 0; s < HT_PET_STATES; s++) p->step_ms[s] = STEP_MS;
 
-    // The scenes: working, listening, sending (failed, the fourth, is validated above and not drawn).
-    for (int s = 0; s < 3; s++) {
-        if (!sc[s].n || !sc[s].ms) continue;                       // absent: the built-in fallback draws
-        unsigned levels = s == 1 ? HT_PET_SCENE_LEVELS : 1;
-        p->scene_loop[s] = PET_CALLOC((size_t)sc[s].n * levels, 1);
-        if (!p->scene_loop[s]) return PET_ERR_SHAPE;
+    // The scenes drawn: working, listening, sending and relaxing (failed, the fourth, is validated above and not
+    // drawn), into scenes[0..3].
+    static const int drawn[4] = {SC_WORKING, SC_LISTENING, SC_SENDING, SC_RELAXING};
+    bool has[4] = {false};
+    for (int k = 0; k < 4; k++) {
+        const scene_raw_t *raw = &sc[drawn[k]];
+        if (!raw->n || !raw->ms) continue;                         // absent: the built-in fallback draws
+        unsigned levels = drawn[k] == SC_LISTENING ? HT_PET_SCENE_LEVELS : 1;
+        p->scene_loop[k] = PET_CALLOC((size_t)raw->n * levels, 1);
+        if (!p->scene_loop[k]) return PET_ERR_SHAPE;
         unsigned sw = 0, sh = 0;
-        for (unsigned i = 0; i < sc[s].n; i++) {
-            const ht_cell_frame_t *f = &p->frames[sc[s].idx[i]];
+        for (unsigned i = 0; i < raw->n; i++) {
+            const ht_cell_frame_t *f = &p->frames[raw->idx[i]];
             if (f->cols * f->cell > sw) sw = (unsigned)f->cols * f->cell;
             if (f->rows * f->cell > sh) sh = (unsigned)f->rows * f->cell;
-            for (unsigned lv = 0; lv < levels; lv++) p->scene_loop[s][lv * sc[s].n + i] = (uint8_t)sc[s].idx[i];
+            for (unsigned lv = 0; lv < levels; lv++) p->scene_loop[k][lv * raw->n + i] = (uint8_t)raw->idx[i];
         }
-        p->scenes[s] = (ht_pet_scene_t){.w = (uint16_t)sw, .h = (uint16_t)sh, .frames = p->frames,
-                                         .loop = p->scene_loop[s], .steps = sc[s].n, .step_ms = sc[s].ms,
-                                         .dx = sc[s].dx, .dy = sc[s].dy};
+        p->scenes[k] = (ht_pet_scene_t){.w = (uint16_t)sw, .h = (uint16_t)sh, .frames = p->frames,
+                                         .loop = p->scene_loop[k], .steps = raw->n, .step_ms = raw->ms,
+                                         .dx = raw->dx, .dy = raw->dy};
+        has[k] = true;
     }
 
     p->pet = (ht_pet_t){.engine = NULL, .w = (uint16_t)w, .h = (uint16_t)h, .frames = NULL,
                         .loops = p->loops, .step_ms = p->step_ms,
-                        .working_scene = sc[0].n && sc[0].ms ? &p->scenes[0] : NULL,
-                        .listening_scene = sc[1].n && sc[1].ms ? &p->scenes[1] : NULL,
-                        .sending_scene = sc[2].n && sc[2].ms ? &p->scenes[2] : NULL,
+                        .working_scene = has[0] ? &p->scenes[0] : NULL,
+                        .listening_scene = has[1] ? &p->scenes[1] : NULL,
+                        .sending_scene = has[2] ? &p->scenes[2] : NULL,
                         .cells = p->frames, .alert_scene = NULL,
-                        .steps = (uint8_t)(steps == HT_PET_STEPS ? 0 : steps)};
+                        .steps = (uint8_t)(steps == HT_PET_STEPS ? 0 : steps),
+                        .relaxing_scene = has[3] ? &p->scenes[3] : NULL};
     return 0;
 }
 
@@ -347,9 +363,9 @@ int pet_store_finish(void)
     for (int i = 0; i < 8; i++) { hex[i * 2] = "0123456789abcdef"[b[6 + i] >> 4]; hex[i * 2 + 1] = "0123456789abcdef"[b[6 + i] & 15]; }
     hex[16] = 0;
     if (p->got != p->size || memcmp(b, "HPET", 4) || stored_len != p->size || strcmp(hex, p->id)) err = PET_ERR_SHAPE;
-    else if (b[4] != 1) err = PET_ERR_VERSION;
+    else if (b[4] < VERSION_MIN || b[4] > VERSION_MAX) err = PET_ERR_VERSION;
     else if (crc32_ieee(b + HEADER, p->size - HEADER) != stored_crc || stored_crc != p->crc) err = PET_ERR_CRC;
-    else err = parse(p);
+    else err = parse(p, b[4]);
     if (err) { pack_free(p); return err; }
 
     lock();
