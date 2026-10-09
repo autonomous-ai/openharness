@@ -27,7 +27,7 @@ export function DetailHead({ harness, social, ready, busy, panel, onFollow, onLi
     <div className={styles.actions}>
       <button className={social.liked ? styles.liked : ''} disabled={busy} aria-label={social.liked ? 'Unlike harness' : 'Like harness'} aria-pressed={social.liked} onClick={onLike}><Heart /><span>{ready ? social.likes : 'Like'}</span></button>
       <button aria-label="Comments" aria-pressed={panel === 'comments'} onClick={() => onPanel('comments')}><MessageCircle /><span>{ready ? commentTotal(social) : 'Comments'}</span></button>
-      <button aria-label="Source files" aria-pressed={panel === 'files'} onClick={() => onPanel('files')}><FileCode2 /><span>Files</span></button>
+      <button aria-label="Source files" aria-pressed={panel === 'files'} onClick={() => onPanel('files')}><FileCode2 /><span className={styles.actionLabel}>Files</span></button>
       <ShareButton id={harness.id} />
       <ForkButton id={harness.id}><GitFork /> Fork</ForkButton>
     </div>
