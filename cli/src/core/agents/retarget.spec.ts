@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { applyOpencodeSessionModel, parseOpencodeModelId } from '../../engines/opencode/sessionModel.js'
-import { isOpencodeV2 } from '../../engines/opencode/version.js'
+import { applyOpencodeSessionModel, parseOpencodeModelId } from '../../engines/launchControl.js'
+import { isOpencodeV2 } from '../../engines/launchControl.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { validateLaunchOverrides } from '../../lib/launchOverrides.js'
 import type { RegisteredSession } from '../../lib/registry.js'
@@ -11,17 +11,17 @@ import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import { workspaceMissing } from '../../lib/workspaceCheck.js'
 import { createAgentRetargeter, type RetargetDeps } from './retarget.js'
 
-vi.mock('../../engines/opencode/sessionModel.js', async (real) => ({
+vi.mock('../../engines/launchControl.js', async (real) => ({
   ...await real<object>(),
+  isOpencodeV2: vi.fn(() => false), opencodeMajorVersion: vi.fn(() => 1),
   applyOpencodeSessionModel: vi.fn(async () => ({ ok: true })),
   parseOpencodeModelId: vi.fn((id: string) => ({ providerID: id.split('/')[0], modelID: id.split('/')[1] })),
 }))
-// OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
+// Optional readers cannot gate a native launch decision.
 vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/opencode/version.js', () => ({ isOpencodeV2: vi.fn(() => false), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/binaryOnPath.js', () => ({ binaryOnPath: vi.fn(() => true) }))
 vi.mock('../../lib/gatewayRuntime.js', async (real) => ({ ...await real<object>(), probeGatewayRuntime: vi.fn(async () => ({ kind: 'none' })) }))
 vi.mock('../../lib/gridLaunchWire.js', async (real) => ({ ...await real<object>(), describeGridLaunch: vi.fn(() => 'claude on Home'), gridEnvVarNames: vi.fn(() => ['ANTHROPIC_BASE_URL']) }))
@@ -240,13 +240,21 @@ describe('retargeting an agent', () => {
       vi.mocked(binaryOnPath).mockReturnValue(true)
     })
 
-    it('refuses to move OpenCode when its code could not be loaded, before the pane is touched', async () => {
+    it.each(['missing', 'stalled'])('moves OpenCode while its optional reader is %s', async mode => {
       const { loadEngine } = await import('../../engines/inProcess.js')
-      vi.mocked(loadEngine).mockResolvedValueOnce(null)
-      const run = setup(agent({ engine: 'opencode' } as Partial<RegisteredSession>))
-      expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
-      expect(restartAgent).not.toHaveBeenCalled()
-      expect(applyOpencodeSessionModel).not.toHaveBeenCalled()
+      vi.mocked(loadEngine).mockImplementation(() => mode === 'stalled' ? new Promise(() => {}) : Promise.resolve(null))
+      const run = setup(agent({ engine: 'opencode' } as Partial<RegisteredSession>), {
+        relaunchOverrides: vi.fn(async () => ({ ok: true, overrides: { sessionModel: 'grid/big', gridLaunchRecord: null } })) as never,
+      })
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const result = await Promise.race([run.retarget({ agentId: 'a1', grid }),
+          new Promise(resolve => { timer = setTimeout(() => resolve('blocked on optional code'), 1000) })])
+        expect(result).toEqual({ ok: true })
+        expect(restartAgent).toHaveBeenCalledOnce()
+        expect(applyOpencodeSessionModel).toHaveBeenCalledOnce()
+        expect(loadEngine).not.toHaveBeenCalled()
+      } finally { clearTimeout(timer) }
     })
 
     it('reads the live bypass flag only when the row recorded none, and announces nothing for a row gone meanwhile', async () => {

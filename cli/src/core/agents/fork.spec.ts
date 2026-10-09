@@ -18,7 +18,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
+vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
 vi.mock('../../lib/createAgentPane.js', () => ({ createAndRegisterPane: vi.fn() }))
 vi.mock('../../lib/engineBin.js', async (real) => ({ ...await real<object>(), enginePathOverride: vi.fn(() => null) }))
 vi.mock('../../lib/engineInstall.js', async (real) => ({ ...await real<object>(), engineInstallRecipe: vi.fn(() => ({ install: 'recipe' })) }))
@@ -175,26 +175,15 @@ describe('forking an agent', () => {
     expect(createAndRegisterPane).not.toHaveBeenCalled()
   })
 
-  it('refuses to fork OpenCode when its code could not be loaded, having written nothing, and loads nothing for another engine', async () => {
+  it('forks OpenCode with eager version facts while optional code is unavailable', async () => {
     const { loadEngine } = await import('../../engines/inProcess.js')
-    vi.mocked(loadEngine).mockResolvedValueOnce(null)
-    vi.mocked(installedDsh).mockReturnValue({ manifest: { name: 'Blender' } } as never)
-    const refused = setup(source({ engine: 'opencode', agent: 'reviewer', dsh: 'blender' } as Partial<RegisteredSession>))
-    expect(await refused.fork({ agentId: 'a1', name: null, prompt: null }))
-      .toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
-    // No instruction files prepared, no harness runtime folder, no relaunch overrides, no pane.
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    expect(launchDsh).not.toHaveBeenCalled()
-    expect(refused.deps.relaunchOverrides).not.toHaveBeenCalled()
-    expect(createAndRegisterPane).not.toHaveBeenCalled()
-    vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
-    vi.mocked(loadEngine).mockClear()
-    await setup(source({ agent: 'reviewer' } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null })
-    expect(loadEngine).not.toHaveBeenCalled()
+    vi.mocked(loadEngine).mockResolvedValue(null)
+    await setup(source({ agent: 'reviewer' })).fork({ agentId: 'a1', name: null, prompt: null })
     expect(supportsNamedAgent).toHaveBeenLastCalledWith('claude', null)
-    // With OpenCode's code, its own probe names the version the fork's named agent is checked against.
-    await setup(source({ engine: 'opencode', agent: 'reviewer' } as Partial<RegisteredSession>)).fork({ agentId: 'a1', name: null, prompt: null })
+    await setup(source({ engine: 'opencode', agent: 'reviewer' })).fork({ agentId: 'a1', name: null, prompt: null })
     expect(supportsNamedAgent).toHaveBeenLastCalledWith('opencode', 2)
+    expect(createAndRegisterPane).toHaveBeenCalledTimes(2)
+    expect(loadEngine).not.toHaveBeenCalled()
   })
 
   it('carries the harness and the named agent over, when the engine still takes it', async () => {

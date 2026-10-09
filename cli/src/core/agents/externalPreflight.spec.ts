@@ -26,7 +26,8 @@ it('refuses a missing or changing folder or unsupported permissions before engin
 })
 it('requires OpenCode launch support and hooks before any external owner can be stopped', async () => {
   vi.mocked(loadEngine).mockResolvedValueOnce(null)
-  expect(await setup().prepare(row('opencode'), session)).not.toBeNull()
+  expect(await setup().prepare(row('opencode'), session)).toBeNull()
+  expect(loadEngine).not.toHaveBeenCalled()
   expect(await setup({ installOpencodePlugin: async () => false }).prepare(row('opencode'), session)).not.toBeNull()
   const enabled = setup()
   expect(await enabled.prepare(row('opencode'), session)).toBeNull()

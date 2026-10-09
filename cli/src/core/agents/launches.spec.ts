@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
 import { dshSupportedEngines } from '../../dsh/manifest.js'
 import { loadEngine } from '../../engines/inProcess.js'
-import { opencodeMajorVersion } from '../../engines/opencode/version.js'
+import { opencodeMajorVersion } from '../../engines/launchControl.js'
 import { AgentCreationReceiptError, AgentCreationReceipts, type AgentCreationOutcome } from '../../lib/agentCreationReceipt.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import { MAX_FIRST_PROMPT_CHARS, permissionModeApproves, permissionModeFlags, supportsFirstPrompt, supportsNamedAgent } from '../../lib/engineLaunch.js'
@@ -36,7 +36,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/opencode/version.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
+vi.mock('../../engines/launchControl.js', async (real) => ({ ...await real<object>(), opencodeMajorVersion: vi.fn(() => 1) }))
 vi.mock('../../lib/newAgentModel.js', async (real) => ({
   ...await real<object>(), parseNewAgentModel: vi.fn(() => ({ state: 'absent' })),
 }))
@@ -173,12 +173,11 @@ describe('agent_create, refused before any pane exists', () => {
     expect(create).not.toHaveBeenCalled()
   })
 
-  it('an OpenCode named agent when OpenCode\'s code could not be loaded, and loads nothing for another engine\'s', async () => {
+  it('validates a named OpenCode launch without optional code', async () => {
     const { ask, create } = setup()
-    vi.mocked(loadEngine).mockResolvedValueOnce(null)
-    expect(await ask({ engine: 'opencode', cwd: '/w', agent: 'reviewer' })).toStrictEqual({ error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
-    expect(create).not.toHaveBeenCalled()
-    vi.mocked(loadEngine).mockClear()
+    vi.mocked(loadEngine).mockResolvedValue(null)
+    await ask({ engine: 'opencode', cwd: '/w', agent: 'reviewer' })
+    expect(create).toHaveBeenCalledOnce()
     await ask({ engine: 'claude', cwd: '/w', agent: 'reviewer' })
     expect(loadEngine).not.toHaveBeenCalled()
   })

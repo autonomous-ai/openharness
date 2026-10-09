@@ -1,0 +1,102 @@
+{
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "tmux": "tmux 3.5a",
+  "samples": [
+    {
+      "bundle": "baseline",
+      "readyMs": 1140.490702,
+      "atReady": {
+        "cpuMs": 300,
+        "rssMiB": 76.83203125
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 951.6568220000001,
+          "coreCpuMs": 30,
+          "rssMiB": 78.53125
+        },
+        {
+          "phase": "warm",
+          "requestMs": 92.50876100000005,
+          "coreCpuMs": 20,
+          "rssMiB": 78.72265625
+        }
+      ]
+    },
+    {
+      "bundle": "candidate",
+      "readyMs": 1214.9187920000004,
+      "atReady": {
+        "cpuMs": 320,
+        "rssMiB": 77.84765625
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 540.1093879999999,
+          "coreCpuMs": 40,
+          "rssMiB": 79.46484375
+        },
+        {
+          "phase": "warm",
+          "requestMs": 92.12919299999976,
+          "coreCpuMs": 10,
+          "rssMiB": 79.6640625
+        }
+      ]
+    },
+    {
+      "bundle": "candidate",
+      "readyMs": 1212.7409969999999,
+      "atReady": {
+        "cpuMs": 320,
+        "rssMiB": 78.828125
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 521.7426919999998,
+          "coreCpuMs": 30,
+          "rssMiB": 80.4609375
+        },
+        {
+          "phase": "warm",
+          "requestMs": 88.81767500000024,
+          "coreCpuMs": 10,
+          "rssMiB": 80.71875
+        }
+      ]
+    },
+    {
+      "bundle": "baseline",
+      "readyMs": 1109.4595839999993,
+      "atReady": {
+        "cpuMs": 300,
+        "rssMiB": 76.9765625
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 541.2657639999998,
+          "coreCpuMs": 40,
+          "rssMiB": 78.640625
+        },
+        {
+          "phase": "warm",
+          "requestMs": 94.00080700000035,
+          "coreCpuMs": 10,
+          "rssMiB": 78.84375
+        }
+      ]
+    }
+  ],
+  "baseline": "2477d7e1d8f70e3fdee4d2b24d4b043080016587",
+  "candidate": "OpenCode eager extraction after former-code golden 9393bd13951f391bc8f31c9abc56a18e40ee3efe",
+  "bundleSha256": {
+    "baseline": "e83840776b83900cd5851eca771e285507456ed3524e97ccd0a0bf8db0129c0c",
+    "candidate": "75d1c875df5a17dede8f99eef620cafb83eb2f6bfc1033596c5b5ebd84f1d63c"
+  },
+  "scope": "Four cold private daemons, baseline/candidate/candidate/baseline; two launches per daemon. Core PID only; ps CPU has 10ms resolution. Two samples per variant are reference measurements, not a performance gate."
+}

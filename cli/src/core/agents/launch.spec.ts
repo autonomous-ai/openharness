@@ -37,21 +37,14 @@ function setup() {
 describe('relaunch helpers', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
-  it('refuses an OpenCode relaunch whose code could not be loaded, having written nothing, and loads nothing for another engine', async () => {
+  it('relaunches with eager control when optional OpenCode code cannot load', async () => {
     const { deps, helpers } = setup()
-    vi.mocked(loadEngine).mockResolvedValueOnce(null)
-    expect(await helpers.relaunchOverrides(session({ engine: 'opencode' }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
-    // No instruction files prepared, no API notes, no overrides built.
-    expect(prepareInstructionWrites).not.toHaveBeenCalled()
-    expect(deps.prepareApiTools).not.toHaveBeenCalled()
-    expect(buildLaunchOverrides).not.toHaveBeenCalled()
-    vi.mocked(loadEngine).mockClear()
-    expect(await helpers.relaunchOverrides(session())).toEqual({ ok: true })
-    expect(loadEngine).not.toHaveBeenCalled()
-    expect(prepareInstructionWrites).toHaveBeenCalledWith('/work')
-    // With OpenCode's code, an OpenCode relaunch is built.
+    vi.mocked(loadEngine).mockImplementation(() => new Promise(() => {}))
     expect(await helpers.relaunchOverrides(session({ engine: 'opencode' }))).toEqual({ ok: true })
-    expect(loadEngine).toHaveBeenCalledWith('opencode')
+    expect(await helpers.relaunchOverrides(session())).toEqual({ ok: true })
+    expect(prepareInstructionWrites).toHaveBeenCalledWith('/work')
+    expect(deps.prepareApiTools).toHaveBeenCalledWith('/work', 'opencode')
+    expect(loadEngine).not.toHaveBeenCalled()
   })
 
   it('rebuilds a launch from the row: its DSH, folder and named agent, whatever the source adds', async () => {

@@ -30,7 +30,7 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/opencode/version.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
+vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
 // The engines' folder trust (engines/launchPrep.ts), one spy per engine: never the person's own config.
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
@@ -356,25 +356,17 @@ describe('creating an agent', () => {
       warn.mockRestore()
     })
 
-    it('refuses an OpenCode create whose code could not be loaded, before anything is written or any pane opens', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      vi.mocked(loadEngine).mockResolvedValueOnce(null)
+    it('creates OpenCode from eager facts when optional code cannot load', async () => {
+      vi.mocked(loadEngine).mockImplementation(() => new Promise(() => {}))
       const t = setup()
-      expect(await t.create(request({ engine: 'opencode', agent: 'reviewer', grid: { networkName: 'g' } }))).toEqual({ ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' })
-      expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · OpenCode\'s code could not be loaded')
-      expect(t.deps.gridLaunchMachine).not.toHaveBeenCalled()
-      expect(t.deps.installOpencodePlugin).not.toHaveBeenCalled()
-      expect(createAndRegisterPane).not.toHaveBeenCalled()
-      // Any other engine's launch loads nothing, and its machine facts are asked for that engine.
-      vi.mocked(loadEngine).mockClear()
-      buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_UNSUPPORTED', detail: 'no' })
-      await t.create(request({ engine: 'claude', agent: 'reviewer', grid: { networkName: 'g' } }))
-      expect(loadEngine).not.toHaveBeenCalled()
-      expect(t.deps.gridLaunchMachine).toHaveBeenCalledWith('claude')
-      // With OpenCode's code, its own probe names the version its named agent opens for.
       await t.create(request({ engine: 'opencode', agent: 'reviewer' }))
       expect(namedAgentArgs).toHaveBeenLastCalledWith('opencode', 'reviewer', 2)
-      warn.mockRestore()
+      expect(createAndRegisterPane).toHaveBeenCalledOnce()
+      expect(t.deps.installOpencodePlugin).toHaveBeenCalledWith(4242)
+      expect(loadEngine).not.toHaveBeenCalled()
+      buildGridLaunch.mockResolvedValueOnce({ ok: false, error: 'GRID_UNSUPPORTED', detail: 'no' })
+      await t.create(request({ engine: 'claude', agent: 'reviewer', grid: { networkName: 'g' } }))
+      expect(t.deps.gridLaunchMachine).toHaveBeenCalledWith('claude')
     })
 
     it('opens as a named agent, with a first prompt, and does not install an engine with a path override', async () => {

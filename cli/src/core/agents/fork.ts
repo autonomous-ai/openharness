@@ -13,7 +13,7 @@ import type { BackendSocket } from '../../backendSocket.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear } from '../../dsh/launch.js'
 import type { DshThrough } from './dshThrough.js'
-import { loadEngine } from '../../engines/inProcess.js'
+import * as opencodeLaunch from '../../engines/launchControl.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
@@ -75,10 +75,7 @@ export function createAgentForker({
     }
     const plan = planFork({ engine, sessionId: source.sessionId, name: sourceName, cwd: source.cwd }, memory, prompt)
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
-    // Which OpenCode is installed decides a fork's named agent (below). Its probe is OpenCode's own code, loaded for
-    // OpenCode alone (engines/inProcess.ts), here before anything is written: without it, no fork.
-    const opencode = engine === 'opencode' ? await loadEngine('opencode') : null
-    if (engine === 'opencode' && !opencode) return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
+    const opencode = engine === 'opencode' ? opencodeLaunch : null
 
     const label = buildHarnessSessionLabel(engine)
     await prepareInstructionWrites(source.cwd)
