@@ -37,6 +37,7 @@ void main() {
       SettingsSection.notifications,
       SettingsSection.experimental,
       if (!kIsWeb) SettingsSection.devices,
+      if (!kIsWeb) SettingsSection.connectors,
       SettingsSection.account,
       SettingsSection.accountDevices,
       SettingsSection.profiles,

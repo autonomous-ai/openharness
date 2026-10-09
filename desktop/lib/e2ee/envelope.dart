@@ -35,6 +35,7 @@ const Set<String> encryptedDownTypes = {
   'phone_pair',
   'viewer_surface',
   'api_connections',
+  'connectors',
   'orchestrator',
   'command_bar',
   'route_task',
