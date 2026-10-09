@@ -54,7 +54,11 @@ export function createLaunchHelpers({ prepareApiTools, launchOverridesDeps, setG
     }
     await prepareInstructionWrites(session.cwd)
     prepareApiTools(session.cwd, session.engine)
-    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, session.agentId)
+    const result = await buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, session.agentId)
+    if (result.ok && session.externalResume?.request.engine === session.engine) {
+      result.overrides.extraArgs.push(...session.externalResume.session?.launchArgs ?? [])
+    }
+    return result
   }
 
   /**

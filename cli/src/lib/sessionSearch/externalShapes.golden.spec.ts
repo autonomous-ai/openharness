@@ -65,7 +65,7 @@ it('preserves external lists, exact ownership, conservative busy answers and cor
         const found = session('conversation', test.extra)
         const p: ExternalProvider = { engine: found.engine, scan: async () => [found],
           owners: async () => test.claim ? [{ sessionId: found.sessionId, pid: 7, record: '/fixture/record', ...test.claim }] : [],
-          busy: async () => test.busy ?? null }
+          busy: async () => test.busy ?? null, confirmOwner: async () => ({ current: true, busy: test.busy ?? null }) }
         const one = externalShapes({ providers: [p] }, { ...openOptions, providers: [p],
           ttys: async () => new Map([[7, test.tty ?? null]]), harnessTtys: async () => test.harness === null ? null : new Set(test.harness ? [test.tty!] : []) },
           { ...own, bySession: () => test.owned ? {} as never : undefined, stoppedAgents: { list: () => test.saved ? [{ sessionId: 'held' } as never] : [] } })

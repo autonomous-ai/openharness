@@ -10,7 +10,7 @@
 import type { CoreApi } from '../core/api.js'
 import { ACCOUNT_BACKEND_OFF, CONVERSATIONS_OFF, AGENT_ACTIONS_OFF, DAEMON_UNKNOWN, DELIVERIES_OFF, emptyPorts, LANE_OFF, resolveAgent, TERMINALS_OFF } from '../core/api.js'
 import { databaseHistory } from '../lib/databaseHistory.js'
-import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
+import { externalSessionRequest, externalUnavailable } from '../lib/externalSessionWire.js'
 import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { runServiceProcess, type CoreConnection, type ServiceProcess } from './process.js'
@@ -37,7 +37,6 @@ export interface SearchServiceOptions {
 export function searchCoreApi(
   dataDir: string,
   agents: () => Array<RegisteredSession & { displayName?: string }>,
-  providers: ReturnType<typeof externalProviders>,
 ): CoreApi {
   return {
     dataDir,
@@ -64,10 +63,7 @@ export function searchCoreApi(
     turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory, lastTurn: UNASKED.lastTurn },
-    external: {
-      sessions: new ExternalSessions({ providers, excluded: [dataDir], log: console.warn }),
-      open: new OpenSessions({ providers, log: console.warn }),
-    },
+
     // Search holds no credential, runs no model and talks to no window: these are never asked of it.
     account: {
       mintGridName: async () => null,
@@ -89,12 +85,13 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
   let core: CoreConnection | null = null
   const refresh = async (): Promise<void> => {
     if (!core) return
-    const answer = await core.query('agents').catch(() => null)
-    if (Array.isArray(answer?.agents)) agents = answer.agents as typeof agents
+    const connection = core
+    const answer = await connection.query('agents').catch(() => null)
+    if (core === connection && Array.isArray(answer?.agents)) agents = answer.agents as typeof agents
   }
-  const api = searchCoreApi(options.dataDir, () => agents, options.providers ?? externalProviders())
+  const api = searchCoreApi(options.dataDir, () => agents)
   const ports = emptyPorts()
-  const answers = (options.start ?? startSearch)(api, ports)
+  const answers = (options.start ?? startSearch)(api, ports, { providers: options.providers ?? externalProviders(), excluded: [options.dataDir], log: console.warn })
   const index = ports.search
   // No index here (a Node without `node:sqlite`): search is off, as it would be in the core's process.
   const off = { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false }
@@ -105,7 +102,11 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
     machineId: options.machineId,
     token: options.token,
     // The same handlers as in the core's process (services/search.ts `searchRequests`).
-    requests: answers ?? Object.fromEntries(SEARCH_REQUESTS.map((type) => [type, () => off])),
+    requests: { ...Object.fromEntries(SEARCH_REQUESTS.map(type => [type, () => off])), ...answers,
+      external_inspect: async payload => {
+        const request = externalSessionRequest(payload)
+        return { ...(request && index ? await index.inspect(request) : externalUnavailable()) }
+      } },
     onEvent: (payload) => {
       const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : ''
       if (!sessionId || !index) return
@@ -115,6 +116,7 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
       if (payload.kind === 'touch') return refresh().then(() => index.touch(sessionId))
       if (payload.kind === 'deleteHistory') index.deleteHistory(sessionId)
     },
+    onDisconnected: () => { core = null; agents = [] },
     onConnected: (connection) => {
       core = connection
       void refresh()
@@ -122,6 +124,7 @@ export function runSearchService(options: SearchServiceOptions): ServiceProcess 
   })
   return {
     stop: () => {
+      core = null; agents = []
       service.stop()
       index?.stop()
     },

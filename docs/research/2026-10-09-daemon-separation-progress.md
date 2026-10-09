@@ -73,3 +73,111 @@ Usage transcript, SQLite and private checkpoint reads belong to the usage servic
 Independent review identified starvation when continuous same-target events invalidated pending reads, omitted-field rejection in inline project readers, unbounded PR URLs, and a reader-capacity refusal that looked like a valid null. Each is corrected with a regression. Same-target progress is published while a later refresh is pending; identity changes still discard old replies. Checkpoint filenames remain compatible. In-memory reader entries additionally include the complete read target so concurrent target changes cannot mutate an in-flight read.
 
 Validation selected before execution: typecheck, architecture, unchanged goldens and mutations, core/harnessd 100% gates, affected frame/usage/Git/backend specs, and isolated usage, edge and services e2e. Initial core validation passed 1,713 tests at 100%; affected validation failed two old backend fixtures that still composed usage as a service without a port. Initial usage e2e failed fixture assumptions: Stop's RPC is `agent_delete`, and transcript attachment can follow session binding. The existing five edge and fourteen services cases passed. Failed receipts remain failed; final evidence follows the corrections. No release is authorized or attempted.
+
+
+### Usage completed
+
+[PR #1078](https://github.com/autonomous-ai/openharness/pull/1078) merged after independent approval of head `e8e98bb22` against base `f5c0f2979`, and [automatic CI](https://github.com/autonomous-ai/openharness/actions/runs/37877120111) passed every selected check including `ci/required`. The final main integration changed only pnpm's lock entries for pngjs packages already declared in package.json and npm's lock; the local tested production, tests and installed npm dependencies stayed identical.
+
+The unchanged former-code usage golden crosses the production service and wire validators. Six deliberate wiring mutations fail assertions. Final local gates passed 1,716 core tests at per-file 100% statements and branches, 265 harnessd tests at 100% with one existing skip, typecheck, architecture and 410 affected specs (`20261009T025300.053066Z-85987`). Three isolated usage e2e cases passed in 73.7 seconds (`20261009T025258.053880Z-85910`), covering unavailable boot, recovery, stopped work, a replacement core receiving an unchanged warm snapshot, and explicit inline mode. The prior warm-worker case failed because it connected after core spawn but before socket readiness; the corrected test waits for the new ready event. The failed receipt is not passing evidence. Five edge-host and fourteen service cases had passed earlier; the final production also passed a 93.9-second two-agent soak/chaos smoke, not a claim about long-term growth.
+
+The matched four-agent/two-active performance sample (`20261009T025602.069419Z-2829`, 69.8 seconds) measured core CPU at 0.55/1.50/6.94% of one logical CPU, and mean RSS 82.5/95.9/101.7 MiB across empty/idle/active windows. Loop-delay p95 stayed near 12.1 ms; both turns completed with p95 7.015 seconds. Same Node 22.23.2, Intel macOS, 16 logical CPUs, 64 GiB, tmux 3.5a, two windows/four streams, ten-second phases, two-second warmup and no history as the L2 baseline. This small fake-engine sample excludes service, engine, tmux and USB costs and sets no threshold.
+
+Time accounting (UTC): production and review corrections through 02:44; the final test-only readiness correction at 02:52. Final local checks ran 02:52:58–about 02:55; performance ran 02:56:02–02:57:12. Main advanced with a lockfile correction; integration and independent review completed about 03:00. Final CI waiting ended about 03:03; the merge helper started at 03:03:27. Request time since 23:26:41 includes all diagnosis, implementation, review and waiting, not just Actions. Publication remains zero.
+
+## Item 5: external sessions
+
+PR [#1081](https://github.com/autonomous-ai/openharness/pull/1081) moves provider and process observations into search, including when SQLite indexing is unavailable. Core retains policy, alias reservations, verified signals, durable admission, cancellation and dispatch. An unavailable reader leaves an inert held pane with a reason. Once admitted, crash restore and Stop/Open use the core's exact conversation identity without search.
+
+Former-code owner-control golden commit `7972e9824` supplements the existing external golden before the move; both fixture files remain unchanged. The new safety rules have separate regression tests. Seven mutations fail assertions: missing owner/busy observations, archived admission, missing Hermes profile, alias reservation loss, suppressed launch and omitted dispatch journal. These checks use pinned platforms, UTC, `/tmp`, and placeholder binaries. The retained former owner-control golden covers the extracted primitive; the new controller's tighter signal fences have direct tests.
+
+Validation selected before final execution: typecheck; architecture and unchanged goldens; core and harnessd per-file 100% gates; resume and portability gates; provider, persistence, restore and real private-tmux tests; isolated adoption, machine, core, lifecycle and search/service e2e; a short process-boundary soak/chaos smoke and the matched four-agent performance sample. Full Linux unit coverage comes from automatic PR CI. Preliminary full-core tests passed but coverage was incomplete; added boundary tests reach 100% in the focused run. The provider diagnostic initially failed an invalid Devin test command (`resume` instead of `-r`); the corrected four-file diagnostic passes 105 tests. Final receipts and independent approval are still pending.
+
+Independent review of the initial checkpoint found races across the pane probe and owner reads, omitted strict-resume forwarding through restart/retarget, incomplete or ambiguous owner records, and a provisional reservation vetoing a real binding. Regression commit `0d992f216` reproduces twelve failures before corrections. The corrected service rereads exact ownership after activity and terminal observations. Ambiguous live engine records and argv-only ownership hold admission. Core checks current bindings and stopped reservations at every signal/journal boundary; verified binding remains independent of search. Provisional and owned reservations are validated separately, while every strict adoption transition still excludes a foreign owner.
+
+The first broad receipt passed core/harnessd/resume/portability coverage but failed one stale startup-order expectation; automatic CI failed the same expectation. The initial control/service e2e run passed 54 cases and failed two inline-search cases because an internal request was returned as a public handler. That wiring is corrected: inline inspection uses the port and only the process wrapper declares the private request. These failed receipts are not passing evidence. Isolating the real tmux fixture with a private home and an empty startup config exposed a vanished-pane cancellation edge; authoritative inventory now makes the repeated close idempotent. All seven wiring mutations still fail assertions after these corrections.
+
+The second review tightened the authority to signal further. A final coherent ownership/activity record is required for idle consent. Unknown activity stays held for idle/wait and cannot generate a continuation prompt under explicit takeover. Every signal, including KILL after the TERM grace period, takes the strict durable reservation check even for an unchanged intent. Same-PID claims for unrelated conversations and Codex-prefix helper processes cannot become stoppable exact owners. Regression tests cross the real registry and controller with synthetic OS signals. The new search request typing and two early-return coverage gaps found in the final gate are corrected; the failed combined receipt remains failed. Its affected, harnessd, resume and portability checks passed, and both adoption plus the two corrected inline-search e2e cases passed separately.
+
+Independent review approved production head `1aced4484` against main `e130ad8e1`, including the coherent activity proof, per-signal durable reservation check, contradictory owner claims and real engine process identity. The final main integration changes no CLI source. Automatic CI [37887475290](https://github.com/autonomous-ai/openharness/actions/runs/37887475290) passed every selected check including `ci/required`.
+
+Final broad receipt `20261009T051228.567255Z-74018` passed typecheck, 1,785 core tests at per-file 100% statements and branches, 265 harnessd tests with one existing skip at 100%, 1,004 affected tests including architecture and the unchanged goldens, 298 resume tests at 100%, and the portability gate at 100%. The two corrected inline-search e2e cases passed. The new strict restart case initially requested a second pane operation before adoption committed its route; its test-only correction completes one private turn first and passes in isolation. The failed combined e2e receipt remains failed. The final adoption lane is rerun after that correction; broad production evidence remains applicable because the final change touches only that test and this note.
+
+A two-agent soak/chaos smoke passed in 105.0 seconds (`20261009T051533.050394Z-3315`). The matched performance run passed in 70.7 seconds (`20261009T051852.532251Z-32229`): empty/idle/active core CPU was 0.75/1.65/6.91% of one logical CPU, mean RSS 81.2/95.1/98.8 MiB and event-loop p95 11.07/11.08/11.12 ms. Both turns completed with p95 6.976 seconds. The preceding usage baseline was 0.55/1.50/6.94%, 82.5/95.9/101.7 MiB and 7.015 seconds, on the same Node, machine, tmux and four-agent/two-active workload. These ten-second windows measure only the core PID, exclude services, engines, tmux and USB, and support neither a new threshold nor a long-term growth claim.
+
+Time accounting (UTC): implementation and diagnosis began after the usage merge at 03:03:42 and production corrections ended at 05:11. Independent production approval followed at about 05:13; the final test-only readiness correction passed at 05:14. Final broad local validation ran 05:12:28–05:17:21, overlapping the short soak/chaos run. The matched measurement ran 05:18:52–05:20:03. Final delta receipt `20261009T052103.008133Z-46578` passed typecheck and both adoption cases in 51.7 seconds. Independent review approved final head `371910cf4` against `e130ad8e1`; [final automatic CI](https://github.com/autonomous-ai/openharness/actions/runs/37888168905) passed all selected checks including `ci/required`. PR #1081 merged as `4cad218c9` at 05:26:10. The merge helper ran 05:25:56–05:26:10; CI waiting ended about 05:25:45. This item took 2 hours 22 minutes 28 seconds; the whole request through that merge took 5 hours 59 minutes 29 seconds. All daemons, homes and tmux servers used for testing are disposable. Publication remains zero.
+
+## Item 6: native runtime readers
+
+[PR #1088](https://github.com/autonomous-ai/openharness/pull/1088) removes the legacy
+manager. Former-code commit `996476cf0` recorded 482 other-engine observations and
+the public state/control answers on pinned Linux and Darwin. Both fixture files
+remain unchanged. The eager owner keeps accepted state, control, waiters and
+cleanup; engine facets keep native catalogs, targets and interpretation. Other
+engines remain display-only, with the six unreachable drivers retained.
+
+Independent review required monotonic evidence revisions, current registry-row
+checks, atomic local parser/profile installation after config and tail-hold
+validation, and containment of optional cleanup. It then found the complete
+start/cancel control cycle and late cleanup after forget. These were reproduced
+and corrected; review approved `08fc7d1fa` against `79c658faa`. The final Linux
+shard exposed an old Command Code fixture delivering records before loading the
+reader. Matching production ordering then reproduced a queued-refresh race:
+a queued read could revoke the explicit config read its caller awaited. The
+queue now checks its original read token; core control and confirmation revoke
+that token too. Repeated same-model records in one watcher batch preserve the
+dependent refresh, which reads the latest accepted model. New tests
+cover explicit-read and confirmation supersession; final review/CI are pending.
+
+On `08fc7d1fa`, typecheck, architecture, 1,789 core tests at per-file 100%, 265
+harnessd tests with one existing skip at 100%, 1,770 affected tests with seven
+existing skips, and 298 resume tests at 100% passed. The resume run first timed
+out in the existing 2,050-file fixture under concurrent load; the passing run
+used the previously established one-worker/45-second limits. The attempted
+receipt reuse did not match the inherited environment and reran checks; that
+cost is included in elapsed validation, not hidden. All sixteen wiring mutations
+failed golden assertions. The final three state-owner mutations were repeated;
+one first hit the five-second compilation deadline, then all three failed the
+required assertions with explicit test deadlines. A two-agent half-minute soak
+and half-minute chaos smoke passed in 101.7 seconds. Final receipts and landing
+times will be recorded after the CI correction is reviewed and validated.
+
+## Added core follow-ups
+
+Item 6 completed as `a9895b02c` at 06:23:02 UTC. Independent review approved
+`3af878758` against `79c658faa`; [automatic CI](https://github.com/autonomous-ai/openharness/actions/runs/37892739470)
+passed all selected checks and `ci/required`. Final receipt
+`20261009T061719.342956Z-78031` passed typecheck, core/harnessd at per-file 100%,
+and 622 directly affected tests including architecture and both unchanged goldens.
+The broader preceding run passed 1,780 tests with seven existing skips. Full
+reader/model/lean/crash lanes passed 28 selected cases; the final rebuilt lean
+bundle passed its two cases. The final queue correction changes only dependent
+Command Code refresh ordering, covered by the real config and batch regressions.
+
+Matched final measurement `20261009T061834.097319Z-84262` passed in 69.7 seconds:
+empty/idle/active CPU 0.75/1.65/6.81%, mean RSS 81.2/95.7/98.9 MiB, event-loop
+p95 12.07/12.07/12.06 ms, and two-turn latency p95 6.979 seconds. The baseline
+above was 0.75/1.65/6.91%, 81.2/95.1/98.8 MiB and 6.976 seconds, on the same
+toolchain and workload. These are short core-only observations, not a new limit.
+
+Runtime timing: golden committed 05:26:02; implementation/review corrections
+continued through 06:16; final review approved at 06:17. Local checks ended about
+06:18. Measurement ran 06:18:47–06:19:44; CI finished 06:21:19. The merge helper
+ran 06:22:48–06:23:02 and verified the full tested tree. Golden commit through
+merge took 57 minutes; total request elapsed was 6 hours 56 minutes 21 seconds.
+Validation, implementation and review overlap; waiting and merge are separate.
+Publication remains zero.
+
+Pane profile polling also needs a session/route snapshot taken before capture:
+the entry-time check cannot reject an older screen if the same registry object
+changed in place during the capture. This pre-existing limitation is independent
+of the runtime extraction's config and staged-history publication checks.
+
+The owner reported that two panes of the same agent started in one millisecond
+fail. Onboarding avoids it today. Regressions committed in `be3ed36e1` reproduce
+both the duplicate label and a real tmux `duplicate session` failure with two
+concurrent private panes. The shared generator now appends a random UUID to the
+existing engine/timestamp prefix, avoiding same-clock collisions across calls,
+daemon processes and restarts. Discovery still accepts both old and new names;
+existing panes are neither renamed nor removed. All native fixtures use private
+homes, shell history and sockets. Final validation and review are pending.

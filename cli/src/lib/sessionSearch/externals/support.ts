@@ -12,15 +12,16 @@ import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
 import { processRows } from '../../tmux.js'
 import { tmuxFeatures } from '../../tmuxVersion.js'
 import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
+import { externalReadFailed } from '../evidence.js'
 
 /** A folder's entries, or none when it is missing or unreadable. */
 export async function entries(dir: string): Promise<Dirent[]> {
-  return readdir(dir, { withFileTypes: true }).catch(() => [])
+  return readdir(dir, { withFileTypes: true }).catch(error => { externalReadFailed(error, 'folder'); return [] })
 }
 
 /** Up to [bytes] from the start of a file; '' when it cannot be read. */
 export async function readHead(path: string, bytes: number): Promise<string> {
-  const handle = await open(path, 'r').catch(() => null)
+  const handle = await open(path, 'r').catch(error => { externalReadFailed(error, 'file'); return null })
   if (!handle) return ''
   try {
     const buffer = Buffer.alloc(bytes)
@@ -33,7 +34,7 @@ export async function readHead(path: string, bytes: number): Promise<string> {
 
 /** Up to [bytes] from the end of a file; '' when it cannot be read. */
 export async function readTail(path: string, bytes: number): Promise<string> {
-  const handle = await open(path, 'r').catch(() => null)
+  const handle = await open(path, 'r').catch(error => { externalReadFailed(error, 'file'); return null })
   if (!handle) return ''
   try {
     const { size } = await handle.stat()
@@ -55,14 +56,17 @@ export async function firstLine(path: string, bytes: number): Promise<string | n
 
 /** A file's text, or '' when it is missing or unreadable. */
 export async function readText(path: string): Promise<string> {
-  return readFile(path, 'utf8').catch(() => '')
+  return readFile(path, 'utf8').catch(error => { externalReadFailed(error, 'file'); return '' })
 }
 
 /** A JSON file's value, or null when it is missing, unreadable or being written. */
 export async function readJson(path: string): Promise<unknown> {
   try {
-    return JSON.parse(await readFile(path, 'utf8'))
-  } catch {
+    const value: unknown = JSON.parse(await readFile(path, 'utf8'))
+    if (value === null) externalReadFailed(new Error('null document'), 'record')
+    return value
+  } catch (error) {
+    externalReadFailed(error, 'record')
     return null
   }
 }
@@ -78,7 +82,7 @@ export function parseLine(line: string): unknown {
 
 /** A file's size and change time, the fingerprint a memo is keyed on; null when it is not a file. */
 export async function fileStamp(path: string): Promise<{ stamp: string; mtime: number } | null> {
-  const info = await stat(path).catch(() => null)
+  const info = await stat(path).catch(error => { externalReadFailed(error, 'file metadata'); return null })
   if (!info?.isFile()) return null
   return { stamp: `${info.size}:${info.mtimeMs}`, mtime: Math.floor(info.mtimeMs) }
 }
@@ -174,7 +178,10 @@ type Run = (command: string, args: readonly string[], timeout: number) => Promis
 
 /** A command's output; what it printed even when it exits non-zero (lsof does, for a gone pid). */
 export const run: Run = (command, args, timeout) => new Promise((resolve) => {
-  execFile(command, [...args], { timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+  execFile(command, [...args], { timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    // lsof's documented empty match is exit 1 with no diagnostic. Timeouts, truncation and errors
+    // remain unknown even if they produced a partial list; display callers retain their old answer.
+    if (error && !(command === 'lsof' && Number(error.code) === 1 && !stderr)) externalReadFailed(error, 'process files')
     resolve(error && !stdout ? null : String(stdout))
   })
 })
@@ -209,9 +216,13 @@ export function parseTtys(stdout: string): Map<number, string | null> {
  *  none when `ps` could not be read. */
 export async function listProcesses(read: typeof processRows = processRows): Promise<RunningProcess[]> {
   const rows = await read()
+  if (!rows) externalReadFailed(new Error('process table unavailable'), 'process table')
   return (rows ?? []).map((row) => {
     const started = Date.parse(row.startMarker)
-    return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args, ...(Number.isFinite(started) ? { started } : {}) }
+    return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args,
+      ...(Number.isFinite(started) ? { started } : {}),
+      ...(row.startTicks !== undefined ? { generation: `linux:${row.startTicks}` }
+        : Number.isFinite(started) ? { generation: `ps:${started}` } : {}) }
   })
 }
 
@@ -262,7 +273,7 @@ export async function harnessTtys(
 ): Promise<Set<string> | null> {
   const format = `#{pane_tty}\t#{session_name}\t${paneOwnerFormat(paneOptions ?? (await tmuxFeatures()).paneOptions)}`
   const { stdout, failed, stderr } = await exec('tmux', ['list-panes', '-a', '-F', format], 3_000)
-  if (failed && !/no server running|error connecting to/i.test(stderr)) return null
+  if (failed && !/no server running|error connecting to .*\(No such file or directory\)/i.test(stderr)) return null
   const ttys = new Set<string>()
   for (const line of stdout.split('\n')) {
     const [tty, session, tag] = line.split('\t')

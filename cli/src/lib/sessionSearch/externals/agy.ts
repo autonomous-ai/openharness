@@ -1,3 +1,4 @@
+import { externalReadFailed } from '../evidence.js'
 /**
  * Antigravity (`agy`): `<home>/brain/<id>/.system_generated/logs/transcript_full.jsonl` is each
  * conversation's history, and `<home>/presence/<id>.lock` is made only for a top-level one (a
@@ -68,7 +69,7 @@ async function memoFile<T>(ctx: ScanContext, path: string, read: (path: string) 
 }
 
 async function isFile(path: string): Promise<boolean> {
-  return (await stat(path).catch(() => null))?.isFile() ?? false
+  return (await stat(path).catch(error => { externalReadFailed(error, 'record'); return null }))?.isFile() ?? false
 }
 
 export interface AgyOptions { home: string }
@@ -85,7 +86,7 @@ export function agyProvider(options: AgyOptions): ExternalProvider {
         if (!entry.isDirectory() || !UUID.test(entry.name)) continue
         const id = entry.name
         const transcriptPath = agyTranscriptPath(options.home, id)!
-        const transcript = await stat(transcriptPath).catch(() => null)
+        const transcript = await stat(transcriptPath).catch(error => { externalReadFailed(error, 'record'); return null })
         // A conversation nobody has spoken in yet has an empty transcript, or none.
         if (!transcript?.isFile() || !transcript.size || !await isFile(join(presence, `${id}.lock`))) continue
         await ctx.pace()
@@ -103,7 +104,7 @@ export function agyProvider(options: AgyOptions): ExternalProvider {
       const pids = (await view.list()).filter((row) => engineProcessMatch(row, 'agy', NO_FILE_OWNERS).score).map((row) => row.pid)
       if (!pids.length) return []
       // lsof names a file by its real path: the presence folder may be reached through a link.
-      const folders = new Set([presence, await realpath(presence).catch(() => presence)])
+      const folders = new Set([presence, await realpath(presence).catch(error => { externalReadFailed(error, 'folder'); return presence })])
       const claims: OwnerClaim[] = []
       for (const [pid, files] of await view.openFiles(pids)) {
         for (const path of files) {

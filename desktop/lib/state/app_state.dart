@@ -1616,10 +1616,9 @@ class AppNotifier extends ChangeNotifier {
 
   String? _pendingStoreHarness;
 
-  bool get devicesEnabled =>
-      ExperimentalFeature.devicesTab.available &&
-      experimentalFeatures.isAvailable(ExperimentalFeature.devicesTab) &&
-      experimentalFeatures.enabled(ExperimentalFeature.devicesTab);
+  /// Devices is a regular workspace on the desktop app. A browser or a viewer
+  /// build has no device on its desk to manage.
+  bool get devicesEnabled => !kIsWeb && !kViewerMode;
 
   LocalKeyValueStore? get deviceLibraryStorage => _paneLayout?.storage;
   final deviceHosts = DeviceHosts();
@@ -1820,8 +1819,7 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// One utility tab for physical devices. The experiment must be explicitly
-  /// acknowledged before any entry point, including restored history, opens it.
+  /// One utility tab for physical devices.
   void openDevices() {
     if (!devicesEnabled) return;
     final existing = swarms.where((s) => s.isDevices).firstOrNull;
@@ -1854,43 +1852,6 @@ class AppNotifier extends ChangeNotifier {
     _ensureDevicesViewer(tab);
     swarms.add(tab);
     selectSwarm(tab.id);
-  }
-
-  void _devicesExperimentChanged() {
-    if (devicesEnabled) return;
-    final historyCount = _closedHistory.length;
-    _closedHistory.removeWhere(
-      (entry) => entry is ClosedSwarm && entry.kind == 'devices',
-    );
-    if (!swarms.any((s) => s.isDevices)) {
-      if (historyCount != _closedHistory.length) notifyListeners();
-      return;
-    }
-    final removed = swarms.where((s) => s.isDevices).toList();
-    swarms.removeWhere((s) => s.isDevices);
-    for (final tab in removed) {
-      for (final pane in tab.panes) {
-        if (!allPanes.contains(pane)) {
-          unawaited(_detachSession(pane, sendClose: true));
-        }
-      }
-    }
-    if (swarms.isEmpty) swarms.add(Swarm(id: 'swarm-${_nextSwarmId++}'));
-    if (!experimentalFeatures.loaded) {
-      // Binding a different account hides its predecessor's page immediately,
-      // before that account's workspace is ready to be persisted or attached.
-      if (!swarms.any((s) => s.id == _activeSwarmId)) {
-        _activeSwarmId = profileSwarms.first.id;
-      }
-      notifyListeners();
-      return;
-    }
-    if (!swarms.any((s) => s.id == _activeSwarmId)) {
-      selectSwarm(profileSwarms.first.id);
-    } else {
-      _persistLayout();
-      notifyListeners();
-    }
   }
 
   void _ensureDevicesViewer(Swarm tab) {
@@ -3173,7 +3134,6 @@ class AppNotifier extends ChangeNotifier {
     // `this.` because the constructor's own parameter of the same name is in
     // scope here and is the nullable one.
     this.agentUnread.addListener(_announceUnreadToDial);
-    experimentalFeatures.addListener(_devicesExperimentChanged);
     addListener(_syncDeviceHosts);
     addListener(_firstArrivalBehindTour);
     _autoRenameTabs = appearancePrefsStore.value.autoRenameTabs;

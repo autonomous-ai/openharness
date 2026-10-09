@@ -22,11 +22,12 @@ import { hasSqliteReader } from '../../sqliteAvailability.js'
 import type { SqliteRow } from '../../sqliteRead.js'
 import { resumeSessionId } from '../../tmux.js'
 import {
-  LIST_LIMIT, argvSubcommand, engineProcess, ownerRecord, parseOwnerRecord, readSql, rowsOf, splitCounts, storeStamp,
+  LIST_LIMIT, argvSubcommand, engineProcess, ownerRecord, parseOwnerRecord, readSql, checkedSql, rowsOf, splitCounts, storeStamp,
   tableColumns, tally, type Counting, type SqlRead, type Tally,
 } from './opencode.js'
 import { absoluteFolder, entries, epochMs, parseLine, record, text } from './support.js'
 import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, RunningProcess, ScanContext } from './types.js'
+import { externalEvidenceActive, externalReadFailed } from '../evidence.js'
 
 export interface DevinOptions {
   home: string
@@ -83,11 +84,13 @@ const LOCK_SLACK_MS = 2_000
 
 /** A lock's pid and when it was written; null when it cannot be read. */
 async function readLock(path: string): Promise<{ pid: number | null; written: number } | null> {
-  const handle = await open(path, 'r').catch(() => null)
+  const handle = await open(path, 'r').catch(error => { externalReadFailed(error, 'record'); return null })
   if (!handle) return null
   try {
     const [info, content] = await Promise.all([handle.stat(), handle.readFile('utf8')])
-    return { pid: lockPid(content), written: info.mtimeMs }
+    const pid = lockPid(content)
+    if (pid === null) externalReadFailed(new Error('invalid lock PID'), 'owner record')
+    return { pid, written: info.mtimeMs }
   } finally {
     await handle.close()
   }
@@ -114,7 +117,7 @@ export function devinTurnOpen(rows: readonly SqliteRow[]): boolean | null {
 export function devinProvider(options: DevinOptions): ExternalProvider & Counting {
   const { home } = options
   const dbPath = join(home, 'sessions.db')
-  const read = options.read ?? readSql
+  const read = checkedSql(options.read ?? readSql)
   const available = options.available ?? hasSqliteReader
   let counts: Tally = {}
   return {
@@ -122,7 +125,7 @@ export function devinProvider(options: DevinOptions): ExternalProvider & Countin
     lastScan: () => counts,
     async scan(ctx: ScanContext): Promise<ExternalSession[]> {
       counts = {}
-      if (!available()) return []
+      if (!available()) { externalReadFailed(new Error('SQLite unavailable'), 'conversation reader'); return [] }
       const stamp = await storeStamp(dbPath)
       if (!stamp) return []
       const listed = await ctx.memo(`devin:${dbPath}`, stamp, () => listSessions(read, dbPath))
@@ -153,8 +156,9 @@ export function devinProvider(options: DevinOptions): ExternalProvider & Countin
       const isDevin = engineProcess('devin')
       const claims = new Map<string, OwnerClaim>()
       const add = (sessionId: string, row: RunningProcess, fromArgs: boolean): void => {
-        if (claims.has(sessionId)) return
-        claims.set(sessionId, {
+        const key = externalEvidenceActive() ? JSON.stringify([sessionId, row.pid, fromArgs]) : sessionId
+        if (claims.has(key)) return
+        claims.set(key, {
           sessionId, pid: row.pid, record: ownerRecord(dbPath, sessionId),
           ...(SERVERS.has(argvSubcommand(row.args, VALUE_FLAGS)) ? { app: true } : {}),
           ...(fromArgs ? { fromArgs: true } : {}),
@@ -170,13 +174,18 @@ export function devinProvider(options: DevinOptions): ExternalProvider & Countin
         // A lock outlives a crash, and its pid can be handed to anything after, another Devin among
         // them: one written before the process under its pid began was that earlier process's.
         const row = byPid.get(lock.pid)
+        if (externalEvidenceActive() && !row && view.alive(lock.pid)) externalReadFailed(new Error('missing owner process'), 'owner process')
         if (!row || !view.alive(lock.pid) || !isDevin(row)) continue
+        if (!Number.isFinite(row.started)) externalReadFailed(new Error('missing owner start time'), 'owner record')
         if (row.started !== undefined && lock.written < row.started - LOCK_SLACK_MS) continue
         add(sessionId, row, false)
       }
       // The id a process was started on, where no lock says more: it may have moved on since.
       for (const row of processes) {
         if (!isDevin(row)) continue
+        if (view.alive(row.pid) && ![...claims.values()].some(claim => claim.pid === row.pid && !claim.fromArgs)) {
+          externalReadFailed(new Error('no exact lock for a live process'), 'current owner')
+        }
         const sessionId = resumeSessionId('devin', row.args)
         if (sessionId) add(sessionId, row, true)
       }

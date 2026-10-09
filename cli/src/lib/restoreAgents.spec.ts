@@ -1217,3 +1217,98 @@ describe('missing held panes against the durable registry', () => {
     expect(h.respawns).toBe(0)
   })
 })
+
+describe('external adoption crash boundaries', () => {
+  const imported = (phase: 'waiting' | 'admitted' | 'cancelled', starting = false) => row({
+    sessionId: phase === 'admitted' ? 'imported-session' : '', resumeOnly: phase === 'admitted' ? true : undefined,
+    externalResume: { token: '12345678-1234-1234-1234-123456789012', request: { engine: 'claude', sessionId: 'imported-session' },
+      takeOver: null, phase, ...(phase === 'admitted' ? { session: { sessionId: 'imported-session', engine: 'claude', cwd: '/fixture',
+        origin: 'terminal', title: '', mtime: 1, transcriptPath: '/fixture/record' }, ...(starting ? { dispatched: true } : {}) } : {}) },
+    launch: starting ? { state: 'starting' } : heldLaunch('search'),
+  })
+  function dispatch(h: Harness) {
+    h.deps.registry.beginExternalDispatch = id => {
+      const row = h.rows.get(id)!
+      expect(row.launch?.state).toBe('held')
+      h.calls.push('journal:dispatch')
+      row.launch = { state: 'starting' }; row.externalResume = { ...row.externalResume!, dispatched: true }
+      return row
+    }
+  }
+
+  it('never recreates a durably cancelled waiting pane, even when tmux is gone', async () => {
+    const h = harness([imported('cancelled')])
+    expect((await restoreAgents(h.deps)).skipped).toContainEqual({ agentId: 'agent-a', reason: 'external adoption cancelled' })
+    expect(h.paneCreates).toBe(0); expect(h.respawns).toBe(0)
+  })
+
+  it('journals before dispatch, and recovers a crash before tmux by recognizing its exact waiting shell', async () => {
+    for (const starting of [false, true]) {
+      const h = harness([imported('admitted', starting)], { alivePanes: ['%3'] })
+      dispatch(h)
+      h.deps.waitingPane = vi.fn(async () => true)
+      h.deps.respawn = vi.fn(async (_pane, launch, control) => {
+        expect(control?.expectedHeldToken).toBe(h.rows.get('agent-a')?.externalResume?.token)
+        control?.onDispatch?.()
+        expect(h.rows.get('agent-a')).toMatchObject({ launch: { state: 'starting' }, externalResume: { dispatched: true } })
+        expect(control?.current?.()).toBe(true)
+        expect(launch.argv).toContain('imported-session')
+        return { ok: true }
+      })
+      h.probes.set('%3', [identity(9)])
+      expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
+      await settled(h, 1, 1)
+      expect(h.deps.respawn).toHaveBeenCalledOnce()
+    }
+  })
+
+  it('observes a dispatch that may have run before the crash instead of replaying over it', async () => {
+    for (const known of [false, 'unknown'] as const) {
+      const h = harness([imported('admitted', true)], { alivePanes: ['%3'] })
+      h.deps.waitingPane = async () => known
+      h.probes.set('%3', [identity(10)])
+      const summary = await restoreAgents(h.deps)
+      expect(summary.restored).toEqual([])
+      await settled(h, 1, 1)
+      expect(h.paneCreates).toBe(0); expect(h.respawns).toBe(0)
+      expect(h.rows.get('agent-a')?.processIdentity?.pid).toBe(10)
+    }
+  })
+
+  it('retries a failed strict journal without dispatch, and retries an uncertain dispatch only with inert-pane proof', async () => {
+    for (const failure of ['journal', 'before-tmux', 'after-tmux'] as const) {
+      const h = harness([imported('admitted')], { alivePanes: ['%3'] })
+      dispatch(h)
+      if (failure === 'journal') h.deps.registry.beginExternalDispatch = () => { throw new Error('disk full') }
+      h.deps.waitingPane = async () => failure === 'before-tmux'
+      const executed = vi.fn()
+      h.deps.respawn = async (_pane, _launch, control) => {
+        control?.onDispatch?.(); executed(); return { ok: false, reason: 'lost tmux reply' }
+      }
+      h.probes.set('%3', [identity(11)])
+      const summary = await restoreAgents(h.deps)
+      if (failure === 'after-tmux') {
+        await settled(h, 1, 1)
+        expect(summary.retry).toBeUndefined()
+        expect(h.rows.get('agent-a')?.processIdentity?.pid).toBe(11)
+      } else {
+        expect(summary.retry).toBe(true)
+        expect(h.rows.get('agent-a')?.launch?.state).toBe('held')
+        if (failure === 'journal') expect(executed).not.toHaveBeenCalled()
+      }
+    }
+  })
+
+  it('resumes a committed external conversation after tmux loss, retaining strict identity without search or a fresh fallback', async () => {
+    const h = harness([imported('admitted', true)])
+    dispatch(h)
+    h.deps.retainStopped = vi.fn()
+    h.deps.waitingLaunch = () => ({ argv: ['waiting-shell'] })
+    h.states.set('%0', [{ dead: true }])
+    expect((await restoreAgents(h.deps)).restored).toEqual(['agent-a'])
+    await settled(h, 1)
+    expect(h.deps.retainStopped).not.toHaveBeenCalled()
+    expect(h.launches).toEqual([{ agentId: 'agent-a', resumeSessionId: 'imported-session' }])
+    expect(h.rows.get('agent-a')).toMatchObject({ sessionId: 'imported-session', launch: { state: 'failed', error: 'RESUME_FAILED' } })
+  })
+})

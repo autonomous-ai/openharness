@@ -1,0 +1,2948 @@
+{
+  "linux": {
+    "claude": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": "runtime-v1:session-claude:claude:registered-model@auto",
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": "runtime-v1:session-claude:claude:registered-model@auto",
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-claude:claude:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-claude:claude:chosen-model@high",
+        "changes": [
+          "session-claude"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-claude:claude:chosen-model@high",
+        "changes": [
+          "session-claude",
+          "session-claude"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-claude",
+          "session-claude"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "codex": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-codex:codex:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-codex:codex:chosen-model@high",
+        "changes": [
+          "session-codex"
+        ]
+      },
+      "supported": true,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-codex:codex:chosen-model@high",
+        "changes": [
+          "session-codex",
+          "session-codex"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-codex",
+          "session-codex"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "cursor": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-cursor:cursor:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-cursor:cursor:chosen-model@high",
+        "changes": [
+          "session-cursor"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-cursor:cursor:chosen-model@high",
+        "changes": [
+          "session-cursor",
+          "session-cursor"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-cursor",
+          "session-cursor"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "opencode": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-opencode:opencode:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-opencode:opencode:chosen-model@high",
+        "changes": [
+          "session-opencode"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-opencode:opencode:chosen-model@high",
+        "changes": [
+          "session-opencode",
+          "session-opencode"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-opencode",
+          "session-opencode"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "kilo": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-kilo:kilo:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-kilo:kilo:chosen-model@high",
+        "changes": [
+          "session-kilo"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-kilo:kilo:chosen-model@high",
+        "changes": [
+          "session-kilo",
+          "session-kilo"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-kilo",
+          "session-kilo"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "devin": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-devin:devin:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-devin:devin:chosen-model@high",
+        "changes": [
+          "session-devin"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-devin:devin:chosen-model@high",
+        "changes": [
+          "session-devin",
+          "session-devin"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-devin",
+          "session-devin"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "hermes": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-hermes:hermes:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-hermes:hermes:chosen-model@high",
+        "changes": [
+          "session-hermes"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-hermes:hermes:chosen-model@high",
+        "changes": [
+          "session-hermes",
+          "session-hermes"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-hermes",
+          "session-hermes"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "amp": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-amp:amp:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-amp:amp:chosen-model@high",
+        "changes": [
+          "session-amp"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-amp:amp:chosen-model@high",
+        "changes": [
+          "session-amp",
+          "session-amp"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-amp",
+          "session-amp"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "agy": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-agy:agy:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-agy:agy:chosen-model@high",
+        "changes": [
+          "session-agy"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-agy:agy:chosen-model@high",
+        "changes": [
+          "session-agy",
+          "session-agy"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-agy",
+          "session-agy"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "grok": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-grok:grok:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-grok:grok:chosen-model@high",
+        "changes": [
+          "session-grok"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-grok:grok:chosen-model@high",
+        "changes": [
+          "session-grok",
+          "session-grok"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-grok",
+          "session-grok"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "copilot": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-copilot:copilot:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-copilot:copilot:chosen-model@high",
+        "changes": [
+          "session-copilot"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-copilot:copilot:chosen-model@high",
+        "changes": [
+          "session-copilot",
+          "session-copilot"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-copilot",
+          "session-copilot"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "commandcode": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-commandcode:commandcode:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-commandcode:commandcode:chosen-model@high",
+        "changes": [
+          "session-commandcode"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-commandcode:commandcode:chosen-model@high",
+        "changes": [
+          "session-commandcode",
+          "session-commandcode"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-commandcode",
+          "session-commandcode"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "muse": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-muse:muse:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-muse:muse:chosen-model@high",
+        "changes": [
+          "session-muse"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-muse:muse:chosen-model@high",
+        "changes": [
+          "session-muse",
+          "session-muse"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-muse",
+          "session-muse"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "pi": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-pi:pi:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-pi:pi:chosen-model@high",
+        "changes": [
+          "session-pi"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-pi:pi:chosen-model@high",
+        "changes": [
+          "session-pi",
+          "session-pi"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-pi",
+          "session-pi"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "generic": {
+      "state": {
+        "model": null,
+        "effort": "high",
+        "mode": "unknown",
+        "cliVersion": null,
+        "observedAt": 1791504000360
+      },
+      "selected": null,
+      "timedOut": false
+    },
+    "unbound": {
+      "state": {
+        "model": null,
+        "effort": null,
+        "mode": "unknown",
+        "cliVersion": null,
+        "observedAt": null
+      },
+      "own": null,
+      "other": null
+    },
+    "staged": {
+      "before": {
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "mode": "unknown",
+        "cliVersion": "1.0.0",
+        "observedAt": 1791504000375
+      },
+      "during": {
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "mode": "unknown",
+        "cliVersion": "1.0.0",
+        "observedAt": 1791504000375
+      },
+      "committed": {
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "mode": "unknown",
+        "cliVersion": "1.0.0",
+        "observedAt": 1791504000375
+      },
+      "afterSuppressed": {
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "mode": "unknown",
+        "cliVersion": "1.0.0",
+        "observedAt": 1791504000375
+      },
+      "fields": [
+        "model",
+        "effort"
+      ],
+      "emitted": []
+    }
+  },
+  "darwin": {
+    "claude": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": "runtime-v1:session-claude:claude:registered-model@auto",
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": "runtime-v1:session-claude:claude:registered-model@auto",
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-claude:claude:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-claude:claude:chosen-model@high",
+        "changes": [
+          "session-claude"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-claude:claude:chosen-model@high",
+        "changes": [
+          "session-claude",
+          "session-claude"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-claude",
+          "session-claude"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "codex": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-codex:codex:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-codex:codex:chosen-model@high",
+        "changes": [
+          "session-codex"
+        ]
+      },
+      "supported": true,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-codex:codex:chosen-model@high",
+        "changes": [
+          "session-codex",
+          "session-codex"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-codex",
+          "session-codex"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "cursor": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-cursor:cursor:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-cursor:cursor:chosen-model@high",
+        "changes": [
+          "session-cursor"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-cursor:cursor:chosen-model@high",
+        "changes": [
+          "session-cursor",
+          "session-cursor"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-cursor",
+          "session-cursor"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "opencode": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-opencode:opencode:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-opencode:opencode:chosen-model@high",
+        "changes": [
+          "session-opencode"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-opencode:opencode:chosen-model@high",
+        "changes": [
+          "session-opencode",
+          "session-opencode"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-opencode",
+          "session-opencode"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "kilo": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-kilo:kilo:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-kilo:kilo:chosen-model@high",
+        "changes": [
+          "session-kilo"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-kilo:kilo:chosen-model@high",
+        "changes": [
+          "session-kilo",
+          "session-kilo"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-kilo",
+          "session-kilo"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "devin": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-devin:devin:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-devin:devin:chosen-model@high",
+        "changes": [
+          "session-devin"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-devin:devin:chosen-model@high",
+        "changes": [
+          "session-devin",
+          "session-devin"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-devin",
+          "session-devin"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "hermes": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-hermes:hermes:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-hermes:hermes:chosen-model@high",
+        "changes": [
+          "session-hermes"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-hermes:hermes:chosen-model@high",
+        "changes": [
+          "session-hermes",
+          "session-hermes"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-hermes",
+          "session-hermes"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "amp": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-amp:amp:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-amp:amp:chosen-model@high",
+        "changes": [
+          "session-amp"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-amp:amp:chosen-model@high",
+        "changes": [
+          "session-amp",
+          "session-amp"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-amp",
+          "session-amp"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "agy": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-agy:agy:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-agy:agy:chosen-model@high",
+        "changes": [
+          "session-agy"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-agy:agy:chosen-model@high",
+        "changes": [
+          "session-agy",
+          "session-agy"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-agy",
+          "session-agy"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "grok": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-grok:grok:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-grok:grok:chosen-model@high",
+        "changes": [
+          "session-grok"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-grok:grok:chosen-model@high",
+        "changes": [
+          "session-grok",
+          "session-grok"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-grok",
+          "session-grok"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "copilot": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-copilot:copilot:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-copilot:copilot:chosen-model@high",
+        "changes": [
+          "session-copilot"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-copilot:copilot:chosen-model@high",
+        "changes": [
+          "session-copilot",
+          "session-copilot"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-copilot",
+          "session-copilot"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "commandcode": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-commandcode:commandcode:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-commandcode:commandcode:chosen-model@high",
+        "changes": [
+          "session-commandcode"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-commandcode:commandcode:chosen-model@high",
+        "changes": [
+          "session-commandcode",
+          "session-commandcode"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-commandcode",
+          "session-commandcode"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "muse": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-muse:muse:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-muse:muse:chosen-model@high",
+        "changes": [
+          "session-muse"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-muse:muse:chosen-model@high",
+        "changes": [
+          "session-muse",
+          "session-muse"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-muse",
+          "session-muse"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "pi": {
+      "fresh": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "hydrated": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "begin": true,
+      "duplicate": false,
+      "invalidEffort": {
+        "state": {
+          "model": "registered-model",
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": []
+      },
+      "confirmed": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-pi:pi:chosen-model@high",
+        "changes": [],
+        "modelWait": true,
+        "profileWait": true
+      },
+      "finished": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-pi:pi:chosen-model@high",
+        "changes": [
+          "session-pi"
+        ]
+      },
+      "supported": false,
+      "gatewaySupported": false,
+      "cancelled": {
+        "state": {
+          "model": "chosen-model",
+          "effort": "high",
+          "mode": "unknown",
+          "cliVersion": "1.0.0",
+          "observedAt": 1791504000000
+        },
+        "selected": "runtime-v1:session-pi:pi:chosen-model@high",
+        "changes": [
+          "session-pi",
+          "session-pi"
+        ],
+        "waited": false
+      },
+      "forgotten": {
+        "state": {
+          "model": null,
+          "effort": null,
+          "mode": "unknown",
+          "cliVersion": null,
+          "observedAt": null
+        },
+        "selected": null,
+        "changes": [
+          "session-pi",
+          "session-pi"
+        ],
+        "waited": false
+      },
+      "targets": [
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    "generic": {
+      "state": {
+        "model": null,
+        "effort": "high",
+        "mode": "unknown",
+        "cliVersion": null,
+        "observedAt": 1791504000360
+      },
+      "selected": null,
+      "timedOut": false
+    },
+    "unbound": {
+      "state": {
+        "model": null,
+        "effort": null,
+        "mode": "unknown",
+        "cliVersion": null,
+        "observedAt": null
+      },
+      "own": null,
+      "other": null
+    },
+    "staged": {
+      "before": {
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "mode": "unknown",
+        "cliVersion": "1.0.0",
+        "observedAt": 1791504000375
+      },
+      "during": {
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "mode": "unknown",
+        "cliVersion": "1.0.0",
+        "observedAt": 1791504000375
+      },
+      "committed": {
+        "model": "gpt-6-luna",
+        "effort": "low",
+        "mode": "unknown",
+        "cliVersion": "1.0.0",
+        "observedAt": 1791504000375
+      },
+      "afterSuppressed": {
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "mode": "unknown",
+        "cliVersion": "1.0.0",
+        "observedAt": 1791504000375
+      },
+      "fields": [
+        "model",
+        "effort"
+      ],
+      "emitted": []
+    }
+  }
+}

@@ -6,3 +6,5 @@
 export { CommandCodeNormalizer, commandCodeRunError, commandCodeRunErrorSummary, commandcodeMessagesToEvents, lastCommandCodeTurnText, windowCommandCodeLines } from './normalizer.js'
 export { COMMANDCODE_EFFORT_LEVELS, COMMANDCODE_EFFORTS, commandcodeBannerModel, countCommandcodeRefusals, parseCommandcodeModelsOutput } from './runtimeProfile.js'
 export { commandcodeProvider } from '../../lib/sessionSearch/externals/commandcode.js'
+
+export { createRuntimeProfileReader } from './profileReader.js'
