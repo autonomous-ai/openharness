@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import type { StoreHomes } from '../kit/storeHomes.js'
 import type { StoreSourceRule } from '../kit/storeSource.js'
 
+export const HERMES_PROFILE = { variable: 'HERMES_HOME', setting: 'HERMES_HOME', trimTrailingSlashes: true } as const
+
 /** The store a Hermes home keeps its sessions in. */
 export function hermesDbPath(home: string): string {
   return join(home, 'state.db')

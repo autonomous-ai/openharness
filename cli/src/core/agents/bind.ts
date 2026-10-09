@@ -7,10 +7,12 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
 import { stat } from 'node:fs/promises'
-import { loadEngine } from '../../engines/inProcess.js'
+import { transcriptOf, processSessionOf } from '../../engines/identities.js'
+import { cursorDataDir } from '../../engines/cursor/contract.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
 import type { TurnRecaps } from '../turns/recaps.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import { transcriptIsFirstTurn } from '../../lib/firstTurnReplay.js'
@@ -81,6 +83,9 @@ export function createBinding({
   let changing: (agentId: string) => boolean = () => false
 
   const handleRegistered = async (entry: RegisteredSession, meta: RegisteredMeta): Promise<void> => {
+    const authority = paneReadIdentity(entry)
+    const current = () => paneReadIdentity(registry.byAgent(entry.agentId)) === authority
+    if (!current()) return
     const forkSource = pendingForkInherit.get(entry.agentId)
     if (forkSource && entry.sessionId) {
       pendingForkInherit.delete(entry.agentId)
@@ -107,6 +112,31 @@ export function createBinding({
       forgetSession(meta.orphaned.agentId, {
         force: true,
         agentId: meta.orphaned.agentId,
+      })
+    }
+
+    // Registration is complete before any optional history reader runs. In particular a stalled
+    // module cannot withhold a resumed agent's record, name or announcement. Capture this fact before
+    // finishResume changes the stopped record used to decide whether history may be replayed below.
+    const resumedConversation = !!entry.resumeOnly && stoppedAgents.get(entry.agentId)?.sessionId === entry.sessionId
+    try {
+      stoppedAgents.save(entry)
+    } catch (error) {
+      console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${error instanceof Error ? error.message : error}`)
+    }
+    if (entry.resumeOnly) stoppedAgents.finishResume(entry.agentId)
+    syncRecapPool()
+    if (meta.isNew) {
+      registry.inheritName(entry.agentId, entry.sessionId)
+      announceSession(entry)
+      clients.send({
+        type: 'session_synced',
+        payload: {
+          sessionId: entry.sessionId,
+          agentId: entry.agentId,
+          title: projectDisplayName(entry),
+          createdAt: new Date(entry.boundAt ?? Date.now()).toISOString(),
+        },
       })
     }
 
@@ -149,13 +179,16 @@ export function createBinding({
     // announced as running with nothing left to end it (found end to end: stop in the middle of a first
     // turn, resume, and the agent read as working for good). A new session started in the agent after
     // the resume is not this conversation, and is judged like any other.
-    const resumedConversation = !!entry.resumeOnly && stoppedAgents.get(entry.agentId)?.sessionId === entry.sessionId
     const bornAfterAgent = !resumedConversation && transcriptIsFirstTurn(
       entry,
       entry.transcriptPath ? await statBirthMs(entry.transcriptPath) : 0,
       { rebound: !!meta.rebound, now: Date.now() },
     )
+    if (!current()) return
     const attached = await attachSession(entry, reset, entry.engine === 'cursor', bornAfterAgent)
+    // The registry mutates rows in place. This completion cannot unbind or re-announce a later
+    // conversation, nor an agent that Stop has already retired.
+    if (!current()) return
     if (!attached) {
       // A terminal reads as gone while a stop or a restart ends its engine. A registration that comes in
       // then, such as the old engine's own SessionStart arriving late on a loaded machine, is still the
@@ -171,50 +204,32 @@ export function createBinding({
       announceSession(entry)
       return
     }
-    const confirmed = registry.byAgent(entry.agentId)
-    if (confirmed?.sessionId === entry.sessionId) {
-      // The record a stop is resumed from, kept current. Best effort: the binding has happened, and a
-      // full disk must not stop the windows hearing of it below (found end to end, e2e/diskfull.e2e.ts).
-      try {
-        stoppedAgents.save(confirmed)
-      } catch (error) {
-        console.error(`[agent] ${sid(entry.agentId)} could not save the record it resumes from: ${error instanceof Error ? error.message : error}`)
-      }
-      if (confirmed.resumeOnly) stoppedAgents.finishResume(confirmed.agentId)
-    }
-    syncRecapPool()
-    if (!meta.isNew) return
-    registry.inheritName(entry.agentId, entry.sessionId)
-    announceSession(entry)
-    clients.send({
-      type: 'session_synced',
-      payload: {
-        sessionId: entry.sessionId,
-        agentId: entry.agentId,
-        title: projectDisplayName(entry),
-        createdAt: new Date(entry.boundAt ?? Date.now()).toISOString(),
-      },
-    })
   }
 
   const lastRepairAttempt = new Map<string, number>()
   const repairAttempts = new Map<string, number>()
-  /**
-   * The transcript of a session the process of one of these engines names, found by that engine's own code,
-   * loaded here (engines/inProcess.ts). One whose code could not be loaded finds nothing: the process is bound as
-   * when its transcript is not there, or not at all.
-   */
-  const ownTranscript = async (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> => {
-    switch (engine) {
-      case 'cursor': { const cursor = await loadEngine('cursor'); return cursor && cursor.findCursorTranscript(cursor.cursorDataDir(), sessionId) }
-      case 'grok': { const grok = await loadEngine('grok'); return grok && grok.findGrokTranscript(homes.grok, cwd, sessionId) }
-      case 'agy': { const agy = await loadEngine('agy'); return agy && agy.findAgyTranscript(homes.agy, sessionId) }
-      case 'copilot': { const copilot = await loadEngine('copilot'); return copilot && copilot.findCopilotTranscript(homes.copilot, sessionId) }
-    }
+  // Binding is committed before optional interpretation starts. A missing reader must not hold the
+  // discovery pass (and therefore readiness) or prevent another process from being bound.
+  const followRegistered = (entry: RegisteredSession, meta: RegisteredMeta): void => {
+    void handleRegistered(entry, meta).catch(error => console.error(
+      `[agent] ${sid(entry.agentId)} transcript attachment is unavailable: ${error instanceof Error ? error.message : error}`))
   }
+  const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
+    transcriptOf(engine, engine === 'cursor' ? cursorDataDir() : homes[engine], sessionId, cwd)
   const bindObservedAgent = async (observed: DiscoveredTerminalAgent): Promise<void> => {
     const agent = registry.byProcess(observed.engine, observed.processIdentity)
     if (!agent) return
+    const authority = paneReadIdentity(agent)
+    const current = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
+      && paneReadIdentity(registry.byProcess(observed.engine, observed.processIdentity)) === authority
+    const mayClaim = (id: string): boolean => {
+      if (isRecentlyDeleted(id)) return false
+      const owner = registry.bySession(id)
+      if (!owner || owner.agentId === agent.agentId) return true
+      const observedStarted = Date.parse(observed.processIdentity.startMarker)
+      const ownerStarted = Date.parse(owner.processIdentity?.startMarker ?? '')
+      return !Number.isFinite(ownerStarted) || (Number.isFinite(observedStarted) && observedStarted > ownerStarted)
+    }
 
     // Copilot can change session WITHOUT changing process: `/resume` inside the CLI opens another one,
     // and the pane then shows a conversation the daemon is not streaming. Every other engine here
@@ -225,16 +240,14 @@ export function createBinding({
     if (agent.resumeOnly && agent.launch && agent.launch.state !== 'ready') return
     if (agent.sessionId) {
       if (observed.engine === 'copilot') {
-        // Copilot's own code reads its lock (engines/inProcess.ts): without it, a /resume is not followed.
-        const copilot = await loadEngine('copilot')
-        if (!copilot) return
-        const current = await copilot.copilotSessionForPid(homes.copilot, observed.processIdentity.pid)
-        if (!current || current === agent.sessionId || isRecentlyDeleted(current)) return
-        const transcript = await copilot.findCopilotTranscript(homes.copilot, current)
-        console.log(`[discovery] ${sid(agent.agentId)} switched copilot session ${sid(agent.sessionId)} → ${sid(current)} (/resume)`)
+        const next = await processSessionOf('copilot', homes.copilot, observed.processIdentity.pid)
+        if (!next || next === agent.sessionId || isRecentlyDeleted(next)) return
+        const transcript = await transcriptOf('copilot', homes.copilot, next)
+        if (!current() || !mayClaim(next)) return
+        console.log(`[discovery] ${sid(agent.agentId)} switched copilot session ${sid(agent.sessionId)} → ${sid(next)} (/resume)`)
         const rotated = registry.register({
           engine: 'copilot',
-          sessionId: current,
+          sessionId: next,
           transcriptPath: transcript ?? undefined,
           cwd: observed.cwd,
           source: 'copilot-resume',
@@ -243,7 +256,7 @@ export function createBinding({
           processIdentity: observed.processIdentity,
           hookEvent: 'CopilotResume',
         })
-        if (rotated?.isNew) await handleRegistered(rotated.entry, rotated)
+        if (rotated?.isNew) followRegistered(rotated.entry, rotated)
         return
       }
       // Claude can also change session WITHOUT any hook firing: a long conversation's transcript
@@ -258,6 +271,7 @@ export function createBinding({
         const continuation = await continuationOf(observed.engine, agent.transcriptPath)
         if (!continuation || continuation.sessionId === agent.sessionId
           || registry.has(continuation.sessionId) || isRecentlyDeleted(continuation.sessionId)) return
+        if (!current()) return
         console.log(`[discovery] ${sid(agent.agentId)} ${observed.engine} session continued ${sid(agent.sessionId)} → ${sid(continuation.sessionId)}`)
         const rotated = registry.register({
           engine: observed.engine,
@@ -270,7 +284,7 @@ export function createBinding({
           processIdentity: observed.processIdentity,
           hookEvent: `${store.label}Continuation`,
         })
-        if (rotated?.isNew) await handleRegistered(rotated.entry, rotated)
+        if (rotated?.isNew) followRegistered(rotated.entry, rotated)
         return
       }
       return
@@ -281,13 +295,7 @@ export function createBinding({
     let hermesHome: string | undefined
     let source = 'terminal-resume'
     if (sessionId) {
-      if (isRecentlyDeleted(sessionId)) return
-      const owner = registry.bySession(sessionId)
-      if (owner && owner.agentId !== agent.agentId) {
-        const observedStarted = Date.parse(observed.processIdentity.startMarker)
-        const ownerStarted = Date.parse(owner.processIdentity?.startMarker ?? '')
-        if (Number.isFinite(ownerStarted) && (!Number.isFinite(observedStarted) || observedStarted <= ownerStarted)) return
-      }
+      if (!mayClaim(sessionId)) return
       transcriptPath = observed.engine === 'cursor' || observed.engine === 'grok' || observed.engine === 'agy' || observed.engine === 'copilot'
         ? await ownTranscript(observed.engine, sessionId, observed.cwd) ?? undefined
         : observed.engine === 'claude' || observed.engine === 'codex'
@@ -321,6 +329,7 @@ export function createBinding({
       source = 'process-repair'
     }
 
+    if (!current() || !mayClaim(sessionId)) return
     const previousOwner = registry.bySession(sessionId)
     const result = registry.register({
       engine: observed.engine,
@@ -343,7 +352,7 @@ export function createBinding({
     }
     lastRepairAttempt.delete(agent.agentId)
     repairAttempts.delete(agent.agentId)
-    await handleRegistered(result.entry, result)
+    followRegistered(result.entry, result)
     console.log(`[discovery] bound ${observed.engine} session ${sid(result.entry.sessionId)} via ${observed.primaryRuntimeKey}`)
   }
   return {

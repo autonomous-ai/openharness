@@ -9,7 +9,7 @@
  */
 import type { LiveFor } from '../../engines/facets/live.js'
 import type { CursorTranscriptDiscovery } from '../../engines/cursor/discovery.js'
-import { isOtherEngine, loadEngine, type InProcessModules } from '../../engines/inProcess.js'
+import { isOtherEngine, type InProcessModules } from '../../engines/inProcess.js'
 import type { AgentEngine } from '../../engines/types.js'
 import { pollsQuestions, type QuestionWatcher } from '../../lib/questionController.js'
 import { attachTranscript, type AttachRead } from '../../lib/attachTranscript.js'
@@ -28,6 +28,7 @@ import type { RelaunchMarks } from './relaunch.js'
 import { createSideReads } from './sideReads.js'
 import { paneReadIdentity } from './readIdentity.js'
 import type { LiveSessions, PreparedLive } from '../engines/liveSessions.js'
+import { createReaderLoads } from './readerLoads.js'
 
 export interface AttachDeps {
   liveFor: LiveFor
@@ -57,6 +58,8 @@ export interface AttachDeps {
   hermesDb: (session: RegisteredSession) => Promise<string>
   /** How many sessions attach at once. */
   concurrency: number
+  /** The wait for optional code, before any reader has started writing. */
+  readerLoadWaitMs?: number
   /** Where an engine's writing became live again after a relaunch (core/transcripts/relaunch.ts): the fold stops there. */
   relaunchMarks?: Pick<RelaunchMarks, 'read' | 'complete'>
   /** The most of a transcript an engine without its own reader from the end folds, from its end. */
@@ -68,13 +71,14 @@ export interface AttachDeps {
 export function createAttach({
   liveFor, resolve, remoteLive, terminalGone, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
   announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
-  wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled,
+  wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled, readerLoadWaitMs,
 }: AttachDeps) {
   const {
     liveParsers, cursorNormalizers, opencodeReaders, kiloReaders, museNormalizers, ampNormalizers,
     grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, hermesReaders, devinReaders, commandcodeNormalizers,
   } = normalizers
   const sideRead = createSideReads()
+  const readerLoads = createReaderLoads(readerLoadWaitMs)
   /**
    * Sessions that attached before their transcript existed, so nothing was folded and nothing has ever
    * been streamed for them.
@@ -100,6 +104,7 @@ export function createAttach({
   const replayedFirstTurn = new Set<string>()
   const attachSessionNow = async (
     session: RegisteredSession,
+    current: () => boolean,
     reset = false,
     replayCursorFromStart = false,
     /**
@@ -123,15 +128,18 @@ export function createAttach({
     // and a probe in flight when the machine slept times out at the wake before its answer is read: the
     // session of an agent still at work was unbound that way two seconds after a laptop woke (round 29,
     // e2e/clockjump.e2e.ts). A terminal that really is gone is retired by the reconciler's confirmed scans.
-    if (await terminalGone(session)) return false
-    // The other engines' code is loaded in this process, and before anything below: the tail starts only at
-    // the end of an attach, so no line reaches its normalizer before it is there (core/transcripts/ingest.ts).
-    // Started as the session entered the registry (engines/inProcess.ts `preloadEngine`), so this rarely
-    // waits. Code that could not load attaches the session with no normalizer or reader: it is followed, and
-    // reads no events, as an engine with no normalizer does.
-    const other = isOtherEngine(session.engine) ? await loadEngine(session.engine) : null
+    if (!current() || await terminalGone(session) || !current()) return false
+    // Bound only the wait for optional code, before any interpretation writes. A late import gets one
+    // fenced retry; a missing import holds the transcript intact until an update or restart fixes it.
+    const other = isOtherEngine(session.engine) ? await readerLoads.read(
+      session.engine, session.sessionId, paneReadIdentity(session), current, () => {
+        if (current()) void attachSession(session, true, replayCursorFromStart, replayFromStart).catch(error => console.error(
+          `[agent] ${sid(session.agentId)} reader retry failed: ${error instanceof Error ? error.message : error}`))
+      }) : null
+    if (!current()) return false
     if (isOtherEngine(session.engine) && !other) {
-      console.warn(`[agent] ${sid(session.agentId)} attached without its engine's code · engine=${session.engine} · its transcript is not read`)
+      console.warn(`[agent] ${sid(session.agentId)} transcript held · engine=${session.engine} · its reader is unavailable or still loading`)
+      return true
     }
     const engine = <Name extends keyof InProcessModules>(name: Name): InProcessModules[Name] | null =>
       session.engine === name ? other as InProcessModules[Name] | null : null
@@ -148,7 +156,6 @@ export function createAttach({
           { fromStart: replayFromStart || unseen || (session.engine === 'cursor' && replayCursorFromStart) },
         )
       }
-      else if (session.engine === 'cursor') await cursorDiscovery.add(session.sessionId)
       console.log(`[agent] ${sid(session.agentId)} re-attached · engine=${session.engine} · terminal=${terminalLabel(session)} · session=${sid(session.sessionId)}`)
       return true
     }
@@ -463,9 +470,7 @@ export function createAttach({
       if (!handover.hold || !watcher.tails(session.sessionId, session.transcriptPath)) {
         await watcher.addSession({ ...session, transcriptPath: session.transcriptPath }, fromEnd ? { fromOffset: fromEnd.next } : {})
       }
-    } else if (session.engine === 'cursor') {
-      await cursorDiscovery.add(session.sessionId)
-    } else {
+    } else if (session.engine !== 'cursor') {
       // No transcript to fold: whatever this session writes later is its FIRST content, so the re-attach
       // that brings the path must read the file whole rather than from its end.
       neverFoldedHistory.add(session.sessionId)
@@ -534,19 +539,31 @@ export function createAttach({
     reset = false,
     replayCursorFromStart = false,
     replayFromStart = false,
-  ): Promise<boolean> =>
-    attaches.attach(session, reset, async () => {
+  ): Promise<boolean> => {
+    const authority = paneReadIdentity(session)
+    const current = () => paneReadIdentity(resolve(session.agentId)) === authority
+    if (!current()) return Promise.resolve(false)
+    readerLoads.supersede(session.sessionId, authority)
+    // Location is core control, outside the optional reader pool. Four stalled readers must not
+    // prevent a fifth Cursor session finding its file. add records its candidate synchronously, so
+    // forget's remove revokes it even while the first filesystem lookup is pending.
+    if (session.engine === 'cursor' && !session.transcriptPath) {
+      void cursorDiscovery.add(session.sessionId).catch(error => console.error(
+        `[cursor-discovery] lookup failed: ${error instanceof Error ? error.message : error}`))
+    }
+    return attaches.attach(session, reset, async () => {
       // A tail an attach holds (a Claude Code or Codex reset, see attachSessionNow) is released only
       // here, after the whole attach — the new normalizer installed and any open turn said to be open —
       // so delivery resumes into it, in order. Released on every exit, however the attach ends.
       const handover = { hold: null as TailHold | null, next: null as number | null }
       try {
-        return await attachSessionNow(session, reset, replayCursorFromStart, replayFromStart, handover)
+        return await attachSessionNow(session, current, reset, replayCursorFromStart, replayFromStart, handover)
       } finally {
         handover.hold?.release(handover.next)
       }
-    })
-  return { attachSession, attaches, neverFoldedHistory, replayedFirstTurn }
+    }, authority)
+  }
+  return { attachSession, attaches, neverFoldedHistory, replayedFirstTurn, forget: readerLoads.forget }
 }
 
 export type Attach = ReturnType<typeof createAttach>
