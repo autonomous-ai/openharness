@@ -489,19 +489,13 @@ void main() {
       await tester.tap(find.text('Investigate Harness crash'));
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
+      // One create: it says to move it, waiting for a running turn to end.
+      expect(connection.creates, hasLength(1));
       expect(
-        connection.creates.first,
+        connection.creates.single,
         containsPair('resumeSessionId', 'e-busy'),
       );
-      expect(connection.creates.first.containsKey('takeOver'), isFalse);
-      // Mid-turn in its terminal: it moves here when the turn ends, with no question.
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(connection.creates, hasLength(2));
-      expect(connection.creates.last, containsPair('takeOver', 'wait'));
-      expect(
-        connection.creates.last,
-        containsPair('resumeSessionId', 'e-busy'),
-      );
+      expect(connection.creates.single, containsPair('takeOver', 'wait'));
       expect(find.text('Move to Harness'), findsNothing);
       expect(app.panes.map((pane) => pane.agentId), ['moved']);
       await tester.pumpWidget(const SizedBox());
@@ -555,8 +549,9 @@ void main() {
       await tester.tap(find.text('Fix the stuck pane'));
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pump(const Duration(milliseconds: 100));
-      expect(connection.creates, hasLength(2));
-      expect(connection.creates.last, containsPair('takeOver', 'idle'));
+      // Between turns, `wait` moves it at once: one create, no question.
+      expect(connection.creates, hasLength(1));
+      expect(connection.creates.single, containsPair('takeOver', 'wait'));
       expect(find.text('Move to Harness'), findsNothing);
       expect(app.panes.map((pane) => pane.agentId), ['moved']);
       await tester.pumpWidget(const SizedBox());
