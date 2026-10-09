@@ -1940,7 +1940,9 @@ static void render_voice(ht_scene_t *f)
     s.status_phase = status_animated() ? ht_shimmer_phase(ms() * status_speed()) : 0;
     for (int i = 0; i < f->count; i++)
         if (f->runs[i].arc == 2) f->runs[i].shimmer = s.status_phase;
-    s.hits[s.hit_count++] = (hit_t){{33, 97, 400, 274}, A_PET, 0, true};
+    // The whole glass ends the recording: the voice screen draws no other control, and a tap that
+    // missed the pet by a finger's width used to leave the microphone open.
+    s.hits[s.hit_count++] = (hit_t){{0, 0, HT_WIDTH, HT_HEIGHT}, A_PET, 0, true};
 }
 static void render_selection(ht_scene_t *f)
 {
