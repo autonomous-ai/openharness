@@ -1,4 +1,4 @@
-/** Healthy native descriptor answers from former main. Linux, UTC, fixed time and private files;
+/** Healthy native descriptor answers from former main. Pinned Linux/macOS, UTC, fixed time and private files;
  * every host binary is forbidden. Record before changing process or descriptor authority. */
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +8,7 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 import type { ProcessRow } from '../lib/tmux.js'
 import type { RegisteredSession } from '../lib/registry.js'
 
-const fixture = vi.hoisted(() => ({ root: '', rows: [] as ProcessRow[] }))
+const fixture = vi.hoisted(() => ({ root: '', rows: [] as ProcessRow[], lsof: new Map<number, string[]>() }))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   const mapped = (path: unknown) => String(path).startsWith('/proc/')
@@ -22,7 +22,12 @@ vi.mock('node:fs/promises', async original => {
 })
 vi.mock('node:child_process', async original => {
   const forbidden = () => { throw new Error('This golden must never run a host binary') }
-  return { ...await original<object>(), execFile: forbidden, execFileSync: forbidden, spawn: forbidden, spawnSync: forbidden }
+  return { ...await original<object>(), execFile: (command: string, args: string[], _options: unknown, done: (error: Error | null, out: string, err: string) => void) => {
+    if (command !== 'lsof' || !args.includes('-Fn')) return forbidden()
+    const pid = Number(args[args.indexOf('-p') + 1]), paths = fixture.lsof.get(pid)
+    if (!paths) return forbidden()
+    done(null, `p${pid}\n${paths.map(path => `n${path}\n`).join('')}`, '')
+  }, execFileSync: forbidden, spawn: forbidden, spawnSync: forbidden }
 })
 vi.mock('../lib/tmux.js', async original => ({ ...await original<object>(), processRows: async () => fixture.rows }))
 vi.mock('../lib/loginShellEnv.js', () => ({ loginShellEnvironment: () => ({}) }))
@@ -136,5 +141,21 @@ it('records native and launcher capture before Stop without native writes', asyn
   await check('capture:launcher', capture(row()))
   descriptors(43, [])
   await check('capture:complete-empty', capture(row()))
+})
+it('records healthy macOS descriptor and capture answers through a placeholder lsof', async () => {
+  Object.defineProperty(globalThis.process, 'platform', { ...platform, value: 'darwin' })
+  const own = rollout(31), unicode = rollout(32, { home: path('café-home') }), noise = file(path('notes-mac'))
+  fixture.rows = [processRow(42, 1), processRow(50, 1)]
+  fixture.lsof.set(42, [noise, own]); fixture.lsof.set(50, [])
+  await check('darwin:descriptors', repair.openFiles(42).then(paths => paths.sort()))
+  await check('darwin:empty', repair.openFiles(50))
+  await check('darwin:identity', repair.openFileSessionOf('codex', 42, path('codex', 'sessions'), path('work')))
+  await check('darwin:capture', capture(row()))
+  fixture.lsof.set(42, [unicode])
+  await check('darwin:unicode', repair.openFileSessionOf('codex', 42, path('café-home', 'sessions'), path('work')))
+  fixture.rows = [processRow(42, 1, '/fixture-tools/node', 'node /fixture-tools/codex.js'), processRow(43, 42)]
+  fixture.lsof.set(42, [noise]); fixture.lsof.set(43, [own])
+  await check('darwin:launcher', repair.processFilesOf('codex', 42).then(paths => paths.sort()))
+  Object.defineProperty(globalThis.process, 'platform', { ...platform, value: 'linux' })
 })
 it('has exactly the recorded observations', () => { if (!RECORD) expect(Object.keys(captured).sort()).toEqual(Object.keys(expected).sort()) })
