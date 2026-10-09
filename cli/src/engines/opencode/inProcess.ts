@@ -10,3 +10,5 @@ export { countOpencodePickers, opencodeFooterModelId, opencodeRowMatches, openco
 export { isOpencodeV2, opencodeMajorVersion } from './version.js'
 export { applyOpencodeSessionModel, parseOpencodeModelId } from './sessionModel.js'
 export { opencodeProvider } from '../../lib/sessionSearch/externals/opencode.js'
+
+export { createRuntimeProfileReader } from './profileReader.js'

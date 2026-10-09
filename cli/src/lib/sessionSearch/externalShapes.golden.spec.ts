@@ -8,7 +8,7 @@ import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from 
 
 process.env.TZ = 'UTC'
 const golden = fileURLToPath(new URL('./__fixtures__/external-shapes.golden.json', import.meta.url))
-const quiet: ProcessView = { list: async () => [], openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
+const quiet: ProcessView = { list: async () => [], openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
 
 it('preserves external lists, exact ownership, conservative busy answers and core admission on both platforms', async () => {
   const root = mkdtempSync(join(tmpdir(), 'external-shapes-'))
@@ -65,7 +65,7 @@ it('preserves external lists, exact ownership, conservative busy answers and cor
         const found = session('conversation', test.extra)
         const p: ExternalProvider = { engine: found.engine, scan: async () => [found],
           owners: async () => test.claim ? [{ sessionId: found.sessionId, pid: 7, record: '/fixture/record', ...test.claim }] : [],
-          busy: async () => test.busy ?? null }
+          busy: async () => test.busy ?? null, confirmOwner: async () => ({ current: true, busy: test.busy ?? null }) }
         const one = externalShapes({ providers: [p] }, { ...openOptions, providers: [p],
           ttys: async () => new Map([[7, test.tty ?? null]]), harnessTtys: async () => test.harness === null ? null : new Set(test.harness ? [test.tty!] : []) },
           { ...own, bySession: () => test.owned ? {} as never : undefined, stoppedAgents: { list: () => test.saved ? [{ sessionId: 'held' } as never] : [] } })

@@ -5,18 +5,15 @@ import 'package:flutter/material.dart';
 
 import '../../core/harness_file_store.dart';
 import '../../core/local_key_value_store.dart';
+import '../../core/phone_app_links.dart';
 import '../../shared/theme/app_icons.dart';
 import '../../shared/theme/app_theme.dart' as grid;
 import '../../shared/theme/app_type.dart';
 import '../../widgets/web_download_button.dart' show openInNewTab;
 import 'web_hidden_under_keyboard.dart';
 
-final _appStore = Uri.parse(
-  'https://apps.apple.com/us/app/harness-like-a-boss/id6812264068',
-);
-final _googlePlay = Uri.parse(
-  'https://play.google.com/store/apps/details?id=ai.autonomous.harness.android',
-);
+final _appStore = Uri.parse(kAppStoreUrl);
+final _googlePlay = Uri.parse(kGooglePlayUrl);
 
 /// The Harness app's store page for the phone or tablet this browser runs on;
 /// null on a computer, which has no store app to send anyone to.

@@ -67,7 +67,6 @@ class FedoraPayload(unittest.TestCase):
             self.assertNotIn('usr/lib/harness-os/' + name, result['files'])
         self.assertNotIn('usr/share/harness-os/lock.json', result['files'])
         self.assertIn('usr/lib/harness-os/live_update.py', result['files'])
-        self.assertIn('usr/lib/harness-os/connections/connections.py', result['files'])
         self.assertIn('usr/share/harness-os/connections.md', result['files'])
         self.assertIn('usr/lib/harness-os/screen-action', result['files'])
         self.assertEqual((destination / 'usr/lib/harness-os/screen-action').stat().st_mode & 0o777, 0o755)

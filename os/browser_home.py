@@ -15,12 +15,10 @@ HOST_MANIFEST = Path('/etc/chromium/native-messaging-hosts/ai.autonomous.harness
 
 
 def open_connections():
-    sys.path.insert(0, '/usr/lib/harness-os/connections')
-    import connections
     # Keep the capability inside the native path. Browser-initiated navigation
-    # is cross-site; the existing OS launcher opens a trusted local tab without
-    # weakening the Connections server's fetch/origin restrictions.
-    subprocess.run(['/usr/bin/hn-browser', connections.page_url()], check=True,
+    # is cross-site; `harness connections` opens a trusted local tab through the
+    # OS launcher (hn-browser) without weakening the page's fetch/origin checks.
+    subprocess.run(['/usr/bin/harness', 'connections'], check=True,
                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                    stderr=subprocess.DEVNULL, timeout=30)
 

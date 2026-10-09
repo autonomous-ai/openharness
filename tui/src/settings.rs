@@ -509,8 +509,9 @@ const SHARE: u16 = 9;
 const PALETTE_SHARE_H: u16 = 7;
 /// Large: as wide as this at most, however wide the window.
 const LARGE_MAX_W: u16 = 160;
-/// (Room for a command's name, its hint and its key apart.)
-const PALETTE_W: u16 = 96;
+/// (Room for a command's name and its key apart: no description beside them any more. Commands,
+/// Keybinds and Layout are the palettes, and they keep one width so the panel stays put between them.)
+const PALETTE_W: u16 = 76;
 /// (New harness's form: its chooser opens beside it where there is room.)
 const FORM_W: u16 = 60;
 /// A form keeps this many rows however short the window (its action stays on screen), up to the
@@ -722,11 +723,13 @@ fn grouped(picker: &Picker) -> bool {
 /// The lines [list] draws for [picker]'s rows, top-down: each row, a heading where the group
 /// changes and a blank line before every heading but the first (at least one: the empty notice).
 pub fn list_lines(picker: &Picker) -> usize {
-    let (grouped, mut lines, mut last) = (grouped(picker), 0, None);
+    let (grouped, mut lines, mut last, mut last_category) = (grouped(picker), 0, None, None);
     for (i, _) in &picker.visible {
-        let group = picker.rows[*i].group.as_deref().filter(|_| grouped);
-        if group.is_some() && group != last { lines += 1 + usize::from(lines > 0) }
-        last = group;
+        let row = &picker.rows[*i];
+        let (group, category) = (row.group.as_deref().filter(|_| grouped), row.category.as_deref().filter(|_| grouped));
+        let new_category = category.is_some() && category != last_category;
+        if group.is_some() && (group != last || new_category) { lines += 1 + usize::from(lines > 0) + usize::from(new_category) }
+        (last, last_category) = (group, category);
         lines += 1;
     }
     lines.max(1)
@@ -768,13 +771,25 @@ impl StatefulWidget for PanelList<'_> {
         }
         let (lines, titles) = list_layout(picker, bottom_up);
         scroll_to_cursor(picker, &lines, &titles, n, bottom_up);
+        let rule = c.muted.remove_modifier(Modifier::BOLD);
         let mut row_at = Vec::new();
         for (slot, i) in (picker.scroll..lines.len()).take(n).enumerate() {
             let y = if bottom_up { r.bottom() - 1 - slot as u16 } else { r.y + slot as u16 };
             let line = Rect::new(r.x, y, r.width, 1);
             match lines[i] {
                 Some(vi) => { self.row(buf, picker, vi, line); row_at.push((y, vi)) }
-                None => if let Some((_, title)) = titles.iter().find(|(at, _)| *at == i) { put(buf, r.x + 2, y, r.width.saturating_sub(2), title, c.muted.add_modifier(Modifier::BOLD)); },
+                None => match titles.iter().find(|(at, _, _)| *at == i) {
+                    // A category (the Models view's Chat models, Decision models) is the list's landmark:
+                    // in the text's own colour, ruled to the edge — a group's muted heading under it read
+                    // as one more of the same.
+                    Some((_, title, true)) => {
+                        let w = r.width.saturating_sub(2);
+                        let used = put(buf, r.x + 2, y, w, title, c.base.add_modifier(Modifier::BOLD));
+                        if used + 1 < w { put(buf, r.x + 2 + used + 1, y, w - used - 1, &"─".repeat((w - used - 1) as usize), rule); }
+                    }
+                    Some((_, title, false)) => { put(buf, r.x + 2, y, r.width.saturating_sub(2), title, c.muted.add_modifier(Modifier::BOLD)); }
+                    None => {}
+                },
             }
         }
         // (No scrollbar: the list follows the cursor, the wheel scrolls it.)
@@ -797,46 +812,62 @@ fn empty_notice(picker: &Picker) -> String {
 
 /// The lines as drawn, first to last (bottom to top when [bottom_up]): each visible row by its
 /// index, and None for a heading (titled, at its line) or the blank line before one.
-fn list_layout(picker: &Picker, bottom_up: bool) -> (Vec<Option<usize>>, Vec<(usize, String)>) {
+/// A title is a group's heading, or — `true` — its category's ([Row::category]), on the line before it.
+fn list_layout(picker: &Picker, bottom_up: bool) -> (Vec<Option<usize>>, Vec<(usize, String, bool)>) {
     // The lines as drawn: each row, and a titled heading (a blank line before it) wherever the
-    // group changes — as opencode's palette groups its commands. The scroll counts lines.
+    // group changes — as opencode's palette groups its commands — with its category's over it where
+    // that changes too. The scroll counts lines.
     let mut lines: Vec<Option<usize>> = Vec::new();
-    let mut titles: Vec<(usize, String)> = Vec::new();
-    let mut last: Option<&str> = None;
+    let mut titles: Vec<(usize, String, bool)> = Vec::new();
+    let (mut last, mut last_category): (Option<&str>, Option<&str>) = (None, None);
     let grouped = grouped(picker);
     if !bottom_up {
         for vi in 0..picker.visible.len() {
-            let group = picker.rows[picker.visible[vi].0].group.as_deref().filter(|_| grouped);
-            if group.is_some() && group != last {
+            let row = &picker.rows[picker.visible[vi].0];
+            let (group, category) = (row.group.as_deref().filter(|_| grouped), row.category.as_deref().filter(|_| grouped));
+            let new_category = category.is_some() && category != last_category;
+            if group.is_some() && (group != last || new_category) {
                 if !lines.is_empty() { lines.push(None) }
-                titles.push((lines.len(), group.unwrap_or_default().to_string()));
+                if new_category { titles.push((lines.len(), category.unwrap_or_default().to_string(), true)); lines.push(None) }
+                titles.push((lines.len(), group.unwrap_or_default().to_string(), false));
                 lines.push(None);
             }
-            last = group;
+            (last, last_category) = (group, category);
             lines.push(Some(vi));
         }
     } else {
-        // Bottom up: a group's rows, then its heading (drawn over them), then a blank.
-        let mut pending: Option<String> = None;
+        // Bottom up: a group's rows, then its heading (drawn over them) and its category's when new,
+        // then a blank.
+        let mut pending: Option<(String, Option<String>)> = None;
+        let flush = |pending: (String, Option<String>), lines: &mut Vec<Option<usize>>, titles: &mut Vec<(usize, String, bool)>| {
+            titles.push((lines.len(), pending.0, false));
+            lines.push(None);
+            if let Some(category) = pending.1 { titles.push((lines.len(), category, true)); lines.push(None) }
+        };
         for vi in 0..picker.visible.len() {
-            let group = picker.rows[picker.visible[vi].0].group.as_deref().filter(|_| grouped);
-            if group != last {
-                if let Some(title) = pending.take() { titles.push((lines.len(), title)); lines.push(None); lines.push(None) }
-                pending = group.map(str::to_string);
+            let row = &picker.rows[picker.visible[vi].0];
+            let (group, category) = (row.group.as_deref().filter(|_| grouped), row.category.as_deref().filter(|_| grouped));
+            let new_category = category.is_some() && category != last_category;
+            if group != last || new_category {
+                if let Some(p) = pending.take() { flush(p, &mut lines, &mut titles); lines.push(None) }
+                pending = group.map(|g| (g.to_string(), new_category.then(|| category.unwrap_or_default().to_string())));
             }
-            last = group;
+            (last, last_category) = (group, category);
             lines.push(Some(vi));
         }
-        if let Some(title) = pending { titles.push((lines.len(), title)); lines.push(None) }
+        if let Some(p) = pending { flush(p, &mut lines, &mut titles) }
     }
     (lines, titles)
 }
 
 /// [picker]'s scroll (the first line shown of [n]) keeping the cursor's row in view — and, top
 /// down, its heading with it — unless the wheel put the list where it is.
-fn scroll_to_cursor(picker: &mut Picker, lines: &[Option<usize>], titles: &[(usize, String)], n: usize, bottom_up: bool) {
+fn scroll_to_cursor(picker: &mut Picker, lines: &[Option<usize>], titles: &[(usize, String, bool)], n: usize, bottom_up: bool) {
     let at_line = lines.iter().position(|l| *l == Some(picker.cursor)).unwrap_or(0);
-    let top = if !bottom_up && at_line >= 1 && titles.iter().any(|(i, _)| *i + 1 == at_line) { at_line - 1 } else { at_line };
+    // Top down, the titles right over the cursor's row come into view with it: its group's, and its
+    // category's over that.
+    let mut top = at_line;
+    while !bottom_up && top >= 1 && titles.iter().any(|(i, _, _)| *i + 1 == top) { top -= 1 }
     if !picker.free_scroll {
         if top < picker.scroll { picker.scroll = top }
         if at_line >= picker.scroll + n { picker.scroll = at_line + 1 - n }
@@ -1650,12 +1681,12 @@ mod tests {
         let medium = Rect::new(0, 0, 120, 40);
         assert_eq!(area(medium, PanelSize::Large, 0), Rect::new(6, 2, 108, 36));
         // (Rows and chrome; at most seven tenths of the height; in the upper third.)
-        assert_eq!(area(medium, PanelSize::Palette, 5), Rect::new(12, 6, 96, 13));
-        assert_eq!(area(medium, PanelSize::Palette, 100), Rect::new(12, 6, 96, 28));
+        assert_eq!(area(medium, PanelSize::Palette, 5), Rect::new(22, 6, 76, 13));
+        assert_eq!(area(medium, PanelSize::Palette, 100), Rect::new(22, 6, 76, 28));
         assert_eq!(area(medium, PanelSize::Form, 20), Rect::new(30, 10, 60, 20));
         let wide = Rect::new(0, 0, 400, 60);
         assert_eq!(area(wide, PanelSize::Large, 0), Rect::new(120, 3, 160, 54));
-        assert_eq!(area(wide, PanelSize::Palette, 5), Rect::new(152, 10, 96, 13));
+        assert_eq!(area(wide, PanelSize::Palette, 5), Rect::new(162, 10, 76, 13));
         assert_eq!(area(wide, PanelSize::Form, 20), Rect::new(170, 20, 60, 20));
     }
 

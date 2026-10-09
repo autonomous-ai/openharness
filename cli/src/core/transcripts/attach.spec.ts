@@ -1,5 +1,5 @@
 import { liveFor } from '../../engines/live.js'
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,7 @@ import { createSessionNormalizers } from './normalizers.js'
 import { createRelaunchMarks, type RelaunchMark } from './relaunch.js'
 import type { PreparedLive } from '../engines/liveSessions.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
+import { TranscriptDiscovery } from '../../engines/kit/transcriptDiscovery.js'
 
 /**
  * The engines' own normalizers and readers are tested with each engine. Here each is a fake that
@@ -21,16 +22,18 @@ const fakes = vi.hoisted(() => {
   const made: Array<{ kind: string; args: unknown[]; instance: Record<string, any> }> = []
   const normalizer = (kind: string) => class {
     turnOpen = false
+    turnRevision = 0
     thinkingPrefix = ''
     args: unknown[]
     constructor(...args: unknown[]) { this.args = args; made.push({ kind, args, instance: this as Record<string, any> }) }
     ingest(line: string) {
+      this.turnRevision++
       const record = JSON.parse(line || '{}') as { events?: unknown[]; open?: boolean; close?: boolean }
       if (record.open) this.turnOpen = true
       if (record.close) this.turnOpen = false
       return record.events ?? []
     }
-    closeTurn() { this.turnOpen = false; return [] }
+    closeTurn() { this.turnRevision++; this.turnOpen = false; return [] }
   }
   const reader = (kind: string) => class {
     turnOpen = false
@@ -59,6 +62,7 @@ vi.mock('../../engines/hermes/reader.js', async (real) => ({ ...await real<objec
 vi.mock('../../engines/devin/reader.js', async (real) => ({ ...await real<object>(), DevinReader: fakes.reader('devin') }))
 
 const dirs: string[] = []
+const bindings = new Map<string, RegisteredSession>()
 const transcript = (lines: unknown[] = []): string => {
   const dir = mkdtempSync(join(tmpdir(), 'core-attach-'))
   dirs.push(dir)
@@ -66,8 +70,11 @@ const transcript = (lines: unknown[] = []): string => {
   writeFileSync(file, lines.map((line) => typeof line === 'string' ? line : JSON.stringify(line)).join('\n') + (lines.length ? '\n' : ''))
   return file
 }
-const session = (engine: string, transcriptPath?: string, over: Partial<RegisteredSession> = {}): RegisteredSession =>
-  ({ agentId: `${engine}-agent`, sessionId: `${engine}-s`, engine, transcriptPath, ...over }) as RegisteredSession
+const session = (engine: string, transcriptPath?: string, over: Partial<RegisteredSession> = {}): RegisteredSession => {
+  const value = { agentId: `${engine}-agent`, sessionId: `${engine}-s`, engine, transcriptPath, ...over } as RegisteredSession
+  bindings.set(value.agentId, value)
+  return value
+}
 
 // Each engine's code is loaded in this process before an attach folds; a test may say it could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
@@ -85,6 +92,7 @@ function setup(over: Partial<AttachDeps> = {}) {
   const profile = { ingest: vi.fn(), commit: vi.fn() }
   const deps: AttachDeps = {
     liveFor,
+    resolve: id => bindings.get(id),
     terminalGone: vi.fn(async () => false),
     normalizers,
     watcher: { addSession: vi.fn(async () => {}), hold: vi.fn(async () => null), tails: vi.fn(() => false) },
@@ -94,9 +102,14 @@ function setup(over: Partial<AttachDeps> = {}) {
       transcriptFields: vi.fn(() => []),
       beginHydrate: vi.fn(() => profile),
       hydrate: vi.fn(),
-      ingestConfig: vi.fn(async () => {}),
-      ingestPane: vi.fn(),
-    } as unknown as AttachDeps['runtimeProfiles'],
+      ingestConfig: vi.fn(async () => false),
+      ingestPane: vi.fn(() => false),
+      capturePane: vi.fn(async (session, capture, lines, silent) => {
+        const text = await capture(session.agentId, lines)
+        if (text) await deps.runtimeProfiles.ingestPane(session, text, silent)
+        return text
+      }),
+    } as AttachDeps['runtimeProfiles'],
     captureTerminal: vi.fn(async () => 'pane'),
     emit: vi.fn(),
     announceTurnAborted: vi.fn(),
@@ -131,6 +144,16 @@ function remoteSetup(open = false, over: Partial<AttachDeps> = {}) {
   return { ...p, remote, candidate, handle }
 }
 
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.mocked(loadEngine).mockReset()
+  vi.useRealTimers()
+  fakes.made.length = 0
+  fakes.copilotOpen.value = true
+  bindings.clear()
+  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
 describe('the order of an attach of another engine\'s session', () => {
   it('loads the engine\'s code, then folds, then starts the tail: no line can come before its normalizer', async () => {
     let loaded!: () => void
@@ -153,33 +176,187 @@ describe('the order of an attach of another engine\'s session', () => {
   })
 })
 
+it('starts core transcript discovery before an optional Cursor module can stall attachment', async () => {
+  let release!: () => void
+  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(null) }))
+  const run = setup()
+  const attaching = run.attach.attachSession(session('cursor'))
+  try {
+    await vi.waitFor(() => expect(run.deps.cursorDiscovery.add).toHaveBeenCalledWith('cursor-s'))
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+  } finally { release(); await attaching; vi.clearAllMocks() }
+})
+
+it('locates a fifth Cursor session while four optional readers occupy the entire attach pool', async () => {
+  const releases: Array<() => void> = []
+  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { releases.push(() => resolve(null)) }))
+  const run = setup({ concurrency: 4 })
+  const pending = Array.from({ length: 4 }, (_, i) => run.attach.attachSession(session('copilot', undefined, { agentId: `a${i}`, sessionId: `s${i}` })))
+  await vi.waitFor(() => expect(releases).toHaveLength(1))
+  expect(run.attach.attaches.attaching()).toHaveLength(4)
+  const fifth = run.attach.attachSession(session('cursor'))
+  expect(run.attach.attaches.queued()).toBe(1)
+  expect(run.deps.cursorDiscovery.add).toHaveBeenCalledWith('cursor-s')
+  releases.forEach(release => release())
+  await Promise.all([...pending, fifth])
+})
+
+it.each(['terminal probe', 'optional module'] as const)('does not restore a forgotten Cursor while its %s completes', async phase => {
+  const run = setup()
+  let release!: () => void
+  if (phase === 'terminal probe') vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(false) }))
+  else vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(null) }))
+  const s = session('cursor')
+  const pending = run.attach.attachSession(s)
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+  expect(run.deps.cursorDiscovery.add).toHaveBeenCalledOnce()
+  bindings.delete(s.agentId)
+  vi.mocked(run.deps.cursorDiscovery.add).mockClear()
+  release()
+  expect(await pending).toBe(false)
+  expect(run.deps.cursorDiscovery.add).not.toHaveBeenCalled()
+  expect(run.normalizers.hasState(s.sessionId)).toBe(false)
+  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+})
+
+it('rejects a stale attach before scheduling its locator or taking a slot', async () => {
+  const run = setup()
+  const stale = session('cursor')
+  bindings.delete(stale.agentId)
+  expect(await run.attach.attachSession(stale)).toBe(false)
+  expect(run.deps.cursorDiscovery.add).not.toHaveBeenCalled()
+  expect(run.deps.terminalGone).not.toHaveBeenCalled()
+})
+
+it('discards a queued attach whose binding was forgotten while every reader slot was occupied', async () => {
+  const run = setup({ concurrency: 1 })
+  let release!: () => void
+  vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(true) }))
+  const first = run.attach.attachSession(session('pi'))
+  const stale = session('cursor')
+  const pending = run.attach.attachSession(stale)
+  bindings.delete(stale.agentId)
+  release()
+  await first
+  expect(await pending).toBe(false)
+  expect(run.deps.terminalGone).toHaveBeenCalledOnce()
+})
+
+it.each([new Error('unavailable'), 'unavailable'])('contains a failed core locator without rejecting the binding: %s', async error => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const run = setup({ cursorDiscovery: { add: vi.fn(async () => { throw error }) } })
+  expect(await run.attach.attachSession(session('cursor'))).toBe(true)
+  expect(log).toHaveBeenCalledWith('[cursor-discovery] lookup failed: unavailable')
+})
+
+it.each(['terminal probe', 'optional module'] as const)('attaches a newly located Cursor file after its pathless %s was superseded', async phase => {
+  const code = await loadEngine('cursor')
+  const home = mkdtempSync(join(tmpdir(), 'attach-locator-')); dirs.push(home)
+  const s = session('cursor')
+  let replacement: Promise<boolean> | undefined, release!: () => void
+  const discovery = new TranscriptDiscovery(home, { kind: 'direct', root: '', id: /^cursor-s$/, file: ['cursor.jsonl'] }, (_id, path) => {
+    s.transcriptPath = path
+    replacement = run.attach.attachSession(s, false, true)
+  }, () => true, 10)
+  const run = setup({ cursorDiscovery: discovery })
+  if (phase === 'terminal probe') vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(false) }))
+  else vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { release = () => resolve(code) }))
+  await discovery.start()
+  try {
+    const first = run.attach.attachSession(s)
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    mkdirSync(join(home, s.sessionId))
+    const path = join(home, s.sessionId, 'cursor.jsonl'); writeFileSync(path, '{}\n')
+    await vi.waitFor(() => expect(replacement).toBeDefined())
+    release()
+    expect(await first).toBe(false)
+    expect(await replacement).toBe(true)
+    expect(run.deps.watcher.addSession).toHaveBeenCalledOnce()
+    expect(run.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ transcriptPath: path }), {})
+  } finally { await discovery.stop() }
+})
+
+it.each(['current', 'forget', 'rebind'] as const)('holds a stalled import without writes and fences its late retry: %s', async change => {
+  const code = await loadEngine('cursor')
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  let finish!: () => void
+  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(code) }))
+  const run = setup({ readerLoadWaitMs: 20 })
+  const s = session('cursor', transcript([{}]))
+  const first = run.attach.attachSession(s)
+  await vi.advanceTimersByTimeAsync(20)
+  expect(await first).toBe(true)
+  expect(run.normalizers.hasState(s.sessionId)).toBe(false)
+  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+  if (change === 'forget') { bindings.delete(s.agentId); run.attach.forget(s.sessionId) }
+  if (change === 'rebind') s.sessionId = 'another'
+  finish()
+  if (change === 'current') await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalledOnce())
+  else { await vi.advanceTimersByTimeAsync(0); expect(run.deps.watcher.addSession).not.toHaveBeenCalled() }
+  vi.useRealTimers()
+})
+
+it.each([new Error('reader failed'), 'reader failed'])('contains a late reader retry failure: %s', async error => {
+  const code = await loadEngine('cursor')
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  let finish!: () => void
+  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { finish = () => resolve(code) }))
+  const run = setup({ readerLoadWaitMs: 20 })
+  vi.mocked(run.deps.watcher.addSession).mockRejectedValueOnce(error)
+  const pending = run.attach.attachSession(session('cursor', transcript([{}])))
+  await vi.advanceTimersByTimeAsync(20); await pending
+  finish()
+  await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[agent] cursor-a reader retry failed: reader failed'))
+  vi.useRealTimers()
+})
+
+it.each(['terminal probe', 'import'] as const)('does not replay twice when a held loader resolves during a newer attach\'s %s', async phase => {
+  const code = await loadEngine('cursor')
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  let loaded!: () => void, probed!: () => void
+  vi.mocked(loadEngine).mockImplementationOnce(() => new Promise(resolve => { loaded = () => resolve(code) }))
+  const run = setup({ readerLoadWaitMs: 20 })
+  const event = started('once')
+  const s = session('cursor', transcript([{ events: [event] }]))
+  const first = run.attach.attachSession(s, false, true)
+  await vi.advanceTimersByTimeAsync(20); expect(await first).toBe(true)
+  if (phase === 'terminal probe') vi.mocked(run.deps.terminalGone).mockImplementationOnce(() => new Promise(resolve => { probed = () => resolve(false) }))
+  const second = run.attach.attachSession(s, false, true)
+  await vi.advanceTimersByTimeAsync(0)
+  loaded()
+  await vi.advanceTimersByTimeAsync(0)
+  if (phase === 'terminal probe') probed()
+  expect(await second).toBe(true)
+  await vi.waitFor(() => expect(run.attach.attaches.attaching()).toEqual([]))
+  expect(run.deps.watcher.addSession).toHaveBeenCalledOnce()
+  expect(run.deps.emit).toHaveBeenCalledExactlyOnceWith(s.sessionId, [event])
+  expect(made('cursor')).toHaveLength(1)
+})
+
 describe('attaching a session whose engine\'s code could not be loaded', () => {
-  it('follows it with no normalizer or reader, says so, and folds nothing', async () => {
+  it('holds interpretation without a normalizer or tail, says why, and preserves the binding', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.mocked(loadEngine).mockResolvedValueOnce(null as never).mockResolvedValueOnce(null as never)
     const file = setup()
     const path = transcript([{ any: 'line' }])
     expect(await file.attach.attachSession(session('grok', path))).toBe(true)
     expect(file.normalizers.hasState('grok-s')).toBe(false)
-    expect(file.deps.watcher.addSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'grok-s', transcriptPath: path }), {})
+    expect(file.deps.watcher.addSession).not.toHaveBeenCalled()
+    expect(file.deps.runtimeProfiles.hydrate).not.toHaveBeenCalled()
     expect(file.deps.emit).not.toHaveBeenCalled()
     const store = setup()
     expect(await store.attach.attachSession(session('opencode'))).toBe(true)
     expect(store.normalizers.hasState('opencode-s')).toBe(false)
-    expect(warn).toHaveBeenCalledWith('[agent] grok-age attached without its engine\'s code · engine=grok · its transcript is not read')
-    expect(warn).toHaveBeenCalledWith('[agent] opencode attached without its engine\'s code · engine=opencode · its transcript is not read')
+    expect(warn).toHaveBeenCalledWith('[agent] grok-age transcript held · engine=grok · its reader is unavailable or still loading')
+    expect(warn).toHaveBeenCalledWith('[agent] opencode transcript held · engine=opencode · its reader is unavailable or still loading')
     warn.mockRestore()
   })
 })
 
 describe('attaching a session', () => {
-  afterEach(() => {
-    vi.restoreAllMocks()
-    vi.useRealTimers()
-    fakes.made.length = 0
-    fakes.copilotOpen.value = true
-    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
-  })
 
   it('installs worker state after hydration, keeps device/profile observations and reuses only a current binding', async () => {
     const p = remoteSetup(true), s = session('claude', '/private/transcript')
@@ -646,6 +823,67 @@ describe('attaching a session', () => {
       expect(made('copilot')[1].turnOpen).toBe(true)
       expect(vi.mocked(run.deps.emit).mock.calls.filter((call) => call[2]?.resumed).map((call) => call[0])).toEqual(['agy-2', 'copilot-2'])
     })
+
+    it('closes an idle agy history turn even when newer profile evidence discards the chip update', async () => {
+      const run = setup({ settled: vi.fn() })
+      vi.mocked(run.deps.captureTerminal).mockResolvedValue(IDLE_AGY)
+      vi.mocked(run.deps.runtimeProfiles.capturePane).mockImplementationOnce(async (_session, capture, lines) => {
+        await capture('agy-agent', lines)
+        return null
+      })
+      await run.attach.attachSession(session('agy', transcript([{ events: [started()], open: true }])))
+      expect(made('agy')[0].turnOpen).toBe(false)
+      expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.deps.settled).toHaveBeenCalledExactlyOnceWith('agy-s')
+    })
+
+    it.each(['binding', 'forgotten', 'new turn', 'later binding', 'later normalizer', 'later turn'] as const)(
+      'does not close or replay agy history after %s supersedes its capture', async change => {
+        const run = setup({ settled: vi.fn() }), s = session('agy', transcript([{ events: [started()], open: true }]))
+        let finish!: (value: string) => void
+        vi.mocked(run.deps.captureTerminal).mockReturnValueOnce(new Promise<string>(resolve => { finish = resolve }))
+        const mutate = () => {
+          if (change.includes('binding')) bindings.set(s.agentId, { ...s, boundAt: 2 })
+          if (change === 'forgotten' || change === 'later normalizer') run.normalizers.agyNormalizers.delete(s.sessionId)
+          if (change.includes('turn')) made('agy')[0].ingest(JSON.stringify({ open: true }))
+        }
+        if (change.startsWith('later')) vi.mocked(run.deps.runtimeProfiles.capturePane).mockImplementationOnce(async (_s, capture) => {
+          await capture(s.agentId)
+          queueMicrotask(mutate)
+          return null
+        })
+        const pending = run.attach.attachSession(s)
+        await vi.waitFor(() => expect(run.deps.captureTerminal).toHaveBeenCalled())
+        const normalizer = made('agy')[0], close = vi.spyOn(normalizer, 'closeTurn')
+        if (!change.startsWith('later')) mutate()
+        finish(change.startsWith('later') ? 'working\n  esc to cancel' : IDLE_AGY)
+        await pending
+        expect(close).not.toHaveBeenCalled()
+        expect(run.deps.emit).not.toHaveBeenCalled()
+        expect(run.deps.settled).not.toHaveBeenCalled()
+      },
+    )
+
+    it.each(['new turn', 'binding', 'forgotten'] as const)(
+      'keeps captured agy history fenced through watcher installation: %s', async change => {
+        for (const pane of [IDLE_AGY, 'working\n  esc to cancel']) {
+          const run = setup({ settled: vi.fn() }), s = session('agy', transcript([{ events: [started()], open: true }]))
+          vi.mocked(run.deps.captureTerminal).mockResolvedValue(pane)
+          let finish!: () => void
+          vi.mocked(run.deps.watcher.addSession).mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve }))
+          const pending = run.attach.attachSession(s)
+          await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalled())
+          const normalizer = run.normalizers.agyNormalizers.get(s.sessionId)!
+          if (change === 'new turn') normalizer.ingest(JSON.stringify({ open: true }))
+          if (change === 'binding') bindings.set(s.agentId, { ...s, boundAt: 2 })
+          if (change === 'forgotten') run.normalizers.agyNormalizers.delete(s.sessionId)
+          finish()
+          await pending
+          expect(run.deps.emit, pane).not.toHaveBeenCalled()
+          expect(run.deps.settled, pane).not.toHaveBeenCalled()
+        }
+      },
+    )
 
     it('tells the recaps when the last turn was already over at attach, never for one open or killed', async () => {
       vi.spyOn(console, 'log').mockImplementation(() => {})

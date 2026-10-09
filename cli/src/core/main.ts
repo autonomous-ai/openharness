@@ -52,7 +52,7 @@ import { AUTH_DIR, AuthSessionManager, clearAuthSession, ensureSignInEpoch, read
 import { ENGINES, enginePathOverride } from '../lib/engineBin.js'
 import { isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import { engineInstallRecipe } from '../lib/engineInstall.js'
-import { buildEngineLaunchArgv } from '../lib/engineLaunch.js'
+import { buildEngineLaunchArgv, supportsFirstPrompt } from '../lib/engineLaunch.js'
 import { workspaceMissing } from '../lib/workspaceCheck.js'
 import { HERMES_SYSTEM_MANAGED_DIR, type GridLaunchMachine } from '../lib/gridLaunchWire.js'
 import { writeGridConfigDir } from '../lib/gridConfigDir.js'
@@ -70,8 +70,8 @@ import { OpenTabProtection } from '../lib/openTabProtection.js'
 import { sessionCheckpoints } from '../lib/sessionCheckpoint.js'
 import { repairProjectCwds } from '../lib/cwdRepair.js'
 import { stoppedAgents } from '../lib/stoppedAgents.js'
-import { ExternalSessions, OpenSessions } from '../lib/sessionSearch/external.js'
-import { externalProviders } from '../lib/sessionSearch/externals/index.js'
+import { externalSessionAnswer, externalUnavailable } from '../lib/externalSessionWire.js'
+import { externalResumePending } from '../lib/externalResume.js'
 import { type LaunchOverridesDeps } from '../lib/launchOverrides.js'
 import { buildHarnessSessionLabel } from '../lib/harnessSessionLabel.js'
 import { adoptLegacyHarnessSessions, listTmuxPanes } from '../lib/tmuxAgentDiscovery.js'
@@ -130,7 +130,8 @@ import { createRestoreLaunch } from './agents/restoreLaunch.js'
 import { createHeldLaunches, heldPaneArgv } from './agents/heldLaunches.js'
 import { createCancel, createCancelRequest } from './turns/cancel.js'
 import { createPaneWatcher } from './agents/newPane.js'
-import { createAdoption } from './agents/adopt.js'
+import { createExternalResumes } from './agents/externalResume.js'
+import { createExternalPreflight } from './agents/externalPreflight.js'
 import { createAgentCreator } from './agents/create.js'
 import { createAgentForker } from './agents/fork.js'
 import { createPaneSwap } from './agents/swap.js'
@@ -146,7 +147,7 @@ import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn
 import { createCursorDiscovery } from './engines/cursorDiscovery.js'
 import { createCursorTaskHooks, loadPendingCursorTasks } from './engines/cursorTasks.js'
 import { databaseHistory, hermesDb } from './transcripts/databaseHistory.js'
-import { COMMAND_BAR_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
+import { COMMAND_BAR_REQUESTS, CONNECTORS_REQUESTS, createCoreApi, DEVICES_FALLBACKS, DEVICES_REQUESTS, emptyPorts, HANDOFF_REQUESTS, EXPERIMENTS, LONG_ANSWERS, MODELS_FALLBACKS, MODELS_OFF, MODELS_REQUESTS, MONITOR_FALLBACKS, MONITOR_OFF, MONITOR_REQUESTS, ORCHESTRATOR_FALLBACKS, ORCHESTRATOR_REQUESTS, SHARE_REQUESTS, SHARING_FALLBACKS, PROJECTS_REQUESTS, SEARCH_FALLBACKS, SEARCH_REQUESTS, STORE_FALLBACKS, STORE_OFF, STORE_REQUESTS, TEAMS_FALLBACKS, TEAMS_REQUESTS, USAGE_FALLBACKS, USAGE_REQUESTS, VIEWERS_FALLBACKS, WIFI_FALLBACKS, WINDOW_NAMES_REQUESTS, WORKSPACES_FALLBACKS, type GatewayAccount, type GatewayOps, type GatewayStatus, type RouteAnswer, type TeamsPort, type WindowFocus } from './api.js'
 import { createServiceHost, testFaults } from './serviceHost.js'
 import { startStalls } from './stall.js'
 import { createServiceLinks, type ServiceLinks } from './serviceLinks.js'
@@ -197,7 +198,7 @@ import { forgetAgentProject } from '../lib/agentProject.js'
 import { createUsageLink } from './usageLink.js'
 import type { UsageSnapshots } from './usageLink.js'
 import type { AgentUsageTarget } from '../lib/agentUsageWire.js'
-import { LegacyRuntimeProfileManager, type RuntimeModelOption } from '../lib/runtimeProfileManager.js'
+import { RuntimeProfileState, type RuntimeModelOption } from '../lib/runtimeProfileState.js'
 import { createRuntimeProfiles } from './engines/runtimeProfiles.js'
 import { createRuntimeTransport } from './engines/runtimeTransport.js'
 import { RuntimeProfileController } from '../lib/runtimeControl.js'
@@ -420,6 +421,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   const restartJobs = new AgentRestartCoordinator()
   const forgetRestartRevision = (agentId: string): void => restartJobs.forget(agentId)
   const restoreRevision = (agentId: string): number => restartJobs.revision(agentId)
+  let externalResumes: ReturnType<typeof createExternalResumes> | null = null
+  let searchGeneration = 0
   let restoreCancelled = (_agentId: string): boolean => false
   let restoreOnly: ((only: ReadonlySet<string>) => Promise<RestoreSummary>) | null = null
   const heldLaunches = createHeldLaunches({
@@ -621,7 +624,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Which engine workers are linked now: a close's read refused by a restart waits here for the new link.
   const engineLinks = createEngineLinks()
   const runtimeProfiles = createRuntimeProfiles({
-    legacy: new LegacyRuntimeProfileManager(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine)),
+    local: new RuntimeProfileState(engine => isolatedRuntime(engine) ? undefined : inline?.runtimeFor(engine), id => registry.resolve(id)),
     handles: isolatedRuntime,
     resolve: id => registry.resolve(id), transport: runtimeTransport })
   const questionControls = createQuestionControls({
@@ -663,9 +666,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Conversations on this machine that Harness did not start, found where each engine keeps them so
   // Cmd-P can find them and open one here; and which sessions a process has open right now. Harness's
   // own byproducts (recaps run in its data folder) are never among them.
-  const externalEngines = externalProviders()
-  const externalSessions = new ExternalSessions({ providers: externalEngines, excluded: [env.ADAPTER_DATA_DIR], log: (line) => console.warn(line) })
-  const openSessions = new OpenSessions({ providers: externalEngines, log: (line) => console.warn(line) })
+
   // The core's one session manager: the backend link, the gateway's dials, the fleet's lane and the dial's
   // transcriber all take their tokens from it, so a refresh in flight is shared rather than raced.
   const auth = new AuthSessionManager(backendHttpBase())
@@ -720,8 +721,6 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     registry,
     stoppedAgents,
     databaseHistory,
-    externalSessions,
-    openSessions,
     syncSession,
     runtimeModels,
     viewerChanged: () => {}, // nothing in the core forwards to a viewer: the viewers follow their own (services/viewers.ts)
@@ -1051,11 +1050,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       hookEvent: 'TranscriptDiscovered',
     })
     if (!result) return
-    void attachSession(result.entry, false, true).then((attached) => {
-      if (!attached) return
-      syncRecapPool()
-      syncSession(result.entry)
-    }).catch((err) => {
+    // The file is authoritative now. Publishing its binding must not wait for an optional reader.
+    syncRecapPool()
+    syncSession(result.entry)
+    void attachSession(result.entry, false, true).catch((err) => {
       console.error('[cursor-discovery] attach failed:', err instanceof Error ? err.message : err)
     })
   })
@@ -1067,6 +1065,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/transcripts/attach.ts).
   const attach = createAttach({
     liveFor,
+    resolve: id => registry.resolve(id),
     remoteLive: engineLive,
     terminalGone: terminalControl.terminalGone,
     normalizers,
@@ -1207,7 +1206,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // The requests each service that can run in its own process answers, as core/api.ts declares them.
   const requestsOf: Record<string, readonly string[]> = {
-    search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS,
+    search: SEARCH_REQUESTS, store: STORE_REQUESTS, usage: USAGE_REQUESTS, monitor: MONITOR_REQUESTS, projects: PROJECTS_REQUESTS, models: MODELS_REQUESTS, handoff: HANDOFF_REQUESTS, connectors: CONNECTORS_REQUESTS,
     devices: DEVICES_REQUESTS, windowNames: WINDOW_NAMES_REQUESTS, shell: SHELL_REQUESTS,
     ...Object.fromEntries(Object.entries(EXPERIMENTS).map(([name, experiment]) => [name, experiment.requests])),
   }
@@ -1295,6 +1294,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       engineLinks.connected(service)
       modelControls.connected(service)
       questionControls.connected(service)
+      if (service === 'search') { searchGeneration++; externalResumes?.wake() }
       if (service === 'usage') usageLink.connected()
       if (service === 'gateway') gatewayLink?.connected()
       if (service === 'teams') teamsLink.on()
@@ -1305,6 +1305,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       void heldLaunches.restoreHeld(service)
     },
     disconnected: (service) => {
+      if (service === 'search') searchGeneration++
       if (service === 'usage') usageLink.disconnected()
       engineReaders.disconnected(service)
       liveTransport.disconnected(service)
@@ -1332,6 +1333,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // where the core tells it what changed. A purge's forgetting waits for it if it is down.
   if (outOfProcess.has('search')) {
     ports.search = {
+      inspect: async request => externalSessionAnswer(await serviceLinks.call('search', 'external_inspect', { ...request }, 4_000), request),
       touch: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'touch', sessionId } }) },
       deleteHistory: (sessionId) => { serviceLinks.notify('search', { type: 'service_event', payload: { kind: 'deleteHistory', sessionId } }, { untilDelivered: true }) },
       session: () => undefined,
@@ -1385,6 +1387,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   if (!outOfProcess.has('windowNames')) serviceHost.serve('windowNames', inline!.startWindowNames, coreApi, WINDOW_NAMES_REQUESTS)
   if (!outOfProcess.has('commandBar')) serviceHost.serve('commandBar', inline!.startCommandBar, coreApi, COMMAND_BAR_REQUESTS)
   if (!outOfProcess.has('handoff')) serviceHost.serve('handoff', inline!.startHandoff, coreApi, HANDOFF_REQUESTS)
+  // Connected services' MCP bridge and the Connectors screen (services/connectors.ts): here, or in the edge host.
+  if (!outOfProcess.has('connectors')) serviceHost.serve('connectors', inline!.startConnectors, coreApi, CONNECTORS_REQUESTS)
   // The recaps: in this process, or in the edge host (services/recapsProcess.ts), told each turn's lifecycle.
   if (outOfProcess.has('recaps')) ports.recaps = recapsLink.port; else serviceHost.start('recaps', inline!.startRecaps, coreApi, RECAPS_FALLBACKS)
   if (!outOfProcess.has('shell')) serviceHost.serve('shell', inline!.startShell, coreApi, SHELL_REQUESTS)
@@ -1475,6 +1479,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
   const forgetSession = createForgetSession({
+    forgetAttach: attach.forget,
     onRemoved: (agentId) => forgetRestartRevision(agentId),
     relaunchMarks,
     registry,
@@ -2029,6 +2034,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // and a pane that outlived the daemon in a session discovery no longer lists still has its
       // engine, which a second pane resuming the same session would collide with.
       survey: () => tmuxSurvey(() => listTmuxPanes(), lookupPaneEngineProcess),
+      waitingPane: (runtime, token) => backend.isHeld(runtime, token),
       liveProcess: (entry, runtime) => tmuxSurvey(() => listTmuxPanes(), lookupPaneEngineProcess).liveProcess(entry, runtime),
       buildLaunch: createRestoreLaunch({
         workspaceMissing, relaunchOverrides, prepareSessionResume, refreshGridWebSearch,
@@ -2037,6 +2043,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
           const { env: launchEnv, extraArgs, clearEnv } = overrides
           const argv = buildEngineLaunchArgv(entry.engine, {
             ...opts,
+            ...(entry.externalResume?.continue && entry.externalResume.signal === 'sent' && !entry.externalResume.dispatched && supportsFirstPrompt(entry.engine) ? { firstPrompt: 'continue' } : {}),
             bypassPermission: permission.bypassPermission === true,
             ...(permission.permissionMode ? { permissionMode: permission.permissionMode } : {}),
             installIfMissing: enginePathOverride(entry.engine) ? undefined : engineInstallRecipe(entry.engine),
@@ -2077,8 +2084,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       triggerHint: async (runtime, engine) => { await agentReconciler.triggerHint(runtime, engine) },
       log: (message) => console.log(message),
       // A grid's or a saved API's launch asks models: not before the core is ready (core/agents/heldLaunches.ts).
-      needs: (entry) => [...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : [])],
-      waitingLaunch: (_entry, held) => ({ argv: heldPaneArgv(held.detail) }),
+      needs: (entry) => [...(externalResumePending(entry.externalResume) ? ['search'] : []), ...(entry.gridLaunch ? ['models'] : []), ...(entry.dsh ? ['store'] : [])],
+      waitingLaunch: (entry, held) => ({ argv: heldPaneArgv(held.detail, entry.externalResume?.token) }),
       killPane: async (runtime) => { await backend.kill(runtime) },
     }
     // Later passes launch the held agents, into the panes they wait in, outside this pass's transaction.
@@ -2124,10 +2131,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       await runtimeProfiles.withoutChangeEvents(async () => {
         await Promise.all(registry.advertised().map((session) => runtimeProfiles.ingestConfig(session, true)))
         await watcher.pollAll()
-        await Promise.all(registry.advertised().map(async (session) => {
-          const capture = await captureTerminal(session.agentId, 120)
-          if (capture) await runtimeProfiles.ingestPane(session, capture, true)
-        }))
+        await Promise.all(registry.advertised().map(session => runtimeProfiles.capturePane(session, captureTerminal, 120, true)))
       })
       await syncTerminalTitles()
       const includeDevice = reconcileNeedsDeviceAnnouncement
@@ -2172,9 +2176,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   setInterval(() => {
     for (const session of registry.list()) {
       if (!PANE_POLLED_ENGINES.has(session.engine)) continue
-      void captureTerminal(session.agentId, 60)
-        .then((capture) => capture ? runtimeProfiles.ingestPane(session, capture) : undefined)
-        .catch(() => undefined)
+      void runtimeProfiles.capturePane(session, captureTerminal, 60).catch(() => undefined)
     }
   }, PANE_POLL_MS)
 
@@ -2236,26 +2238,23 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   // Opening a conversation Harness did not start, and taking it over from a terminal (core/agents/adopt.ts).
-  const adoption = createAdoption({
-    bySession: (sessionId) => registry.bySession(sessionId),
-    byAgent: (agentId) => registry.byAgent(agentId),
-    stoppedAgents,
-    externalSessions,
-    openSessions,
-    search: sessionSearch,
+  externalResumes = createExternalResumes({
+    registry, tmux: tmuxBackend, stopped: () => stoppedAgents.list(), cancelled: id => restoreCancelled(id),
+    generation: () => searchGeneration,
+    waiting: row => tmuxBackend?.isHeld({ backend: 'tmux', paneId: row.tmuxPane }, row.externalResume!.token).then(value => value === true) ?? Promise.resolve(false),
+    inspect: request => ports.search?.inspect(request) ?? Promise.resolve(externalUnavailable()),
+    preflight: createExternalPreflight({ blocksFolder: cwd => backend.purgeAgentService?.blocksFolder(cwd),
+      hookPort, hooksDisabled: env.DISABLE_HOOK_INSTALL, installOpencodePlugin: installOpencodePluginBeforeSpawn }),
+    announce: announceSession, launch: () => { void heldLaunches.restoreHeld('search') },
+    forget: id => forgetSession(id, { force: true }),
   })
-  const adoptableSession = adoption.adoptableSession
-  const takeOverWhenIdle = adoption.takeOverWhenIdle
-  const heldBy = adoption.heldBy
 
   // Creating an agent (core/agents/create.ts).
   backend.onCreateAgent = createAgentCreator({
     dshLaunch,
     tmuxBackend,
     registry,
-    adoptableSession,
-    heldBy,
-    takeOverWhenIdle,
+    externalResume: externalResumes.create,
     watchNewPane,
     announceSession,
     attachDsh,
@@ -2328,6 +2327,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Stopping, purging and resuming an agent (core/agents/lifecycle.ts).
   const lifecycle = createAgentLifecycle({
     settlePane: restorePanes.settle,
+    cancelExternal: externalResumes.cancel,
     registry,
     stoppedAgents,
     restartJobs,
@@ -2443,7 +2443,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // stops being `bootHandoff` HERE, and not a line earlier: everything the teardown releases exists by now.
   // A straight-line assignment, never a wait: if the body never reaches this line the handler stays
   // `bootHandoff`, and the fix still lands.
-  const updateTeardown = (): TeardownStep[] => [
+  const updateTeardown = (): TeardownStep[] => { externalResumes?.stop(); return [
     ['the registry', () => registry.flush({ exiting: true })], ['the updater', () => daemonBoot.updaterBeside?.()],
     ['the reconciler', () => agentReconciler.stop()],
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
@@ -2461,11 +2461,12 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     // next daemon's dial, and esptool, fail as if the hardware had died.
     ['the devices', () => ports.devices?.stop()],
     // The successor starts its own viewers for the agents it restores; ours must not hold the ports.
+    ['external adoption', () => externalResumes?.stop()],
     ['usage observations', () => { usageLink.port.stop(); ports.usage?.stop() }],
     ['the viewers', () => ports.viewers?.stop()], ['the gateway', () => gateway.stop()],
     // A graceful close releases the backend's one-machine claim, given a moment before the reclaim.
     ['the backend', () => backend.stop()], ['a grace', () => new Promise((r) => setTimeout(r, 1000))],
-  ]
+  ] }
   daemonBoot.applyStagedUpdate = (v) => updateHandoff.restartForUpdate(v, updateTeardown())
   // A core an older release's own handoff started (it spawned this `cli.js __run` and judged it) has no
   // master, and so no updater: it would run this build until its next start. Once that release has gone,
@@ -2479,6 +2480,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    *  which restarts any other exit (harnessd/protocol.ts). */
   const forGood = (reason: string): boolean => reason === 'revoked' || reason === 'busy'
   const shutdown = async (signal: string): Promise<void> => {
+    externalResumes?.stop()
     console.log(`\n[cli] ${signal} — shutting down`)
     // A slow teardown may exhaust the master's grace. Persist already acknowledged bindings first.
     registry.flush({ exiting: true })
@@ -2511,6 +2513,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     await localWsServer.close()
     hookServer.close()
     nativeControls.close()
+    externalResumes?.stop()
     usageLink.port.stop(); ports.usage?.stop()
     await ports.viewers?.stop()
     await gateway.stop()
@@ -2605,6 +2608,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   console.log('[cli] ready')
   // Ready first, never after a service: the agents the boot held for one are launched now, in the background.
   void heldLaunches.restoreHeld()
+  externalResumes.open()
 }
 
 /**

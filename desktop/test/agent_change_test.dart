@@ -243,10 +243,6 @@ void main() {
         );
         app.experimentalFeatures.bind('a', transport: AccountSettings('a'));
         await app.experimentalFeatures.refresh();
-        await app.experimentalFeatures.set(
-          ExperimentalFeature.devicesTab,
-          true,
-        );
         app.stateOf('m')!.dsh.replace(const []);
         app.openDevices();
         await app.showDevicesTerminal('m', 'a0');

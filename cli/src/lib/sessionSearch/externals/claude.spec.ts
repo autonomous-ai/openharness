@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
 
+import { externalEvidence } from '../evidence.js'
 import { claudeProvider, readClaudeHead } from './claude.js'
 import { scanMemo } from './support.js'
 import { type ProcessView, UNSETTLED } from './types.js'
@@ -27,7 +28,7 @@ const line = (sessionId: string, entrypoint: string, extra: Record<string, unkno
   message: { role: 'user', content: 'fix the dial scroll' }, ...extra,
 })
 const view = (alive: (pid: number) => boolean): ProcessView => ({
-  list: async () => [], openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive,
+  list: async () => [], openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive,
 })
 
 describe('readClaudeHead', () => {
@@ -126,5 +127,37 @@ describe('claudeProvider', () => {
     expect(looked).toBe(false)
     // The record gone is the process gone: not mid-turn.
     expect(await provider.busy!({ pid: 9, record: join(root, 'sessions', 'gone.json') })).toBe(false)
+  })
+
+  it('places a live Claude with no record by its arguments, or leaves it unplaced with its folder, for admission only', async () => {
+    const root = home()
+    const started = Date.parse('2026-09-27T10:00:00Z')
+    write(join(root, 'sessions', '101.json'), [{ pid: 101, sessionId: A, status: 'idle', startedAt: started + 400 }])
+    const provider = claudeProvider({ projectsDir: join(root, 'projects'), home: root })
+    const running = [
+      { pid: 101, ppid: 1, executable: 'claude', args: 'claude', started },
+      { pid: 201, ppid: 1, executable: 'claude', args: `claude --resume ${B}`, started },
+      { pid: 202, ppid: 1, executable: 'claude', args: 'claude --append-system-prompt "be brief"', started },
+      { pid: 203, ppid: 1, executable: 'claude', args: 'claude --session-id not!an!id', started },
+      { pid: 204, ppid: 1, executable: '-zsh', args: `-zsh --resume ${B}`, started },
+    ]
+    const asked: number[][] = []
+    const machine: ProcessView = { ...view(() => true), list: async () => running,
+      cwds: async (pids) => { asked.push([...pids]); return new Map([[202, '/work/other']]) } }
+    expect(await externalEvidence(() => provider.ownership!(machine))).toEqual({ ok: true, value: {
+      claims: [
+        { sessionId: A, pid: 101, record: join(root, 'sessions', '101.json') },
+        { sessionId: B, pid: 201, record: '', fromArgs: true },
+      ],
+      // Named or not, a record-less process may have moved on: it stays unplaced beside its claim.
+      unresolved: [{ pid: 201, cwd: null, named: B }, { pid: 202, cwd: '/work/other' }, { pid: 203, cwd: null }],
+    } })
+    expect(asked).toEqual([[201, 202, 203]])
+    // The display reader is as it was: exact records only, and no folder is read.
+    expect(await provider.ownership!(machine)).toEqual({ claims: [{ sessionId: A, pid: 101, record: join(root, 'sessions', '101.json') }], unresolved: [] })
+    expect(asked).toHaveLength(1)
+    // Placed by its arguments alone: no record says whether it is mid-turn, so nobody can say.
+    expect(await provider.busy!({ pid: 201, record: '' })).toBeNull()
+    expect(await provider.confirmOwner!({ sessionId: B, pid: 201, record: '', fromArgs: true }, running[1])).toBeNull()
   })
 })

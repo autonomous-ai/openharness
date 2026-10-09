@@ -5,6 +5,7 @@ import 'experimental_features.dart';
 import 'sections/about_section.dart';
 import 'sections/account_devices_section.dart';
 import 'sections/account_section.dart';
+import 'sections/connectors_section.dart';
 import 'sections/profiles_section.dart';
 import 'sections/debug_section.dart';
 import 'sections/devices_section.dart';
@@ -39,6 +40,7 @@ class SettingsBody extends StatelessWidget {
       ),
       SettingsSection.profiles => ProfilesSection(notifier: notifier),
       SettingsSection.usage => const UsageSection(),
+      SettingsSection.connectors => ConnectorsSection(notifier: notifier),
       SettingsSection.customize => throw StateError(
         'Customization opens over the workspace.',
       ),

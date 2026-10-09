@@ -8,6 +8,8 @@
  * there is no index, and the apps through the two requests it answers.
  */
 import { join } from 'node:path'
+import { createExternalSessions, type ExternalReaderOptions } from './externalSessions.js'
+import { externalProviders } from '../lib/sessionSearch/externals/index.js'
 import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
 import { SessionSearchIndex, folderWords, type SearchSource } from '../lib/sessionSearch/indexer.js'
 import { SESSION_SEARCH_FILE, SessionSearchStore, type ExternalHit } from '../lib/sessionSearch/store.js'
@@ -47,13 +49,19 @@ export function searchRequests(index: Pick<SessionSearchIndex, 'search' | 'tail'
 }
 
 /** Start search: its port for the core, and its requests for the apps, both on one index. */
-export function startSearch(core: CoreApi, ports: CorePorts): ServiceRequests | void {
-  const index = openIndex(core)
-  ports.search = index
-  if (index) return searchRequests(index)
+export function startSearch(core: CoreApi, ports: CorePorts, options?: ExternalReaderOptions): ServiceRequests {
+  let index: SessionSearchIndex | null = null
+  const readers = createExternalSessions({ ...(options ?? { providers: externalProviders(), excluded: [core.dataDir], log: console.warn }),
+    title: id => options?.title?.(id) ?? index?.session(id)?.title })
+  index = openIndex(core, readers)
+  ports.search = {
+    touch: id => index?.touch(id), deleteHistory: id => index?.deleteHistory(id), session: id => index?.session(id),
+    inspect: readers.inspect, stop: () => index?.stop(),
+  }
+  return index ? searchRequests(index) : {}
 }
 
-function openIndex(core: CoreApi): SessionSearchIndex | null {
+function openIndex(core: CoreApi, readers: ReturnType<typeof createExternalSessions>): SessionSearchIndex | null {
   try {
     const store = SessionSearchStore.open(join(core.dataDir, SESSION_SEARCH_FILE))
     if (!store) {
@@ -63,7 +71,7 @@ function openIndex(core: CoreApi): SessionSearchIndex | null {
     const index = new SessionSearchIndex({
       store,
       catalogMetadata: () => {
-        const entries = new Map<string, ExternalHit>(core.external.sessions.list().flatMap(s =>
+        const entries = new Map<string, ExternalHit>(readers.sessions.list().flatMap(s =>
           [s.sessionId, ...(s.aliases ?? [])].map(id => [id, { title: s.title, cwd: s.cwd, origin: s.origin }] as const)))
         for (const s of core.agents.all()) if (s.sessionId) entries.set(s.sessionId,
           { title: s.title || core.agents.displayName(s), cwd: s.cwd || '', origin: 'harness' })
@@ -88,7 +96,7 @@ function openIndex(core: CoreApi): SessionSearchIndex | null {
         // Conversations Harness did not start — any Harness agent's, earlier ones included, are not.
         const known = store.ownedSessionIds()
         for (const s of own) if (s.sessionId) known.add(s.sessionId)
-        for (const e of core.external.sessions.list()) {
+        for (const e of readers.sessions.list()) {
           // A conversation Harness holds under any of its ids is Harness's.
           if (known.has(e.sessionId) || e.aliases?.some((id) => known.has(id)) || (!e.transcriptPath && !e.readHistory)) continue
           sources.push({
@@ -100,8 +108,8 @@ function openIndex(core: CoreApi): SessionSearchIndex | null {
         return sources
       },
       agents: () => core.agents.all().map((s) => s.agentId),
-      discover: () => core.external.sessions.scan(),
-      openSessions: core.external.open,
+      discover: () => readers.sessions.scan(),
+      openSessions: readers.open,
       log: (line) => console.log(line),
     })
     index.start()

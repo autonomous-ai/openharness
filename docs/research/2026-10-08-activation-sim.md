@@ -313,6 +313,45 @@ Found and fixed on the way:
   the host's Node works), so its pane shows "Unable to connect" there. The VM's network, not the
   product.
 
+## Hill-climb on the merged onboarding (2026-10-09)
+
+Full journeys on a fresh macOS VM per persona (`vm/journey` in the session scratchpad): install and open
+Harness (the tour), the first task (Enter on OpenCode's typed task, or a task typed into the first
+pane), its result, a second session (a new tab, a task, Enter), and for some the next day (quit,
+reopen, a follow-up in the pane that came back). Scored with the rubric above. "Real" Claude Code and
+Codex are the npm packages on a Node of the person's own, never signed in; the others are the fake
+engines.
+
+| Persona | Opens | First result | Second session | Next day | Score |
+|---|---|---|---|---|---|
+| nothing installed | OpenCode + Codex + Claude Code | 61–66 s | 15–21 s | follow-up in 4–7 s, no prompt | 100 |
+| Claude Code signed in | Claude Code | 46 s | 2 s | — | 100 |
+| Claude Code signed in, 3 sessions | 2 + 1 sessions | 46 s | 2 s | — | 100 |
+| Codex signed in | Codex | 45 s | 3 s | — | 100 |
+| both signed in | Claude Code + Codex | 46 s | 3 s | — | 100 |
+| both signed in, 5 sessions, 1 running | 2 + 2 sessions | 46 s | 2 s | follow-up at once, no prompt | 100 |
+| OpenCode only | OpenCode | 55–56 s | 20 s | — | 100 |
+| real Codex, not signed in, **before** | Codex's sign-in alone (sends you to a browser) | none | — | — | ~25 |
+| real Codex, not signed in, after | OpenCode + Codex | 53–61 s | 16–27 s | follow-up in 7 s | 100 |
+| real Claude Code and Codex, not signed in | OpenCode + Codex + Claude Code | 55–74 s | 16–38 s | — | 100 |
+
+Changes (PR #1077):
+
+- **Agents nobody signed in to:** OpenCode leads with the starter task; their agents sit beside it on
+  their sign-in. Before, the only pane was Codex's sign-in, which opens a browser: no first result
+  without an account.
+- **The first workspace is built behind the tour:** OpenCode has started and its task is typed when
+  the tour hands over (it took ~12 s after the tour before). The new user's first result went from
+  66 s to 61 s. The run fixes its tabs only when the first pane opens, because the desk is still being
+  read behind the tour (the first attempt pinned the tab at the start and gave up on an existing
+  user's sessions).
+
+Existing users, checked by upgrading: a Mac that installed and used the released desktop 1.2.59 (CLI
+0.3.67), then got this build: no tour, no first workspace, no agent downloads; its harness came back
+and answered a follow-up. The new desktop accepts any CLI from 0.2.48, so updating the desktop before
+the CLI asks for nothing. The released 1.2.59 still shows a new user "OpenCode is unavailable. Choose
+an agent." and Apple's developer-tools dialog; both are fixed on main.
+
 ## Next
 
 - #1061 merged. #1047, #1052, #1067 and #1069 are carried by the onboarding PR (branch

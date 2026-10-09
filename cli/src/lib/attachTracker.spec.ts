@@ -37,6 +37,18 @@ describe('AttachTracker', () => {
     expect(order).toEqual(['reset'])
   })
 
+  it('serializes a new identity instead of joining an obsolete attach of the same session', async () => {
+    const tracker = new AttachTracker<Engine>()
+    const first = deferred<boolean>()
+    const start = vi.fn(async () => true)
+    const a = tracker.attach(subject('s1'), false, () => first.promise, 'pathless')
+    const b = tracker.attach(subject('s1'), false, start, 'located')
+    expect(start).not.toHaveBeenCalled()
+    first.resolve(false)
+    expect(await Promise.all([a, b])).toEqual([false, true])
+    expect(start).toHaveBeenCalledOnce()
+  })
+
   it('a reset still runs after the attach it waited on failed', async () => {
     const tracker = new AttachTracker<Engine>()
     const first = deferred<boolean>()

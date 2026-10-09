@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { grokMovedAt, grokProvider, grokTurnOpen, readGrokSession } from './grok.js'
+import { externalEvidence } from '../evidence.js'
 import { scanMemo } from './support.js'
 import type { ProcessView, RunningProcess, ScanContext } from './types.js'
 
@@ -81,7 +82,7 @@ function view(rows: RunningProcess[], alive: (pid: number) => boolean = () => tr
   return {
     list: async () => { listed++; return rows },
     openFiles: async () => new Map(),
-    openFilesOf: async () => new Map(),
+    cwds: async () => new Map(), openFilesOf: async () => new Map(),
     alive,
     listed: () => listed,
   }
@@ -248,6 +249,25 @@ describe('when a Grok conversation last moved', () => {
 
 describe('grokProvider.owners', () => {
   const stream = (root: string, cwd = '/work/app', id = ID) => join(root, 'sessions', encodeURIComponent(cwd), id, 'updates.jsonl')
+
+  it('holds missing or ambiguous live-process records, including equally recent conversations', async () => {
+    const root = home(), at = 1_787_839_648_000, provider = grokProvider({ home: root })
+    session(root, ID); session(root, ID2)
+    const processes = view([{ ...grokRow(41), started: at }])
+    expect((await externalEvidence(() => provider.owners!(processes))).ok).toBe(false)
+    for (const listed of [[], null, {}, [
+      { session_id: ID, pid: 41, opened_at: at, cwd: '/work/app' },
+      { session_id: ID2, pid: 41, opened_at: at, cwd: '/work/app' },
+    ]]) {
+      writeFileSync(join(root, 'active_sessions.json'), JSON.stringify(listed))
+      expect((await externalEvidence(() => provider.owners!(processes))).ok).toBe(false)
+    }
+    writeFileSync(join(root, 'active_sessions.json'), JSON.stringify([
+      { session_id: ID, pid: 41, opened_at: at, cwd: '/work/app' },
+      { session_id: ID2, pid: 41, opened_at: at + 1, cwd: '/work/app' },
+    ]))
+    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: true, value: [{ sessionId: ID2 }] })
+  })
 
   it('claims each live Grok in `active_sessions.json`, with the stream that says whether it is mid-turn', async () => {
     const root = home()

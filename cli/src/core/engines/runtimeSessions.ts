@@ -31,7 +31,8 @@ export interface RuntimeStage {
   commit(install?: () => boolean): boolean
 }
 
-const binding = (s: RegisteredSession | undefined): string => s ? JSON.stringify([transcriptReadIdentity(s), s.cwd, !!s.gateway]) : ''
+const binding = (s: RegisteredSession | undefined): string => s ? JSON.stringify([transcriptReadIdentity(s), s.cwd, !!s.gateway,
+  s.active, s.tmuxPane, s.primaryRuntimeKey, s.runtimes]) : ''
 const snapshot = (s: RegisteredSession): RuntimeSession => ({ agentId: s.agentId, sessionId: s.sessionId, engine: s.engine,
   model: typeof s.model === 'string' ? s.model : null, cliVersion: s.cliVersion, cwd: s.cwd, transcriptPath: s.transcriptPath, codexHome: s.codexHome })
 const controlCopy = (control: RuntimeControl | undefined): RuntimeControl | undefined => control && { ...control, target: { ...control.target } }
@@ -128,10 +129,10 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     wake(view.sessionId)
     if (!silent && !suppressed && before !== view.selected && !view.control) notify(view)
   }
-  const read = (s: RegisteredSession, operation: RuntimeOperation, silent = false): Promise<RuntimeAnswer> => {
+  const read = (s: RegisteredSession, operation: RuntimeOperation, silent = false, stillCurrent = () => true): Promise<RuntimeAnswer> => {
     const identity = binding(s), view = viewFor(s)
     return slot(s.engine, async () => {
-      if (!valid(view) || view.identity !== identity) unavailable()
+      if (!valid(view) || view.identity !== identity || !stillCurrent()) unavailable()
       const current = deps.resolve(view.agentId)!, version = current.cliVersion, revision = view.revision
       const answer = await deps.transport.read(current.engine, contextFor(current, view), operation)
       if (!valid(view) || revision !== view.revision || deps.resolve(view.agentId)?.cliVersion !== version) unavailable()
@@ -192,6 +193,21 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
   }
   return {
     read,
+    async capturePane(s: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
+      historyLines?: number, silent = false): Promise<string | null> {
+      const view = viewFor(s), revision = view.revision, version = s.cliVersion
+      const current = () => valid(view) && view.revision === revision && deps.resolve(view.agentId)?.cliVersion === version
+      const text = await capture(s.agentId, historyLines)
+      if (!text || !current()) return null
+      try {
+        // Authority can also change while this observation waits behind another worker request.
+        await read(s, { kind: 'pane', text }, silent, current)
+        return text
+      } catch (error) {
+        if (error instanceof EngineReadError && error.code === 'ENGINE_STALE_REPLY') return null
+        throw error
+      }
+    },
     stage,
     async prepare(s: RegisteredSession, records: readonly RuntimeRecord[]): Promise<() => boolean> {
       const pending = stage(s, false, false)

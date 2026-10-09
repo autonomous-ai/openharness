@@ -26,7 +26,11 @@ import type { AgentEngine } from '../engines/types.js'
 import { HERMES_HOMES, hermesDbPath } from '../engines/hermes/contract.js'
 import { listStoreHomes } from '../engines/kit/storeHomes.js'
 import { loadEngine, type InProcessModules } from '../engines/inProcess.js'
+import { transcriptOf, processSessionOf as nativeProcessSession } from '../engines/identities.js'
+import { COPILOT_CWD } from '../engines/copilot/contract.js'
+import { recordCwd } from '../engines/kit/sessionLocation.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
+import { sqlitePreflightMessage } from './sqliteAvailability.js'
 import { sessionRoots } from './engineHomes.js'
 import { argvTokens, engineProcessMatchScore, processRows, type ProcessRow } from './tmux.js'
 
@@ -235,7 +239,6 @@ let missingSqliteReported = false
 async function reportMissingSqliteOnce(): Promise<void> {
   if (missingSqliteReported) return
   missingSqliteReported = true
-  const { sqlitePreflightMessage } = await import('./sqliteAvailability.js')
   console.warn(sqlitePreflightMessage() ?? '[preflight] no SQLite reader available')
 }
 
@@ -276,12 +279,11 @@ async function copilotDirectoryScan(
   cwd: string,
   startedAtMs: number,
   opts: { bornOnly?: boolean } | undefined,
-  copilotSessionCwd: InProcessModules['copilot']['copilotSessionCwd'],
 ): Promise<RepairedSession | null> {
   return fileEngineSession(join(env.COPILOT_HOME, 'session-state'), cwd, startedAtMs, async (path) => {
     if (basename(path) !== 'events.jsonl') return null
     const head = (await readFile(path, 'utf8').catch(() => '')).split('\n', 5)
-    const root = copilotSessionCwd(head)
+    const root = recordCwd(head, COPILOT_CWD)
     return root ? { cwd: root, sessionId: basename(dirname(path)) } : null
   }, opts)
 }
@@ -328,7 +330,7 @@ export async function findLiveSession(
   const real = await realpath(cwd).catch(() => cwd)
   const dirs = real === cwd ? [cwd] : [cwd, real]
   const dirList = placeholders(dirs.length)
-  // Muse's, Copilot's and agy's readers of their own files are their code, loaded where they are read
+  // Muse's transcript interpretation still lives with its optional reader
   // (engines/inProcess.ts); Hermes's homes are declared (engines/hermes/contract.ts). An engine whose code could not be loaded has no repair answer: its process stays
   // unbound, as when nothing is found.
   switch (engine) {
@@ -436,14 +438,12 @@ export async function findLiveSession(
       // The lock the process holds is the only thing a `/resume` leaves behind, and it is exact.
       // Fall through to the directory scan when there is no pid or no lock yet (a brand-new session
       // takes its lock only once Copilot creates it).
-      const copilot = await loadEngine('copilot')
-      if (!copilot) return null
-      const locked = opts?.pid ? await copilot.copilotSessionForPid(env.COPILOT_HOME, opts.pid) : null
+      const locked = opts?.pid ? await nativeProcessSession('copilot', env.COPILOT_HOME, opts.pid) : null
       if (locked) {
-        const transcriptPath = await copilot.findCopilotTranscript(env.COPILOT_HOME, locked)
+        const transcriptPath = await transcriptOf('copilot', env.COPILOT_HOME, locked)
         return { sessionId: locked, transcriptPath: transcriptPath ?? undefined }
       }
-      return copilotDirectoryScan(cwd, startedAtMs, opts, copilot.copilotSessionCwd)
+      return copilotDirectoryScan(cwd, startedAtMs, opts)
     }
 
     case 'agy':
@@ -462,11 +462,9 @@ export async function findLiveSession(
 
 /** The conversation the given `agy` pid is holding, if its transcript exists yet. */
 async function agySession(pid: number): Promise<RepairedSession | null> {
-  const agy = await loadEngine('agy')
-  if (!agy) return null
-  const conversationId = await agy.agyConversationForPid(env.AGY_HOME, pid)
+  const conversationId = await nativeProcessSession('agy', env.AGY_HOME, pid)
   if (!conversationId) return null
-  const transcriptPath = await agy.findAgyTranscript(env.AGY_HOME, conversationId)
+  const transcriptPath = await transcriptOf('agy', env.AGY_HOME, conversationId)
   // A conversation with no transcript is one agy has opened but not written to; registry derives the
   // path anyway, so bind it and let the watcher pick the file up when it appears.
   return { sessionId: conversationId, transcriptPath: transcriptPath ?? undefined }

@@ -726,25 +726,22 @@ try:
     # A phone approval is explicit. Closing its UI cancels the driver, and reopening never
     # accepts a previously selected row as consent to a different account.
     hn('account')
-    click_text('Sign in with your phone')
+    click_text('Continue with your phone')
     shown('Cancel sign-in')
     snapshot('phone-sign-in')
     keys('Escape')
     wait(lambda: login_events() == ['start', 'cancel'], 'closing account cancels the pending login')
     hn('account')
-    click_text('Sign in with your phone')
+    click_text('Continue with your phone')
     shown('Cancel sign-in')
     (BASE / 'approve').touch()
-    shown('Sign in as review@example.test')
-    assert not (BASE / 'account.json').exists()
-    snapshot('confirm-account')
-    click_text('Sign in as review@example.test')
-    wait(lambda: 'commit' in login_events(), 'explicit account confirmation commits')
+    # The phone that approved is signed in to the account: no second question here.
+    wait(lambda: 'commit' in login_events(), 'a phone approval commits without another step')
     shown('Connect a machine')
     assert json.loads((BASE / 'account.json').read_text())['loggedIn']
     snapshot('signed-in')
-    click_text('Back to workspace')
-    print('PASS workspace: tab identity survives focus changes; phone login requires explicit account confirmation', flush=True)
+    keys('Escape')
+    print('PASS workspace: tab identity survives focus changes; phone login signs in as soon as the phone approves', flush=True)
 
     # Save failures preserve the session, and a busy session needs an explicit Stop action.
     hn('select-window', '-t', workspace)
@@ -896,7 +893,7 @@ try:
         shown('Commands')
         snapshot(f'workspace-menu-{cols}x{rows}')
         click_text('Account')
-        shown('Back to workspace')
+        shown('Sign out')
         snapshot(f'account-{cols}x{rows}')
         keys('Escape')
         hn('workspace-menu')

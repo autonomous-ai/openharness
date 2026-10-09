@@ -1,16 +1,12 @@
 import { readdir, stat } from 'fs/promises'
 import { join } from 'path'
+import { locateProcessSession, locateTranscript, recordCwd } from '../kit/sessionLocation.js'
 
-import { copilotTranscriptPath, SESSION_ID } from './contract.js'
+import { COPILOT_CWD, COPILOT_PROCESS_SESSION, COPILOT_TRANSCRIPT, SESSION_ID } from './contract.js'
 export { copilotTranscriptPath } from './contract.js'
 
-async function isFile(path: string): Promise<boolean> {
-  try { return (await stat(path)).isFile() } catch { return false }
-}
-
 export async function findCopilotTranscript(copilotHome: string, sessionId: string): Promise<string | null> {
-  const path = copilotTranscriptPath(copilotHome, sessionId)
-  return path && await isFile(path) ? path : null
+  return locateTranscript(COPILOT_TRANSCRIPT, copilotHome, sessionId)
 }
 
 export interface CopilotSessionFile {
@@ -47,15 +43,7 @@ export async function listCopilotSessions(copilotHome: string): Promise<CopilotS
  * the only link between a session file and the pane that owns it.
  */
 export function copilotSessionCwd(firstLines: string[]): string | null {
-  for (const line of firstLines) {
-    try {
-      const record = JSON.parse(line) as { type?: unknown; data?: { context?: { cwd?: unknown } } }
-      if (record?.type !== 'session.start') continue
-      const cwd = record.data?.context?.cwd
-      return typeof cwd === 'string' && cwd ? cwd : null
-    } catch { /* a partial write mid-flush; the next poll sees the whole line */ }
-  }
-  return null
+  return recordCwd(firstLines, COPILOT_CWD)
 }
 
 /**
@@ -71,14 +59,5 @@ export function copilotSessionCwd(firstLines: string[]): string | null {
  * is why a directory scan cannot find it and why the agent used to sit unbound after `/resume`.
  */
 export async function copilotSessionForPid(copilotHome: string, pid: number): Promise<string | null> {
-  const root = join(copilotHome, 'session-state')
-  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
-  let best: { sessionId: string; mtimeMs: number } | null = null
-  for (const entry of entries) {
-    if (!entry.isDirectory() || !SESSION_ID.test(entry.name)) continue
-    const info = await stat(join(root, entry.name, `inuse.${pid}.lock`)).catch(() => null)
-    if (!info) continue
-    if (!best || info.mtimeMs > best.mtimeMs) best = { sessionId: entry.name, mtimeMs: info.mtimeMs }
-  }
-  return best?.sessionId ?? null
+  return locateProcessSession(COPILOT_PROCESS_SESSION, copilotHome, pid)
 }

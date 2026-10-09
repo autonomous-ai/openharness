@@ -226,6 +226,8 @@ esac
     // exact-pane check must see it and refuse a false successful pause.
     const discovery = vi.spyOn(backend, 'inventory').mockResolvedValue({ state: 'available', roots: [] })
     expect((await backend.kill({ backend: 'tmux', paneId: '%42' })).state).toBe(mode === 'gone' || mode === 'no server' || mode === 'no socket' ? 'succeeded' : 'unknown')
+    expect((await backend.killHeld({ backend: 'tmux', paneId: '%42' }, '12345678-1234-1234-1234-123456789012', () => true)).state)
+      .toBe(mode === 'gone' || mode === 'no server' || mode === 'no socket' ? 'succeeded' : 'failed')
     expect(discovery).not.toHaveBeenCalled()
   })
 

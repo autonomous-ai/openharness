@@ -988,7 +988,7 @@ class AppNotifier extends ChangeNotifier {
       !_disposed && revision == _authRevision;
 
   int _invalidateAuthWork() {
-    _phoneOfferSince = null;
+    _phoneOffer = false;
     _closeOwnerMemories();
     _stopMachineRecovery();
     api.resetAccountCache();
@@ -1071,6 +1071,27 @@ class AppNotifier extends ChangeNotifier {
       readiness.needsTerminal ||
       readiness.plan.any((item) => item.requiresTerminal);
 
+  /// A computer new to Harness builds its first workspace behind the welcome tour, as soon as the app
+  /// is ready, so the agents have started and OpenCode's task is typed by the time the tour hands
+  /// over: OpenCode's own first start took about 12 s after the tour had ended (fresh macOS VM,
+  /// 2026-10-09). The workspace joins this run when it appears ([FirstArrival.run]).
+  ///
+  /// Off under test unless a test turns it on: its wait for the machine is a timer a widget test would
+  /// find still pending.
+  @visibleForTesting
+  bool firstArrivalBehindTour = !kUnderTest;
+
+  void _firstArrivalBehindTour() {
+    if (!firstArrivalBehindTour ||
+        viewer != null ||
+        !_setupTour ||
+        status != AppStatus.authenticated ||
+        !firstArrival.pending) {
+      return;
+    }
+    unawaited(firstArrival.run(this));
+  }
+
   /// The tour has shown its last slide with everything done: show the app.
   void finishSetupTour() {
     if (!_setupTour) return;
@@ -1086,23 +1107,23 @@ class AppNotifier extends ChangeNotifier {
     SetupDownloads.none,
   );
 
-  /// How long the agent downloads beside setup usually take from their start: OpenCode 13.5 s,
-  /// then Codex and Claude Code once setup's Node is in place, 47 s in all (fresh macOS VM,
-  /// 2026-10-09). The tour counts down from it.
+  /// How long OpenCode's download beside setup usually takes from its start (11–13 s on a fresh
+  /// macOS VM, 2026-10-09). The tour counts down from it.
   @visibleForTesting
-  static const agentDownloadsExpected = Duration(seconds: 50);
+  static const agentDownloadsExpected = Duration(seconds: 15);
 
-  /// The longest the tour waits for them, as long as a create waits ([agentPrefetchWait]): 287 MB
-  /// take about four minutes at 10 Mbit/s, and a pane that gave up sooner would run its own npm
-  /// install into the prefix the download is still writing.
+  /// The longest the tour waits for OpenCode, as long as a create waits ([agentPrefetchWait]).
   @visibleForTesting
   static const agentDownloadsCap = Duration(minutes: 10);
 
   Timer? _agentDownloadsTick;
 
   /// Feeds [setupDownloads] from [agentPrefetch] once it has started: pending at once, so the tour
-  /// cannot open before the downloads are counted, and done when they settle or [agentDownloadsCap]
-  /// passes.
+  /// cannot open before OpenCode is in place, and done when OpenCode has settled or
+  /// [agentDownloadsCap] passes. Codex and Claude Code go on downloading after the tour: their panes
+  /// open at once and wait for them under the CLI's install line (`waitsForDownload`), which opens
+  /// Harness 10–15 s sooner than waiting for all three (the owner, 2026-10-09: "boot into harness
+  /// right away with 3 panes… downloading then jump into their default screen").
   void _publishAgentDownloads() {
     final prefetch = agentPrefetch;
     if (prefetch == null || !prefetch.started || _agentDownloadsTick != null) {
@@ -1120,7 +1141,9 @@ class AppNotifier extends ChangeNotifier {
       final progress = prefetch.progress.value;
       final elapsed = DateTime.now().difference(began);
       final lines = [agentDownloadsLine(progress)];
-      if (progress.finished || elapsed >= agentDownloadsCap) {
+      if (progress.finished ||
+          progress.settled.contains('opencode') ||
+          elapsed >= agentDownloadsCap) {
         stop();
         setupDownloads.value = SetupDownloads(lines: lines);
         return;
@@ -1596,10 +1619,9 @@ class AppNotifier extends ChangeNotifier {
 
   String? _pendingStoreHarness;
 
-  bool get devicesEnabled =>
-      ExperimentalFeature.devicesTab.available &&
-      experimentalFeatures.isAvailable(ExperimentalFeature.devicesTab) &&
-      experimentalFeatures.enabled(ExperimentalFeature.devicesTab);
+  /// Devices is a regular workspace on the desktop app. A browser or a viewer
+  /// build has no device on its desk to manage.
+  bool get devicesEnabled => !kIsWeb && !kViewerMode;
 
   LocalKeyValueStore? get deviceLibraryStorage => _paneLayout?.storage;
   final deviceHosts = DeviceHosts();
@@ -1800,8 +1822,7 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
-  /// One utility tab for physical devices. The experiment must be explicitly
-  /// acknowledged before any entry point, including restored history, opens it.
+  /// One utility tab for physical devices.
   void openDevices() {
     if (!devicesEnabled) return;
     final existing = swarms.where((s) => s.isDevices).firstOrNull;
@@ -1834,43 +1855,6 @@ class AppNotifier extends ChangeNotifier {
     _ensureDevicesViewer(tab);
     swarms.add(tab);
     selectSwarm(tab.id);
-  }
-
-  void _devicesExperimentChanged() {
-    if (devicesEnabled) return;
-    final historyCount = _closedHistory.length;
-    _closedHistory.removeWhere(
-      (entry) => entry is ClosedSwarm && entry.kind == 'devices',
-    );
-    if (!swarms.any((s) => s.isDevices)) {
-      if (historyCount != _closedHistory.length) notifyListeners();
-      return;
-    }
-    final removed = swarms.where((s) => s.isDevices).toList();
-    swarms.removeWhere((s) => s.isDevices);
-    for (final tab in removed) {
-      for (final pane in tab.panes) {
-        if (!allPanes.contains(pane)) {
-          unawaited(_detachSession(pane, sendClose: true));
-        }
-      }
-    }
-    if (swarms.isEmpty) swarms.add(Swarm(id: 'swarm-${_nextSwarmId++}'));
-    if (!experimentalFeatures.loaded) {
-      // Binding a different account hides its predecessor's page immediately,
-      // before that account's workspace is ready to be persisted or attached.
-      if (!swarms.any((s) => s.id == _activeSwarmId)) {
-        _activeSwarmId = profileSwarms.first.id;
-      }
-      notifyListeners();
-      return;
-    }
-    if (!swarms.any((s) => s.id == _activeSwarmId)) {
-      selectSwarm(profileSwarms.first.id);
-    } else {
-      _persistLayout();
-      notifyListeners();
-    }
   }
 
   void _ensureDevicesViewer(Swarm tab) {
@@ -3153,8 +3137,8 @@ class AppNotifier extends ChangeNotifier {
     // `this.` because the constructor's own parameter of the same name is in
     // scope here and is the nullable one.
     this.agentUnread.addListener(_announceUnreadToDial);
-    experimentalFeatures.addListener(_devicesExperimentChanged);
     addListener(_syncDeviceHosts);
+    addListener(_firstArrivalBehindTour);
     _autoRenameTabs = appearancePrefsStore.value.autoRenameTabs;
     appearancePrefsStore.addListener(_autoRenameChanged);
   }
@@ -5672,9 +5656,7 @@ class AppNotifier extends ChangeNotifier {
       }
       _guestDeskRestorePending = false;
       // The first sign-in on this computer offers Add Phone; a later one does not.
-      if (!await _phoneOfferDone() && _authWorkCurrent(revision)) {
-        _phoneOfferSince = DateTime.now();
-      }
+      unawaited(_offerPhoneAfterSignIn(revision));
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
@@ -5702,46 +5684,38 @@ class AppNotifier extends ChangeNotifier {
   /// The failed sign-in again, to the account the person chose the first time.
   Future<void> retryLogin() => login(signInProvider);
 
-  /// When Add Phone was last offered: Add Phone then opens by itself (`screens/swarm_screen.dart`
-  /// `_maybeOfferPhone`) — signed in, on an account with no phone yet; as a guest, asking for the
-  /// sign-in itself. Null once taken, dropped, or the account changes.
+  /// Whether the workspace offers Add Phone — "Your agents in your pocket.", a card in the window's
+  /// top-right (`widgets/phone_offer_card.dart`): as a guest, whose Add Phone asks for the sign-in
+  /// itself; signed in, on an account with no phone yet. Cleared when the account changes.
   ///
-  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08).** It tells a newcomer to get
-  /// Harness on the computer and pair it (mobile `set_up_computer.dart`), so the code has to come up
-  /// without anyone finding Add Phone in a menu. Not after [loginWithPhone]: that sign-in was a
-  /// phone's, which has its way in already.
+  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08).** It tells a newcomer to open
+  /// Add Phone on the computer (mobile `set_up_computer.dart`), so the button has to be on the
+  /// screen without anyone finding it in a menu, or in the command palette on Linux. Not after
+  /// [loginWithPhone]: that sign-in was a phone's, which has its way in already.
+  ///
+  /// ⚠️ **A card, not Add Phone opened by itself (owner, 2026-10-09).** A new install opens on
+  /// agents already at work (`state/first_arrival.dart`); a dialog over them broke that first moment
+  /// for everyone without a phone, to serve those with one. The card waits beside the work until it
+  /// is used or put away.
   ///
   /// ⚠️ **Once per computer (owner, 2026-10-09)**, not once per sign-in: it is offered at the first
   /// launch, which a new install makes as a guest ([_offerPhoneAtLaunch]), or else after the first
-  /// sign-in by hand ([login]) — never again once Add Phone has been opened here or the account was
-  /// found to have a phone ([_phoneOfferDone]).
-  DateTime? _phoneOfferSince;
+  /// sign-in by hand ([_offerPhoneAfterSignIn]) — never again once Add Phone has been opened here,
+  /// the card put away, or the account found to have a phone ([_phoneOfferDone]).
+  bool get phoneOfferShowing => _phoneOffer;
+  bool _phoneOffer = false;
 
-  /// How long the offer stands: long enough for a sign-in sheet or Settings to close, not so long
-  /// that Add Phone opens over unrelated work later.
-  static const _phoneOfferWindow = Duration(minutes: 2);
-
-  /// Add Phone is waiting to be offered — see [takePhoneOffer].
-  bool get phoneOfferPending => _phoneOfferSince != null;
-
-  /// Takes the offer: true at most once per offer, and only within [_phoneOfferWindow] of it.
-  bool takePhoneOffer() {
-    final since = _phoneOfferSince;
-    _phoneOfferSince = null;
-    return since != null &&
-        viewer == null &&
-        DateTime.now().difference(since) < _phoneOfferWindow;
-  }
-
-  /// Add Phone was opened — by hand, or by the offer itself — or the account turned out to have a
-  /// phone: nothing is left to offer, now or on a later launch or sign-in. Also how a sign-in made
-  /// from inside Add Phone (its "Sign in…") does not open it a second time once it closes.
+  /// Add Phone was opened — from the card or by hand — or the card was put away: nothing is left to
+  /// offer, now or on a later launch or sign-in. Also how a sign-in made from inside Add Phone (its
+  /// "Sign in…") does not bring the card back.
   void dropPhoneOffer() {
-    _phoneOfferSince = null;
+    final showing = _phoneOffer;
+    _phoneOffer = false;
     _markPhoneOfferDone();
+    if (showing) notifyListeners();
   }
 
-  /// This computer's record that Add Phone has had its offer ([_phoneOfferSince]), in the desktop's
+  /// This computer's record that Add Phone has had its offer ([phoneOfferShowing]), in the desktop's
   /// state file beside the dial's ([DialState]).
   static const _phoneOfferDoneKey = 'phone_offer_done';
 
@@ -5787,7 +5761,35 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!isGuest || await _phoneOfferDone()) return;
     if (!_authWorkCurrent(revision) || !isGuest) return;
-    _phoneOfferSince = DateTime.now();
+    _phoneOffer = true;
+    notifyListeners();
+  }
+
+  /// [_offerPhoneAtLaunch] or [_offerPhoneAfterSignIn], as launch and a sign-in by hand run them.
+  @visibleForTesting
+  Future<void> offerPhoneForTest({required bool atLaunch}) => atLaunch
+      ? _offerPhoneAtLaunch(_authRevision)
+      : _offerPhoneAfterSignIn(_authRevision);
+
+  /// The first sign-in by hand on this computer offers Add Phone — unless the account already has a
+  /// phone or a browser on it, which has its way in.
+  Future<void> _offerPhoneAfterSignIn(int revision) async {
+    if (viewer != null || await _phoneOfferDone()) return;
+    var hasPhone = false;
+    try {
+      final devices = await loadDevices();
+      hasPhone =
+          devices?.devices.any((device) => !device.isMachine && !device.self) ??
+          false;
+    } catch (_) {
+      // A list that cannot be read offers the card anyway: it costs one × to put away.
+    }
+    if (!_authWorkCurrent(revision) || !signedIn) return;
+    if (hasPhone) {
+      _markPhoneOfferDone();
+      return;
+    }
+    _phoneOffer = true;
     notifyListeners();
   }
 
@@ -8664,6 +8666,28 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
+  /// The `connectors` request to [machineId]'s daemon: its connected services
+  /// (Settings → Connectors). Never carries a token either way.
+  Future<Map<String, dynamic>> connectors(
+    String machineId,
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final machine = stateOf(machineId);
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      throw StateError('Reconnect this computer to manage its connections.');
+    }
+    final connection = _conn(machineId);
+    if (!connection.isReady) {
+      throw StateError('Reconnect this computer to manage its connections.');
+    }
+    return connection.request('connectors', payload: payload, timeout: timeout);
+  }
+
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
     String modelId, {
@@ -11495,7 +11519,8 @@ class AppNotifier extends ChangeNotifier {
         creation._projectNameRetries < 64;
     // An agent still downloading beside setup ([AgentPrefetch]): the pane would start a second install
     // of it. Waited for here, once the creation is registered (its tab and split are held), and only
-    // for what is left of [agentPrefetchWait] since that download began.
+    // for what is left of [agentPrefetchWait] since that download began. A CLI whose pane waits for
+    // the download itself shows it in the pane instead, once the pane can see it.
     final prefetchedEngine = choices['engine'];
     if (!creation.awaitingConfirmation &&
         prefetchedEngine is String &&
@@ -11503,6 +11528,7 @@ class AppNotifier extends ChangeNotifier {
       final download = agentPrefetch?.waitFor(
         prefetchedEngine,
         agentPrefetchWait,
+        paneWaits: machine.engines[prefetchedEngine]?.waitsForDownload == true,
       );
       if (download != null) {
         await download;

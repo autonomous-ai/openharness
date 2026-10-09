@@ -29,6 +29,8 @@ model CommunityHarness {
 
   @@index([autonomousEnv, deletedAt, createdAt])
   @@index([autonomousEnv, authorId])
+  @@index([autonomousEnv, forkedFrom])
+  @@index([autonomousEnv, category, deletedAt, createdAt])
   @@map("community_harnesses")
 }
 
@@ -902,4 +904,55 @@ model HarnessLink {
   @@unique([machineId, agentId])
   @@index([ownerId, machineId])
   @@map("harness_links")
+}
+
+/// One account's sign-in to a service through the connector gateway (lib/connectorGateway.ts), as the
+/// Grid control plane keeps it: the provider's tokens, so the gateway can renew them for any of the
+/// account's computers. Kept as they came (this database is private). Disconnecting deletes the row.
+model ConnectorCredential {
+  id           String   @id @default(uuid()) @map("_id")
+  userId       String
+  connector    String
+  accessToken  String
+  refreshToken String   @default("")
+  tokenType    String   @default("Bearer")
+  scope        String   @default("")
+  accountName  String   @default("")
+  expiresAt   Int      @default(0)
+  connectedAt DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, connector])
+  @@map("connector_credentials")
+}
+
+/// A service the connector gateway signs in to (lib/connectorGateway.ts): the OAuth app Autonomous
+/// registered with it, in the Grid control plane's config-connector-auth.json fields, kept as they are
+/// (this database is private). Edited directly (Compass) or written by `npm run connectors:import`;
+/// read by the gateway, a minute at a time. `enabled: false` switches a service off.
+model ConnectorApp {
+  id           String   @id @default(uuid()) @map("_id")
+  code         String   @unique
+  enabled      Boolean  @default(true)
+  label        String   @default("")
+  description  String   @default("")
+  imageUrl     String   @default("")
+  clientId     String
+  /// Empty for a public client using PKCE.
+  clientSecret String   @default("")
+  authUrl      String
+  tokenUrl     String
+  refreshUrl   String   @default("")
+  userinfoUrl  String   @default("")
+  scopes       String[]
+  authStyle    String   @default("")
+  pkce         Boolean  @default(false)
+  refresh      Boolean  @default(false)
+  /// Extra consent-URL parameters (Google's access_type=offline).
+  authParams   Json?
+  /// Grid's `extra`: mcp_url, mcp_auth_header, token_field.
+  extra        Json?
+  updatedAt    DateTime @updatedAt
+
+  @@map("connector_apps")
 }

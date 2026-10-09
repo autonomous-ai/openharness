@@ -15,6 +15,7 @@ import { builtinSqlite, closeSqliteHandles, overrideBuiltinSqlite } from '../../
 import { devinListSql, devinProvider, devinTurnOpen, lockPid } from './devin.js'
 import { LIST_LIMIT, ownerRecord, readSql, type SqlRead } from './opencode.js'
 import { scanMemo } from './support.js'
+import { externalEvidence } from '../evidence.js'
 import type { ProcessView, RunningProcess, ScanContext } from './types.js'
 
 const Database = builtinSqlite()!
@@ -261,8 +262,20 @@ describe('Devin owners', () => {
   const view = (rows: RunningProcess[], dead: number[] = []): ProcessView => ({
     list: async () => rows,
     openFiles: async () => new Map(),
-    openFilesOf: async () => new Map(),
+    cwds: async () => new Map(), openFilesOf: async () => new Map(),
     alive: (pid) => !dead.includes(pid),
+  })
+
+  it('keeps a competing resumed process visible beside the exact lock during admission', async () => {
+    const home = tempDir(), locks = join(home, 'session_locks')
+    mkdirSync(locks)
+    writeFileSync(join(locks, 'brisk-otter.lock'), '501')
+    const provider = devinProvider({ home })
+    const processes = view([{ ...devin(501), started: S0 * 1000 }, { ...devin(502, '-r brisk-otter'), started: S0 * 1000 }])
+    expect(await provider.owners!(processes)).toHaveLength(1)
+    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
+    writeFileSync(join(locks, 'brisk-otter.lock'), '{"pid":')
+    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
   })
 
   it('claims a session from a live Devin holding its lock, or resumed with its id', async () => {

@@ -4,6 +4,7 @@ import type { RuntimeContext, RuntimeProfile } from '../../engines/facets/runtim
 import type { RuntimeAnswer, RuntimeOperation } from '../../engines/worker/runtimeProtocol.js'
 import { blankRuntimeState, encodeRuntimeProfile } from '../../engines/kit/runtime.js'
 import { createRuntimeSessions, type RuntimeSessions } from './runtimeSessions.js'
+import { EngineReadError } from '../../engines/worker/protocol.js'
 
 const active: RuntimeSessions[] = []
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r }); return { promise, resolve } }
@@ -43,6 +44,50 @@ function setup() {
 afterEach(() => { active.splice(0).forEach(s => s.stop()); vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('core runtime profile authority', () => {
+  it.each(['binding', 'route', 'control', 'version', 'forget', 'unchanged'] as const)(
+    'keeps pane capture tied to the authority that dispatched it: %s', async change => {
+      const t = setup(); await t.seed()
+      t.s.runtimes = [{ backend: 'tmux', paneId: '%1' }]
+      await t.seed()
+      const captured = deferred<string | null>()
+      const pending = t.sessions.capturePane(t.s, () => captured.promise)
+      if (change === 'binding') t.s.boundAt = 2
+      if (change === 'route') t.s.runtimes[0]!.paneId = '%2'
+      if (change === 'control') { t.sessions.beginControl(t.s, profile(t.s)); t.sessions.cancelControl(t.s.agentId) }
+      if (change === 'version') t.s.cliVersion = 'new-version'
+      if (change === 'forget') t.sessions.forget(t.s.agentId)
+      captured.resolve('captured-model')
+      expect(await pending).toBe(change === 'unchanged' ? 'captured-model' : null)
+      expect(t.sessions.getState(t.s.agentId).model === 'captured-model').toBe(change === 'unchanged')
+    },
+  )
+
+  it('discards capture authority superseded while queued or while its worker replies', async () => {
+    for (const during of ['queue', 'worker'] as const) {
+      const t = setup(); await t.seed()
+      const entered = deferred<void>(), release = deferred<void>()
+      t.read.mockImplementationOnce(async (_e, c, o) => { entered.resolve(); await release.promise; return result(c, o) })
+      const ahead = during === 'queue' ? t.sessions.read(t.s, { kind: 'config' }) : undefined
+      const pending = t.sessions.capturePane(t.s, async () => 'captured-model', 60, true)
+      await entered.promise
+      if (during === 'worker') t.sessions.beginControl(t.s, profile(t.s))
+      release.resolve()
+      await ahead
+      expect(await pending, during).toBeNull()
+      expect(t.sessions.getState(t.s.agentId).model).toBe('old')
+    }
+  })
+
+  it('preserves empty-capture and worker-unavailable outcomes', async () => {
+    const t = setup(); await t.seed()
+    expect(await t.sessions.capturePane(t.s, async () => null)).toBeNull()
+    for (const error of [new Error('worker failed'), new EngineReadError('ENGINE_UNAVAILABLE')]) {
+      t.read.mockRejectedValueOnce(error)
+      await expect(t.sessions.capturePane(t.s, async () => 'pane')).rejects.toBe(error)
+      expect(t.sessions.getState(t.s.agentId).model).toBe('old')
+    }
+  })
+
   it('stages bounded evidence and installs profile and live cursor together only once', async () => {
     const t = setup(); await t.seed()
     const staged = t.sessions.stage(t.s, true, true)

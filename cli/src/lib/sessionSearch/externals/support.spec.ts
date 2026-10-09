@@ -1,13 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { UNSETTLED } from './types.js'
 import {
-  absoluteFolder, entries, epochMs, fileStamp, firstLine, harnessTtys, listProcesses, parseLine, parseLsof, parseTtys,
-  processAlive, processTtys, processView, readHead, readJson, readTail, readText, record, run, scanMemo, text, UUID,
+  absoluteFolder, entries, epochMs, fileStamp, firstLine, folderKey, gitCommonDir, harnessTtys, listProcesses, parseLine, parseLsof, parseTtys,
+  processAlive, processCwds, processTtys, processView, readHead, readJson, readTail, readText, record, run, sameProject, scanMemo, text, UUID,
   within,
 } from './support.js'
 
@@ -207,6 +207,77 @@ describe('processes', () => {
     expect(await processTtys([1], async () => null)).toEqual(new Map())
   })
 
+  it("reads each process's working folder in one bounded look, and leaves out what it cannot read", async () => {
+    const calls: string[] = []
+    const exec = async (command: string, args: readonly string[]) => {
+      calls.push(`${command} ${args.join(' ')}`)
+      // lsof says nothing of a gone pid, or of one it may not look at; a pid with no name line is unknown too.
+      return 'p7\nfcwd\nn/work/dial\np8\nfcwd\n'
+    }
+    expect(await processCwds([7, 8, 9], exec, 'darwin')).toEqual(new Map([[7, '/work/dial']]))
+    expect(calls).toEqual(['lsof -n -P -a -d cwd -Fpn -p 7,8,9'])
+    expect(await processCwds([7], async () => null, 'darwin')).toEqual(new Map())
+    expect(await processCwds([], exec, 'darwin')).toEqual(new Map())
+    expect(calls).toHaveLength(1)
+    // Linux says it in /proc, one link a pid; one it may not read is unknown.
+    const links: string[] = []
+    const link = async (path: string) => {
+      links.push(path)
+      if (path === '/proc/8/cwd') throw Object.assign(new Error('denied'), { code: 'EACCES' })
+      return path === '/proc/7/cwd' ? '/work/dial' : ''
+    }
+    expect(await processCwds([7, 8, 9], exec, 'linux', link)).toEqual(new Map([[7, '/work/dial']]))
+    expect(links.sort()).toEqual(['/proc/7/cwd', '/proc/8/cwd', '/proc/9/cwd'])
+    expect(calls).toHaveLength(1)
+  })
+
+  it('keys a folder the same however it is spelled', async () => {
+    const dir = home()
+    mkdirSync(join(dir, 'project'))
+    symlinkSync(join(dir, 'project'), join(dir, 'link'))
+    const key = await folderKey(join(dir, 'project'))
+    for (const spelling of [`${join(dir, 'project')}/`, join(dir, 'link'), join(dir, 'link', '..', 'project')]) {
+      expect(await folderKey(spelling), spelling).toBe(key)
+    }
+    // A folder that is gone keeps its spelling, less a trailing slash.
+    expect(await folderKey(`${join(dir, 'gone')}/`)).toBe(join(dir, 'gone'))
+  })
+
+  it("finds a repository's shared store from any of its folders and worktrees, without running git", async () => {
+    const dir = home()
+    const main = join(dir, 'main'), tree = join(dir, 'tree'), sub = join(dir, 'sub'), odd = join(dir, 'odd')
+    mkdirSync(join(main, '.git', 'worktrees', 'tree'), { recursive: true }); mkdirSync(join(main, 'src', 'deep'), { recursive: true })
+    mkdirSync(join(tree, 'src'), { recursive: true }); mkdirSync(sub); mkdirSync(odd)
+    // A worktree names its own folder in the store, relative or absolute; a submodule its own store.
+    writeFileSync(join(tree, '.git'), 'gitdir: ../main/.git/worktrees/tree\n')
+    mkdirSync(join(main, '.git', 'modules', 'sub'), { recursive: true })
+    writeFileSync(join(sub, '.git'), `gitdir: ${join(main, '.git', 'modules', 'sub')}\n`)
+    writeFileSync(join(odd, '.git'), 'not a pointer\n')
+    const store = await folderKey(join(main, '.git'))
+    expect(await gitCommonDir(join(main, 'src', 'deep'), '/')).toBe(store)
+    expect(await gitCommonDir(join(tree, 'src'), '/')).toBe(store)
+    expect(await gitCommonDir(sub, '/')).toBe(await folderKey(join(main, '.git', 'modules', 'sub')))
+    expect(await gitCommonDir(odd, '/')).toBeNull()
+    // Not past the ceiling: a `.git` above it does not make every folder one project.
+    mkdirSync(join(dir, 'nested', 'a'), { recursive: true }); mkdirSync(join(dir, 'nested', '.git'))
+    expect(await gitCommonDir(join(dir, 'nested', 'a'), join(dir, 'nested'))).toBeNull()
+    expect(await gitCommonDir(join(dir, 'nested', 'a'), dir)).toBe(await folderKey(join(dir, 'nested', '.git')))
+    // The default ceiling is the folder holding the homes.
+    expect(await gitCommonDir(dirname(homedir()))).toBeNull()
+
+    expect(await sameProject(`${main}/`, main, '/')).toBe(true)
+    // Within one repository by its store; a folder merely above or below, outside one, is another project.
+    expect(await sameProject(main, join(main, 'src', 'deep'), '/')).toBe(true)
+    expect(await sameProject(join(main, 'src', 'deep'), main, '/')).toBe(true)
+    expect(await sameProject(dir, join(dir, 'nested', 'a'), dir)).toBe(false)
+    expect(await sameProject(join(dir, 'nested', 'a'), dir, dir)).toBe(false)
+    expect(await sameProject(join(tree, 'src'), join(main, 'src'), '/')).toBe(true)
+    expect(await sameProject(sub, main, '/')).toBe(false)
+    expect(await sameProject(odd, join(dir, 'nested', 'a'), '/')).toBe(false)
+    // A name that only starts like the other is another folder.
+    expect(await sameProject(join(dir, 'mainly'), join(dir, 'main'), dir)).toBe(false)
+  })
+
   it('lists the real machine: this very process is among them, with its own open files', async () => {
     const view = processView()
     const me = (await view.list()).find((row) => row.pid === process.pid)
@@ -223,15 +294,17 @@ describe('processes', () => {
       await handle.close()
     }
     expect((await processTtys([process.pid])).has(process.pid)).toBe(true)
+    expect(await folderKey((await view.cwds([process.pid])).get(process.pid) ?? '')).toBe(await folderKey(process.cwd()))
   })
 
   it('lists no processes when ps cannot be read, and each start time when it can be read', async () => {
     expect(await listProcesses(async () => null)).toEqual([])
     const row = { pid: 5, parentPid: 1, executable: 'grok', args: 'grok', startMarker: 'Sun Sep 27 09:05:03 2026' }
     expect(await listProcesses(async () => [row, { ...row, pid: 6, startMarker: 'soon' }])).toEqual([
-      { pid: 5, ppid: 1, executable: 'grok', args: 'grok', started: Date.parse('Sun Sep 27 09:05:03 2026') },
+      { pid: 5, ppid: 1, executable: 'grok', args: 'grok', started: Date.parse(row.startMarker), generation: `ps:${Date.parse(row.startMarker)}` },
       { pid: 6, ppid: 1, executable: 'grok', args: 'grok' },
     ])
+    expect((await listProcesses(async () => [{ ...row, startTicks: 42 }]))[0].generation).toBe('linux:42')
   })
 
   it("knows Harness's own panes by their tmux session names, and by a daemon's tag wherever they moved", async () => {

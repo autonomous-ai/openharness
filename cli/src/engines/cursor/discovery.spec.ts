@@ -49,7 +49,7 @@ describe('CursorTranscriptDiscovery', () => {
   afterEach(() => {
     delete process.env.CURSOR_HOME
     rmSync(cursorHome, { recursive: true, force: true })
-  })
+  }, 30_000)
 
   it('reports a transcript that already exists without polling', async () => {
     const { CursorTranscriptDiscovery } = await loadDiscovery()
@@ -179,5 +179,7 @@ describe('CursorTranscriptDiscovery', () => {
     await discovery.stop()
 
     expect(Date.now() - started).toBeLessThan(2000)
-  })
+  // Creating 3,000 fixture directories can exceed Vitest's default under concurrent builds. The
+  // measured discovery deadline above stays two seconds and excludes only fixture construction.
+  }, 30_000)
 })

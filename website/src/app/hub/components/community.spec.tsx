@@ -8,7 +8,8 @@ import type { OpenHarness } from '@/lib/community/types';
 const request = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/community/client', async importActual => ({ ...await importActual<typeof import('@/lib/community/client')>(), communityRequest: request }));
 const sample: OpenHarness = { id: 'starter-orbit', title: 'Orbit', description: 'A small model', category: 'Experiments', engine: 'Codex', authorId: 'harness', authorName: 'Harness', createdAt: '2026-10-05', files: [{ path: 'index.html', content: '<h1>Orbit</h1>' }], viewerPath: 'index.html', conversation: [{ role: 'user', text: 'Make an orbit.' }], example: true };
-beforeEach(() => request.mockReset());
+// A block, not an expression: vitest runs a function returned from beforeEach as the test's cleanup.
+beforeEach(() => { request.mockReset(); });
 describe('community navigation', () => {
   it('lets creators reply to a specific comment without replacing the output', async () => {
     const comment = { id: 'comment-1', body: 'How did you make this?', authorName: 'Bob', mine: false, createdAt: '2026-10-06' };
@@ -39,6 +40,9 @@ describe('community navigation', () => {
   it('renders eighteen linked starter projects, with no fake engagement, and searches them', async () => {
     request.mockResolvedValue({ harnesses: [], nextCursor: null, following: [] });
     render(<Feed />);
+    // Nothing is drawn under the first page until it answers: the grid would jump when it lands.
+    expect(screen.queryAllByRole('link', { name: /^Open / })).toHaveLength(0);
+    await screen.findByRole('link', { name: 'Open One more jump' });
     expect(screen.getAllByRole('link', { name: /^Open / }).filter(link => link.getAttribute('href')?.startsWith('/hub/starter-'))).toHaveLength(18);
     expect(screen.getByRole('link', { name: 'Open One more jump' })).toHaveAttribute('href', '/hub/starter-moonlight');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -109,16 +113,22 @@ describe('community navigation', () => {
     request.mockResolvedValueOnce({ harness: { ...sample, id }, social: emptySocial }).mockResolvedValue({ social: { ...emptySocial, likes: 3 } });
     render(<Detail id={id} initial={null} />);
     await screen.findByTitle('Orbit output');
-    expect(request).toHaveBeenLastCalledWith(`harnesses/${id}`);
-    act(() => { window.dispatchEvent(new Event('focus')); });
+    expect(request).toHaveBeenLastCalledWith(`harnesses/${id}?files=viewer`);
+    // Coming back within half a minute (or clicking out of the output) reads nothing.
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); window.dispatchEvent(new Event('focus')); });
+    expect(request).toHaveBeenCalledTimes(1);
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 31_000);
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Like harness' })).toHaveTextContent('3'));
     expect(request).toHaveBeenLastCalledWith(`harnesses/${id}/social`);
+    vi.restoreAllMocks();
   });
   it('still loads beside a backend that has no social route yet', async () => {
     request.mockRejectedValueOnce(new CommunityError('Not found.', 404)).mockResolvedValueOnce({ harness: null, social: { ...emptySocial, likes: 2 } });
     render(<Detail id={sample.id} initial={sample} />);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Like harness' })).toHaveTextContent('2'));
-    expect(request.mock.calls.map(call => call[0])).toEqual(['harnesses/starter-orbit/social', 'harnesses/starter-orbit']);
+    expect(request.mock.calls.map(call => call[0])).toEqual(['harnesses/starter-orbit/social', 'harnesses/starter-orbit?files=viewer']);
     expect(screen.queryByText('This harness is unavailable.')).not.toBeInTheDocument();
   });
   it('does not pretend a signed-out like succeeded', async () => {
@@ -138,5 +148,73 @@ describe('community navigation', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Like harness' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Unlike harness' })).toHaveTextContent('1'));
     expect(request).toHaveBeenLastCalledWith('harnesses/starter-orbit/like', { method: 'PUT', body: { liked: true } });
+  });
+  it('narrows the feed by category and order, for publications and starters alike', async () => {
+    request.mockResolvedValue({ harnesses: [], nextCursor: null, following: [], stats: {} });
+    render(<Feed />);
+    await screen.findByRole('link', { name: 'Open One more jump' });
+    fireEvent.click(screen.getByRole('button', { name: 'Music' }));
+    await waitFor(() => expect(request).toHaveBeenLastCalledWith('harnesses?category=Music'));
+    expect(screen.getByRole('link', { name: 'Open Blue hour' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open One more jump' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Popular' }));
+    await waitFor(() => expect(request).toHaveBeenLastCalledWith('harnesses?category=Music&sort=popular'));
+    expect(window.location.search).toBe('?category=Music&sort=popular');
+    fireEvent.click(screen.getByRole('button', { name: 'All' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Newest' }));
+    await waitFor(() => expect(request).toHaveBeenLastCalledWith('harnesses?'));
+    expect(window.location.search).toBe('');
+  });
+  it('holds a feed like until the server answers, and shows the forks a card has', async () => {
+    request.mockResolvedValueOnce({ harnesses: [{ ...sample, id: 'first' }], nextCursor: null, following: [], stats: { first: { likes: 1, comments: 0, liked: false, forks: 2 } }, signedIn: true });
+    render(<Feed mine />);
+    await screen.findByRole('link', { name: 'Forks of Orbit' });
+    let answer: (value: unknown) => void = () => {};
+    request.mockReturnValueOnce(new Promise(resolve => { answer = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: 'Like Orbit' }));
+    expect(screen.getByRole('button', { name: 'Like Orbit' })).toBeDisabled();
+    await act(async () => answer({ liked: true, likes: 2 }));
+    expect(screen.getByRole('button', { name: 'Unlike Orbit' })).toHaveTextContent('2');
+    expect(screen.getByRole('button', { name: 'Unlike Orbit' })).toBeEnabled();
+  });
+  it('counts every comment, threads replies, and lists the forks', async () => {
+    const parent = { id: 'c1', body: 'First', authorName: 'Bob', mine: false, createdAt: '2026-10-06' };
+    const other = { id: 'c2', body: 'Second', authorName: 'Cy', mine: false, createdAt: '2026-10-07' };
+    const reply = { id: 'c3', body: 'Reply', authorName: 'Alice', mine: false, createdAt: '2026-10-08', parentId: 'c1', parentAuthorName: 'Bob' };
+    request.mockImplementation(async (path: string) => { return path.startsWith('harnesses?')
+      ? { harnesses: [{ ...sample, id: 'fork-1', title: 'My orbit' }], nextCursor: null, following: [], stats: {} }
+      : { harness: null, social: { ...emptySocial, comments: [parent, other, reply], commentCount: 140, forks: 1 } }; });
+    render(<Detail id={sample.id} initial={sample} initialComments />);
+    await screen.findByText('Showing the latest 3 of 140 comments.');
+    expect(screen.getByRole('heading', { name: 'Comments · 140' })).toBeInTheDocument();
+    expect(screen.getAllByText(/^(First|Second|Reply)$/).map(node => node.textContent)).toEqual(['First', 'Reply', 'Second']);
+    expect(screen.getByRole('link', { name: '1 fork' })).toHaveAttribute('href', '#forks');
+    await screen.findByRole('link', { name: 'Open My orbit' });
+    expect(request).toHaveBeenCalledWith('harnesses?forkedFrom=starter-orbit');
+  });
+  it('reads source files only when the reader opens them', async () => {
+    request.mockResolvedValue({ harness: null, social: emptySocial });
+    const fetcher = vi.spyOn(globalThis, 'fetch').mockResolvedValue(Response.json({ version: 1, harness: { ...sample, files: [...sample.files, { path: 'src/orbit.js', content: 'const radius = 3;' }] } }));
+    render(<Detail id={sample.id} initial={sample} />);
+    await act(async () => {});
+    expect(fetcher).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Source files' }));
+    await screen.findByText('src/orbit.js');
+    expect(fetcher).toHaveBeenCalledWith('/hub/starter-orbit/snapshot', { cache: 'no-store' });
+    expect(screen.queryByText('const radius = 3;')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('src/orbit.js'));
+    expect(await screen.findByText('const radius = 3;')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Source files' }));
+    expect(screen.getByText('Make an orbit.')).toBeInTheDocument();
+    fetcher.mockRestore();
+  });
+  it('copies the harness link', async () => {
+    request.mockResolvedValue({ harness: null, social: emptySocial });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    render(<Detail id={sample.id} initial={sample} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy link to this harness' }));
+    await screen.findByText('Link copied');
+    expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/hub/starter-orbit`);
   });
 });

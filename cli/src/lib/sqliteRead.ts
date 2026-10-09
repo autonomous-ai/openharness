@@ -4,7 +4,7 @@
  *
  * Two ways in, tried in this order:
  *
- *  1. `node:sqlite` (`sqliteBuiltin.ts`, imported at the first read) — built into the Node the installers ship (22.23, see `runtime/current-node`),
+ *  1. `node:sqlite` (`sqliteBuiltin.ts`, eagerly available for hook admission) — built into the Node the installers ship (22.23, see `runtime/current-node`),
  *     and into any Node ≥ 22.13 without a flag. In-process, parameterised, no JSON round-trip: the
  *     query that hung the `sqlite3` CLI for good on one machine (an opencode session with a ~7.5 MB
  *     row) finishes here in tens of milliseconds. The binding is SYNCHRONOUS — it blocks the event
@@ -23,6 +23,7 @@
 import { execFile } from 'node:child_process'
 import { closeSync, existsSync, openSync, readSync } from 'node:fs'
 import { promisify } from 'node:util'
+import { builtinSqlite, readBuiltin } from './sqliteBuiltin.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -153,8 +154,6 @@ export async function sqliteReadAll(
   params: SqliteParam[] = [],
   options: SqliteReadOptions = {},
 ): Promise<SqliteReadResult> {
-  // At the first read, not with this module: the edge host's handoff, monitor and projects import this one.
-  const { builtinSqlite, readBuiltin } = await import('./sqliteBuiltin.js')
   const Database = builtinSqlite()
   if (Database) {
     return readBuiltin(Database, dbPath, sql, params, options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS)

@@ -113,7 +113,7 @@ export interface RestartAgentDeps {
 const KILL_CONFIRMED: ReadonlySet<TerminateOutcome> = new Set(['gone', 'terminated', 'killed'])
 
 export async function restartAgent(
-  session: { engine: AgentEngine; sessionId: string },
+  session: { engine: AgentEngine; sessionId: string; resumeOnly?: true },
   bypassPermission: boolean,
   deps: RestartAgentDeps,
 ): Promise<RestartOutcome> {
@@ -165,7 +165,7 @@ export async function restartAgent(
   let resumed = !!resumeSessionId
   let identity = await spawnAndWait(resumed)
   if (!current()) return changed
-  if (!identity && resumed) {
+  if (!identity && resumed && !session.resumeOnly) {
     // Safe degradation: a working agent with a FRESH session under the same agentId/pane beats a dead
     // pane. Retry once with no resume attempt before giving up entirely.
     deps.log(`[restart] ${session.engine} did not come back up resuming its session — retrying fresh`)

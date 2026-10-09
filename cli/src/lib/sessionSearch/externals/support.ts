@@ -5,22 +5,24 @@
 
 import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
-import { open, readdir, readFile, stat } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { open, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
 import { processRows } from '../../tmux.js'
 import { tmuxFeatures } from '../../tmuxVersion.js'
 import { type ProcessView, type RunningProcess, type ScanContext, UNSETTLED } from './types.js'
+import { externalReadFailed } from '../evidence.js'
 
 /** A folder's entries, or none when it is missing or unreadable. */
 export async function entries(dir: string): Promise<Dirent[]> {
-  return readdir(dir, { withFileTypes: true }).catch(() => [])
+  return readdir(dir, { withFileTypes: true }).catch(error => { externalReadFailed(error, 'folder'); return [] })
 }
 
 /** Up to [bytes] from the start of a file; '' when it cannot be read. */
 export async function readHead(path: string, bytes: number): Promise<string> {
-  const handle = await open(path, 'r').catch(() => null)
+  const handle = await open(path, 'r').catch(error => { externalReadFailed(error, 'file'); return null })
   if (!handle) return ''
   try {
     const buffer = Buffer.alloc(bytes)
@@ -33,7 +35,7 @@ export async function readHead(path: string, bytes: number): Promise<string> {
 
 /** Up to [bytes] from the end of a file; '' when it cannot be read. */
 export async function readTail(path: string, bytes: number): Promise<string> {
-  const handle = await open(path, 'r').catch(() => null)
+  const handle = await open(path, 'r').catch(error => { externalReadFailed(error, 'file'); return null })
   if (!handle) return ''
   try {
     const { size } = await handle.stat()
@@ -55,14 +57,17 @@ export async function firstLine(path: string, bytes: number): Promise<string | n
 
 /** A file's text, or '' when it is missing or unreadable. */
 export async function readText(path: string): Promise<string> {
-  return readFile(path, 'utf8').catch(() => '')
+  return readFile(path, 'utf8').catch(error => { externalReadFailed(error, 'file'); return '' })
 }
 
 /** A JSON file's value, or null when it is missing, unreadable or being written. */
 export async function readJson(path: string): Promise<unknown> {
   try {
-    return JSON.parse(await readFile(path, 'utf8'))
-  } catch {
+    const value: unknown = JSON.parse(await readFile(path, 'utf8'))
+    if (value === null) externalReadFailed(new Error('null document'), 'record')
+    return value
+  } catch (error) {
+    externalReadFailed(error, 'record')
     return null
   }
 }
@@ -78,7 +83,7 @@ export function parseLine(line: string): unknown {
 
 /** A file's size and change time, the fingerprint a memo is keyed on; null when it is not a file. */
 export async function fileStamp(path: string): Promise<{ stamp: string; mtime: number } | null> {
-  const info = await stat(path).catch(() => null)
+  const info = await stat(path).catch(error => { externalReadFailed(error, 'file metadata'); return null })
   if (!info?.isFile()) return null
   return { stamp: `${info.size}:${info.mtimeMs}`, mtime: Math.floor(info.mtimeMs) }
 }
@@ -174,7 +179,10 @@ type Run = (command: string, args: readonly string[], timeout: number) => Promis
 
 /** A command's output; what it printed even when it exits non-zero (lsof does, for a gone pid). */
 export const run: Run = (command, args, timeout) => new Promise((resolve) => {
-  execFile(command, [...args], { timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+  execFile(command, [...args], { timeout, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+    // lsof's documented empty match is exit 1 with no diagnostic. Timeouts, truncation and errors
+    // remain unknown even if they produced a partial list; display callers retain their old answer.
+    if (error && !(command === 'lsof' && Number(error.code) === 1 && !stderr)) externalReadFailed(error, 'process files')
     resolve(error && !stdout ? null : String(stdout))
   })
 })
@@ -209,10 +217,88 @@ export function parseTtys(stdout: string): Map<number, string | null> {
  *  none when `ps` could not be read. */
 export async function listProcesses(read: typeof processRows = processRows): Promise<RunningProcess[]> {
   const rows = await read()
+  if (!rows) externalReadFailed(new Error('process table unavailable'), 'process table')
   return (rows ?? []).map((row) => {
     const started = Date.parse(row.startMarker)
-    return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args, ...(Number.isFinite(started) ? { started } : {}) }
+    return { pid: row.pid, ppid: row.parentPid, executable: row.executable, args: row.args,
+      ...(Number.isFinite(started) ? { started } : {}),
+      ...(row.startTicks !== undefined ? { generation: `linux:${row.startTicks}` }
+        : Number.isFinite(started) ? { generation: `ps:${started}` } : {}) }
   })
+}
+
+/**
+ * Each of [pids]' working folder. Linux says it in /proc; macOS only through lsof, asked once for every pid
+ * (`-a -d cwd`: that one descriptor) under the same timeout and output bound as its open files. A pid whose
+ * folder cannot be read (gone, another user's) is left out: unknown, which admission reads as "may hold any".
+ */
+export async function processCwds(
+  pids: readonly number[],
+  exec: Run = run,
+  os: NodeJS.Platform = process.platform,
+  link: (path: string) => Promise<string> = readlink,
+): Promise<Map<number, string>> {
+  const cwds = new Map<number, string>()
+  if (!pids.length) return cwds
+  if (os === 'linux') {
+    await Promise.all(pids.map(async (pid) => {
+      const cwd = await link(`/proc/${pid}/cwd`).catch(() => null)
+      if (cwd) cwds.set(pid, cwd)
+    }))
+    return cwds
+  }
+  for (const [pid, files] of parseLsof(await exec('lsof', ['-n', '-P', '-a', '-d', 'cwd', '-Fpn', '-p', pids.join(',')], 3_000) ?? '')) {
+    if (files[0]) cwds.set(pid, files[0])
+  }
+  return cwds
+}
+
+/**
+ * A folder as one key whichever way it was spelled: a trailing slash, `..`, or a link (macOS's /tmp is
+ * /private/tmp, and lsof reports the resolved one). A folder that cannot be resolved keeps its spelling.
+ */
+export async function folderKey(path: string): Promise<string> {
+  const absolute = resolve(path)
+  return realpath(absolute).catch(() => absolute)
+}
+
+/**
+ * The git store a folder's repository shares with all its worktrees, read from disk without running git: the
+ * first `.git` above it, a folder (the store itself) or a worktree's `gitdir:` file, whose
+ * `<store>/worktrees/<name>` names the store two levels up. Null outside a repository. The walk stops at the
+ * folder holding the homes, so a stray `.git` there cannot make every project one.
+ */
+export async function gitCommonDir(folder: string, stop: string = dirname(homedir())): Promise<string | null> {
+  const ceiling = await folderKey(stop)
+  let dir = await folderKey(folder)
+  for (let depth = 0; depth < 128 && dir !== ceiling; depth++) {
+    const dotgit = join(dir, '.git')
+    const found = await stat(dotgit).catch(() => null)
+    if (found?.isDirectory()) return folderKey(dotgit)
+    if (found?.isFile()) {
+      const named = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(dotgit, 'utf8').catch(() => ''))?.[1]
+      if (!named) return null
+      const gitdir = resolve(dir, named)
+      return folderKey(/[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitdir) ? dirname(dirname(gitdir)) : gitdir)
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+/**
+ * Whether a process working in [a] might list a conversation of [b] in its own picker: Claude Code's `/resume`
+ * lists its own folder's, and newer versions its repository's worktrees too, so the same folder or one git
+ * store. Never a folder merely above or below: a TUI left open in the home folder is common, and counting
+ * every folder below it would hold every adoption on the machine again, the bug this check replaced.
+ */
+export async function sameProject(a: string, b: string, stop?: string): Promise<boolean> {
+  const [x, y] = await Promise.all([folderKey(a), folderKey(b)])
+  if (x === y) return true
+  const [left, right] = await Promise.all([gitCommonDir(x, stop), gitCommonDir(y, stop)])
+  return left !== null && left === right
 }
 
 /** The machine's processes, looked at once per view: the list is read on first use and kept. */
@@ -220,6 +306,7 @@ export function processView(
   exec: Run = run,
   alive: (pid: number) => boolean = processAlive,
   list: () => Promise<RunningProcess[]> = listProcesses,
+  cwds: (pids: readonly number[]) => Promise<Map<number, string>> = (pids) => processCwds(pids, exec),
 ): ProcessView {
   let listed: Promise<RunningProcess[]> | null = null
   return {
@@ -230,6 +317,7 @@ export function processView(
     openFilesOf: async (commands) => commands.length
       ? parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', ...commands.flatMap((name) => ['-c', name])], 3_000) ?? '')
       : new Map(),
+    cwds,
     alive,
   }
 }
@@ -262,7 +350,7 @@ export async function harnessTtys(
 ): Promise<Set<string> | null> {
   const format = `#{pane_tty}\t#{session_name}\t${paneOwnerFormat(paneOptions ?? (await tmuxFeatures()).paneOptions)}`
   const { stdout, failed, stderr } = await exec('tmux', ['list-panes', '-a', '-F', format], 3_000)
-  if (failed && !/no server running|error connecting to/i.test(stderr)) return null
+  if (failed && !/no server running|error connecting to .*\(No such file or directory\)/i.test(stderr)) return null
   const ttys = new Set<string>()
   for (const line of stdout.split('\n')) {
     const [tty, session, tag] = line.split('\t')

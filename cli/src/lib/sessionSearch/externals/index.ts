@@ -15,6 +15,7 @@ import { adoptionProviderOf } from '../../../engines/adoptions.js'
 import { loadEngine, type InProcessModules, type OtherEngine } from '../../../engines/inProcess.js'
 import { claudeProjectsRoots, codexHomeRoots } from '../../engineHomes.js'
 import type { ExternalEngine, ExternalProvider } from './types.js'
+import { externalReadFailed } from '../evidence.js'
 
 export interface ExternalPaths {
   claudeProjectsDir: string
@@ -73,15 +74,19 @@ export function externalPaths(vars: NodeJS.ProcessEnv = process.env): ExternalPa
  */
 function loaded<Name extends OtherEngine>(engine: ExternalEngine, name: Name, build: (code: InProcessModules[Name]) => ExternalProvider): ExternalProvider {
   let provider: Promise<ExternalProvider | null> | null = null
-  const reader = (): Promise<ExternalProvider | null> => provider ??= loadEngine(name).then((code) => {
-    if (!code) return null
-    try {
-      return build(code)
-    } catch (error) {
-      console.error(`[engine ${name}] adoption reader unavailable · ${error instanceof Error ? error.message : error}`)
-      return null
-    }
-  })
+  const reader = async (): Promise<ExternalProvider | null> => {
+    const found = await (provider ??= loadEngine(name).then((code) => {
+      if (!code) return null
+      try {
+        return build(code)
+      } catch (error) {
+        console.error(`[engine ${name}] adoption reader unavailable · ${error instanceof Error ? error.message : error}`)
+        return null
+      }
+    }))
+    if (!found) externalReadFailed(new Error('engine reader unavailable'), 'engine reader')
+    return found
+  }
   return {
     engine,
     scan: async (ctx) => await (await reader())?.scan(ctx) ?? [],
@@ -104,7 +109,8 @@ export function externalProviders(paths: ExternalPaths = externalPaths()): Exter
     loaded('grok', 'grok', (code) => code.grokProvider({ home: paths.grokHome })),
     loaded('copilot', 'copilot', (code) => code.copilotProvider({ home: paths.copilotHome })),
     loaded('opencode', 'opencode', (code) => code.opencodeProvider({ engine: 'opencode', dbPath: paths.opencodeDb })),
-    loaded('kilo', 'kilo', (code) => code.opencodeProvider({ engine: 'kilo', dbPath: paths.kiloDb })),
+    // These stores share a reader. Loading it must not make Kilo's runtime entry depend on OpenCode.
+    loaded('kilo', 'opencode', (code) => code.opencodeProvider({ engine: 'kilo', dbPath: paths.kiloDb })),
     loaded('hermes', 'hermes', (code) => code.hermesProvider({ root: paths.hermesRoot })),
     loaded('devin', 'devin', (code) => code.devinProvider({ home: paths.devinHome })),
     loaded('pi', 'pi', (code) => code.piProvider({ agentDir: paths.piAgentDir, ...(paths.piSessionDir ? { sessionDir: paths.piSessionDir } : {}) })),

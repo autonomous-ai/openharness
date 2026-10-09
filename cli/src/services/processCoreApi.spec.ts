@@ -54,10 +54,6 @@ describe('the core API a light service runs on in its own process', () => {
     await expect(api.questions.answerReviewed({} as never)).resolves.toBe(false)
     expect(api.transcripts.databaseHistory(agent('a1'))).toBeUndefined()
     expect(await api.transcripts.lastTurn('s1')).toBeNull()
-    expect(api.external.sessions.list()).toEqual([])
-    await expect(api.external.sessions.scan()).resolves.toEqual([])
-    expect(api.external.open.known().size).toBe(0)
-    await expect(api.external.open.fresh()).resolves.toEqual(new Map())
     await expect(api.account.mintGridName()).resolves.toBeNull()
     // A service holds no credential, and says which one asked.
     await expect(api.account.accessToken()).rejects.toThrow('usage holds no credential')

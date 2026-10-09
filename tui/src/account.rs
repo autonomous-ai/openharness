@@ -28,7 +28,6 @@ enum Phase {
     Starting,
     Browser(String),
     Phone { url: String, expires: Instant },
-    Confirm(String),
     Completing,
     Committed,
     SigningOut,
@@ -158,11 +157,6 @@ pub fn fill(app: &App, picker: &mut Picker) {
             rows.push(Row::new("account:copy", "Copy phone sign-in link"));
             rows.push(Row::new("account:cancel", "Cancel sign-in"));
         }
-        Phase::Confirm(email) => {
-            // No account gets accepted merely because Enter was used on the preceding page.
-            rows.push(Row::new("account:deny", "Cancel sign-in"));
-            rows.push(Row::new("account:confirm", format!("Sign in as {email}")));
-        }
         Phase::Completing => rows.push(Row::new("account:wait", "Finishing sign-in…")),
         Phase::Committed => {
             rows.push(Row::new("account:wait", "Signed in · connecting this computer…"));
@@ -172,17 +166,17 @@ pub fn fill(app: &App, picker: &mut Picker) {
             Status::SignedIn { .. } => {
                 rows.push(Row::new("account:machines", "Connect a machine"));
                 rows.push(Row::new("account:phone", "Add your phone"));
-                rows.push(Row::new("account:models", "Models on your machines"));
                 rows.push(Row::new("account:signout", "Sign out"));
             }
             _ => {
                 rows.push(Row::new("account:google", "Continue with Google"));
                 rows.push(Row::new("account:apple", "Continue with Apple"));
-                rows.push(Row::new("account:qr", "Sign in with your phone"));
+                rows.push(Row::new("account:qr", "Continue with your phone"));
             }
         },
     }
-    rows.push(Row::new("account:back", if matches!(app.account.status, Status::SignedIn { .. }) { "Back to workspace" } else { "Keep using locally" }));
+    // Signed in, Esc is the way back; signed out, "Keep using locally" says that sign-in is optional.
+    if !matches!(app.account.status, Status::SignedIn { .. }) { rows.push(Row::new("account:back", "Keep using locally")) }
     // These are page actions, not a growing search result list. Keep Back last
     // across sign-in phases; set_rows still preserves the selected action by ID.
     picker.rows.clear();
@@ -212,17 +206,13 @@ pub fn preview(app: &App, _: &str) -> Vec<Line<'static>> {
     match &app.account.phase {
         Phase::Browser(_) => {
             lines.push(Line::raw("Finish signing in in your browser."));
-            lines.push(Line::raw("Using SSH? Cancel and choose Sign in with your phone."));
+            lines.push(Line::raw("Using SSH? Cancel and choose Continue with your phone."));
         }
         Phase::Phone { expires, .. } => {
             lines.clear();
             lines.push(Line::raw("On your phone, open Harness → Settings → Sign in a computer."));
             lines.push(Line::raw(""));
             lines.push(Line::raw(format!("Expires in {}s", expires.saturating_duration_since(Instant::now()).as_secs())));
-        }
-        Phase::Confirm(email) => {
-            lines.push(Line::raw(format!("Your phone approved {email}.")));
-            lines.push(Line::raw("Choose that account here to finish."));
         }
         Phase::Failed(message) => lines.push(Line::raw(message.clone())),
         Phase::Starting => lines.push(Line::raw(app.account.waiting.clone().unwrap_or_else(|| "Opening sign-in…".into()))),
@@ -270,12 +260,11 @@ pub fn draw(buf: &mut Buffer, app: &App, body: Rect, picker: &mut Picker) -> Opt
     let mut lines = match &app.account.phase {
         Phase::Ready => match &app.account.status {
             Status::SignedIn { email, offline } => vec![Line::raw(email.clone().unwrap_or_else(|| "Signed in".into())),
-                Line::raw(if *offline { "Account is offline. Local work is still available." } else { "Manage your connected computers, phone and models." })],
+                Line::raw(if *offline { "Account is offline. Local work is still available." } else { "Manage your connected computers and phone." })],
             _ => vec![Line::raw("Connect computers and sync your workspace."), Line::raw("Use models on a linked machine. Follow work from your phone."),
                 Line::raw(""), Line::raw("Sign-in is optional. Keep working locally anytime.")],
         },
-        Phase::Browser(_) => vec![Line::raw("Finish signing in in your browser."), Line::raw("Using SSH? Cancel and choose Sign in with your phone.")],
-        Phase::Confirm(email) => vec![Line::raw(format!("Your phone approved {email}.")), Line::raw("Choose that account below to finish.")],
+        Phase::Browser(_) => vec![Line::raw("Finish signing in in your browser."), Line::raw("Using SSH? Cancel and choose Continue with your phone.")],
         Phase::Failed(message) => vec![Line::raw(message.clone())],
         Phase::Phone { .. } => preview(app, ""),
         Phase::Starting => vec![Line::raw(app.account.waiting.clone().unwrap_or_else(|| "Opening sign-in…".into()))],
@@ -309,8 +298,8 @@ pub fn choose(app: &mut App, mut picker: Picker, id: &str) {
     // Reattach before callbacks update the view; every completion checks its own attempt.
     let action = id.strip_prefix("account:").unwrap_or("");
     if action == "back" { cancel(app); return }
-    if matches!(action, "machines" | "phone" | "models") {
-        crate::input::run(app, match action { "machines" => "connect-machine", "phone" => "add-phone", _ => "models" });
+    if matches!(action, "machines" | "phone") {
+        crate::input::run(app, if action == "machines" { "connect-machine" } else { "add-phone" });
         return;
     }
     picker.set_query("");
@@ -318,15 +307,7 @@ pub fn choose(app: &mut App, mut picker: Picker, id: &str) {
     match action {
         "google" | "apple" | "qr" => start(app, action),
         "signout" => ask_sign_out(app, true),
-        "cancel" | "deny" => { cancel(app); refill(app); }
-        "confirm" => {
-            if matches!(app.account.phase, Phase::Confirm(_)) {
-                if let Some(tx) = &app.account.driver { let _ = tx.send(Driver::Answer(true)); }
-                app.account.phase = Phase::Completing;
-                app.account.waiting = Some("Finishing sign-in…".into());
-                refill(app);
-            }
-        }
+        "cancel" => { cancel(app); refill(app); }
         "browser" => { if let Phase::Browser(url) = &app.account.phase { open_browser(app, url.clone()); } }
         "copy" => {
             let url = match &app.account.phase { Phase::Browser(url) | Phase::Phone { url, .. } => Some(url.clone()), _ => None };
@@ -435,7 +416,7 @@ fn open_browser(app: &mut App, url: String) {
         tokio::time::timeout(Duration::from_secs(10), command.status()).await.is_ok_and(|s| s.is_ok_and(|s| s.success()))
     }, |app, opened| {
         if !opened { if let Some(Modal::Picker { kind: PickerKind::Account, picker }) = &mut app.modal {
-            picker.say("Could not open a browser. Copy the link, or use Sign in with your phone.");
+            picker.say("Could not open a browser. Copy the link, or use Continue with your phone.");
         } }
     });
 }
@@ -456,10 +437,16 @@ fn event(app: &mut App, generation: u64, value: Value) {
             let seconds = value["expiresIn"].as_u64().unwrap_or(120).clamp(1, 600);
             app.account.phase = Phase::Phone { url: url.into(), expires: Instant::now() + Duration::from_secs(seconds) };
         },
+        // The phone that approved is signed in to the account, and its person scanned this code, so
+        // there is nothing left to ask here: the CLI is told yes and finishes the sign-in.
         Some("confirm") => {
             let email = clean("email");
             if !email.contains('@') { cancel(app); app.account.phase = Phase::Failed("The phone returned no valid account. Try signing in again.".into()); }
-            else { app.account.phase = Phase::Confirm(email); }
+            else {
+                if let Some(tx) = &app.account.driver { let _ = tx.send(Driver::Answer(true)); }
+                app.account.phase = Phase::Completing;
+                app.account.waiting = Some("Finishing sign-in…".into());
+            }
         }
         Some("waiting") => app.account.waiting = Some(clean("message")),
         Some("result") if value["status"] == "success" => {
@@ -471,7 +458,6 @@ fn event(app: &mut App, generation: u64, value: Value) {
         _ => {}
     }
     refill(app);
-    if matches!(app.account.phase, Phase::Confirm(_)) { if let Some(Modal::Picker { picker, .. }) = &mut app.modal { picker.select("account:deny"); } }
 }
 
 fn finished(app: &mut App, generation: u64, committed: bool, error: Option<String>) {
@@ -626,13 +612,14 @@ mod tests {
             app.account.status = if signed_in { Status::SignedIn { email:Some("dev@example.test".into()), offline:false } } else { Status::SignedOut };
             crate::input::picker(&mut app, PickerKind::Account, "Your Harness account", "");
             let (text, _) = render(&mut app, 40, 12);
-            for label in if signed_in { vec!["Connect a machine", "Add your phone", "Models on your machines", "Sign out", "Back to workspace"] }
-                else { vec!["Continue with Google", "Continue with Apple", "Sign in with your phone", "Keep using locally"] } {
+            for label in if signed_in { vec!["Connect a machine", "Add your phone", "Sign out"] }
+                else { vec!["Continue with Google", "Continue with Apple", "Continue with your phone", "Keep using locally"] } {
                 assert!(text.contains(label), "{label}\n{text}");
             }
+            if signed_in { for gone in ["Models on your machines", "Back to workspace"] { assert!(!text.contains(gone), "{gone} is not offered\n{text}") } }
             assert!(text.contains("Esc back"));
             let Some(Modal::Picker { picker, .. }) = &app.modal else { panic!() };
-            assert!(picker.list_area.get().height >= 4);
+            assert!(picker.list_area.get().height >= if signed_in { 3 } else { 4 }, "every action stays visible");
         }
     }
 
@@ -737,23 +724,16 @@ mod tests {
     }
 
     #[test]
-    fn phone_approval_requires_an_explicit_account_choice_and_is_not_repeated() {
+    fn phone_approval_signs_in_at_once_and_is_not_repeated() {
         let mut app = app();
         open(&mut app);
         select(&mut app, "account:qr");
         let generation = app.account.generation;
-        event(&mut app, generation, json!({ "type": "confirm", "email": "dev@example.test" }));
         let (sender, mut receive) = mpsc::unbounded_channel();
         app.account.driver = Some(sender);
-        key(&mut app, KeyCode::Enter);
-        assert_eq!(receive.try_recv().unwrap(), Driver::Cancel, "Enter must not accept an account just arriving from a phone");
-        select(&mut app, "account:qr");
-        let generation = app.account.generation;
         event(&mut app, generation, json!({ "type": "confirm", "email": "dev@example.test" }));
-        let (sender, mut receive) = mpsc::unbounded_channel();
-        app.account.driver = Some(sender);
-        select(&mut app, "account:confirm");
-        assert_eq!(receive.try_recv().unwrap(), Driver::Answer(true));
+        assert_eq!(receive.try_recv().unwrap(), Driver::Answer(true), "the phone's approval is the answer; nothing more is asked here");
+        assert_eq!(app.account.phase, Phase::Completing);
         key(&mut app, KeyCode::Enter);
         key(&mut app, KeyCode::Esc);
         tick(&mut app);
@@ -802,7 +782,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cli_driver_keeps_stdin_open_then_delivers_exact_phone_approval() {
+    async fn cli_driver_keeps_stdin_open_then_answers_the_phone_approval_itself() {
         let mut app = app();
         open(&mut app);
         let (sink, mut events) = mpsc::unbounded_channel();
@@ -812,9 +792,7 @@ mod tests {
         command.args(["-c", r#"printf '%s\n' '{"type":"confirm","email":"dev@example.test"}'; IFS= read -r answer; [ "$answer" = yes ] || exit 1; printf '%s\n' '{"type":"result","status":"success","email":"dev@example.test"}'"#]);
         let task = tokio::spawn(drive(command, app.account.generation, sink, receive));
         apply_next(&mut app, &mut events).await;
-        assert!(matches!(app.account.phase, Phase::Confirm(_)));
-        assert!(!task.is_finished(), "CLI must still be waiting for the user");
-        sender.send(Driver::Answer(true)).unwrap();
+        assert_eq!(app.account.phase, Phase::Completing, "no step is shown for an account the phone already approved");
         apply_next(&mut app, &mut events).await;
         assert_eq!(app.account.phase, Phase::Committed);
         apply_next(&mut app, &mut events).await;

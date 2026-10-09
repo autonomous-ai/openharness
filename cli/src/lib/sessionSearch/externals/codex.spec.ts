@@ -132,7 +132,7 @@ describe('codexProvider', () => {
         { pid: 203, ppid: 1, executable: 'codex', args: '/opt/codex/bin/codex app-server --listen stdio' },
       ],
       openFiles: async () => new Map(), alive: () => true,
-      openFilesOf: async (commands) => {
+      cwds: async () => new Map(), openFilesOf: async (commands) => {
         expect(commands).toEqual(['codex', 'Codex'])
         return new Map([[201, [path, '/dev/ttys003', '/tmp/rollout-notes.txt']], [202, ['/x/rollout-2026-not-an-id.jsonl']], [203, [served]]])
       },

@@ -58,6 +58,7 @@ import { SESSION_SEARCH_FILE, searchCommand } from './lib/sessionSearch/command.
 import { dshCommand, dshUsage } from './dsh/command.js'
 import { ApiConnections } from './lib/apiConnections.js'
 import { apiCommand, apiUsage } from './lib/apiCommand.js'
+import { connectionsCommand, connectionsUsage } from './lib/connectors/command.js'
 import { remoteCommand } from './remoteCommand.js'
 import { tuiCommand } from './tui/index.js'
 import { newCommand } from './lib/newCommand.js'
@@ -161,6 +162,8 @@ Grid (the fleet of AI engines the \`grid\` CLI serves — needs \`grid\` on PATH
 ${dshUsage()}
 
 ${apiUsage}
+
+${connectionsUsage}
 
 Browser end-to-end encryption:
   harness autonomous-device <command>     pair/status/list/revoke an Autonomous device
@@ -2571,6 +2574,9 @@ switch (cmd) {
   case 'api':
     apiCommand(rest, new ApiConnections(env.ADAPTER_DATA_DIR))
       .then(code => { process.exitCode = code }).catch(onError)
+    break
+  case 'connections':
+    connectionsCommand(rest).then(code => { process.exitCode = code }).catch(onError)
     break
   case 'new':
     // `rest`, not args/flags: a first message and a folder are words in the order they were typed.

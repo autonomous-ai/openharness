@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/test_run.dart';
+
 /// Where the downloads beside setup stand, for the setup tour's bottom line.
 @immutable
 class AgentDownloads {
@@ -49,7 +51,15 @@ class AgentPrefetch {
     DateTime Function()? now,
     Duration nodePoll = const Duration(seconds: 1),
     Duration nodeWait = const Duration(minutes: 5),
-  }) : _start =
+    String? Function()? markerDir,
+    bool? warmOpenCode,
+    String shell = '/bin/bash',
+  }) : _warm = warmOpenCode ?? !kUnderTest,
+       _shell = shell,
+       _markerDir =
+           markerDir ??
+           (() => kUnderTest || _home == null ? null : '$_home/.harness/run'),
+       _start =
            start ??
            ((executable, arguments) => Process.start(executable, arguments)),
        _skip = skip ?? (() => alreadyHasAnAgent(_home)),
@@ -77,8 +87,29 @@ class AgentPrefetch {
   final Duration _nodePoll;
   final Duration _nodeWait;
 
+  /// Where a download names its process while it runs (`downloading-<engine>`), so a pane that opens
+  /// meanwhile waits for it rather than installing the engine again (the CLI's
+  /// `harness_wait_download`). Null writes none (tests).
+  final String? Function() _markerDir;
+
+  /// Runs OpenCode once after its download ([_warmOpenCode]). Off under test unless asked for.
+  final bool _warm;
+
+  /// What runs a download's script; the specs try each shell a computer may have.
+  final String _shell;
+
+  /// The download's own name for itself on its command line, which is how a pane tells it from a
+  /// process that took over a stale marker's pid.
+  static const downloadName = 'harness-download';
+
   final Map<String, Future<void>> _downloads = {};
   final Map<String, DateTime> _startedAt = {};
+
+  /// Completes once the engine's download runs under its marker, which is when a pane can wait
+  /// for it itself.
+  final Map<String, Completer<void>> _marked = {};
+  Completer<void> _markedFor(String engine) =>
+      _marked.putIfAbsent(engine, Completer<void>.new);
   final Set<String> _settled = {};
   Future<void>? _everything;
   final ValueNotifier<AgentDownloads> _progress = ValueNotifier(
@@ -134,7 +165,16 @@ class AgentPrefetch {
   /// download started. Null when there is nothing to wait for — none started, it settled, the agent
   /// is in place, or the budget is spent — so a slow download costs the first create at most
   /// [budget] and every later one nothing.
-  Future<void>? waitFor(String engine, Duration budget) {
+  ///
+  /// When the pane waits for the download itself ([paneWaits], the CLI's `waitsForDownload`), only
+  /// until the download runs under its marker: before that (Codex and Claude Code wait for setup's
+  /// Node first) or without one (a marker that could not be written) the pane could not see it and
+  /// would install a second time.
+  Future<void>? waitFor(
+    String engine,
+    Duration budget, {
+    bool paneWaits = false,
+  }) {
     final running = _downloads[engine];
     final since = _startedAt[engine];
     if (running == null ||
@@ -145,13 +185,51 @@ class AgentPrefetch {
     }
     final left = budget - _now().difference(since);
     if (left <= Duration.zero) return null;
-    return running.timeout(left, onTimeout: () {});
+    if (!paneWaits) return running.timeout(left, onTimeout: () {});
+    final marked = _markedFor(engine);
+    if (marked.isCompleted) return null;
+    return Future.any([running, marked.future]).timeout(left, onTimeout: () {});
   }
 
-  Future<void> _runOpenCode() => _run('OpenCode', '/bin/bash', [
-    '-c',
-    command,
-  ], () => _installed('opencode'));
+  Future<void> _runOpenCode() async {
+    await _run(
+      'OpenCode',
+      const ['opencode'],
+      command,
+      () => _installed('opencode'),
+    );
+    await _warmOpenCode();
+  }
+
+  /// Runs the downloaded OpenCode once (`--version`, nothing else), while setup is still busy: macOS
+  /// checks a new binary on its first run, 3.9 s against 0.4 s afterwards on a fresh VM (2026-10-09),
+  /// and that first run would otherwise be the first pane's, in front of the person. Only the version:
+  /// a warm-up that started OpenCode's server once stalled its first harness for 51 s.
+  Future<void> _warmOpenCode() async {
+    final home = _home;
+    if (!_warm || home == null || !_installed('opencode')) return;
+    final started = _now();
+    try {
+      final process = await _start('$home/.opencode/bin/opencode', [
+        '--version',
+      ]);
+      unawaited(process.stdout.drain<void>().catchError((_) {}));
+      unawaited(process.stderr.drain<void>().catchError((_) {}));
+      final code = await process.exitCode.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () {
+          process.kill();
+          return -1;
+        },
+      );
+      _log(
+        'OpenCode first run during setup: exit $code in '
+        '${(_now().difference(started).inMilliseconds / 1000).toStringAsFixed(1)}s',
+      );
+    } catch (error) {
+      _log('OpenCode first run during setup did not start: $error');
+    }
+  }
 
   /// Codex and Claude Code, once setup has put Harness's Node in place: one npm, so the two never
   /// write the same global prefix at once.
@@ -177,21 +255,49 @@ class AgentPrefetch {
       'export npm_config_prefix="\$HOME/.local" NPM_CONFIG_PREFIX="\$HOME/.local"',
       'npm install -g ${npmPackages.join(' ')}',
     ].join('; ');
-    await _run('Codex and Claude Code', '/bin/bash', [
-      '-c',
+    await _run(
+      'Codex and Claude Code',
+      const ['codex', 'claude'],
       script,
-    ], () => _installed('codex') && _installed('claude'));
+      () => _installed('codex') && _installed('claude'),
+    );
   }
 
+  /// Runs [script] as the download named [downloadName]. It ends on `exit`: bash 5.1 and later (Linux),
+  /// dash and zsh run a script's last command in place of the shell, and npm under the shell's pid no
+  /// longer carries the name a pane checks the marker's pid against (measured with zsh and dash,
+  /// 2026-10-09), so the pane took the download for something else and installed a second time.
   Future<void> _run(
     String what,
-    String executable,
-    List<String> arguments,
+    List<String> engines,
+    String script,
     bool Function() inPlace,
   ) async {
     final started = _now();
+    final markers = <File>[];
     try {
-      final process = await _start(executable, arguments);
+      final process = await _start(_shell, [
+        '-c',
+        '$script; exit \$?',
+        downloadName,
+      ]);
+      final dir = _markerDir();
+      if (dir != null) {
+        try {
+          Directory(dir).createSync(recursive: true);
+          for (final engine in engines) {
+            markers.add(
+              File('$dir/downloading-$engine')
+                ..writeAsStringSync('${process.pid}'),
+            );
+          }
+          for (final engine in engines) {
+            if (!_markedFor(engine).isCompleted) _markedFor(engine).complete();
+          }
+        } on FileSystemException {
+          // Without a marker a pane cannot see the download, so a create waits for it instead.
+        }
+      }
       // Drained so a full pipe never stalls the installer; only the tail is kept for the log.
       final tail = <String>[];
       void keep(String line) {
@@ -224,6 +330,14 @@ class AgentPrefetch {
       );
     } catch (error) {
       _log('$what download during setup did not start: $error');
+    } finally {
+      for (final marker in markers) {
+        try {
+          marker.deleteSync();
+        } on FileSystemException {
+          // Gone already; a pane ignores a marker whose process has ended anyway.
+        }
+      }
     }
   }
 

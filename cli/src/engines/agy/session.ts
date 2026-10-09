@@ -1,16 +1,9 @@
-import { execFile } from 'child_process'
-import { readdir, readlink, stat } from 'fs/promises'
-import { basename, join, sep } from 'path'
-import { promisify } from 'util'
+import { readdir, stat } from 'fs/promises'
+import { join } from 'path'
+import { locateProcessSession, locateTranscript } from '../kit/sessionLocation.js'
 
-const execFileAsync = promisify(execFile)
-
-import { agyTranscriptPath, CONVERSATION_ID } from './contract.js'
+import { AGY_PROCESS_SESSION, AGY_TRANSCRIPT, CONVERSATION_ID } from './contract.js'
 export { agyTranscriptPath } from './contract.js'
-
-async function isFile(path: string): Promise<boolean> {
-  try { return (await stat(path)).isFile() } catch { return false }
-}
 
 /**
  * Resolve a live agy transcript.
@@ -19,8 +12,7 @@ async function isFile(path: string): Promise<boolean> {
  * one. The `_full` file is the one to tail — see the normalizer header for why.
  */
 export async function findAgyTranscript(agyHome: string, conversationId: string): Promise<string | null> {
-  const path = agyTranscriptPath(agyHome, conversationId)
-  return path && await isFile(path) ? path : null
+  return locateTranscript(AGY_TRANSCRIPT, agyHome, conversationId)
 }
 
 export interface AgyConversation {
@@ -69,32 +61,5 @@ export async function listAgyConversations(agyHome: string): Promise<AgyConversa
  * into agy's own environment, so neither the file nor `/proc/<pid>/environ` can answer this.
  */
 export async function agyConversationForPid(agyHome: string, pid: number): Promise<string | null> {
-  const marker = join(agyHome, 'presence') + sep
-  const paths = process.platform === 'linux' ? await linuxFdTargets(pid) : await lsofTargets(pid)
-  for (const path of paths) {
-    if (!path.startsWith(marker) || !path.endsWith('.lock')) continue
-    const id = basename(path, '.lock')
-    if (CONVERSATION_ID.test(id)) return id
-  }
-  return null
-}
-
-async function linuxFdTargets(pid: number): Promise<string[]> {
-  const dir = `/proc/${pid}/fd`
-  const entries = await readdir(dir).catch(() => [])
-  const targets: string[] = []
-  for (const entry of entries) {
-    const target = await readlink(join(dir, entry)).catch(() => '')
-    if (target) targets.push(target)
-  }
-  return targets
-}
-
-async function lsofTargets(pid: number): Promise<string[]> {
-  // -Fn prints one `n<path>` record per descriptor and nothing else; -w silences the warnings lsof
-  // emits for file systems it cannot stat, which would otherwise land on stderr on every poll.
-  const out = await execFileAsync('lsof', ['-w', '-p', String(pid), '-Fn'], { timeout: 4_000 })
-    .then((r) => r.stdout)
-    .catch((err: { stdout?: string }) => err.stdout ?? '')
-  return out.split('\n').filter((line) => line.startsWith('n')).map((line) => line.slice(1))
+  return locateProcessSession(AGY_PROCESS_SESSION, agyHome, pid)
 }

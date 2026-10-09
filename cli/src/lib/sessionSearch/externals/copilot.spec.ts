@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { externalEvidence } from '../evidence.js'
 
 import { copilotMovedAt, copilotOrigin, copilotProvider, copilotTurnOpen, readCopilotSession, workspaceYaml } from './copilot.js'
 import { scanMemo } from './support.js'
@@ -68,7 +69,7 @@ function view(rows: RunningProcess[], alive: (pid: number) => boolean = () => tr
   return {
     list: async () => { listed++; return rows },
     openFiles: async () => new Map(),
-    openFilesOf: async () => new Map(),
+    cwds: async () => new Map(), openFilesOf: async () => new Map(),
     alive,
     listed: () => listed,
   }
@@ -239,6 +240,20 @@ describe('copilotProvider.owners', () => {
     writeFileSync(path, '')
     utimesSync(path, at, at)
   }
+
+  it('holds admission for equal newest locks or a live process whose start cannot be proved', async () => {
+    const root = home(); session(root, ID); session(root, ID2)
+    lock(root, ID, 4242, 1_700_000_000)
+    const provider = copilotProvider({ home: root })
+    expect(await externalEvidence(() => provider.owners!(view([cli(4242)])))).toMatchObject({ ok: false })
+    expect(await externalEvidence(() => provider.owners!(view([])))).toMatchObject({ ok: false })
+    const processes = view([{ ...cli(4242), started: 1_700_000_000_000 }])
+    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: true, value: [{ sessionId: ID }] })
+    lock(root, ID2, 4242, 1_700_000_000)
+    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
+    lock(root, ID2, 4242, 1_700_000_100)
+    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: true, value: [{ sessionId: ID2 }] })
+  })
 
   it('claims the session a live Copilot holds a lock on', async () => {
     const root = home()

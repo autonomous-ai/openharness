@@ -135,6 +135,9 @@ flutter:
     - assets/models.svg
     - assets/harnesses.svg
     - assets/engine-icons/
+    # Settings ▸ Connectors' service icons, copied from the CLI's
+    # (cli/scripts/connector-assets.mjs, with lib/connectors/connector_icons.dart).
+    - assets/connector-icons/
     - assets/store/
     - assets/store/projects/
     - assets/store/covers/
@@ -150,6 +153,9 @@ flutter:
     - assets/octicons/
     # The marks on the login screen's two buttons (`widgets/sign_in_provider_button.dart`).
     - assets/sign-in/
+    # The App Store's and Google Play's marks under Add Phone's download codes
+    # (`widgets/add_phone_dialog.dart`).
+    - assets/stores/
     - assets/harness_device_studio.jpg
     - assets/devices/
     - assets/harness_store_card.jpg

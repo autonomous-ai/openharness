@@ -19,6 +19,7 @@ import type { ForkOrigin, RegisteredSession } from './registry.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import type { TerminalCreateResult, TmuxRuntimeRef } from './terminalTypes.js'
 import { terminalRouteKey } from './terminalRuntime.js'
+import type { ExternalResumeIntent } from './externalResume.js'
 
 const DEFAULT_MAX_ATTEMPTS = 3
 
@@ -41,6 +42,7 @@ export interface CreateAgentPaneDeps {
     defaultName?: string | null
     label?: string | null
     forkedFrom?: ForkOrigin | null
+    externalResume?: ExternalResumeIntent
   }) => RegisteredSession | null }
   engine: AgentEngine
   cwd?: string | null
@@ -74,6 +76,7 @@ export interface CreateAgentPaneDeps {
   agent?: string | null
   /** The agent this pane is a fork of (`agent_fork`), recorded on the row; null otherwise. */
   forkedFrom?: ForkOrigin | null
+  externalResume?: ExternalResumeIntent
   maxAttempts?: number
 }
 
@@ -116,6 +119,7 @@ export async function createAndRegisterPane(deps: CreateAgentPaneDeps): Promise<
       defaultName: deps.defaultName,
       label: deps.label,
       forkedFrom: deps.forkedFrom,
+      ...(deps.externalResume ? { externalResume: deps.externalResume } : {}),
     })
     if (pending) return { ok: true, spawned, pending }
     console.warn(`[agent] create ${deps.engine} registration failed · pane ${spawned.runtime.paneId} · `

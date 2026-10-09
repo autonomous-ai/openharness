@@ -10,3 +10,5 @@ export { HERMES_EFFORTS, hermesStatusModel, parseHermesConfig, parseHermesModels
 export { hermesDbForSession } from '../../lib/hermesHome.js'
 export { probeHermesHome } from './homeProbe.js'
 export { hermesProvider } from '../../lib/sessionSearch/externals/hermes.js'
+
+export { createRuntimeProfileReader } from './profileReader.js'

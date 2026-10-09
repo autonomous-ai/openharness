@@ -116,5 +116,56 @@ void main() {
     expect(find.byKey(const Key('agent-alert-banner')), findsNothing);
     expect(app.panes, isEmpty);
   });
-}
 
+  testWidgets(
+    'the footer stands in the same corner, under the banners, with none or some',
+    (tester) async {
+      tester.view.physicalSize = const Size(1200, 900);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Stack(
+              children: [
+                AgentAlertBanners(
+                  notifier: app,
+                  footer: const SizedBox(
+                    key: Key('banner-footer'),
+                    width: 288,
+                    height: 40,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      // No news: the footer alone, in the top-right.
+      final alone = tester.getRect(find.byKey(const Key('banner-footer')));
+      expect(alone.right, 1200 - 12);
+      expect(alone.top, 12);
+
+      app.agentAlerts.post(
+        AgentAlert(
+          machineId: 'm1',
+          agentId: 'a1',
+          title: 'Respond to greeting',
+          kind: AlertKind.done,
+          at: DateTime.now(),
+        ),
+      );
+      await tester.pump();
+      // News: the banner first, the footer under it, on the same right edge.
+      final banner = tester.getRect(
+        find.byKey(const Key('agent-alert-banner')),
+      );
+      final under = tester.getRect(find.byKey(const Key('banner-footer')));
+      expect(under.top, greaterThan(banner.bottom));
+      expect(under.right, banner.right);
+      await tester.tap(find.byKey(const Key('agent-alert-dismiss')));
+      await tester.pumpAndSettle();
+    },
+  );
+}

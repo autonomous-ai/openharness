@@ -1,0 +1,362 @@
+{
+  "darwin/term": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "darwin/kill": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGKILL"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 5000
+  },
+  "darwin/stuck": {
+    "ok": false,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGKILL"
+      ]
+    ],
+    "waited": 7000
+  },
+  "darwin/gone": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "darwin/group": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        -7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "darwin/job-failed": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "darwin/signal-failed": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "darwin/tty-failed": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "darwin/no-tty": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ]
+    ],
+    "waited": 0
+  },
+  "linux/term": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "linux/kill": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGKILL"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 5000
+  },
+  "linux/stuck": {
+    "ok": false,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "signal",
+        7,
+        "SIGKILL"
+      ]
+    ],
+    "waited": 7000
+  },
+  "linux/gone": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "linux/group": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        -7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "linux/job-failed": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "linux/signal-failed": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "linux/tty-failed": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ],
+      [
+        "tty",
+        "/dev/fixture-terminal",
+        "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1049l\u001b[?25h"
+      ]
+    ],
+    "waited": 0
+  },
+  "linux/no-tty": {
+    "ok": true,
+    "effects": [
+      [
+        "foreground",
+        7
+      ],
+      [
+        "signal",
+        7,
+        "SIGTERM"
+      ]
+    ],
+    "waited": 0
+  }
+}

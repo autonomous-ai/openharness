@@ -479,9 +479,9 @@ fn opened(app: &mut App, view: View) {
             let generation = app.devices.phone.generation;
             sign_in(app, generation);
             load_pairs(app);
-            // (The QR shows at once; handing the daemon its code is a write, so it waits for a yes —
-            // asked at once, unless there is no Harness here to hand it to.)
-            if !app.daemon_down { confirm(app, format!("Let the phone that scans this code pair with this {}?", this_computer()), Act::ArmPhone) }
+            // Opening Add your phone is the ask: the code is handed to the daemon at once, as long as
+            // the QR is on screen, unless there is no Harness here to hand it to.
+            if !app.daemon_down { run_act(app, Act::ArmPhone) }
         }
     }
 }
@@ -1046,7 +1046,7 @@ pub fn choose(app: &mut App, view: View, picker: Picker, enter: bool) {
             _ => copy(app, &format!("{INSTALL}\n{LOGIN}\n{START}")),
         },
         (_, "ph") => match rest.as_str() {
-            "arm" => confirm(app, format!("Let the phone that scans this code pair with this {}?", this_computer()), Act::ArmPhone),
+            "arm" => run_act(app, Act::ArmPhone),
             "new" => { app.devices.phone.code = new_code(); app.devices.phone.message = None; note(app, "A new code — the old one no longer pairs") }
             fp => {
                 let name = app.devices.phone.paired.iter().find(|p| p.get("fingerprint").and_then(Value::as_str) == Some(fp)).map(device_name).unwrap_or_else(|| "this device".into());
@@ -1747,7 +1747,7 @@ mod tests {
         let app = app((150, 42));
         let rows = crate::modal::command_rows(&app);
         // (Connect a computer… only went to Connect machines…: one way in. Its command still runs.)
-        for (id, label) in [("devices", "Connect machines…"), ("add-phone", "Add phone…"), ("machines", "List machines")] {
+        for (id, label) in [("devices", "Connect machines"), ("add-phone", "Add phone"), ("machines", "List machines")] {
             let row = rows.iter().find(|r| r.id == format!("cmd:{id}")).unwrap_or_else(|| panic!("{id} missing"));
             assert_eq!((row.label.as_str(), row.group.as_deref()), (label, Some("Machines")));
         }
@@ -2368,12 +2368,13 @@ mod tests {
     }
 
     #[test]
-    fn add_phone_shows_the_qr_for_the_link_and_arms_only_after_a_yes() {
+    fn add_phone_shows_the_qr_for_the_link_and_arms_without_asking() {
         let mut app = app((150, 42));
         let log = fake(&mut app);
         crate::input::run(&mut app, "add-phone");
         let pair = |log: &Arc<Mutex<Vec<Req>>>| log.lock().unwrap().iter().filter(|r| matches!(r, Req::Http { path, .. } if path == "/api/pair")).count();
-        assert_eq!(pair(&log), 0, "not armed before the yes");
+        assert!(app.devices.ask.is_none(), "no dialog: opening Add your phone is the ask");
+        assert_eq!(pair(&log), 1, "armed at once: the code handed over");
         let link = phone_link(&app).expect("a link");
         assert!(link.starts_with("https://harness.autonomous.ai/pair#e=dev%2Bhn%40example.com&m=") && link.contains("&h=hs_"), "{link}");
         let (s, buf) = screen(&mut app, 150, 42);
@@ -2382,8 +2383,6 @@ mod tests {
         let grouped: Vec<String> = app.devices.phone.code.as_bytes().chunks(4).map(|g| String::from_utf8_lossy(g).to_string()).collect();
         assert!(s.contains(&grouped.join(" ")), "the code in text:\n{s}");
         assert!(s.contains("Dee's iPhone") && !s.contains("Cabled gadget"), "the phones and computers paired, nothing else:\n{s}");
-        press(&mut app, KeyCode::Char('y'));
-        assert_eq!(pair(&log), 1, "armed: the code handed over");
         assert!(has(&log, &http("POST", "/api/pair", Some(json!({ "code": app.devices.phone.code })))));
         assert!(app.devices.phone.message.is_none(), "no phone yet is not an error");
     }
@@ -2403,7 +2402,7 @@ mod tests {
                     View::Phone if w == 80 => assert!(s.contains("to show the QR code") && app.devices.phone.drawn.get().is_none(), "too small says so:\n{s}"),
                     View::Phone => assert!(app.devices.phone.drawn.get().is_some(), "{s}"),
                 }
-                if view == View::Phone { assert!(s.contains("[ Cancel ]  [ Yes ]"), "asks before handing over the code:\n{s}") }
+                if view == View::Phone { assert!(!s.contains("[ Yes ]"), "no dialog before handing over the code:\n{s}") }
             }
         }
     }

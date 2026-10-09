@@ -1,4 +1,5 @@
 /** Restore may wait for preparation; session ownership must survive that wait before core writes. */
+import { externalResumePending } from '../../lib/externalResume.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LaunchOverrides, LaunchOverridesResult } from '../../lib/launchOverrides.js'
 import type { RestoreAgentsDeps, RestoreLaunch } from '../../lib/restoreAgents.js'
@@ -15,6 +16,8 @@ interface RestoreLaunchDeps {
 
 export function createRestoreLaunch(deps: RestoreLaunchDeps): RestoreAgentsDeps['buildLaunch'] {
   return async (entry, { current, ...opts }) => {
+    if (externalResumePending(entry.externalResume)) return { held: 'search', holdScope: 'workspace',
+      detail: entry.launch?.state === 'held' ? entry.launch.detail : 'Waiting to verify this external conversation.' }
     const missing = deps.workspaceMissing(entry.cwd)
     if (missing) return missing
     const built = await deps.relaunchOverrides(entry)

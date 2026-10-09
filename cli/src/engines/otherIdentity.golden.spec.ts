@@ -11,19 +11,34 @@
  * - Cursor's homes, and the hook command that names them.
  *
  * Every home is under a throwaway root named through the environment, which is pinned whatever the host sets;
- * file times are set, the clock and `process.platform` pinned (agy is asked about a process that does not exist,
- * through /proc, on every host), `TZ` is UTC, and no path's length matters. Results name the root `<root>`. One case
- * runs on the host's own platform: agy's lock, held open by this very process, read as each platform reads it.
+ * file times are set, the clock and `process.platform` pinned, `TZ` is UTC, and no path's length matters. Results
+ * name the root `<root>`. Agy's Linux descriptor lookup reads controlled /proc entries, never host processes.
  *
  * `RECORD_OTHER_ENGINES_GOLDEN=1` writes the fixture. Record it again only for a change meant to alter where these
  * engines' conversations are found, and say so in that change.
  */
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AgentEngine } from './types.js'
+
+vi.mock('../lib/bootId.js', async (original) => ({ ...await original<object>(), currentBootId: () => 'linux:11111111-1111-4111-8111-111111111111' }))
+
+const descriptors = vi.hoisted(() => new Map<string, string[]>())
+vi.mock('fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs,
+    readdir: async (path: string, ...args: unknown[]) => /^\/proc\/\d+\/fd$/.test(String(path))
+      ? (descriptors.get(String(path)) ?? []).map((_, index) => String(index))
+      : Reflect.apply(fs.readdir, fs, [path, ...args]),
+    readlink: async (path: string, ...args: unknown[]) => {
+      const match = /^(\/proc\/\d+\/fd)\/(\d+)$/.exec(String(path))
+      return match ? descriptors.get(match[1]!)?.[Number(match[2])] ?? '' : Reflect.apply(fs.readlink, fs, [path, ...args])
+    },
+  }
+})
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-identity.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
@@ -59,6 +74,8 @@ type Modules = {
   bind: typeof import('../core/agents/bind.js')
   notify: typeof import('./kit/notifyHooks.js')
   home: typeof import('./cursor/home.js')
+  hermes: typeof import('./hermes/contract.js')
+  cursorDiscovery: typeof import('../core/engines/cursorDiscovery.js')
 }
 let m: Modules
 
@@ -88,6 +105,8 @@ beforeAll(async () => {
     bind: await import('../core/agents/bind.js'),
     notify: await import('./kit/notifyHooks.js'),
     home: await import('./cursor/home.js'),
+    hermes: await import('./hermes/contract.js'),
+    cursorDiscovery: await import('../core/engines/cursorDiscovery.js'),
   }
   m.registry.registry.load()
   golden = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, unknown>
@@ -113,6 +132,13 @@ function register(engine: AgentEngine, input: { sessionId: string; cwd?: string;
 }
 
 describe('where the core finds the other engines\' conversations', () => {
+  it('distinguishes Hermes history ids from ids admitted by a terminal hook', () => {
+    const ids = ['20261008_110000_a1b2', '20261008_110000_ABCDEF', '20261008_110000_0123456789abcdef',
+      '20261008_110000_abc', '20261008_110000_0123456789abcdef0', '20261008_110000_ghijkl', UUID(1), UUID(1).toUpperCase(),
+      '', '../escape', '20261008_110000_a1b2.jsonl', ' 20261008_110000_a1b2', '20261008_110000_a1b2\n']
+    check('Hermes id rules', ids.map(id => [id, m.hermes.HERMES_HISTORY_ID_RE.test(id), m.hermes.HERMES_SOURCE.id.test(id)]))
+  })
+
   it('derives each layout\'s transcript for a hook that names none, and takes one it names only in its own folder', () => {
     const cwds = ['/work/My Project', '/work/camelCaseRepo', '/work/über-ünïcødé', '/', '/work/a/../b']
     const results: unknown[] = []
@@ -173,7 +199,10 @@ describe('where the core finds the other engines\' conversations', () => {
     file(home('.grok', 'sessions', encodeURIComponent('/work/g'), UUID(32), 'updates.jsonl'), '{}\n')
     file(home('.gemini', 'antigravity-cli', 'brain', UUID(33), '.system_generated', 'logs', 'transcript_full.jsonl'), '{}\n')
     file(home('.copilot', 'session-state', UUID(34), 'events.jsonl'), '{}\n')
+    file(home('.copilot', 'session-state', UUID(34), 'inuse.4242.lock'))
     file(home('.copilot', 'session-state', UUID(35), 'inuse.4242.lock'))
+    file(home('.grok', 'sessions', 'hashed-group', '.cwd'), ' /work/g \n')
+    file(home('.grok', 'sessions', 'hashed-group', UUID(36), 'updates.jsonl'), '{}\n')
     file(home('.copilot', 'session-state', UUID(35), 'events.jsonl'), '{}\n')
     const registered: unknown[] = []
     const agents = new Map<string, Record<string, unknown>>()
@@ -193,7 +222,7 @@ describe('where the core finds the other engines\' conversations', () => {
       processIdentity: { pid: 4242, startMarker: 'Mon Oct  8 10:00:00 2026', executable: engine }, ...over,
     })
     const results: unknown[] = []
-    const ids: Record<string, string[]> = { cursor: [UUID(31), UUID(39)], grok: [UUID(32), UUID(39)], agy: [UUID(33), UUID(39)], copilot: [UUID(34), UUID(39)] }
+    const ids: Record<string, string[]> = { cursor: [UUID(31), UUID(39)], grok: [UUID(32), UUID(36), UUID(39)], agy: [UUID(33), UUID(39)], copilot: [UUID(34), UUID(39)] }
     for (const [engine, sessions] of Object.entries(ids)) {
       for (const resumeSessionId of sessions) {
         agents.clear(); agents.set(engine, { agentId: `agent-${engine}`, engine, sessionId: '', registeredAt: 0 })
@@ -248,22 +277,41 @@ describe('where the core finds the other engines\' conversations', () => {
     check('repair', results)
   }, 60_000)
 
-  it('repairs agy\'s session from the lock its live process holds open, read as the host reads it', async () => {
+  it('repairs agy\'s session from controlled Linux descriptor evidence of its held lock', async () => {
     const id = UUID(50)
     file(home('.gemini', 'antigravity-cli', 'brain', id, '.system_generated', 'logs', 'transcript_full.jsonl'), '{}\n')
     const lock = file(home('.gemini', 'antigravity-cli', 'presence', `${id}.lock`))
     const results: unknown[] = []
-    // Linux reads /proc, any other host lsof: this process's own descriptors, the same on both.
-    Object.defineProperty(process, 'platform', platform)
+    descriptors.set('/proc/4242/fd', [lock])
     try {
-      const held = openSync(lock, 'r')
-      try {
-        results.push(['held', await m.repair.findLiveSession('agy', '/work/r', T0, { pid: process.pid })])
-      } finally { closeSync(held) }
-      results.push(['let go', await m.repair.findLiveSession('agy', '/work/r', T0, { pid: process.pid })])
-    } finally { Object.defineProperty(process, 'platform', { ...platform, value: 'linux' }) }
+      results.push(['held', await m.repair.findLiveSession('agy', '/work/r', T0, { pid: 4242 })])
+      descriptors.delete('/proc/4242/fd')
+      results.push(['let go', await m.repair.findLiveSession('agy', '/work/r', T0, { pid: 4242 })])
+    } finally { descriptors.clear() }
     check('repair agy lock', results)
   }, 60_000)
+
+  it('locates an existing and a later Cursor transcript through core discovery, and stops pending work', async () => {
+    const { loadEngine } = await import('./inProcess.js')
+    await loadEngine('cursor')
+    const found: unknown[] = []
+    const discovery = m.cursorDiscovery.createCursorDiscovery(home('.cursor'), (id, path) => { found.push([id, path]) })
+    await discovery.start()
+    try {
+      const existing = UUID(61), later = UUID(62), removed = UUID(63)
+      file(home('.cursor', 'projects', 'golden-existing', 'agent-transcripts', existing, `${existing}.jsonl`), '{}\n')
+      await discovery.add(existing)
+      await discovery.add(later)
+      await discovery.add(removed)
+      discovery.remove(removed)
+      file(home('.cursor', 'projects', 'golden-later', 'agent-transcripts', later, `${later}.jsonl`), '{}\n')
+      file(home('.cursor', 'projects', 'golden-removed', 'agent-transcripts', removed, `${removed}.jsonl`), '{}\n')
+      await vi.waitFor(() => expect(found).toHaveLength(2), { timeout: 5000 })
+      await discovery.add('../invalid')
+      await discovery.stop()
+      check('pending cursor transcripts', found)
+    } finally { await discovery.stop() }
+  })
 
   it('has a recorded outcome for every case, and no other', () => {
     if (RECORD) return

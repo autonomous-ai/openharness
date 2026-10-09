@@ -10,6 +10,7 @@
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type SubmitOptions, type TerminalActionResult } from '../../lib/terminalTypes.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 
 export type TerminalControlBackend = Pick<TerminalBackendCoordinator,
   'acquireLease' | 'validateLease' | 'capture' | 'captureLease' | 'submitText' | 'submitTextLease'
@@ -65,6 +66,10 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
   const captureTerminal = async (target: string, historyLines?: number): Promise<string | null> => {
     const session = terminalSession(target)
     if (!session) return null
+    // Registry rows (including their runtime/process objects) can change in place while tmux reads.
+    // Copy the identity before yielding so no caller interprets an old pane as the new conversation.
+    const agentId = session.agentId, identity = paneReadIdentity(session)
+    const current = () => paneReadIdentity(resolve(agentId)) === identity
     const pinned = pinnedControls.has(session.agentId)
     if (pinned && invalidControls.has(session.agentId)) return null
     let activeLease = controlLeases.get(session.agentId)
@@ -74,10 +79,11 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     }
     const leased = activeLease || pinned ? await leasedTerminal(session) : null
     if ((activeLease || pinned) && !leased) return null
+    if (!current()) return null
     const result = leased
       ? await terminals.captureLease(leased.value, { historyLines })
       : await terminals.capture(session, { historyLines })
-    return result.state === 'succeeded' ? result.value : null
+    return result.state === 'succeeded' && current() ? result.value : null
   }
   const terminalActionSucceeded = (result: Awaited<ReturnType<typeof terminals.submitText>>): boolean =>
     result.state === 'succeeded'

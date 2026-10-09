@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it } from 'vitest'
+import { externalEvidence } from '../evidence.js'
 
 import { builtinSqlite } from '../../sqliteBuiltin.js'
 import { cursorBucket, cursorProvider, cursorSlug, cursorTurnOpen, readChat, type CursorDatabase } from './cursor.js'
@@ -354,7 +355,7 @@ describe('cursorProvider.owners', () => {
     const processes: ProcessView = {
       list: async () => rows,
       openFiles: async (pids) => { asked.push([...pids]); return new Map(files ? pids.map((pid) => [pid, files[pid] ?? []]) : []) },
-      openFilesOf: async () => new Map(),
+      cwds: async () => new Map(), openFilesOf: async () => new Map(),
       alive,
     }
     return { processes, asked }
@@ -366,6 +367,16 @@ describe('cursorProvider.owners', () => {
     const store = join(dir, 'store.db')
     const { processes } = view([cursorRow(70)], { 70: [store, `${store}-wal`, `${store}-shm`, '/dev/ttys003'] })
     expect(await provider().owners!(processes)).toEqual([{ sessionId: ID, pid: 70, record: store }])
+  })
+
+  it('preserves different open stores in admission, but combines each store with its WAL and SHM', async () => {
+    const { config, provider } = roots()
+    const one = join(chat(config, CWD, ID), 'store.db')
+    const two = join(chat(config, '/work/another', ID), 'store.db')
+    const { processes } = view([cursorRow(70)], { 70: [one, `${one}-wal`, `${one}-shm`, two, `${two}-wal`] })
+    expect(await provider().owners!(processes)).toHaveLength(1)
+    expect(await externalEvidence(() => provider().owners!(processes))).toMatchObject({ ok: true, value: [{ record: one }, { record: two }] })
+    expect(await externalEvidence(() => provider().owners!(view([cursorRow(70)]).processes))).toMatchObject({ ok: false })
   })
 
   it('reads the files of Cursor processes only, and nothing when none runs', async () => {

@@ -84,6 +84,21 @@ describe('retargeting an agent', () => {
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
 
+  it('keeps an admitted external conversation when its retarget resume fails', async () => {
+    const actual = await vi.importActual<typeof import('../../lib/restartAgent.js')>('../../lib/restartAgent.js')
+    vi.mocked(restartAgent).mockImplementationOnce(actual.restartAgent)
+    const respawn = vi.fn(async () => ({ ok: true }))
+    const keepAbandoned = vi.fn(), buildArgv = vi.fn(options => ['fixture-engine', options.resumeSessionId ?? 'fresh'])
+    const run = setup(agent({ resumeOnly: true }), { paneSwapDeps: () => ({
+      holdOpen: async () => ({ ok: true }), terminate: async () => 'gone', respawn,
+      waitForProcess: async () => null, buildArgv, keepAbandoned, log: () => {},
+    }) })
+    expect(await run.retarget({ agentId: 'a1', grid })).toMatchObject({ ok: false, error: 'RESPAWN_FAILED' })
+    expect(respawn).toHaveBeenCalledExactlyOnceWith(['fixture-engine', 's1'])
+    expect(keepAbandoned).not.toHaveBeenCalled()
+    expect(run.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+  })
+
   describe('refusals before anything is touched', () => {
     it('invalidates an older restore as soon as retarget takes control', async () => {
       const { deps, retarget, release } = setup()

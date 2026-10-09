@@ -30,7 +30,6 @@ void main() {
     );
     app.experimentalFeatures.bind('a', transport: AccountSettings('a'));
     await app.experimentalFeatures.refresh();
-    await app.experimentalFeatures.set(ExperimentalFeature.devicesTab, true);
     app.openDevices();
     devices = DevicesHarnessController(app);
   });
@@ -162,7 +161,8 @@ void main() {
       );
       connection.holdCreation!.complete();
       await opening;
-      expect(app.swarms.any((tab) => tab.isDevices), isFalse);
+      // Devices is not an account opt-in, so its tab may stay; the old account's
+      // conversation must not be attached to it.
       expect(app.allPanes.where((pane) => pane.agentId == 'manager'), isEmpty);
       await devices.open();
       expect(connection.creations.length, lessThanOrEqualTo(1));

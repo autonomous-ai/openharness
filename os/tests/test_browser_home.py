@@ -8,7 +8,6 @@ import struct
 import subprocess
 import tempfile
 import threading
-from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -60,10 +59,9 @@ class BrowserHome(unittest.TestCase):
         self.launch.assert_called_once_with()
 
     def test_native_open_uses_os_launcher_without_exposing_capability(self):
-        local = SimpleNamespace(page_url=self.launch)
-        with patch.dict(host.sys.modules, {'connections': local}), patch.object(host.sys, 'path', list(host.sys.path)), patch.object(host.subprocess, 'run') as run:
+        with patch.object(host.subprocess, 'run') as run:
             host.open_connections()
-        run.assert_called_once_with(['/usr/bin/hn-browser', self.launch.return_value],
+        run.assert_called_once_with(['/usr/bin/harness', 'connections'],
                                     check=True, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                     timeout=30)

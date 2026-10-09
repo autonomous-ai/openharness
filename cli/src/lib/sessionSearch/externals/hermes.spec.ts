@@ -17,6 +17,7 @@ import {
 } from './hermes.js'
 import { LIST_LIMIT, ownerRecord, readSql, type SqlRead } from './opencode.js'
 import { scanMemo } from './support.js'
+import { externalEvidence } from '../evidence.js'
 import type { ProcessView, RunningProcess, ScanContext } from './types.js'
 
 const Database = builtinSqlite()!
@@ -427,7 +428,7 @@ describe('Hermes owners', () => {
   const view = (rows: RunningProcess[], dead: number[] = []): ProcessView => ({
     list: async () => rows,
     openFiles: async () => new Map(),
-    openFilesOf: async () => new Map(),
+    cwds: async () => new Map(), openFilesOf: async () => new Map(),
     alive: (pid) => !dead.includes(pid),
   })
 
@@ -441,6 +442,27 @@ describe('Hermes owners', () => {
     work.session(id(4)).turn(id(4))
     return { root, main, work }
   }
+
+  it('keeps competing exact leases visible to admission, while display deduplication stays unchanged', async () => {
+    const { root, main, work } = homes()
+    mkdirSync(join(root, 'runtime'))
+    const leases = [501, 502].map(pid => ({ session_id: id(1), surface: 'cli', pid, process_start_time: S0 }))
+    writeFileSync(join(root, 'runtime', 'active_sessions.json'), JSON.stringify({ entries: leases }))
+    const processes = view([501, 502].map(pid => ({ ...py(pid, 1, ''), started: S0 * 1000 })))
+    const provider = hermesProvider({ root })
+    expect(await provider.owners!(processes)).toHaveLength(1)
+    const observed = await externalEvidence(() => provider.owners!(processes))
+    expect(observed).toMatchObject({ ok: true, value: [{ pid: 501 }, { pid: 502 }] })
+    writeFileSync(join(root, 'runtime', 'active_sessions.json'), JSON.stringify({ entries: [{ ...leases[0], pid: 'unfinished' }] }))
+    expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
+    for (const malformed of [null, { entries: [null] }, { entries: [{}] }, { entries: [{ pid: 501 }] }, { entries: [{ ...leases[0], process_start_time: null }] }]) {
+      writeFileSync(join(root, 'runtime', 'active_sessions.json'), JSON.stringify(malformed))
+      expect(await externalEvidence(() => provider.owners!(processes))).toMatchObject({ ok: false })
+    }
+    writeFileSync(join(root, 'runtime', 'active_sessions.json'), JSON.stringify({ entries: [{ surface: 'gateway-chat', session_id: 'not-a-store-id' }] }))
+    expect(await externalEvidence(() => provider.owners!(view([])))).toMatchObject({ ok: true, value: [] })
+    main.close(); work.close()
+  })
 
   it('claims from the id a Hermes process was resumed with, in the home it runs in, at its chain\'s tip', async () => {
     const { root, main, work } = homes()
