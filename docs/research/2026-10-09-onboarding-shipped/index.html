@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Onboarding as shipped</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --fg: #1d1c1a; --muted: #6b675f; --line: #e6e2da; --card: #ffffff;
+    --accent: #e8890c; --ok: #2f8a4c; --warn: #b4531c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161514; --fg: #ecebe8; --muted: #a29d93; --line: #2d2b28; --card: #1e1d1b;
+      --accent: #f5a524; --ok: #5cc27a; --warn: #f0905a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161514; --fg: #ecebe8; --muted: #a29d93; --line: #2d2b28; --card: #1e1d1b;
+    --accent: #f5a524; --ok: #5cc27a; --warn: #f0905a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+  main { max-width: 1180px; margin: 0 auto; padding: 40px 16px 80px; }
+  h1 { font-size: 34px; line-height: 1.15; margin: 0 0 8px; letter-spacing: -0.01em; }
+  h2 { font-size: 24px; margin: 56px 0 6px; padding-top: 12px; border-top: 1px solid var(--line); }
+  h3 { font-size: 18px; margin: 28px 0 8px; }
+  p { margin: 8px 0; }
+  .kicker { color: var(--accent); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; }
+  .lede { font-size: 18px; color: var(--muted); max-width: 820px; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--card);
+    border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 0; }
+  .pill { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 4px 12px; font-size: 14px; }
+  figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  figure img { display: block; width: 100%; height: auto; }
+  figcaption { padding: 10px 14px 12px; font-size: 14px; color: var(--muted); }
+  figcaption b { color: var(--fg); }
+  .grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+  .wide { margin-top: 16px; }
+  @media (max-width: 820px) { .grid2, .grid3 { grid-template-columns: 1fr; } h1 { font-size: 28px; } }
+  .tablewrap { overflow-x: auto; margin-top: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; min-width: 640px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .note { border-left: 3px solid var(--accent); padding: 4px 0 4px 14px; margin: 16px 0; color: var(--muted); }
+  ul { padding-left: 20px; } li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+  <div class="kicker">Harness · onboarding</div>
+  <h1>Onboarding as shipped</h1>
+  <p class="lede">What a person sees the first time they open Harness, from Desktop 1.2.60 and CLI 0.3.68
+  (released 2026-10-09). A short tour while the computer sets up, then a workspace that already has
+  agents in it, chosen from what the person already uses.</p>
+  <div class="pills">
+    <span class="pill">Desktop 1.2.60</span><span class="pill">CLI 0.3.68</span>
+    <span class="pill">PRs #1075, #1077, #1061</span>
+    <span class="pill"><a href="../2026-10-08-onboarding-redesign/index.html">The approved design</a></span>
+    <span class="pill"><a href="../2026-10-08-onboarding-flow/index.html">The flow before</a></span>
+  </div>
+  <p class="muted" style="margin-top:14px">Screenshots are from a fresh macOS 26 virtual machine with the published build
+  installed from the website's disk image, unless a caption says otherwise. Claude Code and Codex
+  "signed in" are stand-ins that answer at once; OpenCode, and Claude Code and Codex "not signed in",
+  are the real programs.</p>
+
+  <h2>At a glance</h2>
+  <div class="tablewrap">
+  <table>
+    <tr><th>Who opens Harness</th><th>What the first workspace opens</th><th>First result</th><th>Second session</th></tr>
+    <tr><td>No coding agent at all</td><td>OpenCode on the left with a first task typed in, Codex and Claude Code on the right on their own sign-in screens. All three downloaded during the tour.</td><td class="num">70 s</td><td class="num">16 s</td></tr>
+    <tr><td>Uses Claude Code (signed in)</td><td>Claude Code, ready for a task</td><td class="num">46 s</td><td class="num">2 s</td></tr>
+    <tr><td>Uses Claude Code and Codex, with past sessions</td><td>Their recent sessions that nothing else is running: the latest of each agent side by side, the next three in a second tab</td><td class="num">46 s</td><td class="num">2 s</td></tr>
+    <tr><td>Has Codex installed, never signed in</td><td>OpenCode first with the task typed, Codex beside it on its sign-in</td><td class="num">54 s</td><td class="num">23 s</td></tr>
+    <tr><td>Already used Harness before (upgrade)</td><td>Nothing new: no tour, no first workspace; their harnesses come back as they were</td><td class="num">—</td><td class="num">—</td></tr>
+  </table>
+  </div>
+  <p class="muted">Times from opening the app; "second session" is from pressing Return on a new task in a new tab. Each
+  scores 100 on the activation rubric in <code>docs/research/2026-10-08-activation-sim.md</code>.</p>
+
+  <h2>1 · The tour while the computer sets up</h2>
+  <p>Seven slides, one quiet line at the bottom with the time left and ▸ Details. Harness opens by
+  itself at the end of the slide on screen once setup and the agent downloads are done; there is no
+  button to press.</p>
+  <div class="grid2">
+    <figure><img src="img/setup-first.jpg" alt="First slide with the setup line" loading="lazy">
+      <figcaption><b>The first thing a new person sees.</b> "All your machines, one window." Setting up Harness on this Mac, about 48 s left. <span class="muted">(Test build of the same code.)</span></figcaption></figure>
+    <figure><img src="img/setup-tour.jpg" alt="Agents slide with the setup line" loading="lazy">
+      <figcaption><b>The bar moves with the time left.</b> The gold line under every slide: All your machines. All your agents. One command center. <span class="muted">(Test build.)</span></figcaption></figure>
+  </div>
+  <h3>The slides</h3>
+  <div class="grid3">
+    <figure><img src="img/slide-2.jpg" alt="All your agents, side by side" loading="lazy"><figcaption>All your agents, side by side.</figcaption></figure>
+    <figure><img src="img/slide-3.jpg" alt="Command-P finds any harness" loading="lazy"><figcaption>⌘P finds any harness.</figcaption></figure>
+    <figure><img src="img/slide-4.jpg" alt="Command-N starts a new harness" loading="lazy"><figcaption>⌘N starts a new harness.</figcaption></figure>
+    <figure><img src="img/slide-5.jpg" alt="Sessions that keep going" loading="lazy"><figcaption>Sessions that keep going.</figcaption></figure>
+    <figure><img src="img/slide-6.jpg" alt="Your agents in your pocket" loading="lazy"><figcaption>Your agents in your pocket.</figcaption></figure>
+    <figure><img src="img/slide-7.jpg" alt="The Harness device" loading="lazy"><figcaption>The Harness device.</figcaption></figure>
+  </div>
+  <div class="grid2">
+    <figure><img src="img/help-menu.jpg" alt="Help menu with Welcome Tour" loading="lazy">
+      <figcaption><b>Help ▸ Welcome Tour</b> shows the slides again at any time (also in the Linux menu bar).</figcaption></figure>
+  </div>
+
+  <h2>2 · No coding agent yet</h2>
+  <p>OpenCode, Codex and Claude Code are downloaded while the tour runs. The workspace is built behind
+  the tour, so OpenCode is already up with a first task typed in when it hands over. Nothing is sent
+  until the person presses Return.</p>
+  <div class="grid2">
+    <figure><img src="img/new-workspace.jpg" alt="Three panes: OpenCode with a typed task, Codex and Claude Code" loading="lazy">
+      <figcaption><b>The first workspace.</b> OpenCode on the left with "make a small web page that shows today's date" typed in; Codex starting top right; Claude Code on its own setup bottom right. Ordinary panes, closable.</figcaption></figure>
+    <figure><img src="img/new-first.jpg" alt="OpenCode wrote index.html" loading="lazy">
+      <figcaption><b>Return → first result.</b> OpenCode's free model wrote <code>index.html</code>. Codex and Claude Code wait on their sign-in screens.</figcaption></figure>
+    <figure><img src="img/new-second.jpg" alt="Second session in a new tab" loading="lazy">
+      <figcaption><b>Second session.</b> A new tab, a task, Return: it works in the same project.</figcaption></figure>
+    <figure><img src="img/new-day2-turn.jpg" alt="Next day, follow-up answered" loading="lazy">
+      <figcaption><b>The next day.</b> Quit and reopen: the tabs come back, a follow-up is answered.</figcaption></figure>
+  </div>
+
+  <h2>3 · Uses Claude Code (signed in)</h2>
+  <div class="grid2">
+    <figure><img src="img/b-workspace.jpg" alt="Claude Code ready" loading="lazy">
+      <figcaption><b>The first workspace.</b> No conversations yet, so a fresh Claude Code pane in a new project.</figcaption></figure>
+    <figure><img src="img/b-second.jpg" alt="Second session answered" loading="lazy">
+      <figcaption><b>Second session</b> from a new tab, on the agent they use.</figcaption></figure>
+  </div>
+
+  <h2>4 · Uses Claude Code and Codex, with past sessions</h2>
+  <p>Their recent conversations that nothing else is running, newest first by last activity (as ⌘P
+  orders them). A session still open in a terminal or app is left alone.</p>
+  <div class="grid2">
+    <figure><img src="img/dh-workspace.jpg" alt="Tab one: latest Codex and Claude Code sessions" loading="lazy">
+      <figcaption><b>Tab 1:</b> the latest Codex and the latest Claude Code session side by side (the newest Claude Code one was running elsewhere, so it was skipped).</figcaption></figure>
+    <figure><img src="img/dh-tab2.jpg" alt="Tab two: the next three" loading="lazy">
+      <figcaption><b>Tab 2:</b> the next three, mixing both agents. <span class="muted">(Test build of the same code.)</span></figcaption></figure>
+    <figure><img src="img/dh-day2.jpg" alt="Next day, follow-up in a resumed session" loading="lazy">
+      <figcaption><b>The next day:</b> a follow-up in a resumed session, answered.</figcaption></figure>
+  </div>
+
+  <h2>5 · Has Codex installed, never signed in</h2>
+  <p>Someone who installed an agent but never signed in has not used it yet. Their agent's sign-in alone
+  would send them to a browser with no first result, so OpenCode leads with the task and their agent
+  sits beside it.</p>
+  <div class="grid2">
+    <figure><img src="img/cr-workspace.jpg" alt="OpenCode with typed task and Codex sign-in" loading="lazy">
+      <figcaption><b>The first workspace:</b> OpenCode with the task typed in, Codex on its sign-in.</figcaption></figure>
+    <figure><img src="img/cr-first.jpg" alt="OpenCode result beside Codex sign-in" loading="lazy">
+      <figcaption><b>First result at 54 s</b>, without an account anywhere.</figcaption></figure>
+  </div>
+
+  <h2>6 · People who already use Harness</h2>
+  <p>Unchanged. The tour and the first workspace only happen on a computer that has never had Harness
+  (no <code>~/.harness/cli</code>). Checked by installing the previous release (1.2.59), using it, then
+  installing this one over it.</p>
+  <div class="grid2">
+    <figure><img src="img/upgrade.jpg" alt="Upgraded: the harness came back and answered" loading="lazy">
+      <figcaption><b>After the upgrade:</b> no tour, no first workspace, no downloads; the harness from 1.2.59 came back and answered a follow-up. <span class="muted">(Test build of the same code.)</span></figcaption></figure>
+  </div>
+
+  <h2>What changed for a new person</h2>
+  <ul>
+    <li>Before (1.2.59): a setup screen with a checklist, then an empty box that said <i>"OpenCode is unavailable. Choose an agent."</i>, and Apple's "install developer tools" dialog over the app.</li>
+    <li>Now: the tour, then agents already open; the first result is one Return away. No dialog.</li>
+    <li>The agent picker no longer shows Installed / Needs sign-in / Installs on start; an agent someone picks that is missing installs in its own pane with one line and a bar.</li>
+    <li>Opened from inside the disk image, Harness offers to move itself to Applications.</li>
+  </ul>
+
+  <h2>Next</h2>
+  <ul>
+    <li>Open Harness before Codex and Claude Code finish downloading (about 10–15 s sooner); their panes show the install bar meanwhile.</li>
+    <li>A rare Apple developer-tools dialog was seen in one setup (Codex from npm on a Node of the person's own); the cause is still being traced.</li>
+  </ul>
+  <p class="note">Write-up with every run and timing: <code>docs/research/2026-10-08-activation-sim.md</code>.</p>
+</main>
+</body>
+</html>
