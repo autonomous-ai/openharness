@@ -1066,6 +1066,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // (core/transcripts/attach.ts).
   const attach = createAttach({
     liveFor,
+    resolve: id => registry.resolve(id),
     remoteLive: engineLive,
     terminalGone: terminalControl.terminalGone,
     normalizers,

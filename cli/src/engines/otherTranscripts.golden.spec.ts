@@ -221,6 +221,7 @@ function livePath(core: Core, session: RegisteredSession, pane: string | null) {
   const announceTurnAborted = (...args: unknown[]): void => { out.push(['aborted', ...args]) }
   const attach = core.createAttach({
     liveFor: () => undefined,
+    resolve: () => session,
     terminalGone: async () => false,
     normalizers,
     watcher: {

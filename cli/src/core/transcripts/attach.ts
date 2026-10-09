@@ -26,10 +26,12 @@ import type { TailHold, Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from './normalizers.js'
 import type { RelaunchMarks } from './relaunch.js'
 import { createSideReads } from './sideReads.js'
+import { paneReadIdentity } from './readIdentity.js'
 import type { LiveSessions, PreparedLive } from '../engines/liveSessions.js'
 
 export interface AttachDeps {
   liveFor: LiveFor
+  resolve: (agentId: string) => RegisteredSession | undefined
   remoteLive?: Pick<LiveSessions, 'handles' | 'current' | 'prepare' | 'install' | 'discard' | 'retry'>
   /** Whether the session's terminal is known to be gone (core/terminals/control.ts `terminalGone`). */
   terminalGone: (session: RegisteredSession) => Promise<boolean>
@@ -64,7 +66,7 @@ export interface AttachDeps {
 }
 
 export function createAttach({
-  liveFor, remoteLive, terminalGone, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
+  liveFor, resolve, remoteLive, terminalGone, normalizers, watcher, cursorDiscovery, device, runtimeProfiles, captureTerminal, emit,
   announceTurnAborted, questionWatcher, terminalLabel, dbs, devinHome, hermesDb, concurrency, relaunchMarks,
   wholeReadCapBytes = WHOLE_READ_CAP_BYTES, settled,
 }: AttachDeps) {
@@ -352,14 +354,33 @@ export function createAttach({
       const normalizer = new agy.AgyNormalizer()
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       agyNormalizers.set(session.sessionId, normalizer)
-      const capture = await runtimeProfiles.capturePane(session, captureTerminal, 60, true)
       // agy's transcript has no end-of-turn record - only its Stop hook does - so a fold of a FINISHED
       // conversation still reports the last turn as open, and after a daemon restart nothing is ever
       // coming to close it. The pane is the one place the answer exists; ask it.
-      if (historyTurnOpen && capture && agy.agyPaneIdle(capture)) {
-        normalizer.closeTurn()
-        historyTurnOpen = false
+      const agentId = session.agentId, sessionId = session.sessionId, identity = paneReadIdentity(session)
+      const revision = normalizer.turnRevision
+      let observedRevision = revision
+      let current = true
+      const capturing = captureTerminal(agentId, 60)
+      await Promise.all([
+        runtimeProfiles.capturePane(session, () => capturing, 60, true),
+        capturing.then(capture => {
+          // Turn closing owns its own authority: accepting a chip update is not a prerequisite.
+          current = paneReadIdentity(resolve(agentId)) === identity && agyNormalizers.get(sessionId) === normalizer
+          if (!current) return
+          if (normalizer.turnRevision !== revision) { historyTurnOpen = false; return }
+          if (historyTurnOpen && capture && agy.agyPaneIdle(capture)) {
+            normalizer.closeTurn()
+            historyTurnOpen = false
+          }
+          observedRevision = normalizer.turnRevision
+        }),
+      ])
+      if (!current || paneReadIdentity(resolve(agentId)) !== identity || agyNormalizers.get(sessionId) !== normalizer) {
+        if (agyNormalizers.get(sessionId) === normalizer) agyNormalizers.delete(sessionId)
+        return keepLiveNormalizer('changed binding while its pane was read')
       }
+      if (normalizer.turnRevision !== observedRevision) historyTurnOpen = false
     } else if (engine('copilot')) {
       const copilot = engine('copilot')!
       // A JSONL tail like claude/agy. Its turn lifecycle comes from the agentStop hook, not the file —

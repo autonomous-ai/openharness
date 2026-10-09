@@ -22,8 +22,11 @@ or stale capture publishes nothing; an unavailable worker leaves accepted state
 unchanged. No core control depends on a worker becoming available.
 
 Reconcile, periodic profile polling and the five attach captures all use this
-operation. The attach caller can still use accepted pane text for its existing
-idle check. Native interpretation stays with the same owner; fixture bytes for
+operation. Agy turn closing consumes the raw capture under separate binding, normalizer
+identity and transcript/turn revision checks, before waiting for profile acceptance.
+A newer chip update cannot suppress a valid idle-history close; a newer turn or
+rebind cannot authorize closing or replaying the old history. The check is repeated
+after the profile promise settles. Returned profile text is not an authority receipt. Native interpretation stays with the same owner; fixture bytes for
 the runtime and transcript goldens stay unchanged.
 
 Validation is planned before running: typecheck; architecture; core and harnessd
@@ -32,8 +35,11 @@ and unchanged goldens; isolated e2e for readers, model control, models, core,
 lifecycle and machine crash/resume. Deferred tests exercise the real terminal
 boundary plus local profile owner, including the promise handoff window. Worker
 tests cover control changes during capture, while queued and during its reply.
-All runs use UTC, `/tmp` and private daemon/tmux/native-home fixtures. Final
-receipts, independent exact-head review and merge timing follow in the PR body.
+All runs use UTC, `/tmp` and private daemon/tmux/native-home fixtures. The first final-head run passed typecheck, core/harnessd at 100% and 205 affected
+tests (`20261009T064606.422437Z-31957`). Independent review then required the
+separate Agy turn decision above, covered by seven new attach races and a real
+normalizer close/reopen revision test. Final receipts, exact-head review and merge
+timing follow in the PR body.
 
 ## Previous follow-up completed
 

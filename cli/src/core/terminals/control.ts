@@ -10,7 +10,7 @@
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { TerminalBackendCoordinator } from '../../lib/terminalBackendCoordinator.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type SubmitOptions, type TerminalActionResult } from '../../lib/terminalTypes.js'
-import { transcriptReadIdentity } from '../transcripts/readIdentity.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 
 export type TerminalControlBackend = Pick<TerminalBackendCoordinator,
   'acquireLease' | 'validateLease' | 'capture' | 'captureLease' | 'submitText' | 'submitTextLease'
@@ -24,10 +24,6 @@ export interface TerminalControlDeps {
 
 export function createTerminalControl({ resolve, terminals }: TerminalControlDeps) {
   const terminalSession = (target: string): RegisteredSession | undefined => resolve(target)
-  const captureIdentity = (session: RegisteredSession | undefined): string => session ? JSON.stringify([
-    transcriptReadIdentity(session), session.active, session.cwd, session.hermesHome,
-    session.tmuxPane, session.primaryRuntimeKey, session.runtimes,
-  ]) : ''
   const controlLeases = new Map<string, { lease: Awaited<ReturnType<typeof terminals.acquireLease>> & { state: 'succeeded' }; expiresAt: number }>()
   const pinnedControls = new Set<string>()
   const invalidControls = new Set<string>()
@@ -72,8 +68,8 @@ export function createTerminalControl({ resolve, terminals }: TerminalControlDep
     if (!session) return null
     // Registry rows (including their runtime/process objects) can change in place while tmux reads.
     // Copy the identity before yielding so no caller interprets an old pane as the new conversation.
-    const agentId = session.agentId, identity = captureIdentity(session)
-    const current = () => captureIdentity(resolve(agentId)) === identity
+    const agentId = session.agentId, identity = paneReadIdentity(session)
+    const current = () => paneReadIdentity(resolve(agentId)) === identity
     const pinned = pinnedControls.has(session.agentId)
     if (pinned && invalidControls.has(session.agentId)) return null
     let activeLease = controlLeases.get(session.agentId)
