@@ -268,6 +268,12 @@ class _SetupTourState extends State<SetupTour> {
       onOpen();
       return;
     }
+    // Someone on a screen reader turns the slides themselves (arrows, the
+    // dots): text that changes by itself every few seconds loses their place.
+    if (MediaQuery.maybeAccessibleNavigationOf(context) ?? false) {
+      _restartTimer();
+      return;
+    }
     _show(_index + 1);
   }
 
@@ -490,6 +496,8 @@ class _Glow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Const, so it repaints on a light/dark flip only because it watches the theme.
+    grid.AppTheme.watch(context);
     final strength = grid.AppTheme.pick(0.06, 0.10);
     return IgnorePointer(
       child: Stack(
@@ -663,12 +671,17 @@ class _InstallBar extends StatelessWidget {
         ? progress.failure ?? 'Setup could not finish'
         : setupTourInstallLine;
     final left = progress.left;
-    final toggle = MouseRegion(
-      cursor: done ? MouseCursor.defer : SystemMouseCursors.click,
-      child: GestureDetector(
+    // A button the keyboard reaches too (Tab, then Return or Space), not just a click target.
+    final toggle = Semantics(
+      button: !done,
+      expanded: done ? null : detailsOpen,
+      child: InkWell(
         key: const ValueKey('tour-details-toggle'),
-        behavior: HitTestBehavior.opaque,
         onTap: done ? null : onToggleDetails,
+        mouseCursor: done ? MouseCursor.defer : SystemMouseCursors.click,
+        borderRadius: BorderRadius.circular(4),
+        hoverColor: Colors.transparent,
+        splashColor: Colors.transparent,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
           child: Row(

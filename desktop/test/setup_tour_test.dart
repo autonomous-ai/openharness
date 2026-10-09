@@ -45,6 +45,7 @@ Future<void> _mount(
   VoidCallback? onManual,
   VoidCallback? onClose,
   bool reduceMotion = false,
+  bool screenReader = false,
   Brightness brightness = Brightness.dark,
   double textScale = 1,
 }) async {
@@ -57,6 +58,7 @@ Future<void> _mount(
       builder: (context, child) => MediaQuery(
         data: MediaQuery.of(context).copyWith(
           disableAnimations: reduceMotion,
+          accessibleNavigation: screenReader,
           textScaler: TextScaler.linear(textScale),
         ),
         child: child!,
@@ -291,6 +293,49 @@ void main() {
     await tester.pump(tourSlideDuration);
     await tester.pump(const Duration(milliseconds: 50));
     expect(_title, findsNWidgets(2));
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('a screen reader turns the slides itself; Harness still opens', (
+    tester,
+  ) async {
+    final progress = ValueNotifier(SetupProgress.starting);
+    addTearDown(progress.dispose);
+    var opened = 0;
+    await _mount(
+      tester,
+      progress: progress,
+      screenReader: true,
+      onOpen: () => opened++,
+    );
+    await _nextSlide(tester);
+    await _nextSlide(tester);
+    expect(_shownTitle(tester), _macTitles.first);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(_shownTitle(tester), _macTitles[1]);
+
+    progress.value = const SetupProgress(fraction: 1, done: true);
+    await _nextSlide(tester);
+    expect(opened, 1);
+  }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
+
+  testWidgets('the keyboard reaches ▸ and opens the details', (tester) async {
+    final progress = ValueNotifier(
+      const SetupProgress(fraction: 0.22, left: Duration(seconds: 36)),
+    );
+    addTearDown(progress.dispose);
+    await _mount(tester, progress: progress);
+    final toggle = tester.widget<InkWell>(_toggle);
+    expect(toggle.onTap, isNotNull);
+    Focus.of(
+      tester.element(
+        find.descendant(of: _toggle, matching: find.byType(Padding)).first,
+      ),
+    ).requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+    expect(find.text('Setup log body'), findsOneWidget);
   }, variant: TargetPlatformVariant.only(TargetPlatform.macOS));
 
   testWidgets('Welcome Tour: no install line, Escape and Close end it', (

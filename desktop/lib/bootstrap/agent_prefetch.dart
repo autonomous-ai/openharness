@@ -168,6 +168,8 @@ class AgentPrefetch {
       );
       return;
     }
+    // A create's wait counts from the download itself, not from the wait for Node before it.
+    _startedAt['codex'] = _startedAt['claude'] = _now();
     final bin = File(node).parent.path;
     final script = [
       'set -o pipefail',

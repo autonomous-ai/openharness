@@ -88,36 +88,48 @@ class FirstArrival {
   /// `new` (setup downloaded the agents), `agents` (the computer had one), `done`, or null.
   String? _state;
   bool _running = false;
+  Future<void>? _beginning;
 
   /// Whether the next empty workspace is this computer's first.
   bool get pending => !_running && (_state == 'new' || _state == 'agents');
 
-  /// Reads the mark once signed in. A [begin] from this launch's setup stands: its write may not
-  /// have landed yet.
+  /// Opening the first workspace now.
+  bool get running => _running;
+
+  /// Reads the mark once signed in. After a [begin] this launch, what it settled stands.
   Future<void> restore() async {
-    String? stored;
-    try {
-      stored = await _storage?.read(key);
-    } catch (_) {
-      stored = null;
-    }
-    _state ??= stored;
+    if (_beginning case final beginning?) return beginning;
+    _state = await _read();
   }
 
-  /// Setup is putting the Harness CLI on this computer for the first time. [downloads] says it is
-  /// also downloading the agents, because the computer had none.
+  /// Setup is putting the Harness CLI on a computer that never had it. [downloads] says it is also
+  /// downloading the agents, because the computer had none. A mark already spent stays spent.
   void begin({required bool downloads}) {
-    if (_state == 'done') return;
-    _state = downloads ? 'new' : 'agents';
-    unawaited(_write(_state!));
+    _beginning ??= () async {
+      if (await _read() == 'done') {
+        _state = 'done';
+        return;
+      }
+      _state = downloads ? 'new' : 'agents';
+      await _write(_state!);
+    }();
   }
 
   void _finish() {
+    if (_state == 'done') return;
     _state = 'done';
     unawaited(_write('done'));
   }
 
   static void _log(String line) => appLog.info('onboarding', line);
+
+  Future<String?> _read() async {
+    try {
+      return await _storage?.read(key);
+    } catch (_) {
+      return null;
+    }
+  }
 
   Future<void> _write(String value) async {
     try {
@@ -128,9 +140,15 @@ class FirstArrival {
   }
 
   /// Opens the first workspace. True when it opened at least one pane; false leaves the empty tab
-  /// to the New Harness box, as on any later launch.
+  /// to the New Harness box, as on any later launch. Runs once, whatever happens: a first workspace
+  /// that turned up later, on some unrelated empty tab, would surprise more than none at all.
+  ///
+  /// [stillCurrent] says the person has not taken over meanwhile (opened the New Harness box,
+  /// search, the command bar); it is asked before each pane, and so is whether they are still on a
+  /// tab this is filling.
   Future<bool> run(
     AppNotifier app, {
+    bool Function()? stillCurrent,
     Duration machineWait = const Duration(seconds: 30),
     Duration indexWait = const Duration(seconds: 15),
     Duration starterWait = const Duration(minutes: 3),
@@ -138,14 +156,15 @@ class FirstArrival {
     if (!pending) return false;
     _running = true;
     final started = _now();
+    final tabs = <String>{app.activeSwarmId};
+    bool current() =>
+        (stillCurrent?.call() ?? true) && tabs.contains(app.activeSwarmId);
+    var opened = false;
     try {
       // Someone whose account already has a desk elsewhere keeps it.
-      if (app.allPanes.isNotEmpty) {
-        _finish();
-        return false;
-      }
+      if (app.allPanes.isNotEmpty) return false;
       final machine = await _localMachine(app, machineWait);
-      if (machine == null) return false;
+      if (machine == null || !current()) return false;
       final machineId = machine.machine.machineId;
       final sessions = await recentSessions(app, machineId, budget: indexWait);
       await app.probeEngines(machineId);
@@ -162,21 +181,18 @@ class FirstArrival {
         'first arrival: $plan after ${_now().difference(started).inMilliseconds} ms '
         '(${sessions.length} recent, installed $installed)',
       );
-      if (plan.isEmpty || app.allPanes.isNotEmpty) {
-        _finish();
-        return false;
-      }
-      final opened = plan.fresh.isNotEmpty
-          ? await _openFresh(app, machineId, plan, starterWait)
-          : await _openSessions(app, machineId, plan.tabs);
+      if (plan.isEmpty || app.allPanes.isNotEmpty || !current()) return false;
+      opened = plan.fresh.isNotEmpty
+          ? await _openFresh(app, machineId, plan, starterWait, current)
+          : await _openSessions(app, machineId, plan.tabs, tabs, current);
+      return opened;
+    } finally {
+      _running = false;
       _finish();
       _log(
         'first arrival: ${opened ? 'opened' : 'opened nothing'} in '
         '${_now().difference(started).inMilliseconds} ms',
       );
-      return opened;
-    } finally {
-      _running = false;
     }
   }
 
@@ -228,11 +244,18 @@ class FirstArrival {
   Future<bool> _openSessions(
     AppNotifier app,
     String machineId,
-    List<List<ArrivalSession>> tabs,
+    List<List<ArrivalSession>> plan,
+    Set<String> tabs,
+    bool Function() current,
   ) async {
-    String? firstTab;
-    for (final tab in tabs) {
-      Future<bool> resume(ArrivalSession session, String? tabId) async {
+    // The first tab is the empty one the person is looking at; the second a new one.
+    final firstTab = app.activeSwarmId;
+    var opened = false;
+    for (final (index, tab) in plan.indexed) {
+      String? tabId = index == 0 ? firstTab : null;
+      Future<bool> resume(ArrivalSession session) async {
+        if (!current()) return false;
+        final before = {for (final tab in app.swarms) tab.id};
         final (:error, :refusal) = await app.resumeConversation(
           machineId,
           engine: session.engine,
@@ -240,7 +263,6 @@ class FirstArrival {
           sessionId: session.sessionId,
           name: session.title.isEmpty ? null : session.title,
           swarmId: tabId,
-          // The first tab is the empty one the person is looking at; the second is a new one.
           placement: tabId == null
               ? HarnessPlacement.newTab
               : HarnessPlacement.currentTab,
@@ -248,27 +270,33 @@ class FirstArrival {
         if (error != null) {
           // Started since it was listed, or its folder went: the rest still open.
           _log('first arrival: $session not opened: ${refusal ?? error}');
+          return false;
         }
-        return error == null;
+        // The new tab is the one that was not there before, whichever tab is in front now.
+        tabId ??= app.swarms
+            .map((tab) => tab.id)
+            .where((id) => !before.contains(id))
+            .firstOrNull;
+        if (tabId != null) tabs.add(tabId!);
+        return true;
       }
 
       // One at a time until one has the tab, then the rest together, so one slow first start
       // (Codex's took 9.4 s on a fresh Mac) holds back nothing beside it.
-      String? tabId = firstTab == null ? app.activeSwarmId : null;
       var rest = tab;
-      while (rest.isNotEmpty) {
-        final opened = await resume(rest.first, tabId);
+      var placed = false;
+      while (rest.isNotEmpty && !placed) {
+        placed = await resume(rest.first);
         rest = rest.skip(1).toList();
-        if (opened) {
-          tabId = app.activeSwarmId;
-          break;
-        }
       }
-      if (tabId == null || (firstTab == null && app.panes.isEmpty)) continue;
-      await Future.wait([for (final session in rest) resume(session, tabId)]);
+      if (!placed || tabId == null) continue;
+      opened = true;
+      for (final wave in oneOfEachEngine(rest)) {
+        await Future.wait([for (final session in wave) resume(session)]);
+      }
       _arrange(
         app,
-        tabId,
+        tabId!,
         tab,
         // A resumed agent learns its session id once its transcript is found, which can be after
         // this; until then it carries the title it was opened with as its name.
@@ -278,10 +306,9 @@ class FirstArrival {
                 agent.engine == session.engine &&
                 agent.name == session.title),
       );
-      firstTab ??= tabId;
     }
-    if (firstTab == null) return false;
-    _show(app, firstTab);
+    if (!opened) return false;
+    if (current()) _show(app, firstTab);
     return true;
   }
 
@@ -290,6 +317,7 @@ class FirstArrival {
     String machineId,
     FirstArrivalPlan plan,
     Duration starterWait,
+    bool Function() current,
   ) async {
     final String folder;
     try {
@@ -307,6 +335,7 @@ class FirstArrival {
     }
     final tabId = app.activeSwarmId;
     Future<void> start(String engine) async {
+      if (!current()) return;
       final error = await app.createAgent(
         machineId,
         engine: engine,
@@ -326,17 +355,24 @@ class FirstArrival {
     }
 
     // The lead first, so it has the first place; the others together, so Codex's slow first start
-    // does not hold Claude Code back.
+    // does not hold Claude Code back. Never two of one engine at once ([oneOfEachEngine]); the plan
+    // has each engine once.
     await start(plan.fresh.first);
     await Future.wait([for (final engine in plan.fresh.skip(1)) start(engine)]);
     _arrange(app, tabId, plan.fresh, (agent, engine) => agent.engine == engine);
     final panes = app.swarms.where((tab) => tab.id == tabId).firstOrNull?.panes;
     if (panes == null || panes.isEmpty) return false;
-    _show(app, tabId);
+    if (current()) _show(app, tabId);
     final lead = panes.first;
     if (plan.typesStarterTask && _engineOf(app, lead) == plan.fresh.first) {
       unawaited(
-        typeWhenReady(lead, starterTask, wait: starterWait).then(
+        typeWhenReady(
+          lead,
+          starterTask,
+          wait: starterWait,
+          // Still OpenCode in that pane: a failed start leaves a shell there.
+          still: () => _engineOf(app, lead) == plan.fresh.first,
+        ).then(
           (typed) => _log(
             typed
                 ? 'first arrival: starter task typed into ${plan.fresh.first}'
@@ -402,14 +438,21 @@ class FirstArrival {
     Duration wait = const Duration(minutes: 3),
     Duration poll = const Duration(milliseconds: 500),
     bool Function(String screen) ready = openCodeReady,
+    bool Function()? still,
   }) async {
     final deadline = DateTime.now().add(wait);
+    bool usable(TerminalSession? session) =>
+        session != null &&
+        session == pane.session &&
+        session.acceptsInput &&
+        (still?.call() ?? true);
     while (DateTime.now().isBefore(deadline)) {
+      if (still?.call() == false) return false;
       final session = pane.session;
-      if (session != null && session.acceptsInput && ready(_screen(session))) {
+      if (usable(session) && ready(_screen(session!))) {
         // A moment for the box to take focus after its first frame.
         await Future<void>.delayed(const Duration(milliseconds: 800));
-        if (pane.session != session || !session.acceptsInput) continue;
+        if (!usable(session) || !ready(_screen(session))) continue;
         session.terminal.textInput(text);
         return true;
       }
@@ -428,12 +471,12 @@ class FirstArrival {
     return lines.join('\n');
   }
 
-  /// OpenCode's home screen: its prompt box and the key hints beneath it.
+  /// OpenCode's home screen: the key hints under its prompt box ("tab agents  ctrl+p commands",
+  /// OpenCode 1.18) or its placeholder. Phrases only OpenCode prints, so a shell or another agent's
+  /// screen never passes.
   static bool openCodeReady(String screen) {
-    final text = screen.toLowerCase();
-    return text.contains('ctrl+p') ||
-        text.contains('ask anything') ||
-        (text.contains('tab') && text.contains('agent'));
+    final text = screen.toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+    return text.contains('ctrl+p commands') || text.contains('ask anything');
   }
 }
 
@@ -464,6 +507,24 @@ List<ArrivalSession> sessionsFromHits(
   }
   sessions.sort((a, b) => b.lastAt.compareTo(a.lastAt));
   return sessions;
+}
+
+/// [sessions] in waves that never start two of one engine at once: the daemon names an agent's tmux
+/// session after its engine and the millisecond, and two Claude Code resumes started together
+/// collided ("duplicate session", fresh macOS VM, 2026-10-09).
+List<List<ArrivalSession>> oneOfEachEngine(List<ArrivalSession> sessions) {
+  final waves = <List<ArrivalSession>>[];
+  for (final session in sessions) {
+    final wave = waves
+        .where((wave) => wave.every((other) => other.engine != session.engine))
+        .firstOrNull;
+    if (wave != null) {
+      wave.add(session);
+    } else {
+      waves.add([session]);
+    }
+  }
+  return waves;
 }
 
 /// The owner's rules (2026-10-08). Conversations first: the latest Claude Code and the latest Codex

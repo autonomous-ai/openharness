@@ -495,6 +495,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           WorkspaceMachinePrompt(
                             loading: app.machinesLoading,
                             preparing: _hasNewHarnessMachine,
+                            preparingText: app.firstArrival.running
+                                ? 'Opening your agents…'
+                                : 'Preparing your harness…',
                             onChoose: () => unawaited(_openMachines()),
                           ),
                           if (recent != null) ...[
@@ -553,7 +556,19 @@ class _SwarmScreenState extends State<SwarmScreen> {
         if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
         // A computer new to Harness opens on agents, not on an empty box.
         if (app.firstArrival.pending) {
-          if (await app.firstArrival.run(app)) return;
+          final arriving = app.firstArrival.run(
+            app,
+            // The person has not taken over meanwhile: no box, search or command bar opened.
+            stillCurrent: () =>
+                mounted &&
+                _newHarness == null &&
+                _search == null &&
+                !_commandBarOpen &&
+                !_pickingFolder,
+          );
+          // Says "Opening your agents…" while it works.
+          if (mounted) setState(() {});
+          if (await arriving) return;
           if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
         }
         await _newAgent(

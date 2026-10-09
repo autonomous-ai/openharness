@@ -1,5 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/auth/auth_session.dart';
+import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/state/first_arrival.dart';
 import 'package:harness/state/session_content_search.dart';
 import 'package:harness/state/swarm_navigation.dart';
@@ -146,6 +149,21 @@ void main() {
     );
   });
 
+  test('never starts two of one engine at once', () {
+    final waves = oneOfEachEngine([
+      _s('claude', 'c1', 1),
+      _s('claude', 'c2', 2),
+      _s('codex', 'x1', 3),
+      _s('claude', 'c3', 4),
+    ]);
+    expect(_ids(waves), [
+      ['c1', 'x1'],
+      ['c2'],
+      ['c3'],
+    ]);
+    expect(oneOfEachEngine(const []), isEmpty);
+  });
+
   group('planFirstArrival', () {
     test('conversations win, whatever is installed', () {
       final plan = planFirstArrival(
@@ -240,44 +258,74 @@ void main() {
   });
 
   group('FirstArrival', () {
+    // Production order: setup's begin runs before the signed-in restore.
     test(
       'runs only on a computer setup has just reached, and only once',
       () async {
         final store = _MemoryStore();
-        final arrival = FirstArrival(store);
-        await arrival.restore();
-        expect(arrival.pending, isFalse, reason: 'an existing install');
+        final existing = FirstArrival(store);
+        await existing.restore();
+        expect(existing.pending, isFalse, reason: 'an existing install');
 
-        arrival.begin(downloads: true);
-        expect(arrival.pending, isTrue);
-        await Future<void>.delayed(Duration.zero);
+        final fresh = FirstArrival(store)..begin(downloads: true);
+        await fresh.restore();
+        expect(fresh.pending, isTrue);
         expect(store.values[FirstArrival.key], 'new');
 
         // A relaunch before the workspace opened still owes it.
         final again = FirstArrival(store);
         await again.restore();
         expect(again.pending, isTrue);
-
-        store.values[FirstArrival.key] = 'done';
-        final later = FirstArrival(store);
-        await later.restore();
-        expect(later.pending, isFalse);
-        later.begin(downloads: false);
-        expect(later.pending, isFalse, reason: 'done stays done');
       },
     );
 
     test(
-      "this launch's mark stands over an older one still being read",
+      'a spent mark stays spent, even when setup runs again first',
       () async {
-        final store = _MemoryStore()..values[FirstArrival.key] = 'agents';
-        final arrival = FirstArrival(store)..begin(downloads: true);
+        final store = _MemoryStore()..values[FirstArrival.key] = 'done';
+        final arrival = FirstArrival(store)..begin(downloads: false);
         await arrival.restore();
-        await Future<void>.delayed(Duration.zero);
-        expect(store.values[FirstArrival.key], 'new');
-        expect(arrival.pending, isTrue);
+        expect(arrival.pending, isFalse);
+        expect(store.values[FirstArrival.key], 'done');
       },
     );
+
+    test('spends the mark when the computer never answers, so it never fires later', () async {
+      final store = _MemoryStore();
+      final arrival = FirstArrival(store)..begin(downloads: true);
+      await arrival.restore();
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+      addTearDown(app.dispose);
+      expect(await arrival.run(app, machineWait: Duration.zero), isFalse);
+      expect(arrival.pending, isFalse);
+      await Future<void>.delayed(Duration.zero);
+      expect(store.values[FirstArrival.key], 'done');
+      expect(await arrival.run(app, machineWait: Duration.zero), isFalse);
+    });
+
+    test('the person taking over first stops it and spends the mark', () async {
+      final arrival = FirstArrival(_MemoryStore())..begin(downloads: true);
+      await arrival.restore();
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      );
+      addTearDown(app.dispose);
+      expect(
+        await arrival.run(
+          app,
+          stillCurrent: () => false,
+          machineWait: Duration.zero,
+        ),
+        isFalse,
+      );
+      expect(arrival.pending, isFalse);
+    });
   });
 
   test("OpenCode's home screen is recognised by its prompt hints", () {
@@ -293,5 +341,16 @@ void main() {
       isTrue,
     );
     expect(FirstArrival.openCodeReady('Ask anything... "Fix a TODO"'), isTrue);
+    // Another agent's or a shell's screen never passes.
+    expect(
+      FirstArrival.openCodeReady(
+        '? for shortcuts  shift+tab to cycle  /agents',
+      ),
+      isFalse,
+    );
+    expect(
+      FirstArrival.openCodeReady('admin@mac ~ % ls table stable'),
+      isFalse,
+    );
   });
 }

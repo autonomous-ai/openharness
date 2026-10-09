@@ -1,7 +1,8 @@
 import '../core/permission_modes.dart';
 
 import 'dart:async';
-import 'dart:io' show Directory, Platform, exit, pid;
+import 'dart:io'
+    show Directory, FileSystemEntity, FileSystemEntityType, Platform, exit, pid;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -1090,10 +1091,11 @@ class AppNotifier extends ChangeNotifier {
   @visibleForTesting
   static const agentDownloadsExpected = Duration(seconds: 50);
 
-  /// The longest the tour waits for them: past this the first harness installs whatever is left in
-  /// its own pane, as it would for anyone, rather than keep a new person on the tour.
+  /// The longest the tour waits for them, as long as a create waits ([agentPrefetchWait]): 287 MB
+  /// take about four minutes at 10 Mbit/s, and a pane that gave up sooner would run its own npm
+  /// install into the prefix the download is still writing.
   @visibleForTesting
-  static const agentDownloadsCap = Duration(minutes: 3);
+  static const agentDownloadsCap = Duration(minutes: 10);
 
   Timer? _agentDownloadsTick;
 
@@ -1123,10 +1125,9 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       final left = agentDownloadsExpected - elapsed;
+      // Past the usual time the tour says no number rather than a wrong one.
       setupDownloads.value = SetupDownloads.pending(
-        left: left > const Duration(seconds: 3)
-            ? left
-            : const Duration(seconds: 3),
+        left: left > Duration.zero ? left : null,
         lines: lines,
       );
     };
@@ -3257,6 +3258,18 @@ class AppNotifier extends ChangeNotifier {
   /// The first workspace on a computer new to Harness opens with agents already in it.
   final FirstArrival firstArrival;
 
+  /// Whether this computer had the Harness CLI before this launch's setup: `~/.harness/cli`
+  /// exists. Tests answer no, as on a fresh computer.
+  @visibleForTesting
+  bool Function() harnessInstalledBefore = kUnderTest
+      ? () => false
+      : () {
+          final home = Platform.environment['HOME'];
+          return home == null ||
+              FileSystemEntity.typeSync('$home/.harness/cli') !=
+                  FileSystemEntityType.notFound;
+        };
+
   TerminalPane? get focusedPane {
     final id = focusedPaneId;
     if (id == null) return null;
@@ -4267,20 +4280,27 @@ class AppNotifier extends ChangeNotifier {
       // straight away when the whole plan runs in-app; only a plan that needs
       // a password in Terminal waits on the wizard's Install action.
       var result = await _runProvisioner(install: false);
+      // A computer that has never had Harness: the plan installs its CLI and there is no
+      // `~/.harness/cli` at all. A CLI that is only too old, or whose Node went missing, is a repair
+      // on a computer someone already uses, and gets neither the tour nor a first workspace.
+      final firstHarness =
+          result.plan.any((item) => item.step == EnvironmentStep.harness) &&
+          !harnessInstalledBefore();
       if (!result.isReady && _canInstallUnattended(result, mode: null)) {
-        // A computer setting up the Harness CLI for the first time is new to Harness: OpenCode, the
-        // agent its first harness runs unless it has Claude Code or Codex, downloads meanwhile
-        // ([AgentPrefetch.start] decides).
-        if (result.plan.any((item) => item.step == EnvironmentStep.harness)) {
+        if (firstHarness) {
+          // OpenCode, Codex and Claude Code download meanwhile when it has no agent at all
+          // ([AgentPrefetch.start] decides).
           agentPrefetch?.start();
-          firstArrival.begin(downloads: agentPrefetch?.started ?? false);
           _publishAgentDownloads();
+          // Nobody needs to act on this install, so it runs under the welcome tour rather than on
+          // the install screen.
+          _setupTour = true;
         }
-        // Nobody needs to act on this install, so it runs under the setup
-        // tour rather than on the install screen.
-        _setupTour = true;
         status = AppStatus.preparingEnvironment;
         result = await _installUnattended(result);
+      }
+      if (firstHarness) {
+        firstArrival.begin(downloads: agentPrefetch?.started ?? false);
       }
       if (!result.isReady) {
         status = AppStatus.preparingEnvironment;
@@ -11059,10 +11079,12 @@ class AppNotifier extends ChangeNotifier {
   }
 
   /// How long, from its start, a create waits for its agent's download beside setup
-  /// ([agentPrefetch]): OpenCode took 7–12 s in the VM runs, Codex and Claude Code (one npm, after
-  /// setup's Node) 20–40 s more.
+  /// ([agentPrefetch]). OpenCode took 7–12 s in the VM runs, Codex and Claude Code (one npm, after
+  /// setup's Node) 25 s more; on a slow network the wait is the download's, since a pane that stopped
+  /// waiting would start a second npm install into the same prefix. Ten minutes bounds a download
+  /// that hangs.
   @visibleForTesting
-  Duration agentPrefetchWait = const Duration(seconds: 90);
+  Duration agentPrefetchWait = const Duration(minutes: 10);
 
   /// A Claude Code or Codex conversation Harness did not start, opened as a
   /// harness that resumes it, in its own folder (Cmd-P, `ExternalSessionRef`).
