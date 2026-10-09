@@ -76,6 +76,13 @@ describe('retainExitedSession', () => {
     }
   })
 
+  it.each([false, true])('releases a pending resume boundary when the engine exits, pane alive: %s', paneAlive => {
+    const forgetRelaunch = vi.fn()
+    const h = harness({ forgetRelaunch })
+    h.retain(row(), paneAlive)
+    expect(forgetRelaunch).toHaveBeenCalledExactlyOnceWith('session-a')
+  })
+
   it('an archive that cannot be announced is warned about, never thrown at the caller', async () => {
     const warn = vi.fn()
     const h = harness({ publishStoppedAgent: () => Promise.reject(new Error('offline')), warn })

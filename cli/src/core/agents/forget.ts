@@ -18,6 +18,7 @@ import type { StoppedAgentStore } from '../../lib/stoppedAgents.js'
 import type { SwarmPromptScopes } from '../../teams/promptScope.js'
 import type { Watcher } from '../../watcher/watcher.js'
 import type { SessionNormalizers } from '../transcripts/normalizers.js'
+import type { RelaunchMarks } from '../transcripts/relaunch.js'
 
 type Frame = { type: string; payload: Record<string, unknown> }
 
@@ -30,6 +31,7 @@ export interface ForgetDeps {
   /** Attach's two per-session marks (core/transcripts/attach.ts). */
   neverFoldedHistory: Set<string>
   replayedFirstTurn: Set<string>
+  relaunchMarks?: Pick<RelaunchMarks, 'forget'>
   clearAgyIdleWatch: (sessionId: string) => void
   cursorDiscovery: Pick<CursorTranscriptDiscovery, 'remove'>
   cursorSubagents: Pick<CursorSubagentManager, 'forget'>
@@ -47,7 +49,7 @@ export interface ForgetDeps {
 }
 
 export function createForgetSession({
-  registry, stoppedAgents, syncRecapPool, normalizers, turnStartedAt, neverFoldedHistory, replayedFirstTurn,
+  registry, stoppedAgents, syncRecapPool, normalizers, turnStartedAt, neverFoldedHistory, replayedFirstTurn, relaunchMarks,
   clearAgyIdleWatch, cursorDiscovery, cursorSubagents, runtimeProfiles, watcher, stopHeartbeat, teams, input,
   deviceInput, detachDsh, mirror, clients, dataDir,
 }: ForgetDeps) {
@@ -81,6 +83,7 @@ export function createForgetSession({
     // that runs for days, and a session forgotten then re-registered under the same id would inherit a
     // stale "already replayed" and lose a first turn it was entitled to.
     replayedFirstTurn.delete(sessionId)
+    relaunchMarks?.forget(sessionId)
     clearAgyIdleWatch(sessionId)
     cursorDiscovery.remove(sessionId)
     cursorSubagents.forget(sessionId)
