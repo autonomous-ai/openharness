@@ -29,6 +29,8 @@ model CommunityHarness {
 
   @@index([autonomousEnv, deletedAt, createdAt])
   @@index([autonomousEnv, authorId])
+  @@index([autonomousEnv, forkedFrom])
+  @@index([autonomousEnv, category, deletedAt, createdAt])
   @@map("community_harnesses")
 }
 
