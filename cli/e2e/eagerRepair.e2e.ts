@@ -80,6 +80,14 @@ console.log('fixture-${engine}-ready'); setInterval(() => {}, 1000);
       expect(held.detail).toContain('could not be read')
       expect((await rows()).find(row => row.id === pi.id)).toMatchObject({ status: 'active', sessionId: id })
       writeFileSync(path, JSON.stringify({ type: 'session', id, cwd }) + '\n')
+      // A second native file cannot turn exact resume into a first-file guess at Close.
+      const duplicate = join(dirname(path), `2026-10-10_${id}.jsonl`)
+      writeFileSync(duplicate, JSON.stringify({ type: 'session', id, cwd }) + '\n')
+      const ambiguous = await close()
+      expect(ambiguous.error).toBeTruthy()
+      expect(ambiguous.detail).toContain('More than one file')
+      expect((await rows()).find(row => row.id === pi.id)).toMatchObject({ status: 'active', sessionId: id })
+      rmSync(duplicate)
     }
     expect(await close()).toMatchObject({ closed: true })
     expect((await rows()).find(row => row.id === pi.id)).toMatchObject({ status: 'stopped', sessionId: id })

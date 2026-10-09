@@ -1,0 +1,1226 @@
+{
+  "startedAt": "2026-10-09T17:03:05.200620+00:00",
+  "finishedAt": "2026-10-09T17:03:28.528905+00:00",
+  "method": "Three interleaved fresh processes per source/workload, ten lookups per process. Identical private files. Setup and imports excluded from lookup CPU/latency; peak RSS includes setup/import. No daemon or vendor binary. Reference measurements, no numerical performance gate.",
+  "driver": "/** Fresh private native stores; no vendor binary, daemon, saved-home catalog or owner input. */\nimport { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'\nimport { tmpdir } from 'node:os'\nimport { join, resolve } from 'node:path'\nimport { pathToFileURL } from 'node:url'\nimport { performance } from 'node:perf_hooks'\nconst root = realpathSync(mkdtempSync(join(tmpdir(), 'exact-resume-cost-')))\nconst workload = process.argv[2] ?? 'claude'\nconst cli = process.env.EXACT_COST_CLI ?? resolve(import.meta.dirname, '../..')\nconst id = 'aaaaaaaa-1111-4222-8333-444444444444'\nconst cwd = join(root, 'work')\nfor (const name of ['HOME', 'ADAPTER_DATA_DIR', 'ADAPTER_RUNTIME_DIR', 'CLAUDE_CONFIG_DIR',\n  'CODEX_HOME', 'CURSOR_HOME', 'COPILOT_HOME', 'GROK_HOME', 'AGY_HOME', 'PI_HOME', 'MUSE_HOME', 'COMMANDCODE_HOME',\n  'HERMES_HOME', 'AMP_SESSIONS_DIR', 'OPENCODE_DATA_DIR', 'KILO_DATA_DIR', 'DEVIN_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME']) {\n  process.env[name] = join(root, name)\n}\nprocess.env.CLAUDE_PROJECTS_DIR = join(process.env.CLAUDE_CONFIG_DIR!, 'projects')\ntry {\n  mkdirSync(cwd)\n  const engine = workload === 'claude' || workload === 'unavailable' ? 'claude' : workload === 'pi' ? 'pi' : 'codex'\n  const folder = engine === 'claude' ? join(process.env.CLAUDE_PROJECTS_DIR!, 'work') : engine === 'codex'\n    ? join(process.env.CODEX_HOME!, 'sessions', 'day') : join(process.env.PI_HOME!, 'agent', 'sessions', `--${cwd.replace(/^[/\\\\]/, '').replace(/[/\\\\:]/g, '-')}--`)\n  mkdirSync(folder, { recursive: true })\n  const filename = engine === 'claude' ? `${id}.jsonl` : `${engine === 'pi' ? 'day_' : 'rollout-'}${id}.jsonl`\n  const header = JSON.stringify(engine === 'codex' ? { type: 'session_meta', payload: { id, cwd, source: 'cli' } }\n    : engine === 'pi' ? { type: 'session', id, cwd } : { type: 'user', sessionId: id, cwd }) + '\\n'\n  writeFileSync(join(folder, filename), header)\n  const unrelated = workload === 'populated' ? 1000 : workload === 'limit' ? 4200 : 0\n  for (let i = 0; i < unrelated; i++) writeFileSync(join(folder, `unrelated-${i}.jsonl`), '{}\\n')\n  if (workload === 'duplicate') {\n    const other = join(process.env.CODEX_HOME!, 'sessions', 'other'); mkdirSync(other)\n    writeFileSync(join(other, filename), header)\n  }\n  const { findResumedTranscript } = await import(pathToFileURL(join(cli, 'src/lib/sessionRepair.ts')).href)\n  if (workload === 'unavailable') {\n    const moved = join(root, 'moved'); mkdirSync(moved); writeFileSync(join(moved, 'projects'), 'not a directory')\n    const { adoptHomes } = await import(pathToFileURL(join(cli, 'src/lib/engineHomes.ts')).href)\n    adoptHomes({ CLAUDE_CONFIG_DIR: moved })\n  }\n  const latenciesMs: number[] = [], outcomes: Record<string, number> = {}\n  const cpu = process.cpuUsage()\n  for (let i = 0; i < 10; i++) {\n    const at = performance.now()\n    let outcome: string\n    try { outcome = await findResumedTranscript(engine, id, { cwd }) ? 'exact' : 'absent' }\n    catch (error) {\n      if ((error as { code?: string }).code !== 'IDENTITY_UNAVAILABLE') throw error\n      outcome = 'held'\n    }\n    latenciesMs.push(Number((performance.now() - at).toFixed(2)))\n    outcomes[outcome] = (outcomes[outcome] ?? 0) + 1\n  }\n  const used = process.cpuUsage(cpu)\n  console.log(JSON.stringify({ workload, iterations: 10, unrelated, outcomes, latenciesMs,\n    cpuMs: (used.user + used.system) / 1000, peakRssMiB: process.resourceUsage().maxRSS / 1024,\n    node: process.version, platform: process.platform, arch: process.arch }))\n} finally { rmSync(root, { recursive: true, force: true }) }\n",
+  "samples": [
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 0,
+      "wallSeconds": 0.553,
+      "workload": "claude",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.67,
+        0.15,
+        0.1,
+        0.1,
+        0.11,
+        0.11,
+        0.15,
+        0.11,
+        0.26,
+        0.13
+      ],
+      "cpuMs": 2.239,
+      "peakRssMiB": 95.5390625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 0,
+      "wallSeconds": 0.492,
+      "workload": "claude",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        2.89,
+        0.95,
+        0.92,
+        0.83,
+        1.07,
+        0.93,
+        0.92,
+        0.82,
+        1,
+        0.77
+      ],
+      "cpuMs": 12.457,
+      "peakRssMiB": 106.140625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 0,
+      "wallSeconds": 0.419,
+      "workload": "codex",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.56,
+        0.17,
+        0.11,
+        0.12,
+        0.12,
+        0.1,
+        0.1,
+        0.1,
+        0.28,
+        0.13
+      ],
+      "cpuMs": 1.865,
+      "peakRssMiB": 94.421875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 0,
+      "wallSeconds": 0.415,
+      "workload": "codex",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        3.91,
+        1.3,
+        1.21,
+        1.17,
+        1.73,
+        1.01,
+        0.99,
+        0.98,
+        1.08,
+        0.94
+      ],
+      "cpuMs": 15.887,
+      "peakRssMiB": 90.2890625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 0,
+      "wallSeconds": 0.411,
+      "workload": "pi",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        1.49,
+        0.41,
+        0.5,
+        0.43,
+        0.5,
+        0.38,
+        0.38,
+        0.4,
+        0.49,
+        0.36
+      ],
+      "cpuMs": 6.126,
+      "peakRssMiB": 93.9296875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 0,
+      "wallSeconds": 0.425,
+      "workload": "pi",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        5.28,
+        2.15,
+        1.59,
+        1.58,
+        1.62,
+        1.35,
+        1.12,
+        0.94,
+        1.07,
+        0.91
+      ],
+      "cpuMs": 19.281,
+      "peakRssMiB": 95.40625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 0,
+      "wallSeconds": 0.685,
+      "workload": "populated",
+      "iterations": 10,
+      "unrelated": 1000,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        1.51,
+        1.09,
+        1.04,
+        1.06,
+        1.05,
+        1.02,
+        0.99,
+        0.98,
+        1.19,
+        1
+      ],
+      "cpuMs": 11.021,
+      "peakRssMiB": 93.4765625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 0,
+      "wallSeconds": 0.726,
+      "workload": "populated",
+      "iterations": 10,
+      "unrelated": 1000,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        11.48,
+        6.64,
+        10.31,
+        7.75,
+        5.56,
+        5.79,
+        7.41,
+        7.44,
+        7.27,
+        5
+      ],
+      "cpuMs": 130.707,
+      "peakRssMiB": 105.3984375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 0,
+      "wallSeconds": 0.4,
+      "workload": "duplicate",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.56,
+        0.17,
+        0.12,
+        0.12,
+        0.12,
+        0.11,
+        0.1,
+        0.1,
+        0.3,
+        0.13
+      ],
+      "cpuMs": 1.904,
+      "peakRssMiB": 95.90625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 0,
+      "wallSeconds": 0.393,
+      "workload": "duplicate",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        4.49,
+        1.87,
+        1.92,
+        1.85,
+        1.98,
+        1.52,
+        1.38,
+        1.78,
+        1.58,
+        1.38
+      ],
+      "cpuMs": 23.852,
+      "peakRssMiB": 93.37109375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 0,
+      "wallSeconds": 0.373,
+      "workload": "unavailable",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.58,
+        0.16,
+        0.13,
+        0.26,
+        0.15,
+        0.15,
+        0.13,
+        0.14,
+        0.29,
+        0.12
+      ],
+      "cpuMs": 2.344,
+      "peakRssMiB": 94.546875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 0,
+      "wallSeconds": 0.391,
+      "workload": "unavailable",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        3.08,
+        1,
+        1.01,
+        0.9,
+        1.06,
+        0.85,
+        0.94,
+        0.89,
+        1.02,
+        0.77
+      ],
+      "cpuMs": 14.392,
+      "peakRssMiB": 94.875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 0,
+      "wallSeconds": 1.25,
+      "workload": "limit",
+      "iterations": 10,
+      "unrelated": 4200,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        4.69,
+        4.14,
+        4.03,
+        4.06,
+        4.13,
+        4.06,
+        4.6,
+        4.14,
+        4.15,
+        3.96
+      ],
+      "cpuMs": 43.084,
+      "peakRssMiB": 92.66796875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 0,
+      "wallSeconds": 1.384,
+      "workload": "limit",
+      "iterations": 10,
+      "unrelated": 4200,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        22.72,
+        14.73,
+        12.73,
+        12.24,
+        11.81,
+        12.91,
+        13.21,
+        11.91,
+        11.87,
+        11.46
+      ],
+      "cpuMs": 199.827,
+      "peakRssMiB": 104.07421875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 1,
+      "wallSeconds": 0.371,
+      "workload": "claude",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        2.77,
+        0.85,
+        0.86,
+        0.73,
+        0.9,
+        0.85,
+        0.85,
+        0.75,
+        0.9,
+        0.77
+      ],
+      "cpuMs": 11.455,
+      "peakRssMiB": 92.83984375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 1,
+      "wallSeconds": 0.372,
+      "workload": "claude",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.58,
+        0.2,
+        0.26,
+        0.17,
+        0.16,
+        0.18,
+        0.2,
+        0.15,
+        0.32,
+        0.16
+      ],
+      "cpuMs": 2.673,
+      "peakRssMiB": 96.45703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 1,
+      "wallSeconds": 0.375,
+      "workload": "codex",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        3.69,
+        1.26,
+        1.18,
+        1.09,
+        1.15,
+        1.01,
+        0.91,
+        0.92,
+        1.08,
+        0.89
+      ],
+      "cpuMs": 14.73,
+      "peakRssMiB": 95.97265625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 1,
+      "wallSeconds": 0.36,
+      "workload": "codex",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.49,
+        0.16,
+        0.11,
+        0.11,
+        0.11,
+        0.1,
+        0.1,
+        0.09,
+        0.3,
+        0.13
+      ],
+      "cpuMs": 1.777,
+      "peakRssMiB": 91.52734375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 1,
+      "wallSeconds": 0.378,
+      "workload": "pi",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        3.55,
+        1.02,
+        1.05,
+        0.9,
+        1.05,
+        0.93,
+        0.98,
+        0.93,
+        0.98,
+        0.92
+      ],
+      "cpuMs": 13.783,
+      "peakRssMiB": 96.2421875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 1,
+      "wallSeconds": 0.364,
+      "workload": "pi",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        1.29,
+        0.38,
+        0.42,
+        0.35,
+        0.4,
+        0.31,
+        0.29,
+        0.33,
+        0.43,
+        0.33
+      ],
+      "cpuMs": 5.148,
+      "peakRssMiB": 93.015625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 1,
+      "wallSeconds": 0.615,
+      "workload": "populated",
+      "iterations": 10,
+      "unrelated": 1000,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        9.02,
+        7.9,
+        4.66,
+        5.8,
+        4.02,
+        5.51,
+        3.91,
+        3.81,
+        3.94,
+        3.54
+      ],
+      "cpuMs": 93.314,
+      "peakRssMiB": 104.45703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 1,
+      "wallSeconds": 0.588,
+      "workload": "populated",
+      "iterations": 10,
+      "unrelated": 1000,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        1.43,
+        1.06,
+        1.03,
+        1.03,
+        1.05,
+        1.03,
+        1.03,
+        1,
+        1.2,
+        1.01
+      ],
+      "cpuMs": 10.957,
+      "peakRssMiB": 94.01953125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 1,
+      "wallSeconds": 0.402,
+      "workload": "duplicate",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        4.49,
+        1.9,
+        1.85,
+        1.82,
+        1.92,
+        1.63,
+        1.53,
+        1.98,
+        1.81,
+        1.74
+      ],
+      "cpuMs": 25.025,
+      "peakRssMiB": 94.0703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 1,
+      "wallSeconds": 0.373,
+      "workload": "duplicate",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.49,
+        0.16,
+        0.11,
+        0.12,
+        0.11,
+        0.15,
+        0.13,
+        0.1,
+        0.28,
+        0.12
+      ],
+      "cpuMs": 1.853,
+      "peakRssMiB": 95.79296875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 1,
+      "wallSeconds": 0.377,
+      "workload": "unavailable",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        3.07,
+        0.93,
+        1,
+        0.88,
+        0.91,
+        0.77,
+        0.84,
+        0.83,
+        0.95,
+        0.76
+      ],
+      "cpuMs": 14.037,
+      "peakRssMiB": 96.30859375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 1,
+      "wallSeconds": 0.363,
+      "workload": "unavailable",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.52,
+        0.15,
+        0.1,
+        0.15,
+        0.1,
+        0.09,
+        0.09,
+        0.1,
+        0.24,
+        0.11
+      ],
+      "cpuMs": 1.867,
+      "peakRssMiB": 93.09765625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 1,
+      "wallSeconds": 1.344,
+      "workload": "limit",
+      "iterations": 10,
+      "unrelated": 4200,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        23.09,
+        14.79,
+        12.79,
+        12.34,
+        11.99,
+        12.6,
+        11.98,
+        11.48,
+        12.18,
+        11.41
+      ],
+      "cpuMs": 199.384,
+      "peakRssMiB": 104.94921875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 1,
+      "wallSeconds": 1.31,
+      "workload": "limit",
+      "iterations": 10,
+      "unrelated": 4200,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        4.69,
+        4.16,
+        4.04,
+        4.09,
+        4.11,
+        4.09,
+        4.16,
+        4.55,
+        4.2,
+        4.08
+      ],
+      "cpuMs": 43.344,
+      "peakRssMiB": 96.95703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 2,
+      "wallSeconds": 0.375,
+      "workload": "claude",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.6,
+        0.19,
+        0.17,
+        0.14,
+        0.13,
+        0.13,
+        0.2,
+        0.16,
+        0.34,
+        0.17
+      ],
+      "cpuMs": 2.557,
+      "peakRssMiB": 97.49609375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 2,
+      "wallSeconds": 0.385,
+      "workload": "claude",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        2.95,
+        0.95,
+        0.92,
+        0.74,
+        0.93,
+        0.81,
+        0.9,
+        0.76,
+        0.88,
+        0.72
+      ],
+      "cpuMs": 11.837,
+      "peakRssMiB": 96.18359375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 2,
+      "wallSeconds": 0.358,
+      "workload": "codex",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.53,
+        0.16,
+        0.11,
+        0.15,
+        0.12,
+        0.1,
+        0.1,
+        0.09,
+        0.27,
+        0.12
+      ],
+      "cpuMs": 1.816,
+      "peakRssMiB": 93.67578125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 2,
+      "wallSeconds": 0.389,
+      "workload": "codex",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        3.76,
+        1.28,
+        1.2,
+        1.14,
+        1.19,
+        1,
+        1,
+        1.02,
+        1.06,
+        0.94
+      ],
+      "cpuMs": 15.134,
+      "peakRssMiB": 95.109375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 2,
+      "wallSeconds": 0.363,
+      "workload": "pi",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        1.27,
+        0.37,
+        0.43,
+        0.42,
+        0.42,
+        0.31,
+        0.32,
+        0.34,
+        0.44,
+        0.34
+      ],
+      "cpuMs": 5.305,
+      "peakRssMiB": 92.58984375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 2,
+      "wallSeconds": 0.375,
+      "workload": "pi",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        3.39,
+        1.05,
+        1.12,
+        0.94,
+        1.16,
+        0.95,
+        1.02,
+        0.92,
+        1.07,
+        0.91
+      ],
+      "cpuMs": 14.042,
+      "peakRssMiB": 95.5390625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 2,
+      "wallSeconds": 0.553,
+      "workload": "populated",
+      "iterations": 10,
+      "unrelated": 1000,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        1.42,
+        1.05,
+        0.99,
+        0.98,
+        0.99,
+        0.98,
+        0.97,
+        0.98,
+        1.15,
+        0.99
+      ],
+      "cpuMs": 10.576,
+      "peakRssMiB": 92.84375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 2,
+      "wallSeconds": 0.63,
+      "workload": "populated",
+      "iterations": 10,
+      "unrelated": 1000,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        9.74,
+        6.94,
+        9.29,
+        6.84,
+        5.6,
+        6.12,
+        5.37,
+        4.9,
+        4.68,
+        4.41
+      ],
+      "cpuMs": 113.025,
+      "peakRssMiB": 106.1953125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 2,
+      "wallSeconds": 0.37,
+      "workload": "duplicate",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.5,
+        0.16,
+        0.12,
+        0.17,
+        0.13,
+        0.11,
+        0.1,
+        0.1,
+        0.29,
+        0.12
+      ],
+      "cpuMs": 1.845,
+      "peakRssMiB": 95.19921875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 2,
+      "wallSeconds": 0.38,
+      "workload": "duplicate",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        4.22,
+        1.84,
+        1.73,
+        1.5,
+        1.57,
+        1.36,
+        1.4,
+        1.79,
+        1.47,
+        1.45
+      ],
+      "cpuMs": 22.326,
+      "peakRssMiB": 97.20703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 2,
+      "wallSeconds": 0.362,
+      "workload": "unavailable",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        0.55,
+        0.16,
+        0.13,
+        0.18,
+        0.11,
+        0.09,
+        0.09,
+        0.1,
+        0.25,
+        0.11
+      ],
+      "cpuMs": 2.043,
+      "peakRssMiB": 95.68359375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 2,
+      "wallSeconds": 0.37,
+      "workload": "unavailable",
+      "iterations": 10,
+      "unrelated": 0,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        3.12,
+        0.87,
+        0.91,
+        0.93,
+        0.89,
+        0.79,
+        0.84,
+        0.88,
+        0.96,
+        0.73
+      ],
+      "cpuMs": 13.779,
+      "peakRssMiB": 96.19921875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "former",
+      "commit": "a847441e566cf9c34c960bbd43a5ec8b3ff83e10",
+      "repeat": 2,
+      "wallSeconds": 1.179,
+      "workload": "limit",
+      "iterations": 10,
+      "unrelated": 4200,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        4.5,
+        4.04,
+        3.91,
+        4.12,
+        3.97,
+        3.96,
+        4.38,
+        3.94,
+        4.07,
+        3.93
+      ],
+      "cpuMs": 41.908,
+      "peakRssMiB": 92.87890625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "source": "current",
+      "commit": "fa431e3586a7fce896c3a5f8d3f3c6c67d69e6ea",
+      "repeat": 2,
+      "wallSeconds": 1.321,
+      "workload": "limit",
+      "iterations": 10,
+      "unrelated": 4200,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        22.97,
+        14.87,
+        12.89,
+        15.62,
+        13.74,
+        12.24,
+        11.58,
+        11.54,
+        11.61,
+        11.76
+      ],
+      "cpuMs": 205.024,
+      "peakRssMiB": 101.5234375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    }
+  ]
+}

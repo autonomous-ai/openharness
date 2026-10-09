@@ -2,11 +2,13 @@ import { screenFor } from '../engines/screens.js'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { CloseAgentService, inspectCloseActivity as inspectCloseReading, type CloseActivity, type CloseAgentServiceDeps, type AgentCloseRequest } from './closeAgentService.js'
 import { registry, type RegisteredSession } from './registry.js'
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
+import { findResumedTranscript } from './sessionRepair.js'
+import { piSessionFolder } from '../engines/repairIdentities.js'
 
 let row: RegisteredSession
 let service: CloseAgentService
@@ -80,6 +82,46 @@ it('a queued Close preserves its intent and reason while native identity is unav
   expect(deps.stop).toHaveBeenCalledTimes(2)
   expect(deps.checkpoint).toHaveBeenCalledOnce()
   expect(registry.byAgent(row.agentId)).toBeUndefined()
+})
+it.each(['capture', 'checkpoint'] as const)('a queued Pi Close retries real native evidence held during %s', async phase => {
+  const previousHome = env.PI_HOME
+  env.PI_HOME = join(env.ADAPTER_DATA_DIR, 'pi-close', row.agentId)
+  const cwd = join(env.PI_HOME, 'workspace'), directory = join(env.PI_HOME, 'checkpoints')
+  mkdirSync(cwd, { recursive: true })
+  Object.assign(row, { engine: 'pi', sessionId: 'queued-conversation', transcriptPath: null, cwd, codexHome: undefined })
+  const folder = join(env.PI_HOME, 'agent', 'sessions', piSessionFolder(cwd))
+  mkdirSync(folder, { recursive: true }); mkdirSync(directory)
+  const native = join(folder, `day_${row.sessionId}.jsonl`), duplicate = join(folder, `next_${row.sessionId}.jsonl`)
+  const header = JSON.stringify({ type: 'session', id: row.sessionId, cwd }) + '\n'
+  const store = new SessionCheckpointStore(directory)
+  deps.checkpoint = vi.fn(s => store.save(s, { screen: 'The private terminal is idle' }))
+  deps.stop = vi.fn(async (id, options) => {
+    const captured = { ...row }
+    if (phase === 'capture') captured.transcriptPath = await findResumedTranscript('pi', row.sessionId, { cwd })
+    await options.checkpoint!(captured, 'before')
+    await options.beforeStop!(captured)
+    expect(options.current!()).toBe(true)
+    registry.removeAgent(id)
+  })
+  try {
+    writeFileSync(native, '{partial')
+    expect(await service.request(request('after_task'))).toEqual({ deferred: true })
+    const plan = row.closePlan!
+    await service.tick(); time += 5_000; await service.tick()
+    expect(registry.byAgent(row.agentId)?.closePlan).toMatchObject({ id: plan.id, state: 'waiting', detail: expect.stringContaining('could not be read') })
+    expect(readdirSync(directory)).toEqual([])
+    writeFileSync(native, header); writeFileSync(duplicate, header)
+    await service.tick()
+    expect(registry.byAgent(row.agentId)?.closePlan).toMatchObject({ id: plan.id, state: 'waiting', detail: 'More than one file matches this Pi conversation.' })
+    expect(readdirSync(directory)).toEqual([])
+    rmSync(duplicate)
+    await service.tick()
+    expect(registry.byAgent(row.agentId)).toBeUndefined()
+    const saved = JSON.parse(readFileSync(join(directory, readdirSync(directory).find(file => /^[a-f0-9]{64}\.json$/.test(file))!), 'utf8'))
+    expect(saved.source).toBe(native)
+    expect(readFileSync(join(directory, saved.file), 'utf8')).toBe(header)
+    expect(deps.stop).toHaveBeenCalledTimes(3)
+  } finally { env.PI_HOME = previousHome }
 })
 it('cleanup requires open-tab support and checks again after history is saved', async () => {
   const close = { ...request('now'), onlyIfHidden: true }

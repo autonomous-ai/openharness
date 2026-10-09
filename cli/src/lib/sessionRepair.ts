@@ -20,14 +20,16 @@ import { basename, dirname, isAbsolute, join, sep } from 'path'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
 import { identityBytes, identityEntries, identityFile, identityHead, identityScanBudget, IdentityReadUnavailable } from '../engines/kit/identityScan.js'
-import { findSessionFileOf, sessionIdentityMetaOf } from '../engines/sessionFiles.js'
+import { sessionIdentityMetaOf } from '../engines/sessionFiles.js'
+import { exactTranscript, exactWorkspaces } from '../engines/kit/exactTranscript.js'
+import { readSessionHeader } from '../engines/kit/sessionIdentity.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import type { AgentEngine } from '../engines/types.js'
 import { HERMES_HOMES, HERMES_HISTORY_ID_RE, HERMES_ID_SQL, HERMES_SOURCE, HERMES_SOURCE_SQL } from '../engines/hermes/contract.js'
 import { readStorePool } from '../engines/kit/storePool.js'
 import { isInteractiveSource } from '../engines/kit/storeSource.js'
 import { museSessionIdentity, piSessionFolder, readPiHead } from '../engines/repairIdentities.js'
-import { PI_SESSION_ID } from '../engines/pi/contract.js'
+import { PI_HEADER, PI_SESSION_ID } from '../engines/pi/contract.js'
 import { transcriptOf, processSessionOf as nativeProcessSession } from '../engines/identities.js'
 import { COPILOT_CWD } from '../engines/copilot/contract.js'
 import { recordCwd } from '../engines/kit/sessionLocation.js'
@@ -530,46 +532,46 @@ export async function findResumedTranscript(
   if (engine === 'pi') {
     // Pi allocates an ID before its first reply creates the file. Look up that
     // exact ID again at Close, including after exit, without guessing by mtime.
-    if (!opts?.cwd || !PI_SESSION_ID.test(sessionId)) throw new Error('The Pi conversation location is unavailable.')
+    if (!opts?.cwd || !PI_SESSION_ID.test(sessionId)) {
+      throw new IdentityReadUnavailable('the Pi conversation location is unavailable', 'The Pi conversation location is unavailable.')
+    }
     // The folder and header are native identity, available even when Pi's history reader cannot load.
     const directory = join(env.PI_HOME, 'agent', 'sessions', piSessionFolder(opts.cwd))
-    let files: string[]
-    try { files = await readdir(directory) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error // An unreadable store is not an unwritten conversation.
-    }
-    const matches: string[] = []
-    for (const file of files.filter(file => file.endsWith(`_${sessionId}.jsonl`))) {
-      const head = await readPiHead(join(directory, file))
-      if (!head || typeof head === 'symbol') throw new Error('The Pi conversation file could not be read.')
-      if (head.sessionId === sessionId && await sameDir(head.cwd, opts.cwd)) matches.push(file)
-    }
-    if (matches.length > 1) throw new Error('More than one file matches this Pi conversation.')
-    return matches.length ? join(directory, matches[0]) : null
+    const workspaces = exactWorkspaces()
+    return exactTranscript([directory], { kind: 'directory', matches: file => file.endsWith(`_${sessionId}.jsonl`) }, {
+      accepts: async (path, version) => {
+        const head = await readSessionHeader(PI_HEADER, async bytes => (await identityBytes(path, bytes, version)).toString('utf8'))
+          .catch(() => null)
+        if (!head || typeof head === 'symbol') {
+          throw new IdentityReadUnavailable('the Pi conversation file could not be read', 'The Pi conversation file could not be read.')
+        }
+        return head.sessionId === sessionId && await workspaces.same(head.cwd, opts.cwd!)
+      },
+      verify: workspaces.verify,
+      ambiguous: 'More than one file matches this Pi conversation.',
+    })
   }
-  if (!/^[0-9a-f-]{16,}$/i.test(sessionId)) return null
+  if (!/^[0-9a-f-]{16,128}$/i.test(sessionId)) return null
   const byId = sessionStoreOf(engine)?.byId
   if (!byId) return null
   // In every folder the registry takes a transcript from (registry.validTranscriptPath): the daemon's own and
   // each home the person moved in their shell profile (lib/engineHomes.ts), or an agent's own profile alone.
   // Only the default folders were looked in, so a resume typed into a pane for a conversation in a moved home
   // found no file and never bound, though the registry would have taken it.
-  for (const root of sessionRoots(engine, opts?.codexHome)) {
-    if (byId.layout === 'walk') {
-      const found = findSessionFileOf(engine, sessionId, root)
-      if (found) return found
-      continue
-    }
-    let projects: string[]
-    try { projects = await readdir(root) } catch { continue }
-    for (const project of projects) {
-      const candidate = join(root, project, `${sessionId}${byId.suffix}`)
-      try {
-        if ((await stat(candidate)).isFile()) return candidate
-      } catch { /* not this project */ }
-    }
+  const roots = repairRoots(engine, opts?.codexHome)
+  const found = await (byId.layout === 'walk'
+    ? exactTranscript(roots, { kind: 'walk', matches: file => file.endsWith(byId.suffix) && file.includes(sessionId) }, {
+      accepts: async (path, version) => {
+        const meta = await sessionIdentityMetaOf(engine, path, version)
+        if (!meta?.id || !byId.id.test(meta.id)) throw new IdentityReadUnavailable('the exact rollout header has no conclusive conversation id')
+        return meta.id === sessionId
+      },
+    })
+    : exactTranscript(roots, { kind: 'projects', filename: `${sessionId}${byId.suffix}` }))
+  if (repairRoots(engine, opts?.codexHome).join('\0') !== roots.join('\0')) {
+    throw new IdentityReadUnavailable('the known session homes changed during exact lookup')
   }
-  return null
+  return found
 }
 
 /** The files a process holds open: `/proc` on Linux, `lsof` elsewhere. Empty when neither can say. */

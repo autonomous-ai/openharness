@@ -1,0 +1,20 @@
+{
+  "claude:own": "<root>/CLAUDE_CONFIG_DIR/projects/project-1/aaaaaaaa-1111-4222-8333-000000000001.jsonl",
+  "claude:unadopted": null,
+  "claude:absent": null,
+  "claude:invalid": null,
+  "codex:own": "<root>/CODEX_HOME/sessions/2026/10/09/rollout-2026-10-09T12-00-00-aaaaaaaa-1111-4222-8333-000000000001.jsonl",
+  "codex:unadopted": null,
+  "codex:absent": null,
+  "codex:invalid": null,
+  "claude:moved": "<root>/moved-claude/projects/project-2/aaaaaaaa-1111-4222-8333-000000000002.jsonl",
+  "codex:moved": "<root>/moved-codex/sessions/2026/10/09/rollout-2026-10-09T12-00-00-aaaaaaaa-1111-4222-8333-000000000002.jsonl",
+  "codex:profile": "<root>/profile/sessions/2026/10/09/rollout-2026-10-09T12-00-00-aaaaaaaa-1111-4222-8333-000000000003.jsonl",
+  "codex:profile-excludes-own": null,
+  "codex:missing-profile": null,
+  "unsupported": null,
+  "pi:exact": "<root>/PI_HOME/agent/sessions/--work-pi-a-b--/2026-10-09_custom.id-12.jsonl",
+  "pi:other-cwd": null,
+  "pi:unwritten": null,
+  "pi:missing-directory": null
+}

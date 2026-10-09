@@ -30,6 +30,7 @@ const descriptors = vi.hoisted(() => new Map<string, string[]>())
 vi.mock('fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs,
+    realpath: (name: string) => fs.realpath(name.startsWith('/work/') ? join(root, 'workspaces', name.slice(6)) : name),
     // Keep a streamed descriptor listing private as well as the former readdir path.
     opendir: async (path: string, ...args: unknown[]) => /^\/proc\/\d+\/fd$/.test(String(path))
       ? { async *[Symbol.asyncIterator]() {
@@ -44,6 +45,11 @@ vi.mock('fs/promises', async (original) => {
       return match ? descriptors.get(match[1]!)?.[Number(match[2])] ?? '' : Reflect.apply(fs.readlink, fs, [path, ...args])
     },
   }
+})
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>()
+  const mapped = (name: string) => name.startsWith('/work/') ? join(root, 'workspaces', name.slice(6)) : name
+  return { ...fs, realpathSync: (name: string) => fs.realpathSync(mapped(name)), statSync: (name: string) => fs.statSync(mapped(name)) }
 })
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-identity.golden.json', import.meta.url))
@@ -89,6 +95,7 @@ let m: Modules
 
 beforeAll(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'other-identity-golden-')))
+  for (const cwd of ['r', 'other']) mkdirSync(join(root, 'workspaces', cwd), { recursive: true })
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   vi.useFakeTimers({ toFake: ['Date'], now: NOW })
   const home = join(root, 'home')

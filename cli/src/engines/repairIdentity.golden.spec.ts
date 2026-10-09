@@ -10,12 +10,18 @@ import { afterAll, beforeAll, expect, it, vi } from 'vitest'
 const clock = vi.hoisted(() => ({ root: '', time: Date.parse('2026-10-09T00:00:00Z') }))
 vi.mock('fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
-  return { ...fs, stat: async (path: string, ...args: unknown[]) => {
+  return { ...fs, realpath: (name: string) => fs.realpath(name.startsWith('/work/') ? join(clock.root, 'workspaces', name.slice(6)) : name),
+    stat: async (path: string, ...args: unknown[]) => {
     const result = await Reflect.apply(fs.stat, fs, [path, ...args])
     return String(path).startsWith(clock.root + '/')
       ? new Proxy(result, { get: (value, key) => key === 'birthtimeMs' ? clock.time : Reflect.get(value, key) })
       : result
   } }
+})
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>()
+  const mapped = (name: string) => name.startsWith('/work/') ? join(clock.root, 'workspaces', name.slice(6)) : name
+  return { ...fs, realpathSync: (name: string) => fs.realpathSync(mapped(name)), statSync: (name: string) => fs.statSync(mapped(name)) }
 })
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/repair-identity.golden.json', import.meta.url))
@@ -57,6 +63,7 @@ async function check(key: string, run: () => unknown | Promise<unknown>): Promis
 
 beforeAll(async () => {
   clock.root = realpathSync(mkdtempSync(join(tmpdir(), 'repair-identity-golden-')))
+  for (const cwd of ['pi/resume', 'pi/a-b', 'pi-a/b']) mkdirSync(join(clock.root, 'workspaces', cwd), { recursive: true })
   Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
   vi.useFakeTimers({ toFake: ['Date'], now: clock.time })
   const home = join(clock.root, 'home')

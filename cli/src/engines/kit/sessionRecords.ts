@@ -7,7 +7,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import type { SessionStoreContract } from '../facets/sessionStore.js'
-import { identityHead, IdentityReadUnavailable } from './identityScan.js'
+import { identityHead, IdentityReadUnavailable, type IdentityVersion } from './identityScan.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -79,9 +79,9 @@ function firstRecordMeta(firstLine: string, first: NonNullable<SessionStoreContr
 
 /** Repair pools require conclusive metadata for every candidate. A short, cut or unreadable
  * rollout cannot make a sibling unique. Compatibility readers retain their nullable result. */
-export async function readIdentityFirstRecord(file: string, first: NonNullable<SessionStoreContract['first']>): Promise<SessionMeta> {
+export async function readIdentityFirstRecord(file: string, first: NonNullable<SessionStoreContract['first']>, expected?: IdentityVersion): Promise<SessionMeta> {
   try {
-    const head = await identityHead(file, Number.MAX_SAFE_INTEGER, first.maxBytes)
+    const head = await identityHead(file, Number.MAX_SAFE_INTEGER, first.maxBytes, expected)
     const line = head.lines.find(line => line.trim())
     if (!line) throw new IdentityReadUnavailable('the rollout header is incomplete or exceeds the read limit')
     const meta = firstRecordMeta(line, first)

@@ -98,6 +98,8 @@ export class SessionCheckpointStore {
       try { previous = JSON.parse(readPrivateStateFile(manifest, 16384)) as Checkpoint } catch (e) {
         if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
       }
+      const source = s.transcriptPath ?? (s.engine === 'pi' && s.sessionId
+        ? await findResumedTranscript('pi', s.sessionId, { cwd: s.cwd ?? undefined }) : null)
       if (options.screen != null && s.sessionId) {
         // Save even when the native transcript is unchanged: a newly typed draft
         // belongs to the terminal, not to that transcript. Never submit it.
@@ -106,8 +108,6 @@ export class SessionCheckpointStore {
       }
       const checkpoint: Checkpoint = { version: 1, agentId: s.agentId, sessionId: s.sessionId,
         engine: s.engine, codexHome: s.codexHome ?? null, savedAt: Date.now(), source: null, file, bytes: 0 }
-      const source = s.transcriptPath ?? (s.engine === 'pi' && s.sessionId
-        ? await findResumedTranscript('pi', s.sessionId, { cwd: s.cwd ?? undefined }) : null)
       // Pi announces a session ID before it writes any history. In particular,
       // missing credentials can leave it here indefinitely. Preserve the screen
       // just as for an unbound chat; a known transcript, or one backed up before, must still save.
@@ -166,7 +166,7 @@ export class SessionCheckpointStore {
         await rm(join(this.directory, previous.file), { force: true }).catch(() => {})
       }
     } catch (error) {
-      if (error instanceof SessionCheckpointError) throw error
+      if (error instanceof SessionCheckpointError || (error as { code?: unknown } | null)?.code === 'IDENTITY_UNAVAILABLE') throw error
       throw new SessionCheckpointError('Could not back up this conversation to disk. Check free space and try again; its existing history is kept.')
     } finally {
       await rm(temporary, { force: true }).catch(() => {})

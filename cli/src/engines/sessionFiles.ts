@@ -8,6 +8,7 @@ import { sessionRoots } from '../lib/engineHomes.js'
 import { continuedIn } from './kit/continuation.js'
 import { findSessionFile, readFirstRecord, readIdentityFirstRecord, type SessionMeta } from './kit/sessionRecords.js'
 import { sessionStoreOf } from './sessionStoreContracts.js'
+import type { IdentityVersion } from './kit/identityScan.js'
 import type { AgentEngine } from './types.js'
 
 export type { SessionMeta }
@@ -20,9 +21,9 @@ export function sessionMetaOf(engine: AgentEngine | string, path: string): Sessi
 }
 
 /** Strict, asynchronous evidence for discovery and Stop; unrelated readers keep their compatibility API. */
-export async function sessionIdentityMetaOf(engine: AgentEngine | string, path: string): Promise<SessionMeta | null> {
+export async function sessionIdentityMetaOf(engine: AgentEngine | string, path: string, expected?: IdentityVersion): Promise<SessionMeta | null> {
   const first = sessionStoreOf(engine)?.first
-  return first ? readIdentityFirstRecord(path, first) : null
+  return first ? readIdentityFirstRecord(path, first, expected) : null
 }
 
 /**
