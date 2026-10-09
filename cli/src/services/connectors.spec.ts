@@ -7,6 +7,7 @@ import { fakeCore } from '../testing/fakeCore.js'
 import { CONNECTORS_REQUESTS, startConnectors } from './connectors.js'
 import { Store } from '../lib/connectors/store.js'
 import * as gateway from '../lib/connectors/gateway.js'
+import { FakeGateway } from '../testing/connectorServers.js'
 
 const OWNER = { local: true, owner: true }
 
@@ -63,6 +64,29 @@ describe('the connectors service', () => {
     const started = await requests.connectors!({ action: 'connect', connector: 'newsvc' }, OWNER)
     expect(started).toMatchObject({ error: 'CONNECTORS_FAILED', detail: expect.stringContaining('reach') })
   })
+
+  it('says how a gateway sign-in goes without ever an `error` key, which the desktop reads as the request failing', async () => {
+    const fake = await new FakeGateway().start()
+    const original = { ...gateway.backend }
+    Object.assign(gateway.backend, { signedIn: () => true, base: async () => fake.base, headers: async () => ({ authorization: 'Bearer harness-session' }) })
+    try {
+      const vault = new Store(join(home, 'store'), env)
+      const requests = startConnectors(fakeCore(), { vault, env, port: 0 })
+      const ask = (flow: string) => requests.connectors!({ action: 'flow', flow }, OWNER) as Promise<Record<string, unknown>>
+      const started = await requests.connectors!({ action: 'connect', connector: 'github' }, OWNER) as { flow: string }
+      const seen: Record<string, unknown>[] = [await ask(started.flow)]
+      while (seen.at(-1)!.state === 'pending') { await new Promise(resolve => setTimeout(resolve, 100)); seen.push(await ask(started.flow)) }
+      expect(seen[0]).toEqual({ connector: 'github', state: 'pending' })
+      expect(seen.at(-1)).toEqual({ connector: 'github', state: 'connected' })
+      expect(vault.token('github')).toMatchObject({ source: 'gateway' })
+      fake.polls = 0
+      const again = await requests.connectors!({ action: 'connect', connector: 'github' }, OWNER) as { flow: string }
+      fake.fail = { status: 400, code: 'BAD', message: 'The service said no.' }
+      let failed = await ask(again.flow)
+      while (failed.state === 'pending') { await new Promise(resolve => setTimeout(resolve, 100)); failed = await ask(again.flow) }
+      expect(failed).toEqual({ connector: 'github', state: 'failed', reason: 'The service said no.' })
+    } finally { Object.assign(gateway.backend, original); fake.close() }
+  }, 15_000)
 
   it('a failure that is not a connection\'s own says only that connections are unavailable', async () => {
     const vault = new Store(join(home, 'store'), env)

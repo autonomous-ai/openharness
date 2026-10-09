@@ -78,8 +78,7 @@ class ConnectorsController extends ChangeNotifier {
   final Set<String> pending = {};
   bool _disposed = false;
 
-  String? get _target =>
-      machineId ?? app.localMachineState?.machine.machineId;
+  String? get _target => machineId ?? app.localMachineState?.machine.machineId;
 
   Future<Map<String, dynamic>> _ask(Map<String, dynamic> payload) async {
     final target = _target;
@@ -87,7 +86,7 @@ class ConnectorsController extends ChangeNotifier {
     final answer = await app.connectors(target, payload);
     final failure = answer['error'];
     if (failure != null) {
-      throw StateError(
+      throw _Refused(
         answer['detail'] as String? ??
             (failure == 'SERVICE_UNAVAILABLE' || failure == 'UNSUPPORTED'
                 ? 'Update Harness on this computer to use Connectors.'
@@ -132,6 +131,12 @@ class ConnectorsController extends ChangeNotifier {
     } finally {
       pending.remove(card.code);
       await refresh();
+      // Back from the browser, the link to the computer may still be coming back: the card shows the
+      // new connection as soon as it answers, not on the next manual refresh.
+      for (var i = 0; error != null && !_disposed && i < 5; i++) {
+        await Future<void>.delayed(pollEvery);
+        await refresh();
+      }
     }
   }
 
@@ -144,18 +149,31 @@ class ConnectorsController extends ChangeNotifier {
     final flow = started['flow'] as String?;
     if (flow == null) return;
     final deadline = DateTime.now().add(_signInFor);
+    Object? lastError;
     while (!_disposed && DateTime.now().isBefore(deadline)) {
       await Future<void>.delayed(pollEvery);
-      final status = await _ask({'action': 'flow', 'flow': flow});
+      final Map<String, dynamic> status;
+      try {
+        status = await _ask({'action': 'flow', 'flow': flow});
+      } on _Refused {
+        rethrow;
+      } catch (e) {
+        // The link to the computer can drop for a moment while the person is in the browser signing in;
+        // the sign-in goes on in the daemon all the same. Ask again rather than give up on it.
+        lastError = e;
+        continue;
+      }
       if (status['state'] == 'connected') {
         notice = '$name connected. Your agents can use it now.';
         return;
       }
       if (status['state'] == 'failed') {
-        notice = '$name: ${status['error'] ?? 'The sign-in did not finish.'}';
+        // `reason`, not `error`: a reply carrying `error` never reaches here (WsConn reads it as a failure).
+        notice = '$name: ${status['reason'] ?? 'The sign-in did not finish.'}';
         return;
       }
     }
+    if (lastError != null) throw lastError;
   }
 
   Future<void> disconnect(ConnectorCard card) async {
@@ -183,9 +201,11 @@ class ConnectorsController extends ChangeNotifier {
       });
       if (started['flow'] != null) {
         unawaited(
-          _follow(name, started).catchError((Object e) {
-            notice = '$name: ${_message(e)}';
-          }).whenComplete(refresh),
+          _follow(name, started)
+              .catchError((Object e) {
+                notice = '$name: ${_message(e)}';
+              })
+              .whenComplete(refresh),
         );
       } else {
         notice = '$name added. Your agents can use it now.';
@@ -197,12 +217,25 @@ class ConnectorsController extends ChangeNotifier {
     }
   }
 
-  static String _message(Object e) =>
-      e is StateError ? e.message : 'Connections are unavailable. Try again.';
+  static String _message(Object e) => switch (e) {
+    _Refused(:final message) => message,
+    StateError(:final message) => message,
+    _ => 'Connections are unavailable. Try again.',
+  };
 
   @override
   void dispose() {
     _disposed = true;
     super.dispose();
   }
+}
+
+/// The computer answered, and said no: a reason to stop, unlike a request that did not get through.
+class _Refused implements Exception {
+  const _Refused(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }

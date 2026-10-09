@@ -64,7 +64,12 @@ export function startConnectors(_core: CoreApi, overrides: Partial<ConnectorsDep
         const code = validateCode(payload.connector)
         return { ...(await flows.start(code, signInFor(vault, code, services(await gatewayOffers())))) }
       }
-      case 'flow': return { ...flows.get(String(payload.flow ?? '')) }
+      case 'flow': {
+        // Never an `error` key on an answer: the desktop's socket reads one, even empty, as the request
+        // failing, and would never see the sign-in finish. Why one failed rides as `reason`.
+        const { connector, state, error } = flows.get(String(payload.flow ?? ''))
+        return { connector, state, ...(error ? { reason: error } : {}) }
+      }
       case 'disconnect': {
         const code = validateCode(payload.connector)
         await disconnect(vault, code, env)
