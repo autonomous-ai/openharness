@@ -33,6 +33,7 @@ function fixture(): ConvertedPet {
     listening: scene([0]),
     sending: scene([1, 1, 0], -3, 5),
     failed: scene([0]),
+    relaxing: scene([0, 1, 1], 2, -4),
     warnings: [],
   }
 }
@@ -49,16 +50,50 @@ describe('pack', () => {
     expect(back).toEqual({ ...p, id: '0102030405060708' })
   })
 
+  it('version 2 round-trips the relaxing scene right after failed', () => {
+    const p = fixture()
+    const buf = encodePack(p, ID, 2)
+    expect(buf[4]).toBe(2)
+    expect(decodePack(buf)).toEqual({ ...p, id: '0102030405060708' })
+    // the scene is n u8 · step_ms u16 · dx i16 · dy i16 · n x u16, 3 + 4 + 6 bytes, after failed's
+    const v1 = encodePack(p, ID, 1)
+    const tail = Buffer.from([3, 120, 0, 2, 0, 0xfc, 0xff, 0, 0, 1, 0, 1, 0])
+    expect(buf.includes(tail)).toBe(true)
+    expect(buf.length).toBe(v1.length + tail.length)
+  })
+
+  it('version 1 has no relaxing scene and equals the pack before relaxing existed', () => {
+    const p = fixture()
+    const v1 = encodePack(p, ID, 1)
+    expect(v1[4]).toBe(1)
+    expect(decodePack(v1)).toEqual({ ...p, id: '0102030405060708', relaxing: { frames: [], stepMs: 0, dx: 0, dy: 0 } })
+    expect(v1.equals(readFileSync(VECTOR))).toBe(true)
+  })
+
+  it('version 1 leaves out the frames only relaxing uses, keeping every other index', () => {
+    const p = fixture()
+    p.frames = [...p.frames, frame(1, ['1.1', '.1.'])]
+    p.relaxing = { frames: [2, 0], stepMs: 120, dx: 0, dy: 0 }
+    const v1 = decodePack(encodePack(p, ID, 1))
+    expect(v1.frames).toEqual(p.frames.slice(0, 2))
+    expect(decodePack(encodePack(p, ID, 2)).frames).toEqual(p.frames)
+  })
+
+  it('refuses a version it does not write', () => {
+    expect(() => encodePack(fixture(), ID, 3)).toThrow(/version/)
+  })
+
   it('header layout', () => {
     const buf = encodePack(fixture(), ID)
     expect(buf.subarray(0, 4).toString('latin1')).toBe('HPET')
     expect(buf[4]).toBe(PACK_VERSION)
+    expect(PACK_VERSION).toBe(2)
     expect([...buf.subarray(6, 14)]).toEqual([...ID])
     expect(buf.readUInt32LE(14)).toBe(buf.length)
     expect(buf.readUInt32LE(18)).toBe(crc32(buf.subarray(22)))
   })
 
-  it('bad CRC / bad magic / version 2 → throws', () => {
+  it('bad CRC / bad magic / version 3 → throws', () => {
     const good = encodePack(fixture(), ID)
     const crc = Buffer.from(good)
     crc[crc.length - 1] ^= 0xff
@@ -66,9 +101,9 @@ describe('pack', () => {
     const magic = Buffer.from(good)
     magic[0] = 0x58
     expect(() => decodePack(magic)).toThrow(/magic/)
-    const v2 = Buffer.from(good)
-    v2[4] = 2
-    expect(() => decodePack(rewriteCrc(v2))).toThrow(/version/)
+    const v3 = Buffer.from(good)
+    v3[4] = 3
+    expect(() => decodePack(rewriteCrc(v3))).toThrow(/version/)
     expect(() => decodePack(good.subarray(0, good.length - 3))).toThrow(/length/)
     expect(() => decodePack(good.subarray(0, 10))).toThrow()
   })
@@ -98,8 +133,8 @@ describe('pack', () => {
     }
   })
 
-  it('vector: encodePack(fixture) equals test/vectors/pet_min.hpet', () => {
-    const buf = encodePack(fixture(), ID)
+  it('vector: encodePack(fixture, version 1) equals test/vectors/pet_min.hpet', () => {
+    const buf = encodePack(fixture(), ID, 1)
     if (process.env.UPDATE_VECTORS === '1') {
       mkdirSync(dirname(VECTOR), { recursive: true })
       writeFileSync(VECTOR, buf)

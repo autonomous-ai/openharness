@@ -68,7 +68,7 @@ function petStubs() {
 }
 
 // What the defaults come to on sheetPng: only idle and running are drawn.
-const DEFAULT_ROWS_IDLE = { rest: 'idle', working: 'running', listening: 'idle', sending: 'idle', asking: 'idle' }
+const DEFAULT_ROWS_IDLE = { rest: 'idle', working: 'running', listening: 'idle', sending: 'idle', asking: 'idle', relaxing: 'idle' }
 
 // A 768 x 936 sheet with an idle and a running row.
 function sheetPng(): Buffer {
@@ -103,7 +103,7 @@ describe('pet requests', () => {
     expect(reply).toMatchObject({ ok: true, id: expect.stringMatching(/^[0-9a-f]{16}$/), warnings: expect.any(Array), stepMs: { small: 120 } })
     expect(reply.bytes).toBeGreaterThan(0)
     expect(reply.colours).toBeGreaterThan(0)
-    for (const scene of ['small', 'working', 'listening', 'sending']) {
+    for (const scene of ['small', 'working', 'listening', 'sending', 'relaxing']) {
       expect(reply.frames[scene].length).toBeGreaterThan(0)
       for (const url of reply.frames[scene]) {
         expect(url).toMatch(PNG_URL)
@@ -112,9 +112,9 @@ describe('pet requests', () => {
       }
       expect(reply.stepMs[scene]).toBeGreaterThan(0)
     }
-    expect(Object.keys(reply.frames).sort()).toEqual(['asking', 'listening', 'sending', 'small', 'working'])
+    expect(Object.keys(reply.frames).sort()).toEqual(['asking', 'listening', 'relaxing', 'sending', 'small', 'working'])
     expect(reply.name).toBe('sheet')
-    expect(reply.stepMs).toEqual({ small: 120, asking: 120, working: 120, listening: 120, sending: 120 })
+    expect(reply.stepMs).toEqual({ small: 120, asking: 120, working: 120, listening: 120, sending: 120, relaxing: 120 })
   })
   it('pet_preview with a name stores it, sanitized: control characters stripped, trimmed, cut to 40; empty falls back to the file name', async () => {
     const { service, sheet } = await fixture()
@@ -150,12 +150,22 @@ describe('pet requests', () => {
     const swapped = await harnessDevicesRequest(service, 'pet_preview', { path: sheet, rows: { rest: 'running', working: 'idle', other: 'x' } }) as Record<string, any>
     expect(swapped.ok).toBe(true)
     expect(swapped.id).not.toBe(plain.id)
-    expect(swapped.rows).toEqual({ rest: 'running', working: 'idle', listening: 'running', sending: 'running', asking: 'running' })
+    expect(swapped.rows).toEqual({ rest: 'running', working: 'idle', listening: 'running', sending: 'running', asking: 'running', relaxing: 'running' })
     const same = await harnessDevicesRequest(service, 'pet_preview', { path: sheet, rows: { listening: 'idle' } }) as Record<string, any>
     expect(same.id).toBe(plain.id)
     await harnessDevicesRequest(service, 'pet_apply', { target: 'all', id: swapped.id })
     const status = await harnessDevicesRequest(service, 'pet_status', {}) as { pets: Record<string, { rows: unknown }> }
     expect(status.pets[swapped.id].rows).toEqual(swapped.rows)
+  })
+  it('pet_preview accepts a relaxing row: it is its own pack and its own scene', async () => {
+    const { service, sheet } = await fixture()
+    const plain = await harnessDevicesRequest(service, 'pet_preview', { path: sheet }) as Record<string, any>
+    const calm = await harnessDevicesRequest(service, 'pet_preview', { path: sheet, rows: { relaxing: 'running' } }) as Record<string, any>
+    expect(calm.ok).toBe(true)
+    expect(calm.rows).toEqual({ ...DEFAULT_ROWS_IDLE, relaxing: 'running' })
+    expect(calm.id).not.toBe(plain.id)
+    expect(calm.frames.relaxing).toHaveLength(2)
+    expect(await harnessDevicesRequest(service, 'pet_preview', { path: sheet, rows: { relaxing: 'sideways' } })).toEqual({ error: 'BAD_PET_REQUEST' })
   })
   it('pet_preview refuses an unknown row name and explains an empty chosen row', async () => {
     const { service, sheet } = await fixture()

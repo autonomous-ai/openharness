@@ -30,8 +30,9 @@ export function previewFrames(pet: ConvertedPet) {
       working: url(pet.working.frames),
       listening: url(pet.listening.frames),
       sending: url(pet.sending.frames),
+      relaxing: url(pet.relaxing.frames),
     },
-    stepMs: { small: SMALL_STEP_MS, asking: SMALL_STEP_MS, working: pet.working.stepMs, listening: pet.listening.stepMs, sending: pet.sending.stepMs },
+    stepMs: { small: SMALL_STEP_MS, asking: SMALL_STEP_MS, working: pet.working.stepMs, listening: pet.listening.stepMs, sending: pet.sending.stepMs, relaxing: pet.relaxing.stepMs },
   }
 }
 

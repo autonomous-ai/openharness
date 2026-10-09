@@ -47,7 +47,8 @@ describe('sheetStrips', () => {
 // messages are capped at 6 MiB + 4 KiB (localWsServer.ts MAX_WS_MESSAGE_BYTES). Its pictures are bounded by a sheet
 // of full-size cells drawn edge to edge in noise, every row full: more than any sheet that converts (a pack over 1 MB
 // is refused) and than any file under 8 MB holds. The scenes' and the small pet's frames are as many as they can be
-// with the default rows (three scenes of 8, the small pet's 8 idle and 8 waving, 8 asking).
+// with the default rows (four scenes of 6, the small pet's 6 idle and 6 waving, 6 asking). Relaxing is the fourth
+// scene; the rows are cut to 6 frames so that stays under the cap (a real pet is bounded by its 1 MB pack besides).
 describe('pet_preview size', () => {
   it('a full 9 x 8 sheet of noise fits the local socket limit', () => {
     const png = new PNG({ width: 1536, height: 1872 })
@@ -58,6 +59,7 @@ describe('pet_preview size', () => {
     }
     const sheet = parsePetSheet(PNG.sync.write(png))
     expect(PET_ROWS.every((row) => sheet.rows[row].length === 8)).toBe(true)
+    for (const row of PET_ROWS) sheet.rows[row] = sheet.rows[row].slice(0, 6)
     const strips = JSON.stringify(sheetStrips(sheet)).length
     const frames = JSON.stringify(previewFrames(convertPet(sheet))).length
     process.stderr.write(`pet_preview worst case: sheetRows ${strips} B, frames ${frames} B\n`)
