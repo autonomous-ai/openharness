@@ -216,7 +216,10 @@ export class CloseAgentService {
         if (result.error && result.error !== 'SESSION_NOT_IDLE') {
           const latest = this.deps.registry.byAgent(s.agentId)
           if (latest?.closePlan?.id === plan.id) {
-            const changed = this.deps.registry.setClosePlan(s.agentId, { ...plan, state: 'failed',
+            // Native identity can be between writes. Preserve the queued intent and reason
+            // so the next idle tick retries before any checkpoint or process mutation.
+            const changed = this.deps.registry.setClosePlan(s.agentId, { ...plan,
+              state: result.error === 'IDENTITY_UNAVAILABLE' ? 'waiting' : 'failed',
               detail: result.detail ?? 'Could not save and close this session. Open it to try again.' })
             if (changed) this.deps.changed(changed)
           }

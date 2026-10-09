@@ -56,11 +56,13 @@ function check(key: string, value: unknown): void {
   recorded[key] = result
   if (!RECORD) expect({ key, result }).toEqual({ key, result: golden[key] })
 }
+const writtenFiles: string[] = []
 let fileTime = T0
 /** A file, written, whose modification time is the next tick of a fixed clock: a scan's newest-first order is set. */
 function file(path: string, text = ''): string {
   mkdirSync(join(path, '..'), { recursive: true })
   writeFileSync(path, text)
+  writtenFiles.push(path)
   fileTime += 1000
   utimesSync(path, fileTime / 1000, fileTime / 1000)
   return path
@@ -240,6 +242,8 @@ describe('where the core finds the other engines\' conversations', () => {
 
   it('repairs a live process\'s session: by folder, by store, by its lock, and a resumed Pi conversation', async () => {
     const since = T0
+    // Resolver/binding fixtures model older conversations; repair gets a fresh corpus below.
+    for (const path of writtenFiles) utimesSync(path, (T0 - 60_000) / 1000, (T0 - 60_000) / 1000)
     // Pi, Command Code and Amp name the folder on their first line; Muse its workspace, once a run has opened.
     file(home('.pi', 'agent', 'sessions', '--work-r--', `2026_${UUID(41)}.jsonl`), `${JSON.stringify({ type: 'session', id: UUID(41), cwd: '/work/r' })}\n`)
     file(home('.commandcode', 'projects', 'work-r', `${UUID(42)}.jsonl`), `${JSON.stringify({ cwd: '/work/r', sessionId: UUID(42) })}\n`)

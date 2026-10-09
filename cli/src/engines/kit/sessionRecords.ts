@@ -5,8 +5,9 @@
  * path, so every read is bounded.
  */
 import { closeSync, existsSync, openSync, readdirSync, readSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import type { SessionStoreContract } from '../facets/sessionStore.js'
+import { identityHead, IdentityReadUnavailable } from './identityScan.js'
 
 type JsonObject = Record<string, unknown>
 
@@ -61,6 +62,39 @@ function valueAt(value: unknown, path: readonly string[]): unknown {
   return at
 }
 
+function firstRecordMeta(firstLine: string, first: NonNullable<SessionStoreContract['first']>): SessionMeta | null {
+  const record = object(JSON.parse(firstLine))
+  if (record?.type !== first.type || !object(valueAt(record, first.id.slice(0, -1)))) return null
+  const id = valueAt(record, first.id)
+  const cwd = valueAt(record, first.cwd)
+  const child = valueAt(record, first.child)
+  const parent = valueAt(record, first.parent)
+  return {
+    id: typeof id === 'string' ? id : '',
+    isSubagent: child !== undefined && child !== null,
+    parentThreadId: typeof parent === 'string' && parent ? parent : null,
+    cwd: typeof cwd === 'string' ? cwd : null,
+  }
+}
+
+/** Repair pools require conclusive metadata for every candidate. A short, cut or unreadable
+ * rollout cannot make a sibling unique. Compatibility readers retain their nullable result. */
+export async function readIdentityFirstRecord(file: string, first: NonNullable<SessionStoreContract['first']>): Promise<SessionMeta> {
+  try {
+    const head = await identityHead(file, Number.MAX_SAFE_INTEGER, first.maxBytes)
+    const line = head.lines.find(line => line.trim())
+    if (!line) throw new IdentityReadUnavailable('the rollout header is incomplete or exceeds the read limit')
+    const meta = firstRecordMeta(line, first)
+    if (!meta || (!meta.isSubagent && (!meta.id || !meta.cwd || !isAbsolute(meta.cwd)))) {
+      throw new IdentityReadUnavailable('the rollout header is incomplete or invalid')
+    }
+    return meta
+  } catch (error) {
+    if (error instanceof IdentityReadUnavailable) throw error
+    throw new IdentityReadUnavailable('the rollout header could not be read completely')
+  }
+}
+
 /** Read only the first record (the first line with anything on it, within the declared bound). Null for a
  *  file that does not open with the declared record, or cannot be read or parsed. */
 export function readFirstRecord(file: string, first: NonNullable<SessionStoreContract['first']>): SessionMeta | null {
@@ -71,18 +105,7 @@ export function readFirstRecord(file: string, first: NonNullable<SessionStoreCon
     const bytes = readSync(fd, buffer, 0, buffer.length, 0)
     const firstLine = buffer.subarray(0, bytes).toString('utf8').split('\n').find((line) => line.trim())
     if (!firstLine) return null
-    const record = object(JSON.parse(firstLine))
-    if (record?.type !== first.type || !object(valueAt(record, first.id.slice(0, -1)))) return null
-    const id = valueAt(record, first.id)
-    const cwd = valueAt(record, first.cwd)
-    const child = valueAt(record, first.child)
-    const parent = valueAt(record, first.parent)
-    return {
-      id: typeof id === 'string' ? id : '',
-      isSubagent: child !== undefined && child !== null,
-      parentThreadId: typeof parent === 'string' && parent ? parent : null,
-      cwd: typeof cwd === 'string' ? cwd : null,
-    }
+    return firstRecordMeta(firstLine, first)
   } catch {
     return null
   } finally {

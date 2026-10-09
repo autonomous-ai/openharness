@@ -291,15 +291,15 @@ describe('session repair — Claude subagent transcripts, verifier cases', () =>
       .resolves.toEqual({ sessionId: 'fork-sess', transcriptPath: fork })
   })
 
-  it('reads only the opening for the flag: a sidechain record past the scanned lines does not hide a main session', async () => {
+  it('holds when the opening does not settle the sidechain flag before the read limit', async () => {
     const root = join(tempRoot(), 'projects')
     const opening = Array.from({ length: 25 }, (_, i) => ({ type: 'x-mode', i }))
-    const file = write(root, 'proj/long-sess.jsonl',
+    write(root, 'proj/long-sess.jsonl',
       lines({ type: 'summary' }, { type: 'user', cwd: CWD }, ...opening, { type: 'user', isSidechain: true, cwd: CWD }),
       STARTED_AT + 10_000)
     const { findLiveSession } = await load(root)
     await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true }))
-      .resolves.toEqual({ sessionId: 'long-sess', transcriptPath: file })
+      .rejects.toThrow('header exceeds the read limit')
   })
 
   it('takes the cwd from a later record when the flagged opening carries none', async () => {
@@ -835,7 +835,10 @@ it.each(['bad pid', 'bad start', 'missing file', 'bad json', 'different pid', 'd
   if (mode === 'invalid id') record.sessionId = '../escape'
   mkdirSync(join(home, 'sessions'))
   if (mode !== 'missing file') writeFileSync(join(home, 'sessions', '77.json'), mode === 'bad json' ? '{' : JSON.stringify(record))
-  expect(await processSessionOf('claude', mode === 'bad pid' ? -1 : 77, CWD, mode === 'bad start' ? NaN : STARTED_AT)).toBeNull()
+  const result = processSessionOf('claude', mode === 'bad pid' ? -1 : 77, CWD, mode === 'bad start' ? NaN : STARTED_AT)
+  if (['bad json', 'different cwd', 'missing start', 'missing cwd', 'missing id', 'invalid id', 'missing history'].includes(mode)) {
+    await expect(result).rejects.toThrow('Conversation identity is held')
+  } else await expect(result).resolves.toBeNull()
 })
 
 /**

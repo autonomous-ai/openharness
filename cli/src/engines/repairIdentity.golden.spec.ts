@@ -39,7 +39,20 @@ async function check(key: string, run: () => unknown | Promise<unknown>): Promis
   try { value = await run() } catch (error) { value = { error: (error as Error).message } }
   if (typeof value === 'symbol') value = '<unsettled>'
   captured[key] = JSON.parse(JSON.stringify(value ?? null).split(clock.root).join('<root>'))
-  if (!RECORD) expect({ key, value: captured[key] }).toEqual({ key, value: expected[key] })
+  if (!RECORD) {
+    // Explicit safety corrections only: keep the former nulls in the artifact, but do not
+    // let an incomplete identity remove a possible competitor from a discovery pool.
+    const held: Record<string, string> = {
+      'muse:malformed': 'the workspace header is incomplete or invalid',
+      'muse:noWorkspace': 'the workspace header is incomplete or invalid',
+      'muse:wrongEnvelope': 'the workspace header is incomplete or invalid',
+      'muse:incomplete': 'the run identity is incomplete or invalid',
+    }
+    const reason = held[key]
+    if (reason) expect(expected[key], `${key} · former answer`).toBeNull()
+    expect({ key, value: captured[key] }).toEqual({ key,
+      value: reason ? { error: `Conversation identity is held: ${reason}.` } : expected[key] })
+  }
 }
 
 beforeAll(async () => {
@@ -86,6 +99,8 @@ it('records which Muse files identify a conversation', async () => {
     const cwd = `/work/muse/${name}`
     file(join(root, name, 'session.jsonl'), body(cwd))
     await check(`muse:${name}`, () => repair.findLiveSession('muse', cwd, clock.time, { bornOnly: true }))
+    // A malformed header must not affect later cases; keep spoken for the final age check.
+    if (name !== 'spoken') rmSync(join(root, name), { recursive: true, force: true })
   }
   file(join(root, 'parent', 'subagent', 'session.jsonl'), lines(header('/work/muse/child'), event('run', 'started')))
   await check('muse:subagent', () => repair.findLiveSession('muse', '/work/muse/child', clock.time))

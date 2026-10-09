@@ -6,7 +6,7 @@
  */
 import { sessionRoots } from '../lib/engineHomes.js'
 import { continuedIn } from './kit/continuation.js'
-import { findSessionFile, readFirstRecord, type SessionMeta } from './kit/sessionRecords.js'
+import { findSessionFile, readFirstRecord, readIdentityFirstRecord, type SessionMeta } from './kit/sessionRecords.js'
 import { sessionStoreOf } from './sessionStoreContracts.js'
 import type { AgentEngine } from './types.js'
 
@@ -17,6 +17,12 @@ export type { SessionMeta }
 export function sessionMetaOf(engine: AgentEngine | string, path: string): SessionMeta | null {
   const first = sessionStoreOf(engine)?.first
   return first ? readFirstRecord(path, first) : null
+}
+
+/** Strict, asynchronous evidence for discovery and Stop; unrelated readers keep their compatibility API. */
+export async function sessionIdentityMetaOf(engine: AgentEngine | string, path: string): Promise<SessionMeta | null> {
+  const first = sessionStoreOf(engine)?.first
+  return first ? readIdentityFirstRecord(path, first) : null
 }
 
 /**

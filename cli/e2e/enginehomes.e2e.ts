@@ -7,7 +7,7 @@
  * without the profile. An agent must still bind, take turns and come back after a restart.
  */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -344,6 +344,55 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     expect(back.status).toBe('active')
     client.close()
   }, 300_000)
+
+  it('an incomplete native identity holds binding, Stop and Close while readiness and a sibling continue', async () => {
+    const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'codex' } }); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    await d.start()
+    let client = await LocalClient.connect(d)
+    const opened = await client.request('agent_create', { engine: 'terminal', cwd: d.projectsDir }, 60_000)
+    expect(opened.error, JSON.stringify(opened)).toBeUndefined()
+    const tile = await until('the private terminal tile', async () => {
+      const now = await row(client, opened.agent.id); return now?.tmuxPane ? now : null
+    })
+    client.close()
+    await d.stop()
+    // Start only in this fixture's private pane while discovery is stopped. No hook can
+    // bind before the engine's own record is made incomplete, as during a crashed write.
+    await type(d, tile.tmuxPane, 'claude')
+    const records = join(d.engineConfig.claudeProjectsDir, '..', 'sessions')
+    const path = await until('the private engine process record', () => {
+      try { const files = readdirSync(records); return files.length === 1 ? join(records, files[0]) : null }
+      catch { return null }
+    })
+    const complete = readFileSync(path, 'utf8')
+    const native = JSON.parse(complete)
+    writeFileSync(path, '{')
+    await d.start()
+    client = await LocalClient.connect(d)
+    await until('the binding hold with its reason', () => d.log().includes('binding held · Conversation identity is held: the process record is incomplete'))
+    const held = await row(client, tile.id)
+    expect(held?.engine).toBe('claude')
+    expect(held?.sessionId).toBeFalsy()
+    expect(held?.status).toBe('active')
+    const sibling = await client.request('agent_create', { engine: 'codex', cwd: d.projectsDir, bypassPermission: true }, 90_000)
+    expect(sibling.error, JSON.stringify(sibling)).toBeUndefined()
+    await until('the independent sibling to bind', async () => (await row(client, sibling.agent.id))?.sessionId, 45_000)
+    const stopped = await client.request('agent_delete', { agentId: tile.id }, 60_000)
+    expect(stopped.error, JSON.stringify(stopped)).toBeTruthy()
+    const closed = await client.request('agent_close', { agentId: tile.id, sessionId: held!.sessionId,
+      createdAt: held!.createdAt, mode: 'now' }, 60_000)
+    expect(closed).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', detail: expect.stringContaining('process record is incomplete') })
+    expect(IsolatedDaemon.alive(native.pid)).toBe(true)
+    expect((await row(client, tile.id))?.status).toBe('active')
+    writeFileSync(path + '.complete', complete)
+    renameSync(path + '.complete', path)
+    await until('the same live process to bind after its record becomes complete', async () => {
+      const now = await row(client, tile.id)
+      return now?.status === 'active' && now.sessionId === native.sessionId
+    }, 60_000, 250)
+    client.close()
+  }, 240_000)
 
   // A Codex agent in a moved CODEX_HOME, restarted, then stopped and opened again. Its rollout was held to the
   // daemon's own CODEX_HOME before the relaunch (portableHistory.ts) and refused as outside the profile: the
