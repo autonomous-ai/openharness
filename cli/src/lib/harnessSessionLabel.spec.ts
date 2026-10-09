@@ -100,7 +100,9 @@ describe('the tag on a tmux before 3.0', () => {
   it('reads the window\'s tag only in a session Harness named, on a real tmux', async () => {
     // A pane the person split into an agent's window, once they had moved that window into their own
     // session, carries no tag of its own: the window's was taken for it, and it was styled as an agent.
-    const tmux = await isolatedTmux()
+    const home = mkdtempSync(join(tmpdir(), 'pane-owner-home-'))
+    dirs.push(home)
+    const tmux = await isolatedTmux({ ...process.env, HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history') })
     try {
       const tag = '0123456789abcdef'
       await tmux.run('new-session', '-d', '-s', 'harness-claude-1', '-x', '80', '-y', '24')
