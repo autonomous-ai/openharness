@@ -26,7 +26,7 @@ import { resolveBinaryOnPath } from '../lib/binaryOnPath.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { GridLaunchOverride } from '../lib/gridLaunchWire.js'
 
-process.env.TZ = 'America/New_York'
+process.env.TZ = 'UTC'
 
 // The pane itself, the probes of this machine's binaries, and a harness's init: the launch is what is recorded.
 const pane = vi.hoisted(() => ({ calls: [] as Array<Record<string, unknown>>, tmux: true }))
