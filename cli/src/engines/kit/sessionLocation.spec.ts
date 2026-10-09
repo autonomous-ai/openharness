@@ -12,7 +12,7 @@ import { locateProcessSession, locateTranscript, transcriptGroups } from './sess
 
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
-  return { ...actual, opendir: vi.fn(actual.opendir), stat: vi.fn(actual.stat), readlink: vi.fn(actual.readlink) }
+  return { ...actual, open: vi.fn(actual.open), opendir: vi.fn(actual.opendir), stat: vi.fn(actual.stat), readlink: vi.fn(actual.readlink) }
 })
 vi.mock('node:child_process', async original => {
   const actual = await original<typeof import('node:child_process')>()
@@ -51,6 +51,7 @@ function lsof(stdout: string, error: unknown = null): void {
 beforeEach(async () => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'native-location-')))
   actual = await vi.importActual<typeof fs>('node:fs/promises')
+  vi.mocked(fs.open).mockReset().mockImplementation(actual.open)
   const mapped = (path: unknown) => String(path).startsWith('/proc/') ? join(root, 'proc', String(path).slice(6)) : path
   vi.mocked(fs.opendir).mockReset().mockImplementation(((path: unknown, ...args: unknown[]) =>
     Reflect.apply(actual.opendir, actual, [mapped(path), ...args])) as typeof fs.opendir)
@@ -123,6 +124,25 @@ it('excludes a verified other workspace and preserves registry path rejection', 
   file(join(root, 'sessions', 'hash', A, 'updates.jsonl')); file(join(root, 'sessions', 'hash', '.cwd'), '/elsewhere')
   await expect(locateTranscript(GROK_TRANSCRIPT, root, A, { cwd: '/workspace' })).resolves.toBeNull()
   cursor(); await expect(locateTranscript(CURSOR_TRANSCRIPT, root, A, { valid: () => false })).resolves.toBeNull()
+})
+it('checks the selected Grok workspace after later sidecars and transcript evidence', async () => {
+  file(join(root, 'sessions', 'a', A, 'updates.jsonl'))
+  const selected = file(join(root, 'sessions', 'a', '.cwd'), '/workspace')
+  file(join(root, 'sessions', 'b', A, 'updates.jsonl'))
+  const other = file(join(root, 'sessions', 'b', '.cwd'), '/elsewhere')
+  const groups = await transcriptGroups(root, GROK_TRANSCRIPT); groups.sort()
+  let reads = 0
+  vi.mocked(fs.open).mockImplementation(((path, ...args) => {
+    // Each bounded read opens twice. Change the selected evidence during the other sidecar's recheck.
+    if (String(path) === other && ++reads === 3) writeFileSync(selected, '/changed')
+    return Reflect.apply(actual.open, actual, [path, ...args])
+  }) as typeof fs.open)
+  await expect(locateTranscript(GROK_TRANSCRIPT, root, A, { cwd: '/workspace', groups })).rejects.toThrow('sidecar changed')
+})
+it('revalidates the selected registry path after all asynchronous reads', async () => {
+  cursor()
+  const valid = vi.fn().mockReturnValueOnce(true).mockReturnValueOnce(false)
+  await expect(locateTranscript(CURSOR_TRANSCRIPT, root, A, { valid })).rejects.toThrow('selected transcript path changed')
 })
 it('holds equally new process locks instead of guessing by directory order', async () => {
   lock(A); lock(B)

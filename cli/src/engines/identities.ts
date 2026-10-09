@@ -4,7 +4,7 @@ import { GROK_TRANSCRIPT } from './grok/contract.js'
 import { AGY_PROCESS_SESSION, AGY_TRANSCRIPT } from './agy/contract.js'
 import { COPILOT_PROCESS_SESSION, COPILOT_TRANSCRIPT } from './copilot/contract.js'
 import { locateProcessSession, locateTranscript } from './kit/sessionLocation.js'
-import { validTranscriptPath } from '../lib/registry.js'
+import { inspectTranscriptPath } from '../lib/registry.js'
 import { env } from '../config/env.js'
 import { readProcessEnv } from '../lib/processEnv.js'
 import type { ProcessIdentity } from '../lib/terminalTypes.js'
@@ -17,7 +17,7 @@ export type LocatedEngine = keyof typeof transcripts
 
 export function transcriptOf(engine: LocatedEngine, home: string, id: string, cwd?: string): Promise<string | null> {
   return locateTranscript(transcripts[engine], home, id, { cwd,
-    ...(engine === 'cursor' ? { valid: (path: string) => validTranscriptPath(engine, path) } : {}),
+    ...(engine === 'cursor' ? { valid: (path: string) => inspectTranscriptPath(engine, path) } : {}),
   })
 }
 export function processSessionOf(engine: 'agy' | 'copilot', home: string, pid: number): Promise<string | null> {

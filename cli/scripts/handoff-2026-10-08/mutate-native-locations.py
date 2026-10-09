@@ -12,7 +12,13 @@ poll_spec = 'src/engines/kit/transcriptDiscovery.spec.ts'
 golden = 'src/engines/nativeLocation.golden.spec.ts'
 mutations = [
     ('unreadable metadata is absent', location, "if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null", 'return null', spec),
-    ('first transcript wins', location, '    selected ??= { path, info }', '    return path', spec),
+    ('first transcript wins', location, '    selected ??= { path, info, workspace }', '    return path', spec),
+    ('selected Grok workspace not rechecked', location, 'if (selected.workspace) await verifyWorkspace(selected.workspace)', 'if (false) await verifyWorkspace(selected.workspace!)', spec),
+    ('selected Cursor path not revalidated', location, 'if (options.valid && !options.valid(selected.path))', 'if (false)', spec),
+    ('unreadable Cursor validation is rejection', 'src/lib/registry.ts', "if (strict) throw new IdentityReadUnavailable('the transcript path could not be validated')", 'if (false) throw new Error()', 'src/lib/nativeLocations.control.spec.ts'),
+    ('Copilot bind claim not revalidated', 'src/core/agents/bind.ts', "if (await processSessionOf('copilot', homes.copilot, observed.processIdentity.pid) !== next)", 'if (false)', 'src/lib/nativeLocations.control.spec.ts'),
+    ('Copilot repair claim not revalidated', 'src/lib/sessionRepair.ts', "if (await nativeProcessSession('copilot', env.COPILOT_HOME, opts!.pid!) !== locked)", 'if (false)', 'src/lib/nativeLocations.control.spec.ts'),
+    ('agy repair claim not revalidated', 'src/lib/sessionRepair.ts', "if (await nativeProcessSession('agy', env.AGY_HOME, pid) !== conversationId)", 'if (false)', 'src/lib/nativeLocations.control.spec.ts'),
     ('shared listing loses its authority', location, "if (signature(await inspect(root)) !== proof.signature)", 'if (false)', spec),
     ('new transcript ignored', location, "if (file.path !== selected?.path && fileIdentity(await fileInfo(file.path)) !== fileIdentity(file.info))", 'if (false)', spec),
     ('tied process locks accepted', location, 'if (tied) throw', 'if (false) throw', spec),

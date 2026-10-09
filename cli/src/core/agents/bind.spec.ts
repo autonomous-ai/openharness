@@ -468,7 +468,7 @@ describe('binding a running process to its session', () => {
   it('does not take a Copilot resume target that was stopped during its transcript lookup', async () => {
     const run = setup()
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(agent({ engine: 'copilot' }))
-    vi.mocked(processSessionOf).mockResolvedValueOnce('s2')
+    vi.mocked(processSessionOf).mockResolvedValue('s2')
     let answer!: (path: string | null) => void
     vi.mocked(transcriptOf).mockReturnValueOnce(new Promise(resolve => { answer = resolve }))
     const pending = run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
@@ -476,6 +476,16 @@ describe('binding a running process to its session', () => {
     vi.mocked(isRecentlyDeleted).mockImplementation(id => id === 's2')
     answer('/fixture/transcript.jsonl'); await pending
     expect(run.deps.registry.register).not.toHaveBeenCalled()
+  })
+
+  it.each(['s3', null])('holds a Copilot conversation changed to %s during transcript lookup', async next => {
+    const run = setup(), row = agent({ engine: 'copilot' })
+    vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
+    vi.mocked(processSessionOf).mockResolvedValueOnce('s2').mockResolvedValueOnce(next)
+    await run.binding.bindObservedAgent(observed({ engine: 'copilot' }))
+    expect(run.deps.registry.register).not.toHaveBeenCalled()
+    expect(row.sessionId).toBe('s1')
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('process conversation changed during transcript lookup'))
   })
 
   describe('an agent that already has a session', () => {

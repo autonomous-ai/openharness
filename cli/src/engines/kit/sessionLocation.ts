@@ -1,5 +1,6 @@
 /** Filesystem evidence for binding, declared by each engine and available before optional readers load. */
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import { readlink, stat } from 'node:fs/promises'
 import { basename, isAbsolute, join, sep } from 'node:path'
@@ -31,6 +32,12 @@ async function fileInfo(path: string): Promise<Stats | null> {
 }
 const signature = (info: Stats | null) => info && `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
 const fileIdentity = (info: Stats | null) => info && `${info.dev}:${info.ino}`
+const digest = (text: string) => createHash('sha256').update(text).digest('hex')
+type WorkspaceProof = { path: string; digest: string }
+async function verifyWorkspace(proof: WorkspaceProof): Promise<void> {
+  const current = await identityFile(proof.path).catch(() => { throw new IdentityReadUnavailable('a workspace sidecar became unavailable during lookup') })
+  if (digest(current) !== proof.digest) throw new IdentityReadUnavailable('a workspace sidecar changed during lookup')
+}
 // Evidence belongs to this one listing, not a cache reused by later polls.
 const groupProofs = new WeakMap<readonly string[], { root: string; signature: string | null }>()
 
@@ -67,8 +74,9 @@ export async function locateTranscript(rule: TranscriptLocation, home: string, i
   const groups = shared?.root === root ? options.groups! : await transcriptGroups(home, rule)
   const proof = groupProofs.get(groups)!
   const files: { path: string; info: Stats | null }[] = []
-  const sidecars: { path: string; text: string }[] = []
-  let selected: { path: string; info: Stats } | null = null
+  // Keep fixed-size digests, not up to 64 KiB of retained text for every project.
+  const sidecars: WorkspaceProof[] = []
+  let selected: { path: string; info: Stats; workspace?: WorkspaceProof } | null = null
   for (const group of groups) {
     const directory = join(root, group)
     const path = rule.kind === 'projects'
@@ -76,11 +84,13 @@ export async function locateTranscript(rule: TranscriptLocation, home: string, i
     const info = await fileInfo(path)
     files.push({ path, info })
     if (!info) continue
+    let workspace: WorkspaceProof | undefined
     if (rule.kind === 'cwd' && group !== encodeURIComponent(options.cwd!)) {
       let cwd: string
       try {
         const sidecar = join(directory, rule.sidecar), text = await identityFile(sidecar)
-        sidecars.push({ path: sidecar, text }); cwd = text.trim()
+        workspace = { path: sidecar, digest: digest(text) }
+        sidecars.push(workspace); cwd = text.trim()
       }
       catch (error) {
         if (error instanceof IdentityReadUnavailable) throw error
@@ -94,7 +104,7 @@ export async function locateTranscript(rule: TranscriptLocation, home: string, i
     if (selected && (selected.info.dev !== info.dev || selected.info.ino !== info.ino)) {
       throw new IdentityReadUnavailable('more than one transcript matches the conversation')
     }
-    selected ??= { path, info }
+    selected ??= { path, info, workspace }
   }
   // Negative candidates matter too: a competing file may appear while later projects are read.
   for (const file of files) {
@@ -103,8 +113,7 @@ export async function locateTranscript(rule: TranscriptLocation, home: string, i
     }
   }
   for (const sidecar of sidecars) {
-    const current = await identityFile(sidecar.path).catch(() => { throw new IdentityReadUnavailable('a workspace sidecar became unavailable during lookup') })
-    if (current !== sidecar.text) throw new IdentityReadUnavailable('a workspace sidecar changed during lookup')
+    if (sidecar !== selected?.workspace) await verifyWorkspace(sidecar)
   }
   if (signature(await inspect(root)) !== proof.signature) throw new IdentityReadUnavailable('the native directory list changed during lookup')
   if (!selected) return null
@@ -112,6 +121,9 @@ export async function locateTranscript(rule: TranscriptLocation, home: string, i
   if (fileIdentity(await fileInfo(selected.path)) !== fileIdentity(selected.info)) {
     throw new IdentityReadUnavailable('the selected transcript changed during lookup')
   }
+  // The selected workspace must survive every other native await, including other sidecars.
+  if (selected.workspace) await verifyWorkspace(selected.workspace)
+  if (options.valid && !options.valid(selected.path)) throw new IdentityReadUnavailable('the selected transcript path changed during lookup')
   return selected.path
 }
 

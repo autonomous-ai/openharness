@@ -8,6 +8,7 @@
  */
 import { stat } from 'node:fs/promises'
 import { transcriptOf, processSessionOf } from '../../engines/identities.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 import { cursorDataDir } from '../../engines/cursor/contract.js'
 import { continuationOf } from '../../engines/sessionFiles.js'
 import { sessionStoreOf } from '../../engines/sessionStoreContracts.js'
@@ -253,7 +254,13 @@ export function createBinding({
         if (!process) return
         const next = process.value
         if (!next || next === agent.sessionId || isRecentlyDeleted(next)) return
-        const located = await read(() => transcriptOf('copilot', homes.copilot, next))
+        const located = await read(async () => {
+          const path = await transcriptOf('copilot', homes.copilot, next)
+          if (await processSessionOf('copilot', homes.copilot, observed.processIdentity.pid) !== next) {
+            throw new IdentityReadUnavailable('the process conversation changed during transcript lookup')
+          }
+          return path
+        })
         if (!located) return
         const transcript = located.value
         if (!current() || !mayClaim(next)) return

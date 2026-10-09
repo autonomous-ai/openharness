@@ -463,6 +463,9 @@ export async function findLiveSession(
       const locked = opts?.pid ? await nativeProcessSession('copilot', env.COPILOT_HOME, opts.pid) : null
       if (locked) {
         const transcriptPath = await transcriptOf('copilot', env.COPILOT_HOME, locked)
+        if (await nativeProcessSession('copilot', env.COPILOT_HOME, opts!.pid!) !== locked) {
+          throw new IdentityReadUnavailable('the process conversation changed during transcript lookup')
+        }
         return { sessionId: locked, transcriptPath: transcriptPath ?? undefined }
       }
       return copilotDirectoryScan(cwd, startedAtMs, opts)
@@ -487,6 +490,9 @@ async function agySession(pid: number): Promise<RepairedSession | null> {
   const conversationId = await nativeProcessSession('agy', env.AGY_HOME, pid)
   if (!conversationId) return null
   const transcriptPath = await transcriptOf('agy', env.AGY_HOME, conversationId)
+  if (await nativeProcessSession('agy', env.AGY_HOME, pid) !== conversationId) {
+    throw new IdentityReadUnavailable('the process conversation changed during transcript lookup')
+  }
   // A conversation with no transcript is one agy has opened but not written to; registry derives the
   // path anyway, so bind it and let the watcher pick the file up when it appears.
   return { sessionId: conversationId, transcriptPath: transcriptPath ?? undefined }
