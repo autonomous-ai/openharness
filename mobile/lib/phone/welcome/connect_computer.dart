@@ -8,34 +8,32 @@ import 'package:flutter/services.dart';
 import 'package:harness_mobile/shared/theme/app_theme.dart';
 import 'package:harness_mobile/state/app_state.dart';
 
+import '../phone_navigation.dart' show phoneRoute;
 import '../settings_page.dart' show PhoneSettingsButton, confirmSignOut;
 import '../tty.dart';
 import '../tty_controls.dart';
 import 'scan_to_connect.dart';
 import 'set_up_computer.dart';
 
-/// Setting up a computer, for a phone that is signed in — the same page as the first screen's "Not
-/// yet" ([SetUpComputerPage]: three steps, the first sending the download to the computer), and the
-/// one thing only a signed-in phone can do on it: watch for the computer to appear (every few
-/// seconds, since nothing tells the phone) and pair with it by the code its Harness ▸ Add Phone…
-/// shows.
+/// Connecting a computer, for a phone that is signed in — the same page as the first screen
+/// ([SetUpComputerPage], Connect your computer, with Get it behind it), and the one thing only a
+/// signed-in phone can do on it: watch for the computer to appear (every few seconds, since nothing
+/// tells the phone) and pair with it by the code its Add Phone shows.
 ///
 /// ```
-/// Get Harness for                              ⚙
-/// your computer
+/// harness▌                                      ⚙
+///           Connect your computer
+///   Drive Claude Code and Codex from your phone.
 /// [| Signed in as ada@… Waiting for your computer…]
 /// Not you? Sign out
-///
-/// 1  Install Harness on your computer.
-///    [⇪ Send it to your computer ›]   (the download menu, in a sheet)
-///    or open harness.autonomous.ai/desktop there.
-/// 2  Open it, and sign in with Google or Apple, as ada@… — the account on this phone.
-/// 3  Open Add Phone… and scan its code.
-///    On a Mac, it’s in the Harness menu.
-///    [Scan to connect]
-/// ───
-/// Try the sample ›
-/// See how it works ▶
+///          [ ⊞  Pair computer ]
+/// HOW IT WORKS
+/// [1] Sign in on your computer
+///     With the same account.
+/// [2] Not showing up? Scan its code
+///     Mac: Harness menu · Linux: Ctrl+Shift+P, “add phone”
+/// [3] You’re connected
+///        No Harness yet? Get it ›     (and the sample, while it installs)
 /// ```
 ///
 /// It replaces a page of its own — an email of the steps, a Terminal/Mac tab, four commands to
@@ -49,7 +47,6 @@ class ConnectComputerPage extends StatefulWidget {
     this.onBack,
     this.onTrySample,
     this.scanCamera,
-    this.loadDownloads,
   });
 
   final AppNotifier notifier;
@@ -60,12 +57,11 @@ class ConnectComputerPage extends StatefulWidget {
   /// Shown as `‹ Back` when set.
   final VoidCallback? onBack;
 
-  /// Opens the sample; see `PhoneWelcome.onTrySample`.
+  /// Opens the sample, from Get it; see `PhoneWelcome.onTrySample`.
   final Future<Object?> Function(BuildContext context)? onTrySample;
 
-  /// Stand-ins for the camera and the release manifest, in tests.
+  /// Stands in for the camera, in tests.
   final Widget? scanCamera;
-  final DesktopDownloadsLoader? loadDownloads;
 
   @override
   State<ConnectComputerPage> createState() => _ConnectComputerPageState();
@@ -92,10 +88,56 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
     }
   }
 
+  /// Get it, while it is up over this page — see [_openGetIt].
+  Route<void>? _getIt;
+
   @override
   void dispose() {
     _watch?.cancel();
+    // ⚠️ At home this page goes when the computer turns up — the 5-second watch — and Get it, pushed
+    // over it, stayed up over the agents. Taken away after this frame: a navigator is not to be
+    // changed while the tree is being torn down.
+    final getIt = _getIt;
+    if (getIt != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final navigator = getIt.navigator;
+        if (navigator != null && navigator.mounted && getIt.isActive) {
+          navigator.removeRoute(getIt);
+        }
+      });
+    }
     super.dispose();
+  }
+
+  /// "No Harness on your computer yet? Get it ›": the download sent to the computer, over this
+  /// page, and its "Pair computer ›" back to this page's scan. One at a time.
+  void _openGetIt() {
+    if (_getIt != null) return;
+    final route = phoneRoute(
+      (page) => Scaffold(
+        backgroundColor: Tty.of(page).ground,
+        body: SafeArea(
+          child: GetHarnessPage(
+            onBack: () => Navigator.of(page).maybePop(),
+            onPair: () {
+              // ⚠️ `pop`, not `maybePop`: that one waits a microtask, sees the camera pushed over
+              // Get it meanwhile, and drops the pop — Get it stayed under the camera, and the scan's
+              // answer (or Computers' back on success) landed on it instead of this page.
+              Navigator.of(page).pop();
+              if (mounted) unawaited(_scanToPair());
+            },
+            // Over Get it, which its end card's "set up" comes back to.
+            onTrySample: widget.onTrySample == null
+                ? null
+                : () => unawaited(widget.onTrySample!(page)),
+          ),
+        ),
+      ),
+    );
+    _getIt = route;
+    unawaited(
+      Navigator.of(context).push(route).whenComplete(() => _getIt = null),
+    );
   }
 
   void _say(String? message, {bool failed = false}) => setState(() {
@@ -157,11 +199,7 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
     final machineId = code.machineId, pairCode = code.pairCode;
     if (machineId == null || pairCode == null) {
       if (!mounted) return;
-      _say(
-        'That isn’t an Add Phone code. Open Add Phone… on the computer and '
-        'scan its code.',
-        failed: true,
-      );
+      _say('That’s not the Add Phone code.', failed: true);
       return;
     }
     if (mounted) _say('Pairing…');
@@ -246,11 +284,13 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
         child: SetUpComputerPage(
           onBack: widget.onBack,
           onScan: () => unawaited(_scanToPair()),
-          loadDownloads: widget.loadDownloads,
+          onGetIt: _openGetIt,
           // The computer has to join this account, so the steps name it — from Computers too
           // ("Set up another computer", which does not watch), where a second computer signed in
           // to another account is likeliest.
           account: email,
+          // At home the account is watched, and the computer turns up here by itself.
+          watching: widget.signedIn,
           // At home there is no back, and this page is where a phone signed in to an account with
           // no computer stays: Settings — and Sign out — has to be reachable from it.
           topTrailing: widget.onBack == null
@@ -274,44 +314,28 @@ class _ConnectComputerPageState extends State<ConnectComputerPage> {
               ? Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    if (widget.signedIn) _Watching(account: email),
-                    // Right under the account it names: the wrong one is the likeliest reason this
-                    // page never moves on — Continue with Google, and another of the person's
-                    // Google accounts.
+                    if (widget.signedIn) const _Watching(),
+                    // The account, said once, right under the watch: the wrong one is the
+                    // likeliest reason this page never moves on — Continue with Google, and
+                    // another of the person's Google accounts.
                     if (widget.signedIn && email != null)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Transform.translate(
-                          // The button's own inset, so its words sit on the gutter.
-                          offset: const Offset(-12, 0),
-                          child: TtyTextButton(
-                            key: const ValueKey('connect-sign-out'),
-                            label: 'Not you? Sign out',
-                            color: tty.faint,
-                            onPressed: () => unawaited(
-                              confirmSignOut(context, widget.notifier),
-                            ),
-                          ),
-                        ),
+                      _AccountLine(
+                        email: email,
+                        onSignOut: () =>
+                            unawaited(confirmSignOut(context, widget.notifier)),
                       ),
                   ],
                 )
               : null,
-          onTrySample: widget.onTrySample == null
-              ? null
-              : () => unawaited(widget.onTrySample!(context)),
         ),
       ),
     );
   }
 }
 
-/// `Looking for your computer…` with a terminal spinner — the page is watching.
+/// `Waiting for your computer…` with a terminal spinner — the page is watching.
 class _Watching extends StatefulWidget {
-  const _Watching({this.account});
-
-  /// Whose computer it is waiting for.
-  final String? account;
+  const _Watching();
 
   @override
   State<_Watching> createState() => _WatchingState();
@@ -352,14 +376,57 @@ class _WatchingState extends State<_Watching> {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              widget.account == null
-                  ? 'Waiting for your computer…'
-                  : 'Signed in as ${widget.account}. Waiting for your '
-                        'computer…',
+              'Waiting for your computer…',
               style: tty.style(size: TtySize.meta, color: tty.text),
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// `ada@gmail.com · Not you? Sign out` — the account this phone is signed in to, and the way out of
+/// it, on one line that wraps. The whole line signs out (after asking, [confirmSignOut]).
+class _AccountLine extends StatelessWidget {
+  const _AccountLine({required this.email, required this.onSignOut});
+
+  final String email;
+  final VoidCallback onSignOut;
+
+  @override
+  Widget build(BuildContext context) {
+    final tty = Tty.of(context);
+    return Semantics(
+      button: true,
+      label: 'Signed in as $email. Not you? Sign out',
+      excludeSemantics: true,
+      child: GestureDetector(
+        key: const ValueKey('connect-sign-out'),
+        behavior: HitTestBehavior.opaque,
+        onTap: () {
+          HapticFeedback.selectionClick();
+          onSignOut();
+        },
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 44),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Text.rich(
+              TextSpan(
+                children: [
+                  TextSpan(text: '$email · '),
+                  TextSpan(
+                    text: 'Not you? Sign out',
+                    style: tty.style(color: tty.text, size: TtySize.meta),
+                  ),
+                ],
+              ),
+              textAlign: TextAlign.center,
+              style: tty.style(color: tty.faint, size: TtySize.meta),
+            ),
+          ),
+        ),
       ),
     );
   }

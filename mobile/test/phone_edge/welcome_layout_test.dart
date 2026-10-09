@@ -20,8 +20,8 @@ import 'edge_fixture.dart';
 /// phone, scale and brightness, with an account and a computer whose names are long. None may
 /// report an overflow.
 ///
-/// ⚠️ Nothing here reaches anything real: the downloads manifest, the camera, the account service
-/// and the computer are all stand-ins, and no screen is left up long enough for a poll to fire.
+/// ⚠️ Nothing here reaches anything real: the camera, the account service and the computer are all
+/// stand-ins, and no screen is left up long enough for a poll to fire.
 void main() {
   setUpAll(loadRealFontsIfAsked);
 
@@ -46,7 +46,6 @@ void main() {
     ),
     signInWithScan: (_) async {},
     scanCamera: const SizedBox(),
-    loadDownloads: () async => const {},
   );
 
   testWidgets('the first screen', (tester) async {
@@ -54,18 +53,24 @@ void main() {
       final app = edgeApp(noMachines: true);
       addTearDown(app.dispose);
       await pump(tester, welcome(app), scale, brightness);
-      expect(find.text('Yes — scan to connect'), findsOneWidget);
+      expect(find.text('Connect your computer'), findsOneWidget);
+      await tester.drag(find.byType(ListView), const Offset(0, -2000));
+      await frames(tester);
     });
   });
 
-  testWidgets('scan, then email, then a code that fails', (tester) async {
+  testWidgets('scan, the other ways, then email, then a code that fails', (
+    tester,
+  ) async {
     await expectNoLayoutErrors(tester, (scale, brightness) async {
       final app = edgeApp(noMachines: true);
       addTearDown(app.dispose);
       await pump(tester, welcome(app), scale, brightness);
-      await tapInView(tester, find.text('Yes — scan to connect'));
+      await tapInView(tester, find.byKey(const ValueKey('set-up-scan')));
       await frames(tester);
-      await tapInView(tester, find.text('Use email instead'));
+      await tapInView(tester, find.text('Can’t scan? Sign in another way'));
+      await frames(tester);
+      await tapInView(tester, find.text('Continue with email'));
       await frames(tester);
       await tester.enterText(
         find.byType(TextField),
@@ -84,13 +89,14 @@ void main() {
     });
   });
 
-  testWidgets('the set-up page', (tester) async {
+  testWidgets('Get it', (tester) async {
     await expectNoLayoutErrors(tester, (scale, brightness) async {
       final app = edgeApp(noMachines: true);
       addTearDown(app.dispose);
       await pump(tester, welcome(app), scale, brightness);
-      await tapInView(tester, find.text('Not yet — set it up'));
+      await tapInView(tester, find.byKey(const ValueKey('set-up-get-it')));
       await frames(tester);
+      expect(find.text('Get Harness on your computer'), findsOneWidget);
       await tester.drag(find.byType(ListView), const Offset(0, -2000));
       await frames(tester);
     });
@@ -135,7 +141,6 @@ void main() {
           notifier: app,
           onBack: () {},
           onTrySample: (_) async => null,
-          loadDownloads: () async => const {},
         ),
         scale,
         brightness,

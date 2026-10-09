@@ -372,22 +372,35 @@ void main() {
     sendCode: (_) async {},
     signIn: (_, _) async {},
     scanCamera: const SizedBox(),
-    loadDownloads: () async => const {},
   );
+
+  /// Pair computer, then the camera's "Can’t scan?": the other ways to sign in, in a sheet.
+  Future<void> otherWays(WidgetTester tester) async {
+    await tester.tap(find.byKey(const ValueKey('set-up-scan')));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('Can’t scan? Sign in another way'));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+  }
 
   testWidgets('welcome, scan', skip: skip, (tester) async {
     final key = await pumpScreen(tester, welcome());
-    await tester.tap(find.text('Yes — scan to connect'));
+    await tester.tap(find.byKey(const ValueKey('set-up-scan')));
     await tester.pump(const Duration(milliseconds: 300));
     // [shoot] takes the screen down after it: one capture per test.
     await shoot(tester, key, '0a-welcome-scan');
   });
 
+  testWidgets('welcome, other ways', skip: skip, (tester) async {
+    final key = await pumpScreen(tester, welcome());
+    await otherWays(tester);
+    await shoot(tester, key, '0a-welcome-other-ways');
+  });
+
   testWidgets('welcome, email', skip: skip, (tester) async {
     final key = await pumpScreen(tester, welcome());
-    await tester.tap(find.text('Yes — scan to connect'));
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('Use email instead'));
+    await otherWays(tester);
+    await tester.tap(find.text('Continue with email'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.enterText(
       find.byKey(const Key('welcome-email')).last,
@@ -408,9 +421,8 @@ void main() {
         scanCamera: const SizedBox(),
       ),
     );
-    await tester.tap(find.text('Yes — scan to connect'));
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('Use email instead', findRichText: true));
+    await otherWays(tester);
+    await tester.tap(find.text('Continue with email'));
     await tester.pump(const Duration(milliseconds: 300));
     await tester.enterText(find.byType(TextField), 'ada@example.com');
     await tester.tap(find.text('Send code'));
@@ -426,30 +438,28 @@ void main() {
       ConnectComputerPage(
         notifier: notifier,
         onTrySample: (_) async => null,
-        loadDownloads: () async => const {},
       ),
     );
     await shoot(tester, key, '0d-connect-computer');
   });
 
-  testWidgets('set up, download menu', skip: skip, (tester) async {
+  testWidgets('get it', skip: skip, (tester) async {
     final key = await pumpScreen(
       tester,
       Builder(
         builder: (context) => Scaffold(
           backgroundColor: Tty.of(context).ground,
           body: SafeArea(
-            child: SetUpComputerPage(
-              onScan: () {},
+            child: GetHarnessPage(
               onBack: () {},
+              onPair: () {},
               onTrySample: () {},
-              loadDownloads: () async => const {},
             ),
           ),
         ),
       ),
     );
-    await shoot(tester, key, '0e-set-up');
+    await shoot(tester, key, '0e-get-it');
   });
 
   void addOtherComputers() {

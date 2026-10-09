@@ -5,8 +5,8 @@ import 'package:integration_test/integration_test.dart';
 import 'package:harness_mobile/main.dart' as app;
 
 /// A first-time user's walk through the real app on a fresh simulator, a screenshot at each
-/// step: the welcome, the sample (hints, answering a question, Find, New with a task, the menu),
-/// leaving it, and the way in — email, then setting up a computer.
+/// step: the welcome, Get it and its sample (hints, answering a question, Find, New with a task,
+/// the menu), leaving it, and the way in — Pair computer, then the other ways and email.
 ///
 /// Signed out on a clean install, so nothing here can reach a real account or a real machine: the
 /// sample is offline by construction (`lib/demo/`).
@@ -41,11 +41,14 @@ void main() {
     }
 
     await app.main();
-    await waitFor(find.text('Is Harness on your computer?'));
+    await waitFor(find.text('Connect your computer'));
     await shot('welcome');
 
-    // The sample: no account, no computer.
-    await tester.longPress(find.byKey(const ValueKey('welcome-wordmark')));
+    // The sample, from Get it: no account, no computer.
+    await tester.tap(find.byKey(const ValueKey('set-up-get-it')));
+    await wait(800);
+    await shot('get-it');
+    await tester.tap(find.byKey(const ValueKey('get-it-sample')));
     await wait(2000);
     // "Pick up where you left off": the sessions, a tap from their terminals.
     await shot('sample-pick-up');
@@ -103,21 +106,21 @@ void main() {
     await shot('sample-end-card');
     await tester.tap(find.text('Set up my computer'));
     await wait(1500);
-    await shot('set-up-after-sample');
+    // Back on Get it, where the sample was opened.
+    await shot('get-it-after-sample');
     await tester.tap(find.bySemanticsLabel('Back'));
     await wait(800);
     await shot('back-to-welcome');
 
-    // The two ways in: set it up, or scan the code the desktop app shows.
-    await tester.tap(find.text('Not yet — set it up'));
-    await wait(800);
-    await shot('set-up-computer');
-    await tester.tap(find.bySemanticsLabel('Back'));
-    await wait(800);
-    await tester.tap(find.text('Yes — scan to connect'));
+    // The way in: Pair computer scans the code the desktop app shows; without one, the camera's
+    // "Can’t scan?" has the accounts and email.
+    await tester.tap(find.byKey(const ValueKey('set-up-scan')));
     await wait(1500);
     await shot('scan-to-connect');
-    await tester.tap(find.text('Use email instead'));
+    await tester.tap(find.text('Can’t scan? Sign in another way'));
+    await wait(800);
+    await shot('sign-in-other-ways');
+    await tester.tap(find.text('Continue with email'));
     await wait(800);
     await shot('sign-in-email');
   });

@@ -44,12 +44,13 @@ class _Links implements PeerLinkClient {
   Future<String?> unlink(String machineId) async => null;
 }
 
-/// Setting up a computer from a signed-in phone is the first screen's download menu, plus what only
-/// a signed-in phone can do there: watch for the computer, and pair with it by its code.
+/// Setting up a computer from a signed-in phone is the first screen's Connect your computer, plus
+/// what only a signed-in phone can do there: watch for the computer, and pair with it by its code.
 void main() {
   late _Links links;
   late AppNotifier app;
   late List<bool> backs;
+  late int samples;
 
   setUp(() {
     links = _Links();
@@ -63,6 +64,7 @@ void main() {
     // scanned computer is looked for, and none is on it unless a test says so.
     app.api = FakeApi();
     backs = [];
+    samples = 0;
   });
   tearDown(() => app.dispose());
 
@@ -75,9 +77,11 @@ void main() {
         home: ConnectComputerPage(
           notifier: app,
           onBack: () => backs.add(true),
-          onTrySample: (_) async => null,
+          onTrySample: (_) async {
+            samples++;
+            return null;
+          },
           scanCamera: const SizedBox(),
-          loadDownloads: () async => const {},
         ),
       ),
     );
@@ -98,21 +102,38 @@ void main() {
     await tester.pump(const Duration(seconds: 6));
   }
 
-  testWidgets('the download menu, watching, and the sample to try meanwhile', (
+  testWidgets('Connect your computer, watching, and Get it behind it', (
     tester,
   ) async {
     await pump(tester);
     expect(find.byType(SetUpComputerPage), findsOneWidget);
-    expect(find.textContaining('Waiting for your computer'), findsOneWidget);
-    expect(find.text('Try the sample ›'), findsOneWidget);
+    expect(find.text('Connect your computer'), findsOneWidget);
+    expect(find.text('Waiting for your computer…'), findsOneWidget);
+    // The sample is Get it's, for somebody waiting on the computer to install — not this page's.
+    expect(find.byKey(const ValueKey('get-it-sample')), findsNothing);
     // The old page's second way of saying all this is gone.
     expect(find.text('Email me the setup link'), findsNothing);
     expect(find.textContaining('remote-password'), findsNothing);
-    // The download menu is step 1's sheet.
-    expect(find.text('Apple Silicon · M1 or later'), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('set-up-send')));
+
+    // No Harness yet: the download to send, and the sample to try meanwhile.
+    await tester.tap(find.byKey(const ValueKey('set-up-get-it')));
     await tester.pumpAndSettle();
-    expect(find.text('Apple Silicon · M1 or later'), findsOneWidget);
+    expect(find.byType(GetHarnessPage), findsOneWidget);
+    expect(find.text('For Mac and Linux.'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('get-it-sample')));
+    await tester.pumpAndSettle();
+    expect(samples, 1);
+
+    // Installed: Get it goes, and the camera comes up over this page — not over Get it.
+    await tester.tap(find.byKey(const ValueKey('get-it-pair')));
+    await tester.pumpAndSettle();
+    expect(find.byType(ScanToConnectPage), findsOneWidget);
+    expect(find.byType(GetHarnessPage), findsNothing);
+    tester.widget<ScanToConnectPage>(find.byType(ScanToConnectPage)).onBack();
+    await tester.pumpAndSettle();
+    expect(find.byType(ScanToConnectPage), findsNothing);
+    expect(find.text('Connect your computer'), findsOneWidget);
+    expect(backs, isEmpty);
     await unmount(tester);
   });
 
