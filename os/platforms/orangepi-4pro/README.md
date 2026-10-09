@@ -16,6 +16,7 @@ update feed is generated, and the board keeps Debian's own system updates.
 | Compositor | labwc 0.20.2 on Arch's wlroots 0.20 | the same labwc source and patch, built with wlroots 0.20.2 and newer Wayland libraries into `/opt/harness-wl` |
 | Rendering | GPU | CPU (`WLR_RENDERER=pixman`): the PowerVR GPU has no open driver |
 | OpenCode | Arch's 2.x | the official 1.x ARM release pinned in `os/packaging/fedora/opencode.lock.json`; the skel config is restated in OpenCode 1's `permission` form |
+| Claude Code | installed by hn when first chosen | preinstalled with hn's recipe (`npm install -g @anthropic-ai/claude-code`); version recorded in `/etc/harness-image.json` |
 | System profile | `arch` | `debian`: `hn-os` and `harness install/upgrade/rollback` refuse PC system operations, as on Fedora |
 | Screen lock | gtklock | not available on Debian 12 (Super+l and the idle lock do nothing yet) |
 
@@ -54,6 +55,9 @@ NAME`. Sign in with `harness login --qr` and scan from Harness on a phone.
 ## Checked on hardware
 
 Orange Pi 4 Pro over HDMI (1920×1080): autologin into labwc and `hn`, the daemon after a
-reboot, `hn-browser` opening Chromium maximized, OpenCode answering on Muse Spark 1.3 Free,
-`harness login --qr` rendering on the console. Keyboard shortcuts, audio, suspend and the
-screen lock remain unverified.
+reboot, Super+n (via `screen-action`) opening New Harness, `hn-browser` opening Chromium maximized, OpenCode answering on Muse Spark 1.3 Free,
+`harness login --qr` rendering on the console. Other keyboard shortcuts, audio, suspend and
+the screen lock remain unverified.
+
+The vendor kernel has no `CONFIG_PROC_CHILDREN`, so `screen-action` (every Super shortcut that
+reaches hn) falls back to scanning `/proc` when `/proc/PID/task/TID/children` is missing.

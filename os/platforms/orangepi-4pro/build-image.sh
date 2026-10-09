@@ -62,15 +62,18 @@ if chroot "$MNT" ldd "$PREFIX/bin/labwc" | grep 'not found'; then
 fi
 
 HARNESS_WL_PREFIX=$PREFIX "$HERE/install-session.sh" "$MNT" "$RUNTIME" "$ACCOUNT"
-# OpenCode, the version the ARM package pins; other agents install from hn when chosen.
-chroot "$MNT" su - "$ACCOUNT" -c "npm_config_prefix=\$HOME/.local npm install -g --no-audit --no-fund opencode-ai@$OPENCODE >/dev/null 2>&1"
-python3 - "$MNT/etc/harness-image.json" "$BASE" "$SOURCE" "$OPENCODE" <<'PY'
+# OpenCode, the version the ARM package pins. Claude Code too, by hn's own install recipe
+# (cli/src/lib/engineInstall.ts), so the first Claude harness need not wait for a download;
+# other agents install from hn when chosen.
+chroot "$MNT" su - "$ACCOUNT" -c "npm_config_prefix=\$HOME/.local npm install -g --no-audit --no-fund opencode-ai@$OPENCODE @anthropic-ai/claude-code >/dev/null 2>&1"
+CLAUDE=$(chroot "$MNT" su - "$ACCOUNT" -c '$HOME/.local/bin/claude --version' | cut -d' ' -f1)
+python3 - "$MNT/etc/harness-image.json" "$BASE" "$SOURCE" "$OPENCODE" "$CLAUDE" <<'PY'
 import json, subprocess, sys
 from pathlib import Path
-path, base, source, opencode = sys.argv[1:]
+path, base, source, opencode, claude = sys.argv[1:]
 commit = subprocess.check_output(['git', '-c', f'safe.directory={source}', '-C', source, 'rev-parse', 'HEAD'], text=True).strip()
-Path(path).write_text(json.dumps({'board': 'orangepi4pro', 'base': Path(base).name,
-                                  'source_commit': commit, 'opencode': opencode}, indent=2) + '\n')
+Path(path).write_text(json.dumps({'board': 'orangepi4pro', 'base': Path(base).name, 'source_commit': commit,
+                                  'opencode': opencode, 'claude_code': claude}, indent=2) + '\n')
 PY
 
 # Leave no build-host state behind.

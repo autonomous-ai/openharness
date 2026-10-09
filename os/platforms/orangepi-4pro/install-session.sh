@@ -66,6 +66,9 @@ EOF
 sed -i 's/^%wheel/%sudo/' "$T/etc/sudoers.d/20-harness-network"
 
 # 3. Install the tree. Replace rather than overwrite files a running session may hold open.
+# Connections now live in the CLI; remove the former Python copy from an earlier install.
+rm -rf "$ROOT/usr/lib/harness-os/connections" "$ROOT/usr/share/licenses/harness-os-connections" \
+       "$ROOT/usr/lib/systemd/user/harness-connections.service" "$ROOT/usr/lib/systemd/user/harness-connections.socket"
 cp -a --remove-destination "$T/." "$ROOT/"
 chmod 440 "$ROOT/etc/sudoers.d/20-harness-network"
 # The compositor from build-compositor.sh, at the path the session starts.
