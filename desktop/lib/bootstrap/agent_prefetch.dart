@@ -52,7 +52,9 @@ class AgentPrefetch {
     Duration nodePoll = const Duration(seconds: 1),
     Duration nodeWait = const Duration(minutes: 5),
     String? Function()? markerDir,
-  }) : _markerDir =
+    bool? warmOpenCode,
+  }) : _warm = warmOpenCode ?? !kUnderTest,
+       _markerDir =
            markerDir ??
            (() => kUnderTest || _home == null ? null : '$_home/.harness/run'),
        _start =
@@ -87,6 +89,9 @@ class AgentPrefetch {
   /// meanwhile waits for it rather than installing the engine again (the CLI's
   /// `harness_wait_download`). Null writes none (tests).
   final String? Function() _markerDir;
+
+  /// Runs OpenCode once after its download ([_warmOpenCode]). Off under test unless asked for.
+  final bool _warm;
 
   /// The download's own name for itself on its command line, which is how a pane tells it from a
   /// process that took over a stale marker's pid.
@@ -163,13 +168,46 @@ class AgentPrefetch {
     return running.timeout(left, onTimeout: () {});
   }
 
-  Future<void> _runOpenCode() => _run(
-    'OpenCode',
-    const ['opencode'],
-    '/bin/bash',
-    ['-c', command, downloadName],
-    () => _installed('opencode'),
-  );
+  Future<void> _runOpenCode() async {
+    await _run(
+      'OpenCode',
+      const ['opencode'],
+      '/bin/bash',
+      ['-c', command, downloadName],
+      () => _installed('opencode'),
+    );
+    await _warmOpenCode();
+  }
+
+  /// Runs the downloaded OpenCode once (`--version`, nothing else), while setup is still busy: macOS
+  /// checks a new binary on its first run, 3.9 s against 0.4 s afterwards on a fresh VM (2026-10-09),
+  /// and that first run would otherwise be the first pane's, in front of the person. Only the version:
+  /// a warm-up that started OpenCode's server once stalled its first harness for 51 s.
+  Future<void> _warmOpenCode() async {
+    final home = _home;
+    if (!_warm || home == null || !_installed('opencode')) return;
+    final started = _now();
+    try {
+      final process = await _start('$home/.opencode/bin/opencode', [
+        '--version',
+      ]);
+      unawaited(process.stdout.drain<void>().catchError((_) {}));
+      unawaited(process.stderr.drain<void>().catchError((_) {}));
+      final code = await process.exitCode.timeout(
+        const Duration(seconds: 20),
+        onTimeout: () {
+          process.kill();
+          return -1;
+        },
+      );
+      _log(
+        'OpenCode first run during setup: exit $code in '
+        '${(_now().difference(started).inMilliseconds / 1000).toStringAsFixed(1)}s',
+      );
+    } catch (error) {
+      _log('OpenCode first run during setup did not start: $error');
+    }
+  }
 
   /// Codex and Claude Code, once setup has put Harness's Node in place: one npm, so the two never
   /// write the same global prefix at once.

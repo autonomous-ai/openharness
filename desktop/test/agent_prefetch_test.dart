@@ -236,6 +236,33 @@ void main() {
       },
     );
 
+    test('runs OpenCode once after its download, so a pane never pays its first run', () async {
+      final opencode = _Install();
+      final warm = _Install();
+      final runs = <List<String>>[];
+      var installed = false;
+      final prefetch = AgentPrefetch(
+        start: (executable, args) async {
+          runs.add([executable, ...args]);
+          return runs.length == 1 ? opencode : warm;
+        },
+        skip: () => false,
+        installed: (engine) => engine == 'opencode' && installed,
+        managedNode: () => null,
+        nodeWait: Duration.zero,
+        warmOpenCode: true,
+      )..start();
+      await pumpEventQueue();
+      installed = true;
+      opencode.finish(0);
+      await pumpEventQueue();
+      expect(runs, hasLength(2));
+      expect(runs.last.first, endsWith('/.opencode/bin/opencode'));
+      expect(runs.last.sublist(1), ['--version']);
+      warm.finish(0);
+      await prefetch.everything;
+    });
+
     test('names each download in a marker while it runs, for a pane that opens meanwhile', () async {
       final dir = Directory.systemTemp.createTempSync('prefetch-markers-');
       addTearDown(() => dir.deleteSync(recursive: true));
