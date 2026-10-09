@@ -345,7 +345,7 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     client.close()
   }, 300_000)
 
-  it('an incomplete native identity holds binding, Stop and Close while readiness and a sibling continue', async () => {
+  it.each(['process record', 'home catalog'] as const)('an incomplete %s holds binding, Stop and Close while readiness and a sibling continue', async fault => {
     const d = await IsolatedDaemon.create({ env: { HOOK_INSTALL_ENGINES: 'codex' } }); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     await d.start()
@@ -365,12 +365,15 @@ describe('the person\'s engines keeping their data elsewhere', () => {
       try { const files = readdirSync(records); return files.length === 1 ? join(records, files[0]) : null }
       catch { return null }
     })
-    const complete = readFileSync(path, 'utf8')
-    const native = JSON.parse(complete)
-    writeFileSync(path, '{')
+    const nativeBytes = readFileSync(path, 'utf8')
+    const native = JSON.parse(nativeBytes)
+    const faultFile = fault === 'process record' ? path : join(d.dataDir, 'engine-homes.json')
+    const complete = fault === 'process record' ? nativeBytes : JSON.stringify({ claude: [], codex: [] })
+    const reason = fault === 'process record' ? 'the process record is incomplete' : 'the saved engine-home catalog is incomplete'
+    writeFileSync(faultFile, '{', { mode: 0o600 })
     await d.start()
     client = await LocalClient.connect(d)
-    await until('the binding hold with its reason', () => d.log().includes('binding held · Conversation identity is held: the process record is incomplete'))
+    await until('the binding hold with its reason', () => d.log().includes(`binding held · Conversation identity is held: ${reason}`))
     const held = await row(client, tile.id)
     expect(held?.engine).toBe('claude')
     expect(held?.sessionId).toBeFalsy()
@@ -382,11 +385,11 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     expect(stopped.error, JSON.stringify(stopped)).toBeTruthy()
     const closed = await client.request('agent_close', { agentId: tile.id, sessionId: held!.sessionId,
       createdAt: held!.createdAt, mode: 'now' }, 60_000)
-    expect(closed).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', detail: expect.stringContaining('process record is incomplete') })
+    expect(closed).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', detail: expect.stringContaining(reason) })
     expect(IsolatedDaemon.alive(native.pid)).toBe(true)
     expect((await row(client, tile.id))?.status).toBe('active')
-    writeFileSync(path + '.complete', complete)
-    renameSync(path + '.complete', path)
+    writeFileSync(faultFile + '.complete', complete, { mode: 0o600 })
+    renameSync(faultFile + '.complete', faultFile)
     await until('the same live process to bind after its record becomes complete', async () => {
       const now = await row(client, tile.id)
       return now?.status === 'active' && now.sessionId === native.sessionId

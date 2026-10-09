@@ -35,7 +35,7 @@ import { COPILOT_CWD } from '../engines/copilot/contract.js'
 import { recordCwd } from '../engines/kit/sessionLocation.js'
 import { sqliteReadAll, type SqliteParam } from './sqliteRead.js'
 import { sqlitePreflightMessage } from './sqliteAvailability.js'
-import { sessionRoots } from './engineHomes.js'
+import { nativeSessionRoots } from './engineHomes.js'
 import { argvTokens, engineProcessMatchScore, processRows, type ProcessRow } from './tmux.js'
 
 /**
@@ -54,7 +54,7 @@ const MAX_FILES = 400
 
 /** Known empty homes still require native probes. Do not let a saved catalog bypass the walk bound. */
 function repairRoots(engine: AgentEngine, profile?: string): string[] {
-  const roots = sessionRoots(engine, profile)
+  const roots = nativeSessionRoots(engine, profile)
   if (roots.length > 64) throw new IdentityReadUnavailable('the known session-home limit was reached')
   return roots
 }

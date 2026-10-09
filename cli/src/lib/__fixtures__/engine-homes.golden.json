@@ -1,0 +1,155 @@
+{
+  "default:own": [
+    "<root>/CLAUDE_CONFIG_DIR",
+    "<root>/CODEX_HOME"
+  ],
+  "default:roots": [
+    [
+      "<root>/CLAUDE_CONFIG_DIR/projects"
+    ],
+    [
+      "<root>/CODEX_HOME/sessions"
+    ],
+    []
+  ],
+  "default:moved": {
+    "claude": [],
+    "codex": []
+  },
+  "default:ignored": {
+    "claude": null,
+    "codex": null
+  },
+  "ignored:relative": {
+    "claude": null,
+    "codex": null
+  },
+  "ignored:~/elsewhere": {
+    "claude": null,
+    "codex": null
+  },
+  "ignored:   ": {
+    "claude": null,
+    "codex": null
+  },
+  "ignored:undefined": {
+    "claude": null,
+    "codex": null
+  },
+  "adopt:both": {
+    "claude": "<root>/moved-claude",
+    "codex": "<root>/moved-codex"
+  },
+  "adopt:saved": {
+    "claude": [
+      "<root>/moved-claude"
+    ],
+    "codex": [
+      "<root>/moved-codex"
+    ]
+  },
+  "adopt:duplicate": {
+    "claude": null,
+    "codex": null
+  },
+  "adopt:roots": [
+    [
+      "<root>/CLAUDE_CONFIG_DIR/projects",
+      "<root>/moved-claude/projects"
+    ],
+    [
+      "<root>/CODEX_HOME/sessions",
+      "<root>/moved-codex/sessions"
+    ]
+  ],
+  "adopt:home-roots": [
+    [
+      "<root>/CODEX_HOME",
+      "<root>/moved-codex"
+    ],
+    [
+      "<root>/CLAUDE_CONFIG_DIR/projects"
+    ]
+  ],
+  "profile:roots": [
+    [
+      "<root>/CLAUDE_CONFIG_DIR/projects",
+      "<root>/moved-claude/projects"
+    ],
+    [
+      "<root>/profile/sessions"
+    ],
+    []
+  ],
+  "profile:environment": [
+    null,
+    {
+      "CODEX_HOME": "<root>/profile"
+    },
+    null
+  ],
+  "unknown:moved": [
+    [],
+    []
+  ],
+  "restart:before-shell": {
+    "claude": [
+      "<root>/moved-claude"
+    ],
+    "codex": [
+      "<root>/moved-codex"
+    ]
+  },
+  "refresh:atomic-replacement": {
+    "claude": [
+      "<root>/moved-claude"
+    ],
+    "codex": [
+      "<root>/moved-codex",
+      "<root>/second-codex"
+    ]
+  },
+  "refresh:search-roots": [
+    [
+      "<root>/CLAUDE_CONFIG_DIR/projects",
+      "<root>/moved-claude/projects"
+    ],
+    [
+      "<root>/CODEX_HOME",
+      "<root>/moved-codex",
+      "<root>/second-codex"
+    ]
+  ],
+  "bound:sessions": [
+    "<root>/moved-codex",
+    "<root>/moved-codex/sessions",
+    "<root>/profile"
+  ],
+  "bound:archived_sessions": [
+    "<root>/moved-codex",
+    "<root>/moved-codex/sessions",
+    "<root>/profile"
+  ],
+  "bound:claude": "<root>/moved-claude",
+  "bound:sibling-prefix": [
+    "<root>/new-codex",
+    "<root>/new-claude"
+  ],
+  "launch:shell": [
+    "<root>/new-codex",
+    "<root>/new-claude"
+  ],
+  "launch:profile": "<root>/profile",
+  "launch:explicit-environment": [
+    "<root>/moved-codex",
+    "<root>/moved-claude"
+  ],
+  "launch:invalid-environment": [
+    "<root>/CODEX_HOME",
+    "<root>/HOME"
+  ],
+  "bound:no-shell-cache": [
+    "<root>/second-codex",
+    "<root>/moved-claude"
+  ]
+}
