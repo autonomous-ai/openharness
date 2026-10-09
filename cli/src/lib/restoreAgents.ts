@@ -625,9 +625,12 @@ async function watchRestoredPane(
     if (!current()) return false
     const launch = { ...heldLaunch(service), ...(detail ? { detail } : {}) } as Extract<AgentLaunch, { state: 'held' }>
     const spawned = await deps.respawn(runtime, deps.waitingLaunch?.(entry, launch) ?? { argv: [] }, { current })
+      .catch(error => ({ ok: false, reason: error instanceof Error ? error.message : String(error) }))
     if (!owns()) return false
     if (!spawned.ok) {
-      fail('ENGINE_DID_NOT_START', `${engine} could not wait for ${service} in its pane: ${spawned.reason ?? 'unknown reason'}`)
+      const detail = `${launch.detail} Its waiting pane could not be shown: ${spawned.reason ?? 'unknown reason'}. Pane recovery is still pending.`
+      deps.registry.setLaunch(agentId, { ...launch, detail })
+      deps.log(`[restore] ${engine} · agent ${agentId} · held · ${detail}`)
       return false
     }
     deps.registry.setLaunch(agentId, launch)

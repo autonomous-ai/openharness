@@ -775,7 +775,7 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect(h.launches).toEqual([{ agentId: 'gridded' }])
   })
 
-  it('holds an agent whose fresh relaunch needs a service that cannot be asked, in its pane, never failed', async () => {
+  it.each([false, true])('holds an agent whose service and waiting pane are unavailable (throwing reply %s)', async throws => {
     const h = harness([gridRow('gridded')])
     withModels(h, [undefined as never, 'held'])
     h.probes.set('%0', [null, null])
@@ -784,17 +784,25 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     await settled(h, 1)
     expect(h.calls).toContain(`respawn:%0:wait ${HELD.state === 'held' ? HELD.detail : ''}`)
     expect(h.rows.get('gridded')?.launch).toEqual(HELD)
-    // A waiting pane that cannot be had is the one failure left.
+    // A waiting pane that cannot be had preserves the conversation and both reasons.
     const stuck = harness([gridRow('gridded')])
     withModels(stuck, [undefined as never, 'held'])
     const respawn = stuck.deps.respawn
     let dispatched = false
-    stuck.deps.respawn = async (...args) => { if (dispatched) return { ok: false }; dispatched = true; return respawn(...args) }
+    stuck.deps.respawn = async (...args) => { if (dispatched) { if (throws) throw new Error('test uncertain reply'); return { ok: false } }; dispatched = true; return respawn(...args) }
     stuck.probes.set('%0', [null, null])
     stuck.states.set('%0', [{ dead: true }])
     await restoreAgents(stuck.deps)
     await settled(stuck, 1)
-    expect(stuck.rows.get('gridded')?.launch).toMatchObject({ state: 'failed', error: 'ENGINE_DID_NOT_START', detail: expect.stringContaining('unknown reason') })
+    expect(stuck.rows.get('gridded')).toMatchObject({ sessionId: 'session-gridded', launch: { state: 'held', service: 'models', detail: expect.stringContaining(throws ? 'test uncertain reply' : 'unknown reason') } })
+    expect(stuck.calls.some(call => /unbind:|inheritName:/.test(call))).toBe(false)
+    // Even a missing waiting shell is recoverable once preparation can be asked again.
+    stuck.deps.only = new Set(['gridded'])
+    stuck.deps.respawn = respawn
+    stuck.probes.set('%1', [identity(12)])
+    expect((await restoreAgents(stuck.deps)).restored).toEqual(['gridded'])
+    await settled(stuck, 2, 1)
+    expect(stuck.rows.get('gridded')?.sessionId).toBe('session-gridded')
   })
 
   it('holds a terminal whose adopted engine needs a service to come back, too', async () => {
@@ -1145,7 +1153,7 @@ describe('missing held panes against the durable registry', () => {
       const h = harness([entry])
       h.deps.registry = realRegistry
       h.deps.only = new Set([entry.agentId])
-      h.deps.buildLaunch = vi.fn(() => new Promise(done => { finish = done }))
+      h.deps.buildLaunch = vi.fn(() => new Promise<RestoreLaunchResult>(done => { finish = done }))
       const restoring = restoreAgents(h.deps)
       await vi.waitFor(() => expect(h.deps.buildLaunch).toHaveBeenCalledOnce())
       expect(realRegistry.byAgent(entry.agentId)).toMatchObject({ active: false, launch: { state: 'held' }, tmuxPane: '%0' })
