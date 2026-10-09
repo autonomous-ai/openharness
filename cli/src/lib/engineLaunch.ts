@@ -12,6 +12,7 @@ import { isOpencodeV2 } from '../engines/opencode/contract.js'
 import { binaryOnPath, resolveBinaryOnPath } from './binaryOnPath.js'
 import { engineBin } from './engineBin.js'
 import { engineInstallPaths, npmEnginePrefix, type EngineInstallRecipe } from './engineInstall.js'
+import { engineLabel } from './agentNames.js'
 import { GRID_NO_UPDATE_CHECK_VAR, gridBinaryPath } from './gridBinary.js'
 import { loginShellEnvironment } from './loginShellEnv.js'
 import { managedNodePath } from './nodeRuntime.js'
@@ -571,7 +572,7 @@ export function buildEngineLaunchArgv(
     : ''
   // The engine is found (or installed first), then run at the script's top level (`engineRunScript`).
   const engineFound = opts.installIfMissing
-    ? installIfMissingScript(opts.installIfMissing, runtimeNode)
+    ? installIfMissingScript(opts.installIfMissing, runtimeNode, { engine, messageWaiting: Boolean(opts.firstPrompt) })
     : opts.installFirst
       ? installFirstScript(opts.installFirst)
       : 'harness_engine_bin=$1\n'
@@ -1009,17 +1010,78 @@ export function shellAgentArgv(binary: string, args: string[], recipe: EngineIns
  * source-owned candidate paths below bridge that one-shell gap without sourcing arbitrary profile
  * files a second time. npm installs also get their active global prefix as a fallback.
  */
-function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string): string {
+/**
+ * How a pane says it is installing its agent. The installer's own output (the command, npm's notices,
+ * "engine is missing") read as an error to the people it was for: the owner, reviewing a fresh-Mac
+ * run, "we don't want to show scary text on the terminal" (2026-10-08). So the pane shows three plain
+ * lines and a bar that moves with time (installers report no progress), and the installer's output
+ * goes to a log under ~/.harness/logs, shown only when the install fails. It runs through Harness's
+ * own Node, so where that is missing (an install without the managed runtime) the pane shows the
+ * installer as before. Typical times are measured on a fresh Mac (VM, 2026-10-08).
+ */
+export interface FriendlyInstall {
+  engine: string
+  /** A first message is waiting to go to the agent once it starts. */
+  messageWaiting: boolean
+}
+
+const TYPICAL_INSTALL_SECONDS: Readonly<Record<string, number>> = { opencode: 10, claude: 12, pi: 12, codex: 20 }
+
+/** The progress shown while the installer's output streams into the log (argv: label, seconds, log, waiting). */
+const INSTALL_PROGRESS_JS = [
+  'const fs=require("fs");const [label,sec,log,waiting]=process.argv.slice(1);const E=Number(sec)*1000;const t0=Date.now();',
+  'const out=fs.openSync(log,"a");fs.writeSync(out,"\\n--- "+new Date().toISOString()+" installing "+label+"\\n");',
+  'process.stdin.on("data",(d)=>fs.writeSync(out,d));',
+  'const rows=waiting==="1"?3:2;let drawn=false;',
+  'const draw=()=>{const t=Date.now()-t0;const f=Math.min(0.97,Math.max(0.04,1-1/(1+2.4*t/E)));const n=Math.round(f*24);',
+  'const left=Math.round((E-t)/1000);const when=t>3*E?"still working, this can take a while":left>3?"about "+left+" s":"almost there";',
+  'const lines=["Installing "+label+"…  "+when,"█".repeat(n)+"░".repeat(24-n)].concat(waiting==="1"?["Your message goes as soon as it starts."]:[]);',
+  'let text=drawn?"\\x1b["+rows+"F":"";for(const l of lines)text+="\\r\\x1b[2K"+l+"\\n";drawn=true;process.stdout.write(text);};',
+  'draw();const tick=setInterval(draw,500);',
+  'process.stdin.on("end",()=>{clearInterval(tick);fs.closeSync(out);});',
+].join('')
+
+function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string, friendly?: FriendlyInstall): string {
   const install = recipe.command
+  const label = friendly ? (friendly.engine === 'claude' ? 'Claude Code' : engineLabel(friendly.engine)) : ''
+  const seconds = friendly ? (TYPICAL_INSTALL_SECONDS[friendly.engine] ?? 15) : 0
   const names = recipe.executable.names.map(shellSingleQuote).join(' ')
   const paths = engineInstallPaths(recipe).map(shellSingleQuote).join(' ')
   // Scope both npm env spellings to the installer subprocess. Do not rewrite .npmrc or install
   // into a different OS user's shared prefix, and do not tie the engine to a versioned Node folder.
   // Either way a subshell, run at the top level where a stop is resumed (STOP_PROOF_FUNCTIONS).
-  const installCommand = recipe.executable.npmGlobal
-    ? `(export npm_config_prefix=${shellSingleQuote(npmEnginePrefix())} NPM_CONFIG_PREFIX=${shellSingleQuote(npmEnginePrefix())}; eval ${shellSingleQuote(install)})`
-    : `(eval ${shellSingleQuote(install)})`
+  const run = (line: string) => recipe.executable.npmGlobal
+    ? `(export npm_config_prefix=${shellSingleQuote(npmEnginePrefix())} NPM_CONFIG_PREFIX=${shellSingleQuote(npmEnginePrefix())}; eval ${shellSingleQuote(line)})`
+    : `(eval ${shellSingleQuote(line)})`
+  const installCommand = run(install)
+  // The same line, its output into the log and the progress on the screen. Its status is the
+  // installer's, written by the inner subshell; no file means the subshell itself was ended (Ctrl-C),
+  // which counts as 130 so no fallback follows.
+  const quiet = (line: string) => '( ( ' + run(line) + '; printf %s $? >"$harness_install_rc" ) 2>&1 | '
+    + `${shellSingleQuote(runtimeNode)} -e ${shellSingleQuote(INSTALL_PROGRESS_JS)} ${shellSingleQuote(label)} ${seconds} "$harness_install_log" ${friendly?.messageWaiting ? 1 : 0}`
+    + '; harness_rc="$(cat "$harness_install_rc" 2>/dev/null || echo 130)"; rm -f "$harness_install_rc"; exit "$harness_rc" )'
   const candidates = [names, paths].filter(Boolean).join(' ')
+  // `curl … | bash` exits 0 when curl itself fails (bash ran an empty script), so the fallback is
+  // decided by whether an executable exists afterwards, not by the first line's status.
+  // Decided first, then run as a top-level command like the first install line: a Ctrl+Z inside a
+  // compound `if` makes zsh drop the rest of it (STOP_PROOF_FUNCTIONS). An install the person ended
+  // with Ctrl-C (130) is not followed by another one.
+  const fallback = recipe.fallback ? [
+    'harness_try_fallback=0',
+    'if [ -z "$harness_engine_bin" ] && [ "$harness_status" -ne 130 ]; then',
+    '  hash -r 2>/dev/null || true',
+    '  if ! harness_find_engine "$1"; then',
+    '    harness_try_fallback=1',
+    '    harness_status=0',
+    `    [ "$harness_quiet" -eq 1 ] || printf '\\n%s\\n' 'harness: that install did not finish; trying the npm package instead' 'harness: $ ${recipe.fallback.replace(/'/g, "'\\''")}' ''`,
+    // The friendly view keeps it in the log, which a failure shows the end of.
+    ...(friendly ? [`    [ "$harness_quiet" -eq 0 ] || printf '%s\\n' 'harness: that install did not finish; trying the npm package instead' >>"$harness_install_log"`] : []),
+    '  fi',
+    'fi',
+    `[ "$harness_try_fallback" -eq 0 ] || [ "$harness_quiet" -eq 1 ] || ${run(recipe.fallback)} || harness_status=$?`,
+    ...(friendly ? [`[ "$harness_try_fallback" -eq 0 ] || [ "$harness_quiet" -eq 0 ] || ${quiet(recipe.fallback)} || harness_status=$?`] : []),
+    'harness_resume',
+  ] : []
   return [
     'resolve_engine() {',
     '  candidate="$1"',
@@ -1050,6 +1112,13 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     // A previously installed npm launcher also needs Node. Resolve the runtime before executing
     // it, not just before installing it; fresh users often have no system node on PATH.
     npmRuntimePrelude(recipe, runtimeNode),
+    'harness_quiet=0',
+    ...(friendly ? [
+      'harness_install_log="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
+      // Beside the log rather than in a temporary folder: nothing machine-specific in the script.
+      'harness_install_rc="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
+      `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "$HOME/.harness/logs" 2>/dev/null && harness_quiet=1`,
+    ] : []),
     'if ! harness_find_engine "$1"; then',
     ...(recipe.executable.npmGlobal ? [
       '  if ! command -v npm >/dev/null 2>&1; then',
@@ -1057,15 +1126,23 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
       '    exit 1',
       '  fi',
     ] : []),
-    `  printf '%s\\n' 'harness: engine is missing — installing it in this terminal' 'harness: $ ${install.replace(/'/g, "'\\''")}' ''`,
-    ...(recipe.executable.npmGlobal ? [`  printf '%s\\n' ${shellSingleQuote(`harness: installing for this user in ${npmEnginePrefix()}`)}`] : []),
+    `  [ "$harness_quiet" -eq 1 ] || printf '%s\\n' 'harness: engine is missing — installing it in this terminal' 'harness: $ ${install.replace(/'/g, "'\\''")}' ''`,
+    ...(recipe.executable.npmGlobal ? [`  [ "$harness_quiet" -eq 1 ] || printf '%s\\n' ${shellSingleQuote(`harness: installing for this user in ${npmEnginePrefix()}`)}`] : []),
     'fi',
     'harness_status=0',
-    `[ -n "$harness_engine_bin" ] || ${installCommand} || harness_status=$?`,
+    `[ -n "$harness_engine_bin" ] || [ "$harness_quiet" -eq 1 ] || ${installCommand} || harness_status=$?`,
+    ...(friendly ? [`[ -n "$harness_engine_bin" ] || [ "$harness_quiet" -eq 0 ] || ${quiet(install)} || harness_status=$?`] : []),
     'harness_resume',
+    ...fallback,
     'if [ -z "$harness_engine_bin" ]; then',
+    ...(friendly ? [
+      `  if [ "$harness_status" -ne 0 ] && [ "$harness_quiet" -eq 1 ]; then printf '\\n%s\\n\\n' ${shellSingleQuote(`${label} could not be installed.`)}; tail -n 12 "$harness_install_log"; printf '\\n%s\\n' "Full details: $harness_install_log"; exit 1; fi`,
+    ] : []),
     `  if [ "$harness_status" -ne 0 ]; then printf '\\n%s\\n' 'harness: the install failed, so the agent was not started. The command is above; fix it and create the agent again.'; exit 1; fi`,
     '  hash -r 2>/dev/null || true',
+    ...(friendly ? [
+      `  if [ "$harness_quiet" -eq 1 ] && ! harness_find_engine "$1"; then printf '\\n%s\\n' ${shellSingleQuote(`${label} was installed but could not be started.`)} "Full details: $harness_install_log"; exit 1; fi`,
+    ] : []),
     `  if ! harness_find_engine "$1"; then printf '\\n%s\\n' 'harness: the install completed, but its executable could not be found. Check the installer output and PATH above.'; exit 1; fi`,
     'fi',
     '',

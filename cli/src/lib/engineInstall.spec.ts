@@ -40,6 +40,11 @@ describe('ENGINE_INSTALL', () => {
     expect(ENGINE_INSTALL.opencode.command).not.toContain('@beta')
   })
 
+  it('falls back to OpenCode’s npm package, whose binaries need no GitHub download', () => {
+    expect(ENGINE_INSTALL.opencode.fallback).toBe('npm install -g opencode-ai')
+    expect(ENGINE_INSTALL.opencode.executable.npmGlobal).toBe(true)
+  })
+
   it('generates valid POSIX pane scripts for every recipe', () => {
     for (const engine of PROCESS_ENGINES) {
       const script = launchScriptOf(buildEngineLaunchArgv(

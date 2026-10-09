@@ -293,17 +293,45 @@ Future<Map<String, List<String>?>> _refreshRemoteBranches(
   }
 }
 
+/// Whether [path] or a folder above it holds `.git`: a directory, or the file
+/// a linked worktree has.
+Future<bool> _insideGitCheckout(String path) async {
+  // git resolves the folder physically: ~/proj linked into a repository's
+  // packages/app is in that repository though nothing above ~/proj says so.
+  final String real;
+  try {
+    real = await Directory(path).resolveSymbolicLinks();
+  } on FileSystemException {
+    // Gone or unreadable: let git give its own answer.
+    return true;
+  }
+  var dir = p.normalize(p.absolute(real));
+  while (true) {
+    final type = await FileSystemEntity.type(p.join(dir, '.git'));
+    if (type != FileSystemEntityType.notFound) return true;
+    final parent = p.dirname(dir);
+    if (parent == dir) return false;
+    dir = parent;
+  }
+}
+
 /// Read cached choices, or explicitly refresh remote branches first. Refresh
 /// failures retain usable local results and are reported separately.
 Future<Map<String, dynamic>> readLocalGitProject(
   String source, {
   bool refresh = false,
   GitProcessStarter? startProcess,
+  Future<bool> Function(String path) insideCheckout = _insideGitCheckout,
 }) async {
   Future<({int code, String output, String errorOutput})> git(
     List<String> arguments,
   ) => _git(source, arguments, startProcess: startProcess);
   if (!validGitPath(source)) return {'error': 'INVALID_PATH'};
+  // A folder with no `.git` in it or above it is not a Git project, and saying so needs no git. On a
+  // Mac without the Command Line Tools, /usr/bin/git is Apple's installer stub: it exits 1 (not git's
+  // 128), so a returning user's second harness in their first project failed with "Could not check
+  // Git" (fresh macOS VM, 2026-10-08), and the stub may also offer to install the tools.
+  if (!await insideCheckout(source)) return {'isGit': false};
   try {
     final root = await git(['rev-parse', '--show-toplevel']);
     if (root.code != 0) {

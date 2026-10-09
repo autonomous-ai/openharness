@@ -495,6 +495,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           WorkspaceMachinePrompt(
                             loading: app.machinesLoading,
                             preparing: _hasNewHarnessMachine,
+                            preparingText: app.firstArrival.running
+                                ? 'Opening your agents…'
+                                : 'Preparing your harness…',
                             onChoose: () => unawaited(_openMachines()),
                           ),
                           if (recent != null) ...[
@@ -551,6 +554,23 @@ class _SwarmScreenState extends State<SwarmScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       try {
         if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
+        // A computer new to Harness opens on agents, not on an empty box.
+        if (app.firstArrival.pending) {
+          final arriving = app.firstArrival.run(
+            app,
+            // The person has not taken over meanwhile: no box, search or command bar opened.
+            stillCurrent: () =>
+                mounted &&
+                _newHarness == null &&
+                _search == null &&
+                !_commandBarOpen &&
+                !_pickingFolder,
+          );
+          // Says "Opening your agents…" while it works.
+          if (mounted) setState(() {});
+          if (await arriving) return;
+          if (!_canShowWelcomeComposer || app.activeSwarmId != tab) return;
+        }
         await _newAgent(
           stillCurrent: () =>
               _canShowWelcomeComposer && app.activeSwarmId == tab,
@@ -588,6 +608,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     app.canChangeCompanionAgent = _canChangeCompanionAgent;
     app.openAgentPicker = _openPaneAgents;
     app.agentChangeNotice = _showPaneActionHint;
+    app.notificationOffer = _offerNotifications;
     _keymap.addListener(_keymapChanged);
     app.hasNavigationRail = false;
     app.railFocused = false;
@@ -809,6 +830,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       app.canChangeCompanionAgent = null;
     }
     if (app.openAgentPicker == _openPaneAgents) app.openAgentPicker = null;
+    if (app.notificationOffer == _offerNotifications) {
+      app.notificationOffer = null;
+    }
     if (app.agentChangeNotice == _showPaneActionHint) {
       app.agentChangeNotice = null;
     }
@@ -2656,7 +2680,9 @@ class _SwarmScreenState extends State<SwarmScreen> {
       // treats a lost reply as proof that the session stopped. A replaced
       // session must not inherit a choice made for the old one.
       return targets.every((target) {
-        final current = app.stateOf(target.$1)?.agents
+        final current = app
+            .stateOf(target.$1)
+            ?.agents
             .where((agent) => agent.id == target.$2.id)
             .firstOrNull;
         return current == null ||
@@ -3579,6 +3605,24 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Why a pane action did nothing, for the one route that is not gated by
   /// `_canExecuteCommand`: a native menu item clicked while no keymap region
   /// owns the focus reaches its handler directly.
+  /// Once: an agent finished while the person was away and nothing told them.
+  void _offerNotifications() {
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        key: const ValueKey('notification-offer'),
+        duration: const Duration(seconds: 12),
+        content: const Text(
+          'An agent finished while you were away. Get a notification next time?',
+        ),
+        action: SnackBarAction(
+          label: 'Turn on',
+          onPressed: () => unawaited(app.acceptNotificationOffer()),
+        ),
+      ),
+    );
+  }
+
   void _showPaneActionHint(String message) {
     if (!mounted) return;
     ScaffoldMessenger.maybeOf(context)

@@ -63,12 +63,51 @@ GitProcessStarter _commands({
   );
 };
 
+Future<bool> _checkout(String _) async => true;
+
 void main() {
+  // A fresh Mac's /usr/bin/git is Apple's installer stub (exit 1): a folder that
+  // is not a checkout must read as one without starting git at all.
+  test('a folder linked into a checkout is read as part of it', () async {
+    final root = await Directory.systemTemp.createTemp('harness-linked-');
+    addTearDown(() => root.delete(recursive: true));
+    final repo = await Directory('${root.path}/repo/packages/app').create(recursive: true);
+    await Directory('${root.path}/repo/.git').create();
+    final link = await Link('${root.path}/proj').create(repo.path);
+    var started = 0;
+    await readLocalGitProject(
+      link.path,
+      startProcess: (_, _) async {
+        started++;
+        return _GitProcess(code: 128);
+      },
+    );
+    expect(started, greaterThan(0));
+  });
+
+  test('a folder with no .git above it is not a Git project, and git is never started', () async {
+    final folder = await Directory.systemTemp.createTemp('harness-plain-');
+    addTearDown(() => folder.delete(recursive: true));
+    var started = 0;
+    expect(
+      await readLocalGitProject(
+        folder.path,
+        startProcess: (_, _) async {
+          started++;
+          return _GitProcess(code: 1);
+        },
+      ),
+      {'isGit': false},
+    );
+    expect(started, 0);
+  });
+
   test('Git command failures stay distinct from folders without Git', () async {
     for (final code in [1, 128]) {
       expect(
         await readLocalGitProject(
           '/repo',
+          insideCheckout: _checkout,
           startProcess: (_, _) async => _GitProcess(code: code),
         ),
         code == 128 ? {'isGit': false} : {'error': 'GIT_UNAVAILABLE'},
@@ -77,6 +116,7 @@ void main() {
     expect(
       await readLocalGitProject(
         '/repo',
+        insideCheckout: _checkout,
         startProcess: (_, _) => throw const ProcessException('git', []),
       ),
       {'error': 'GIT_UNAVAILABLE'},
@@ -84,6 +124,7 @@ void main() {
     expect(
       await readLocalGitProject(
         '/repo',
+        insideCheckout: _checkout,
         startProcess: _commands(fail: 'for-each-ref'),
       ),
       {'error': 'GIT_UNAVAILABLE'},
@@ -96,6 +137,7 @@ void main() {
       final calls = <List<String>>[];
       await readLocalGitProject(
         '/repo with spaces',
+        insideCheckout: _checkout,
         startProcess: (arguments, environment) async {
           calls.add(arguments);
           expect(arguments.take(3), [
@@ -130,7 +172,7 @@ void main() {
   test('excessive Git output is bounded and the process is killed', () async {
     final process = _GitProcess(bytes: Uint8List(1024 * 1024 + 1));
     expect(
-      await readLocalGitProject('/repo', startProcess: (_, _) async => process),
+      await readLocalGitProject('/repo',insideCheckout: _checkout, startProcess: (_, _) async => process),
       {'error': 'GIT_UNAVAILABLE'},
     );
     expect(process.signals, [ProcessSignal.sigkill]);
@@ -140,6 +182,7 @@ void main() {
     final process = _GitProcess(code: null);
     final result = readLocalGitProject(
       '/repo',
+      insideCheckout: _checkout,
       startProcess: (_, _) async => process,
     );
     expect(await result, {'error': 'GIT_UNAVAILABLE'});
@@ -150,6 +193,7 @@ void main() {
     final stalled = _GitProcess(code: null);
     final result = await readLocalGitProject(
       '/repo',
+      insideCheckout: _checkout,
       refresh: true,
       startProcess: (arguments, environment) async {
         final command = arguments.skip(3).join(' ');

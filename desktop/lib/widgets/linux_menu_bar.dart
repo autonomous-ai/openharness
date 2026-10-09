@@ -602,6 +602,13 @@ class _LinuxMenuBarState extends State<LinuxMenuBar> {
 
   List<Widget> _buildHelpMenu() {
     return [
+      // The first-run tour's slides, again (RootShell shows them).
+      _appRow(
+        key: 'menu-bar-welcome-tour',
+        icon: AppIcons.presentation,
+        label: 'Welcome Tour',
+        action: 'welcomeTour',
+      ),
       // Quick Start is a keymap command on macOS too: the Help row sends it
       // over the swarm channel as `keymapCommand`.
       _swarmRow(

@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { sessionBranchNames } from './agentNames.js'
-import { HARNESS_BRANCH_KEY } from './gitProject.js'
+import { HARNESS_BRANCH_KEY, insideGitCheckout } from './gitProject.js'
 
 const exec = promisify(execFile)
 
@@ -28,6 +28,9 @@ const RESERVED_BRANCHES = ['main', 'master', 'head', 'origin', 'upstream', 'deve
 export async function nameBranchAfterSession(cwd: string, title: string | null): Promise<string | null> {
   const names = sessionBranchNames(title)
   if (!names.length) return null
+  // Asked for every agent once it has a name, most of them in folders that are not checkouts at all
+  // (insideGitCheckout: no git runs there).
+  if (!(await insideGitCheckout(cwd))) return null
   const branch = await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => null)
   if (!branch) return null
   const mark = await git(cwd, ['config', '--get', `branch.${branch}.${HARNESS_BRANCH_KEY}`]).catch(() => null)

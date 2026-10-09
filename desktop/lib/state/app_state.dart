@@ -1,7 +1,8 @@
 import '../core/permission_modes.dart';
 
 import 'dart:async';
-import 'dart:io' show Directory, Platform, exit, pid;
+import 'dart:io'
+    show Directory, FileSystemEntity, FileSystemEntityType, Platform, exit, pid;
 import 'dart:math' show Random;
 
 import 'package:dio/dio.dart';
@@ -18,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/model_manager_controller.dart';
 import '../companions/coding_memory_connection.dart';
+import 'first_arrival.dart';
 import 'harness_monitor_controller.dart';
 import 'agent_handoff_file.dart';
 import 'agent_switch_handoff.dart';
@@ -34,7 +36,9 @@ import '../auth/sign_in_client.dart';
 import '../auth/sign_in_provider.dart';
 import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
+import '../bootstrap/agent_prefetch.dart';
 import '../bootstrap/environment_provisioner.dart';
+import '../bootstrap/setup_progress.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/sleep_aware.dart';
@@ -792,7 +796,16 @@ class AppNotifier extends ChangeNotifier {
           },
           lanBlocked: () async {
             try {
-              await AutonomousDeviceCli().discover();
+              final cli = AutonomousDeviceCli();
+              // Discovery is what raises macOS's "find devices on local networks… Autonomous robots"
+              // prompt. Everyone who reopened the app after its daemon outlived it saw that prompt on
+              // their second session, robots or not (fresh macOS VM, 2026-10-08). Without a paired
+              // robot nothing here needs the LAN, so it is not tested.
+              final paired = (await cli.list())['devices'];
+              if (!_localNetworkWanted && (paired is! List || paired.isEmpty)) {
+                return null;
+              }
+              await cli.discover();
               return false;
             } on AutonomousDeviceCliException catch (error) {
               return error.localNetworkBlocked ? true : null;
@@ -804,6 +817,10 @@ class AppNotifier extends ChangeNotifier {
         )
       : null;
   final EnvironmentProvisioner? environmentProvisioner;
+
+  /// OpenCode downloaded beside a fresh computer's setup (see [AgentPrefetch]). Null under test
+  /// unless a test passes one, so nothing there runs `curl`.
+  final AgentPrefetch? agentPrefetch;
   final DesktopUpdater? desktopUpdater;
   @visibleForTesting
   final WsConn Function(String machineId)? connectionForTest;
@@ -834,6 +851,11 @@ class AppNotifier extends ChangeNotifier {
     foreground.value = state == null || state == AppLifecycleState.resumed;
     // Back in front: a viewer reads the device log again, and joins it if the boot never got in.
     if (foreground.value && !wasForeground) {
+      if (_notificationOfferDue) {
+        _notificationOfferDue = false;
+        unawaited(notificationOfferStoreForTest.set(true));
+        notificationOffer?.call();
+      }
       _refreshDeviceLogAfterReconnect();
       // ...and, hearing no machine at all, looks again for one: the person most likely just went to
       // their computer to sign it in.
@@ -1021,6 +1043,112 @@ class AppNotifier extends ChangeNotifier {
   /// racing the first.
   bool get environmentSetupInFlight => _environmentSetupInFlight;
   bool get environmentInstallRequested => _environmentInstallRequested;
+
+  // --- Setup tour (onboarding redesign, 2026-10-08) -----------------------
+  // A fresh computer whose setup installs with nobody at the keyboard sees a
+  // tour of Harness instead of the install screen, with the install as one
+  // line under it (`widgets/setup_tour.dart`). Everything else about setup is
+  // unchanged; these three members are the whole of the tour's state here.
+  bool _setupTour = false;
+
+  /// Whether RootShell shows the setup tour in place of whatever [status]
+  /// would show. Set when launch takes the unattended install path; cleared
+  /// by [finishSetupTour] once the tour has opened Harness. It also gives way,
+  /// for good, as soon as setup needs a person — a Terminal password, manual
+  /// mode, or the method choice — because those are the existing setup
+  /// screen's job.
+  bool get setupTourShowing {
+    if (_setupTour && _setupNeedsPerson(environmentReadiness)) {
+      _setupTour = false;
+    }
+    return _setupTour;
+  }
+
+  static bool _setupNeedsPerson(EnvironmentReadiness readiness) =>
+      readiness.mode == EnvironmentSetupMode.manual ||
+      readiness.phase == EnvironmentSetupPhase.chooseMethod ||
+      readiness.needsTerminal ||
+      readiness.plan.any((item) => item.requiresTerminal);
+
+  /// The tour has shown its last slide with everything done: show the app.
+  void finishSetupTour() {
+    if (!_setupTour) return;
+    _setupTour = false;
+    notifyListeners();
+  }
+
+  /// What is still downloading beside setup (see [SetupDownloads]). The tour
+  /// opens Harness only once this says done as well as setup. The agent
+  /// downloads set `.value` here; nothing pending is the default, so a
+  /// computer with nothing to download opens as soon as setup is finished.
+  final ValueNotifier<SetupDownloads> setupDownloads = ValueNotifier(
+    SetupDownloads.none,
+  );
+
+  /// How long the agent downloads beside setup usually take from their start: OpenCode 13.5 s,
+  /// then Codex and Claude Code once setup's Node is in place, 47 s in all (fresh macOS VM,
+  /// 2026-10-09). The tour counts down from it.
+  @visibleForTesting
+  static const agentDownloadsExpected = Duration(seconds: 50);
+
+  /// The longest the tour waits for them, as long as a create waits ([agentPrefetchWait]): 287 MB
+  /// take about four minutes at 10 Mbit/s, and a pane that gave up sooner would run its own npm
+  /// install into the prefix the download is still writing.
+  @visibleForTesting
+  static const agentDownloadsCap = Duration(minutes: 10);
+
+  Timer? _agentDownloadsTick;
+
+  /// Feeds [setupDownloads] from [agentPrefetch] once it has started: pending at once, so the tour
+  /// cannot open before the downloads are counted, and done when they settle or [agentDownloadsCap]
+  /// passes.
+  void _publishAgentDownloads() {
+    final prefetch = agentPrefetch;
+    if (prefetch == null || !prefetch.started || _agentDownloadsTick != null) {
+      return;
+    }
+    final began = DateTime.now();
+    late final void Function() publish;
+    void stop() {
+      _agentDownloadsTick?.cancel();
+      prefetch.progress.removeListener(publish);
+    }
+
+    publish = () {
+      if (_disposed) return stop();
+      final progress = prefetch.progress.value;
+      final elapsed = DateTime.now().difference(began);
+      final lines = [agentDownloadsLine(progress)];
+      if (progress.finished || elapsed >= agentDownloadsCap) {
+        stop();
+        setupDownloads.value = SetupDownloads(lines: lines);
+        return;
+      }
+      final left = agentDownloadsExpected - elapsed;
+      // Past the usual time the tour says no number rather than a wrong one.
+      setupDownloads.value = SetupDownloads.pending(
+        left: left > Duration.zero ? left : null,
+        lines: lines,
+      );
+    };
+    prefetch.progress.addListener(publish);
+    _agentDownloadsTick = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => publish(),
+    );
+    publish();
+  }
+
+  /// `Agents: OpenCode ✓ · Codex ✓ · Claude Code downloading`, for the tour's Details.
+  @visibleForTesting
+  static String agentDownloadsLine(AgentDownloads progress) {
+    final parts = [
+      for (final engine in const ['opencode', 'codex', 'claude'])
+        '${engine == 'claude' ? 'Claude Code' : engineIdentity(engine).label} '
+            '${progress.settled.contains(engine) ? '✓' : 'downloading'}',
+    ];
+    return 'Agents: ${parts.join(' · ')}';
+  }
 
   // The daemon's own advertised local-ws endpoint — the dial target for EVERY machine's data plane
   // now, not just this computer's own one (see src/lib/remoteRelay.ts in the harness CLI repo: a
@@ -2956,6 +3084,7 @@ class AppNotifier extends ChangeNotifier {
     this.localManualFixture,
     this.localCliDiscovery,
     this.environmentProvisioner,
+    AgentPrefetch? agentPrefetch,
     this.desktopUpdater,
     this.connectionForTest,
     SignInClient? cliLogin,
@@ -2970,7 +3099,12 @@ class AppNotifier extends ChangeNotifier {
     AgentUnread? agentUnread,
     SystemNotifications? systemNotifications,
     this.experimentalSettingsTransport,
-  }) : alerts = alerts ?? AlertSounds(store: alertSoundStore),
+  }) : agentPrefetch =
+           agentPrefetch ??
+           (kUnderTest
+               ? null
+               : AgentPrefetch(log: (line) => appLog.info('setup', line))),
+       alerts = alerts ?? AlertSounds(store: alertSoundStore),
        agentAlerts = agentAlerts ?? AgentAlerts(),
        systemNotifications =
            systemNotifications ?? notify_system.systemNotifications,
@@ -2981,6 +3115,7 @@ class AppNotifier extends ChangeNotifier {
        // without one (the tests) nothing is written anywhere.
        dial = DialState(paneLayoutStore?.storage),
        agentPreference = AgentPreference(paneLayoutStore?.storage),
+       firstArrival = FirstArrival(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
        session = authSession,
        _store = configStore,
@@ -3119,6 +3254,21 @@ class AppNotifier extends ChangeNotifier {
   final DialState dial;
   final AgentPreference agentPreference;
   final ProjectHistory projectHistory;
+
+  /// The first workspace on a computer new to Harness opens with agents already in it.
+  final FirstArrival firstArrival;
+
+  /// Whether this computer had the Harness CLI before this launch's setup: `~/.harness/cli`
+  /// exists. Tests answer no, as on a fresh computer.
+  @visibleForTesting
+  bool Function() harnessInstalledBefore = kUnderTest
+      ? () => false
+      : () {
+          final home = Platform.environment['HOME'];
+          return home == null ||
+              FileSystemEntity.typeSync('$home/.harness/cli') !=
+                  FileSystemEntityType.notFound;
+        };
 
   TerminalPane? get focusedPane {
     final id = focusedPaneId;
@@ -4130,9 +4280,27 @@ class AppNotifier extends ChangeNotifier {
       // straight away when the whole plan runs in-app; only a plan that needs
       // a password in Terminal waits on the wizard's Install action.
       var result = await _runProvisioner(install: false);
+      // A computer that has never had Harness: the plan installs its CLI and there is no
+      // `~/.harness/cli` at all. A CLI that is only too old, or whose Node went missing, is a repair
+      // on a computer someone already uses, and gets neither the tour nor a first workspace.
+      final firstHarness =
+          result.plan.any((item) => item.step == EnvironmentStep.harness) &&
+          !harnessInstalledBefore();
       if (!result.isReady && _canInstallUnattended(result, mode: null)) {
+        if (firstHarness) {
+          // OpenCode, Codex and Claude Code download meanwhile when it has no agent at all
+          // ([AgentPrefetch.start] decides).
+          agentPrefetch?.start();
+          _publishAgentDownloads();
+          // Nobody needs to act on this install, so it runs under the welcome tour rather than on
+          // the install screen.
+          _setupTour = true;
+        }
         status = AppStatus.preparingEnvironment;
         result = await _installUnattended(result);
+      }
+      if (firstHarness) {
+        firstArrival.begin(downloads: agentPrefetch?.started ?? false);
       }
       if (!result.isReady) {
         status = AppStatus.preparingEnvironment;
@@ -4524,6 +4692,7 @@ class AppNotifier extends ChangeNotifier {
       return;
     }
     await dial.restore();
+    await firstArrival.restore();
     if (!_authWorkCurrent(revision)) {
       _bootStatusMessage = null;
       return;
@@ -4938,6 +5107,22 @@ class AppNotifier extends ChangeNotifier {
         );
     }
     _startDaemonSupervision(discovery);
+  }
+
+  /// Settings › Devices could not see the local network. Without a paired
+  /// robot the daemon-owner check never tests the LAN (it is what raises the
+  /// macOS prompt), so a daemon started from a terminal would stay refused it
+  /// and the first robot could never be found. Asked here, by the person
+  /// looking for one, the check runs again with the LAN test.
+  bool _localNetworkWanted = false;
+
+  Future<void> localNetworkBlocked() async {
+    _localNetworkWanted = true;
+    final guard = _daemonOwner;
+    if (guard == null) return;
+    final probe = await _discovery.ensureRunning();
+    final pid = probe.pid;
+    if (probe.ready && pid != null) await guard.recheck(pid);
   }
 
   /// One line per probe STATE the gate lands in, never per tick: this gate was silent, and the one
@@ -6570,8 +6755,7 @@ class AppNotifier extends ChangeNotifier {
   /// screen stay — as a missed `machines_changed` push would. For a screen
   /// waiting on a computer this window has no connection to hear that push
   /// through: an account with none connected yet (the browser's connect page).
-  Future<void> rereadMachines() =>
-      _rereadMachinesInBackground(pushed: false);
+  Future<void> rereadMachines() => _rereadMachinesInBackground(pushed: false);
 
   Future<void> _rereadMachinesInBackground({required bool pushed}) async {
     if (_disposed || status != AppStatus.authenticated) return;
@@ -6688,7 +6872,8 @@ class AppNotifier extends ChangeNotifier {
     });
     try {
       await _pool?.closeMachine(machineId);
-      if (machineStates[machineId] case final current?) _connectMachine(current);
+      if (machineStates[machineId] case final current?)
+        _connectMachine(current);
       settle();
       return await done.future;
     } finally {
@@ -9469,6 +9654,86 @@ class AppNotifier extends ChangeNotifier {
     }
   }
 
+  /// The first message each harness was created with, by machine and agent,
+  /// for as long as this window runs. An agent that exits before it reads it
+  /// hands it to the shell that keeps its pane, and a Change agent with no
+  /// conversation to hand off starts the new agent on it: the person picked
+  /// OpenCode after Claude Code could not reach Anthropic, and had to type
+  /// their task again (fresh macOS VM, 2026-10-08).
+  final _firstMessages = <(String, String), String>{};
+
+  @visibleForTesting
+  void rememberFirstMessageForTest(
+    String machineId,
+    String agentId,
+    String message,
+  ) => _firstMessages[(machineId, agentId)] = message;
+
+  /// An engine that exited left its pane's shell running under [successor]
+  /// (the daemon's retainExitedSession). Its tiles move to that shell instead
+  /// of closing, so the engine's last screen — the reason it stopped — stays in
+  /// front of the person. A first Claude Code harness that could not reach
+  /// Anthropic closed its only pane and left a new user on an empty box with
+  /// no message (fresh macOS VM, 2026-10-08). The retained deletion reloads the
+  /// machine, and that load attaches the tiles once the successor is listed.
+  Future<void> _handOverViews(
+    MachineState machine,
+    String agentId,
+    String successor,
+  ) async {
+    final machineId = machine.machine.machineId;
+    if (_firstMessages.remove((machineId, agentId)) case final message?) {
+      _firstMessages[(machineId, successor)] = message;
+    }
+    // An explicit Close or a Change agent owns these panes until it finishes,
+    // as [_removeAgent] honours; a shell must not take them from under it.
+    if (_closingViewAgents.containsKey((machineId, agentId)) ||
+        _agentChanges[(machineId, agentId)]?.preservingViews == true) {
+      return;
+    }
+    final terminals = allPanes
+        .where((p) => p.machineId == machineId && p.agentId == agentId)
+        .toList();
+    if (terminals.isEmpty) return;
+    // As a Change agent does: a tab whose only agent was the one that ended
+    // gets a fresh desk identity, so a peer that prunes that agent (an older
+    // window ignores `successor`) cannot close the tab now showing the shell.
+    final replacedTabs = _desk.enabled
+        ? swarms.where((swarm) {
+            final agents = swarm.panes.where((pane) => pane.agentId != null);
+            return _deskTracks(swarm) &&
+                isDeskId(swarm.id) &&
+                agents.isNotEmpty &&
+                agents.every(
+                  (pane) =>
+                      pane.machineId == machineId && pane.agentId == agentId,
+                );
+          }).toList()
+        : <Swarm>[];
+    for (final pane in terminals) {
+      await _detachSession(pane, sendClose: false);
+      if (allPanes.contains(pane) && pane.agentId == agentId) {
+        pane.agentId = successor;
+      }
+    }
+    for (final swarm in swarms) {
+      if (swarm.titleMachineId == machineId && swarm.titleAgentId == agentId) {
+        swarm.titleAgentId = successor;
+      }
+    }
+    for (final swarm in replacedTabs) {
+      if (!swarms.contains(swarm)) continue;
+      final previousId = swarm.id;
+      swarm.id = newDeskId();
+      if (_activeSwarmId == previousId) _activeSwarmId = swarm.id;
+      for (final entry in _draftSwarmReturns.entries.toList()) {
+        if (entry.value == previousId) _draftSwarmReturns[entry.key] = swarm.id;
+      }
+    }
+    _persistLayout();
+    notifyListeners();
+  }
+
   Future<void> _removeAgent(MachineState machine, String agentId) async {
     // Repeated retained-stop events must not invalidate the history refresh
     // already in flight. There is no newer removal when nothing changed.
@@ -9485,6 +9750,7 @@ class AppNotifier extends ChangeNotifier {
     final confirmedStop = stop != null && _agentStopCurrent(stop) ? stop : null;
     confirmedStop?.confirmed = true;
     machine._agentRemovals[agentId] = ++machine._agentRevision;
+    _firstMessages.remove((machine.machine.machineId, agentId));
     _agentRenames.remove((machine.machine.machineId, agentId));
     machine._agentNames.remove(agentId);
     sessionPreviews.removeAgent(machine.machine.machineId, agentId);
@@ -9990,8 +10256,32 @@ class AppNotifier extends ChangeNotifier {
     // counts as not in front, for the reason [lifecycle] gives.
     if (lifecycle() != AppLifecycleState.resumed) {
       systemNotifications.post(alert);
+      _noteNotificationOffer(kind);
     }
   }
+
+  /// Called with the offer when the person is back in front of Harness: an
+  /// agent finished (or needs them) while they were away and nothing told
+  /// them, because notifications are off. The workspace shows it once.
+  void Function()? notificationOffer;
+  bool _notificationOfferDue = false;
+
+  @visibleForTesting
+  NotificationOfferStore notificationOfferStoreForTest = notificationOfferStore;
+
+  void _noteNotificationOffer(AlertKind kind) {
+    if (kind != AlertKind.done && kind != AlertKind.needsYou) return;
+    if (systemNotifications.store.value ||
+        !systemNotifications.supported ||
+        notificationOfferStoreForTest.value) {
+      return;
+    }
+    _notificationOfferDue = true;
+  }
+
+  /// Turns notifications on from the offer, asking the system's permission.
+  Future<void> acceptNotificationOffer() =>
+      systemNotifications.setEnabled(true);
 
   /// What clicking a banner does: show that agent, wherever it is.
   ///
@@ -10336,15 +10626,16 @@ class AppNotifier extends ChangeNotifier {
     String query, {
     SearchWhen? when,
     int limit = 30,
+    Duration budget = const Duration(seconds: 4),
   }) async {
     if (!searchableMachineIds.contains(machineId)) return null;
     final elapsed = Stopwatch()..start();
-    const budget = Duration(seconds: 4);
     List<SessionContentHit>? hits;
     try {
       // Discovery is asynchronous. An unfinished index is not a final empty
       // answer; ask again briefly, within the same budget as one slow request.
-      for (var attempt = 0; attempt < 20; attempt++) {
+      final attempts = budget.inMilliseconds ~/ 200;
+      for (var attempt = 0; attempt < attempts; attempt++) {
         if (_disposed || !searchableMachineIds.contains(machineId)) return hits;
         final remaining = budget - elapsed.elapsed;
         if (remaining <= Duration.zero) return hits;
@@ -10365,7 +10656,7 @@ class AppNotifier extends ChangeNotifier {
         // Older daemons omit ready; retain their single-request behavior.
         if (reply['ready'] != false || reply['discoveryError'] == true)
           return hits;
-        if (attempt == 19 ||
+        if (attempt == attempts - 1 ||
             budget - elapsed.elapsed < const Duration(milliseconds: 200))
           return hits;
         await Future<void>.delayed(const Duration(milliseconds: 200));
@@ -10787,6 +11078,14 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
+  /// How long, from its start, a create waits for its agent's download beside setup
+  /// ([agentPrefetch]). OpenCode took 7–12 s in the VM runs, Codex and Claude Code (one npm, after
+  /// setup's Node) 25 s more; on a slow network the wait is the download's, since a pane that stopped
+  /// waiting would start a second npm install into the same prefix. Ten minutes bounds a download
+  /// that hangs.
+  @visibleForTesting
+  Duration agentPrefetchWait = const Duration(minutes: 10);
+
   /// A Claude Code or Codex conversation Harness did not start, opened as a
   /// harness that resumes it, in its own folder (Cmd-P, `ExternalSessionRef`).
   /// The machine refuses one open elsewhere, already a harness, or whose folder
@@ -11099,6 +11398,30 @@ class AppNotifier extends ChangeNotifier {
         !machine.isLocalMachine &&
         creation._projectFolder?.isGenerated == true &&
         creation._projectNameRetries < 64;
+    // An agent still downloading beside setup ([AgentPrefetch]): the pane would start a second install
+    // of it. Waited for here, once the creation is registered (its tab and split are held), and only
+    // for what is left of [agentPrefetchWait] since that download began.
+    final prefetchedEngine = choices['engine'];
+    if (!creation.awaitingConfirmation &&
+        prefetchedEngine is String &&
+        machine.isLocalMachine) {
+      final download = agentPrefetch?.waitFor(
+        prefetchedEngine,
+        agentPrefetchWait,
+      );
+      if (download != null) {
+        await download;
+        final moved = creation.background
+            ? null
+            : _creationPlacementError(targetId, split, placement: placement);
+        if (moved != null) return creation._complete(moved);
+        if (_disposed || machineStates[machineId] != machine) {
+          return creation._complete(
+            'The selected machine changed. Choose the machine again.',
+          );
+        }
+      }
+    }
     final operation = creation.awaitingConfirmation
         ? 'agent_create_status'
         : 'agent_create';
@@ -11249,6 +11572,10 @@ class AppNotifier extends ChangeNotifier {
     creation._complete(null);
     if (_disposed || machineStates[machineId] != machine) return null;
     creation._agentId = agent.id;
+    if (choices['prompt'] case final String prompt
+        when prompt.trim().isNotEmpty) {
+      _firstMessages[(machineId, agent.id)] = prompt;
+    }
     _upsertAgent(machine, agent);
     // Apply each creation receipt once, even if its transport result is replayed.
     // A Git start remembers its repository, never the worktree it made.
@@ -12362,6 +12689,7 @@ class AppNotifier extends ChangeNotifier {
         change.handoffEmpty = accepted.prompt == null;
         change.handoffFailed = false;
         change.contextLoaded = true;
+        _resendUnreadFirstMessage(machineId, change, source);
         return null;
       }
     } catch (_) {
@@ -12387,7 +12715,23 @@ class AppNotifier extends ChangeNotifier {
     } catch (_) {
       return 'Could not read the conversation for the handoff. Try switching again.';
     }
+    _resendUnreadFirstMessage(machineId, change, source);
     return null;
+  }
+
+  /// Nothing to hand off, but the source was created with a first message:
+  /// the new agent starts on it (see [_firstMessages]).
+  void _resendUnreadFirstMessage(
+    String machineId,
+    _AgentChange change,
+    Agent source,
+  ) {
+    if (!change.handoffEmpty) return;
+    final message = _firstMessages[(machineId, source.id)];
+    if (message == null) return;
+    change.handoff = message;
+    change.handoffEmpty = false;
+    change.handoffFailed = false;
   }
 
   Future<String?> _changeAgent(String machineId, _AgentChange change) async {
@@ -16262,6 +16606,10 @@ class AppNotifier extends ChangeNotifier {
           );
         }
         final agentId = _eventAgentId(machine, event, payload);
+        final successor = payload['successor'];
+        if (agentId != null && successor is String && successor.isNotEmpty) {
+          await _handOverViews(machine, agentId, successor);
+        }
         if (agentId != null) {
           await _removeAgent(machine, agentId);
         }
@@ -16567,6 +16915,8 @@ class AppNotifier extends ChangeNotifier {
       cli.waitingNote.removeListener(_loginWaitingChanged);
     }
     _closeOwnerMemories();
+    _agentDownloadsTick?.cancel();
+    setupDownloads.dispose();
     experimentalFeatures.dispose();
     deviceHosts.dispose();
     viewer?.auth.dispose();

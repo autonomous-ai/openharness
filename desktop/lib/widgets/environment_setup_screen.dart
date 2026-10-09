@@ -210,8 +210,8 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
           count == 0
               ? 'Your tools are ready. Verify them to continue.'
               : count == 1
-              ? 'Install this tool, then sign in to start your first harness.'
-              : 'Install these $countLabel, then sign in to start your first harness.',
+              ? 'Install this tool, then start your first harness.'
+              : 'Install these $countLabel, then start your first harness.',
         ),
         Row(
           children: [
@@ -307,72 +307,16 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
       _heading(
         'Setup complete',
         'This computer is ready',
-        'Every required command passed. Continue to Harness sign-in.',
+        'Every required command passed. Continue to your workspace.',
       ),
       _checkList(state),
     ],
   );
 
-  /// One row per command Harness runs — never one per way of obtaining it.
-  /// What obtaining a missing one takes is the row's detail, read off the
-  /// plan the provisioner computed.
   Widget _checkList(
     EnvironmentReadiness state, {
     bool checking = false,
-  }) => _Panel(
-    child: Column(
-      children: [
-        const _CheckSectionLabel('Host dependencies'),
-        _CheckRow(
-          label: 'tmux terminal backend',
-          detail: _tmuxDetail(state),
-          status: state.steps[EnvironmentStep.tmux],
-          checking: checking && state.phase == EnvironmentSetupPhase.preflight,
-        ),
-        if (Platform.isLinux)
-          _CheckRow(
-            label: 'Native image clipboard',
-            detail: _linuxClipboardDetail,
-            status: state.steps[EnvironmentStep.clipboard],
-            checking:
-                checking && state.phase == EnvironmentSetupPhase.preflight,
-          ),
-        const _CheckSectionLabel('Harness components'),
-        _CheckRow(
-          label: 'Managed Node 20+ & Harness CLI',
-          detail: '~/.harness/runtime · harness version',
-          status: state.steps[EnvironmentStep.harness],
-          checking: checking && state.phase == EnvironmentSetupPhase.preflight,
-        ),
-      ],
-    ),
-  );
-
-  String _tmuxDetail(EnvironmentReadiness state) {
-    const base = 'Required for every harness';
-    final steps = state.planFor(EnvironmentStep.tmux);
-    if (steps.isEmpty) {
-      return Platform.isLinux ? '$base · tmux, ps' : base;
-    }
-    if (Platform.isLinux) return '$base · installs with apt';
-    // macOS: one in-app step; the item's detail says whether Homebrew or the
-    // managed download does it.
-    return '$base · ${steps.first.detail.toLowerCase()}';
-  }
-
-  String? get _linuxClipboardPackage {
-    if ((Platform.environment['WAYLAND_DISPLAY'] ?? '').isNotEmpty) {
-      return 'wl-clipboard';
-    }
-    if ((Platform.environment['DISPLAY'] ?? '').isNotEmpty) return 'xclip';
-    return null;
-  }
-
-  String get _linuxClipboardDetail => switch (_linuxClipboardPackage) {
-    'wl-clipboard' => 'wl-copy · provided by wl-clipboard',
-    'xclip' => 'xclip · required for native image paste',
-    _ => 'Not applicable · image paste uses file-path fallback',
-  };
+  }) => EnvironmentCheckList(readiness: state, checking: checking);
 
   Widget _planList(List<EnvironmentPlanItem> items) {
     if (items.isEmpty) {
@@ -578,7 +522,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
             ? widget.notifier.retryEnvironmentSetup
             : widget.notifier.startEnvironmentSetup;
       case EnvironmentSetupPhase.ready:
-        label = 'Continue to sign in';
+        label = 'Continue';
         action = widget.notifier.continueAfterEnvironmentSetup;
       case EnvironmentSetupPhase.waitingForTerminal:
         label = 'Recheck now';
@@ -630,7 +574,7 @@ class _EnvironmentSetupScreenState extends State<EnvironmentSetupScreen> {
     final next = Semantics(
       liveRegion: _copyError != null,
       child: Text(
-        _copyError ?? 'Next: sign in and start a harness.',
+        _copyError ?? 'Next: start your first harness.',
         style: grid.AppType.body(
           color: _copyError == null
               ? AppColors.textSoft
@@ -785,6 +729,224 @@ class _CheckRow extends StatelessWidget {
           }, style: grid.AppType.label(color: color)),
         ],
       ),
+    );
+  }
+}
+
+/// One row per command Harness runs — never one per way of obtaining it.
+/// What obtaining a missing one takes is the row's detail, read off the
+/// plan the provisioner computed.
+///
+/// Shared by [EnvironmentSetupScreen] and the setup tour's Details
+/// ([EnvironmentSetupDetails]), so both list the same steps the same way.
+class EnvironmentCheckList extends StatelessWidget {
+  const EnvironmentCheckList({
+    super.key,
+    required this.readiness,
+    this.checking = false,
+  });
+
+  final EnvironmentReadiness readiness;
+
+  /// Pre-flight rows show a spinner instead of a status.
+  final bool checking;
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final state = readiness;
+    final probing = checking && state.phase == EnvironmentSetupPhase.preflight;
+    return _Panel(
+      child: Column(
+        children: [
+          const _CheckSectionLabel('Host dependencies'),
+          _CheckRow(
+            label: 'tmux terminal backend',
+            detail: _tmuxDetail(state),
+            status: state.steps[EnvironmentStep.tmux],
+            checking: probing,
+          ),
+          if (Platform.isLinux)
+            _CheckRow(
+              label: 'Native image clipboard',
+              detail: _linuxClipboardDetail,
+              status: state.steps[EnvironmentStep.clipboard],
+              checking: probing,
+            ),
+          const _CheckSectionLabel('Harness components'),
+          _CheckRow(
+            label: 'Managed Node 20+ & Harness CLI',
+            detail: '~/.harness/runtime · harness version',
+            status: state.steps[EnvironmentStep.harness],
+            checking: probing,
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _tmuxDetail(EnvironmentReadiness state) {
+    const base = 'Required for every harness';
+    final steps = state.planFor(EnvironmentStep.tmux);
+    if (steps.isEmpty) {
+      return Platform.isLinux ? '$base · tmux, ps' : base;
+    }
+    if (Platform.isLinux) return '$base · installs with apt';
+    // macOS: one in-app step; the item's detail says whether Homebrew or the
+    // managed download does it.
+    return '$base · ${steps.first.detail.toLowerCase()}';
+  }
+
+  static String? get _linuxClipboardPackage {
+    if ((Platform.environment['WAYLAND_DISPLAY'] ?? '').isNotEmpty) {
+      return 'wl-clipboard';
+    }
+    if ((Platform.environment['DISPLAY'] ?? '').isNotEmpty) return 'xclip';
+    return null;
+  }
+
+  static String get _linuxClipboardDetail => switch (_linuxClipboardPackage) {
+    'wl-clipboard' => 'wl-copy · provided by wl-clipboard',
+    'xclip' => 'xclip · required for native image paste',
+    _ => 'Not applicable · image paste uses file-path fallback',
+  };
+}
+
+/// What [EnvironmentSetupScreen] shows of an install, folded into the setup
+/// tour's Details: the step list, a failure's command, the downloads beside
+/// setup, and the log with Copy diagnostics (which lives here now, since the
+/// tour has no footer for it).
+class EnvironmentSetupDetails extends StatefulWidget {
+  const EnvironmentSetupDetails({
+    super.key,
+    required this.readiness,
+    this.downloadLines = const [],
+  });
+
+  final EnvironmentReadiness readiness;
+
+  /// One line per download running beside setup (`SetupDownloads.lines`).
+  final List<String> downloadLines;
+
+  @override
+  State<EnvironmentSetupDetails> createState() =>
+      _EnvironmentSetupDetailsState();
+}
+
+class _EnvironmentSetupDetailsState extends State<EnvironmentSetupDetails> {
+  String? _copied;
+  String? _copyError;
+  var _copyRevision = 0;
+  Timer? _copyTimer;
+
+  @override
+  void dispose() {
+    _copyTimer?.cancel();
+    super.dispose();
+  }
+
+  // The setup screen's copy, with the same rule: only the latest attempt may
+  // change what the button says.
+  Future<void> _copy(String value) async {
+    final revision = ++_copyRevision;
+    _copyTimer?.cancel();
+    try {
+      await Clipboard.setData(ClipboardData(text: value));
+      if (!mounted || revision != _copyRevision) return;
+      setState(() {
+        _copied = value;
+        _copyError = null;
+      });
+      _copyTimer = Timer(const Duration(milliseconds: 1400), () {
+        if (mounted && revision == _copyRevision) {
+          setState(() => _copied = null);
+        }
+      });
+    } catch (_) {
+      if (!mounted || revision != _copyRevision) return;
+      setState(() {
+        _copied = null;
+        _copyError =
+            'Could not copy. Select the text to copy it, or try again.';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    grid.AppTheme.watch(context);
+    final state = widget.readiness;
+    final failure = state.failure;
+    final diagnostics = [...widget.downloadLines, ...state.output].join('\n');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        EnvironmentCheckList(readiness: state, checking: true),
+        if (failure?.command != null) ...[
+          const SizedBox(height: 12),
+          CommandRow(
+            command: failure!.command!,
+            copied: _copied == failure.command,
+            onCopy: () => _copy(failure.command!),
+          ),
+        ],
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Setup log',
+                style: grid.AppType.label(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.text,
+                ),
+              ),
+            ),
+            TextButton.icon(
+              key: const ValueKey('setup-copy-diagnostics'),
+              onPressed: diagnostics.isEmpty ? null : () => _copy(diagnostics),
+              icon: const Icon(AppIcons.copy, size: 14),
+              label: Text(
+                _copied == diagnostics ? 'Copied' : 'Copy diagnostics',
+              ),
+            ),
+          ],
+        ),
+        if (_copyError != null)
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              _copyError!,
+              style: grid.AppType.body(
+                color: Theme.of(context).colorScheme.error,
+              ),
+            ),
+          ),
+        const SizedBox(height: 6),
+        Container(
+          constraints: const BoxConstraints(maxHeight: 180),
+          decoration: BoxDecoration(
+            color: AppColors.background,
+            border: Border.all(color: AppColors.border),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: SingleChildScrollView(
+            reverse: true,
+            padding: const EdgeInsets.all(12),
+            child: SizedBox(
+              width: double.infinity,
+              child: SelectableText(
+                diagnostics.isEmpty ? 'Nothing logged yet.' : diagnostics,
+                style: grid.AppType.monoLabel(
+                  fontWeight: FontWeight.w400,
+                  height: 1.55,
+                  color: AppColors.textSoft,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

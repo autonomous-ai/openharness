@@ -235,6 +235,28 @@ describe('how an agent\'s life ends', () => {
     client.close()
   })
 
+  // A failed start (Claude Code that cannot reach Anthropic) keeps its pane on the shell it leaves,
+  // where its last screen says why: agent_deleted names that shell as `successor`. An agent that
+  // exits after doing work still ends as before (#262).
+  it('an agent that exits before any conversation hands its pane to the shell; one after a turn does not', async () => {
+    const d = await fresh()
+    const client = await LocalClient.connect(d)
+    const early = await create(d, client, 'claude', 'exit-at-start')
+    const gone = client.next((frame) => frame.type === 'agent_deleted' && frame.payload?.agentId === early.id, 45_000, 'agent_deleted (early)')
+    client.send('message', { agentId: early.id, content: '!exit' })
+    const deleted = await gone
+    const successor = deleted.payload?.successor as string | undefined
+    expect(successor, JSON.stringify(deleted.payload)).toBeTruthy()
+    const shell = await until('the successor shell row', async () => (await row(client, successor!)) ?? null, 30_000, 500)
+    expect(shell.engine).toBe('terminal')
+
+    const worked = await create(d, client, 'claude', 'exit-after-work')
+    await turn(client, worked.id, 'a real first task')
+    const ended = client.next((frame) => frame.type === 'agent_deleted' && frame.payload?.agentId === worked.id, 45_000, 'agent_deleted (after work)')
+    client.send('message', { agentId: worked.id, content: '!exit' })
+    expect((await ended).payload?.successor).toBeUndefined()
+  })
+
   it('a close for an agent that is not the one asked about changes nothing', async () => {
     const d = await fresh()
     const client = await LocalClient.connect(d)

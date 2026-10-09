@@ -296,6 +296,16 @@ void main() {
     expect(appActions.last, 'keyboardPractice');
   });
 
+  // The Mac's Help ▸ Welcome Tour reports the same string over app_menu.
+  testWidgets('Help opens the Welcome Tour', (tester) async {
+    await pumpBar(tester);
+
+    await tap(tester, 'menu-bar-help');
+    expect(find.text('Welcome Tour'), findsOneWidget);
+    await tap(tester, 'menu-bar-welcome-tour');
+    expect(appActions.last, 'welcomeTour');
+  });
+
   testWidgets('rows go quiet while the app cannot take them', (tester) async {
     swarmMenuBus.send('update', {
       'enabled': false,
