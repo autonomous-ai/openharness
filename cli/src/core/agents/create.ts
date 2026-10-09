@@ -15,8 +15,8 @@ import { MODEL_MANAGER_ID } from '../../dsh/builtinIds.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear, type DshAccount } from '../../dsh/launch.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
-import { materializeWorkspace } from '../../dsh/materialize.js'
-import { harnessLaunchOrRefusal, incompatibleHarnessEngine, prepareHarnessLaunch } from '../../dsh/runtime.js'
+import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
+import type { DshThrough } from './dshThrough.js'
 import { loadEngine } from '../../engines/inProcess.js'
 import { isTerminalEngine, type AgentEngine } from '../../engines/types.js'
 import { engineLabel } from '../../lib/agentNames.js'
@@ -83,12 +83,13 @@ export interface CreateAgentDeps {
    *  while it is off. */
   gridSetup: () => ModelsPort['ensure'] | null
   privateGridName: () => Promise<string | null>
+  dshLaunch: Pick<DshThrough, 'materialize' | 'launch'>
 }
 
 export function createAgentCreator({
   tmuxBackend, registry, adoptableSession, heldBy, takeOverWhenIdle, watchNewPane, announceSession, attachDsh,
   prepareApiTools, hookPort, hooksDisabled, installOpencodePlugin, gridLaunchMachine, buildGridLaunch, terminalHintMachineName, blocksFolder,
-  gridSetup, privateGridName,
+  gridSetup, privateGridName, dshLaunch,
 }: CreateAgentDeps) {
   const createAgent: CreateAgent = async ({ engine, cwd, bypassPermission, permissionMode, grid, codexHome, dsh, prompt, name, agent, resumeSessionId, takeOver, scmLaunchRecord }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
@@ -198,7 +199,11 @@ export function createAgentCreator({
         // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
         const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
           (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
-        const materialized = await materializeWorkspace(harness, cwd, dshAccount, engine)
+        const materialized = await dshLaunch.materialize({ dsh, workspace: cwd, account: dshAccount, engine })
+        if (!materialized.ok) {
+          if (materialized.unavailable) return { ok: false, error: materialized.error, detail: materialized.detail }
+          throw new Error(materialized.detail)
+        }
         for (const warning of materialized.warnings) console.warn(`[dsh] ${dsh} materialize · ${warning}`)
         console.log(`[dsh] ${dsh} materialized ${cwd} · created ${materialized.created.length} · kept ${materialized.kept.length}`)
         // The template just went into an EMPTY folder: everything in it is the harness's, and Claude Code
@@ -215,8 +220,8 @@ export function createAgentCreator({
         console.warn(`[agent] create ${dsh} refused · ${detail}`)
         return { ok: false, error: 'DSH_MATERIALIZE_FAILED', detail }
       }
-      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(harness, cwd, engine, label, dshAccount, null))
-      if (!prepared.ok) return prepared
+      const prepared = await dshLaunch.launch({ dsh, workspace: cwd, engine, key: label, account: dshAccount })
+      if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail }
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
       dshLabel = harness.manifest.name

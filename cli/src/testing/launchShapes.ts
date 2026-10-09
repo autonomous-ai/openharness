@@ -11,7 +11,10 @@ import { createLaunchHelpers, gridLaunchThrough } from '../core/agents/launch.js
 import { createAgentCreator, type CreateAgentDeps } from '../core/agents/create.js'
 import { createAgentForker, type ForkAgentDeps } from '../core/agents/fork.js'
 import { installedDsh } from '../dsh/installed.js'
-import { prepareHarnessLaunch } from '../dsh/runtime.js'
+import { dshThrough } from '../core/agents/dshThrough.js'
+import { createStoreLink } from '../core/storeLink.js'
+import { storeLaunchPort } from '../services/storeLaunch.js'
+import { dshLaunchRequestIn, dshMaterializeRequestIn } from '../services/storeProcess.js'
 import { gridLaunchAnswerIn } from '../core/modelsLink.js'
 import { ApiConnections } from '../lib/apiConnections.js'
 import { prepareApiInstructions } from '../lib/apiInstructions.js'
@@ -38,9 +41,9 @@ export interface LaunchWorld {
 }
 
 /** What `create` needs besides the launch: the spec's stubs for the pane, the registry and the rest. */
-export type CreateRest = Omit<CreateAgentDeps, 'gridLaunchMachine' | 'prepareApiTools' | 'buildGridLaunch'>
+export type CreateRest = Omit<CreateAgentDeps, 'gridLaunchMachine' | 'prepareApiTools' | 'buildGridLaunch' | 'dshLaunch'>
 /** What `fork` needs besides the launch. */
-export type ForkRest = Omit<ForkAgentDeps, 'prepareApiTools' | 'relaunchOverrides' | 'gridName'>
+export type ForkRest = Omit<ForkAgentDeps, 'prepareApiTools' | 'relaunchOverrides' | 'gridName' | 'dshLaunch'>
 
 export function launchShapes(world: LaunchWorld) {
   const savedApis = new ApiConnections(world.dataDir)
@@ -65,6 +68,19 @@ export function launchShapes(world: LaunchWorld) {
       return answer
     },
   }))
+  const store = storeLaunchPort()
+  const link = createStoreLink({ clients: { dshInstallStatus: () => {} } } as never, () => {}, async (type, payload) => {
+    if (type === 'dshMaterialize') {
+      const request = dshMaterializeRequestIn(wire(payload))
+      if (!request) throw new Error('Store could not read the workspace request')
+      return wire(await store.dshMaterialize(request))
+    }
+    const request = dshLaunchRequestIn(wire(payload))
+    if (!request) throw new Error('Store could not read the launch request')
+    return wire(await store.dshLaunch(request))
+  })
+  const dshLaunch = dshThrough({ store: () => link.port, nameOf: id => installedDsh(id)?.manifest.name,
+    account: () => ({ privateGrid: gridName() }) })
   const launchOverridesDeps: LaunchOverridesDeps = {
     machine: world.machine,
     gridLaunch,
@@ -72,24 +88,16 @@ export function launchShapes(world: LaunchWorld) {
     tmuxSupportsSessionEnv: world.tmuxSupportsSessionEnv,
     installCodexHooks: () => {},
     readCodexConfig: world.readCodexConfig,
-    // A harness package's part of a relaunch, as core/main.ts wires it.
-    dshLaunch: (id, workspace, engine, runtimeKey) => {
-      const installed = installedDsh(id)
-      if (!installed) {
-        console.warn(`[dsh] ${id} is not installed on this machine · cannot restore its harness context`)
-        return null
-      }
-      return prepareHarnessLaunch(installed, workspace, engine, runtimeKey, { privateGrid: gridName() }, null)
-    },
+    dshLaunch: dshLaunch.relaunch,
   }
   const helpers = createLaunchHelpers({
     prepareApiTools, launchOverridesDeps,
     setGridLaunch: world.setGridLaunch as never, setTail: () => {},
   })
   return {
-    create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools }),
+    create: (rest: CreateRest) => createAgentCreator({ ...rest, gridLaunchMachine: world.machine, buildGridLaunch: gridLaunch, prepareApiTools, dshLaunch }),
     relaunch: (session: RegisteredSession, source?: LaunchSource) => helpers.relaunchOverrides(session, source),
-    fork: (rest: ForkRest) => createAgentForker({ ...rest, prepareApiTools, relaunchOverrides: helpers.relaunchOverrides, gridName }),
+    fork: (rest: ForkRest) => createAgentForker({ ...rest, prepareApiTools, relaunchOverrides: helpers.relaunchOverrides, gridName, dshLaunch }),
     validate: (engine: AgentEngine, source: LaunchSource) => validateLaunchOverrides(launchOverridesDeps, engine, source),
     /** The line retarget logs once a move onto a grid succeeded. */
     retargetLine: (engine: AgentEngine, overrides: LaunchOverrides): string | null => overrides.gridLaunchRecord

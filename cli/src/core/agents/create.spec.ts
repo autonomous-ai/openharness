@@ -4,8 +4,7 @@ import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { installedDsh } from '../../dsh/installed.js'
 import { dshPinnedPermissionMode } from '../../dsh/manifest.js'
-import { materializeWorkspace } from '../../dsh/materialize.js'
-import { harnessLaunchOrRefusal, incompatibleHarnessEngine } from '../../dsh/runtime.js'
+import { incompatibleHarnessEngine } from '../../dsh/compatibility.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
 import { buildEngineLaunchArgv, namedAgentArgs, permissionModeFlags, refusePermissionFlagIfUnsupported, supportsFirstPrompt } from '../../lib/engineLaunch.js'
@@ -22,13 +21,9 @@ import { createAgentCreator, type CreateAgentDeps } from './create.js'
 
 vi.mock('../../dsh/installed.js', () => ({ installedDsh: vi.fn(() => undefined) }))
 vi.mock('../../dsh/manifest.js', async (real) => ({ ...await real<object>(), dshPinnedPermissionMode: vi.fn(() => null) }))
-vi.mock('../../dsh/materialize.js', () => ({ materializeWorkspace: vi.fn(async () => ({ warnings: [], created: [], kept: [] })) }))
-vi.mock('../../dsh/runtime.js', async (real) => ({
-  ...await real<object>(),
-  harnessLaunchOrRefusal: vi.fn((prepare: () => unknown) => { prepare(); return { ok: true, launch: { env: { HARNESS_DSH: 'blender' }, args: ['--dsh'] } } }),
-  incompatibleHarnessEngine: vi.fn(() => null),
-  prepareHarnessLaunch: vi.fn(),
-}))
+vi.mock('../../dsh/compatibility.js', () => ({ incompatibleHarnessEngine: vi.fn(() => null) }))
+const materializeWorkspace = vi.fn(async () => ({ warnings: [], created: [], kept: [] }))
+
 vi.mock('../../dsh/launch.js', async (real) => ({ ...await real<object>(), harnessEnvToClear: vi.fn(() => ['HARNESS_OLD']) }))
 // OpenCode's version probe is its own code, loaded for an OpenCode launch alone; a test may say it could not be.
 vi.mock('../../engines/inProcess.js', async (real) => {
@@ -77,6 +72,8 @@ vi.mock('../../lib/sessionSearch/external.js', async (real) => ({ ...await real<
 vi.mock('../../lib/tmux.js', async (real) => ({ ...await real<object>(), clearPaneRemainOnExit: vi.fn(async () => {}) }))
 vi.mock('../../lib/tmuxVersion.js', async (real) => ({ ...await real<object>(), tmuxSupportsSessionEnv: vi.fn(async () => true) }))
 
+const launchDsh = vi.fn<CreateAgentDeps['dshLaunch']['launch']>(async () => ({ ok: true, launch: { env: { HARNESS_DSH: 'blender' }, args: ['--dsh'] } }))
+
 const root = mkdtempSync(join(tmpdir(), 'core-create-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 let folders = 0
@@ -115,6 +112,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
     blocksFolder: vi.fn(() => false),
     gridSetup: vi.fn(() => vi.fn(async () => ({}))) as never,
     privateGridName: vi.fn(async () => 'grid-me'),
+    dshLaunch: { launch: launchDsh, materialize: async () => ({ ok: true, ...await materializeWorkspace() }) },
     ...over,
   }
   return { deps, create: createAgentCreator(deps) }
@@ -165,7 +163,7 @@ describe('creating an agent', () => {
       vi.mocked(materializeWorkspace).mockRejectedValueOnce(new Error('disk full')).mockRejectedValueOnce('worse')
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'DSH_MATERIALIZE_FAILED', detail: 'could not prepare the workspace for blender · disk full' })
       expect(await create(request({ dsh: 'blender' }))).toMatchObject({ detail: 'could not prepare the workspace for blender · worse' })
-      vi.mocked(harnessLaunchOrRefusal).mockReturnValueOnce({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' } as never)
+      launchDsh.mockResolvedValueOnce({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' } as never)
       expect(await create(request({ dsh: 'blender' }))).toEqual({ ok: false, error: 'DSH_RUNTIME', detail: 'no runtime' })
       vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
     })

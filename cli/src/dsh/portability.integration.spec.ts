@@ -143,7 +143,7 @@ for (const engine of PROCESS_ENGINES) it(`${engine}: prepare → spawn → tool 
   expect(readFileSync(join(workspace, 'scene.txt'), 'utf8')).toBe('drawn by test/portable\n')
   const restored = await buildLaunchOverrides({ machine: () => ({ hermesSystemManaged: false }), gridLaunch: gridLaunchInProcess(), writeGridConfigDir: async () => '/unused',
     tmuxSupportsSessionEnv: async () => true, installCodexHooks: () => {},
-    dshLaunch: (_id, ws, selected, key) => prepareHarnessLaunch(pkg, ws, selected, key) }, engine,
+    dshLaunch: async (_id, ws, selected, key) => ({ ok: true, launch: prepareHarnessLaunch(pkg, ws, selected, key) }) }, engine,
   { dsh: pkg.id, cwd: workspace, dshRuntime: 'created' }, 'registered')
   expect(restored.ok).toBe(true)
   if (!restored.ok) throw new Error(restored.detail)

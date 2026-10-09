@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DshInstallProgress } from '../dsh/install.js'
 import { fakeCore } from '../testing/fakeCore.js'
-import { STORE_REQUESTS, startStore, type StoreDeps } from './store.js'
+import { emptyPorts } from '../core/api.js'
+import { STORE_REQUESTS, startStore, startStoreInCore, type StoreDeps } from './store.js'
 
 const ASKER = { local: true, owner: true }
 
@@ -22,6 +23,11 @@ describe('the store service', () => {
   it('prepares the release-owned harnesses before answering requests', () => {
     const { deps } = setup()
     expect(deps.prepare).toHaveBeenCalledOnce()
+  })
+  it('installs the same launch port in the explicit inline mode', () => {
+    const ports = emptyPorts()
+    expect(Object.keys(startStoreInCore(fakeCore(), ports)).sort()).toEqual([...STORE_REQUESTS].sort())
+    expect(ports.store).toMatchObject({ dshMaterialize: expect.any(Function), dshLaunch: expect.any(Function) })
   })
   it('answers exactly the requests it declares', () => {
     expect(Object.keys(setup().requests).sort()).toEqual([...STORE_REQUESTS].sort())

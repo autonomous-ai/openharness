@@ -429,6 +429,20 @@ describe('restoreAgents — held until the service a launch asks is ready', () =
     expect(h.rows.get('second')?.launch).toEqual(HELD)
   })
 
+  it('asks a failed Store only once when each harness also needs models', async () => {
+    const h = harness([gridRow('first', { launch: HELD, dsh: 'test/draw' }), gridRow('second', { launch: HELD, dsh: 'test/draw' })])
+    withModels(h)
+    h.deps.needs = () => ['models', 'store']
+    const asks: string[] = []
+    h.deps.buildLaunch = async entry => { asks.push(entry.agentId); return { held: 'store' } }
+    const summary = await restoreAgents(h.deps)
+    expect(asks).toEqual(['first'])
+    expect(summary.held).toEqual(['first', 'second'])
+    expect(summary.failed).toEqual([])
+    expect(h.rows.get('first')?.launch).toEqual(heldLaunch('store'))
+    expect(h.rows.get('second')?.launch).toEqual(heldLaunch('store'))
+  })
+
   it('never fails or skips a held agent: the next restore holds it again, its pane gone with a reboot', async () => {
     const h = harness([gridRow('gridded', { launch: HELD, resumeOnly: true })])
     withModels(h)

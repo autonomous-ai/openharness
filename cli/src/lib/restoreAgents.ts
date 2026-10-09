@@ -109,7 +109,7 @@ export interface RestoreAgentsDeps {
   triggerHint: (runtime: TmuxRuntimeRef, engine: AgentEngine) => Promise<void>
   log: (message: string) => void
   /** The service a launch of this row asks for its part (a grid's or a saved API's: `models`), or null. */
-  needs?: (entry: RegisteredSession) => string | null
+  needs?: (entry: RegisteredSession) => string | readonly string[] | null
   /** Boot: hold every row whose launch asks a service rather than ask it now (`heldLaunch`). */
   defer?: boolean
   /** Restore only these agents, every other row as it is: a pass over the held ones. */
@@ -371,9 +371,11 @@ export async function restoreAgents(deps: RestoreAgentsDeps): Promise<RestoreSum
         continue
       }
       // Never asked at boot, and asked at most once a pass: the core's readiness never waits on a service.
-      const needed = deps.needs?.(entry) ?? null
-      if (needed && (deps.defer || unavailable.has(needed))) {
-        await hold(entry, dead, !!alive, needed)
+      const needed = deps.needs?.(entry) ?? []
+      const services = typeof needed === 'string' ? [needed] : needed
+      const waitingFor = deps.defer ? services[0] : services.find(service => unavailable.has(service))
+      if (waitingFor) {
+        await hold(entry, dead, !!alive, waitingFor)
         continue
       }
       const launch = await deps.buildLaunch(entry, resumeSessionId ? { resumeSessionId } : {})

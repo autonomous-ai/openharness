@@ -29,7 +29,8 @@ import {
   type GridLaunchRequest,
 } from './gridLaunchWire.js'
 import { TMUX_SESSION_ENV_MIN } from './tmuxVersion.js'
-import { harnessEnvToClear, type DshLaunch } from '../dsh/launch.js'
+import { harnessEnvToClear } from '../dsh/launch.js'
+import type { DshLaunchAnswer } from '../dsh/launchWire.js'
 import { scmLaunchEnv } from '../scm/scmProjects.js'
 import type { ScmLaunchRecord } from '../scm/types.js'
 
@@ -86,7 +87,7 @@ export interface LaunchOverridesDeps {
   readCodexConfig?: (path: string) => string | null
   /** Prepare the saved harness context before restarting. Missing or broken packages refuse the
    * relaunch: starting a plain agent would silently change the user's chosen harness. */
-  dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => DshLaunch | null
+  dshLaunch?: (dsh: string, workspace: string, engine: AgentEngine, runtimeKey: string) => Promise<DshLaunchAnswer>
 }
 
 /** Where the agent should come back: the registry row, or an override the desktop just sent. */
@@ -181,13 +182,16 @@ export async function buildLaunchOverrides(
   let overrides = base.overrides
   if (source.dsh && !source.cwd) return { ok: false, error: 'DSH_WORKSPACE_MISSING', detail: `${source.dsh} has no saved workspace` }
   if (source.dsh && source.cwd) {
-    let dsh: DshLaunch | null
+    let prepared: DshLaunchAnswer | null
     try {
-      dsh = deps.dshLaunch?.(source.dsh, source.cwd, engine, source.dshRuntime ?? configKey) ?? null
+      prepared = await deps.dshLaunch?.(source.dsh, source.cwd, engine, source.dshRuntime ?? configKey) ?? null
     } catch (error) {
       return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: String(error) }
     }
-    if (!dsh) return { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${source.dsh} is not installed on this machine` }
+    if (!prepared) return { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${source.dsh} is not installed on this machine` }
+    if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
+      ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}) }
+    const dsh = prepared.launch
     // The DSH's variables layer over the grid's or the profile's; `HARNESS_*` are the daemon's own
     // and a manifest cannot set them (see `dshLaunch`), so nothing here can shadow a grid credential.
     overrides = {

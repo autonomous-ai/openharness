@@ -17,6 +17,7 @@ import type { AppSwarms } from '../cable/cableSession.js'
 import type { UnreadNotification } from '../lib/notificationRead.js'
 import type { AutonomousDeviceAgent, AutonomousDeviceDelivery, AutonomousDeviceReceipt } from '../lib/autonomous-device/service.js'
 import type { StoreAgent } from '../lib/autonomous-device/store.js'
+import type { DshLaunchAnswer, DshLaunchRequest, DshMaterializeAnswer, DshMaterializeRequest } from '../dsh/launchWire.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
 import type { GridAccess } from '../lib/gridAttach.js'
 import type { createHarnessResourcesReader } from '../lib/harnessResources.js'
@@ -508,7 +509,7 @@ export const LONG_ANSWERS: Readonly<Record<string, Readonly<Record<string, numbe
     ensure: 15 * MINUTE, moveTarget: 15 * MINUTE,
     launchTarget: 3 * MINUTE, privateGridName: 2 * MINUTE, lists: 2 * MINUTE,
   },
-  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE },
+  store: { dsh_install: 30 * MINUTE, dsh_update: 30 * MINUTE, dshMaterialize: 6 * MINUTE },
 }
 
 /** The orchestrator (services/orchestrator.ts): its projects, for the apps and for the agents it runs. */
@@ -1284,7 +1285,19 @@ export interface WindowRelay {
 
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
+export interface StorePort {
+  dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
+  dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
+}
+
+export const STORE_FALLBACKS: PortFallbacks<StorePort> = { dshMaterialize: later(FAIL), dshLaunch: later(FAIL) }
+export const STORE_OFF: StorePort = {
+  dshMaterialize: () => Promise.reject(new ServiceUnavailableError('store')),
+  dshLaunch: () => Promise.reject(new ServiceUnavailableError('store')),
+}
+
 export interface CorePorts {
+  store: StorePort | null
   search: SearchPort | null
   viewers: ViewersPort | null
   models: ModelsPort | null
@@ -1299,7 +1312,7 @@ export interface CorePorts {
 }
 
 export function emptyPorts(): CorePorts {
-  return { search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
+  return { store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
 }
 
 export interface CoreApiDeps {
