@@ -46,6 +46,8 @@ export async function identityBytes(path: string, maxBytes: number): Promise<Buf
 
 /** opendir bounds the directory buffer too; readdir followed by slice would still read the whole tree. */
 export async function* identityEntries(path: string, budget: { remaining: number }, missingOkay = true): AsyncGenerator<Dirent> {
+  // An empty or missing directory still costs a filesystem operation.
+  if (budget.remaining-- <= 0) throw new IdentityReadUnavailable('the directory entry limit was reached')
   let directory
   try { directory = await opendir(path, { bufferSize: 32 }) }
   catch (error) {

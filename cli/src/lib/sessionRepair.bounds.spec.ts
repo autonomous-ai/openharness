@@ -102,7 +102,7 @@ describe('complete bounded evidence before choosing a conversation', () => {
     vi.mocked(fs.opendir).mockResolvedValueOnce(directory as never)
     await expect((async () => { for await (const _entry of identityEntries('/fixture', identityScanBudget())) { /* consume */ } })())
       .rejects.toThrow('directory entry limit')
-    expect(reads).toBe(4097)
+    expect(reads).toBe(4096)
     expect(closed).toBe(true)
     expect(fs.opendir).toHaveBeenLastCalledWith('/fixture', { bufferSize: 32 })
   })
@@ -239,7 +239,7 @@ describe('bounded native metadata', () => {
       await expect(repair.findLiveSession('claude', CWD, START, { pid: 77 })).rejects.toThrow('identity is held')
     })
 
-  it('rechecks the first process claim after reading later homes', async () => {
+  it.each(['initial', 'validation'])('rechecks the authoritative claim after later homes in the %s pass', async pass => {
     transcript(); transcript(OTHER)
     const first = record(validRecord())
     const moved = join(root, 'moved')
@@ -247,12 +247,35 @@ describe('bounded native metadata', () => {
     const homes = await import('./engineHomes.js')
     homes.adoptEngineHomes({ CLAUDE_CONFIG_DIR: moved }, { claudeHome: join(root, 'claude'), codexHome: join(root, 'codex') })
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
-    let changed = false
+    let reads = 0
     vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
-      if (String(name) === later && !changed) { changed = true; writeFileSync(first, validRecord(OTHER)) }
+      if (String(name) === later && ++reads === (pass === 'initial' ? 1 : 3)) writeFileSync(first, validRecord(OTHER))
       return actual.open(name, flags, mode)
     })
     await expect(repair.processSessionOf('claude', 77, CWD, START)).rejects.toThrow('process records changed')
+  })
+
+  it.each(['scan', 'process'])('bounds %s probes even when every saved home is missing', async kind => {
+    file(join(root, 'data', 'engine-homes.json'), JSON.stringify({
+      claude: Array.from({ length: 65 }, (_, i) => join(root, `missing-${i}`)),
+    }))
+    await expect(kind === 'scan' ? scan() : repair.processSessionOf('claude', 77, CWD, START))
+      .rejects.toThrow('known session-home limit')
+    expect(fs.opendir).not.toHaveBeenCalled()
+    expect(fs.open).not.toHaveBeenCalled()
+  })
+
+  it('holds when the saved home set changes while the authoritative record is rechecked', async () => {
+    transcript(); const path = record(validRecord())
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    let reads = 0
+    vi.mocked(fs.open).mockImplementation(async (name, flags, mode) => {
+      if (String(name) === path && ++reads === 3) {
+        file(join(root, 'data', 'engine-homes.json'), JSON.stringify({ claude: [join(root, 'new-home')] }))
+      }
+      return actual.open(name, flags, mode)
+    })
+    await expect(repair.processSessionOf('claude', 77, CWD, START)).rejects.toThrow('known session homes changed')
   })
 
   it('rejects an atomically replaced identity even when its old descriptor stays readable', async () => {

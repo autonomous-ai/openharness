@@ -16,7 +16,7 @@
 
 import { execFile } from 'child_process'
 import { readdir, readlink, realpath, stat } from 'fs/promises'
-import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
+import { basename, dirname, isAbsolute, join, sep } from 'path'
 import { env } from '../config/env.js'
 import type { SessionStoreContract } from '../engines/facets/sessionStore.js'
 import { identityBytes, identityEntries, identityFile, identityHead, identityScanBudget, IdentityReadUnavailable } from '../engines/kit/identityScan.js'
@@ -48,6 +48,13 @@ const START_SLACK_MS = 5_000
 /** Directories to walk per engine root. Deep enough for codex's <year>/<month>/<day> layout. */
 const MAX_DEPTH = 4
 const MAX_FILES = 400
+
+/** Known empty homes still require native probes. Do not let a saved catalog bypass the walk bound. */
+function repairRoots(engine: AgentEngine, profile?: string): string[] {
+  const roots = sessionRoots(engine, profile)
+  if (roots.length > 64) throw new IdentityReadUnavailable('the known session-home limit was reached')
+  return roots
+}
 
 export interface RepairedSession {
   sessionId: string
@@ -162,8 +169,8 @@ function scanMeta(engine: AgentEngine, scan: SessionStoreContract['scan'], cwd: 
   return async (path) => {
     // Relative to the sessions folder it is under (the daemon's own, or a moved home's): that folder itself may
     // legitimately sit under a folder of the child's name.
-    const root = sessionRoots(engine).find((one) => !relative(one, path).startsWith('..'))
-    if (root !== undefined && relative(root, path).split(sep).includes(scan.childFolder)) return null
+    // The bounded walk already excludes childFolder below each root. Reading the home
+    // catalog again here would make every transcript reopen an unrelated configuration.
     const head = await readTranscriptHead(path, scan.sidechain, cwd)
     return head && head.side !== true && head.cwd ? { cwd: head.cwd } : null
   }
@@ -318,10 +325,10 @@ async function storeSession(
   const scan = scanMeta(engine, store.scan, cwd)
   if ('record' in store.live) {
     const exact = opts?.pid ? await processSessionOf(engine, opts.pid, cwd, startedAtMs) : null
-    return exact ?? fileEngineSession(sessionRoots(engine), cwd, startedAtMs, scan,
+    return exact ?? fileEngineSession(repairRoots(engine), cwd, startedAtMs, scan,
       { ...opts, ...(store.scan.from === 'head' ? { excludedDirectory: store.scan.childFolder } : {}) })
   }
-  const sessions = sessionRoots(engine, opts?.codexHome)
+  const sessions = repairRoots(engine, opts?.codexHome)
   if (opts?.pid) return openFileSessionOf(engine, opts.pid, sessions, cwd)
   return fileEngineSession(sessions, cwd, startedAtMs, scan, opts)
 }
@@ -622,12 +629,14 @@ export async function processSessionOf(engine: AgentEngine, pid: number, cwd: st
   if (!Number.isSafeInteger(pid) || pid <= 0 || !Number.isFinite(startedAtMs)) return null
   const rule = live.record
   let result: RepairedSession | null = null
+  let selected: string | undefined
+  const roots = repairRoots(engine)
   const records: { file: string; text: string | null }[] = []
   const read = (file: string) => identityFile(file).catch(error => {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
     throw error
   })
-  for (const sessions of sessionRoots(engine)) {
+  for (const sessions of roots) {
     const file = join(dirname(sessions), rule.folder, `${pid}${rule.suffix}`)
     const text = await read(file)
     records.push({ file, text })
@@ -638,12 +647,17 @@ export async function processSessionOf(engine: AgentEngine, pid: number, cwd: st
       throw new IdentityReadUnavailable('current process records name different conversations')
     }
     result = found
+    selected = file
   }
   // A conversation can change inside the same process while another home is being read.
   // Recheck absent/stale claims too: a newly created claim invalidates the earlier pool.
-  for (const { file, text } of records) {
+  // Read the authoritative claim last: otherwise it can change while the later homes
+  // are being rechecked. No asynchronous work follows that final native read.
+  const recheck = [...records.filter(record => record.file !== selected), ...records.filter(record => record.file === selected)]
+  for (const { file, text } of recheck) {
     if (await read(file) !== text) throw new IdentityReadUnavailable('the process records changed during discovery')
   }
+  if (repairRoots(engine).join('\0') !== roots.join('\0')) throw new IdentityReadUnavailable('the known session homes changed during discovery')
   return result
 }
 
