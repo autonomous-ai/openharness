@@ -13,20 +13,15 @@
  * So the transcript's size is noted where the engine's own writing begins: by a resume just before it
  * launches the engine, and by the daemon at start for every conversation it restores. The attach that
  * follows folds the conversation only up to that byte and tails from there, so what was written after
- * it is live. A mark is used once, by the next attach of that conversation; one older than a resume can
- * wait for (`RESUME_READINESS_BUDGET_MS`) belongs to an operation that is over and is not used.
+ * it is live. A mark is committed only after an attach installs its state. Failed worker reads must
+ * retain it: otherwise a retry reopens an interrupted turn as live. Time passing is not evidence that
+ * the old turn resumed: a queued attach keeps its boundary until it commits or the session is released.
  */
 import { statSync } from 'node:fs'
-import { RESUME_READINESS_BUDGET_MS } from '../../lib/resumeStoppedAgent.js'
 
 /** A transcript's size now, or null when there is no file to tail. One stat: nothing for a launch to wait on. */
 export function transcriptSize(path: string): number | null {
   try { return statSync(path).size } catch { return null }
-}
-
-export interface RelaunchMarkOptions {
-  now?: () => number
-  maxAgeMs?: number
 }
 
 /**
@@ -42,24 +37,29 @@ export interface RelaunchMark {
   engineStarted: boolean
 }
 
-export function createRelaunchMarks({ now = Date.now, maxAgeMs = RESUME_READINESS_BUDGET_MS }: RelaunchMarkOptions = {}) {
-  const marks = new Map<string, RelaunchMark & { at: number }>()
+export function createRelaunchMarks() {
+  const marks = new Map<string, RelaunchMark>()
   return {
     /** Before the engine is launched: its own writing starts at `offset`. */
     note(sessionId: string, offset: number, engineStarted = false): void {
-      marks.set(sessionId, { offset, engineStarted, at: now() })
+      marks.set(sessionId, { offset, engineStarted })
     },
     /** A restore rebuilt this conversation's pane, so its engine is a new one. */
     engineStarted(sessionId: string): void {
       const mark = marks.get(sessionId)
       if (mark) mark.engineStarted = true
     },
-    /** At the attach: where the fold stops, and whether the engine is new, once. */
-    take(sessionId: string): RelaunchMark | undefined {
-      const mark = marks.get(sessionId)
-      if (!mark) return undefined
+    /** At the attach: retain the boundary through retries, however long its worker is unavailable. */
+    read(sessionId: string): RelaunchMark | undefined {
+      return marks.get(sessionId)
+    },
+    /** An installed attach acknowledges only the boundary it read, never a newer resume's. */
+    complete(sessionId: string, mark: RelaunchMark): void {
+      if (marks.get(sessionId) === mark) marks.delete(sessionId)
+    },
+    /** A stopped or unbound conversation has no pending attach to preserve. */
+    forget(sessionId: string): void {
       marks.delete(sessionId)
-      return now() - mark.at <= maxAgeMs ? { offset: mark.offset, engineStarted: mark.engineStarted } : undefined
     },
     /** How many marks are waiting for an attach — for tests and diagnostics. */
     get size(): number {

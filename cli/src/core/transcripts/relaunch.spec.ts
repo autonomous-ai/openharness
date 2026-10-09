@@ -1,28 +1,32 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createRelaunchMarks, transcriptSize } from './relaunch.js'
 
 describe('relaunch marks', () => {
-  it('gives the attach the byte the relaunched engine began at, once', () => {
+  afterEach(() => vi.restoreAllMocks())
+  it('keeps the byte the relaunched engine began at until its attach commits', () => {
     const marks = createRelaunchMarks()
     marks.note('conversation', 1457)
     expect(marks.size).toBe(1)
-    expect(marks.take('conversation')).toEqual({ offset: 1457, engineStarted: false })
-    expect(marks.take('conversation')).toBeUndefined()
+    expect(marks.read('conversation')).toEqual({ offset: 1457, engineStarted: false })
+    const mark = marks.read('conversation')!
+    expect(mark).toEqual({ offset: 1457, engineStarted: false })
+    marks.complete('conversation', mark)
+    expect(marks.read('conversation')).toBeUndefined()
     expect(marks.size).toBe(0)
   })
 
   it('has nothing for a conversation that was not relaunched', () => {
-    expect(createRelaunchMarks().take('never')).toBeUndefined()
+    expect(createRelaunchMarks().read('never')).toBeUndefined()
   })
 
   it('keeps the latest relaunch of a conversation', () => {
     const marks = createRelaunchMarks()
     marks.note('conversation', 10)
     marks.note('conversation', 20)
-    expect(marks.take('conversation')).toEqual({ offset: 20, engineStarted: false })
+    expect(marks.read('conversation')).toEqual({ offset: 20, engineStarted: false })
   })
 
   it('says whether a new engine was started on the conversation: by a resume, or by a restore that rebuilt its pane', () => {
@@ -33,9 +37,22 @@ describe('relaunch marks', () => {
     marks.note('survived', 8)
     // Nothing to mark for a conversation the daemon's start did not note.
     marks.engineStarted('never')
-    expect(marks.take('resumed')).toEqual({ offset: 3, engineStarted: true })
-    expect(marks.take('restored')).toEqual({ offset: 5, engineStarted: true })
-    expect(marks.take('survived')).toEqual({ offset: 8, engineStarted: false })
+    expect(marks.read('resumed')).toEqual({ offset: 3, engineStarted: true })
+    expect(marks.read('restored')).toEqual({ offset: 5, engineStarted: true })
+    expect(marks.read('survived')).toEqual({ offset: 8, engineStarted: false })
+    expect(marks.size).toBe(3)
+  })
+
+  it('never lets an older attach consume a newer resume, and forgets stopped conversations', () => {
+    const marks = createRelaunchMarks()
+    marks.note('conversation', 10, true)
+    const before = marks.read('conversation')!
+    marks.note('conversation', 20, true)
+    marks.complete('conversation', before)
+    expect(marks.read('conversation')).toEqual({ offset: 20, engineStarted: true })
+    marks.forget('conversation')
+    marks.complete('conversation', before)
+    expect(marks.read('conversation')).toBeUndefined()
     expect(marks.size).toBe(0)
   })
 
@@ -50,15 +67,16 @@ describe('relaunch marks', () => {
     }
   })
 
-  it('drops a mark older than a resume can wait for', () => {
+  it('keeps a boundary when its first attach waits beyond the resume deadline', () => {
     let clock = 0
-    const marks = createRelaunchMarks({ now: () => clock, maxAgeMs: 1_000 })
-    marks.note('stale', 5)
-    marks.note('fresh', 7)
-    clock = 1_000
-    expect(marks.take('fresh')).toEqual({ offset: 7, engineStarted: false })
-    clock = 1_001
-    expect(marks.take('stale')).toBeUndefined()
-    expect(marks.size).toBe(0)
+    vi.spyOn(Date, 'now').mockImplementation(() => clock)
+    const marks = createRelaunchMarks()
+    marks.note('queued', 5, true)
+    marks.note('restoring', 7)
+    clock = 60 * 60_000
+    marks.engineStarted('restoring')
+    expect(marks.read('queued')).toEqual({ offset: 5, engineStarted: true })
+    expect(marks.read('restoring')).toEqual({ offset: 7, engineStarted: true })
+    expect(marks.size).toBe(2)
   })
 })
