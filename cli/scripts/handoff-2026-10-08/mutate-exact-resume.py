@@ -25,6 +25,8 @@ mutations = [
     ('dangling alias evidence dropped', kit, '    proofs.push({ path, info, content: true })\n    return info?.isDirectory() ?? false', '    return info?.isDirectory() ?? false', spec),
     ('ambiguous files accepted', kit, 'if (selected.size > 1)', 'if (false)', spec),
     ('readability not checked', kit, 'await identityBytes(path, 1, info)', 'await Promise.resolve(Buffer.alloc(0))', spec),
+    ('directory alias evidence omitted', kit, '    await inspectAliases(path)', '    // alias proof disconnected', spec),
+    ('directory alias revalidation omitted', kit, 'if (signature(lstatSync(path)) !== signature(info))', 'if (false)', spec),
     ('new native homes ignored', 'src/lib/sessionRepair.ts', "if (repairRoots(engine, opts?.codexHome).join('\\0') !== roots.join('\\0'))", 'if (false)', 'src/engines/kit/exactTranscript.spec.ts'),
     ('workspace proof not revalidated', 'src/engines/kit/exactTranscript.ts', '  options.verify?.()', '  // workspace revalidation disconnected', 'src/engines/kit/exactTranscript.spec.ts'),
     ('unavailable workspace excluded', 'src/engines/kit/exactTranscript.ts', "catch { throw new IdentityReadUnavailable('the Pi workspace identity could not be read') }", "catch { return '' }", 'src/engines/kit/exactTranscript.spec.ts'),

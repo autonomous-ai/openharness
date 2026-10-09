@@ -1,7 +1,7 @@
 /** A complete, bounded native pool for an exact resume id. No optional reader or cross-poll cache. */
-import { realpathSync, statSync, type Stats } from 'node:fs'
-import { lstat, realpath } from 'node:fs/promises'
-import { join } from 'node:path'
+import { lstatSync, realpathSync, statSync, type Stats } from 'node:fs'
+import { lstat, readlink, realpath } from 'node:fs/promises'
+import { dirname, join, parse, resolve, sep } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { identityBytes, identityEntries, identityScanBudget, IdentityReadUnavailable, type IdentityVersion } from './identityScan.js'
 
@@ -19,13 +19,50 @@ export async function exactTranscript(roots: readonly string[], layout: Layout,
   if (roots.length > 64) throw new IdentityReadUnavailable('the known session-home limit was reached')
   const budget = identityScanBudget(), started = performance.now()
   const proofs: Proof[] = [], visited = new Set<string>()
+  const pathParts = new Map<string, { info: Stats; target?: string }>()
+  const aliases = new Map<string, Stats>()
   const selected = new Map<string, Proof>()
   let candidates = 0
   const deadline = () => {
     if (performance.now() - started > 2000) throw new IdentityReadUnavailable('the exact transcript lookup deadline was reached')
   }
+  // A directory opened through A -> B -> A can list B while both target stats name A.
+  // Retain the links themselves, including links in ancestors and in another link's target.
+  // Ordinary ancestor directories retain no content stamp: unrelated activity in /tmp is not ours.
+  const inspectAliases = async (path: string) => {
+    let location = resolve(path), links = 0
+    for (;;) {
+      const root = parse(location).root, parts = location.slice(root.length).split(sep).filter(Boolean)
+      let prefix = root, redirected = false
+      for (const [index, part] of parts.entries()) {
+        deadline()
+        prefix = join(prefix, part)
+        let evidence = pathParts.get(prefix)
+        if (!evidence) {
+          if (budget.remaining-- <= 0) throw new IdentityReadUnavailable('the directory entry limit was reached')
+          try {
+            const info = await lstat(prefix)
+            evidence = { info, ...(info.isSymbolicLink() ? { target: await readlink(prefix) } : {}) }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+            throw new IdentityReadUnavailable('an exact transcript alias could not be inspected')
+          }
+          pathParts.set(prefix, evidence)
+        }
+        if (evidence.target !== undefined) {
+          if (++links > 32) throw new IdentityReadUnavailable('the exact transcript alias depth limit was reached')
+          aliases.set(prefix, evidence.info)
+          location = resolve(dirname(prefix), evidence.target, ...parts.slice(index + 1))
+          redirected = true
+          break
+        }
+      }
+      if (!redirected) return
+    }
+  }
   const inspect = async (path: string): Promise<Stats | null> => {
     deadline()
+    await inspectAliases(path)
     try {
       const info = await lstat(path)
       return info.isSymbolicLink() ? await lstat(await realpath(path)) : info
@@ -85,6 +122,12 @@ export async function exactTranscript(roots: readonly string[], layout: Layout,
   // invalidate the selected header. This is bounded change detection, not an atomic filesystem view.
   const only = selected.size === 1 ? selected.values().next().value! : undefined
   options.verify?.()
+  for (const [path, info] of aliases) {
+    deadline()
+    try {
+      if (signature(lstatSync(path)) !== signature(info)) throw new Error('changed alias')
+    } catch { throw new IdentityReadUnavailable('an exact transcript alias changed during lookup') }
+  }
   for (const proof of [...proofs.filter(proof => proof !== only), ...(only ? [only] : [])]) {
     deadline()
     let now: Stats | null

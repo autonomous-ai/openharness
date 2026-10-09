@@ -107,7 +107,8 @@ describe('exact resume uses complete native evidence', () => {
       finally { closed = true }
     } } as never)
     await expect(lookup([path('pool')], walk)).rejects.toThrow('directory entry limit')
-    expect(reads).toBe(4096); expect(closed).toBe(true)
+    // Inspecting this private path spends part of the same budget before enumeration starts.
+    expect(reads).toBeLessThan(4096); expect(reads).toBeGreaterThan(4000); expect(closed).toBe(true)
     expect(fs.opendir).toHaveBeenCalledWith(path('pool'), { bufferSize: 32 })
   })
   it('bounds homes even when all are absent', async () => {
@@ -223,6 +224,24 @@ describe('exact resume uses complete native evidence', () => {
       return handle
     })
     await expect(repair.findResumedTranscript(engine, ID, { cwd })).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  })
+  it.each(['root', 'ancestor', 'chained target'] as const)('holds a directory listing redirected through a %s alias and restored', async kind => {
+    claude('conflict', path('target-a')); claude('other', path('moved'))
+    mkdirSync(path('target-b', 'projects'), { recursive: true })
+    const alias = kind === 'root' ? path('claude', 'projects') : kind === 'ancestor' ? path('claude') : path('outer')
+    if (kind === 'root') mkdirSync(path('claude'))
+    const target = (name: string) => kind === 'root' ? path(name, 'projects') : path(name)
+    symlinkSync(target('target-a'), alias)
+    if (kind === 'chained target') symlinkSync(path('outer'), path('claude'))
+    ;(await import('../../lib/engineHomes.js')).adoptHomes({ CLAUDE_CONFIG_DIR: path('moved') })
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    vi.mocked(fs.opendir).mockImplementationOnce(async (name, options) => {
+      rmSync(alias); symlinkSync(target('target-b'), alias)
+      const directory = await actual.opendir(name, options)
+      rmSync(alias); symlinkSync(target('target-a'), alias)
+      return directory
+    })
+    await expect(repair.findResumedTranscript('claude', ID)).rejects.toThrow('alias changed during lookup')
   })
   it.each(['accepted', 'excluded'] as const)('revalidates an %s Pi cwd alias after later native reads', async kind => {
     const cwd = path('work'), other = path('other'), alias = path('cwd-alias')
