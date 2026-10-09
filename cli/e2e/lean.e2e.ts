@@ -63,6 +63,11 @@ describe('harnessd\'s master and services lean', () => {
     onTestFailed(() => { console.log(`---- daemon log\n${d.log().split('\n').slice(-120).join('\n')}`) })
     await d.start()
     await until('every service process', () => PROCESSES.every((name) => new RegExp(`service ${name} started`).test(d.log())) || null, 60_000, 200)
+    // "Started" is logged at spawn, before Node opens the module or sets its
+    // process title. Linux caught both the title assertion and bundle deletion
+    // racing models' initial load. Every case here needs established services.
+    await until('initial services to load', () =>
+      SERVICES.every(name => d.log().includes(`[service ${name}] connected to the core`)) || null, 30_000, 100)
     return d
   }
   async function agentWorks(d: IsolatedDaemon, engine: Engine): Promise<void> {

@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:collection';
+
+import 'support/agent_inventory_pages.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
@@ -42,6 +45,32 @@ const _capabilities = {
   'features': {'noTakeover': true},
 };
 
+// Inject a real push during response decoding, before AppNotifier can commit
+// the candidate. The caller must reject it after the helper returns.
+class DecodeHookMap extends MapBase<String, dynamic> {
+  DecodeHookMap(this.valuesByKey, this.onDecode);
+  final Map<String, dynamic> valuesByKey;
+  final void Function() onDecode;
+  bool scheduled = false;
+  @override
+  dynamic operator [](Object? key) {
+    if (key == 'sync' && !scheduled) {
+      scheduled = true;
+      onDecode();
+    }
+    return valuesByKey[key];
+  }
+
+  @override
+  void operator []=(String key, dynamic value) => valuesByKey[key] = value;
+  @override
+  Iterable<String> get keys => valuesByKey.keys;
+  @override
+  void clear() => valuesByKey.clear();
+  @override
+  dynamic remove(Object? key) => valuesByKey.remove(key);
+}
+
 class DiscoveryConnection extends WsConn {
   DiscoveryConnection()
     : super(
@@ -55,6 +84,7 @@ class DiscoveryConnection extends WsConn {
       );
 
   final calls = <String>[];
+  final inventoryRequests = <Map<String, dynamic>>[];
   final agents = <Completer<Map<String, dynamic>>>[];
   final capabilities = <Completer<Map<String, dynamic>>>[];
   final themes = <Map<String, dynamic>>[];
@@ -80,6 +110,7 @@ class DiscoveryConnection extends WsConn {
     final response = Completer<Map<String, dynamic>>();
     switch (type) {
       case 'agents_list':
+        inventoryRequests.add(Map.of(payload));
         agents.add(response);
       case 'terminal_capabilities':
         capabilities.add(response);
@@ -333,6 +364,185 @@ void main() {
             machine.agentLoadStatus == AgentLoadStatus.loading,
         isTrue,
       );
+    },
+  );
+
+  test('a push during inventory decode wins without advancing the delta baseline', () async {
+    final revision = '1' * 64;
+    final initial = app.reloadMachineData('m');
+    await _tick();
+    connection.agents.last.complete({
+      ..._agents,
+      'sync': {'version': 1, 'revision': revision},
+    });
+    connection.capabilities.last.complete(_capabilities);
+    await initial;
+    final refreshing = app.reloadMachineData('m');
+    await _tick();
+    connection.capabilities.last.complete(_capabilities);
+    connection.agents.last.complete(
+      DecodeHookMap(
+        {
+          'agents': [
+            {
+              ...(_agents['agents'] as List).single as Map,
+              'viewerName': 'Stale viewer',
+            },
+          ],
+          'sync': {
+            'version': 1,
+            'base': revision,
+            'revision': '2' * 64,
+            'order': ['a'],
+          },
+        },
+        () {
+          unawaited(
+            app.handleEventForTest('m', {
+              'type': 'agent_synced',
+              'payload': {
+                'agent': {
+                  ...(_agents['agents'] as List).single as Map,
+                  'viewerName': 'New viewer',
+                },
+              },
+            }),
+          );
+        },
+      ),
+    );
+    await refreshing;
+    expect(machine.agents.single.viewerName, 'New viewer');
+    // The rejected candidate did not change the server baseline. A following
+    // update compares with the original full response and installs fresh data.
+    final next = app.reloadMachineData('m');
+    await _tick();
+    expect(
+      (connection.inventoryRequests.last['sync'] as Map)['since'],
+      revision,
+    );
+    connection.capabilities.last.complete(_capabilities);
+    connection.agents.last.complete({
+      'agents': [
+        {
+          ...(_agents['agents'] as List).single as Map,
+          'viewerName': 'New viewer',
+        },
+      ],
+      'sync': {
+        'version': 1,
+        'base': revision,
+        'revision': '2' * 64,
+        'order': ['a'],
+      },
+    });
+    await next;
+    expect(machine.agents.single.viewerName, 'New viewer');
+  });
+
+  testWidgets(
+    'inventory retries share one awake deadline and late replies cannot commit',
+    (tester) async {
+      final load = app.reloadMachineData('m');
+      await tester.pump();
+      connection.capabilities.single.complete(_capabilities);
+      await tester.pump(const Duration(seconds: 8));
+      connection.agents.single.complete({'error': 'malformed'});
+      await tester.pump();
+      expect(connection.agents, hasLength(2));
+      await tester.pump(const Duration(seconds: 2));
+      await load;
+      expect(machine.agentsLoadError, contains('offline'));
+      connection.agents.last.complete(_agents);
+      await tester.pump();
+      expect(machine.agents, isEmpty);
+      app.dispose();
+      disposed = true;
+    },
+  );
+
+  test(
+    'expired page errors from WsConn restart the complete fetch once',
+    () async {
+      final load = app.reloadMachineData('m');
+      final pages = inventoryPages({
+        'agents': [
+          {'id': 'a', 'name': 'x' * 150000},
+        ],
+        'sync': {'version': 1, 'revision': '1' * 64},
+      });
+      await _tick();
+      connection.capabilities.single.complete(_capabilities);
+      connection.agents.single.complete(pages.first);
+      await _tick();
+      expect(connection.agents, hasLength(2));
+      expect(machine.agents, isEmpty);
+      connection.agents.last.completeError(
+        const WsRequestFailure(
+          responseType: 'agents_list_result',
+          code: 'INVENTORY_RESET_REQUIRED',
+        ),
+      );
+      await _tick();
+      expect(connection.agents, hasLength(3));
+      expect(connection.inventoryRequests.last['sync'], {
+        'version': 1,
+        'pages': true,
+      });
+      connection.agents.last.complete(_agents);
+      await load;
+      expect(machine.agents.single.id, 'a');
+      expect(machine.agentsLoadError, isNull);
+    },
+  );
+
+  for (final code in ['INVENTORY_TOO_LARGE', 'UNAUTHORIZED']) {
+    test(
+      'a $code socket refusal is surfaced without restarting inventory',
+      () async {
+        final load = app.reloadMachineData('m');
+        await _tick();
+        connection.capabilities.single.complete(_capabilities);
+        connection.agents.single.completeError(
+          WsRequestFailure(responseType: 'agents_list_result', code: code),
+        );
+        await load;
+        expect(connection.agents, hasLength(1));
+        expect(machine.agents, isEmpty);
+        expect(machine.agentsLoadError, isNotNull);
+      },
+    );
+  }
+
+  testWidgets(
+    'all initial pages share one deadline and a late page cannot clear panes',
+    (tester) async {
+      final load = app.reloadMachineData('m');
+      final pages = inventoryPages({
+        'agents': [
+          {'id': 'a', 'name': 'x' * 300000},
+        ],
+        'sync': {'version': 1, 'revision': '1' * 64},
+      });
+      await tester.pump();
+      connection.capabilities.single.complete(_capabilities);
+      await tester.pump(const Duration(seconds: 8));
+      connection.agents.single.complete(pages.first);
+      await tester.pump();
+      expect(connection.agents, hasLength(2));
+      expect(machine.agents, isEmpty);
+      await tester.pump(const Duration(seconds: 2));
+      await load;
+      connection.agents.last.complete(pages[1]);
+      await tester.pump();
+      expect(
+        connection.agents,
+        hasLength(2),
+      ); // No third page after expiration.
+      expect(machine.agents, isEmpty);
+      expect(machine.agentsLoadError, contains('offline'));
+      app.dispose();
+      disposed = true;
     },
   );
 

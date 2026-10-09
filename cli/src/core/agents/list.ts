@@ -7,6 +7,8 @@
  * Moved verbatim out of the socket's request switch (docs/design/2026-10-03-harnessd.md), with the
  * device trimming it alone used.
  */
+import { createAgentInventory } from './inventory.js'
+import { createInventoryPages } from './inventoryPages.js'
 import { isTerminalEngine, PROCESS_ENGINES, type ProcessEngine } from '../../engines/types.js'
 import type { AgentFrame } from '../../lib/agentFrame.js'
 import type { MonitorActivity, MonitorCompletions } from '../../lib/harnessMonitor.js'
@@ -81,6 +83,9 @@ export function createAgentList({
   registry, stoppedAgents, toProject, toStoppedProject, harnessResourcesReader, harnessStorageReader,
   monitorActivityProvider, monitorCompletions,
 }: AgentListDeps) {
+  const inventory = createAgentInventory()
+  const pages = createInventoryPages()
+  const pending = new Map<string, Set<symbol>>()
   /**
    * Answers `agents_list` through `reply`: before it returns, or, for the monitor's readings, once
    * they are read. `sessionRole` is the asking connection's paired role, read where the list needs it.
@@ -89,56 +94,77 @@ export function createAgentList({
     payload: Record<string, unknown>,
     sessionRole: () => string | null,
     reply: (result: Record<string, unknown>) => void,
+    connectionId = '',
   ): Promise<void> => {
-    const sessions = registry.advertised()
-    const projects = await Promise.all(sessions.map((s) => toProject(s)))
-    // Older clients/devices keep their live-only contract. The desktop picker
-    // explicitly asks for stopped work and receives no stale terminal routes.
-    const savedSessions = payload.includeStopped === true && sessionRole() !== 'device' ? stoppedAgents.available(sessions) : []
-    projects.push(...await Promise.all(savedSessions.map(s => toStoppedProject(s))))
-    // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
-    // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
-    // order is TOTAL: without it two agents registered in the same millisecond fall through to array
-    // position, which is Map insertion order and differs between daemon runs — the web, the app and
-    // the dial would each show a different order for the same registry. `cableHost.listAgents`
-    // sorts by the same rule; the two must stay identical.
-    projects.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
-    if (sessionRole() === 'device') {
-      reply({ agents: projects.filter(deviceAgentRow).slice(0, DEVICE_AGENT_LIST_LIMIT).map(deviceAgentListItem) })
-      return
+    const role = sessionRole()
+    const scope = JSON.stringify([role, payload.includeStopped === true])
+    const sync = payload.sync as Record<string, unknown> | undefined
+    const paged = role !== 'device' && payload.monitor !== true && sync?.version === 1 && sync.pages === true && connectionId !== ''
+    if (paged && 'page' in sync) { reply(pages.next(sync.page, connectionId, scope)); return }
+    const ticket = Symbol()
+    if (paged) {
+      if (!pending.has(connectionId)) pending.set(connectionId, new Set())
+      pending.get(connectionId)!.add(ticket)
     }
-    if (payload.monitor === true) {
-      // Optional telemetry must never hold the ordered terminal-input queue.
-      void (async () => {
-        const [snapshot, storage] = await Promise.all([
-          harnessResourcesReader().catch(() => ({ agents: [], sampledAt: null, shared: [] })),
-          harnessStorageReader([...sessions, ...savedSessions]).catch(() => new Map()),
-        ])
-        const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
-        const byId = new Map(sessions.map(s => [s.agentId, s]))
-        reply({ agents: projects.map(agent => {
-          const session = byId.get(agent.id)
-          const activity = session ? monitorActivityProvider?.(session.sessionId) : null
-          const reading = resources.get(agent.id)
-          return { ...agent, monitor: {
-            activity: activity && activity !== 'idle' ? activity : session ? monitorCompletions.state(session) : 'idle',
-            activityKnown: monitorActivityProvider !== null,
-            rssBytes: agent.status === 'stopped' ? 0 : reading?.memoryBytes ?? null,
-            cpu: agent.status === 'stopped' ? 0 : reading?.cpuPercent ?? null,
-            pid: reading?.processCount != null ? session?.processIdentity?.pid ?? null : null,
-            sampledAt: snapshot.sampledAt,
-            processCount: reading?.processCount ?? null,
-            gpuMemoryBytes: reading?.gpuMemoryBytes ?? null,
-            gpuPercent: reading?.gpuPercent ?? null,
-            diskReadBytesPerSecond: reading?.diskReadBytesPerSecond ?? null,
-            diskWriteBytesPerSecond: reading?.diskWriteBytesPerSecond ?? null,
-            processes: reading?.processes ?? [],
-            ...(storage.get(agent.id) ?? {}),
-          } }
-        }), sharedResources: snapshot.shared ?? [], sampledAt: snapshot.sampledAt })
-      })().catch(() => reply({ error: 'UNAVAILABLE' }))
-    } else reply({ agents: projects })
+    try {
+      const sessions = registry.advertised()
+      const projects = await Promise.all(sessions.map((s) => toProject(s)))
+      // Older clients/devices keep their live-only contract. The desktop picker
+      // explicitly asks for stopped work and receives no stale terminal routes.
+      const savedSessions = payload.includeStopped === true && sessionRole() !== 'device' ? stoppedAgents.available(sessions) : []
+      projects.push(...await Promise.all(savedSessions.map(s => toStoppedProject(s))))
+      // Ordered by creation time, oldest → newest — a stable tab order that doesn't reshuffle as
+      // sessions become active (createdAt = the session's registeredAt). The id breaks a tie so the
+      // order is TOTAL: without it two agents registered in the same millisecond fall through to array
+      // position, which is Map insertion order and differs between daemon runs — the web, the app and
+      // the dial would each show a different order for the same registry. `cableHost.listAgents`
+      // sorts by the same rule; the two must stay identical.
+      projects.sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || a.id.localeCompare(b.id))
+      if (sessionRole() === 'device') {
+        reply({ agents: projects.filter(deviceAgentRow).slice(0, DEVICE_AGENT_LIST_LIMIT).map(deviceAgentListItem) })
+        return
+      }
+      if (payload.monitor === true) {
+        // Optional telemetry must never hold the ordered terminal-input queue.
+        void (async () => {
+          const [snapshot, storage] = await Promise.all([
+            harnessResourcesReader().catch(() => ({ agents: [], sampledAt: null, shared: [] })),
+            harnessStorageReader([...sessions, ...savedSessions]).catch(() => new Map()),
+          ])
+          const resources = new Map(snapshot.agents.map(row => [row.agentId, row]))
+          const byId = new Map(sessions.map(s => [s.agentId, s]))
+          reply({ agents: projects.map(agent => {
+            const session = byId.get(agent.id)
+            const activity = session ? monitorActivityProvider?.(session.sessionId) : null
+            const reading = resources.get(agent.id)
+            return { ...agent, monitor: {
+              activity: activity && activity !== 'idle' ? activity : session ? monitorCompletions.state(session) : 'idle',
+              activityKnown: monitorActivityProvider !== null,
+              rssBytes: agent.status === 'stopped' ? 0 : reading?.memoryBytes ?? null,
+              cpu: agent.status === 'stopped' ? 0 : reading?.cpuPercent ?? null,
+              pid: reading?.processCount != null ? session?.processIdentity?.pid ?? null : null,
+              sampledAt: snapshot.sampledAt,
+              processCount: reading?.processCount ?? null,
+              gpuMemoryBytes: reading?.gpuMemoryBytes ?? null,
+              gpuPercent: reading?.gpuPercent ?? null,
+              diskReadBytesPerSecond: reading?.diskReadBytesPerSecond ?? null,
+              diskWriteBytesPerSecond: reading?.diskWriteBytesPerSecond ?? null,
+              processes: reading?.processes ?? [],
+              ...(storage.get(agent.id) ?? {}),
+            } }
+          }), sharedResources: snapshot.shared ?? [], sampledAt: snapshot.sampledAt })
+        })().catch(() => reply({ error: 'UNAVAILABLE' }))
+      } else {
+        const result = inventory(projects, payload, scope)
+        reply(paged ? pending.get(connectionId)?.has(ticket)
+          ? pages.start(result, connectionId, scope) : { error: 'INVENTORY_RESET_REQUIRED' } : result)
+      }
+    } finally {
+      const requests = pending.get(connectionId)
+      requests?.delete(ticket)
+      if (requests?.size === 0) pending.delete(connectionId)
+    }
   }
 
-  return { agentsList }
+  return { agentsList, closeConnection: (id: string) => { pending.delete(id); pages.close(id) } }
 }

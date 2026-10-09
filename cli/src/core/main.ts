@@ -1155,12 +1155,13 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.questionProvider = asking.questionResponse
   const openQuestions = asking.openQuestions
   // The agents on this machine (core/agents/list.ts), in the socket's frames, with its monitor readings.
-  backend.agentsProvider = createAgentList({
+  const agentLists = createAgentList({
     registry, stoppedAgents, monitorActivityProvider: asking.monitorActivity, monitorCompletions: backend.monitorCompletions,
     toProject: (s) => backend.toProject(s), toStoppedProject: (s) => backend.toStoppedProject(s),
     // The monitor's readings, through its port (services/monitor.ts): none while it is off.
     harnessResourcesReader: () => (ports.monitor ?? MONITOR_OFF).resources(), harnessStorageReader: (agents, invalidate) => (ports.monitor ?? MONITOR_OFF).storage(agents, invalidate),
-  }).agentsList
+  })
+  backend.agentsProvider = agentLists.agentsList
   const questionWatcher = asking.questionWatcher
 
 
@@ -1328,7 +1329,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   backend.serviceRouter = (type, payload, asker, reply) => (teamsOut && teamsLink.route(type, payload, asker, reply))
     || serviceLinks.route(type, payload, asker, reply) || serviceHost.route(type, payload, asker, reply)
   // The connection that asked closed: the services abort what it asked, wherever they run.
-  backend.onConnectionClosed = (connId) => { serviceLinks.closeConnection(connId); serviceHost.closeConnection(connId) }
+  backend.onConnectionClosed = (connId) => { agentLists.closeConnection(connId); serviceLinks.closeConnection(connId); serviceHost.closeConnection(connId) }
   // Session search (services/search.ts): in this process, or in its own (services/searchProcess.ts),
   // where the core tells it what changed. A purge's forgetting waits for it if it is down.
   if (outOfProcess.has('search')) {
