@@ -26,6 +26,7 @@
 		B20100000000000000000A01 /* HarnessNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20100000000000000000A02 /* HarnessNotifications.swift */; };
 		B20100000000000000000B01 /* HarnessStatusMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20100000000000000000B02 /* HarnessStatusMenu.swift */; };
 		B20100000000000000000C01 /* SurfaceCacheGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20100000000000000000C02 /* SurfaceCacheGuard.swift */; };
+		B20100000000000000000D01 /* MoveToApplications.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20100000000000000000D02 /* MoveToApplications.swift */; };
 		331C80D8294CF71000263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C80D7294CF71000263BE5 /* RunnerTests.swift */; };
 		335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */; };
 		33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC10F02044A3C60003C045 /* AppDelegate.swift */; };
@@ -72,6 +73,7 @@
 		B20100000000000000000A02 /* HarnessNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessNotifications.swift; sourceTree = "<group>"; };
 		B20100000000000000000B02 /* HarnessStatusMenu.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessStatusMenu.swift; sourceTree = "<group>"; };
 		B20100000000000000000C02 /* SurfaceCacheGuard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceCacheGuard.swift; sourceTree = "<group>"; };
+		B20100000000000000000D02 /* MoveToApplications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoveToApplications.swift; sourceTree = "<group>"; };
 		331C80D5294CF71000263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		331C80D7294CF71000263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
 		333000ED22D3DE5D00554162 /* Warnings.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Warnings.xcconfig; sourceTree = "<group>"; };
@@ -186,6 +188,7 @@
 				B20100000000000000000A02 /* HarnessNotifications.swift */,
 				B20100000000000000000B02 /* HarnessStatusMenu.swift */,
 				B20100000000000000000C02 /* SurfaceCacheGuard.swift */,
+				B20100000000000000000D02 /* MoveToApplications.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -379,6 +382,7 @@
 				B20100000000000000000A01 /* HarnessNotifications.swift in Sources */,
 				B20100000000000000000B01 /* HarnessStatusMenu.swift in Sources */,
 				B20100000000000000000C01 /* SurfaceCacheGuard.swift in Sources */,
+				B20100000000000000000D01 /* MoveToApplications.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);
