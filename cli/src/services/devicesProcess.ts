@@ -74,6 +74,12 @@ function faultsOf(value: string | undefined): ReadonlySet<string> {
 export function runDevicesService(options: DevicesServiceOptions): ServiceProcess {
   const processEnv = options.processEnv ?? process.env
   let core: CoreConnection | null = null
+  /** Whether a dial watches, as the cable last said: told again to every core this process connects to.
+   *  A dial says hello as soon as its port opens, which is often before a core that just started has
+   *  this process connected (2026-10-09, a user's log: hello 14:22:54.141, connected 14:22:54.525). Told
+   *  only then, the notice was lost: the core made no cards for the dial, which showed Working for turns
+   *  that had ended, and no recaps, until the next restart. */
+  let dialWatching = false
   let view: View = { agents: [], machine: { id: '', computerId: options.machineId, name: 'This machine' }, signedIn: false, environment: '', hasWindow: false }
   /** One ask of the core's view at a time: the dial's tick and ⌘K asking together share it. */
   let viewing: Promise<void> | null = null
@@ -164,7 +170,10 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       sendToWindow: (connId, frame) => { tell('sendToWindow', { connId, frame }); return core !== null },
       hasWindow: () => view.hasWindow,
       devicesChanged: (payload) => tell('devicesChanged', payload),
-      dialWatching: (watching) => tell('dialWatching', { watching }),
+      dialWatching: (watching) => {
+        dialWatching = watching
+        tell('dialWatching', { watching })
+      },
       windows: () => {},
     },
     daemon: DAEMON_UNKNOWN,
@@ -241,6 +250,7 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
     },
     onConnected: (connection) => {
       core = connection
+      if (dialWatching) tell('dialWatching', { watching: true })
       void refresh()
     },
     onDisconnected: () => { core = null },
