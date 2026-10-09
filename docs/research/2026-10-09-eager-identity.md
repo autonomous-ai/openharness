@@ -1,0 +1,7 @@
+# Eager identity and transcript location
+
+The owner requires session control to survive missing optional engine modules. The former main implementation still loads engine modules to locate Cursor, Grok, Agy and Copilot transcripts, follow Copilot's in-process resume, discover a Hermes profile, and poll a pending Cursor transcript. These filesystem and process facts belong to the eager core; interpretation remains optional.
+
+Before changing implementation, `otherIdentity.golden.spec.ts` was recorded from main `3a68988a7848adaa6ea329a597cb4cfa82b17fb6`. It retains the existing identity outcomes and adds the Grok hashed-directory fallback, competing Copilot locks and core Cursor discovery of existing and later transcripts. The fixture also carries the previously recorded Hermes ID cases. Linux platform, boot identity, time, UTC, disposable homes and controlled descriptor evidence are pinned. Host Node paths are placeholders. Recording passed all nine cases; the fixture is committed separately before the move.
+
+A lookup must remain available when an optional engine module is absent. A delayed lookup must also respect removal and stop; moving code is not sufficient evidence of that authority boundary. The implementation will use engine declarations and eager kit mechanics, with unchanged golden assertions, deliberate mutation assertions and a private daemon test with optional chunks removed.
