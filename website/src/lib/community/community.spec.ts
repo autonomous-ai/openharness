@@ -27,6 +27,11 @@ describe('portable starter projects', () => {
       expect(new TextDecoder().decode(zip)).toContain(harness.files[0].content);
     }
   });
+  it('reads only the output for a harness page, not a starter\'s megabytes of source', async () => {
+    const full = (await getStarter('starter-two-futures'))!, page = (await getStarter('starter-two-futures', { viewerOnly: true }))!;
+    expect(full.files.length).toBeGreaterThan(1);
+    expect(page.files).toEqual([full.files.find(file => file.path === full.viewerPath)]);
+  });
   it('rejects path traversal and retains copyright from the fork lineage', async () => {
     expect(() => zipFiles([{ path: '../evil', content: 'oops' }])).toThrow('Invalid project path');
     const harness = (await getStarter('starter-orbit'))!;

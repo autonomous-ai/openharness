@@ -1,4 +1,4 @@
-import type { SocialState } from './types';
+import type { OpenHarness, SocialState } from './types';
 import { refreshHubSession } from './session';
 
 /** Read the existing Harness web session; the community does not mint a second identity. */
@@ -35,6 +35,13 @@ export async function communityRequest<T>(path: string, options: { method?: stri
   const body = await response.json();
   if (!response.ok || !body.success) throw new CommunityError(body.error?.message || 'The community is temporarily unavailable. Try again.', response.status);
   return body.data as T;
+}
+
+/** A starter's whole project, which this site serves itself (the Hub stores only publications). */
+export async function starterSnapshot(id: string): Promise<OpenHarness | null> {
+  const response = await fetch(`/hub/${id}/snapshot`, { cache: 'no-store' });
+  if (!response.ok) return null;
+  return (await response.json() as { harness: OpenHarness }).harness;
 }
 
 export const emptySocial: SocialState = { likes: 0, liked: false, following: false, comments: [], signedIn: false, mine: false };

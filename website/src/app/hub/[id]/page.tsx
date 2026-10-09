@@ -11,21 +11,26 @@ const validId = (id: string) => /^starter-[a-z-]+$/.test(id) || /^[a-f0-9-]{36}$
 /**
  * Read once per request, for the metadata and the page. The server asks as a production reader, so a
  * staging publication (or an outage) comes back null and the page loads it in the browser instead.
+ * The page draws only the output; the other files reach a fork through its own routes.
  */
 const readHarness = cache(async (id: string): Promise<OpenHarness | null> => {
   if (!validId(id)) return null;
   // A slow backend must not hold the page: past this, the browser loads the harness itself.
-  return getPublicHarness(id, 2500).catch(() => null);
+  return getPublicHarness(id, { timeoutMs: 2500, viewerOnly: true }).catch(() => null);
 });
 
-/** The page draws only the output; the other files reach a fork through its own routes. */
-function forViewer(harness: OpenHarness): OpenHarness {
-  return { ...harness, files: harness.files.filter(file => file.path === harness.viewerPath) };
-}
+/** A link preview's image: link unfurlers read raster covers, not a starter's SVG. */
+const shareImage = (harness: OpenHarness) => harness.cover && !harness.cover.endsWith('.svg') ? harness.cover : undefined;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const harness = await readHarness((await params).id);
-  return { title: harness?.title || 'Open harness', description: harness?.description };
+  if (!harness) return { title: 'Open harness' };
+  const image = shareImage(harness), title = harness.title, description = harness.description;
+  return {
+    title, description,
+    openGraph: { type: 'article', title, description, authors: [harness.authorName], ...(image ? { images: [{ url: image, width: 900, height: 600 }] } : {}) },
+    twitter: { card: image ? 'summary_large_image' : 'summary', title, description },
+  };
 }
 
 export default async function HarnessPage({ params, searchParams }: Props) {
@@ -33,5 +38,5 @@ export default async function HarnessPage({ params, searchParams }: Props) {
   if (!validId(id)) notFound();
   const initial = await readHarness(id);
   if (id.startsWith('starter-') && !initial) notFound();
-  return <Detail key={id} id={id} initial={initial && forViewer(initial)} initialComments={(await searchParams).comments !== undefined} />;
+  return <Detail key={id} id={id} initial={initial} initialComments={(await searchParams).comments !== undefined} />;
 }
