@@ -1452,6 +1452,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Release a session's binding, or remove a process-owned agent everywhere (core/agents/forget.ts).
   const forgetSession = createForgetSession({
+    relaunchMarks,
     registry,
     stoppedAgents,
     syncRecapPool,
@@ -1475,6 +1476,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
 
   const retainExitedSession = createRetainExitedSession({
+    forgetRelaunch: relaunchMarks.forget,
     stoppedAgents,
     registry,
     send: frame => backend.send(frame),

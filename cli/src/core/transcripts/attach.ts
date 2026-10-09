@@ -56,7 +56,7 @@ export interface AttachDeps {
   /** How many sessions attach at once. */
   concurrency: number
   /** Where an engine's writing became live again after a relaunch (core/transcripts/relaunch.ts): the fold stops there. */
-  relaunchMarks?: Pick<RelaunchMarks, 'take'>
+  relaunchMarks?: Pick<RelaunchMarks, 'read' | 'complete'>
   /** The most of a transcript an engine without its own reader from the end folds, from its end. */
   wholeReadCapBytes?: number
   /** The session attached with its last turn already over (core/turns/recaps.ts `settled`). */
@@ -133,11 +133,12 @@ export function createAttach({
     }
     const engine = <Name extends keyof InProcessModules>(name: Name): InProcessModules[Name] | null =>
       session.engine === name ? other as InProcessModules[Name] | null : null
-    // Taken whichever way this attach goes: a mark is for the next attach of the conversation only.
-    const relaunch = relaunchMarks?.take(session.sessionId)
+    // Reading does not consume the boundary. A stale profile or unavailable worker can abandon this
+    // attach before installing anything; the next attach must still know the old engine's turn died.
+    const relaunch = relaunchMarks?.read(session.sessionId)
     const relaunchedAt = relaunch?.offset
     const remote = remoteLive?.handles(session.engine) ? remoteLive : undefined
-    if (!reset && normalizers.hasState(session.sessionId) && (!remote || remote.current(session))) {
+    if (!relaunch && !reset && normalizers.hasState(session.sessionId) && (!remote || remote.current(session))) {
       if (session.transcriptPath) {
         const unseen = neverFoldedHistory.delete(session.sessionId)
         await watcher.addSession(
@@ -207,15 +208,19 @@ export function createAttach({
       console.warn(`[agent] ${sid(session.agentId)} kept its live normalizer · the re-read ${why}`)
       handover.hold?.release()
       handover.next = null
+      if (relaunch) remote?.retry(session)
       return true
     }
+    // A surviving shell can leave its old tail installed. Its cursor is the old engine's delivery
+    // position; a newly started engine's history ends at the launch boundary instead.
+    const historyEnd = () => relaunch?.engineStarted ? relaunch.offset : handover.hold?.offset ?? relaunchedAt
     if (remote) {
       if (session.transcriptPath) handover.hold = await watcher.hold(session.sessionId, session.transcriptPath)
       const live = replayLive && handover.hold === null
-      const profile = runtimeProfiles.beginHydrate(session)
-      profileHydration = profile
       try {
-        prepared = await remote.prepare(session, { live, end: handover.hold?.offset ?? relaunchedAt }, frame => {
+        const profile = runtimeProfiles.beginHydrate(session)
+        profileHydration = profile
+        prepared = await remote.prepare(session, { live, end: historyEnd() }, frame => {
           if (frame.profile && !profile.ingestFrames) sideRead('runtime profile', session.sessionId, () => profile.ingest(frame.raw))
           if (frame.observe && observe) observe(frame.raw)
         }, profile.ingestFrames)
@@ -226,7 +231,7 @@ export function createAttach({
         return handover.hold ? keepLiveNormalizer('could not reach its engine worker') : true
       }
       if (handover.hold?.expired) { remote.discard(prepared); return keepLiveNormalizer('outlasted its hold on the tail') }
-      if (!profile.commitWith) profile.commit()
+      if (!profileHydration.commitWith) profileHydration.commit()
       fromEnd = { next: prepared.page.cursor.offset, records: prepared.records, content: prepared.content }
       handover.next = fromEnd.next
       historyTurnOpen = !live && prepared.state.handle.turnOpen
@@ -246,7 +251,7 @@ export function createAttach({
         profile: (line) => profile.ingest(line),
         fold: (line) => stream.push(line),
         observe,
-      }, { fromStart: live, end: handover.hold?.offset ?? relaunchedAt })
+      }, { fromStart: live, end: historyEnd() })
       if (handover.hold && (read.failed || handover.hold.expired)) {
         return keepLiveNormalizer(read.failed ? 'could not read the transcript' : 'outlasted its hold on the tail')
       }
@@ -410,6 +415,18 @@ export function createAttach({
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       commandcodeNormalizers.set(session.sessionId, normalizer)
     }
+    // Close the old engine's turn before starting the tail: addSession may synchronously deliver a
+    // new turn written after resume. Closing afterward would abandon that new turn instead.
+    const abandonedHistory = historyTurnOpen && relaunch?.engineStarted
+    if (abandonedHistory) {
+      console.log(`[agent] ${sid(session.agentId)} left the turn open at attach as history · it began before its engine was started again`)
+      const folds: Array<Map<string, { closeTurn(): unknown }>> = [cursorNormalizers, museNormalizers, ampNormalizers,
+        grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, commandcodeNormalizers]
+      for (const fold of folds) fold.get(session.sessionId)?.closeTurn()
+      liveParsers.get(session.sessionId)?.closeTurn('abandoned')
+    }
+    // From this point the installed parser owns the boundary, including the closed-turn checkpoint.
+    if (relaunch) relaunchMarks!.complete(session.sessionId, relaunch)
     if (session.transcriptPath) {
       neverFoldedHistory.delete(session.sessionId)
       // Deliberately NOT `fromStart`, even when the caller asked for it: this branch has just folded the
@@ -451,16 +468,7 @@ export function createAttach({
     // Nor for a turn left open before a new engine was started on the conversation (a resume, or a restore
     // that rebuilt the pane): that turn died with the engine before, and announcing it showed the
     // interrupted message starting anew (core/transcripts/relaunch.ts).
-    if (historyTurnOpen && !handover.hold && relaunch?.engineStarted) {
-      console.log(`[agent] ${sid(session.agentId)} left the turn open at attach as history · it began before its engine was started again`)
-      // Closed in the normalizer too, and as silently. Left open, the next message's start ended it first:
-      // a turn_ended for a turn no client saw start (a "done" and its notification), a team's or the
-      // orchestrator's delivery read as ended before it started, and the agent working until then.
-      const folds: Array<Map<string, { closeTurn(): unknown }>> = [cursorNormalizers, museNormalizers, ampNormalizers,
-        grokNormalizers, agyNormalizers, copilotNormalizers, piNormalizers, commandcodeNormalizers]
-      for (const fold of folds) fold.get(session.sessionId)?.closeTurn()
-      liveParsers.get(session.sessionId)?.closeTurn('abandoned')
-    } else if (historyTurnOpen && !handover.hold) {
+    if (historyTurnOpen && !handover.hold && !abandonedHistory) {
       const opened = historyEvents.findLast((event) => event.type === 'turn_started')
       if (opened) {
         console.log(`[agent] ${sid(session.agentId)} resumed the turn already open at attach`)
