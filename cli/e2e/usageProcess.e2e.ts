@@ -83,8 +83,10 @@ it('a new core receives an unchanged warm worker snapshot', async () => {
   const a = await create(d, client, 'claude')
   await usage(d, a); await totals(client, a.id, 120)
   const worker = edge(d), before = d.corePid()!
+  const ready = [...d.log().matchAll(/\[cli\] ready/g)].length
   client.close(); process.kill(before, 'SIGKILL')
   await until('new core', () => d.corePid() !== before && d.coresStarted() >= 2 || null, 30_000, 250)
+  await until('new core ready', () => [...d.log().matchAll(/\[cli\] ready/g)].length > ready || null, 60_000, 250)
   const next = await LocalClient.connect(d)
   await totals(next, a.id, 120)
   expect(edge(d)).toBe(worker)
