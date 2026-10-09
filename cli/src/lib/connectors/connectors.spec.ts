@@ -324,8 +324,16 @@ describe('REST calls and the command', () => {
     expect(customCode('Linear', new Set(['linear']))).toBe('custom-linear')
   })
 
-  it('bundles an icon for every service', () => {
+  it('bundles an icon and a real description for every service', () => {
     expect(Object.keys(CATALOG).filter(code => !ICONS[code])).toEqual([])
+    expect(Object.values(CATALOG).filter(item => item.description.length < 20 || /abcd|lorem|placeholder|\bdescription\b/i.test(item.description))).toEqual([])
+  })
+
+  it('keeps a known service\'s own description over the gateway\'s', () => {
+    const items = services({ notion: { code: 'notion', auth_type: 'app', label: 'Notion', description: 'Notion description abcd', mcp_url: 'https://mcp.notion.com/mcp' },
+      fresh: { code: 'fresh', auth_type: 'dcr', label: 'Fresh', description: 'A service Harness does not know yet.', mcp_url: 'https://mcp.fresh.example/mcp' } })
+    expect(items.notion.description).toBe(CATALOG.notion.description)
+    expect(items.fresh.description).toBe('A service Harness does not know yet.')
   })
 
   it('adds a custom server that asks for sign-in through the same flow', async () => {

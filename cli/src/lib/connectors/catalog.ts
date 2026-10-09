@@ -34,7 +34,10 @@ export function services(offered?: Record<string, GatewayRow>): Record<string, C
     const url = row.mcp_url ?? ''
     if (url && (auth === 'dcr' || !item.mcp_url)) item.mcp_url = url
     item.label = row.label || item.label || code
-    item.description = row.description || item.description || ''
+    // The bundled description wins: the gateway's has carried placeholder text ("Notion description
+    // abcd"), and a service's own words do not change between releases. A service Harness does not know
+    // yet has only the gateway's.
+    item.description = item.description || row.description || ''
     if (item.auth === 'dcr' && !item.mcp_url) continue
     items[code] = item
   }

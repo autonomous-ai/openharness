@@ -394,7 +394,7 @@ export const CATALOG_ITEMS: CatalogItem[] = [
   "code": "notion",
   "label": "Notion",
   "auth": "dcr",
-  "description": "Notion description abcd",
+  "description": "Pages and databases in your Notion workspace: search, read and write.",
   "mcp_url": "https://mcp.notion.com/mcp"
  },
  {

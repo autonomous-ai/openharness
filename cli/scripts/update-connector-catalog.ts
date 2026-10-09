@@ -51,7 +51,8 @@ for (const row of [...(Array.isArray(rows) ? rows : rows.connectors ?? [])].sort
   let auth = row.auth_type
   if (auth === 'app' && row.mcp_url && await selfRegisters(row.mcp_url)) auth = 'dcr'
   if (auth !== 'app' && auth !== 'dcr') continue
-  items.push({ code: row.code, label: row.label ?? row.code, auth, description: row.description || before[row.code]?.description || '', ...(row.mcp_url ? { mcp_url: row.mcp_url } : {}) })
+  // A description written here is kept: the gateway's has carried placeholder text. Review new ones.
+  items.push({ code: row.code, label: row.label ?? row.code, auth, description: before[row.code]?.description || row.description || '', ...(row.mcp_url ? { mcp_url: row.mcp_url } : {}) })
   await icon(row.code, (row as { image_url?: string }).image_url)
   console.log(`${auth} ${row.code}`)
 }
