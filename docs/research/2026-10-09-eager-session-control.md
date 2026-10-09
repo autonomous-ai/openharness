@@ -1,0 +1,9 @@
+# Eager session control follow-up
+
+The major daemon separation steps and pane-name collision fix have landed. The remaining audit follows the owner's stricter rule: binding, discovery, resume, launch, hook admission and turn closing must not depend on a worker or lazy module. The older other-engine extraction plan allowed lazy helpers in several of these paths; that is no longer the intended boundary. Optional interpretation remains separate.
+
+Before moving identity helpers, the identity and admission goldens were re-recorded from main `d4a0fdea4`. Existing outcomes are unchanged. Added cases cover Hermes history-versus-hook ID rules and an unreadable candidate SQLite store. Platform and environment are pinned, native homes are disposable, and hooks use a private credential on port zero.
+
+The new unreadable-store case exposed a pre-existing bug: `storeSessionSource` maps a failed SQLite read to an empty source, which the Hermes contract treats as interactive. Admission can therefore bind an unverified session and assign the unreadable home. Placing that store before a healthy profile also bypasses the healthy profile's delegated-session rejection. This needs an explicit behavior correction before the mechanical identity move. Its former behavior is recorded separately; the intended correction must retain the current binding and say why admission is pending.
+
+The planned identity move keeps filesystem and process mechanics eager and bounded, driven by the existing engine layouts. It removes lazy dependencies from the four transcript finders, Copilot's in-process resume lock, Muse repair, Agy lock lookup, Pi resume/close lookup and Hermes home discovery. Launch helpers, declared Stop rules and submission policies follow separately, each with former-code goldens and mutation checks. Line counts are reference only.

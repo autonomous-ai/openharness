@@ -123,6 +123,23 @@
    [
     "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check"
    ]
+  ],
+  [
+   "one whose candidate store cannot be read",
+   200,
+   {
+    "pending": true
+   },
+   [
+    {
+     "sessionId": "20261008_100010_aaaaaa",
+     "engine": "hermes",
+     "hermesHome": "<root>/home/.hermes/profiles/unreadable"
+    }
+   ],
+   [
+    "[hooks] 20261008 SessionStart · engine=hermes · isNew=true · after a source check · home=<root>/home/.hermes/profiles/unreadable"
+   ]
   ]
  ],
  "home probe": [

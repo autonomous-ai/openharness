@@ -59,6 +59,7 @@ type Modules = {
   bind: typeof import('../core/agents/bind.js')
   notify: typeof import('./kit/notifyHooks.js')
   home: typeof import('./cursor/home.js')
+  hermes: typeof import('./hermes/contract.js')
 }
 let m: Modules
 
@@ -88,6 +89,7 @@ beforeAll(async () => {
     bind: await import('../core/agents/bind.js'),
     notify: await import('./kit/notifyHooks.js'),
     home: await import('./cursor/home.js'),
+    hermes: await import('./hermes/contract.js'),
   }
   m.registry.registry.load()
   golden = RECORD ? {} : JSON.parse(readFileSync(GOLDEN, 'utf8')) as Record<string, unknown>
@@ -113,6 +115,13 @@ function register(engine: AgentEngine, input: { sessionId: string; cwd?: string;
 }
 
 describe('where the core finds the other engines\' conversations', () => {
+  it('distinguishes Hermes history ids from ids admitted by a terminal hook', () => {
+    const ids = ['20261008_110000_a1b2', '20261008_110000_ABCDEF', '20261008_110000_0123456789abcdef',
+      '20261008_110000_abc', '20261008_110000_0123456789abcdef0', '20261008_110000_ghijkl', UUID(1), UUID(1).toUpperCase(),
+      '', '../escape', '20261008_110000_a1b2.jsonl', ' 20261008_110000_a1b2', '20261008_110000_a1b2\n']
+    check('Hermes id rules', ids.map(id => [id, m.hermes.HERMES_HISTORY_ID_RE.test(id), m.hermes.HERMES_SOURCE.id.test(id)]))
+  })
+
   it('derives each layout\'s transcript for a hook that names none, and takes one it names only in its own folder', () => {
     const cwds = ['/work/My Project', '/work/camelCaseRepo', '/work/über-ünïcødé', '/', '/work/a/../b']
     const results: unknown[] = []
