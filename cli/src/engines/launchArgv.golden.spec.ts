@@ -502,7 +502,29 @@ describe('every launch hands tmux what it did before Claude Code and Codex decla
         expect({ ...mine, script: mine.script && actual.scripts[mine.script] }, `${platform} · ${name}`)
           .toEqual({ ...value, script: value.script && golden.scripts[value.script] })
       }
-      for (const [name, value] of Object.entries(want.overrides)) expect(got.overrides[name], `${platform} · ${name}`).toEqual(value)
+      for (const [name, value] of Object.entries(want.overrides)) {
+        // Launch preparation intentionally asks the Store before publishing grid files. Keep the
+        // former artifact intact and pin this one ordering change explicitly, including its old
+        // trace. Every result field, call argument and other case still compares byte-for-byte.
+        const changedOrder: Record<string, readonly [string, string]> = {
+          'opencode · harness on a grid, as git, as a named agent': [
+            'writeGridConfigDir agent-0001 opencode.json',
+            'dshLaunch acme/studio /work/studio opencode agent-0001',
+          ],
+          'pi · harness on a grid, as git, as a named agent': [
+            'writeGridConfigDir agent-0001 models.json,settings.json',
+            'dshLaunch acme/studio /work/studio pi agent-0001',
+          ],
+        }
+        const order = changedOrder[name]
+        let expected = value
+        if (order) {
+          const former = value as { calls: string[] }
+          expect(former.calls, `${platform} · ${name} · former order`).toEqual(order)
+          expected = { ...former, calls: [order[1], order[0]] }
+        }
+        expect(got.overrides[name], `${platform} · ${name}`).toEqual(expected)
+      }
       expect(Object.keys(got.overrides).sort(), platform).toEqual(Object.keys(want.overrides).sort())
       expect(got.adapters, platform).toEqual(want.adapters)
     }

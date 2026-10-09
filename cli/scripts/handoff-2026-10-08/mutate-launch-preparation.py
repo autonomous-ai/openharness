@@ -21,6 +21,12 @@ mutations = [
     ('compare projection to live row', 'src/core/agents/launch.ts', 'session = structuredClone(session)', "session = structuredClone(session)\n    if (session.engine === 'terminal') return { ok: false, error: 'AGENT_CHANGED', detail: 'wrong projection fence' }", restore),
     ('fail cancelled restore', 'src/core/agents/restoreLaunch.ts', "if (!built.ok && built.error === 'AGENT_CHANGED') return { cancelled: true }", '// cancellation incorrectly becomes a launch error', restore),
     ('reuse committed preparation', 'src/lib/launchOverrides.ts', 'if (committed) return', 'if (false) return', overrides),
+    ('restore old write order without duplicate writes', 'src/lib/launchOverrides.ts',
+     'const base = await prepareBaseLaunchOverrides({ ...deps, machine: () => machine }, engine, source, configKey)',
+     'const originalBase = await prepareBaseLaunchOverrides({ ...deps, machine: () => machine }, engine, source, configKey)\n'
+     '  const early = originalBase.ok ? await originalBase.commit() : originalBase\n'
+     '  const base = early.ok ? { ok: true as const, commit: async () => early } : early',
+     'src/engines/launchArgv.golden.spec.ts'),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 for key in ['TMUX', 'TMUX_PANE', 'RECORD_DSH_LAUNCH_SHAPES_GOLDEN']:
