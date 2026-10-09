@@ -84,6 +84,43 @@ describe('terminal control', () => {
     ])
   })
 
+  it.each([false, true])('discards an old pane after its binding changes while capture is pending (leased: %s)', async leased => {
+    for (const change of ['session', 'route', 'process', 'replacement', 'removed'] as const) {
+      const { terminals } = backend()
+      let current: RegisteredSession | undefined = { ...session, engine: 'codex', boundAt: 1,
+        tmuxPane: '%1', primaryRuntimeKey: 'tmux\u0000%1', runtimes: [{ backend: 'tmux', paneId: '%1' }],
+        processIdentity: { pid: 123, startMarker: 'before', executable: 'codex' } }
+      const control = createTerminalControl({ resolve: () => current, terminals })
+      if (leased) await control.submitTerminal(current.agentId, 'first')
+      let finish!: (result: { state: 'succeeded'; value: string }) => void
+      const pending = new Promise<{ state: 'succeeded'; value: string }>(resolve => { finish = resolve })
+      const capture = vi.mocked(leased ? terminals.captureLease : terminals.capture).mockReturnValueOnce(pending)
+      const reading = control.captureTerminal(current.agentId)
+      await vi.waitFor(() => expect(capture).toHaveBeenCalled())
+      if (change === 'session') { current.sessionId = 'session-2'; current.boundAt = 2 }
+      if (change === 'route') current.runtimes[0]!.paneId = '%2'
+      if (change === 'process') current.processIdentity!.startMarker = 'after'
+      if (change === 'replacement') current = { ...current, engine: 'claude' }
+      if (change === 'removed') current = undefined
+      finish({ state: 'succeeded', value: 'old pane' })
+      await expect(reading, change).resolves.toBeNull()
+    }
+  })
+
+  it('does not begin a capture after the binding changes during lease validation', async () => {
+    const { terminals } = backend()
+    const current = { ...session }
+    const control = createTerminalControl({ resolve: () => current, terminals })
+    await control.submitTerminal(current.agentId, 'first')
+    vi.mocked(terminals.validateLease).mockImplementationOnce(async () => {
+      current.sessionId = 'session-2'
+      return true
+    })
+    expect(await control.captureTerminal(current.agentId)).toBeNull()
+    expect(terminals.captureLease).not.toHaveBeenCalled()
+    expect(terminals.capture).not.toHaveBeenCalled()
+  })
+
   it('keeps a lease while it is used, and takes a new one once it lapses or stops validating', async () => {
     const { fake, terminals } = backend()
     const control = createTerminalControl({ resolve, terminals })
