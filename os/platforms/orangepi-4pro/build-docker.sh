@@ -48,7 +48,7 @@ ENV DEBIAN_FRONTEND=noninteractive LC_ALL=C.UTF-8 \
     RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git jq xz-utils python3 python3-venv build-essential musl-tools \
-      cmake ninja-build pkg-config parted e2fsprogs fdisk udev \
+      cmake ninja-build pkg-config bison parted e2fsprogs fdisk udev \
       libffi-dev libexpat1-dev libxml2-dev libudev-dev libmtdev-dev libevdev-dev libseat-dev \
       libegl-dev libgles-dev libgbm-dev hwdata libglib2.0-dev libcairo2-dev libpango1.0-dev \
       libpng-dev librsvg2-dev libpciaccess-dev \

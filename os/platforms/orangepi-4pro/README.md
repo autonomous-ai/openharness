@@ -51,7 +51,7 @@ builds natively.
 Or natively on the board, running Orange Pi's Debian 12 server image, with a clean checkout:
 
 ```sh
-sudo apt install build-essential musl-tools cmake ninja-build pkg-config python3-venv parted \
+sudo apt install build-essential musl-tools cmake ninja-build pkg-config bison python3-venv parted \
   libffi-dev libexpat1-dev libxml2-dev libudev-dev libmtdev-dev libevdev-dev libseat-dev \
   libegl-dev libgles-dev libgbm-dev hwdata libglib2.0-dev libcairo2-dev libpango1.0-dev \
   libpng-dev librsvg2-dev libpciaccess-dev
