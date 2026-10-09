@@ -100,7 +100,7 @@ cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bou
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${PET_SANITIZERS:-address,undefined}" \
    -I "$here/../main" -o "$out/test_pet_store" "$here/test_pet_store.c" \
    "$here/../main/ui/habitat/terminal.c" "$here/../main/ui/habitat/fonts.c" -lm
-"$out/test_pet_store" "$here/vectors/pet_min.hpet"
+"$out/test_pet_store" "$here/vectors/pet_min.hpet" "$here/vectors/pet_min_v2.hpet"
 
 cc -std=c11 -Wall -Wextra -Werror -O1 -g -fsanitize="${SANITIZERS:-undefined,bounds}" \
    -o "$out/test_voice_buffer" "$here/test_voice_buffer.c" "$here/../main/voice_buffer.c"

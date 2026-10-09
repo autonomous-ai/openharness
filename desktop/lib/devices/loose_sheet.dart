@@ -24,7 +24,14 @@ const petRows = [
 
 /// The dial states a sheet row can be chosen for, in the order the app lists
 /// them.
-const petStates = ['rest', 'working', 'listening', 'sending', 'asking'];
+const petStates = [
+  'rest',
+  'working',
+  'listening',
+  'sending',
+  'asking',
+  'relaxing',
+];
 
 const cellWidth = 192, cellHeight = 208, sheetCols = 8, sheetRows = 9;
 const sheetWidth = cellWidth * sheetCols, sheetHeight = cellHeight * sheetRows;
@@ -357,8 +364,8 @@ double motionScore(Uint8List rgba, int width, List<LooseFrame> row) {
   return diff / (grids.length - 1);
 }
 
-/// A first guess at which row plays which state: the first row rests, listens
-/// and sends, the last asks, and working is the row that moves the most
+/// A first guess at which row plays which state: the first row rests, listens,
+/// sends and relaxes, the last asks, and working is the row that moves the most
 /// (other than the first when there are two rows or more, and the last when
 /// there are three or more).
 Map<String, String> guessRows(
@@ -385,6 +392,7 @@ Map<String, String> guessRows(
     'listening': petRows[0],
     'sending': petRows[0],
     'asking': petRows[n - 1],
+    'relaxing': petRows[0],
   };
 }
 

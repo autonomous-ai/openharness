@@ -10,8 +10,8 @@ typedef struct { uint8_t frame; int8_t dy; } ht_pet_step_t;
 enum { HT_PET_STEPS = 24 };   // the loops' room; a pet's own length is ht_pet_steps()
 
 /*
- * A large scene a pet can play in place of its small self (Claude, Codex): `loop` indexes `frames` (cell
- * sprites, w x h px), one step per step_ms. The working and sending scenes' loop is [step]; the listening
+ * A large scene a pet can play in place of its small self (Claude, Codex, Muse): `loop` indexes `frames` (cell
+ * sprites, w x h px), one step per step_ms. The working, sending and relaxing scenes' loop is [step]; the listening
  * scene's is [level 0..HT_PET_SCENE_LEVELS - 1][step].
  *
  * A scene may carry an OVERLAY (Codex: the sandbox bubble, the equalizer bubble, the paper plane): a second,
@@ -55,6 +55,25 @@ typedef struct {
     uint16_t period_ms;
     int16_t gap16;   // each side's arcs centred this far out from the centre (Claude's cups); 0 = one centre (Muse)
 } ht_pet_waves_t;
+/*
+ * Shapes drawn in code over a scene, a few per step, instead of stored props (the relaxing scenes: Claude's three
+ * juggling balls, Muse's beach ball; mockup/relaxing.html "For the firmware", mockup/muse-play.html D). Step s draws `count` ring arcs
+ * (ht_ring_arc), shape k at at[s * count + k]: its centre in sixteenths of a px from the scene's top-left (like the
+ * waves'), the band `w16` wide around radius `r16`, over mid_deg +- half_deg (anticlockwise from 3 o'clock; a disc is
+ * half_deg 180 with the band reaching the centre), in `rgb` (native RGB565, as ht_rgb() returns). w16 0 is an empty
+ * slot at that centre, so every step emits the same `count` runs (focus.c).
+ */
+typedef struct {
+    int16_t cx16, cy16;
+    uint16_t r16, w16;
+    int16_t mid_deg;
+    uint8_t half_deg;
+    uint16_t rgb;
+} ht_pet_shape_t;
+typedef struct {
+    uint8_t count;
+    const ht_pet_shape_t *at;                    // [steps][count]
+} ht_pet_shapes_t;
 typedef struct {
     uint16_t w, h;
     const ht_cell_frame_t *frames;
@@ -69,6 +88,7 @@ typedef struct {
                                                  // (Claude: a hop or a nod moves one stored pose instead of storing more)
     const int16_t (*count_at)[2];                // an alert's: per step, the centre of the bubble's count slot from the
                                                  // working scene's origin, {0,0} = no count yet; NULL for other scenes
+    const ht_pet_shapes_t *shapes;               // NULL: none (the relaxing scenes of Claude and Muse)
 } ht_pet_scene_t;
 
 typedef struct {
@@ -86,6 +106,9 @@ typedef struct {
                                                  // works, its last step held until read (gen_pets.py THE ALERT); its
                                                  // overlay is the bubble
     uint8_t steps;                               // the loops' length, <= HT_PET_STEPS; 0 = HT_PET_STEPS (Muse's is 18)
+    const ht_pet_scene_t *relaxing_scene;        // NULL: today's resting face (the small pet and the resting line); else
+                                                 // the resting face is laid out like the working one, this scene in the
+                                                 // middle and a quiet line on the lower arc (focus.c THE RELAXING FACE)
 } ht_pet_t;
 // A pet's loop length.
 static inline unsigned ht_pet_steps(const ht_pet_t *pet) { return pet->steps ? pet->steps : HT_PET_STEPS; }

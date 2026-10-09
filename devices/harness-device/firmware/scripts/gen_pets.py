@@ -42,7 +42,7 @@ import re
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageColor, ImageDraw
+from PIL import Image, ImageChops, ImageColor, ImageDraw
 
 root = Path(__file__).resolve().parents[1]
 STEPS = 24
@@ -287,7 +287,7 @@ def generate_pack_scene(prefix, kind):
     x0, y0 = (466 - CW) // 2 + RX + box[0], (466 - CH) // 2 + RY + box[1]
     if kind == 'work':
         dx, dy = mascot_centred(w, h, bias)
-        out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},NULL,{dx},{dy},NULL,NULL,NULL,NULL}};\n')
+        out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},NULL,{dx},{dy},NULL,NULL,NULL,NULL,NULL}};\n')
         return out, n, nbytes + len(palette) * 2
     if kind == 'listen':
         images = [listen_bubble()]               # one frame: the bars are drawn in code, the loop is all zeros
@@ -315,7 +315,7 @@ def generate_pack_scene(prefix, kind):
         out.append(f'static const ht_pet_bars_t {prefix}_bars = {{{{{",".join(str(x - box[0]) for x in BAR_X)}}},{BAR_CY - box[1]},'
                    f'{BAR_W + 1},{BAR_RADIUS},{BAR_MIN},{BAR_SWING},{{{fills}}},{BAR_PERIOD_MS},{BAR_PHASE}f}};\n')
         bars = f',&{prefix}_bars'
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL,NULL,NULL}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{step_ms},&{ov},{dx},{dy}{bars},NULL,NULL,NULL,NULL}};\n')
     return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
 
 
@@ -490,7 +490,7 @@ def generate_muse_scene(prefix, kind):
                    f'{round(wv["width"] * 16)},{wv["half_angle_deg"]},{wv["count"]},{{{",".join(map(str, wv["colour"]))}}},'
                    f'{wv["period_ms"]},0}};\n')
         waves = f'&{prefix}_waves'
-    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},NULL,NULL}};\n')
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{steps},{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},NULL,NULL,NULL}};\n')
     return out, n + extra, nbytes + obytes + len(palette) * 2
 
 
@@ -567,7 +567,7 @@ def generate_claude_scene(prefix, name, levels, bias):
                    f'{wv["period_ms"]},{round(wv["gap"] * 16)}}};\n')
         waves = f'&{prefix}_waves'
     out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{len(steps)},'
-               f'{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},{prefix}_dy,NULL}};\n')
+               f'{meta["step_ms"]},{ov_ref},{dx},{dy},NULL,{waves},{prefix}_dy,NULL,NULL}};\n')
     return out, n + on, nbytes + obytes + len(palette) * 2 + len(dys)
 
 
@@ -747,8 +747,175 @@ def generate_alert(prefix, engine, work_code, work_prefix):
     assert all(c != (0, 0) for c, sl in zip(cat, slots) if sl)
     out.append(f'static const int16_t {prefix}_count_at[{len(cat)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in cat) + '};\n')
     out.append(f'static const ht_pet_scene_t {prefix} = {{0,0,NULL,NULL,{ALERT_STEPS},{ALERT_MS},&{ov},0,0,NULL,NULL,NULL,'
-               f'{prefix}_count_at}};\n')
+               f'{prefix}_count_at,NULL}};\n')
     return out, n, nbytes + len(opal) * 2 + len(cat) * 4
+
+
+# ---- THE RELAXING SCENES: the resting face laid out like the working one (owner, 2026-10-09, mockup/relaxing.html) ----
+# Claude juggles three balls, Codex throws and catches its paper plane, Muse keeps a beach ball up off its head
+# (mockup/muse-play.html D, owner 2026-10-09: it moves as a whole, never bending a joint); 24 steps each. The
+# bodies are stored like the other scenes (palette cells, cell 1) and placed where the mockup's glass has them (bias 4,
+# as the working scene); the balls are NOT stored: per step a few shapes (ht_pet_shapes_t) that focus.c
+# draws as ring arcs. Claude's and Muse's come from assets/pets/<engine>/relax{/,.json} (exported by
+# mockup/relax_export.py from clawd_juggle.py B and muse_play.py D); Codex's from its pack, drawn here (relaxing.py).
+RELAX_N = 24
+RELAX_BIAS = 4
+
+
+def relax_shapes(prefix, shapes, x0, y0):
+    """The JSON shapes (glass px) as ht_pet_shape_t from the scene's origin (x0, y0), in sixteenths of a px."""
+    count = len(shapes[0])
+    assert all(len(st) == count for st in shapes) and 0 < count <= 28    # focus.c: 11 runs + these <= HT_RUNS (40)
+    rows = []
+    for st in shapes:
+        for sh in st:
+            kind, cx, cy = sh[0], round((sh[1] - x0) * 16), round((sh[2] - y0) * 16)
+            if kind == 'none':
+                rows.append((cx, cy, 0, 0, 0, 0, 0))
+            elif kind == 'disc':          # the band from the centre (a 1/2 px inside it) out to r: fully covered at the centre
+                R = round(sh[3] * 16)
+                rows.append((cx, cy, max(0, (R - 8) // 2), R + 8, 0, 180, rgb565(sh[4])))
+            else:
+                r, w, mid, half, col = sh[3:8]
+                rows.append((cx, cy, round(r * 16), max(1, round(w * 16)), int(mid), int(half), rgb565(col)))
+    out = [f'static const ht_pet_shape_t {prefix}_shape_at[{len(rows)}] = {{' +
+           ','.join('{' + ','.join(map(str, r)) + '}' for r in rows) + '};\n',
+           f'static const ht_pet_shapes_t {prefix}_shapes = {{{count},{prefix}_shape_at}};\n']
+    return out, len(rows) * 14
+
+
+def generate_json_relax(prefix, folder):
+    """Claude's or Muse's relaxing scene from assets/pets/<engine>/relax (poses) and relax.json (steps, shapes)."""
+    meta = json.loads((folder.parent / 'relax.json').read_text())
+    bodies = [Image.open(p).convert('RGBA') for p in sorted(folder.glob('*.png'))]
+    bodies = [im.copy() for im in bodies]
+    for im in bodies:
+        im.putalpha(im.getchannel('A').point(lambda a: 255 if a >= 128 else 0))
+    w, h = bodies[0].size
+    assert w < 256 and h < 256 and len(meta['steps']) == RELAX_N
+    grids, palette = quantise_pieces(bodies)
+    out = [f'static const uint16_t {prefix}_pal[{len(palette)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(palette)) + '};\n']
+    code, order, n, nbytes = cell_frames(prefix, [(w, h, g) for g in grids], f'{prefix}_pal')
+    out += code
+    loop = [order[st[0]] for st in meta['steps']]
+    dys = [st[1] for st in meta['steps']]
+    out.append(f'static const uint8_t {prefix}_loop[{len(loop)}] = {{' + ','.join(map(str, loop)) + '};\n')
+    out.append(f'_Static_assert(sizeof {prefix}_loop == {RELAX_N}, "{prefix}: steps");\n')
+    dy_ref = 'NULL'
+    if any(dys):
+        out.append(f'static const int8_t {prefix}_dy[{len(dys)}] = {{' + ','.join(map(str, dys)) + '};\n')
+        dy_ref = f'{prefix}_dy'
+        nbytes += len(dys)
+    x0, y0 = meta['body_at']
+    scode, sbytes = relax_shapes(prefix, meta['shapes'], x0, y0)
+    out += scode
+    dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + RELAX_BIAS)
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{RELAX_N},{meta["step_ms"]},'
+               f'NULL,{dx},{dy},NULL,NULL,{dy_ref},NULL,&{prefix}_shapes}};\n')
+    return out, n, nbytes + sbytes + len(palette) * 2
+
+
+# Codex plays with its paper plane (relaxing.py, from clawd-on-desk's cloudling-juggling.gif): holds it up, throws it,
+# the plane laps round it (behind its head, then in front) and comes back to be caught. The robot is the pack's waving
+# 1-2 (hand up, the throw, the catch) and idle 0-1 (watching; a happy squint while the plane is behind it); the plane
+# and its dotted trail are the overlay, one sprite per step, the part behind the robot cut out of it.
+XRELAX_MS = 120
+XROBOT_AT = (233 - 96, 234 - 104)                      # the 192 x 208 frame's top-left on the glass
+XHAND = (XROBOT_AT[0] + 34, XROBOT_AT[1] + 120)        # the raised hand in waving frames 1-2
+XLOOP = dict(cx=240, cy=214, rx=124, ry=44)
+XTHROW, XCATCH = 3, 19                                 # the step it lets go, the step it has it back
+
+
+def relax_plane(d, x, y, ang, s):
+    """send_overlay's plane (nose at +x), turned to `ang` about its centre and scaled by `s`."""
+    c, sn = math.cos(ang), math.sin(ang)
+
+    def T(pts):
+        return [(x + ((px - 15) * c - (py - 9) * sn) * s, y + ((px - 15) * sn + (py - 9) * c) * s) for px, py in pts]
+    d.polygon(T([(0, 10), (30, 0), (12, 18)]), fill=CX_BAR_HI, outline=CX_LINE)
+    d.polygon(T([(12, 18), (30, 0), (15, 11)]), fill=CX_BAR)
+
+
+def relax_loop_at(k):
+    """The plane at k (0 at the hand .. 1 back at it): one lap of an ellipse round the robot; depth < 0 behind it."""
+    a = math.pi + 2 * math.pi * k
+    ex, ey = XLOOP['cx'] + XLOOP['rx'] * math.cos(a), XLOOP['cy'] + XLOOP['ry'] * math.sin(a)
+    w = math.sin(math.pi * k) ** 0.5
+    return XHAND[0] + (ex - XHAND[0]) * w, XHAND[1] + (ey - XHAND[1]) * w, math.sin(a)
+
+
+def codex_relax_step(n, wave, idle):
+    """The robot frame and the plane's overlay image (both glass-sized) at step n."""
+    if n < XTHROW:
+        robot = wave[1]
+    elif n == XTHROW:
+        robot = wave[2]
+    elif n < XCATCH - 1:
+        robot = idle[1 if 8 <= n <= 12 else 0]
+    elif n == XCATCH - 1:
+        robot = wave[2]
+    else:
+        robot = wave[1]
+    body = Image.new('RGBA', (466, 466), (0, 0, 0, 0))
+    body.alpha_composite(robot, XROBOT_AT)
+    props = Image.new('RGBA', (466, 466), (0, 0, 0, 0))
+    d = ImageDraw.Draw(props)
+    if XTHROW < n < XCATCH:
+        k = (n - XTHROW) / (XCATCH - XTHROW)
+        x, y, depth = relax_loop_at(k)
+        (bx, by, _), (fx, fy, _) = relax_loop_at(max(0, k - 0.01)), relax_loop_at(min(1, k + 0.01))
+        for j in range(2, 9):                          # the dotted trail, thinning out
+            kk = k - j * 0.02
+            if kk <= 0:
+                break
+            tx, ty, td = relax_loop_at(kk)
+            r = (2.6 if td > 0 else 2.0) * (1 - j / 11)
+            d.ellipse((tx - r, ty - r, tx + r, ty + r), fill=CX_BAR)
+        relax_plane(d, x, y, math.atan2(fy - by, fx - bx), 1.35 + 0.3 * depth)
+        if depth < 0:                                  # behind the robot: hidden where it is
+            behind = body.getchannel('A').point(lambda v: 255 if v >= 128 else 0)
+            props.putalpha(ImageChops.subtract(props.getchannel('A'), behind))
+    else:                                              # in the hand, nose up and out
+        relax_plane(d, XHAND[0] - 2, XHAND[1] - 14, -1.1, 1.25)
+    props.putalpha(props.getchannel('A').point(lambda v: 255 if v >= 128 else 0))
+    return robot, props
+
+
+def generate_codex_relax(prefix):
+    wave, idle = pack_frames('waving', 4), pack_frames('idle', 6)
+    steps = [codex_relax_step(n, wave, idle) for n in range(RELAX_N)]
+    robots = [wave[1], wave[2], idle[0], idle[1]]
+    ink = [f.getchannel('A').getbbox() for f in robots]
+    box = (min(b[0] for b in ink), min(b[1] for b in ink), max(b[2] for b in ink), max(b[3] for b in ink))
+    w, h = box[2] - box[0], box[3] - box[1]
+    assert w < 256 and h < 256
+    grids, palette = quantise_robot(robots, box)
+    out = [f'static const uint16_t {prefix}_pal[{len(palette)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(palette)) + '};\n']
+    code, order, n, nbytes = cell_frames(prefix, [(w, h, g) for g in grids], f'{prefix}_pal')
+    out += code
+    which = [next(i for i, r in enumerate(robots) if r is robot) for robot, _ in steps]
+    loop = [order[i] for i in which]
+    out.append(f'static const uint8_t {prefix}_loop[{len(loop)}] = {{' + ','.join(map(str, loop)) + '};\n')
+    out.append(f'_Static_assert(sizeof {prefix}_loop == {RELAX_N}, "{prefix}: steps");\n')
+    x0, y0 = XROBOT_AT[0] + box[0], XROBOT_AT[1] + box[1]       # the scene's origin on the glass
+    shapes, opal = exact_overlay([p for _, p in steps])
+    ov = prefix + '_ov'
+    out.append(f'static const uint16_t {ov}_pal[{len(opal)}] = {{' + ','.join(str(0 if k == 0 else rgb565_panel(c)) for k, c in enumerate(opal)) + '};\n')
+    ocode, oorder, on, obytes = cell_frames(ov, [(c, r, g) for c, r, g, _ in shapes], f'{ov}_pal')
+    out += ocode
+    out.append(f'static const uint8_t {ov}_loop[{len(oorder)}] = {{' + ','.join(map(str, oorder)) + '};\n')
+    at = [(x - x0, y - y0) if (x or y) else (0, 0) for *_, (x, y) in shapes]
+    out.append(f'static const int16_t {ov}_at[{len(at)}][2] = {{' + ','.join(f'{{{x},{y}}}' for x, y in at) + '};\n')
+    out.append(f'static const ht_pet_overlay_t {ov} = {{{ov}_frames,{ov}_loop,{ov}_at}};\n')
+    dx, dy = x0 - (466 - w) // 2, y0 - (233 - h // 2 + RELAX_BIAS)
+    out.append(f'static const ht_pet_scene_t {prefix} = {{{w},{h},{prefix}_frames,{prefix}_loop,{RELAX_N},{XRELAX_MS},'
+               f'&{ov},{dx},{dy},NULL,NULL,NULL,NULL,NULL}};\n')
+    return out, n + on, nbytes + obytes + (len(palette) + len(opal)) * 2
+
+
+RELAX = {'claude': ('claude_relax', lambda p: generate_json_relax(p, CLAUDE / 'relax')),
+         'codex': ('codex_relax', generate_codex_relax),
+         'muse': ('muse_relax', lambda p: generate_json_relax(p, MUSE / 'relax'))}
 
 
 # engine -> (working scene, listening scene, sending scene): prefix, loop, size in cells, step_ms, steps; levels
@@ -798,7 +965,14 @@ def generate():
         code, n, nbytes = generate_alert(f'{engine}_alert', engine, ''.join(out), SCENES[engine][0][0])
         out += code
         scene_stats.append((f'{engine}_alert', n, nbytes))
-        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert,{0 if n_steps == STEPS else n_steps}}}')
+        relax = 'NULL'
+        if engine in RELAX:
+            rprefix, gen = RELAX[engine]
+            code, n, nbytes = gen(rprefix)
+            out += code
+            scene_stats.append((rprefix, n, nbytes))
+            relax = '&' + rprefix
+        table.append(f'{{"{engine}",{w},{h},{"NULL" if cells_out else prefix + "_frames"},{prefix}_loops,{prefix}_step_ms,{",".join(refs_to)},{prefix + "_frames" if cells_out else "NULL"},&{engine}_alert,{0 if n_steps == STEPS else n_steps},{relax}}}')
     out.append('const ht_pet_t ht_pets[] = {' + ','.join(table) + '};\n')
     out.append(f'const unsigned ht_pet_count = {len(PETS)};\n')
     return ''.join(out), counts, scene_stats

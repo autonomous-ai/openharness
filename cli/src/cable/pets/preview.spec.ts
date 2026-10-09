@@ -46,23 +46,41 @@ describe('sheetStrips', () => {
 // pet_preview's reply goes from the devices process to the core and on to the app over the local socket, whose
 // messages are capped at 6 MiB + 4 KiB (localWsServer.ts MAX_WS_MESSAGE_BYTES). Its pictures are bounded by a sheet
 // of full-size cells drawn edge to edge in noise, every row full: more than any sheet that converts (a pack over 1 MB
-// is refused) and than any file under 8 MB holds. The scenes' and the small pet's frames are as many as they can be
-// with the default rows (three scenes of 8, the small pet's 8 idle and 8 waving, 8 asking).
+// is refused) and than any file under 8 MB holds. Relaxing frames are not in the reply (the app shows no such scene).
+const WS_CAP = 6 * 1024 * 1024 + 4096
+
+function noiseSheet() {
+  const png = new PNG({ width: 1536, height: 1872 })
+  let seed = 1
+  for (let i = 0; i < png.data.length; i += 4) {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
+    png.data.set([seed & 0xff, (seed >> 8) & 0xff, (seed >> 16) & 0xff, 255], i)
+  }
+  const sheet = parsePetSheet(PNG.sync.write(png))
+  expect(PET_ROWS.every((row) => sheet.rows[row].length === 8)).toBe(true)
+  return sheet
+}
+
 describe('pet_preview size', () => {
   it('a full 9 x 8 sheet of noise fits the local socket limit', () => {
-    const png = new PNG({ width: 1536, height: 1872 })
-    let seed = 1
-    for (let i = 0; i < png.data.length; i += 4) {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff
-      png.data.set([seed & 0xff, (seed >> 8) & 0xff, (seed >> 16) & 0xff, 255], i)
-    }
-    const sheet = parsePetSheet(PNG.sync.write(png))
-    expect(PET_ROWS.every((row) => sheet.rows[row].length === 8)).toBe(true)
+    const sheet = noiseSheet()
     const strips = JSON.stringify(sheetStrips(sheet)).length
     const frames = JSON.stringify(previewFrames(convertPet(sheet))).length
     process.stderr.write(`pet_preview worst case: sheetRows ${strips} B, frames ${frames} B\n`)
     expect(strips).toBeLessThan(1.25 * 1024 * 1024)
     // The rest of the reply (id, name, rows, warnings, …) is a few hundred bytes.
     expect(strips + frames).toBeLessThan(6 * 1024 * 1024)
+  }, 60_000)
+
+  it.each(['idle', 'running'] as const)('every state on the %s row of the noise sheet fits the cap', (row) => {
+    const sheet = noiseSheet()
+    const all = { rest: row, working: row, listening: row, sending: row, asking: row, relaxing: row }
+    const strips = JSON.stringify(sheetStrips(sheet)).length
+    const preview = previewFrames(convertPet(sheet, all))
+    const frames = JSON.stringify(preview).length
+    process.stderr.write(`pet_preview all=${row}: sheetRows ${strips} B, frames ${frames} B, total ${strips + frames} B (cap ${WS_CAP})\n`)
+    expect(preview.frames).not.toHaveProperty('relaxing')
+    expect(preview.stepMs).not.toHaveProperty('relaxing')
+    expect(strips + frames + 4096).toBeLessThan(WS_CAP)
   }, 60_000)
 })

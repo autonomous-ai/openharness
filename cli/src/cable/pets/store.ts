@@ -70,7 +70,9 @@ export class PetStore {
     return [...new Set([this.map.all, ...Object.values(this.map.engines)].filter((v): v is string => !!v))]
   }
 
-  async pack(id: string): Promise<Buffer> {
+  // `version` is the newest pack version the dial reads: the file on disk is the newest we write, and an older one is
+  // made from the kept source on the way out (same id, other bytes), never stored beside it.
+  async pack(id: string, version: number = PACK_VERSION): Promise<Buffer> {
     if (!ID_RE.test(id)) throw new PetStoreError('UNKNOWN_PET', 'That pet is not on this computer any more')
     let pack: Buffer
     try {
@@ -78,16 +80,25 @@ export class PetStore {
     } catch {
       throw new PetStoreError('UNKNOWN_PET', 'That pet is not on this computer any more')
     }
-    // A pack written by an older format is made again from its kept source, never handed to a dial as it is.
-    if (pack.length > 4 && pack[4] !== PACK_VERSION) {
+    // A pack of another version than asked for is made again from its kept source, never handed to a dial as it is.
+    if (pack.length > 4 && pack[4] !== version) {
       let source: Buffer | null = null
       try {
         source = await readFile(join(this.dir, `${id}.png`))
       } catch { /* no source kept: the pack is all there is */ }
       if (source) {
-        const { pack: fresh } = buildPack(source, (await this.rows(id)) ?? undefined)
-        await writeAtomic(join(this.dir, `${id}.hpet`), fresh)
-        return fresh
+        try {
+          const { pack: fresh } = buildPack(source, (await this.rows(id)) ?? undefined, version)
+          // The kept source must make the pack it is named for: never overwrite or hand out another pet's bytes.
+          if (fresh.subarray(6, 14).toString('hex') !== id) throw new Error(`rebuilt pack is ${fresh.subarray(6, 14).toString('hex')}, not ${id}`)
+          if (version === PACK_VERSION) await writeAtomic(join(this.dir, `${id}.hpet`), fresh)
+          return fresh
+        } catch (err) {
+          // The pack on disk still serves a dial that reads its version or newer; only an older dial than the file
+          // has nothing to be given.
+          if (pack[4] > version) throw err
+          console.error(`[pets] could not rebuild ${id} as version ${version}, using the stored version ${pack[4]}: ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
     }
     return pack
@@ -111,7 +122,8 @@ export class PetStore {
       const raw = JSON.parse(await readFile(join(this.dir, `${id}.json`), 'utf8')) as { rows?: Record<string, unknown> }
       const rows = {} as PetRows
       for (const state of PET_STATES) {
-        const row = raw.rows?.[state]
+        // A sidecar from before relaxing existed has none: it follows the rest row, as it was built.
+        const row = state === 'relaxing' && raw.rows?.relaxing === undefined ? rows.rest : raw.rows?.[state]
         if (!PET_ROWS.includes(row as PetRows[typeof state])) return null
         rows[state] = row as PetRows[typeof state]
       }
@@ -201,19 +213,23 @@ export class PetStore {
   }
 }
 
-function buildPack(source: Buffer, choice?: Partial<PetRows>): { id: string; pet: ConvertedPet; pack: Buffer; rows: PetRows; sheet: PetSheet } {
+function buildPack(source: Buffer, choice?: Partial<PetRows>, version: number = PACK_VERSION): { id: string; pet: ConvertedPet; pack: Buffer; rows: PetRows; sheet: PetSheet } {
   const sheet = parsePetSheet(source)
   const rows = resolvePetRows(sheet, choice)
   // The default rows hash the source alone, so a pet made before rows could be chosen keeps its id. Compared after
   // the fallbacks, so naming a row the defaults fall back to is no choice either: the pack is the same.
   const defaults = pickPetRows(sheet)
   const hash = createHash('sha256').update(source)
-  if (PET_STATES.some((state) => rows[state] !== defaults[state])) {
-    hash.update(`\0rows:${PET_STATES.map((state) => rows[state]).join(',')}`)
+  const base = PET_STATES.filter((state) => state !== 'relaxing')
+  if (base.some((state) => rows[state] !== defaults[state])) {
+    hash.update(`\0rows:${base.map((state) => rows[state]).join(',')}`)
   }
+  // Relaxing joins the id only when it is not the rest row it follows by default, so every pack made before it
+  // existed (and every default mapping) keeps its id.
+  if (rows.relaxing !== rows.rest) hash.update(`\0relaxing:${rows.relaxing}`)
   const digest = hash.digest()
   const pet = convertPet(sheet, rows)
-  return { id: digest.subarray(0, 8).toString('hex'), pet, pack: encodePack(pet, digest.subarray(0, 8)), rows, sheet }
+  return { id: digest.subarray(0, 8).toString('hex'), pet, pack: encodePack(pet, digest.subarray(0, 8), version), rows, sheet }
 }
 
 function stampOf(file: string): string {

@@ -79,10 +79,10 @@ Errors are returned to the app with a message it shows as is, e.g. "The sheet mu
 ## The pet pack (little-endian)
 
 ```
-header  "HPET" · version u8 (1) · flags u8 · id u8[8] (first 8 bytes of sha256 of the source PNG) · length u32 · crc32 u32
+header  "HPET" · version u8 (1 or 2) · flags u8 · id u8[8] (first 8 bytes of sha256 of the source PNG) · length u32 · crc32 u32
 palette count u8 (entries incl. index 0) · count x u16 RGB565 panel order
 small   w u16 · h u16 · loops idle/done/asking: each n u8 · n x u16 frame index
-scenes  working, listening, sending, failed: each n u8 · step_ms u16 · dx i16 · dy i16 · n x u16 frame index
+scenes  working, listening, sending, failed (, relaxing in version 2): each n u8 · step_ms u16 · dx i16 · dy i16 · n x u16 frame index
 frames  count u16 · per frame: cols u8 · rows u8 · cell u8 · row_at u16[rows] · packed rows
 ```
 
@@ -91,6 +91,16 @@ and `loops` already are; it replaces separate rest and rest_small scenes. Frames
 scene points at idle's frames. `step_ms` defaults to 120. `dx`, `dy` place the scene from Focus's home position
 (0, 0 = centred as the built-in pets are). `failed` is packed but not drawn in version 1: the dial has no failed
 state yet.
+
+Version 2 (2026-10-09, the relaxing face: `mockup/relaxing.html`) appends one scene, `relaxing`, after `failed`, same
+encoding, built at full size like `working` from the row the person picks for Relaxing (default: the Rest row). A pack
+whose relaxing frames would push it over 1 MB is sent with an empty relaxing scene (n = 0), which the dial treats as
+none. A dial says which versions it reads in `hello` (`pets: 1` or `pets: 2`); the daemon sends min(dial, 2) and
+rebuilds a version-1 pack for an older dial from the kept PNG. The pack id is the same for both versions: it names the
+pet and its mapping, and `relaxing` joins the id's hash only when it is not the Rest row, so every older pack keeps its
+id. On the dial, a pet with a relaxing scene shows the relaxing resting face (name on the upper arc, the scene in the
+middle, one short grey line on the lower arc) when idle or done with no recap; a version-1 pack keeps the old resting
+face.
 
 The app hands the daemon the PNG's local path, not its bytes: pet requests are local-only, and the 8 MB source would
 not fit the local socket's message limit.
@@ -105,7 +115,7 @@ not fit the local socket's message limit.
 
 ## Protocol (cable)
 
-- `hello` from a supporting dial carries `pets: 1` and `petIds: [...]`, the packs it holds (empty after a reboot).
+- `hello` from a supporting dial carries `pets: 1` (or `pets: 2`, see version 2 above) and `petIds: [...]`, the packs it holds (empty after a reboot).
 - `pet.map {all, engines}`: which pack stands for what. Sent after attach and on every change.
 - `pet.begin {id, length, crc}` → dial allocates in PSRAM or answers `pet.error {id, reason: "memory"}`.
 - `pet.chunk {id, offset, data}` → ack per chunk. Reuse fwPush's chunking if it fits; otherwise ~4 KB chunks.
@@ -128,7 +138,7 @@ not fit the local socket's message limit.
   `ht_lv_inter_med_26`) is drawn in code at the pet's top-right.
 - Swapping a pet: the new one takes effect on the next frame from step 0; the old pack is freed only once no frame
   references it.
-- Capability `pets: 1` in `hello`.
+- Capability `pets: 2` in `hello` (relaxing scene; `pets: 1` before 2026-10-09).
 
 ## Desktop app
 

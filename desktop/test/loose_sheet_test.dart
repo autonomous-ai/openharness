@@ -270,6 +270,7 @@ void main() {
       'listening': 'idle',
       'sending': 'idle',
       'asking': 'waving',
+      'relaxing': 'idle',
     });
   });
 
@@ -410,6 +411,7 @@ void main() {
       'listening': 'idle',
       'sending': 'idle',
       'asking': 'waving',
+      'relaxing': 'idle',
     });
     // The prototype's row bands.
     expect(

@@ -1,7 +1,8 @@
-// The firmware pet store on a laptop: the 241-byte vector from the daemon's pack encoder, then packs broken
-// in every way a cable or a hostile daemon could break them. Run under the sanitizers by test/run.sh.
+// The firmware pet store on a laptop: the 241-byte vector from the daemon's pack encoder and its version 2 (the
+// relaxing scene), then packs broken in every way a cable or a hostile daemon could break them. Run under the
+// sanitizers by test/run.sh.
 //
-//   test_pet_store <path to test/vectors/pet_min.hpet>
+//   test_pet_store <path to test/vectors/pet_min.hpet> <path to test/vectors/pet_min_v2.hpet>
 //
 // pet_store.c is included, not linked, so the allocations can be counted: "freed after the frame" is an
 // assertion here, not a hope that a leak checker is available on this host.
@@ -54,7 +55,7 @@ static int send_pack(const char *id, const uint8_t *b, size_t n, bool *offered)
 }
 
 // Offsets inside the vector, found by walking its layout.
-static size_t working_idx0, frame0_row_at;
+static size_t working_idx0, frame0_row_at, scenes_end;
 static void locate(void)
 {
     size_t pos = HEADER;
@@ -63,7 +64,27 @@ static void locate(void)
     for (int l = 0; l < 3; l++) pos += 1 + 2u * vec[pos];
     working_idx0 = pos + 7;
     for (int s = 0; s < 4; s++) pos += 7 + 2u * vec[pos];
+    scenes_end = pos;
     frame0_row_at = pos + 2 + 3;
+}
+
+/*
+ * VERSION 2 (the relaxing scene): version 1 with a fifth scene, `relaxing`, right after `failed`, in the same
+ * encoding (n u8, step_ms u16, dx i16, dy i16, n x u16 frame index). Built here from the v1 vector: two steps of
+ * 150 ms showing frames 1 then 0, moved (4, -6). test/vectors/pet_min_v2.hpet is exactly this pack.
+ */
+static const uint8_t RELAX[] = {2, 150, 0, 4, 0, 0xfa, 0xff, 1, 0, 0, 0};
+static uint8_t vec2[4096];
+static size_t vec2_len;
+static size_t build_v2(uint8_t *out, const uint8_t *relax, size_t relax_len)
+{
+    memcpy(out, vec, scenes_end);
+    memcpy(out + scenes_end, relax, relax_len);
+    memcpy(out + scenes_end + relax_len, vec + scenes_end, vec_len - scenes_end);
+    size_t n = vec_len + relax_len;
+    out[4] = 2;
+    reseal(out, n);
+    return n;
 }
 
 static void reset_store(void)
@@ -135,13 +156,86 @@ static void reject_bad_crc(void)
     check(g_live == 0, "reject_bad_crc leaves nothing allocated");
 }
 
-static void reject_version_2(void)
+static void reject_version_3(void)
 {
     uint8_t b[4096];
+    memcpy(b, vec2, vec2_len);
+    b[4] = 3;
+    check(send_pack(ID, b, vec2_len, NULL) == PET_ERR_VERSION, "version 3 -> VERSION");
+    memcpy(b, vec, vec_len);
+    b[4] = 0;
+    check(send_pack(ID, b, vec_len, NULL) == PET_ERR_VERSION, "version 0 -> VERSION");
+    reset_store();
+    check(g_live == 0, "reject_version_3 leaves nothing allocated");
+}
+
+// A v1 pack has no relaxing scene; a v2 pack has one after `failed`, and a v2 pack cut anywhere is refused.
+static void version_2(void)
+{
+    uint8_t b[4096];
+    check(send_pack(ID, vec, vec_len, NULL) == 0, "v1 parses");
+    pet_store_map(ID, NULL, NULL, 0);
+    pet_store_release_frame();
+    const ht_pet_t *pet = pet_store_lookup("claude");
+    check(pet && pet->working_scene && !pet->relaxing_scene, "v1: no relaxing scene");
+    reset_store();
+
+    memcpy(b, vec2, vec2_len);
+    check(send_pack(ID, b, vec2_len, NULL) == 0, "v2 parses");
+    pet_store_map(ID, NULL, NULL, 0);
+    pet_store_release_frame();
+    pet = pet_store_lookup("claude");
+    check(pet != NULL, "v2 looked up");
+    if (pet) {
+        const ht_pet_scene_t *r = pet->relaxing_scene;
+        check(r && r->steps == 2 && r->step_ms == 150 && r->dx == 4 && r->dy == -6, "v2: the relaxing scene");
+        check(r && r->loop[0] == 1 && r->loop[1] == 0 && r->frames == pet->cells, "v2: its frames");
+        check(r && r->w == 16 && r->h == 16 && !r->overlay && !r->shapes, "v2: its size (frame 0: 8 x 8 cells of 2 px)");
+        // the rest of the pack is what v1 says
+        check(pet->working_scene && pet->working_scene->steps == 2 && pet->listening_scene &&
+              pet->sending_scene && pet->sending_scene->dx == -3 && ht_pet_steps(pet) == 3, "v2: the other scenes");
+        touch_all(pet, 2);
+    }
+    reset_store();
+
+    // relaxing n = 0: absent (the face keeps today's resting face)
+    static const uint8_t none[] = {0, 0, 0, 0, 0, 0, 0};
+    size_t n = build_v2(b, none, sizeof none);
+    check(send_pack(ID, b, n, NULL) == 0, "v2 with an empty relaxing scene parses");
+    pet_store_map(ID, NULL, NULL, 0);
+    pet_store_release_frame();
+    pet = pet_store_lookup("claude");
+    check(pet && !pet->relaxing_scene, "an empty relaxing scene is no scene");
+    reset_store();
+
+    // a frame index past the frame count, a dx past the glass
+    static const uint8_t past[] = {1, 100, 0, 0, 0, 0, 0, 2, 0};
+    n = build_v2(b, past, sizeof past);
+    check(send_pack(ID, b, n, NULL) == PET_ERR_SHAPE, "v2 relaxing frame index == count -> SHAPE");
+    static const uint8_t far[] = {1, 100, 0, 0xe1, 0x01, 0, 0, 0, 0};
+    n = build_v2(b, far, sizeof far);
+    check(send_pack(ID, b, n, NULL) == PET_ERR_SHAPE, "v2 relaxing dx 481 -> SHAPE");
+
+    // a v2 pack cut inside its relaxing scene (and anywhere else), sealed again: a SHAPE error
+    for (size_t cut = scenes_end; cut <= scenes_end + sizeof RELAX; cut++) {
+        memcpy(b, vec2, cut);
+        reseal(b, cut);
+        int r = send_pack(ID, b, cut, NULL);
+        if (r != PET_ERR_SHAPE) { check(0, "a v2 pack cut in its relaxing scene is a SHAPE error"); printf("    cut=%zu got %d\n", cut, r); break; }
+    }
+    for (size_t cut = HEADER + 1; cut < vec2_len; cut++) {
+        memcpy(b, vec2, vec2_len);
+        reseal(b, cut);
+        int r = send_pack(ID, b, cut, NULL);
+        if (r != PET_ERR_SHAPE) { check(0, "every v2 truncation is a SHAPE error"); printf("    cut=%zu got %d\n", cut, r); break; }
+    }
+    // the v2 relaxing scene taken out again but the version left at 2: the frames read as a scene, refused
     memcpy(b, vec, vec_len);
     b[4] = 2;
-    check(send_pack(ID, b, vec_len, NULL) == PET_ERR_VERSION, "version 2 -> VERSION");
+    reseal(b, vec_len);
+    check(send_pack(ID, b, vec_len, NULL) == PET_ERR_SHAPE, "a v1 body under a v2 header -> SHAPE");
     reset_store();
+    check(g_live == 0, "version_2 leaves nothing allocated");
 }
 
 static void pet_store_abort_keeps_current(void)
@@ -381,16 +475,26 @@ static void bounds(void)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { printf("usage: test_pet_store pet_min.hpet\n"); return 2; }
+    if (argc < 3) { printf("usage: test_pet_store pet_min.hpet pet_min_v2.hpet\n"); return 2; }
     FILE *f = fopen(argv[1], "rb");
     if (!f) { printf("cannot open %s\n", argv[1]); return 2; }
     vec_len = fread(vec, 1, sizeof vec, f);
     fclose(f);
     check(vec_len == 241, "vector is 241 bytes");
     locate();
+    vec2_len = build_v2(vec2, RELAX, sizeof RELAX);
+    {
+        uint8_t file2[4096];
+        FILE *g = fopen(argv[2], "rb");
+        if (!g) { printf("cannot open %s\n", argv[2]); return 2; }
+        size_t n2 = fread(file2, 1, sizeof file2, g);
+        fclose(g);
+        check(n2 == vec2_len && !memcmp(file2, vec2, n2), "pet_min_v2.hpet is the v1 vector plus the relaxing scene");
+    }
     parse_vector();
     reject_bad_crc();
-    reject_version_2();
+    reject_version_3();
+    version_2();
     pet_store_abort_keeps_current();
     drop_aborts_partial();
     engine_before_all();

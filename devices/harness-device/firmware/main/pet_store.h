@@ -1,5 +1,6 @@
 // The custom pets the daemon sends over the cable (cli/src/cable/pets/pack.ts is the source of truth for
-// the HPET pack format). Up to four packs are held in PSRAM; a mapping says which pack draws for which
+// the HPET pack format). Versions 1 and 2 are read: version 2 appends a fifth scene, `relaxing`, after `failed`
+// (same encoding), which ht_pet_t.relaxing_scene carries; the daemon sends it only to a dial whose hello says pets: 2. Up to four packs are held in PSRAM; a mapping says which pack draws for which
 // engine, and `pet_store_lookup` hands the UI an ht_pet_t built from the pack.
 //
 // DELIBERATELY FREE OF ESP-IDF headers except where ESP_PLATFORM is defined: pet_store.c also compiles on a

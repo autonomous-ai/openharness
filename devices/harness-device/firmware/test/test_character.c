@@ -649,10 +649,17 @@ static void focus_face(void)
          * the face with no agent — still gets a new line each time the resting face returns, never
          * the one it just showed, and over a few returns most of the list.
          */
-        {
+        for (int relaxing = 0; relaxing < 2; relaxing++) {
+            // Today's resting face (an engine with no relaxing scene: Cursor) says its line in the middle, runs 8 and 9;
+            // the relaxing face (Claude) on the lower arc, run 10, from its own list (owner, 2026-10-09). The same picker.
+            f.engine = relaxing ? "claude" : "cursor";
             f.recipient = "Choose a pane";
             char last[64] = "", seen[10][64];
             int kinds = 0;
+            #define SAID(sc_, out_) do { if (relaxing) { assert((sc_).runs[10].arc == 2 && (sc_).runs[10].fg == ht_rgb(0x9a9aa6) && \
+                !(sc_).runs[8].text[0] && !(sc_).runs[9].text[0]); snprintf(out_, sizeof out_, "%s", (sc_).runs[10].text); } \
+                else { assert(!(sc_).runs[10].arc); snprintf(out_, sizeof out_, "%s%s", (sc_).runs[8].text, (sc_).runs[9].text); } \
+                squeeze(out_); } while (0)
             for (int visit = 0; visit < 24; visit++) {
                 f.activity = "Working"; f.elapsed = 3; f.clock_ms = 1000u + (uint32_t)visit * 977u;
                 ht_scene_clear(&scene, 0);
@@ -661,18 +668,28 @@ static void focus_face(void)
                 ht_scene_clear(&scene, 0);
                 ht_character_face(&scene, &c, &f, 0xffff, "");   // back to resting
                 char said[64];
-                snprintf(said, sizeof said, "%s%s", scene.runs[8].text, scene.runs[9].text);
-                squeeze(said);
-                assert(strcmp(said, last));
+                SAID(scene, said);
+                assert(said[0] && strcmp(said, last));
                 snprintf(last, sizeof last, "%s", said);
                 bool known = false;
                 for (int k = 0; k < kinds; k++) known |= !strcmp(seen[k], said);
                 if (!known && kinds < 10) snprintf(seen[kinds++], sizeof seen[0], "%s", said);
+                // held while the face stays up: a redraw later in the scene says the same
+                f.clock_ms += 2000;
+                ht_scene_clear(&scene, 0);
+                ht_character_face(&scene, &c, &f, 0xffff, "");
+                char again[64];
+                SAID(scene, again);
+                assert(!strcmp(again, said));
             }
             assert(kinds >= 5);
-            // The teaching lines come up more (owner, 2026-10-03): "Tap to talk" is listed 10 times of 27,
-            // "Hold to switch tabs" 5, "Tap the name to switch panes" 5, the rest once — never twice running.
-            int talk = 0, tabs = 0, name = 0, other = 0;
+            // The teaching lines come up more (owner, 2026-10-03): today's "Tap to talk" is listed 10 times of 27,
+            // "Hold to switch tabs" 5, "Tap the name to switch panes" 5, the rest once; the relaxing list "Tap to talk"
+            // 10 of 24, "Hold for tabs" 5, "Tap name for panes" 5, "What's next?", "Your move", "Say the word", "Ask away"
+            // once — never twice running.
+            static const char *const relax_lines[] = {"Taptotalk", "Holdfortabs", "Tapnameforpanes", "What'snext?",
+                                                      "Yourmove", "Saytheword", "Askaway"};
+            int talk = 0, tabs = 0, name = 0, other = 0, each[7] = {0};
             for (int visit = 0; visit < 900; visit++) {
                 f.activity = "Working"; f.elapsed = 3; f.clock_ms = 7u + (uint32_t)visit * 613u;
                 ht_scene_clear(&scene, 0);
@@ -681,18 +698,28 @@ static void focus_face(void)
                 ht_scene_clear(&scene, 0);
                 ht_character_face(&scene, &c, &f, 0xffff, "");
                 char said[64];
-                snprintf(said, sizeof said, "%s%s", scene.runs[8].text, scene.runs[9].text);
-                squeeze(said);
+                SAID(scene, said);
                 assert(strcmp(said, last));
                 snprintf(last, sizeof last, "%s", said);
                 if (!strcmp(said, "Taptotalk")) talk++;
-                else if (!strcmp(said, "Holdtoswitchtabs")) tabs++;
-                else if (!strcmp(said, "Tapthenametoswitchpanes")) name++;
+                else if (!strcmp(said, relaxing ? "Holdfortabs" : "Holdtoswitchtabs")) tabs++;
+                else if (!strcmp(said, relaxing ? "Tapnameforpanes" : "Tapthenametoswitchpanes")) name++;
                 else other++;
+                if (relaxing) {
+                    bool listed = false;
+                    for (int k = 0; k < 7; k++) if (!strcmp(said, relax_lines[k])) { each[k]++; listed = true; }
+                    assert(listed);   // only the new list on the relaxing face
+                }
             }
-            assert(talk > tabs && talk > name && tabs > other / 7 * 2 && name > other / 7 * 2 && talk > 200 && other > 60);
+            #undef SAID
+            if (relaxing) {
+                assert(talk > tabs && talk > name && talk > 250 && tabs > 100 && name > 100 && other > 60);
+                for (int k = 3; k < 7; k++) assert(each[k] > 10);   // every invitation comes up
+            } else
+                assert(talk > tabs && talk > name && tabs > other / 7 * 2 && name > other / 7 * 2 && talk > 200 && other > 60);
             f.clock_ms = 0;
         }
+        f.engine = "claude";
         f.recipient = "Payments refactor";
 
         // An engine this build has no mark for leaves the mark's place empty, not a wrong mark.
@@ -727,6 +754,7 @@ static void focus_face(void)
                     ht_character_face(&scene, &c, &f, 0xffff, layout == 0 ? "Shipped the retry queue." : "");
                     const ht_run_t *mark = &scene.runs[1];
                     if (pet->working_scene && layout == 1 && state != HT_PET_ASKING) continue;   // the scene: below
+                    if (pet->relaxing_scene && layout == 2 && (state == HT_PET_IDLE || state == HT_PET_DONE || state == HT_PET_WORKING)) continue;   // relaxing: below
                     int fr = pet_frame(pet, &mark->sprite);
                     assert(fr >= 0);
                     if (mark->sprite.height != pet->h) {   // a larger drawing: its whole box is under the title
@@ -749,10 +777,21 @@ static void focus_face(void)
                 if (state == HT_PET_ASKING) f.asking = true;
                 ht_scene_t scene; ht_scene_clear(&scene, 0);
                 ht_character_face(&scene, &c, &f, 0xffff, state == HT_PET_DONE ? "Done." : "");
-                assert(scene.count == 1 + 1 + 1 + 4 + 1 + 2 + 1);
                 const ht_run_t *mark = &scene.runs[1];
+                const ht_pet_scene_t *rs = state == HT_PET_IDLE ? pet->relaxing_scene : NULL;
+                assert(scene.count == 1 + 1 + 1 + 4 + 1 + 2 + 1 + (rs && rs->shapes ? rs->shapes->count : 0));
                 const ht_pet_scene_t *ws = state == HT_PET_WORKING ? pet->working_scene : NULL;
-                if (ws) {
+                if (rs) {
+                    // THE RELAXING SCENE: in the mark's run, placed as a working scene is, the grey line on the lower arc.
+                    unsigned st = (step * pet->step_ms[state] + 1) / rs->step_ms % rs->steps;
+                    int frame = scene_frame(rs, mark->sprite.cells, 1);
+                    assert(frame == rs->loop[st]);
+                    assert(mark->sprite.width == rs->w && mark->sprite.height == rs->h && mark->x == (466 - rs->w) / 2 + rs->dx);
+                    assert(mark->y == 233 + 4 - rs->h / 2 + rs->dy + (rs->step_dy ? rs->step_dy[st] : 0));
+                    assert(!scene.runs[7].text[0] && !scene.runs[8].text[0] && !scene.runs[9].text[0]);
+                    assert(scene.runs[10].arc == 2 && scene.runs[10].fg == ht_rgb(0x9a9aa6) && scene.runs[10].text[0]);
+                    frame_at[state][step] = frame;
+                } else if (ws) {
                     // THE WORKING SCENE: in the mark's run, centred, the status on the lower arc.
                     int frame = scene_frame(ws, mark->sprite.cells, 1);
                     assert(frame == ws->loop[(step * pet->step_ms[state] + 1) / ws->step_ms % ws->steps]);
@@ -807,6 +846,8 @@ static void focus_face(void)
         if (pet->cells) {
             ht_character_face_t cf = {.recipient = "Payments refactor", .engine = eng, .status = "", .hint = "", .detail = "",
                 .mood = HT_CHARACTER_IDLE, .foreground = 0xffff, .dim = 0x8410, .ink = 0xffff, .clock_ms = 1};
+            // (a pet with a relaxing scene shows its small self resting only while held: clock 0)
+            if (pet->relaxing_scene) cf.clock_ms = 0;
             ht_scene_t cs; ht_scene_clear(&cs, 0);
             ht_character_face(&cs, &c, &cf, 0xffff, "");
             const ht_run_t *cm = &cs.runs[1];
@@ -1276,8 +1317,10 @@ static void focus_face(void)
             // Two waves and the arm down and up, 18 steps (owner, 2026-10-06): the loop wraps at 18, not 24.
             assert(mp->step_ms[0] == 217 && ht_pet_steps(mp) == 18);
             {
-                ht_character_face_t g = {.recipient = "x", .engine = "muse", .activity = "", .status = "", .hint = "",
-                    .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 18 * 217 + 1};
+                // (with a status line: an idle or done agent with nothing to show is the relaxing face; every
+                // state plays this one loop)
+                ht_character_face_t g = {.recipient = "x", .engine = "muse", .activity = "", .status = "Ready", .hint = "",
+                    .detail = "", .mood = HT_CHARACTER_DONE, .clock_ms = 18 * 217 + 1};
                 ht_scene_t a, b; ht_scene_clear(&a, 0); ht_scene_clear(&b, 0);
                 ht_character_face(&a, &c, &g, 0xffff, "");
                 g.clock_ms = 1; ht_character_face(&b, &c, &g, 0xffff, "");
@@ -1615,6 +1658,168 @@ static void focus_face(void)
     assert(expected == 1 + 1 + 1 + 4 + 1 + 2 + 1);
 }
 
+/*
+ * THE RELAXING FACE (owner, 2026-10-09: mockup/relaxing.html). Claude, Codex and Muse with nothing to show play their
+ * relaxing scene in the mark's run, placed as a working scene is; nothing in the middle (the recap slots, the status
+ * and the two resting lines empty; Codex's plane the overlay in run 3); one line on the lower arc in quiet grey,
+ * Inter Medium 26, from the new list, held while the face stays up; the balls (Claude's three, Muse's beach ball) are ring arcs
+ * after the eleven runs, as many on every step. The incremental redraw from step to step is exact, the ink stays inside
+ * r 230, and the schedule wakes on each step that draws differently. Every other engine keeps today's resting face.
+ */
+static void ink_inside_r230(const ht_scene_t *scene);
+static void focus_relaxing(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    static const char *const lines[] = {"Tap to talk", "Hold for tabs", "Tap name for panes", "What's next?",
+                                        "Your move", "Say the word", "Ask away"};
+    static const struct { const char *engine; unsigned shapes, step_ms; bool overlay; } want[] = {
+        {"claude", 6, 55, false}, {"codex", 0, 120, true}, {"muse", 8, 100, false}};
+    for (unsigned e = 0; e < 3; e++) {
+        const ht_pet_t *pet = pet_of(want[e].engine);
+        const ht_pet_scene_t *rs = pet->relaxing_scene;
+        assert(rs && rs->steps == 24 && rs->step_ms == want[e].step_ms && !rs->overlay == !want[e].overlay);
+        assert(want[e].shapes ? rs->shapes && rs->shapes->count == want[e].shapes : !rs->shapes);
+        ht_scene_t prev; ht_scene_clear(&prev, 0);
+        const char *held = NULL;
+        unsigned arcs_ink = 0;
+        bool moved = false;
+        int ball_at[24] = {0};
+        for (unsigned step = 0; step < 2 * rs->steps; step++) {
+            ht_character_face_t f = {.recipient = "Payments refactor", .engine = want[e].engine, .activity = "",
+                .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .foreground = 0xffff, .dim = 0x8410,
+                .ink = 0xffff, .clock_ms = 5000 + step * rs->step_ms};
+            unsigned st = f.clock_ms / rs->step_ms % rs->steps;
+            ht_scene_t scene; ht_scene_clear(&scene, 0);
+            ht_character_face(&scene, &c, &f, 0xffff, "");
+            only_inter(&scene);
+            assert(scene.count == 11 + (int)want[e].shapes);   // the same runs on every step of it
+            assert(scene.runs[0].arc == 1 && !strcmp(scene.runs[0].text, "Payments refactor"));
+            const ht_run_t *m = &scene.runs[1];
+            assert(m->sprite.cells == rs->frames[rs->loop[st]].cells && !m->sprite.zoom);
+            assert(m->x == (466 - rs->w) / 2 + rs->dx && m->y == 233 + 4 - rs->h / 2 + rs->dy + (rs->step_dy ? rs->step_dy[st] : 0));
+            assert(!scene.runs[2].box.h || scene.runs[2].box.fill == scene.runs[2].box.border);   // no card
+            for (int i = 3; i < 10; i++) {
+                assert(!scene.runs[i].text[0]);                               // no text in the middle
+                if (i == 3 && rs->overlay) assert(scene.runs[i].sprite.cells == rs->overlay->frames[rs->overlay->loop[st]].cells);
+                else assert(!scene.runs[i].sprite.width);
+            }
+            const ht_run_t *arc = &scene.runs[10];
+            assert(arc->arc == 2 && arc->fg == ht_rgb(0x9a9aa6) && arc->font == &ht_lv_inter_med_26.base);
+            bool listed = false;
+            for (unsigned k = 0; k < 7; k++) listed |= !strcmp(arc->text, lines[k]);
+            assert(listed && ht_arc_measure(&ht_arc_inter_lower, arc->text) <= HT_ARC_SPAN);
+            if (!held) held = arc->text; else assert(!strcmp(held, arc->text));   // held while the face stays up
+            for (unsigned k = 0; k < want[e].shapes; k++) {
+                const ht_run_t *r = &scene.runs[11 + k];
+                const ht_pet_shape_t *at = &rs->shapes->at[st * rs->shapes->count + k];
+                assert(r->ring.set);
+                // placed from the scene's origin (the frame's step_dy moves the frame alone), as the step lists it
+                assert(r->ring.cx16 == ((466 - rs->w) / 2 + rs->dx) * 16 + at->cx16);
+                assert(r->ring.cy16 == (233 + 4 - rs->h / 2 + rs->dy) * 16 + at->cy16);
+                assert(r->ring.r16 == at->r16 && r->ring.w16 == at->w16 && r->ring.colour == at->rgb);
+                if (r->ring.w16) arcs_ink += (unsigned)(r->ink_box.w * r->ink_box.h);
+            }
+            if (e == 2) {
+                // Muse's keepy-uppy (mockup/muse-play.html D): the beach ball is six 60-degree wedges round one
+                // centre, reaching it, then the white centre disc on it and the highlight up and left of it.
+                const ht_run_t *b0 = &scene.runs[11];
+                for (unsigned k = 0; k < 8; k++) {
+                    const ht_run_t *r = &scene.runs[11 + k];
+                    assert(r->ring.w16);
+                    if (k < 7) assert(r->ring.cx16 == b0->ring.cx16 && r->ring.cy16 == b0->ring.cy16);
+                    if (k < 6) assert(r->ring.w16 >= 2 * r->ring.r16);              // a wedge: the band reaches the centre
+                }
+                assert(scene.runs[18].ring.cx16 < b0->ring.cx16 && scene.runs[18].ring.cy16 < b0->ring.cy16);
+                // It meets the ball on steps 0 and 12 (a squash, the ball low on its head), hops on 1 and 13, the ball
+                // highest halfway between; the ball always above the body's top.
+                int ball_y = b0->ring.cy16 / 16, top = m->y;
+                assert(ball_y < top + 12);
+                if (st % 12 == 1) assert(rs->step_dy && rs->step_dy[st] < 0);
+                else assert(!rs->step_dy || !rs->step_dy[st]);
+                ball_at[st] = ball_y;
+            }
+            ink_inside_r230(&scene);
+            if (!step) ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, partial);   // what the glass holds
+            else {
+                redraw(&prev, &scene);                                       // the damage from the step before is exact
+                moved |= memcmp(&prev.runs[1], &scene.runs[1], sizeof scene.runs[1]) != 0;
+            }
+            // Its schedule: the next step that draws differently, and nothing changes a ms before it.
+            uint32_t next = ht_focus_pet_next_ms(&f, "");
+            assert(next > f.clock_ms && next <= f.clock_ms + rs->steps * rs->step_ms);
+            ht_character_face_t a = f, b = f; a.clock_ms = next; b.clock_ms = next - 1;
+            ht_scene_t sa, sb; ht_scene_clear(&sa, 0); ht_scene_clear(&sb, 0);
+            ht_character_face(&sa, &c, &a, 0xffff, ""); ht_character_face(&sb, &c, &b, 0xffff, "");
+            bool same_b = true, same_a = true;
+            for (int i = 1; i < scene.count; i++) {
+                if (i == 10) continue;
+                same_b &= !memcmp(&sb.runs[i], &scene.runs[i], sizeof scene.runs[i]);
+                same_a &= !memcmp(&sa.runs[i], &scene.runs[i], sizeof scene.runs[i]);
+            }
+            assert(same_b && !same_a);
+            prev = scene;
+        }
+        assert(moved);
+        if (e == 2) {   // Muse: five body pictures (the squash, the hop, eyes up, eyes on the ball high, wide-eyed)
+            unsigned seen = 0;
+            for (unsigned st = 0; st < rs->steps; st++) seen |= 1u << rs->loop[st];
+            assert(__builtin_popcount(seen) == 5);
+            for (unsigned st = 0; st < 24; st++)      // lowest as it meets the head, up and down between, highest at 6, 18
+                assert(st % 12 == 0 ? ball_at[st] >= ball_at[(st + 23) % 24] : st % 12 <= 6 ? ball_at[st] < ball_at[st - 1]
+                                    : ball_at[st] >= ball_at[st - 1]);
+            assert(ball_at[0] - ball_at[6] > 40 && ball_at[12] - ball_at[18] > 40);
+        }
+        // The raster budget: the code-drawn shapes stay small (each ring arc rasterises only its ink box).
+        assert(arcs_ink / (2 * rs->steps) <= 8000);   // Claude ~1.7k px a step, Muse's ball ~1.5k
+        // Not relaxing: working, a recap, a question, a status of its own, held (clock 0, asleep), the voice screen.
+        ht_character_face_t g = {.recipient = "x", .engine = want[e].engine, .activity = "", .status = "", .hint = "",
+            .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 1234};
+        ht_scene_t sc;
+        ht_character_face_t w = g; w.activity = "Working"; w.elapsed = 3;
+        ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &w, 0xffff, "");
+        assert(sc.count == 11 && sc.runs[1].sprite.cells != rs->frames[0].cells && sc.runs[10].fg == ht_rgb(0x00ff2f));
+        ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "Done.");
+        assert(sc.count == 11 && sc.runs[3].text[0] && !sc.runs[10].arc);
+        ht_character_face_t q = g; q.asking = true;
+        ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &q, 0xffff, "");
+        assert(sc.count == 11 && !sc.runs[10].arc);
+        ht_character_face_t t = g; t.status = "Try again";
+        ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &t, 0xffff, "");
+        assert(sc.count == 11 && !sc.runs[10].arc && sc.runs[7].text[0]);
+        ht_character_face_t h = g; h.clock_ms = 0;
+        ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &h, 0xffff, "");
+        assert(sc.count == 11 && pet_frame(pet, &sc.runs[1].sprite) == pet->loops[HT_PET_IDLE][0].frame && !sc.runs[10].arc);
+        ht_character_face_t z = g; z.mood = HT_CHARACTER_ASLEEP;
+        ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &z, 0xffff, "");
+        assert(sc.count == 11 && !sc.runs[10].arc);
+        ht_character_face_t v = g; v.voice = true; v.mood = HT_CHARACTER_WORKING;
+        ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &v, 0xffff, "");
+        assert(sc.count == 11);
+    }
+    // EVERY OTHER ENGINE keeps today's resting face (owner, 2026-10-09): Cursor's 56 px mark, the resting line in
+    // grey inter_36 in runs 8 and 9 from today's list, nothing on the lower arc, eleven runs.
+    for (int k = 0; k < 6; k++) {
+        static const char *const others[] = {"cursor", "opencode", "grok", "hermes", "agy", "something-new"};
+        ht_character_face_t g = {.recipient = "Payments refactor", .engine = others[k], .activity = "", .status = "",
+            .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 777u * (unsigned)k + 1};
+        ht_scene_t sc; ht_scene_clear(&sc, 0); ht_character_face(&sc, &c, &g, 0xffff, "");
+        assert(sc.count == 11 && !sc.runs[10].arc && !sc.runs[10].text[0]);
+        assert(sc.runs[8].text[0] && sc.runs[8].font == &ht_lv_inter_36.base && sc.runs[8].fg == ht_rgb(0x585863));
+        if (k == 0) assert(sc.runs[1].sprite.pixels == ht_icon_engine56[2].px && sc.runs[1].sprite.width == 56);
+        assert(!ht_focus_pet_next_ms(&g, ""));
+        char said[64];
+        snprintf(said, sizeof said, "%s%s", sc.runs[8].text, sc.runs[9].text);
+        squeeze(said);
+        static const char *const today[] = {"Let'sbuildit", "Doanything", "What'snext?", "Readywhenyouare", "Saytheword",
+            "Makeithappen", "Startsomething", "Taptotalk", "Holdtoswitchtabs", "Tapthenametoswitchpanes"};
+        bool known = false;
+        for (unsigned r = 0; r < 10; r++) known |= !strcmp(said, today[r]);
+        assert(known);
+    }
+    puts("Focus relaxing: Claude juggles, Codex's plane, Muse's keepy-uppy; constant runs, exact redraws, grey arc line; others unchanged PASS");
+}
+
 static void footer_layout(void)
 {
     const unsigned counts[] = {0, 1, 9, 10, 32, 1, 0};
@@ -1745,8 +1950,10 @@ static void focus_custom_pet_resting(void)
     ht_character_t c = {0};
     assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
     ht_character_face_t f = custom_face(false, 0);
+    // Today's resting face of a pet without a relaxing scene (Cursor's mark): a v1 pack keeps exactly its runs.
+    ht_character_face_t g = f; g.engine = "cursor";
     ht_scene_t builtin; ht_scene_clear(&builtin, 0);
-    ht_character_face(&builtin, &c, &f, 0xffff, "");
+    ht_character_face(&builtin, &c, &g, 0xffff, "");
     pack_load(vec_buf, vec_len);
     ht_scene_t scene; ht_scene_clear(&scene, 0);
     ht_character_face(&scene, &c, &f, 0xffff, "");
@@ -1759,6 +1966,103 @@ static void focus_custom_pet_resting(void)
             if (scene.runs[i].sprite.cells && scene.runs[i].sprite.cells == pet->cells[k].cells) drawn = true;
     assert(drawn);
     ink_inside_r230(&scene);
+    pet_store_release_frame();
+    pack_unload();
+}
+/*
+ * A VERSION 2 PACK (pet_store.c): a fifth scene, relaxing, after failed. Its pet's resting face is the relaxing face
+ * with that scene (placed as its working scene is, from its dx, dy; the quiet line on the lower arc, nothing in the
+ * middle); a version 1 pack keeps today's resting face (the small pet and the two lines in the middle).
+ */
+static size_t make_v2(uint8_t *out)
+{
+    size_t pos = 22;
+    pos += 1 + 2u * vec_buf[pos];
+    pos += 4;
+    for (int l = 0; l < 3; l++) pos += 1 + 2u * vec_buf[pos];
+    for (int s = 0; s < 4; s++) pos += 7 + 2u * vec_buf[pos];
+    static const uint8_t relax[] = {2, 150, 0, 4, 0, 0xfa, 0xff, 1, 0, 0, 0};   // 2 x 150 ms: frames 1, 0; (4, -6)
+    memcpy(out, vec_buf, pos);
+    memcpy(out + pos, relax, sizeof relax);
+    memcpy(out + pos + sizeof relax, vec_buf + pos, vec_len - pos);
+    out[4] = 2;
+    return vec_len + sizeof relax;
+}
+static void focus_custom_pet_relaxing(void)
+{
+    ht_character_t c = {0};
+    assert(ht_character_select(&c, HT_CHARACTER_FOCUS));
+    ht_character_face_t f = custom_face(false, 0);
+    // v1: today's face
+    pack_load(vec_buf, vec_len);
+    ht_scene_t old; ht_scene_clear(&old, 0);
+    ht_character_face(&old, &c, &f, 0xffff, "");
+    assert(old.count == 11 && (old.runs[8].text[0] || old.runs[9].text[0]) && !old.runs[10].arc);
+    assert(old.runs[8].font == &ht_lv_inter_36.base && old.runs[1].sprite.zoom);   // the small pet, drawn zoomed
+    pet_store_release_frame();
+    pack_unload();
+    // v2: the relaxing face
+    static uint8_t b[4096];
+    size_t n = make_v2(b);
+    pack_load(b, n);
+    const ht_pet_t *pet = pet_store_lookup("claude");
+    assert(pet && pet->relaxing_scene && pet->relaxing_scene->steps == 2);
+    const ht_pet_scene_t *rs = pet->relaxing_scene;
+    for (unsigned step = 0; step < 4; step++) {
+        f.clock_ms = 1000 + step * 150;
+        ht_scene_t scene; ht_scene_clear(&scene, 0);
+        ht_character_face(&scene, &c, &f, 0xffff, "");
+        assert(scene.count == 11);                        // no shapes: the eleven runs
+        const ht_run_t *m = &scene.runs[1];
+        unsigned st = f.clock_ms / 150 % 2;
+        assert(m->sprite.cells == pet->cells[rs->loop[st]].cells && !m->sprite.zoom);
+        assert(m->x == (466 - rs->w) / 2 + 4 && m->y == 233 - rs->h / 2 + 4 - 6);
+        for (int i = 3; i < 10; i++) assert(!scene.runs[i].text[0] && !scene.runs[i].sprite.width);
+        assert(scene.runs[10].arc == 2 && scene.runs[10].fg == ht_rgb(0x9a9aa6) && scene.runs[10].text[0]);
+        assert(ht_focus_pet_next_ms(&f, "") == (f.clock_ms / 150 + 1) * 150);
+        ink_inside_r230(&scene);
+    }
+    // with notices (the bell pill takes the lower arc) or a footer action: the same runs, the line left out
+    {
+        ht_character_face_t nf = custom_face(false, 2), ff = custom_face(false, 0);
+        ff.footer_action = true;
+        ht_scene_t base, ns, fs;
+        ht_scene_clear(&base, 0); ht_scene_clear(&ns, 0); ht_scene_clear(&fs, 0);
+        ht_character_face(&base, &c, &f, 0xffff, "");
+        ht_character_face(&ns, &c, &nf, 0xffff, "");
+        ht_character_face(&fs, &c, &ff, 0xffff, "");
+        assert(base.runs[10].arc == 2 && base.runs[10].text[0]);
+        assert(ns.count == base.count && fs.count == base.count);
+        assert(!ns.runs[10].arc && !ns.runs[10].text[0] && !fs.runs[10].arc && !fs.runs[10].text[0]);
+        ink_inside_r230(&ns);
+    }
+    // working, and a recap, are not relaxing
+    ht_character_face_t w = custom_face(true, 0);
+    ht_scene_t ws; ht_scene_clear(&ws, 0); ht_character_face(&ws, &c, &w, 0xffff, "");
+    assert(ws.runs[1].sprite.cells && !ws.runs[1].sprite.zoom && ws.runs[10].arc == 2 && ws.runs[10].fg == ht_rgb(0x00ff2f));
+    ht_scene_t rc; ht_scene_clear(&rc, 0); ht_character_face(&rc, &c, &f, 0xffff, "Done.");
+    assert(rc.runs[3].text[0] && !rc.runs[10].arc);
+    pet_store_release_frame();
+    pack_unload();
+    // a v2 pack whose relaxing scene has no frames keeps today's resting face
+    {
+        static const uint8_t none[] = {0, 0, 0, 0, 0, 0, 0};
+        size_t pos = 22;
+        pos += 1 + 2u * vec_buf[pos];
+        pos += 4;
+        for (int l = 0; l < 3; l++) pos += 1 + 2u * vec_buf[pos];
+        for (int k = 0; k < 4; k++) pos += 7 + 2u * vec_buf[pos];
+        memcpy(b, vec_buf, pos);
+        memcpy(b + pos, none, sizeof none);
+        memcpy(b + pos + sizeof none, vec_buf + pos, vec_len - pos);
+        b[4] = 2;
+        pack_load(b, vec_len + sizeof none);
+        pet = pet_store_lookup("claude");
+        assert(pet && !pet->relaxing_scene);
+        ht_scene_t e; ht_scene_clear(&e, 0);
+        ht_character_face(&e, &c, &f, 0xffff, "");
+        assert(e.count == 11 && (e.runs[8].text[0] || e.runs[9].text[0]) && !e.runs[10].arc && e.runs[1].sprite.zoom);
+    }
     pet_store_release_frame();
     pack_unload();
 }
@@ -1877,10 +2181,11 @@ static void focus_swap_mid_scene(void)
 static void custom_pet(void)
 {
     focus_custom_pet_resting();
+    focus_custom_pet_relaxing();
     focus_custom_pet_working_alert();
     focus_custom_ink_inside_r230();
     focus_swap_mid_scene();
-    puts("Custom pet: resting, code-drawn working alert, r 230 clamp and a swap mid-scene PASS");
+    puts("Custom pet: resting, relaxing (v2), code-drawn working alert, r 230 clamp and a swap mid-scene PASS");
 }
 
 int main(int argc, char **argv)
@@ -1895,6 +2200,6 @@ int main(int argc, char **argv)
     assert(!strcmp(ht_character_name(HT_CHARACTER_TIM), "Tim"));
     assert(!strcmp(ht_character_name(HT_CHARACTER_TUX), "Tux"));
     clocks(); portraits(); delivery_and_caption(); recap_budget(); focus_face();
-    footer_layout(); inbox_layout(); custom_pet();
+    focus_relaxing(); footer_layout(); inbox_layout(); custom_pet();
     printf("Characters: both adapters, eight moods, five sizes, pause/mic/wrap/swap and %u exact incremental redraws PASS\n", redraws);
 }
