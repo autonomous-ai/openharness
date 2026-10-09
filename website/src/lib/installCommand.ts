@@ -46,3 +46,9 @@ export const DESKTOP_DOWNLOAD_URL = "/desktop/download-macos";
  */
 export const DESKTOP_DOWNLOAD_LINUX_X64_URL = "/desktop/download/linux-x64";
 export const DESKTOP_DOWNLOAD_LINUX_ARM64_URL = "/desktop/download/linux-arm64";
+
+/**
+ * The Apple silicon (Impeller) `.dmg` — `src/app/desktop/download/macos-arm64/`. Offered only to a Mac
+ * whose browser reports an ARM CPU; `DESKTOP_DOWNLOAD_URL` stays the one every other Mac gets.
+ */
+export const DESKTOP_DOWNLOAD_MACOS_ARM64_URL = "/desktop/download/macos-arm64";
