@@ -173,6 +173,7 @@ export function createAttach({
       || (session.engine === 'cursor' && replayCursorFromStart))
     const historyEvents: LiveEvent[] = []
     let historyTurnOpen = false
+    let historySuperseded = false
     let observed = false
     sideRead('device', session.sessionId, () => { observed = !!device()?.needsTranscript(session.agentId, session.sessionId, session.engine) })
     const observe = observed
@@ -368,7 +369,7 @@ export function createAttach({
           // Turn closing owns its own authority: accepting a chip update is not a prerequisite.
           current = paneReadIdentity(resolve(agentId)) === identity && agyNormalizers.get(sessionId) === normalizer
           if (!current) return
-          if (normalizer.turnRevision !== revision) { historyTurnOpen = false; return }
+          if (normalizer.turnRevision !== revision) { historySuperseded = true; return }
           if (historyTurnOpen && capture && agy.agyPaneIdle(capture)) {
             normalizer.closeTurn()
             historyTurnOpen = false
@@ -380,7 +381,7 @@ export function createAttach({
         if (agyNormalizers.get(sessionId) === normalizer) agyNormalizers.delete(sessionId)
         return keepLiveNormalizer('changed binding while its pane was read')
       }
-      if (normalizer.turnRevision !== observedRevision) historyTurnOpen = false
+      if (normalizer.turnRevision !== observedRevision) historySuperseded = true
     } else if (engine('copilot')) {
       const copilot = engine('copilot')!
       // A JSONL tail like claude/agy. Its turn lifecycle comes from the agentStop hook, not the file —
@@ -438,7 +439,7 @@ export function createAttach({
     }
     // Close the old engine's turn before starting the tail: addSession may synchronously deliver a
     // new turn written after resume. Closing afterward would abandon that new turn instead.
-    const abandonedHistory = historyTurnOpen && relaunch?.engineStarted
+    const abandonedHistory = !historySuperseded && historyTurnOpen && relaunch?.engineStarted
     if (abandonedHistory) {
       console.log(`[agent] ${sid(session.agentId)} left the turn open at attach as history · it began before its engine was started again`)
       const folds: Array<Map<string, { closeTurn(): unknown }>> = [cursorNormalizers, museNormalizers, ampNormalizers,
@@ -474,7 +475,7 @@ export function createAttach({
     // Any fold of a transcript with content counts too: the watcher now tails it from the end, so a later
     // replay could only send history out again as if it were live.
     if (replayLive || lines.length || fromEnd?.content) replayedFirstTurn.add(session.sessionId)
-    if (initialEvents.length) {
+    if (!historySuperseded && initialEvents.length) {
       emit(session.sessionId, initialEvents)
       console.log(`[agent] ${sid(session.agentId)} replayed the first turn its transcript already held · ${initialEvents.length} events`)
     }
@@ -489,7 +490,7 @@ export function createAttach({
     // Nor for a turn left open before a new engine was started on the conversation (a resume, or a restore
     // that rebuilt the pane): that turn died with the engine before, and announcing it showed the
     // interrupted message starting anew (core/transcripts/relaunch.ts).
-    if (historyTurnOpen && !handover.hold && !abandonedHistory) {
+    if (!historySuperseded && historyTurnOpen && !handover.hold && !abandonedHistory) {
       const opened = historyEvents.findLast((event) => event.type === 'turn_started')
       if (opened) {
         console.log(`[agent] ${sid(session.agentId)} resumed the turn already open at attach`)
@@ -512,7 +513,7 @@ export function createAttach({
     // A fold from the end keeps only the last turn's start as history (lib/normalize.ts TranscriptFold), so a turn
     // that is no longer open is one that ended; a fold from the start keeps its end too, and says if it was killed.
     const last = historyEvents.findLast((event) => event.type === 'turn_started' || event.type === 'turn_ended')
-    if (!historyTurnOpen && last && !(last.type === 'turn_ended' && last.payload.aborted)) settled?.(session.sessionId)
+    if (!historySuperseded && !historyTurnOpen && last && !(last.type === 'turn_ended' && last.payload.aborted)) settled?.(session.sessionId)
     return true
   }
 

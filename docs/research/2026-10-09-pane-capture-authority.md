@@ -26,7 +26,9 @@ operation. Agy turn closing consumes the raw capture under separate binding, nor
 identity and transcript/turn revision checks, before waiting for profile acceptance.
 A newer chip update cannot suppress a valid idle-history close; a newer turn or
 rebind cannot authorize closing or replaying the old history. The check is repeated
-after the profile promise settles. Returned profile text is not an authority receipt. Native interpretation stays with the same owner; fixture bytes for
+after the profile promise settles. Superseded history is distinct from a finished
+turn: it produces neither replay nor a historical settlement notification. Returned
+profile text is not an authority receipt. Native interpretation stays with the same owner; fixture bytes for
 the runtime and transcript goldens stay unchanged.
 
 Validation is planned before running: typecheck; architecture; core and harnessd

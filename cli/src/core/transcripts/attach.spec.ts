@@ -661,7 +661,7 @@ describe('attaching a session', () => {
     })
 
     it('closes an idle agy history turn even when newer profile evidence discards the chip update', async () => {
-      const run = setup()
+      const run = setup({ settled: vi.fn() })
       vi.mocked(run.deps.captureTerminal).mockResolvedValue(IDLE_AGY)
       vi.mocked(run.deps.runtimeProfiles.capturePane).mockImplementationOnce(async (_session, capture, lines) => {
         await capture('agy-agent', lines)
@@ -670,11 +670,12 @@ describe('attaching a session', () => {
       await run.attach.attachSession(session('agy', transcript([{ events: [started()], open: true }])))
       expect(made('agy')[0].turnOpen).toBe(false)
       expect(run.deps.emit).not.toHaveBeenCalled()
+      expect(run.deps.settled).toHaveBeenCalledExactlyOnceWith('agy-s')
     })
 
     it.each(['binding', 'forgotten', 'new turn', 'later binding', 'later normalizer', 'later turn'] as const)(
       'does not close or replay agy history after %s supersedes its capture', async change => {
-        const run = setup(), s = session('agy', transcript([{ events: [started()], open: true }]))
+        const run = setup({ settled: vi.fn() }), s = session('agy', transcript([{ events: [started()], open: true }]))
         let finish!: (value: string) => void
         vi.mocked(run.deps.captureTerminal).mockReturnValueOnce(new Promise<string>(resolve => { finish = resolve }))
         const mutate = () => {
@@ -695,6 +696,7 @@ describe('attaching a session', () => {
         await pending
         expect(close).not.toHaveBeenCalled()
         expect(run.deps.emit).not.toHaveBeenCalled()
+        expect(run.deps.settled).not.toHaveBeenCalled()
       },
     )
 
