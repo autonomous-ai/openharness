@@ -29,11 +29,12 @@ import { hasSqliteReader } from '../../sqliteAvailability.js'
 import type { SqliteParam, SqliteRow } from '../../sqliteRead.js'
 import { argvTokens, resumeSessionId } from '../../tmux.js'
 import {
-  LIST_LIMIT, ancestry, argvSubcommand, engineProcess, ownerRecord, parseOwnerRecord, readSql, rowsOf, splitCounts,
+  LIST_LIMIT, ancestry, argvSubcommand, engineProcess, ownerRecord, parseOwnerRecord, readSql, checkedSql, rowsOf, splitCounts,
   storeStamp, tableColumns, tally, type Counting, type SqlRead, type Tally,
 } from './opencode.js'
 import { absoluteFolder, entries, epochMs, readJson, record, text } from './support.js'
 import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView, RunningProcess, ScanContext } from './types.js'
+import { externalEvidenceActive, externalReadFailed } from '../evidence.js'
 
 export interface HermesOptions {
   root: string
@@ -74,7 +75,7 @@ export interface HermesHome {
 
 /** The profile `hermes profile use <name>` made sticky, or null for the default. */
 export async function activeProfile(root: string): Promise<string | null> {
-  const name = (await readFile(join(root, 'active_profile'), 'utf8').catch(() => '')).trim()
+  const name = (await readFile(join(root, 'active_profile'), 'utf8').catch(error => { externalReadFailed(error, 'record'); return '' })).trim()
   return PROFILE_ID.test(name) && name !== 'default' ? name : null
 }
 
@@ -302,7 +303,7 @@ const START_SLACK_MS = 2_000
 export async function hermesLeases(home: string): Promise<HermesLease[]> {
   const file = await readJson(join(home, 'runtime', 'active_sessions.json'))
   const list = Array.isArray(file) ? file : record(file)?.entries
-  if (!Array.isArray(list)) return []
+  if (!Array.isArray(list)) { if (file !== null) externalReadFailed(new Error('invalid leases'), 'owner record'); return [] }
   const leases: HermesLease[] = []
   for (const item of list) {
     const entry = record(item)
@@ -311,7 +312,9 @@ export async function hermesLeases(home: string): Promise<HermesLease[]> {
     const started = entry?.process_start_time
     // A gateway's lease names a chat's key, not a stored session.
     if (!HERMES_HISTORY_ID_RE.test(sessionId) || text(entry?.surface).startsWith('gateway')) continue
-    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) continue
+    if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
+      externalReadFailed(new Error('invalid lease PID'), 'owner record'); continue
+    }
     leases.push({ sessionId, pid, ...(typeof started === 'number' && started > 0 ? { started: started * 1000 } : {}) })
   }
   return leases
@@ -341,7 +344,7 @@ export function hermesTurnOpen(rows: readonly SqliteRow[]): boolean | null {
 
 export function hermesProvider(options: HermesOptions): ExternalProvider & Counting {
   const { root } = options
-  const read = options.read ?? readSql
+  const read = checkedSql(options.read ?? readSql)
   const available = options.available ?? hasSqliteReader
   const now = options.now ?? Date.now
   const lastGood = new Map<string, Listed | null>()
@@ -384,7 +387,7 @@ export function hermesProvider(options: HermesOptions): ExternalProvider & Count
     lastScan: () => counts,
     async scan(ctx: ScanContext): Promise<ExternalSession[]> {
       counts = {}
-      if (!available()) return []
+      if (!available()) { externalReadFailed(new Error('SQLite unavailable'), 'conversation reader'); return [] }
       const active = await activeProfile(root)
       const sessions: HermesSession[] = []
       const failures: unknown[] = []
@@ -399,6 +402,7 @@ export function hermesProvider(options: HermesOptions): ExternalProvider & Count
           lastGood.set(home.dbPath, listed)
         } catch (error) {
           // One home locked or broken keeps what it said last time; the others still answer.
+          externalReadFailed(error, 'conversation store')
           failures.push(error)
           listed = lastGood.get(home.dbPath) ?? null
         }
@@ -432,8 +436,9 @@ export function hermesProvider(options: HermesOptions): ExternalProvider & Count
           at = { dbPath: home.dbPath, sessionId: await compressionTip(read, home.dbPath, sessionId) }
           break
         }
-        if (claims.has(at.sessionId)) return
-        claims.set(at.sessionId, {
+        const key = externalEvidenceActive() ? JSON.stringify([at.sessionId, owner.pid, at.dbPath, fromArgs, served(owner)]) : at.sessionId
+        if (claims.has(key)) return
+        claims.set(key, {
           sessionId: at.sessionId, pid: owner.pid, record: ownerRecord(at.dbPath, at.sessionId),
           ...(served(owner) ? { app: true } : {}),
           ...(fromArgs ? { fromArgs: true } : {}),
@@ -442,6 +447,9 @@ export function hermesProvider(options: HermesOptions): ExternalProvider & Count
       // A lease is exact, so it is read first and wins over the same session named in arguments.
       for (const home of homes) {
         for (const lease of await hermesLeases(home.home)) {
+          if (externalEvidenceActive() && (lease.started === undefined || byPid.get(lease.pid)?.started === undefined) && view.alive(lease.pid)) {
+            externalReadFailed(new Error('missing owner generation'), 'owner record'); continue
+          }
           if (!view.alive(lease.pid) || !leaseHeldBy(lease, byPid.get(lease.pid))) continue
           // The lease's pid is the REPL itself, or a terminal UI's gateway two levels under its
           // `hermes` (hermes → node UI → python gateway). A pid that is neither was reused.

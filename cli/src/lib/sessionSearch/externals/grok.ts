@@ -1,3 +1,4 @@
+import { externalReadFailed } from '../evidence.js'
 /**
  * Grok: one folder per conversation, `<GROK_HOME>/sessions/<group>/<id>/`, where the group is the
  * folder it ran in (URL-encoded, or a slug and hash with the path in `.cwd` when that is too long).
@@ -55,7 +56,7 @@ const skip = (reason: GrokSkip): GrokRead => ({ kind: 'skip', reason })
  * throws, so a scan's memo keeps nothing of it and the next scan reads it again.
  */
 async function jsonFile(path: string): Promise<unknown> {
-  const source = await readFile(path, 'utf8').catch(() => null)
+  const source = await readFile(path, 'utf8').catch(error => { externalReadFailed(error, 'record'); return null })
   return source === null ? undefined : JSON.parse(source)
 }
 
@@ -75,7 +76,7 @@ function update(line: string): { kind: string; at: number | null; event: string 
  * mid-file starts mid-line, so its first line is never read.
  */
 async function fromEnd<T>(path: string, pick: (line: string) => T | null): Promise<T | null> {
-  const size = (await stat(path).catch(() => null))?.size ?? 0
+  const size = (await stat(path).catch(error => { externalReadFailed(error, 'record'); return null }))?.size ?? 0
   for (const bytes of TAIL_BYTES) {
     const lines = (await readTail(path, bytes)).split('\n')
     for (let i = lines.length - 1; i >= (size > bytes ? 1 : 0); i--) {
@@ -92,7 +93,8 @@ async function prompted(path: string): Promise<boolean> {
   let found = false
   try {
     await forEachLine(path, 0, () => { found = true }, { skip: (head) => !PROMPT.test(head), shouldStop: () => found })
-  } catch {
+  } catch (error) {
+    externalReadFailed(error, 'conversation stream')
     return false
   }
   return found
@@ -200,7 +202,7 @@ export function grokProvider(options: GrokOptions): ExternalProvider {
             fileStamp(join(dir, 'summary.json')), fileStamp(join(dir, 'prompt_context.json')),
           ])
           const fingerprint = `${stamp.stamp}|${summary?.stamp ?? '-'}|${context?.stamp ?? '-'}`
-          const read = await ctx.memo(`grok:${dir}`, fingerprint, () => readGrokSession(dir, entry.name)).catch(() => null)
+          const read = await ctx.memo(`grok:${dir}`, fingerprint, () => readGrokSession(dir, entry.name)).catch(error => { externalReadFailed(error, 'record'); return null })
           await ctx.pace()
           // Half-written: nothing was remembered, and the next scan reads it again.
           if (read?.kind !== 'session' || ctx.excluded(read.cwd)) continue
@@ -215,13 +217,16 @@ export function grokProvider(options: GrokOptions): ExternalProvider {
     async owners(view: ProcessView): Promise<OwnerClaim[]> {
       const listed = await readJson(join(options.home, 'active_sessions.json'))
       // Grok itself starts over from an empty list when this file is corrupt.
-      if (!Array.isArray(listed) || !listed.length) return []
+      if (!Array.isArray(listed)) { if (listed !== null) externalReadFailed(new Error('invalid active sessions'), 'owner record'); return [] }
+      if (!listed.length) return []
       const byPid = new Map<number, Array<{ sessionId: string; cwd: string; at: number }>>()
       for (const item of listed) {
         const entry = record(item)
         const sessionId = text(entry?.session_id)
         const pid = entry?.pid
-        if (!UUID.test(sessionId) || typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) continue
+        if (!UUID.test(sessionId) || typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) {
+          externalReadFailed(new Error('invalid active session'), 'owner record'); continue
+        }
         byPid.set(pid, [...byPid.get(pid) ?? [], { sessionId, cwd: text(entry?.cwd), at: epochMs(entry?.opened_at) ?? 0 }])
       }
       const rows = new Map((await view.list()).map((row) => [row.pid, row]))

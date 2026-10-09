@@ -1,3 +1,4 @@
+import { externalReadFailed } from '../evidence.js'
 /**
  * OpenCode and Kilo (an OpenCode fork): one SQLite store each, `opencode.db` and `kilo.db`, with the
  * same `session` / `message` / `part` tables (measured: opencode 1.18.31, kilo 7.4.20). One list query
@@ -121,7 +122,7 @@ export function opencodeTurnOpen(rows: readonly SqliteRow[]): boolean | null {
 
 export function opencodeProvider(options: OpencodeOptions): ExternalProvider & Counting {
   const { engine, dbPath } = options
-  const read = options.read ?? readSql
+  const read = checkedSql(options.read ?? readSql)
   const available = options.available ?? hasSqliteReader
   let counts: Tally = {}
   const history = (sessionId: string) => engine === 'kilo'
@@ -132,7 +133,7 @@ export function opencodeProvider(options: OpencodeOptions): ExternalProvider & C
     lastScan: () => counts,
     async scan(ctx: ScanContext): Promise<ExternalSession[]> {
       counts = {}
-      if (!available()) return []
+      if (!available()) { externalReadFailed(new Error('SQLite unavailable'), 'conversation reader'); return [] }
       const stamp = await storeStamp(dbPath)
       if (!stamp) return []
       const listed = await ctx.memo(`${engine}:${dbPath}`, stamp, () => listSessions(read, dbPath))
@@ -191,6 +192,15 @@ export function opencodeProvider(options: OpencodeOptions): ExternalProvider & C
 export type SqlRead = (dbPath: string, sql: string, params?: SqliteParam[]) => Promise<SqliteReadResult>
 
 export const readSql: SqlRead = (dbPath, sql, params = []) => sqliteReadAll(dbPath, sql, params)
+
+/** A swallowed failed statement must never authorize absence of an external owner. */
+export function checkedSql(read: SqlRead): SqlRead {
+  return async (...args) => {
+    const answer = await read(...args)
+    if (!answer.ok) externalReadFailed(new Error('SQLite read failed'), 'conversation store')
+    return answer
+  }
+}
 
 /** How many rows each rule kept out of a scan, and how many it found. */
 export type Tally = Record<string, number>

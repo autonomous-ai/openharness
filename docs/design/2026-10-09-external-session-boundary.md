@@ -8,7 +8,7 @@ Core retains adoption decisions, canonical/alias reservations, process-incarnati
 
 A pending adoption survives daemon/tmux restart. Stop cancels it and its verified inert pane without archiving/deleting the external conversation, signalling its owner, or allowing delayed work to revive it. Owner busy uses a per-intent hold, not the pass-wide service outage map. A bounded coalesced refresh must return held promptly, never idle-poll inside heldLaunches global queue.
 
-Before any signal, recheck core generation, route, exact owner PID/start marker/session/TTY and non-Harness ownership. Recheck after foreground-group lookup and before TERM, KILL and TTY reset. A signal already sent cannot be undone; persist that phase. An identity replacement cannot inherit permission to terminate. Never trust worker to signal anything.
+Before any signal, recheck core generation, route, exact owner PID/start marker/session/TTY and non-Harness ownership. Recheck after foreground-group lookup and before TERM and KILL. Do not reset the TTY after exit: its ownership can no longer be proved. A signal already sent cannot be undone; persist that phase. An identity replacement cannot inherit permission to terminate. Never trust worker to signal anything.
 
 Admission/dispatch must have a durable boundary. Generic restore currently treats held panes as inert: crash after respawn but before its starting commit would replay. Record dispatch phase before the side effect and reconcile exact pane/process on restart. Once admitted, resume is core owned and strict (never fresh fallback), and never asks search again. Keep launch prep outside the pane-operation lock so Stop can cancel it immediately.
 

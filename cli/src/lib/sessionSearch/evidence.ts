@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 
 interface Evidence { reason?: string; requirePresent: boolean }
 const evidence = new AsyncLocalStorage<Evidence>()
+export const externalEvidenceActive = (): boolean => evidence.getStore() !== undefined
 
 /** Called even by readers which intentionally swallow errors for their display-only callers. */
 export function externalReadFailed(error: unknown, operation = 'read'): void {

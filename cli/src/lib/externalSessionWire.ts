@@ -41,7 +41,9 @@ export function externalSessionFact(value: unknown): ExternalSessionFact | null 
     || !text(value.title, 4096) || typeof value.mtime !== 'number' || !Number.isFinite(value.mtime) || value.mtime < 0
     || !(value.transcriptPath === null || path(value.transcriptPath))
     || !(value.aliases === undefined || strings(value.aliases, 256, 200) && value.aliases.every(id))
-    || !(value.launchArgs === undefined || strings(value.launchArgs, 64, 4096))
+    || !(value.launchArgs === undefined || Array.isArray(value.launchArgs) && (value.launchArgs.length === 0
+      || value.engine === 'hermes' && value.launchArgs.length === 2 && value.launchArgs[0] === '-p'
+      && typeof value.launchArgs[1] === 'string' && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(value.launchArgs[1])))
     || !(value.archived === undefined || value.archived === true)) return null
   return {
     sessionId: value.sessionId, engine: value.engine, cwd: value.cwd, origin: value.origin as ExternalSessionFact['origin'],
@@ -68,12 +70,13 @@ export function externalSessionAnswer(value: unknown, request: ExternalSessionRe
     if (value.ok === false) return externalUnavailable(text(value.detail, 4096) ? value.detail : undefined)
     const target = externalSessionRequest(value.request)
     if (value.ok !== true || !target || target.sessionId !== request.sessionId || target.engine !== request.engine
-      || typeof value.busy !== 'boolean' || !(value.generation === null || text(value.generation, 200) && value.generation.length > 0)) return externalUnavailable()
+      || typeof value.busy !== 'boolean' || !(value.generation === null || text(value.generation, 200) && /^(linux|ps):\d+$/.test(value.generation))) return externalUnavailable()
     const session = value.session === null ? null : externalSessionFact(value.session)
     const owner = value.owner === null ? null : externalSessionOwner(value.owner)
     if (value.session !== null && !session || value.owner !== null && !owner
       || session && session.sessionId !== request.sessionId && !session.aliases?.includes(request.sessionId)
       || owner && (!session || owner.engine !== session.engine)
+      || owner?.tty && !owner.harness && !owner.fromArgs && !owner.unverified && value.generation === null
       || !owner && (value.generation !== null || value.busy)) return externalUnavailable()
     return { ok: true, request: target, session, owner, generation: value.generation as string | null, busy: value.busy }
   } catch { return externalUnavailable() }

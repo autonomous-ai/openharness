@@ -211,8 +211,8 @@ const EDGE: RegExp[] = [
   /^lib\/(commander|agentNotifications)\.ts$/,
   // Package execution belongs to the Store; core retains the installed index and launch contracts.
   /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts|runtime|materialize|shell|preparation)\.ts$/,
-  // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.
-  /^lib\/sessionSearch\/(?!external\.ts$|externals\/)/,
+  // Search owns external catalogs and provider reads too. Core keeps only the wire's declared types.
+  /^lib\/sessionSearch\/(?!externals\/types\.ts$)/,
   // Downloading builds: the updater's, in a process the master runs (services/updaterProcess.ts). The core
   // never downloads a build.
   /^lib\/(selfUpdate|runtimeInstall)\.ts$/, /^tui\/(update|install)\.ts$/,
@@ -282,7 +282,7 @@ const FACETS_FREE_OF_THEM: Array<[string, string]> = [
   ['lib/engineLaunch.ts', '(o6)'],
   ['lib/gridLaunch.ts', '(o6)'],
   ['lib/subscriptionModel.ts', '(o6)'],
-  // Adoption: the other engines' readers, each loaded on the first scan or question that needs it.
+  // Search's provider composition still loads each engine lazily in its own process.
   ['lib/sessionSearch/externals/index.ts', '(o5)'],
   ['lib/sessionSearch/external.ts', '(o5)'],
   ['core/agents/adopt.ts', '(o5)'],

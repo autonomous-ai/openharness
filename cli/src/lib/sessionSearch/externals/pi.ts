@@ -1,3 +1,4 @@
+import { externalReadFailed } from '../evidence.js'
 /**
  * Pi: `<agentDir>/sessions/--<folder>--/<time>_<id>.jsonl`, or one flat folder when the person moved
  * them (`PI_CODING_AGENT_SESSION_DIR`, else `sessionDir` in `<agentDir>/settings.json`; Pi then
@@ -88,14 +89,14 @@ export interface PiTitleRead { end: number; lead: string; title: string }
  * header) is read again from the start. Only lines that name `session_info` are parsed.
  */
 export async function readPiTitle(path: string, prior?: PiTitleRead): Promise<PiTitleRead> {
-  const [start, info] = await Promise.all([readHead(path, LEAD_BYTES), stat(path).catch(() => null)])
+  const [start, info] = await Promise.all([readHead(path, LEAD_BYTES), stat(path).catch(error => { externalReadFailed(error, 'record'); return null })])
   const lead = start.split('\n')[0]
   const from = prior && info && prior.lead === lead && info.size >= prior.end ? prior : { end: 0, lead, title: '' }
   let title = from.title
   const read = await forEachLine(path, from.end, ({ text: line }) => {
     const row = record(parseLine(line))
     if (row?.type === 'session_info') title = text(row.name).trim()
-  }, { skip: (head) => !head.includes('"session_info"') }).catch(() => null)
+  }, { skip: (head) => !head.includes('"session_info"') }).catch(error => { externalReadFailed(error, 'record'); return null })
   // Unreadable now (gone, or being replaced): nothing is carried over, and the next change reads it whole.
   return read ? { end: read.end, lead, title } : { end: 0, lead: '', title: '' }
 }

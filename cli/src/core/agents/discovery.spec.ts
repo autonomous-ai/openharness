@@ -293,3 +293,14 @@ describe('discovery', () => {
     expect(run.deps.announceSession).toHaveBeenCalledTimes(1)
   })
 })
+
+it('cannot promote an unadmitted external waiting pane into a live engine', async () => {
+  const test = setup()
+  const pending = row({ active: false, sessionId: '', externalResume: { phase: 'waiting' } as RegisteredSession['externalResume'] })
+  test.rows.set(pending.agentId, pending)
+  await test.handlers.onObserved(seen(), pending)
+  expect(test.deps.registry.updateRuntimes).not.toHaveBeenCalled()
+  expect(test.deps.registry.updateProcessIdentity).not.toHaveBeenCalled()
+  expect(test.deps.registry.setLaunch).not.toHaveBeenCalled()
+  expect(test.deps.bindObservedAgent).not.toHaveBeenCalled()
+})

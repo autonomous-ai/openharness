@@ -1,7 +1,12 @@
 import { expect, it, vi } from 'vitest'
 import { createExternalSessions } from './externalSessions.js'
 import { externalReadFailed } from '../lib/sessionSearch/evidence.js'
+import { externalProcessGeneration } from '../lib/externalProcessGeneration.js'
+import { processView, processTtys, harnessTtys } from '../lib/sessionSearch/externals/support.js'
 import type { ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from '../lib/sessionSearch/externals/types.js'
+vi.mock('../lib/externalProcessGeneration.js', () => ({ externalProcessGeneration: vi.fn(() => 'ps:1000') }))
+vi.mock('../lib/sessionSearch/externals/support.js', async original => ({ ...await original<object>(),
+  processView: vi.fn(), processTtys: vi.fn(), harnessTtys: vi.fn() }))
 
 const target = { sessionId: 'conversation', engine: 'claude' as const }
 const session: ExternalSession = { ...target, cwd: '/workspace', origin: 'terminal', title: '', mtime: 10, transcriptPath: '/store/conversation.jsonl' }
@@ -37,6 +42,41 @@ it('never uses last-good catalog data to authorize an unavailable reader', async
   expect(await f.reader.inspect(target)).toMatchObject({ ok: false })
 })
 
+it('uses the newest canonical record before aliases, exactly as the catalog does', async () => {
+  const f = fixture()
+  vi.mocked(f.provider.scan).mockResolvedValue([
+    { ...session, cwd: '/older', mtime: 1 },
+    { ...session, sessionId: 'other', aliases: ['conversation'], cwd: '/alias', mtime: 100 },
+    { ...session, cwd: '/newest', mtime: 50 },
+  ])
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: true, session: { cwd: '/newest' } })
+})
+
+it('holds conflicting exact records/app evidence and missing terminal evidence', async () => {
+  const f = fixture()
+  for (const other of [{ ...f.claim, record: '/different' }, { ...f.claim, app: true }]) {
+    vi.mocked(f.provider.owners!).mockResolvedValue([f.claim, other])
+    expect(await f.reader.inspect(target)).toMatchObject({ ok: false })
+  }
+  vi.mocked(f.provider.owners!).mockResolvedValue([f.claim, { ...f.claim }])
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: true })
+  f.options.open.ttys.mockResolvedValue(new Map())
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: false })
+})
+
+it('checks process generation after the activity read and treats tmux permission failure as unknown', async () => {
+  const f = fixture()
+  vi.mocked(f.provider.owners!).mockResolvedValue([f.claim])
+  vi.mocked(f.provider.busy!).mockImplementation(async () => { f.generation.mockReturnValue(null); return false })
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: false })
+  f.generation.mockReturnValue('ps:1000')
+  vi.mocked(f.provider.busy!).mockResolvedValue(false)
+  const { harnessTtys } = await vi.importActual<typeof import('../lib/sessionSearch/externals/support.js')>('../lib/sessionSearch/externals/support.js')
+  f.options.open.harnessTtys.mockImplementation(() => harnessTtys(async () => ({ failed: true, stdout: '',
+    stderr: 'error connecting to /fixture/socket (Permission denied)' }), true))
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: true, owner: { unverified: true } })
+})
+
 it('refuses unavailable or conflicting owners and changed process incarnations', async () => {
   const f = fixture()
   vi.mocked(f.provider.owners!).mockRejectedValueOnce(new Error('unreadable'))
@@ -66,4 +106,52 @@ it('keeps app, argument-only, Harness and unverifiable pane owners distinguishab
   expect(await f.reader.inspect(target)).toMatchObject({ ok: true, busy: true })
   f.provider.busy = undefined
   expect(await f.reader.inspect(target)).toMatchObject({ ok: true, busy: true })
+})
+
+it('uses fresh provider facts after cold discovery finds an ID from another engine', async () => {
+  for (const result of ['found', 'missing', 'failed'] as const) {
+    const f = fixture()
+    vi.mocked(f.provider.scan).mockResolvedValue([])
+    const other: ExternalProvider = { engine: 'codex', scan: vi.fn(async () => [{ ...session, engine: 'codex' as const }]) }
+    vi.mocked(other.scan).mockImplementationOnce(async () => [{ ...session, engine: 'codex' }])
+    if (result === 'missing') vi.mocked(other.scan).mockResolvedValue([])
+    if (result === 'failed') vi.mocked(other.scan).mockImplementation(async () => { throw new Error('reader failed') })
+    const reader = createExternalSessions({ ...f.options, providers: [f.provider, other] })
+    expect(await reader.inspect(target)).toMatchObject(result === 'failed' ? { ok: false } :
+      { ok: true, session: result === 'missing' ? null : { engine: 'codex' } })
+    expect(other.scan).toHaveBeenCalledTimes(2)
+  }
+})
+
+it('bounds the actual provider reads even when callers give up waiting', async () => {
+  const f = fixture(), finish: Array<(sessions: ExternalSession[]) => void> = []
+  vi.mocked(f.provider.scan).mockImplementation(() => new Promise(resolve => finish.push(resolve)))
+  const pending = Array.from({ length: 4 }, () => f.reader.inspect(target))
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: false, detail: expect.stringContaining('finish verifying') })
+  expect(f.provider.scan).toHaveBeenCalledTimes(4)
+  for (const resolve of finish) resolve([session])
+  expect((await Promise.all(pending)).every(answer => answer.ok)).toBe(true)
+  vi.mocked(f.provider.scan).mockResolvedValue([session])
+  expect(await f.reader.inspect(target)).toMatchObject({ ok: true })
+})
+
+it('rechecks the OS incarnation from its snapshot using default readers and preserves unknown terminals', async () => {
+  const f = fixture()
+  vi.mocked(processView).mockReturnValue(f.view)
+  vi.mocked(processTtys).mockResolvedValue(new Map([[7, '/dev/fixture-terminal']]))
+  vi.mocked(harnessTtys).mockResolvedValue(new Set())
+  vi.mocked(externalProcessGeneration).mockReturnValue('ps:1000')
+  vi.mocked(f.provider.owners!).mockResolvedValue([f.claim])
+  const reader = createExternalSessions({ providers: [f.provider] })
+  expect(await reader.inspect(target)).toMatchObject({ ok: true, generation: 'ps:1000', session: { title: '' } })
+  vi.mocked(externalProcessGeneration).mockReturnValue('ps:2000')
+  expect(await reader.inspect(target)).toMatchObject({ ok: false })
+  vi.mocked(f.view.list).mockResolvedValue([{ pid: 7, ppid: 1, executable: 'fixture', args: '' }])
+  expect(await reader.inspect(target)).toMatchObject({ ok: false })
+  vi.mocked(f.view.list).mockResolvedValue([])
+  expect(await reader.inspect(target)).toMatchObject({ ok: false })
+  vi.mocked(processTtys).mockResolvedValue(new Map([[7, null]]))
+  expect(await reader.inspect(target)).toMatchObject({ ok: true, owner: { tty: null } })
+  vi.mocked(f.provider.owners!).mockResolvedValue([{ ...f.claim, pid: 0 }])
+  expect(await reader.inspect(target)).toMatchObject({ ok: false })
 })

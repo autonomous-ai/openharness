@@ -14,7 +14,7 @@ it('preserves ordered terminal-owner signals, bounded waits and terminal restora
     for (const os of ['darwin', 'linux']) {
       Object.defineProperty(process, 'platform', { value: os })
       vi.resetModules()
-      const { stopSessionOwner } = await import('./sessionSearch/external.js')
+      const { stopSessionOwner } = await import('./externalOwnerControl.js')
       for (const mode of ['term', 'kill', 'stuck', 'gone', 'group', 'job-failed', 'signal-failed', 'tty-failed', 'no-tty']) {
         const effects: unknown[] = []
         let alive = mode !== 'gone', signals = 0, waited = 0

@@ -96,9 +96,7 @@ function setup(over: Partial<CreateAgentDeps> = {}) {
   const deps: CreateAgentDeps = {
     tmuxBackend: {} as CreateAgentDeps['tmuxBackend'],
     registry: { setLaunch: vi.fn(() => ({ ...pending, launch: { state: 'ready' } })) } as unknown as CreateAgentDeps['registry'],
-    adoptableSession: vi.fn(async () => ({ ok: true, cwd: folder(), title: 'Adopted', owner: null, busy: false, launchArgs: [] })) as never,
-    heldBy: vi.fn(async () => 'same' as const),
-    takeOverWhenIdle: vi.fn(async () => {}),
+    externalResume: vi.fn<CreateAgentDeps['externalResume']>(async () => ({ ok: true, session: pending })),
     watchNewPane: vi.fn(async () => {}),
     announceSession: vi.fn(),
     attachDsh: vi.fn(),
@@ -127,6 +125,16 @@ describe('creating an agent', () => {
     vi.mocked(createAndRegisterPane).mockReset().mockResolvedValue({ ok: true, spawned: { runtime: { paneId: '%1' } }, pending } as never)
   })
   afterEach(() => { vi.restoreAllMocks(); vi.clearAllMocks() })
+
+  it('hands external resume to its durable controller before folder, instructions or engine preparation', async () => {
+    const externalResume = vi.fn<CreateAgentDeps['externalResume']>(async () => ({ ok: true, session: pending }))
+    const test = setup({ externalResume })
+    const input = request({ resumeSessionId: 'conversation' })
+    expect(await test.create(input)).toEqual({ ok: true, session: pending })
+    expect(externalResume).toHaveBeenCalledWith(input)
+    expect(createAndRegisterPane).not.toHaveBeenCalled()
+    expect(test.deps.prepareApiTools).not.toHaveBeenCalled()
+  })
 
   describe('refusals before any pane opens', () => {
     it('without tmux, in a folder being purged, or in a folder that is not one', async () => {
@@ -193,15 +201,7 @@ describe('creating an agent', () => {
       expect(await create(request({ grid }))).toMatchObject({ detail: "could not write claude's grid configuration · worse" })
     })
 
-    it('when opening a conversation that cannot be opened, or that moved or would not quit in its terminal', async () => {
-      const refused = setup({ adoptableSession: vi.fn(async () => ({ ok: false, error: 'SESSION_NOT_FOUND', detail: 'gone' })) as never })
-      expect(await refused.create(request({ resumeSessionId: 'c1' }))).toEqual({ ok: false, error: 'SESSION_NOT_FOUND', detail: 'gone' })
-      const adopted = vi.fn(async () => ({ ok: true, cwd: folder(), title: '', owner, busy: false, launchArgs: [] }))
-      const moved = setup({ adoptableSession: adopted as never, heldBy: vi.fn(async () => 'other' as const) })
-      expect(await moved.create(request({ resumeSessionId: 'c1', takeOver: 'now' }))).toMatchObject({ error: 'SESSION_OPEN_ELSEWHERE' })
-      vi.mocked(stopSessionOwner).mockResolvedValueOnce(false)
-      expect(await setup({ adoptableSession: adopted as never }).create(request({ resumeSessionId: 'c1', takeOver: 'now' }))).toMatchObject({ error: 'SESSION_STOP_FAILED' })
-    })
+
 
     it('when the pane itself cannot be made', async () => {
       vi.mocked(createAndRegisterPane).mockResolvedValueOnce({ ok: false, error: 'SPAWN_FAILED', detail: 'tmux said no' } as never)
@@ -218,7 +218,6 @@ describe('creating an agent', () => {
       expect(deps.announceSession).toHaveBeenCalledWith(pending)
       expect(deps.attachDsh).not.toHaveBeenCalled()
       expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, { runtime: { paneId: '%1' } }, ['claude'], { install: 'recipe' }, undefined)
-      expect(deps.takeOverWhenIdle).not.toHaveBeenCalled()
       const pane = vi.mocked(createAndRegisterPane).mock.calls[0][0]
       expect(pane).toMatchObject({ engine: 'claude', sessionLabel: expect.any(String), grid: null, gridLaunchRecord: null, dsh: null, dshRuntime: null, defaultName: null })
     })
@@ -389,47 +388,8 @@ describe('creating an agent', () => {
       expect(deps.watchNewPane).toHaveBeenCalledWith('claude', pending, expect.anything(), ['claude'], undefined, undefined)
     })
 
-    it('opens a conversation Harness did not start, in its folder and under its title, resuming it', async () => {
-      const cwd = folder()
-      const adopted = vi.fn(async () => ({ ok: true, cwd, title: 'Fix the build', owner: null, busy: false, launchArgs: ['--model', 'opus'] }))
-      const { create } = setup({ adoptableSession: adopted as never })
-      await create(request({ resumeSessionId: 'c1' }))
-      expect(vi.mocked(createAndRegisterPane).mock.calls[0][0]).toMatchObject({ cwd, defaultName: 'Fix the build' })
-      expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).toMatchObject({ resumeSessionId: 'c1', extraArgs: ['--model', 'opus'] })
-      const untitled = vi.fn(async () => ({ ok: true, cwd, title: '', owner: null, busy: false, launchArgs: [] }))
-      await setup({ adoptableSession: untitled as never }).create(request({ resumeSessionId: 'c1' }))
-      expect(vi.mocked(createAndRegisterPane).mock.calls[1][0]).toMatchObject({ defaultName: null })
-      await setup({ adoptableSession: untitled as never }).create(request({ resumeSessionId: 'c1', name: 'Mine' }))
-      expect(vi.mocked(createAndRegisterPane).mock.calls[2][0]).toMatchObject({ defaultName: 'Mine' })
-    })
 
-    it('takes a conversation over from a terminal: stopped now (mid-turn: told to continue), or once its turn ends', async () => {
-      const log = vi.mocked(console.log)
-      const busyOwner = vi.fn(async () => ({ ok: true, cwd: folder(), title: '', owner, busy: true, launchArgs: [] }))
-      const now = setup({ adoptableSession: busyOwner as never })
-      await now.create(request({ resumeSessionId: 'c1', takeOver: 'now' }))
-      expect(stopSessionOwner).toHaveBeenCalledWith(owner)
-      expect(vi.mocked(buildEngineLaunchArgv).mock.calls[0][1]).toMatchObject({ firstPrompt: 'continue' })
-      expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.includes('pid 7 stopped mid-turn'))).toBe(true)
-      // An engine that cannot open with a message just resumes where it stopped.
-      vi.mocked(supportsFirstPrompt).mockReturnValueOnce(false)
-      await now.create(request({ resumeSessionId: 'c1', takeOver: 'now' }))
-      expect(vi.mocked(buildEngineLaunchArgv).mock.calls[1][1]).not.toHaveProperty('firstPrompt')
-      const idleOwner = vi.fn(async () => ({ ok: true, cwd: folder(), title: '', owner, busy: false, launchArgs: [] }))
-      await setup({ adoptableSession: idleOwner as never }).create(request({ resumeSessionId: 'c1', takeOver: 'now' }))
-      expect(log.mock.calls.map(([line]) => String(line)).some((line) => line.endsWith('pid 7 stopped'))).toBe(true)
-      // Quit in its terminal meanwhile: nothing to stop.
-      const free = setup({ adoptableSession: idleOwner as never, heldBy: vi.fn(async () => 'free' as const) })
-      vi.mocked(stopSessionOwner).mockClear()
-      await free.create(request({ resumeSessionId: 'c1', takeOver: 'now' }))
-      expect(stopSessionOwner).not.toHaveBeenCalled()
-      // To wait for its turn: the pane waits on the process, and the watcher has a day.
-      const wait = setup({ adoptableSession: busyOwner as never })
-      await wait.create(request({ resumeSessionId: 'c1', takeOver: 'wait' }))
-      expect(stopSessionOwner).not.toHaveBeenCalled()
-      expect(vi.mocked(buildEngineLaunchArgv).mock.lastCall?.[1]).toMatchObject({ waitForPid: { pid: 7, name: 'Claude' } })
-      expect(wait.deps.watchNewPane).toHaveBeenCalledWith('claude', pending, expect.anything(), ['claude'], { install: 'recipe' }, 24 * 60 * 60_000)
-      expect(wait.deps.takeOverWhenIdle).toHaveBeenCalledWith('a1', owner, 'c1')
-    })
+
+
   })
 })

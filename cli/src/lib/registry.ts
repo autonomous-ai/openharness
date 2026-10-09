@@ -56,6 +56,7 @@ import { lockOwnerAlive, lockStartMarker, processLockIdentity } from './processL
 import { hardenPrivateStateFileIfPresent, readPrivateStateFile, secureStateDirectory } from './secureState.js'
 import { mergeTerminalRuntimes, processIdentityKey, sameProcessIdentity, terminalPlacementKey, terminalRouteKey } from './terminalRuntime.js'
 import type { HookTerminalHint, ProcessIdentity, TerminalRuntimeRef } from './terminalTypes.js'
+import { externalReservations, externalResumePending, externalResumeIds, parseExternalResume, type ExternalResumeIntent } from './externalResume.js'
 
 export type { ProcessIdentity } from './terminalTypes.js'
 
@@ -91,6 +92,8 @@ export interface RegisteredSession {
   launch?: AgentLaunch
   /** Enter on stopped work must never become a fresh conversation, including after a daemon restart. */
   resumeOnly?: true
+  /** External admission survives a crash independently of any conversation Harness already owns. */
+  externalResume?: ExternalResumeIntent
   /**
    * THE AGENT. Public identity: this is what web tabs, device tiles and every inbound frame address.
    *
@@ -562,8 +565,11 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   const active = row.active === true
   const projectedTmuxPane = tmuxProjection(runtimes)
   const launch = normalizedLaunch(row.launch)
+  const externalResume = row.externalResume === undefined ? undefined : parseExternalResume(row.externalResume)
   if (row.schemaVersion !== 2
     || typeof row.active !== 'boolean'
+    || externalResume === null || externalResume && externalResume.request.engine !== row.engine
+    || externalResume && externalResumePending(externalResume) && (row.sessionId !== '' || row.processIdentity !== null || launch?.state !== 'held')
     || typeof row.agentId !== 'string' || !row.agentId
     || typeof row.sessionId !== 'string'
     || typeof row.engine !== 'string' || !AGENT_ENGINES.has(row.engine as AgentEngine)
@@ -581,12 +587,13 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, ...rest } = row
+  const { lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
   return {
     ...rest,
+    ...(externalResume ? { externalResume } : {}),
     ...(scmLaunch ? { scmLaunch } : {}),
     ...(normalizedClosePlan(rawClosePlan) ? { closePlan: normalizedClosePlan(rawClosePlan)! } : {}),
     schemaVersion: 2,
@@ -695,9 +702,9 @@ function validatedRows(values: readonly unknown[]): RegisteredSession[] | null {
     const row = strictPersistedRow(value)
     if (!row || agents.has(row.agentId)) return null
     agents.add(row.agentId)
-    if (row.sessionId) {
-      if (sessions.has(row.sessionId)) return null
-      sessions.add(row.sessionId)
+    for (const id of new Set(externalReservations(row))) {
+      if (sessions.has(id)) return null
+      sessions.add(id)
     }
     if (row.processIdentity) {
       const key = processIdentityKey(row.engine, row.processIdentity)
@@ -1108,7 +1115,8 @@ class Registry {
       }
       const { rows: parsed, dropped, changed: strippedRetired } = withoutRetiredRows(stored)
       if (dropped) console.log(`[registry] dropped ${dropped} agent(s) that lived only in a retired Herdr terminal`)
-      if (parsed.some(hasUnknownRowSchema)) {
+      if (parsed.some(hasUnknownRowSchema) || parsed.some(value => !!value && typeof value === 'object'
+        && Object.hasOwn(value, 'externalResume') && !strictPersistedRow(value))) {
         this.writeBlocked = true
         console.error('[registry] registry contains an unknown row schema; refusing to overwrite it')
         return
@@ -1208,6 +1216,7 @@ class Registry {
           active,
           ...(launch ? { launch } : {}),
           ...(raw.resumeOnly === true ? { resumeOnly: true } : {}),
+          ...(raw.externalResume ? { externalResume: parseExternalResume(raw.externalResume)! } : {}),
           agentId,
           boundAt: bound ? (typeof raw.boundAt === 'number' ? raw.boundAt : (raw.registeredAt ?? now)) : null,
           engine,
@@ -1370,6 +1379,7 @@ class Registry {
     const { engine, processIdentity } = input
     const runtimes = normalizedRuntimes(input.runtimes, input.tmuxPane)
     if (!runtimes.length || !validProcessIdentity(processIdentity)) return null
+    if (runtimes.some(runtime => externalResumePending(this.agents.get(this.runtimeIndex.get(terminalRouteKey(runtime)) ?? '')?.externalResume))) return null
     const processAgentId = this.processIndex.get(processIdentityKey(engine, processIdentity))
     const processAgent = processAgentId ? this.agents.get(processAgentId) : undefined
     const routeAgent = runtimes
@@ -1505,8 +1515,12 @@ class Registry {
     label?: string | null
     /** The agent this one is a fork of — see RegisteredSession.forkedFrom. */
     forkedFrom?: ForkOrigin | null
+    externalResume?: ExternalResumeIntent
   }): RegisteredSession | null {
     if (this.writeBlocked) return null
+    const externalResume = input.externalResume === undefined ? undefined : parseExternalResume(input.externalResume)
+    if (externalResume === null || externalResume && (externalResume.phase !== 'waiting' || externalResume.request.engine !== input.engine
+      || this.externalConflict(externalResumeIds(externalResume)))) return null
     const runtimes = normalizedRuntimes(input.runtimes)
     if (!runtimes.length) return null
     if (runtimes.some((runtime) => this.runtimeIndex.has(terminalRouteKey(runtime)))) return null
@@ -1514,8 +1528,9 @@ class Registry {
     const agentId = randomUUID()
     const entry: RegisteredSession = {
       schemaVersion: 2,
-      active: true,
-      launch: { state: 'starting' },
+      active: !externalResume,
+      launch: externalResume ? { state: 'held', service: 'search', detail: 'Waiting for the search service to verify this conversation.' } : { state: 'starting' },
+      ...(externalResume ? { externalResume } : {}),
       defaultName: normalizedDefaultName(input.defaultName) ?? this.automaticName(input.label?.trim() || engineLabel(input.engine), new Date(now)),
       agentId,
       sessionId: '',
@@ -1555,8 +1570,12 @@ class Registry {
     }
     this.index(entry)
     this.terminalAvailableAgents.add(entry.agentId)
-    this.save()
-    return entry
+    try { this.save(!!externalResume, false, externalResume ? agentId : undefined) } catch {
+      this.drop(entry)
+      this.terminalAvailableAgents.delete(entry.agentId)
+      return null
+    }
+    return this.byAgent(entry.agentId) ?? null
   }
 
   /** A stopped agent gets a new terminal route while keeping its saved conversation and identity.
@@ -1655,6 +1674,9 @@ class Registry {
         .map((agent) => this.adoptEngine(agent.agentId, engine, validProcessIdentity(input.processIdentity) ? input.processIdentity : null))
         .find((agent): agent is RegisteredSession => !!agent))
     const agentId = processAgent?.agentId ?? ''
+    // An inert adoption pane cannot bind a hook before core has admitted its external conversation.
+    if (processAgent?.externalResume && processAgent.externalResume.phase !== 'admitted') return null
+    if (this.externalConflict([sessionId], agentId)?.externalResume) return null
     if (
       !sessionId
       || !agentId
@@ -1812,6 +1834,8 @@ class Registry {
       ...(existing?.bypassPermission ? { bypassPermission: true } : {}),
       ...(existing?.permissionMode ? { permissionMode: existing.permissionMode } : {}),
       ...(existing?.resumeOnly ? { resumeOnly: true, launch: { state: 'ready' as const } } : {}),
+      // Keep alias reservations and profile arguments across the first hook and daemon restart.
+      ...(existing?.externalResume && existing.engine === engine ? { externalResume: existing.externalResume } : {}),
       ...(existing?.terminalHost ? { terminalHost: true } : {}),
       processIdentity: validProcessIdentity(input.processIdentity) ? input.processIdentity : existing?.processIdentity ?? null,
       registeredAt: existing?.registeredAt ?? now,
@@ -1952,6 +1976,7 @@ class Registry {
     const entry = separateShell ? { ...original, agentId: randomUUID(), dsh: null, dshRuntime: null, agent: null, defaultName: this.automaticName('Terminal', new Date()) } : original
     this.releaseBinding(entry)
     delete entry.resumeOnly
+    delete entry.externalResume
     entry.engine = 'terminal'
     entry.terminalHost = true
     entry.processIdentity = null
@@ -2023,6 +2048,61 @@ class Registry {
     this.traceLaunch(agentId, before, entry.launch, `setLaunch${launch.state === 'failed' ? ` (${launch.error})` : ''}`)
     this.save()
     return entry
+  }
+
+  /** A canonical conversation and every alias have one core owner, including pending adoptions. */
+  externalConflict(ids: readonly string[], except?: string): RegisteredSession | undefined {
+    const sought = new Set(ids)
+    return this.list().find(row => row.agentId !== except &&
+      externalReservations(row).some(id => sought.has(id)))
+  }
+
+  /** No await between the reservation, ownership transition and durable save. */
+  setExternalResume(agentId: string, value: ExternalResumeIntent): RegisteredSession | null {
+    if (this.writeBlocked) return null
+    const row = this.byAgent(agentId), intent = parseExternalResume(value)
+    if (!row?.externalResume || !intent || row.externalResume.token !== intent.token || row.engine !== intent.request.engine
+      || row.externalResume.request.sessionId !== intent.request.sessionId || row.externalResume.takeOver !== intent.takeOver
+      || this.externalConflict(externalResumeIds(intent), agentId)) return null
+    if (row.externalResume.phase === 'cancelled' && intent.phase !== 'cancelled'
+      || row.externalResume.phase === 'admitted' && intent.phase !== 'admitted') return null
+    const next: RegisteredSession = { ...row, externalResume: intent }
+    if (intent.phase === 'admitted') {
+      const session = intent.session!
+      Object.assign(next, { sessionId: session.sessionId, cwd: session.cwd, title: session.title || row.title,
+        transcriptPath: session.transcriptPath, resumeOnly: true })
+    }
+    this.drop(row)
+    this.index(next)
+    try { this.save(true, false, agentId) } catch (error) {
+      this.drop(next)
+      this.index(row)
+      throw error
+    }
+    return this.byAgent(agentId) ?? null
+  }
+
+  /** A cancelled external intent has no owned conversation to archive. Its deletion must be durable. */
+  finishExternalCancellation(agentId: string): boolean {
+    const row = this.byAgent(agentId)
+    if (row?.externalResume?.phase !== 'cancelled') return false
+    const available = this.terminalAvailable(agentId)
+    this.drop(row); this.terminalAvailableAgents.delete(agentId)
+    try { this.save(true, false, agentId) } catch (error) {
+      this.index(row); if (available) this.terminalAvailableAgents.add(agentId)
+      throw error
+    }
+    return true
+  }
+
+  /** A launch dispatch is durable before tmux may replace the inert shell. */
+  beginExternalDispatch(agentId: string): RegisteredSession | null {
+    const row = this.byAgent(agentId)
+    if (row?.externalResume?.phase !== 'admitted' || row.launch?.state !== 'held') return null
+    const prior = row.launch, active = row.active, intent = row.externalResume
+    row.launch = { state: 'starting' }; row.active = true; row.externalResume = { ...intent, dispatched: true }
+    try { this.save(true, false, agentId) } catch (error) { row.launch = prior; row.active = active; row.externalResume = intent; throw error }
+    return row
   }
 
   setClosePlan(agentId: string, plan: RegisteredSession['closePlan'] | null): RegisteredSession | null {
@@ -2332,7 +2412,7 @@ class Registry {
     this.saveNames()
   }
 
-  private save(strict = false, exiting = false): void {
+  private save(strict = false, exiting = false, externalAgentId?: string): void {
     if (this.transactionDepth > 0 && !exiting) {
       if (strict) throw new Error('Cannot acknowledge a close intent inside an uncommitted registry transaction')
       this.savePending = true
@@ -2369,7 +2449,8 @@ class Registry {
           const stored = JSON.parse(readPrivateStateFile(FILE)) as unknown
           if (!Array.isArray(stored)) throw new Error('registry root changed to a non-array value')
           const parsed = withoutRetiredRows(stored).rows
-          if (parsed.some(hasUnknownRowSchema)) {
+          if (parsed.some(hasUnknownRowSchema) || parsed.some(value => !!value && typeof value === 'object'
+        && Object.hasOwn(value, 'externalResume') && !strictPersistedRow(value))) {
             throw new Error('registry contains an unknown row schema')
           }
           const legacyRows = parsed.filter((row) => !row || typeof row !== 'object' || !Object.hasOwn(row, 'schemaVersion'))
@@ -2387,6 +2468,24 @@ class Registry {
           if (id) latest.set(id, value as Record<string, unknown>)
         }
 
+        if (externalAgentId && (latest.has(externalAgentId) ? rowFingerprint(latest.get(externalAgentId)) : undefined)
+          !== this.persistedBaseline.get(externalAgentId)) {
+          throw new Error('The durable adoption changed while it was being prepared')
+        }
+        // Adoption never uses the normal winner/eviction policy. A daemon-down hook may have
+        // claimed its conversation since the core's last read; refuse admission inside this lock.
+        for (const [id, value] of currentRows) {
+          const intent = parseExternalResume(value.externalResume)
+          if (!intent || intent.phase === 'cancelled' || this.persistedBaseline.get(id) === rowFingerprint(value)) continue
+          const claims = new Set(externalReservations(value as unknown as RegisteredSession))
+          for (const [otherId, otherValue] of latest) {
+            if (otherId === id) continue
+            const other = strictPersistedRow(otherValue)
+            if (other && externalReservations(other).some(claim => claims.has(claim))) {
+              throw new Error('The external conversation has another durable owner')
+            }
+          }
+        }
         const merged = mergedForSave(latest, currentRows, this.persistedBaseline, this.intended)
         const rows = validatedRows([...merged.values()])
         if (!rows) throw new Error('registry transaction would violate global identity invariants')

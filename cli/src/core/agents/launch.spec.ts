@@ -75,6 +75,18 @@ describe('relaunch helpers', () => {
     expect(deps.setGridLaunch).toHaveBeenCalledWith('a1', record)
   })
 
+  it('retains an imported Hermes profile for every relaunch, without applying it after an engine change', async () => {
+    const { helpers } = setup()
+    const externalResume = { request: { engine: 'hermes' }, session: { launchArgs: ['-p', 'work'] }, phase: 'admitted' } as unknown as RegisteredSession['externalResume']
+    vi.mocked(buildLaunchOverrides).mockResolvedValueOnce({ ok: true, overrides: { extraArgs: ['--fixture'] } as LaunchOverrides })
+    expect(await helpers.relaunchOverrides(session({ engine: 'hermes', externalResume }))).toMatchObject({ ok: true, overrides: { extraArgs: ['--fixture', '-p', 'work'] } })
+    expect(await helpers.relaunchOverrides(session({ engine: 'claude', externalResume }))).toEqual({ ok: true })
+    vi.mocked(buildLaunchOverrides).mockResolvedValueOnce({ ok: true, overrides: { extraArgs: [] } as unknown as LaunchOverrides })
+    expect(await helpers.relaunchOverrides(session({ engine: 'hermes', externalResume: { ...externalResume!, session: undefined } }))).toMatchObject({ ok: true, overrides: { extraArgs: [] } })
+    vi.mocked(buildLaunchOverrides).mockResolvedValueOnce({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: 'unavailable' })
+    expect(await helpers.relaunchOverrides(session({ engine: 'hermes', externalResume }))).toMatchObject({ ok: false })
+  })
+
   it('drops a permission flag the engine no longer takes, says so, and keeps the pane', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { helpers } = setup()

@@ -2,7 +2,7 @@
 import { externalProcessGeneration } from '../lib/externalProcessGeneration.js'
 import { externalSessionAnswer, externalSessionRequest, externalUnavailable,
   type ExternalSessionAnswer } from '../lib/externalSessionWire.js'
-import { ExternalSessions, OpenSessions, type ExternalSessionsOptions, type OpenSessionsOptions,
+import { ExternalSessions, OpenSessions, externalSessionCatalog, type ExternalSessionsOptions, type OpenSessionsOptions,
   type SessionOwner } from '../lib/sessionSearch/external.js'
 import { externalEvidence } from '../lib/sessionSearch/evidence.js'
 import { harnessTtys, processTtys, processView, scanMemo } from '../lib/sessionSearch/externals/support.js'
@@ -22,18 +22,31 @@ export function createExternalSessions(options: ExternalReaderOptions) {
     const expected = processes.find(row => row.pid === pid)?.generation
     return expected && externalProcessGeneration(pid) === expected ? expected : null
   })
-  const inspect = async (payload: unknown): Promise<ExternalSessionAnswer> => {
+  const inspectOne = async (payload: unknown): Promise<ExternalSessionAnswer> => {
     const request = externalSessionRequest(payload)
     if (!request) return externalUnavailable('The conversation request could not be verified.')
     // A catalog alias can name another engine. Re-read that provider rather than admit stale display data.
     const known = sessions.get(request.sessionId)
-    const provider = options.providers.find(p => p.engine === (known?.engine ?? request.engine))
+    let provider = options.providers.find(p => p.engine === (known?.engine ?? request.engine))
     if (!provider) return externalUnavailable('The conversation reader is unavailable.')
-    const found = await externalEvidence(async () => {
-      const rows = await provider.scan(scanMemo({ excluded: options.excluded ?? [] }).context())
-      return rows.find(row => row.sessionId === request.sessionId || row.aliases?.includes(request.sessionId)) ?? null
+    const initialProvider = provider
+    let found = await externalEvidence(async () => {
+      const rows = await initialProvider.scan(scanMemo({ excluded: options.excluded ?? [] }).context())
+      return externalSessionCatalog(rows).byId.get(request.sessionId) ?? null
     })
     if (!found.ok) return externalUnavailable(found.detail)
+    if (!found.value) {
+      // A cold catalog may not yet know that the requested ID belongs to another engine. Refresh
+      // its display discovery, then re-read that provider before returning a wrong-engine fact.
+      await sessions.scan()
+      const elsewhere = sessions.get(request.sessionId)
+      const other = elsewhere && options.providers.find(candidate => candidate.engine === elsewhere.engine)
+      if (other) {
+        provider = other
+        found = await externalEvidence(async () => externalSessionCatalog(await other.scan(scanMemo({ excluded: options.excluded ?? [] }).context())).byId.get(request.sessionId) ?? null)
+        if (!found.ok) return externalUnavailable(found.detail)
+      }
+    }
     const session = found.value
     if (!session || session.engine !== request.engine || session.archived) return externalSessionAnswer({
       ok: true, request, session, owner: null, generation: null, busy: false,
@@ -47,18 +60,23 @@ export function createExternalSessions(options: ExternalReaderOptions) {
         [session.sessionId, ...session.aliases ?? []].includes(claim.sessionId))
       const pids = new Set(claims.map(claim => claim.pid))
       if (pids.size > 1) throw new Error('conflicting owners')
+      const exact = claims.filter(claim => !claim.fromArgs)
+      if (new Set(exact.map(claim => JSON.stringify([claim.record, !!claim.app]))).size > 1
+        || new Set(claims.map(claim => !!claim.app)).size > 1) throw new Error('conflicting owner evidence')
       const claim = claims.find(claim => !claim.fromArgs) ?? claims[0]
       if (!claim) return { owner: null, generation: null, busy: false }
+      if (!Number.isSafeInteger(claim.pid) || claim.pid <= 0 || claim.pid > 0x7fffffff) throw new Error('invalid owner PID')
       const [ttys, harness] = await Promise.all([
         (options.open?.ttys ?? processTtys)([claim.pid]), (options.open?.harnessTtys ?? harnessTtys)(),
       ])
+      if (!claim.app && !ttys.has(claim.pid)) throw new Error('missing terminal evidence')
       const tty = claim.app ? null : ttys.get(claim.pid) ?? null
       const owner: SessionOwner = { pid: claim.pid, engine: provider.engine, record: claim.record, tty,
         ...(tty && harness?.has(tty) ? { harness: true } : {}), ...(tty && !harness ? { unverified: true } : {}),
         ...(claim.fromArgs ? { fromArgs: true } : {}) }
+      const activity = await externalEvidence(async () => await provider.busy?.(owner) ?? true, true)
       const identity = generation(claim.pid, processes)
       if (!identity && tty && !owner.harness && !owner.fromArgs && !owner.unverified) throw new Error('unverified process incarnation')
-      const activity = await externalEvidence(async () => await provider.busy?.(owner) ?? true, true)
       // Unknown activity cannot grant an idle takeover. Explicit take-over-now still requires ownership.
       return { owner, generation: identity, busy: activity.ok ? activity.value : true }
     })
@@ -66,6 +84,14 @@ export function createExternalSessions(options: ExternalReaderOptions) {
     return externalSessionAnswer({ ok: true, request,
       session: { ...session, title: session.title || options.title?.(request.sessionId) || '' }, ...observed.value,
     }, request)
+  }
+  let active = 0
+  const inspect = async (payload: unknown): Promise<ExternalSessionAnswer> => {
+    // RPC deadlines do not stop a native read. Charge the actual work until it settles, so a hung
+    // provider cannot accumulate another set of scans on every retry from core.
+    if (active >= 4) return externalUnavailable('Waiting for the search service to finish verifying conversations.')
+    active++
+    try { return await inspectOne(payload) } finally { active-- }
   }
   return { sessions, open, inspect }
 }

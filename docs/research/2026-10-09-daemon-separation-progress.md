@@ -87,4 +87,16 @@ Time accounting (UTC): production and review corrections through 02:44; the fina
 
 ## Added core follow-up
 
+## Item 5: external sessions (in progress)
+
+Draft [#1081](https://github.com/autonomous-ai/openharness/pull/1081) moves provider and process observations into search, including when SQLite indexing is unavailable. Core retains policy, alias reservations, verified signals, durable admission, cancellation and dispatch. An unavailable reader leaves an inert held pane with a reason. Once admitted, crash restore and Stop/Open use the core's exact conversation identity without search.
+
+Former-code owner-control golden commit `7972e9824` supplements the existing external golden before the move; both fixture files remain unchanged. The new safety rules have separate regression tests. Seven mutations fail assertions: missing owner/busy observations, archived admission, missing Hermes profile, alias reservation loss, suppressed launch and omitted dispatch journal. These checks use pinned platforms, UTC, `/tmp`, and placeholder binaries. The retained former owner-control golden covers the extracted primitive; the new controller's tighter signal fences have direct tests.
+
+Validation selected before final execution: typecheck; architecture and unchanged goldens; core and harnessd per-file 100% gates; resume and portability gates; provider, persistence, restore and real private-tmux tests; isolated adoption, machine, core, lifecycle and search/service e2e; a short process-boundary soak/chaos smoke and the matched four-agent performance sample. Full Linux unit coverage comes from automatic PR CI. Preliminary full-core tests passed but coverage was incomplete; added boundary tests reach 100% in the focused run. The provider diagnostic initially failed an invalid Devin test command (`resume` instead of `-r`); the corrected four-file diagnostic passes 105 tests. Final receipts and independent approval are still pending.
+
+Implementation and diagnosis began after the usage merge at 03:03:42 UTC and continued through 04:29. All local daemons, homes and tmux servers are disposable. Publication remains zero.
+
+## Added core follow-up
+
 The owner reported that two panes of the same agent started in one millisecond fail. Onboarding avoids it today; the fix belongs in core. The current session-label generator contains only the engine and a millisecond timestamp, so concurrent same-engine creates can collide. Reproduce with a pinned clock, fix the shared label generation, and verify two isolated panes can start together. This is not blocking the completed usage separation.

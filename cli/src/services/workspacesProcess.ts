@@ -73,10 +73,7 @@ export function workspacesCoreApi(
     turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
-    external: {
-      sessions: { list: () => [], scan: async () => [] },
-      open: { known: () => new Map(), fresh: async () => new Map() },
-    },
+
     account: {
       mintGridName: async () => null,
       accessToken: () => Promise.reject(new Error('workspaces hold no credential')),

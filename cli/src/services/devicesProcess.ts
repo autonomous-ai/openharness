@@ -145,7 +145,6 @@ export function runDevicesService(options: DevicesServiceOptions): ServiceProces
       answerReviewed: async (answer) => (await ask('answerReviewed', { answer })).ok === true,
     },
     transcripts: unasked.transcripts,
-    external: unasked.external,
     account: {
       ...unasked.account,
       // The core's sign-in and the gateway's seal, asked at every use: this process holds no credential and

@@ -6,7 +6,7 @@ const session = { ...request, cwd: '/workspace', title: 'A conversation', origin
 const answer = { ok: true, request, session, owner: null, generation: null, busy: false }
 
 it('copies bounded facts, never history readers, and matches the exact request and canonical aliases', () => {
-  const source = { ...answer, session: { ...session, aliases: ['old'], launchArgs: ['-p', 'work'], readHistory: () => ['private history'] } }
+  const source = { ...answer, session: { ...session, aliases: ['old'], launchArgs: [], readHistory: () => ['private history'] } }
   const accepted = externalSessionAnswer(source, request)
   expect(accepted.ok).toBe(true)
   if (!accepted.ok) throw new Error('valid observation refused')
@@ -31,11 +31,19 @@ it('holds mismatched, oversized, malformed or unavailable answers instead of rep
 
 it('refuses invalid metadata and owner boundaries', () => {
   for (const patch of [{ cwd: 'relative' }, { transcriptPath: 'relative' }, { title: 'x'.repeat(4097) },
-    { aliases: [''] }, { aliases: Array(257).fill('id') }, { launchArgs: ['\u0000'] }, { archived: false },
+    { aliases: [''] }, { aliases: Array(257).fill('id') }, { launchArgs: ['\u0000'] }, { launchArgs: ['-p', 'work'] }, { archived: false },
     { engine: 'terminal' }, { origin: 'arbitrary' }, { mtime: NaN }]) expect(externalSessionFact({ ...session, ...patch })).toBeNull()
   const owner = { pid: 7, engine: 'claude', tty: '/dev/fixture-terminal', record: '/store/record', harness: true }
   const owned = { ...answer, owner, generation: 'ps:1000', busy: true }
   expect(externalSessionAnswer(owned, request)).toMatchObject({ ok: true, owner })
   for (const patch of [{ pid: 0 }, { pid: 2 ** 32 }, { tty: '/workspace' }, { record: '\u0000' },
     { harness: false }, { engine: 'codex' }]) expect(externalSessionAnswer({ ...owned, owner: { ...owner, ...patch } }, request).ok).toBe(false)
+  expect(externalSessionAnswer({ ...owned, owner: { ...owner, harness: undefined }, generation: null }, request).ok).toBe(false)
+})
+
+it('accepts only the declarative Hermes profile launch option', () => {
+  expect(externalSessionFact({ ...session, engine: 'hermes', launchArgs: ['-p', 'work'] })?.launchArgs).toEqual(['-p', 'work'])
+  for (const launchArgs of [['--command', 'shell'], ['-p', '../escape'], ['-p', 'work', 'extra'], ['-p', 1]]) {
+    expect(externalSessionFact({ ...session, engine: 'hermes', launchArgs })).toBeNull()
+  }
 })

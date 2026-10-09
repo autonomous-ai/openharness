@@ -1,3 +1,4 @@
+import { externalReadFailed } from '../evidence.js'
 /**
  * GitHub Copilot CLI: one folder per conversation, `<COPILOT_HOME>/session-state/<id>/`, holding its
  * event stream (`events.jsonl`, whose first line is `session.start`) and `workspace.yaml` (its folder
@@ -203,7 +204,8 @@ async function streamHead(path: string): Promise<{ start: Record<string, unknown
       },
       shouldStop: () => prompted,
     }))
-  } catch {
+  } catch (error) {
+    externalReadFailed(error, 'conversation stream')
     return null
   }
   // Not one whole line yet.
@@ -213,7 +215,7 @@ async function streamHead(path: string): Promise<{ start: Record<string, unknown
 
 /** The first answer [pick] gives, reading lines back from the end of [path]. */
 async function fromEnd<T>(path: string, pick: (line: string) => T | null): Promise<T | null> {
-  const size = (await stat(path).catch(() => null))?.size ?? 0
+  const size = (await stat(path).catch(error => { externalReadFailed(error, 'record'); return null }))?.size ?? 0
   for (const bytes of TAIL_BYTES) {
     const lines = (await readTail(path, bytes)).split('\n')
     // A window that starts mid-file starts mid-line.
@@ -240,7 +242,7 @@ export function copilotMovedAt(path: string): Promise<number | null> {
  * the stream holds no turn event at all.
  */
 export async function copilotTurnOpen(path: string): Promise<boolean | null> {
-  const size = (await stat(path).catch(() => null))?.size ?? 0
+  const size = (await stat(path).catch(error => { externalReadFailed(error, 'record'); return null }))?.size ?? 0
   for (const bytes of TAIL_BYTES) {
     const lines = (await readTail(path, bytes)).split('\n').filter((line) => {
       // A window that starts mid-file starts mid-line, and half a line is not JSON.
@@ -264,7 +266,7 @@ export async function readCopilotSession(dir: string, sessionId: string): Promis
   if (!head || head.start?.type !== 'session.start' || !data) return skip('unreadable')
   if (text(data.sessionId) && data.sessionId !== sessionId) return skip('mismatch')
   if (text(data.detachedFromSpawningParentSessionId)) return skip('detached')
-  const workspace = workspaceYaml(await readFile(join(dir, 'workspace.yaml'), 'utf8').catch(() => ''))
+  const workspace = workspaceYaml(await readFile(join(dir, 'workspace.yaml'), 'utf8').catch(error => { externalReadFailed(error, 'record'); return '' }))
   if (workspace.get('mc_task_id')) return skip('cloud-task')
   const origin = copilotOrigin(workspace.get('client_name') ?? '')
   if (!origin) return skip('automation')
@@ -300,7 +302,7 @@ export function copilotProvider(options: CopilotOptions): ExternalProvider {
         if (!stamp) continue
         const workspace = await fileStamp(join(dir, 'workspace.yaml'))
         const read = await ctx.memo(`copilot:${dir}`, `${stamp.stamp}|${workspace?.stamp ?? '-'}`, () => readCopilotSession(dir, entry.name))
-          .catch(() => null)
+          .catch(error => { externalReadFailed(error, 'record'); return null })
         await ctx.pace()
         // Half-written: nothing was remembered, and the next scan reads it again.
         if (read?.kind !== 'session' || ctx.excluded(read.cwd)) continue

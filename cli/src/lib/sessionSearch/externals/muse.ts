@@ -1,3 +1,4 @@
+import { externalReadFailed } from '../evidence.js'
 /**
  * Muse: `<home>/sessions/YYYY/MM/DD/<id>/session.jsonl`, one append-only log per session. Nothing in
  * the path names the project: the first record, the session's metadata, carries `workspace_root`,
@@ -78,7 +79,7 @@ export async function museOwnRun(path: string, sessionId: string): Promise<boole
   await forEachLine(path, 0, ({ text: line }) => {
     const own = ownRecord(line, sessionId)
     if (own?.run && own.kind === 'started') ran = true
-  }, { skip: (head) => ran || !head.includes(sessionId), shouldStop: () => ran }).catch(() => undefined)
+  }, { skip: (head) => ran || !head.includes(sessionId), shouldStop: () => ran }).catch(error => { externalReadFailed(error, 'record'); return undefined })
   return ran
 }
 

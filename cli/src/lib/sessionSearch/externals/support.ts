@@ -271,7 +271,7 @@ export async function harnessTtys(
 ): Promise<Set<string> | null> {
   const format = `#{pane_tty}\t#{session_name}\t${paneOwnerFormat(paneOptions ?? (await tmuxFeatures()).paneOptions)}`
   const { stdout, failed, stderr } = await exec('tmux', ['list-panes', '-a', '-F', format], 3_000)
-  if (failed && !/no server running|error connecting to/i.test(stderr)) return null
+  if (failed && !/no server running|error connecting to .*\(No such file or directory\)/i.test(stderr)) return null
   const ttys = new Set<string>()
   for (const line of stdout.split('\n')) {
     const [tty, session, tag] = line.split('\t')

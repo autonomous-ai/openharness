@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { shellSingleQuote } from './shellQuote.js'
 import { patientExec } from './patientExec.js'
 import type { TerminalBackend } from './terminalBackend.js'
 import {
@@ -249,20 +250,26 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // The engine-exit marker is the pane's, and a respawned pane is a new launch: cleared here, in
     // the same invocation, or the new engine would read as exited the moment it started. A `-p` here
     // before tmux 3.0 failed the whole list, the respawn with it, so no agent could restart there.
-    const args = [
-      'set-option', scope, '-t', runtime.paneId, 'remain-on-exit', 'on', ';',
-      'set-option', scope, '-t', runtime.paneId, ENGINE_EXIT_PANE_OPTION, '', ';',
-      'respawn-pane', '-k',
+    const setup = [
+      ['set-option', scope, '-t', runtime.paneId, 'remain-on-exit', 'on'],
+      ['set-option', scope, '-t', runtime.paneId, ENGINE_EXIT_PANE_OPTION, ''],
     ]
+    const args = ['respawn-pane', '-k']
     if (request.cwd) args.push('-c', request.cwd)
     for (const [key, value] of variables) args.push('-e', `${key}=${value}`)
     // A respawn replaces the pane's start command, which carries its tag before tmux 3.0 (`create`).
     args.push('-t', runtime.paneId, ...this.ownedCommand(features, this.owner(), request.command))
+    const commands = [...setup, args]
+    if (request.expectedHeldToken && !/^[a-f0-9-]{36}$/.test(request.expectedHeldToken)) return terminalActionNotStarted('invalid waiting pane identity')
+    const command = request.expectedHeldToken
+      ? ['if-shell', '-F', '-t', runtime.paneId, `#{&&:#{m:*harness-held*,#{pane_start_command}},#{m:*${request.expectedHeldToken}*,#{pane_start_command}}}`,
+        commands.map(parts => parts.map(shellSingleQuote).join(' ')).join('; '), 'display-message -p adoption-mismatch']
+      : commands.flatMap((parts, index) => index ? [';', ...parts] : parts)
     const result = await new Promise<{ error: NodeJS.ErrnoException | null; stderr: string }>((resolve) => {
       if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stderr: '' }); return }
       request.onDispatch?.()
-      run('tmux', args, { timeout: 5_000 }, (error, _stdout, stderr) => resolve({
-        error: error as NodeJS.ErrnoException | null,
+      run('tmux', command, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
+        error: stdout.trim() === 'adoption-mismatch' ? Object.assign(new Error('The waiting pane changed'), { code: 'HARNESS_CANCELLED' }) : error as NodeJS.ErrnoException | null,
         stderr,
       }))
     })
@@ -273,6 +280,30 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // cannot be reported as "nothing happened".
     const detail = result.stderr.trim().split('\n')[0]?.slice(0, 200) || result.error.message.slice(0, 200)
     return terminalActionPossiblyExecuted(`tmux could not respawn the pane: ${detail}`)
+  }
+
+  /** Read only. The dispatch repeats this predicate inside tmux; this read grants no later write. */
+  async isHeld(runtime: TmuxRuntimeRef, token: string): Promise<boolean | 'unknown'> {
+    if (!/^%\d+$/.test(runtime.paneId) || !/^[a-f0-9-]{36}$/.test(token)) return 'unknown'
+    return new Promise(resolve => run('tmux', ['display-message', '-p', '-t', runtime.paneId,
+      `#{&&:#{m:*harness-held*,#{pane_start_command}},#{m:*${token}*,#{pane_start_command}}}`], { timeout: 2_000 }, (error, stdout) => {
+      if (error) { resolve(isNoTmuxServerError(error.message) || /can't find pane: %\d+/.test(error.message) ? false : 'unknown'); return }
+      resolve(stdout.trim() === '1' ? true : stdout.trim() === '0' ? false : 'unknown')
+    }))
+  }
+
+  /** A pending adoption may close only its own inert shell, even after tmux recycled the pane ID. */
+  async killHeld(runtime: TmuxRuntimeRef, token: string, current: () => boolean): Promise<TerminalActionResult> {
+    if (!/^%\d+$/.test(runtime.paneId) || !/^[a-f0-9-]{36}$/.test(token)) return terminalActionNotStarted('invalid waiting pane identity')
+    const result = await inTmuxRoom('notify', () => new Promise<{ error: Error | null; stdout: string }>(resolve => {
+      if (!current()) { resolve({ error: new Error('Adoption changed before pane close'), stdout: '' }); return }
+      // Evaluated inside the tmux server, in the same command that kills: no check/use gap for %N.
+      run('tmux', ['if-shell', '-F', '-t', runtime.paneId, `#{&&:#{m:*harness-held*,#{pane_start_command}},#{m:*${token}*,#{pane_start_command}}}`,
+        `kill-pane -t ${runtime.paneId}`, 'display-message -p adoption-mismatch'], { timeout: 5_000 },
+      (error, stdout) => resolve({ error, stdout }))
+    }))
+    if (!result.error && !result.stdout.trim() || result.error && (isNoTmuxServerError(result.error.message) || /can't find pane: %\d+/.test(result.error.message))) return TERMINAL_ACTION_SUCCEEDED
+    return terminalActionNotStarted('The waiting pane no longer has this adoption identity')
   }
 
   async kill(runtime: TmuxRuntimeRef): Promise<TerminalActionResult> {
