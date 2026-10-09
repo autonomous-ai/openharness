@@ -26,7 +26,6 @@ import type { CloseAgentService } from './lib/closeAgentService.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { gridCliPresence } from './lib/gridBinary.js'
 import { GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS } from './lib/gridFleetProtocol.js'
-import { rememberApiBase } from './lib/gridAssignment.js'
 import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunchWire.js'
 import type { ScmLaunchRecord } from './scm/types.js'
 import { probeEngines } from './lib/engineProbe.js'
@@ -1021,7 +1020,6 @@ export class BackendSocket {
               return
             }
             // An agent on it from now on reports that API's model, as when the socket read the store itself.
-            rememberApiBase(resolved.apiBase)
             payload.grid = resolved.target
           }
           if (picked && payload.grid === undefined && !clear) {

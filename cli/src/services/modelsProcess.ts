@@ -1,3 +1,4 @@
+import { gridAssignmentProcessesIn } from '../lib/gridAssignmentWire.js'
 /**
  * Models in its own process (`harness __service models`, with `HARNESSD_SERVICES=models`).
  *
@@ -175,6 +176,10 @@ export function runModelsService(options: ModelsServiceOptions): ServiceProcess 
     ensure: async (payload) => ({ ...await models.ensure({ ownGrid: payload.ownGrid === true }) }),
     launchTarget: async (payload) => ({ target: await models.launchTarget({ model: text(payload.model), grid: text(payload.grid) }) }),
     moveTarget: async (payload) => ({ ...await models.moveTarget({ gridName: text(payload.gridName) || null, model: text(payload.model) }) }),
+    gridAssignments: async (payload) => {
+      const processes = gridAssignmentProcessesIn(payload.processes)
+      return processes ? { assignments: await models.gridAssignments(processes) } : { error: 'INVALID_PROCESSES' }
+    },
     gridLaunch: async (payload) => {
       const request = gridLaunchRequestIn(payload)
       return request ? { ...await models.gridLaunch(request) } : { ok: false, error: 'INVALID_GRID', detail: 'This launch could not be read.' }

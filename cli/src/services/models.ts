@@ -1,3 +1,4 @@
+import { modelsAssignments } from './modelsAssignments.js'
 /**
  * Models: grid, how Harness runs local AI models with Codex, Claude Code and the other engines
  * (docs/design/2026-10-03-harnessd.md, "Models"). Grid access on first use, the managed grid's pin, the
@@ -140,6 +141,7 @@ export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
 
   // The saved APIs, a file in the data folder (lib/apiConnections.ts), read afresh by every launch on one.
   const savedApis = new ApiConnections(core.dataDir)
+  rememberSavedApis(savedApis)
   ports.models = {
     ensure: grid.ensure,
     annotation: (target) => gridAnnotation(target),
@@ -154,6 +156,7 @@ export function startModels(core: CoreApi, ports: CorePorts): ServiceRequests {
     moved: (launch) => { void retargetPrewarm(launch).catch(() => {}) },
     // The launch that points an engine at a grid or a saved API, built here for the core, which builds none
     // (docs/design/2026-10-08-launch-port.md): a relaunch's saved API with its endpoint and key as saved now.
+    gridAssignments: modelsAssignments(savedApis),
     gridLaunch: async (request) => answerGridLaunch(request, refreshApiFor(savedApis)),
     apiTarget: (request) => apiTargetAnswer(savedApis, request.connectionId, request.model),
     privateGridName,

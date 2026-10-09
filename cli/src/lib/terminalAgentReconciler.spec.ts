@@ -285,11 +285,12 @@ describe('composite terminal reconciliation', () => {
     // A stop retiring a starting agent's pane holds its route and lets it go; a probe taken before it
     // still saw the engine there, and opened a second agent for a pane that no longer existed.
     const onDiscovered = vi.fn()
+    const onReconciled = vi.fn()
     const route = terminalRouteKey(tmux)
     let whileProbing: (() => void) | null = null
     const reconciler = new TerminalAgentReconciler({
       current: () => [], backends: [], backendOrder: ['tmux'],
-      onDiscovered, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
+      onDiscovered, onReconciled, onObserved: vi.fn(), onDormant: vi.fn(), onRemoved: vi.fn(),
       probe: async () => {
         whileProbing?.()
         whileProbing = null
@@ -299,10 +300,12 @@ describe('composite terminal reconciliation', () => {
     whileProbing = () => { reconciler.holdRoute(route); reconciler.releaseRoute(route) }
     await reconciler.trigger()
     expect(onDiscovered).not.toHaveBeenCalled()
+    expect(onReconciled).toHaveBeenLastCalledWith([])
     // Releasing a route nobody held changes nothing, and a probe that began afterwards speaks for it.
     reconciler.releaseRoute(route)
     await reconciler.trigger()
     expect(onDiscovered).toHaveBeenCalledTimes(1)
+    expect(onReconciled).toHaveBeenLastCalledWith([observed([tmux])])
   })
 
   it('does not count a miss for an agent whose route changed hands while the probe ran', async () => {

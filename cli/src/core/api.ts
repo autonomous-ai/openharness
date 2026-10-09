@@ -1,3 +1,4 @@
+import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
 /**
  * The boundary the services stand on (docs/design/2026-10-03-harnessd.md, "The core boundary"):
  * `CoreApi` is what a service may ask of the core, and `CorePorts` is what the core asks of services.
@@ -715,6 +716,8 @@ export interface ModelsPort {
    * itself (docs/design/2026-10-08-launch-port.md).
    */
   gridLaunch(request: GridLaunchRequest): Promise<GridLaunchAnswer>
+  /** Fresh process evidence, batched; core never waits for it to discover or bind a session. */
+  gridAssignments(processes: readonly GridAssignmentProcess[]): Promise<GridAssignmentAnswer[]>
   /** Where an agent moved onto a saved API's model sends its inference: the key travels only into its launch. The
    *  sentence a person reads when the API cannot be used. */
   apiTarget(request: { connectionId: string; model: string }): Promise<{ target: GridLaunchOverride; apiBase: string } | { detail: string }>
@@ -738,7 +741,7 @@ export interface ModelsPort {
  */
 export const MODELS_FALLBACKS: PortFallbacks<ModelsPort> = {
   ensure: later(FAIL), annotation: null, prewarm: undefined, launchTarget: later(FAIL), moveTarget: later(FAIL), moved: undefined,
-  gridLaunch: later(FAIL), apiTarget: later(FAIL), privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
+  gridAssignments: later(FAIL), gridLaunch: later(FAIL), apiTarget: later(FAIL), privateGridName: later(null), lists: later(FAIL), machines: undefined, signedOut: undefined,
 }
 
 /** What the core calls while `ports.models` is null (models is off): its fallbacks' answers. */
@@ -749,6 +752,7 @@ export const MODELS_OFF: ModelsPort = {
   launchTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   moveTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   moved: () => {},
+  gridAssignments: () => Promise.reject(new ServiceUnavailableError('models')),
   gridLaunch: () => Promise.reject(new ServiceUnavailableError('models')),
   apiTarget: () => Promise.reject(new ServiceUnavailableError('models')),
   privateGridName: async () => null,

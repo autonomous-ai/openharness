@@ -13,7 +13,6 @@ import { wholeHistoryPage } from './core/transcripts/history.js'
 import { grokMessagesToEvents } from './engines/grok/normalizer.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
 import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
-import { classifyGridAssignment } from './lib/gridAssignment.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
@@ -3377,13 +3376,10 @@ describe('a move onto a grid model asks models where it goes', () => {
   it("a move onto a saved API's model: the launch models read, its endpoint recognised from then on, no grid started", async () => {
     const apiTarget = vi.fn(async () => ({ target: API, apiBase: API.baseUrl }))
     const d = daemon(vi.fn(), apiTarget)
-    const env = { ANTHROPIC_BASE_URL: 'https://router.fixture.invalid', ANTHROPIC_MODEL: 'vendor/model-a' }
-    expect(classifyGridAssignment('claude', env)).toBeNull()
     expect(await d.ask('agent_retarget', { agentId: 'a1', apiConnection: 'router', apiModel: ' vendor/model-a ' })).toMatchObject({ retargeted: true })
     expect(apiTarget).toHaveBeenCalledWith({ connectionId: 'router', model: 'vendor/model-a' })
     expect(d.retargeted).toHaveBeenCalledWith({ agentId: 'a1', grid: API })
-    // Read in models' process: only the answer's endpoint can teach the core's grid assignment.
-    expect(classifyGridAssignment('claude', env)).toEqual({ baseUrl: 'https://router.fixture.invalid', model: 'vendor/model-a' })
+    // Target resolution and endpoint recognition belong to models; core forwards the launch.
     expect(d.moved).not.toHaveBeenCalled()
     await d.done()
   })

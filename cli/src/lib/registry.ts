@@ -2327,13 +2327,13 @@ class Registry {
     }
   }
 
-  flush(): void {
-    this.save()
+  flush(options: { exiting?: boolean } = {}): void {
+    this.save(false, options.exiting === true)
     this.saveNames()
   }
 
-  private save(strict = false): void {
-    if (this.transactionDepth > 0) {
+  private save(strict = false, exiting = false): void {
+    if (this.transactionDepth > 0 && !exiting) {
       if (strict) throw new Error('Cannot acknowledge a close intent inside an uncommitted registry transaction')
       this.savePending = true
       return
@@ -2350,6 +2350,10 @@ class Registry {
         const row = persistedRow(entry) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
+      // A discovery batch may be awaiting a reader after acknowledging a complete binding. Exit cannot
+      // wait for it. Check BEFORE merge conflict resolution: an incomplete pane swap must never be
+      // made to look valid by evicting its other owner. Its last durable snapshot remains untouched.
+      if (exiting && !validatedRows([...currentRows.values()])) throw new Error('Cannot flush an incomplete registry transaction at exit')
       // Discovery still calls save on an unchanged observation so a daemon-down hook's commit is
       // noticed. If neither side changed, avoid the lock's process probe and all three fsyncs.
       // Read through the normal ownership/mode/no-symlink checks; timestamps cannot prove equality.
