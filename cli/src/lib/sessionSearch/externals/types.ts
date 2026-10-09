@@ -81,6 +81,8 @@ export interface RunningProcess {
    * the process named in it was left by another process that once had the same pid.
    */
   started?: number
+  /** Stable across wall-clock corrections on Linux; otherwise the locale-pinned process start. */
+  generation?: string
 }
 
 /** What a provider may ask about the machine's processes. One view serves one look. */
