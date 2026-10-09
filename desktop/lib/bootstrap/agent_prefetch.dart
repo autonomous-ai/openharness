@@ -51,9 +51,7 @@ class AgentPrefetch {
     void Function(String line)? log,
     DateTime Function()? now,
     Duration nodePoll = const Duration(seconds: 1),
-    // Long enough for a person to finish setup's apt step in Terminal (Linux), which brings curl and
-    // comes before Harness's Node.
-    Duration nodeWait = const Duration(minutes: 15),
+    Duration nodeWait = const Duration(minutes: 5),
     String? Function()? markerDir,
     bool? warmOpenCode,
     String shell = '/bin/bash',
@@ -349,12 +347,24 @@ class AgentPrefetch {
     }
   }
 
-  /// Whether [there] holds, asked every [_nodePoll] until [_nodeWait] has passed: what a download needs
-  /// from setup (curl, Harness's Node) arrives while setup runs.
+  /// Setup is still putting in place what the downloads need (curl, Harness's Node): they wait for it
+  /// as long as it runs, and [_nodeWait] more once it is over. On Linux setup waits for a password in
+  /// Terminal, and on a first boot its apt queues behind Ubuntu's own updates; a wait that ran out
+  /// meanwhile left the first tab to install Codex and Claude Code in two panes at once, two npm in
+  /// one prefix.
+  bool setupRunning = false;
+
+  /// Stops every wait: the app is going away.
+  void close() => _closed = true;
+  bool _closed = false;
+
+  /// Whether [there] holds, asked every [_nodePoll] while setup runs and until [_nodeWait] after.
   Future<bool> _until(bool Function() there) async {
-    final deadline = _now().add(_nodeWait);
+    var deadline = _now().add(_nodeWait);
     var found = there();
-    while (!found && _now().isBefore(deadline)) {
+    while (!found && !_closed) {
+      if (setupRunning) deadline = _now().add(_nodeWait);
+      if (!_now().isBefore(deadline)) break;
       await Future<void>.delayed(_nodePoll);
       found = there();
     }

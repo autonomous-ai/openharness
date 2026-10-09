@@ -11,12 +11,25 @@ import 'package:harness/bootstrap/setup_progress.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/state/app_state.dart';
+import 'package:harness/state/first_arrival.dart';
+import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'support/guest_app.dart';
 
 /// An installer that exits when the test says so.
+class _MemoryStore implements LocalKeyValueStore {
+  final values = <String, String>{};
+  @override
+  Future<String?> read(String key) async => values[key];
+  @override
+  Future<void> write(String key, String value) async => values[key] = value;
+  @override
+  Future<void> delete(String key) async => values.remove(key);
+}
+
 class _Install implements Process {
   final _exit = Completer<int>();
   final _out = StreamController<List<int>>();
@@ -258,6 +271,7 @@ void main() {
         now: () => now,
         nodePoll: const Duration(milliseconds: 5),
       )..start();
+      addTearDown(prefetch.close);
       await Future<void>.delayed(const Duration(milliseconds: 30));
       expect(runs, isEmpty, reason: 'no OpenCode without curl');
       now = now.add(const Duration(minutes: 8));
@@ -289,6 +303,41 @@ void main() {
       await never.everything;
       expect(lines, contains(contains('curl never arrived')));
     });
+
+    // On Linux setup waits for a Terminal password, and on a first boot its apt queues behind Ubuntu's
+    // own updates: a wait that ran out meanwhile left Codex and Claude Code to two npm in two panes.
+    test(
+      'waits for what setup brings as long as setup runs, then a while more',
+      () async {
+        var now = DateTime(2026, 10, 9, 12);
+        final lines = <String>[];
+        final prefetch = AgentPrefetch(
+          start: (_, _) async => _Install()..finish(0),
+          skip: () => false,
+          installed: (_) => false,
+          managedNode: () => null,
+          log: lines.add,
+          now: () => now,
+          nodePoll: const Duration(milliseconds: 5),
+          nodeWait: const Duration(minutes: 5),
+        )..setupRunning = true;
+        addTearDown(prefetch.close);
+        prefetch.start();
+        now = now.add(const Duration(minutes: 30));
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(lines, isNot(contains(contains('never arrived'))));
+        prefetch.setupRunning = false;
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(
+          lines,
+          isNot(contains(contains('never arrived'))),
+          reason: 'five minutes from the end of setup',
+        );
+        now = now.add(const Duration(minutes: 6));
+        await prefetch.everything;
+        expect(lines, contains(contains("Harness's Node never arrived")));
+      },
+    );
 
     test('runs OpenCode once after its download, so a pane never pays its first run', () async {
       final opencode = _Install();
@@ -668,11 +717,13 @@ void main() {
     // pane: about 90 s to a first result, against 55 s on a Mac.
     test('a setup that needs Terminal (Linux apt) starts it too, and opens the first tab on the agents', () async {
       var started = false;
+      final store = _MemoryStore();
       final app = GuestTestApp(
         config: AppConfig.dev,
         authSession: AuthSession(),
         configStore: null,
         cliLogin: _FakeCliLogin(),
+        paneLayoutStore: PaneLayoutStore(storage: store),
         environmentProvisioner: _Provisioner(
           _review([apt, EnvironmentPlanItem.harnessCli]),
         ),
@@ -695,33 +746,12 @@ void main() {
         reason: 'the apt step is the setup screen\'s, with its Terminal',
       );
       await app.firstArrival.restore();
-      expect(app.firstArrival.pending, isTrue);
-    });
-
-    test('a setup the person chose to do by hand does not', () async {
-      var started = false;
-      final app = GuestTestApp(
-        config: AppConfig.dev,
-        authSession: AuthSession(),
-        configStore: null,
-        cliLogin: _FakeCliLogin(),
-        environmentProvisioner: _Provisioner(
-          _review([apt, EnvironmentPlanItem.harnessCli])
-              .copyWith(mode: EnvironmentSetupMode.manual),
-        ),
-        agentPrefetch: AgentPrefetch(
-          start: (_, _) async {
-            started = true;
-            return _Install()..finish(0);
-          },
-          skip: () => false,
-          managedNode: () => null,
-        ),
+      expect(
+        store.values[FirstArrival.key],
+        'new',
+        reason: 'the first tab opens on OpenCode, Codex and Claude Code',
       );
-      addTearDown(app.dispose);
-      await app.bootstrap();
-      await pumpEventQueue();
-      expect(started, isFalse);
+      expect(app.agentPrefetch!.setupRunning, isTrue);
     });
   });
 
