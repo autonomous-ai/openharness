@@ -60,6 +60,11 @@ pub fn open(app: &mut App) {
     refresh(app, true);
 }
 
+/// A sign-in is under way: the browser or phone asked, or the account it chose being committed.
+pub fn signing_in(app: &App) -> bool {
+    app.account.driver.is_some() || matches!(app.account.phase, Phase::Starting | Phase::Browser(_) | Phase::Phone { .. } | Phase::Completing | Phase::Committed)
+}
+
 fn visible(app: &App) -> bool { matches!(app.modal, Some(Modal::Picker { kind: PickerKind::Account, .. })) }
 
 pub(crate) fn identity_changed(app: &mut App) {
@@ -111,6 +116,7 @@ pub fn refresh(app: &mut App, force: bool) {
                         let email = match &app.account.status { Status::SignedIn { email, .. } => email.clone(), _ => None };
                         app.account.status = Status::SignedIn { offline: status["offline"] == true, email };
                         load_email(app, generation);
+                        crate::models::signed_in(app);
                     }
                     None => {}
                 }
@@ -317,8 +323,18 @@ pub fn choose(app: &mut App, mut picker: Picker, id: &str) {
     }
 }
 
+/// hn's own sign-in, chosen and finished — what the browser and `harness login` would do.
+#[cfg(test)]
+pub(crate) fn sign_in_for_test(app: &mut App) {
+    start(app, "google");
+    let generation = app.account.generation;
+    finished(app, generation, true, None);
+}
+
 fn cancel(app: &mut App) {
     if matches!(app.account.phase, Phase::Committed | Phase::Completing) { return }
+    // A sign-in that a Set up asked for, given up: nothing waits to set grid up behind a later one.
+    if (app.account.driver.is_some() || app.account.status == Status::SignedOut) && !app.models_view.set_up_signed_in { app.models_view.set_up_after_sign_in = false }
     if let Some(driver) = app.account.driver.take() {
         let _ = driver.send(Driver::Cancel);
         app.account.generation += 1;
@@ -473,6 +489,8 @@ fn finished(app: &mut App, generation: u64, committed: bool, error: Option<Strin
     app.account.driver = None;
     if committed {
         app.account.phase = error.map(Phase::Failed).unwrap_or(Phase::Ready);
+        // This sign-in is hn's own: a Set up that asked for it goes on (only that one sets grid up).
+        crate::models::own_sign_in_done(app);
         // The CLI commits credentials and restarts its daemon before it exits.
         reconnect(app);
         refresh(app, true);

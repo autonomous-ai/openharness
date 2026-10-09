@@ -3128,6 +3128,8 @@ fn choose(app: &mut App, kind: PickerKind, mut picker: Picker, choice: Choice) {
         PickerKind::Models if id.as_deref().is_some_and(crate::models::is_row) => {
             if !matches!(choice, Choice::Enter | Choice::SplitDown) { return keep(app, kind, picker) }
             crate::models::choose(app, &mut picker, id.as_deref().unwrap_or(""), choice == Choice::SplitDown);
+            // (Set up signed out opened the account page: the sign-in is shown, not this list.)
+            if matches!(app.modal, Some(Modal::Picker { kind: PickerKind::Account, .. })) { return }
             fill(app, &kind, &mut picker);
             return keep(app, kind, picker);
         }

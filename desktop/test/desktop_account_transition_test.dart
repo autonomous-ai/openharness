@@ -13,6 +13,7 @@ import 'package:harness/state/app_state.dart';
 import 'package:harness/state/pane_layout_store.dart';
 import 'package:harness/terminal/terminal_session.dart';
 import 'package:harness/viewer/device_log_sync.dart' show DeviceLogDeparted;
+import 'package:harness/ws/local_cli_discovery.dart';
 
 import 'swarm_state_test.dart' show MemoryStore;
 
@@ -20,6 +21,16 @@ class _Login extends CliLogin {
   var logins = 0;
   Completer<void>? pending;
   bool fail = false;
+
+  /// What `harness auth status` says: the sign-in as the CLI holds it.
+  bool loggedIn = true;
+  var statusChecks = 0;
+
+  @override
+  Future<CliAuthStatus> checkStatus() async {
+    statusChecks++;
+    return CliAuthStatus(loggedIn: loggedIn);
+  }
 
   @override
   Future<void> logout() async {}
@@ -166,7 +177,72 @@ Future<void> _settle() async {
   }
 }
 
+/// A ready probe of this computer's daemon, signed in or not as it says.
+LocalCliEndpoint _probe({required bool signedIn}) => LocalCliEndpoint(
+  computerId: 'computer-local',
+  wsUri: Uri.parse('ws://127.0.0.1:1/ws'),
+  protocolVersion: 1,
+  terminalProtocolVersion: 3,
+  signedIn: signedIn,
+);
+
 void main() {
+  test('a sign-in made elsewhere (hn, a terminal) is followed, not left as "Not signed in"', () async {
+    final login = _Login();
+    final app = _Desktop(MemoryStore(), login);
+    addTearDown(app.dispose);
+    await app.arrange();
+    await app.logout();
+    await _settle();
+    expect(app.isGuest, isTrue);
+
+    // The daemon says signed in, but the CLI does not (yet): nothing changes.
+    login.loggedIn = false;
+    app.followDaemonAccountForTest(_probe(signedIn: true));
+    await _settle();
+    expect(app.isGuest, isTrue);
+
+    // Asked again only after a while, then on the CLI's word the window is signed in — without
+    // a sign-in of its own.
+    login.loggedIn = true;
+    app.followDaemonAccountForTest(_probe(signedIn: true));
+    await _settle();
+    expect(login.statusChecks, 1, reason: 'at most one check per pause');
+    app.debugForgetDaemonAccountCheckForTest();
+    app.followDaemonAccountForTest(_probe(signedIn: true));
+    await _settle();
+    expect(app.isGuest, isFalse);
+    expect(app.signedIn, isTrue);
+    expect(app.status, AppStatus.authenticated);
+    expect(login.logins, 0);
+    expect(app.allPanes.map((p) => (p.machineId, p.agentId)), [
+      ('account-local', 'local-agent'),
+    ]);
+
+    // A daemon that agrees asks nothing.
+    final checks = login.statusChecks;
+    app.debugForgetDaemonAccountCheckForTest();
+    app.followDaemonAccountForTest(_probe(signedIn: true));
+    await _settle();
+    expect(login.statusChecks, checks);
+  });
+
+  test('a sign-out made elsewhere turns the window into a guest', () async {
+    final login = _Login();
+    final app = _Desktop(MemoryStore(), login);
+    addTearDown(app.dispose);
+    await app.arrange();
+    expect(app.isGuest, isFalse);
+    login.loggedIn = false;
+    app.followDaemonAccountForTest(_probe(signedIn: false));
+    await _settle();
+    expect(app.isGuest, isTrue);
+    expect(app.status, AppStatus.authenticated);
+    expect(app.allPanes.map((p) => (p.machineId, p.agentId)), [
+      ('computer-local', 'local-agent'),
+    ]);
+  });
+
   test(
     'a failed guest layout write preserves the old identity and can retry',
     () async {
