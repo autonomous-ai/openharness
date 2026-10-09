@@ -15,7 +15,7 @@ function fixture() {
   const provider: ExternalProvider = { engine: 'claude', scan: vi.fn(async () => [session]), owners: vi.fn(async () => []),
     confirmOwner: vi.fn(async () => ({ current: true, busy: false })) }
   const view: ProcessView = { list: vi.fn(async () => [{ pid: 7, ppid: 1, executable: 'fixture', args: '', generation: 'ps:1000' }]),
-    openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
+    openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
   const generation = vi.fn((): string | null => 'ps:1000')
   const options = { providers: [provider], generation, title: () => 'Indexed title',
     open: { view: () => view, ttys: vi.fn(async () => new Map([[7, '/dev/fixture-terminal']])), harnessTtys: vi.fn(async (): Promise<Set<string> | null> => new Set()) } }

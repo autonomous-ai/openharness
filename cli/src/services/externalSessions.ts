@@ -4,9 +4,9 @@ import { externalSessionAnswer, externalSessionRequest, externalUnavailable,
   type ExternalSessionAnswer } from '../lib/externalSessionWire.js'
 import { ExternalSessions, OpenSessions, externalSessionCatalog, type ExternalSessionsOptions, type OpenSessionsOptions,
   type SessionOwner } from '../lib/sessionSearch/external.js'
-import { externalEvidence } from '../lib/sessionSearch/evidence.js'
-import { harnessTtys, processTtys, processView, scanMemo } from '../lib/sessionSearch/externals/support.js'
-import type { OwnerClaim, RunningProcess } from '../lib/sessionSearch/externals/types.js'
+import { externalEvidence, externalReadFailed } from '../lib/sessionSearch/evidence.js'
+import { harnessTtys, processTtys, processView, sameProject, scanMemo } from '../lib/sessionSearch/externals/support.js'
+import type { Ownership, OwnerClaim, ProcessView, RunningProcess } from '../lib/sessionSearch/externals/types.js'
 
 export interface ExternalReaderOptions extends ExternalSessionsOptions {
   open?: Omit<OpenSessionsOptions, 'providers'>
@@ -60,7 +60,24 @@ export function createExternalSessions(options: ExternalReaderOptions) {
         [session.sessionId, ...session.aliases ?? []].includes(claim.sessionId))
       const signature = (claims: readonly OwnerClaim[]) => JSON.stringify([...new Set(claims.map(claim =>
         JSON.stringify([claim.sessionId, claim.pid, claim.record, !!claim.app, !!claim.fromArgs])))].sort())
-      const allClaims = await provider.owners!(view)
+      const ownership = async (view: ProcessView): Promise<Ownership> =>
+        await provider.ownership?.(view) ?? { claims: await provider.owners!(view), unresolved: [] }
+      // A process the provider could not place may hold any conversation its own picker lists: Claude Code's
+      // `/resume` lists its project's (sameProject, kept wide). One far from this folder cannot hold this one;
+      // one near it, or one whose folder could not be read, might, and then nobody can say who holds it. Before,
+      // any such process on the machine held every adoption (CLI 0.3.70: "launched 0 of 4 · 4 still waiting"
+      // behind two old TUIs). The conversation its arguments name is its fromArgs claim's to answer.
+      const ids = [session.sessionId, ...session.aliases ?? []]
+      const placed = async (found: Ownership): Promise<OwnerClaim[]> => {
+        for (const process of found.unresolved) {
+          if (process.named !== undefined && ids.includes(process.named)) continue
+          if (process.cwd !== null && !await sameProject(process.cwd, session.cwd)) continue
+          externalReadFailed(new Error('an unplaced process may hold it'), 'current owner')
+          throw new Error('an unplaced process may hold it')
+        }
+        return found.claims
+      }
+      const allClaims = await placed(await ownership(view))
       const claims = matching(allClaims)
       const pids = new Set(claims.map(claim => claim.pid))
       if (pids.size > 1) throw new Error('conflicting owners')
@@ -86,7 +103,8 @@ export function createExternalSessions(options: ExternalReaderOptions) {
       // does not prove it still owns this conversation. Re-read ownership with a fresh process view.
       const fresh = (options.open?.view ?? processView)()
       await fresh.list()
-      if (signature(candidateClaims(await provider.owners!(fresh))) !== signature(candidateClaims(allClaims))) throw new Error('owner changed during observation')
+      // The same rule on the second look: a process that came up in this folder meanwhile may have it now.
+      if (signature(candidateClaims(await placed(await ownership(fresh)))) !== signature(candidateClaims(allClaims))) throw new Error('owner changed during observation')
       // Nothing asynchronous follows this proof. Idle must come from a record that also proves
       // the exact current owner; a separate activity read could belong to a previous conversation.
       const activity = await externalEvidence(async () => await provider.confirmOwner?.(claim, processes.find(row => row.pid === claim.pid) ?? null) ?? null, true)

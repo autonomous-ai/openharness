@@ -355,7 +355,7 @@ describe('cursorProvider.owners', () => {
     const processes: ProcessView = {
       list: async () => rows,
       openFiles: async (pids) => { asked.push([...pids]); return new Map(files ? pids.map((pid) => [pid, files[pid] ?? []]) : []) },
-      openFilesOf: async () => new Map(),
+      cwds: async () => new Map(), openFilesOf: async () => new Map(),
       alive,
     }
     return { processes, asked }

@@ -53,7 +53,7 @@ describe('where each engine keeps its conversations', () => {
 })
 
 describe('the other engines\' readers, loaded on first use', () => {
-  const none: ProcessView = { list: async () => [], openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
+  const none: ProcessView = { list: async () => [], openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true }
   const missing = '/nonexistent/adoption-root'
   const paths = () => externalPaths({ CURSOR_CONFIG_DIR: missing, CURSOR_DATA_DIR: missing, OPENCODE_DB: `${missing}/opencode.db`, KILO_DB: `${missing}/kilo.db`, PI_CODING_AGENT_DIR: missing })
 

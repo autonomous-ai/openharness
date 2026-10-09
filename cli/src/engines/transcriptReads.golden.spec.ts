@@ -240,7 +240,7 @@ async function adoptionCases(): Promise<Record<string, unknown>> {
     { pid: 201, ppid: 1, executable: 'claude', args: 'claude' },
   ]
   const alive = new Set([101, 102, 106, 107, 108, 109, 110, 111, 112, 113, 201])
-  const claudeView: ProcessView = { list: async () => running, openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: (pid) => alive.has(pid) }
+  const claudeView: ProcessView = { list: async () => running, openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: (pid) => alive.has(pid) }
   for (const moved of [false, true]) {
     if (moved) adoptMoved(); else forgetMoved()
     const claims = await providerOf('claude').owners!(claudeView)
@@ -273,7 +273,7 @@ async function adoptionCases(): Promise<Record<string, unknown>> {
       { pid: 313, ppid: 1, executable: 'codex-acp-wrapper', args: 'codex-acp-wrapper --stdio' },
     ],
     openFiles: async () => new Map(), alive: () => true,
-    openFilesOf: async (commands) => {
+    cwds: async () => new Map(), openFilesOf: async (commands) => {
       cases['owners · codex · asked for'] = commands
       return new Map([
         held(301, [C1, '/dev/ttys003', join(root, 'tmp', 'rollout-notes.txt')]), held(302, ['/x/rollout-2026-not-an-id.jsonl']),

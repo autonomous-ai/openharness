@@ -293,7 +293,7 @@ describe('what the core\'s adoption finds of the other engines\' conversations',
     const view = {
       list: async () => rows,
       openFiles: async (pids: readonly number[]) => new Map(pids.flatMap((pid) => files.has(pid) ? [[pid, files.get(pid)!] as [number, string[]]] : [])),
-      openFilesOf: async () => new Map<number, string[]>(),
+      cwds: async () => new Map(), openFilesOf: async () => new Map<number, string[]>(),
       alive: () => true,
     }
     const scanned = new m.external.ExternalSessions({ providers, excluded: [join(root, 'data')], log: () => {} })
@@ -321,7 +321,7 @@ describe('what the core\'s adoption finds of the other engines\' conversations',
         { pid: 105, ppid: 1, executable: 'kilo', args: `kilo -s ${ID.kilo}` },
         { pid: 104, ppid: 1, executable: 'opencode', args: `opencode -s ${ID.opencode}` },
       ],
-      openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true,
+      openFiles: async () => new Map(), cwds: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true,
     })
     check('Kilo alone', {
       sessions: await Promise.all(sessions.map(async session => ({ ...session, readHistory: await session.readHistory?.() }))),
