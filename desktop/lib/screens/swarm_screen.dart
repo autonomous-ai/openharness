@@ -156,6 +156,7 @@ import '../widgets/workspace_welcome.dart';
 import '../widgets/workspace_machine_prompt.dart';
 import '../shortcuts/keyboard_practice.dart';
 import '../widgets/agent_alert_banners.dart';
+import '../widgets/phone_offer_card.dart';
 import '../settings/experimental_features.dart';
 
 class SwarmScreen extends StatefulWidget {
@@ -2916,10 +2917,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
   Future<void> _addPhone() async {
-    // Open, by hand or not, it is this computer's offer ([_maybeOfferPhone]),
-    // spent for good — and a sign-in made from inside it (its "Sign in…") must
-    // not open it again once it closes, so the offer is dropped on the way out
-    // too.
+    // Open, from its card or by hand, it is this computer's offer
+    // ([_phoneOfferCard]) spent for good — and a sign-in made from inside it
+    // (its "Sign in…") must not bring the card back once it closes, so the
+    // offer is dropped on the way out too.
     app.dropPhoneOffer();
     // "Manage devices…" pops the dialog and asks for Settings, but this
     // [_dialog] is still open until the pop lands — a [_settings] made from
@@ -6370,63 +6371,16 @@ class _SwarmScreenState extends State<SwarmScreen> {
     });
   }
 
-  /// Add Phone, opened by itself once on this computer: at the first launch
-  /// as a guest — the dialog asks for the sign-in, then shows the code — or
-  /// after the first sign-in by hand, when the account has no phone yet
-  /// ([AppNotifier.takePhoneOffer]).
-  ///
-  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08):** a
-  /// newcomer who got Harness from the phone is not sent looking for Add Phone
-  /// in a menu, or in the command palette on Linux.
-  ///
-  /// Waits for a clear screen — the sign-in sheet closed, no dialog or palette
-  /// up — rather than opening over what somebody is in the middle of; the
-  /// offer lapses by itself if that takes too long.
-  void _maybeOfferPhone() {
-    if (kIsWeb || !app.phoneOfferPending || !_phoneOfferClear) return;
-    if (!app.takePhoneOffer()) return;
-    WidgetsBinding.instance.addPostFrameCallback(
-      (_) => unawaited(_offerPhone()),
+  /// Add Phone's card ([AppNotifier.phoneOfferShowing]) — not while a new
+  /// computer's first agents are being opened (`state/first_arrival.dart`): it
+  /// comes once the work is on the screen, and stands beside it.
+  Widget? _phoneOfferCard() {
+    if (kIsWeb || !app.phoneOfferShowing) return null;
+    if (app.firstArrival.pending || app.firstArrival.running) return null;
+    return PhoneOfferCard(
+      onAdd: () => unawaited(_addPhone()),
+      onDismiss: app.dropPhoneOffer,
     );
-  }
-
-  /// ⚠️ New Harness counts only open over the screen: embedded in the welcome
-  /// page it is what an empty workspace shows — the very screen a first
-  /// sign-in lands on, which waiting on it would never offer Add Phone from.
-  bool get _phoneOfferClear =>
-      _routeIsCurrent &&
-      !_dialogOpen &&
-      !_commandBarOpen &&
-      !_spokenPaletteOpen &&
-      _search == null &&
-      (_newHarness == null || _newHarnessEmbedded);
-
-  Future<void> _offerPhone() async {
-    // A guest has no account to ask: its Add Phone asks for the sign-in.
-    final signedIn = app.signedIn;
-    var hasPhone = false;
-    if (signedIn) {
-      try {
-        final devices = await app.loadDevices();
-        // Any app on the account but this one — a phone, or a browser — has
-        // its way in already. A list that cannot be read offers it anyway:
-        // closing Add Phone costs less than a newcomer left looking for its
-        // code.
-        hasPhone =
-            devices?.devices.any(
-              (device) => !device.isMachine && !device.self,
-            ) ??
-            false;
-      } catch (_) {
-        hasPhone = false;
-      }
-    }
-    if (!mounted) return;
-    // Nothing to offer on this computer again.
-    if (hasPhone) return app.dropPhoneOffer();
-    // Signed in or out meanwhile, or something opened: not now.
-    if (app.signedIn != signedIn || !_phoneOfferClear) return;
-    await _addPhone();
   }
 
   bool get _hasConnectedBrowserMachine => app.machineStates.values.any(
@@ -7060,7 +7014,6 @@ class _SwarmScreenState extends State<SwarmScreen> {
     builder: (context, _) {
       grid.AppTheme.watch(context);
       _maybeLink();
-      _maybeOfferPhone();
       _scheduleWelcomeComposer();
       if (app.panes.isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback(
@@ -7394,7 +7347,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           // Last in the stack, so a banner is never painted
                           // under a pane, a tab or the palette. It takes
                           // pointers only on the banners themselves.
-                          AgentAlertBanners(notifier: app),
+                          AgentAlertBanners(
+                            notifier: app,
+                            footer: _phoneOfferCard(),
+                          ),
                         ],
                       ),
                     ),

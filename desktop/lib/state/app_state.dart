@@ -988,7 +988,7 @@ class AppNotifier extends ChangeNotifier {
       !_disposed && revision == _authRevision;
 
   int _invalidateAuthWork() {
-    _phoneOfferSince = null;
+    _phoneOffer = false;
     _closeOwnerMemories();
     _stopMachineRecovery();
     api.resetAccountCache();
@@ -5656,9 +5656,7 @@ class AppNotifier extends ChangeNotifier {
       }
       _guestDeskRestorePending = false;
       // The first sign-in on this computer offers Add Phone; a later one does not.
-      if (!await _phoneOfferDone() && _authWorkCurrent(revision)) {
-        _phoneOfferSince = DateTime.now();
-      }
+      unawaited(_offerPhoneAfterSignIn(revision));
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
@@ -5686,46 +5684,38 @@ class AppNotifier extends ChangeNotifier {
   /// The failed sign-in again, to the account the person chose the first time.
   Future<void> retryLogin() => login(signInProvider);
 
-  /// When Add Phone was last offered: Add Phone then opens by itself (`screens/swarm_screen.dart`
-  /// `_maybeOfferPhone`) — signed in, on an account with no phone yet; as a guest, asking for the
-  /// sign-in itself. Null once taken, dropped, or the account changes.
+  /// Whether the workspace offers Add Phone — "Your agents in your pocket.", a card in the window's
+  /// top-right (`widgets/phone_offer_card.dart`): as a guest, whose Add Phone asks for the sign-in
+  /// itself; signed in, on an account with no phone yet. Cleared when the account changes.
   ///
-  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08).** It tells a newcomer to get
-  /// Harness on the computer and pair it (mobile `set_up_computer.dart`), so the code has to come up
-  /// without anyone finding Add Phone in a menu. Not after [loginWithPhone]: that sign-in was a
-  /// phone's, which has its way in already.
+  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08).** It tells a newcomer to open
+  /// Add Phone on the computer (mobile `set_up_computer.dart`), so the button has to be on the
+  /// screen without anyone finding it in a menu, or in the command palette on Linux. Not after
+  /// [loginWithPhone]: that sign-in was a phone's, which has its way in already.
+  ///
+  /// ⚠️ **A card, not Add Phone opened by itself (owner, 2026-10-09).** A new install opens on
+  /// agents already at work (`state/first_arrival.dart`); a dialog over them broke that first moment
+  /// for everyone without a phone, to serve those with one. The card waits beside the work until it
+  /// is used or put away.
   ///
   /// ⚠️ **Once per computer (owner, 2026-10-09)**, not once per sign-in: it is offered at the first
   /// launch, which a new install makes as a guest ([_offerPhoneAtLaunch]), or else after the first
-  /// sign-in by hand ([login]) — never again once Add Phone has been opened here or the account was
-  /// found to have a phone ([_phoneOfferDone]).
-  DateTime? _phoneOfferSince;
+  /// sign-in by hand ([_offerPhoneAfterSignIn]) — never again once Add Phone has been opened here,
+  /// the card put away, or the account found to have a phone ([_phoneOfferDone]).
+  bool get phoneOfferShowing => _phoneOffer;
+  bool _phoneOffer = false;
 
-  /// How long the offer stands: long enough for a sign-in sheet or Settings to close, not so long
-  /// that Add Phone opens over unrelated work later.
-  static const _phoneOfferWindow = Duration(minutes: 2);
-
-  /// Add Phone is waiting to be offered — see [takePhoneOffer].
-  bool get phoneOfferPending => _phoneOfferSince != null;
-
-  /// Takes the offer: true at most once per offer, and only within [_phoneOfferWindow] of it.
-  bool takePhoneOffer() {
-    final since = _phoneOfferSince;
-    _phoneOfferSince = null;
-    return since != null &&
-        viewer == null &&
-        DateTime.now().difference(since) < _phoneOfferWindow;
-  }
-
-  /// Add Phone was opened — by hand, or by the offer itself — or the account turned out to have a
-  /// phone: nothing is left to offer, now or on a later launch or sign-in. Also how a sign-in made
-  /// from inside Add Phone (its "Sign in…") does not open it a second time once it closes.
+  /// Add Phone was opened — from the card or by hand — or the card was put away: nothing is left to
+  /// offer, now or on a later launch or sign-in. Also how a sign-in made from inside Add Phone (its
+  /// "Sign in…") does not bring the card back.
   void dropPhoneOffer() {
-    _phoneOfferSince = null;
+    final showing = _phoneOffer;
+    _phoneOffer = false;
     _markPhoneOfferDone();
+    if (showing) notifyListeners();
   }
 
-  /// This computer's record that Add Phone has had its offer ([_phoneOfferSince]), in the desktop's
+  /// This computer's record that Add Phone has had its offer ([phoneOfferShowing]), in the desktop's
   /// state file beside the dial's ([DialState]).
   static const _phoneOfferDoneKey = 'phone_offer_done';
 
@@ -5771,7 +5761,35 @@ class AppNotifier extends ChangeNotifier {
     }
     if (!isGuest || await _phoneOfferDone()) return;
     if (!_authWorkCurrent(revision) || !isGuest) return;
-    _phoneOfferSince = DateTime.now();
+    _phoneOffer = true;
+    notifyListeners();
+  }
+
+  /// [_offerPhoneAtLaunch] or [_offerPhoneAfterSignIn], as launch and a sign-in by hand run them.
+  @visibleForTesting
+  Future<void> offerPhoneForTest({required bool atLaunch}) => atLaunch
+      ? _offerPhoneAtLaunch(_authRevision)
+      : _offerPhoneAfterSignIn(_authRevision);
+
+  /// The first sign-in by hand on this computer offers Add Phone — unless the account already has a
+  /// phone or a browser on it, which has its way in.
+  Future<void> _offerPhoneAfterSignIn(int revision) async {
+    if (viewer != null || await _phoneOfferDone()) return;
+    var hasPhone = false;
+    try {
+      final devices = await loadDevices();
+      hasPhone =
+          devices?.devices.any((device) => !device.isMachine && !device.self) ??
+          false;
+    } catch (_) {
+      // A list that cannot be read offers the card anyway: it costs one × to put away.
+    }
+    if (!_authWorkCurrent(revision) || !signedIn) return;
+    if (hasPhone) {
+      _markPhoneOfferDone();
+      return;
+    }
+    _phoneOffer = true;
     notifyListeners();
   }
 
