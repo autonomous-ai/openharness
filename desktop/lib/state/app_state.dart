@@ -988,6 +988,7 @@ class AppNotifier extends ChangeNotifier {
       !_disposed && revision == _authRevision;
 
   int _invalidateAuthWork() {
+    _phoneOfferSince = null;
     _closeOwnerMemories();
     _stopMachineRecovery();
     api.resetAccountCache();
@@ -5653,6 +5654,7 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       _guestDeskRestorePending = false;
+      _phoneOfferSince = DateTime.now();
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
@@ -5679,6 +5681,38 @@ class AppNotifier extends ChangeNotifier {
 
   /// The failed sign-in again, to the account the person chose the first time.
   Future<void> retryLogin() => login(signInProvider);
+
+  /// When a sign-in by hand ([login]) last finished: Add Phone then opens by itself on an account
+  /// with no phone yet (`screens/swarm_screen.dart` `_maybeOfferPhone`). Null once taken, dropped,
+  /// or signed out.
+  ///
+  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08).** It tells a newcomer "Open it
+  /// and sign in — it shows a code on the screen" (mobile `set_up_computer.dart`), so the code has to
+  /// come up without anyone finding Add Phone in a menu. Not after [loginWithPhone]: that sign-in was
+  /// a phone's, which has its way in already.
+  DateTime? _phoneOfferSince;
+
+  /// How long after the sign-in the offer stands: long enough for a sign-in sheet or Settings to
+  /// close, not so long that Add Phone opens over unrelated work later.
+  static const _phoneOfferWindow = Duration(minutes: 2);
+
+  /// A sign-in by hand is waiting to offer Add Phone — see [takePhoneOffer].
+  bool get phoneOfferPending => _phoneOfferSince != null;
+
+  /// Takes the offer: true at most once per sign-in, while still signed in, and only within
+  /// [_phoneOfferWindow] of it.
+  bool takePhoneOffer() {
+    final since = _phoneOfferSince;
+    _phoneOfferSince = null;
+    return since != null &&
+        signedIn &&
+        DateTime.now().difference(since) < _phoneOfferWindow;
+  }
+
+  /// Add Phone was opened — by hand, or by the offer itself: nothing is left to offer. Also how a
+  /// sign-in made from inside Add Phone (its "Sign in…") does not open it a second time once it
+  /// closes.
+  void dropPhoneOffer() => _phoneOfferSince = null;
 
   /// Sign in by a QR a signed-in phone approves, then a yes here to the account it names.
   Future<void> loginWithPhone() async {
