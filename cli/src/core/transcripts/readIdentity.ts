@@ -7,3 +7,9 @@ export function transcriptReadIdentity(session: RegisteredSession | undefined): 
     session.codexHome, session.boundAt,
     session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : undefined]) : ''
 }
+
+/** A pane belongs to its process, conversation and current terminal routes. Copy before capture. */
+export function paneReadIdentity(session: RegisteredSession | undefined): string {
+  return session ? JSON.stringify([transcriptReadIdentity(session), session.active, session.cwd, session.hermesHome,
+    session.tmuxPane, session.primaryRuntimeKey, session.runtimes]) : ''
+}
