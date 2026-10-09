@@ -385,6 +385,11 @@ describe('models in its own process', () => {
       const client = await LocalClient.connect(d)
       const grid = { networkId: 'assignment-e2e', networkName: 'Assignment', baseUrl: 'https://fixture.invalid/g/assignment/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
       const known = await createOn(d, client, 'claude', 'assignment-known', grid)
+      const knownAssignment = { baseUrl: grid.baseUrl.replace(/\/v1$/, ''), model: grid.model }
+      await until('the existing Claude assignment to reflect its real endpoint', async () => {
+        const now = await row(client, known.id)
+        return now?.grid?.baseUrl === knownAssignment.baseUrl ? now : null
+      }, 15_000, 200)
       writeFileSync(hold, '')
       for (const pid of modelsPids(d)) process.kill(pid, 'SIGKILL')
       await until('models disconnected', () => d.log().includes('[services] models disconnected') || null, 15_000, 100)
@@ -411,7 +416,7 @@ describe('models in its own process', () => {
         discovered.push(agent)
         await turn(client, agent.id, `bound without models ${engine}`)
       }
-      expect((await row(client, known.id))?.grid).toMatchObject({ baseUrl: grid.baseUrl, model: grid.model })
+      expect((await row(client, known.id))?.grid).toMatchObject(knownAssignment)
       for (const agent of discovered) expect((await row(client, agent.id))?.grid ?? null).toBeNull()
       rmSync(hold)
       for (const agent of discovered) await until(`${agent.engine} classified after models returns`, async () => {
@@ -424,44 +429,50 @@ describe('models in its own process', () => {
   })
 
   it('down at launch time: Claude Code and Codex on their own login launch as ever, a launch on a grid or a saved API is refused at once, and builds again once models is back', async () => {
-    // Slow to come back, so what is launched meanwhile finds it down.
-    const d = await fresh({ HARNESSD_SERVICE_INITIAL_BACKOFF_MS: '8000', HARNESSD_SERVICE_MAX_BACKOFF_MS: '8000' })
-    const client = await LocalClient.connect(d)
-    // The launch the desktop sends for a grid it already resolved: models builds it (ModelsPort.gridLaunch).
-    const grid = { networkId: 'net-e2e', networkName: 'e2e-grid', baseUrl: 'https://fixture.invalid/g/net-e2e/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
-    const onGrid = await createOn(d, client, 'claude', 'launch-grid-claude', grid)
-    expect(onGrid.grid).toMatchObject({ baseUrl: grid.baseUrl, model: 'Small-Q4' })
-    const before = modelsPids(d)
-    for (const pid of before) process.kill(pid, 'SIGKILL')
-    await until('the core to see models gone', () => d.log().includes('[services] models disconnected') || null, 15_000, 100)
-    // Their own login asks models nothing: both launch, and take a turn, while it is down.
-    const plain = [await create(d, client, 'claude', 'launch-plain-claude'), await create(d, client, 'codex', 'launch-plain-codex')]
-    for (const agent of plain) await turn(client, agent.id, `launched while models was down (${agent.engine})`)
-    // A launch that needs it is refused at once, saying why, and nothing is started or stopped.
-    const asked = Date.now()
-    const down = (engine: string, name: string) => `The models service is not running, so ${engine} cannot be put on ${name}. Try again in a moment.`
-    mkdirSync(join(d.projectsDir, 'launch-grid-refused'), { recursive: true })
-    expect(await client.request('agent_create', { engine: 'codex', cwd: join(d.projectsDir, 'launch-grid-refused'), grid, bypassPermission: true }, 30_000))
-      .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: down('codex', 'e2e-grid') })
-    expect(await client.request('agent_restart', { agentId: onGrid.id }, 30_000)).toMatchObject({ error: 'GRID_UNAVAILABLE', detail: down('claude', 'e2e-grid') })
-    expect(await client.request('agent_retarget', { agentId: plain[0].id, grid }, 30_000)).toMatchObject({ error: 'GRID_UNAVAILABLE', detail: down('claude', 'e2e-grid') })
-    expect(await client.request('agent_retarget', { agentId: plain[1].id, apiConnection: 'openrouter', apiModel: 'z-ai/glm-5' }, 30_000))
-      .toMatchObject({ error: 'API_UNAVAILABLE', detail: 'The models service is not running, so this API cannot be used now. Try again in a moment.' })
-    expect(Date.now() - asked).toBeLessThan(5_000)
-    // The agent on the grid was left running as it was, and every agent goes on.
-    await turn(client, onGrid.id, 'its restart was refused, and it is still here')
-    for (const agent of plain) expect((await row(client, agent.id))?.grid ?? null).toBeNull()
-    expect((await row(client, onGrid.id))?.grid).toMatchObject({ baseUrl: grid.baseUrl })
-    // Back, it builds the launch again.
-    await until('the master to restart models', () => restarts(d) >= 1 || null, 30_000, 200)
-    await until('models to answer again', () => modelsAnswers(client).then((ok) => ok || null), 30_000, 500)
-    expect(await client.request('agent_restart', { agentId: onGrid.id }, 90_000)).not.toHaveProperty('error')
-    await until('the agent on the grid to come back', async () => {
-      const agent = await row(client, onGrid.id)
-      return agent?.status === 'active' && agent.grid?.baseUrl === grid.baseUrl ? agent : null
-    }, 60_000, 500)
-    expect(d.coresStarted()).toBe(1)
-    client.close()
+    const holdDir = mkdtempSync(join(tmpdir(), 'models-launch-hold-'))
+    const hold = join(holdDir, 'hold')
+    try {
+      // Hold the replacement until every outage assertion has finished, regardless of host load.
+      const d = await fresh({ HARNESSD_TEST_HOLD_CONNECT: `models:${hold}` })
+      const client = await LocalClient.connect(d)
+      // The launch the desktop sends for a grid it already resolved: models builds it (ModelsPort.gridLaunch).
+      const grid = { networkId: 'net-e2e', networkName: 'e2e-grid', baseUrl: 'https://fixture.invalid/g/net-e2e/relay/v1', apiKey: 'fixture-key', model: 'Small-Q4' }
+      const onGrid = await createOn(d, client, 'claude', 'launch-grid-claude', grid)
+      expect(onGrid.grid).toMatchObject({ baseUrl: grid.baseUrl, model: 'Small-Q4' })
+      const before = modelsPids(d)
+      writeFileSync(hold, '')
+      for (const pid of before) process.kill(pid, 'SIGKILL')
+      await until('the core to see models gone', () => d.log().includes('[services] models disconnected') || null, 15_000, 100)
+      // Their own login asks models nothing: both launch, and take a turn, while it is down.
+      const plain = [await create(d, client, 'claude', 'launch-plain-claude'), await create(d, client, 'codex', 'launch-plain-codex')]
+      for (const agent of plain) await turn(client, agent.id, `launched while models was down (${agent.engine})`)
+      // A launch that needs it is refused at once, saying why, and nothing is started or stopped.
+      const asked = Date.now()
+      const down = (engine: string, name: string) => `The models service is not running, so ${engine} cannot be put on ${name}. Try again in a moment.`
+      mkdirSync(join(d.projectsDir, 'launch-grid-refused'), { recursive: true })
+      expect(await client.request('agent_create', { engine: 'codex', cwd: join(d.projectsDir, 'launch-grid-refused'), grid, bypassPermission: true }, 30_000))
+        .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: down('codex', 'e2e-grid') })
+      expect(await client.request('agent_restart', { agentId: onGrid.id }, 30_000)).toMatchObject({ error: 'GRID_UNAVAILABLE', detail: down('claude', 'e2e-grid') })
+      expect(await client.request('agent_retarget', { agentId: plain[0].id, grid }, 30_000)).toMatchObject({ error: 'GRID_UNAVAILABLE', detail: down('claude', 'e2e-grid') })
+      expect(await client.request('agent_retarget', { agentId: plain[1].id, apiConnection: 'openrouter', apiModel: 'z-ai/glm-5' }, 30_000))
+        .toMatchObject({ error: 'API_UNAVAILABLE', detail: 'The models service is not running, so this API cannot be used now. Try again in a moment.' })
+      expect(Date.now() - asked).toBeLessThan(5_000)
+      // The agent on the grid was left running as it was, and every agent goes on.
+      await turn(client, onGrid.id, 'its restart was refused, and it is still here')
+      for (const agent of plain) expect((await row(client, agent.id))?.grid ?? null).toBeNull()
+      expect((await row(client, onGrid.id))?.grid).toMatchObject({ baseUrl: grid.baseUrl })
+      // Back, it builds the launch again.
+      rmSync(hold)
+      await until('the master to restart models', () => restarts(d) >= 1 || null, 30_000, 200)
+      await until('models to answer again', () => modelsAnswers(client).then((ok) => ok || null), 30_000, 500)
+      expect(await client.request('agent_restart', { agentId: onGrid.id }, 90_000)).not.toHaveProperty('error')
+      await until('the agent on the grid to come back', async () => {
+        const agent = await row(client, onGrid.id)
+        return agent?.status === 'active' && agent.grid?.baseUrl === grid.baseUrl ? agent : null
+      }, 60_000, 500)
+      expect(d.coresStarted()).toBe(1)
+      client.close()
+    } finally { rmSync(holdDir, { recursive: true, force: true }) }
   })
 
   /**
