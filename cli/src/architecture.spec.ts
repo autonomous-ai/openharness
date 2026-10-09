@@ -208,7 +208,7 @@ const EDGE: RegExp[] = [
   // shares with the questions the core tells it of (services/recaps.ts).
   /^lib\/(commander|agentNotifications)\.ts$/,
   // Package execution belongs to the Store; core retains the installed index and launch contracts.
-  /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts|runtime|materialize|shell)\.ts$/,
+  /^dsh\/(catalog|install|update|updates|registry|wire|service|lock|builtins|viewer|viewerLedger|verdict|artifacts|runtime|materialize|shell|preparation)\.ts$/,
   // Search's index; the readers of other engines' sessions (external.ts, externals/) are the core's, for adoption.
   /^lib\/sessionSearch\/(?!external\.ts$|externals\/)/,
   // Downloading builds: the updater's, in a process the master runs (services/updaterProcess.ts). The core

@@ -199,7 +199,7 @@ export function createAgentCreator({
         // Not there yet is empty; unreadable is not — trust is only ever granted on evidence.
         const emptyBefore = await readdir(cwd).then((names) => names.length === 0,
           (error: NodeJS.ErrnoException) => error.code === 'ENOENT')
-        const materialized = await dshLaunch.materialize({ dsh, workspace: cwd, account: dshAccount, engine })
+        const materialized = await dshLaunch.materialize({ dsh, workspace: cwd, account: dshAccount, engine, key: label })
         if (!materialized.ok) {
           if (materialized.unavailable) return { ok: false, error: materialized.error, detail: materialized.detail }
           throw new Error(materialized.detail)

@@ -6,6 +6,7 @@ import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { adoptHomes, movedHomes } from '../../lib/engineHomes.js'
 import { createEngineHooks, installEngineHooks, installOpencodePluginBeforeSpawn, PROCESS_RECORD_WAIT_MS, type EngineHookDeps } from './hooks.js'
 import { loadEngine } from '../../engines/inProcess.js'
+import { createPaneOperations } from '../agents/paneOperations.js'
 
 vi.mock('../../engines/hooks.js', async (real) => {
   const actual = await real<typeof import('../../engines/hooks.js')>()
@@ -105,6 +106,36 @@ describe('which agent a hook belongs to', () => {
     expect(await setup({ '%1': c1 }).hooks.resolveHookAgent({ engine: 'cursor', runtimeHints: [hint('%1')], callerPid: 300 })).toBe(c1)
     expect(console.log).toHaveBeenCalledWith('[hooks] cursor hook accepted on runtime evidence alone · agent=cursor-1 · caller=300 is outside that engine\'s process tree')
   })
+
+  it.each(['committed', 'removed', 'failed', 'unreadable', 'no acknowledgement'] as const)(
+    'Cursor admission waits only for the pane commit, then rechecks the current row: %s', async outcome => {
+      const operations = createPaneOperations()
+      const c1 = { ...agent('cursor-1'), engine: 'cursor' } as RegisteredSession
+      const onPane: Record<string, RegisteredSession> = { '%1': c1 }
+      let commit!: () => void
+      const work = operations.run(c1.agentId, async () => {
+        await new Promise<void>(done => { commit = done })
+        if (outcome === 'failed') throw new Error('pane uncertain')
+        if (outcome === 'removed') delete onPane['%1']
+        if (outcome === 'unreadable') vi.mocked(processRows).mockResolvedValue(null)
+      })
+      const finished = work.catch(() => {})
+      vi.mocked(processRows).mockResolvedValue(tree([300, 1]) as never)
+      const { hooks } = setup(onPane, { panePending: operations.pending })
+      const onWait = vi.fn()
+      const admitted = vi.fn()
+      const resolution = hooks.resolveHookAgent({ engine: 'cursor', runtimeHints: [hint('%1')], callerPid: 300,
+        ...(outcome === 'no acknowledgement' ? {} : { onWait }) }).then(result => { admitted(result); return result })
+      await vi.waitFor(() => expect(processRows).toHaveBeenCalled())
+      if (outcome !== 'no acknowledgement') await vi.waitFor(() => expect(onWait).toHaveBeenCalledOnce())
+      else await new Promise(resolve => setImmediate(resolve))
+      expect(admitted).not.toHaveBeenCalled()
+      commit()
+      await finished
+      expect(await resolution).toBe(['committed', 'no acknowledgement'].includes(outcome) ? c1 : null)
+      vi.mocked(processRows).mockReset().mockResolvedValue([])
+    },
+  )
 
   it('none for any other engine on the pane alone, saying the caller is not its descendant', async () => {
     // 300's parent 200 is not in the table; the walk stops there.

@@ -10,6 +10,7 @@ import { terminalRouteKey } from './terminalRuntime.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
 
 export interface StopAgentServiceDeps {
+  settlePane?: (agentId: string) => Promise<void>
   registry: Pick<typeof liveRegistry, 'resolve'>
   stoppedAgents: StoppedAgentStore
   restartJobs: AgentRestartCoordinator
@@ -62,6 +63,7 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
     if (existing) return existing
     restartJobs.cancel(sessionId)
     const job = Promise.resolve().then(async () => {
+      await deps.settlePane?.(sessionId)
       const live = registry.resolve(sessionId)
       if (!live) return
       // A row still starting has no process yet, and the one it gains while this stop runs is the engine

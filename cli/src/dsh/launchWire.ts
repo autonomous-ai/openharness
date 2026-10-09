@@ -7,10 +7,11 @@ export interface DshMaterializeRequest {
   workspace: string
   engine: AgentEngine
   account: DshAccount
+  /** The create's stable label also identifies its workspace preparation across a lost reply. */
+  key: string
 }
 
 export interface DshLaunchRequest extends DshMaterializeRequest {
-  key: string
   forkOf?: { agentId: string; dshRuntime: string | null }
 }
 
@@ -20,6 +21,8 @@ export interface DshRefusal {
   detail: string
   /** A restore holds this launch until the service returns. */
   unavailable?: 'store'
+  /** The Store answered, but only this workspace is held; other workspaces can still launch. */
+  holdScope?: 'workspace'
   /** Relaunches historically used String(error); create and fork used error.message. */
   thrown?: string
 }

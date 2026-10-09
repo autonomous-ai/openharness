@@ -239,6 +239,20 @@ describe('creating an agent', () => {
       expect(await create(request({ engine: 'terminal' }))).toMatchObject({ ok: true, session: { engine: 'terminal' } })
     })
 
+    it('does not trust, configure or launch a workspace when the Store cannot prepare it', async () => {
+      vi.mocked(installedDsh).mockReturnValue(installed() as never)
+      const refused = { ok: false as const, error: 'DSH_UNAVAILABLE', detail: 'Store unavailable', unavailable: 'store' as const }
+      const materialize = vi.fn(async () => refused)
+      const { create } = setup({ dshLaunch: { materialize, launch: launchDsh } })
+      expect(await create(request({ dsh: 'blender' }))).toEqual({ ok: false, error: refused.error, detail: refused.detail })
+      expect(launchDsh).not.toHaveBeenCalled()
+      expect(createAndRegisterPane).not.toHaveBeenCalled()
+      expect(preTrustClaudeProject).not.toHaveBeenCalled()
+      materialize.mockResolvedValueOnce({ ok: false, error: 'DSH_MATERIALIZE_FAILED', detail: 'disk full' } as never)
+      expect(await create(request({ dsh: 'blender' }))).toMatchObject({ error: 'DSH_MATERIALIZE_FAILED', detail: 'could not prepare the workspace for blender · disk full' })
+      vi.mocked(installedDsh).mockReset().mockReturnValue(undefined)
+    })
+
     it('as a DSH: its workspace prepared, trusted when it went into an empty folder, and its launch layered on', async () => {
       vi.mocked(installedDsh).mockReturnValue(installed() as never)
       vi.mocked(materializeWorkspace).mockResolvedValue({ warnings: ['kept AGENTS.md'], created: ['template/scene.blend'], kept: [] } as never)

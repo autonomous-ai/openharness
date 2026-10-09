@@ -49,7 +49,7 @@ describe('checked Store launch replies', () => {
     expect(call.mock.calls).toEqual([['dshMaterialize', request], ['dshLaunch', request]])
     for (const refused of [
       { ok: false, error: 'DSH_NOT_INSTALLED', detail: 'missing' },
-      { ok: false, error: 'DSH_UNAVAILABLE', detail: 'waiting', unavailable: 'store', thrown: 'Error: waiting' },
+      { ok: false, error: 'DSH_UNAVAILABLE', detail: 'waiting', unavailable: 'store', holdScope: 'workspace', thrown: 'Error: waiting' },
     ]) {
       call.mockResolvedValue(refused)
       expect(await link.port.dshMaterialize(request)).toEqual(refused)
@@ -61,7 +61,7 @@ describe('checked Store launch replies', () => {
     const link = createStoreLink(fakeCore(), vi.fn(), call)
     const common = [null, [], false, {}, { ok: false }, { ok: false, error: 1 },
       { ok: false, error: 'x', detail: 1 }, { ok: false, error: 'x', detail: 'x', unavailable: 'models' },
-      { ok: false, error: 'x', detail: 'x', thrown: 1 }, { error: 'SERVICE_UNAVAILABLE' }]
+      { ok: false, error: 'x', detail: 'x', thrown: 1 }, { ok: false, error: 'x', detail: 'x', holdScope: 'process' }, { error: 'SERVICE_UNAVAILABLE' }]
     for (const bad of [...common, { ok: true }, { ...materialized, created: [1] }, { ...materialized, kept: null }, { ...materialized, warnings: [1] }]) {
       call.mockResolvedValue(bad)
       await expect(link.port.dshMaterialize(request)).rejects.toThrow('the store service is unavailable')

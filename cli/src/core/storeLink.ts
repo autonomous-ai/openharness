@@ -18,8 +18,10 @@ function refusal(value: Record<string, unknown>): DshRefusal | null {
   if (value.ok !== false || !text(value.error) || !text(value.detail)) return null
   if (value.unavailable !== undefined && value.unavailable !== 'store') return null
   if (value.thrown !== undefined && !text(value.thrown)) return null
+  if (value.holdScope !== undefined && value.holdScope !== 'workspace') return null
   return { ok: false, error: value.error, detail: value.detail,
     ...(value.unavailable ? { unavailable: value.unavailable } : {}),
+    ...(value.holdScope ? { holdScope: value.holdScope } : {}),
     ...(value.thrown !== undefined ? { thrown: value.thrown } : {}) }
 }
 

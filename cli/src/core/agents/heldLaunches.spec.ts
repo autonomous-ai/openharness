@@ -77,6 +77,35 @@ describe('agents held until a service is ready', () => {
     expect(log).toHaveBeenLastCalledWith('[restore] held · models · launched 0 of 2 · 2 still waiting')
   })
 
+  it.each(['prepared', 'restart'] as const)('retries transient core contention after the only %s notice, coalescing retries', async trigger => {
+    vi.useFakeTimers()
+    try {
+      const h = setup([row('a', HELD)])
+      h.restore.mockResolvedValueOnce(summary({ retry: true, held: ['a'] }))
+        .mockResolvedValueOnce(summary({ retry: true, held: ['a'] }))
+      await h.held.boot(async () => {})
+      if (trigger === 'prepared') await h.held.restoreHeld('models')
+      else await h.held.restartHeld('a')
+      await h.held.restoreHeld('models')
+      expect(h.restore).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(h.restore).toHaveBeenCalledTimes(3)
+      expect(h.registry.get('a')?.launch?.state).toBe('starting')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('logs a failed core-contention retry without an unhandled rejection', async () => {
+    vi.useFakeTimers()
+    try {
+      const h = setup([row('a', HELD)])
+      h.restore.mockResolvedValueOnce(summary({ retry: true })).mockRejectedValueOnce(new Error('test retry failure'))
+      await h.held.boot(async () => {})
+      await h.held.restoreHeld()
+      await vi.advanceTimersByTimeAsync(500)
+      expect(h.log).toHaveBeenLastCalledWith(expect.stringContaining('test retry failure'))
+    } finally { vi.useRealTimers() }
+  })
+
   it('runs one pass at a time, and a pass that fails does not stop the next', async () => {
     let release!: () => void
     const order: string[] = []

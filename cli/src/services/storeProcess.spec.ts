@@ -90,7 +90,7 @@ describe('the Store launch port on its process wire', () => {
     const { launch, requests } = setup()
     for (const account of [{}, { privateGrid: null }, { privateGrid: '' }, { privateGrid: 'private' }]) {
       expect(await requests.dshMaterialize!({ ...request, account, secret: 'not forwarded' }, ASKER)).toMatchObject({ ok: true })
-      expect(launch.dshMaterialize).toHaveBeenLastCalledWith({ dsh: request.dsh, workspace: request.workspace, engine: request.engine, account })
+      expect(launch.dshMaterialize).toHaveBeenLastCalledWith({ dsh: request.dsh, workspace: request.workspace, key: request.key, engine: request.engine, account })
     }
     for (const forkOf of [undefined, { agentId: 'source', dshRuntime: null }, { agentId: 'source', dshRuntime: 'runtime' }]) {
       expect(await requests.dshLaunch!({ ...request, forkOf }, ASKER)).toMatchObject({ ok: true })
@@ -112,4 +112,29 @@ describe('the Store launch port on its process wire', () => {
     expect(launch.dshMaterialize).not.toHaveBeenCalled()
     expect(launch.dshLaunch).not.toHaveBeenCalled()
   })
+  it('notifies held launches after a completed preparation and tolerates the core going away', async () => {
+    const { launch, requests } = setup()
+    const options = vi.mocked(runServiceProcess).mock.calls.at(-1)![0]
+    const query = vi.fn(async () => ({}))
+    options.onConnected!({ query })
+    query.mockClear()
+    await requests.dshMaterialize!(request, ASKER)
+    await requests.dshLaunch!(request, ASKER)
+    expect(query.mock.calls).toEqual([['prepared'], ['prepared']])
+    query.mockRejectedValue(new Error('core gone'))
+    await requests.dshMaterialize!(request, ASKER)
+    await requests.dshLaunch!(request, ASKER)
+    launch.dshMaterialize.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', unavailable: 'store', detail: 'unconfirmed' } as never)
+    launch.dshLaunch.mockResolvedValueOnce({ ok: false, error: 'DSH_UNAVAILABLE', unavailable: 'store', detail: 'unconfirmed' } as never)
+    await requests.dshMaterialize!(request, ASKER)
+    await requests.dshLaunch!(request, ASKER)
+    expect(query).toHaveBeenCalledTimes(4)
+    query.mockResolvedValue({})
+    launch.dshMaterialize.mockResolvedValueOnce({ ok: false, error: 'DSH_MATERIALIZE_FAILED', detail: 'init failed' } as never)
+    launch.dshLaunch.mockResolvedValueOnce({ ok: false, error: 'DSH_RUNTIME_FAILED', detail: 'runtime failed' } as never)
+    await requests.dshMaterialize!(request, ASKER)
+    await requests.dshLaunch!(request, ASKER)
+    expect(query).toHaveBeenCalledTimes(6)
+  })
+
 })

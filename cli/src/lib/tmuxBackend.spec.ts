@@ -69,6 +69,35 @@ afterEach(async () => {
 })
 
 describe('TmuxBackend lifecycle', () => {
+  it.each(['create', 'respawn'] as const)('rechecks core ownership after the feature wait before %s dispatch', async operation => {
+    let release!: () => void
+    let current = true
+    const pending = new Promise<void>(done => { release = done })
+    const features = vi.fn(async () => { await pending; return { paneOptions: true, sessionEnv: true, respawnEnv: true, controlNotifyGuard: true } })
+    const backend = new TmuxBackend(undefined, () => 'private-test-owner', () => {}, features as never)
+    const onDispatch = vi.fn()
+    const request = { command: ['never-executed'], current: () => current, onDispatch }
+    const result = operation === 'create' ? backend.create(request) : backend.respawn({ backend: 'tmux', paneId: '%42' }, request)
+    await vi.waitFor(() => expect(features).toHaveBeenCalled())
+    current = false
+    release()
+    expect(await result).toMatchObject({ state: 'failed', dispatch: 'not_started', reason: 'The harness changed before pane dispatch' })
+    expect(onDispatch).not.toHaveBeenCalled()
+  })
+
+  it('rechecks ownership inside the tmux notification gate before allocating a pane', async () => {
+    assumeTmuxVersion({ major: 3, minor: 4 })
+    const leave = await tmuxControlGate.enter('attach')
+    let current = true
+    const onDispatch = vi.fn()
+    const result = new TmuxBackend(undefined, () => 'private-test-owner', () => {}).create({ current: () => current, onDispatch })
+    await vi.waitFor(() => expect(tmuxControlGate.state.waiting).toBe(1))
+    current = false
+    leave()
+    expect(await result).toMatchObject({ state: 'failed', dispatch: 'not_started' })
+    expect(onDispatch).not.toHaveBeenCalled()
+  })
+
   it.each(['tmux', 'ps'] as const)('does not declare a running pane gone when the %s probe fails', async failed => {
     const dir = mkdtempSync(join(tmpdir(), 'tmux-backend-probe-'))
     dirs.push(dir)

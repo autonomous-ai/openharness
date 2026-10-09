@@ -5,6 +5,7 @@ import { buildEngineLaunchArgv } from '../../lib/engineLaunch.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
 import { bypassPermissionActive, resolvePaneEngineProcess } from '../../lib/tmux.js'
+import { AgentRestartCoordinator } from '../../lib/restartAgent.js'
 import { createPaneSwap, SWAP_SETTLE_MS, type PaneSwapDeps } from './swap.js'
 
 vi.mock('../../lib/deleteAgentFallback.js', async (real) => ({ ...await real<object>(), terminateDeletedAgent: vi.fn(async () => ({ ok: true })) }))
@@ -41,6 +42,14 @@ describe('the pane-process swap', () => {
     vi.mocked(buildEngineLaunchArgv).mockClear()
   })
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+
+  it('uses the coordinator that already owns boot restore revisions', () => {
+    const restartJobs = new AgentRestartCoordinator()
+    const boot = restartJobs.revision('a1')
+    const swap = createPaneSwap({ ...setup().deps, restartJobs })
+    expect(swap.restartJobs).toBe(restartJobs)
+    expect(swap.restartJobs.revision('a1')).toBe(boot)
+  })
 
   it('restarts only the agent it was asked about: same registration, same pane, same engine', () => {
     expect(setup().swap.sameRestartTarget(session())).toBe(true)

@@ -2,8 +2,8 @@
  * Create snapshots instructions/env/argv; resume reads that snapshot; fork copies it under a new
  * key. Toolchains and skill assets stay at their installed package paths, as in spec 1.
  */
-import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
@@ -48,7 +48,14 @@ function isLink(path: string): boolean {
 
 function writeManagedFile(path: string, body: string): void {
   if (isLink(path)) throw new Error(`Refusing to replace a symlink: ${path}`)
-  writeFileSync(path, body, { mode: 0o600 })
+  // A killed Store must never truncate the context an already-running agent is reading.
+  const temporary = `${path}.${randomUUID()}.tmp`
+  const mode = existsSync(path) ? lstatSync(path).mode & 0o777 : 0o600
+  const fd = openSync(temporary, 'wx', mode)
+  try {
+    try { writeFileSync(fd, body); fsyncSync(fd) } finally { closeSync(fd) }
+    renameSync(temporary, path)
+  } finally { rmSync(temporary, { force: true }) }
 }
 
 /** Older versions appended a marker without an end marker. Remove only text that exactly matches

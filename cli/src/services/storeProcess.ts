@@ -38,21 +38,21 @@ const text = (value: unknown): value is string => typeof value === 'string' && v
 
 /** Internal port calls accept only the context package preparation actually reads. */
 export function dshMaterializeRequestIn(value: Record<string, unknown>): DshMaterializeRequest | null {
-  if (!text(value.dsh) || !text(value.workspace) || !PROCESS_ENGINES.some(engine => engine === value.engine)) return null
+  if (!text(value.dsh) || !text(value.workspace) || !text(value.key) || !PROCESS_ENGINES.some(engine => engine === value.engine)) return null
   if (!record(value.account)) return null
   const name = value.account.privateGrid
   if (name !== undefined && name !== null && typeof name !== 'string') return null
-  return { dsh: value.dsh, workspace: value.workspace, engine: value.engine as AgentEngine,
+  return { dsh: value.dsh, workspace: value.workspace, key: value.key, engine: value.engine as AgentEngine,
     account: name === undefined ? {} : { privateGrid: name } }
 }
 
 export function dshLaunchRequestIn(value: Record<string, unknown>): DshLaunchRequest | null {
   const base = dshMaterializeRequestIn(value)
-  if (!base || !text(value.key)) return null
-  if (value.forkOf === undefined) return { ...base, key: value.key }
+  if (!base) return null
+  if (value.forkOf === undefined) return base
   const fork = value.forkOf
   if (!record(fork) || !text(fork.agentId) || !(fork.dshRuntime === null || text(fork.dshRuntime))) return null
-  return { ...base, key: value.key, forkOf: { agentId: fork.agentId, dshRuntime: fork.dshRuntime } }
+  return { ...base, forkOf: { agentId: fork.agentId, dshRuntime: fork.dshRuntime } }
 }
 
 /** The requests that change what is installed here. */
@@ -76,11 +76,17 @@ export function runStoreService(options: StoreServiceOptions): ServiceProcess {
   const requests: Record<string, ServiceRequest> = Object.fromEntries(Object.entries(answers).map(([type, handle]) => [type, CHANGES.includes(type) ? changing(handle) : handle]))
   requests.dshMaterialize = async payload => {
     const request = dshMaterializeRequestIn(payload)
-    return request ? { ...await launch.dshMaterialize(request) } : { ok: false, error: 'INVALID_DSH', detail: 'Invalid harness workspace request' }
+    if (!request) return { ok: false, error: 'INVALID_DSH', detail: 'Invalid harness workspace request' }
+    const answer = await launch.dshMaterialize(request)
+    if (answer.ok || !answer.unavailable) void core?.query('prepared').catch(() => {})
+    return { ...answer }
   }
   requests.dshLaunch = async payload => {
     const request = dshLaunchRequestIn(payload)
-    return request ? { ...await launch.dshLaunch(request) } : { ok: false, error: 'INVALID_DSH', detail: 'Invalid harness launch request' }
+    if (!request) return { ok: false, error: 'INVALID_DSH', detail: 'Invalid harness launch request' }
+    const answer = await launch.dshLaunch(request)
+    if (answer.ok || !answer.unavailable) void core?.query('prepared').catch(() => {})
+    return { ...answer }
   }
   return (options.run ?? runServiceProcess)({
     name: 'store',

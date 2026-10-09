@@ -45,6 +45,16 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
     return next
   }
 
+  let retryTimer: ReturnType<typeof setTimeout> | undefined
+  const retryContention = (summary: RestoreSummary): void => {
+    if (!summary.retry || retryTimer) return
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined
+      void restoreHeld().catch(error => log(`[restore] core contention retry failed: ${String(error)}`))
+    }, 500)
+    retryTimer.unref?.()
+  }
+
   /** The agents held (for `service`, or for any), launched now. */
   const restoreHeld = (service?: string): Promise<RestoreSummary | null> => serial(async () => {
     const held = new Set(registry.list().filter((row) => {
@@ -53,6 +63,7 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
     }).map((row) => row.agentId))
     if (!held.size) return null
     const summary = await restore(held)
+    retryContention(summary)
     log(`[restore] held · ${service ?? 'every service'} · launched ${summary.restored.length} of ${held.size}`
       + (summary.held.length ? ` · ${summary.held.length} still waiting` : ''))
     return summary
@@ -68,6 +79,7 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
       if (!before) return { ok: false, error: 'AGENT_NOT_FOUND' }
       if (!heldFor(before)) return { ok: true, session: before, resumed: !!before.sessionId }
       const summary = await restore(new Set([agentId]))
+      retryContention(summary)
       const now = registry.byAgent(agentId)
       if (!now) return { ok: false, error: 'AGENT_NOT_FOUND' }
       if (summary.restored.includes(agentId)) {

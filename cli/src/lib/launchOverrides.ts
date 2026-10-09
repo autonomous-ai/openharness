@@ -59,7 +59,7 @@ export interface LaunchOverrides {
 /** A refusal names the service that could not be asked (`unavailable`) when that is all that stopped it. */
 export type LaunchOverridesResult =
   | { ok: true; overrides: LaunchOverrides }
-  | { ok: false; error: string; detail: string; unavailable?: string }
+  | { ok: false; error: string; detail: string; unavailable?: string; holdScope?: 'workspace' }
 
 export interface LaunchOverridesDeps {
   /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
@@ -190,7 +190,8 @@ export async function buildLaunchOverrides(
     }
     if (!prepared) return { ok: false, error: 'DSH_NOT_INSTALLED', detail: `${source.dsh} is not installed on this machine` }
     if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail,
-      ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}) }
+      ...(prepared.unavailable ? { unavailable: prepared.unavailable } : {}),
+      ...(prepared.holdScope ? { holdScope: prepared.holdScope } : {}) }
     const dsh = prepared.launch
     // The DSH's variables layer over the grid's or the profile's; `HARNESS_*` are the daemon's own
     // and a manifest cannot set them (see `dshLaunch`), so nothing here can shadow a grid credential.

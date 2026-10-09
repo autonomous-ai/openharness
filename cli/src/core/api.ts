@@ -1283,8 +1283,6 @@ export interface WindowRelay {
     onClosed: (code: number, reason: string) => void): Promise<WindowRelaySession>
 }
 
-/** Each port is filled by the service that owns it when that service starts, and is null while the
- *  service is off: the core never waits on one. */
 export interface StorePort {
   dshMaterialize(request: DshMaterializeRequest): Promise<DshMaterializeAnswer>
   dshLaunch(request: DshLaunchRequest): Promise<DshLaunchAnswer>
@@ -1296,6 +1294,8 @@ export const STORE_OFF: StorePort = {
   dshLaunch: () => Promise.reject(new ServiceUnavailableError('store')),
 }
 
+/** Each port is filled by the service that owns it when that service starts, and is null while the
+ *  service is off: the core never waits on one. */
 export interface CorePorts {
   store: StorePort | null
   search: SearchPort | null

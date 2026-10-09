@@ -61,8 +61,20 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRe
   }
 }
 
-export function startStoreInCore(core: CoreApi, ports: CorePorts): ServiceRequests {
+export function startStoreInCore(core: CoreApi, ports: CorePorts, prepared?: () => void): ServiceRequests {
   const requests = startStore(core)
-  ports.store = storeLaunchPort()
+  const launch = storeLaunchPort()
+  ports.store = {
+    dshMaterialize: async request => {
+      const answer = await launch.dshMaterialize(request)
+      if (answer.ok || !answer.unavailable) prepared?.()
+      return answer
+    },
+    dshLaunch: async request => {
+      const answer = await launch.dshLaunch(request)
+      if (answer.ok || !answer.unavailable) prepared?.()
+      return answer
+    },
+  }
   return requests
 }

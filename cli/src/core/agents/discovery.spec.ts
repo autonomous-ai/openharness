@@ -271,6 +271,17 @@ describe('discovery', () => {
     expect(run.deps.registry.setActive).toHaveBeenCalledWith('a2', false)
   })
 
+  it('never archives a held conversation when its waiting shell or engine is absent', async () => {
+    const run = setup()
+    const held = row({ launch: { state: 'held', service: 'store', detail: 'Waiting for preparation.' } })
+    await run.handlers.onDormant(held, 'two engine misses')
+    run.handlers.onRemoved(held, 'two missing-pane scans')
+    expect(run.deps.retainExitedSession).not.toHaveBeenCalled()
+    expect(run.deps.forgetSession).not.toHaveBeenCalled()
+    expect(run.deps.registry.setActive).toHaveBeenCalledWith('a1', false)
+    expect(run.deps.announceSession).toHaveBeenCalledWith(held)
+  })
+
   it('records whether a row\'s terminal is available, announcing it when it becomes so', () => {
     const run = setup()
     run.handlers.onTerminalAvailability(row(), true)
