@@ -9,6 +9,7 @@ import { isRecentlyDeleted } from '../../lib/deletedSessions.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { findLiveSession, findResumedTranscript } from '../../lib/sessionRepair.js'
 import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
+import { TerminalAgentReconciler } from '../../lib/terminalAgentReconciler.js'
 import { createBinding, statBirthMs, type BindDeps, type RegisteredMeta } from './bind.js'
 
 vi.mock('../../engines/identities.js', () => ({ transcriptOf: vi.fn(), processSessionOf: vi.fn() }))
@@ -316,6 +317,41 @@ describe('binding a running process to its session', () => {
     await vi.waitFor(() => expect(done).toBe(true), { timeout: 1000 })
     expect(run.deps.registry.register).toHaveBeenCalledOnce()
     expect(run.deps.attachSession).toHaveBeenCalledOnce()
+  })
+
+  it.each([new Error('identity read limit'), 'identity read limit'])('holds only the unreadable native identity and finishes the discovery/readiness pass: %s', async error => {
+    const run = setup()
+    const rows = [agent({ engine: 'muse', agentId: 'held', sessionId: '', runtimes: [], active: true,
+      processIdentity: { pid: 42, executable: 'muse', startMarker: '2026-10-09T00:00:00Z' } }),
+    agent({ engine: 'codex', agentId: 'next', sessionId: '', runtimes: [], active: true,
+      processIdentity: { pid: 43, executable: 'codex', startMarker: '2026-10-09T00:00:00Z' } })]
+    for (const row of rows) run.byAgent.set(row.agentId, row)
+    vi.mocked(run.deps.registry.byProcess).mockImplementation(engine => rows.find(row => row.engine === engine))
+    vi.mocked(findLiveSession).mockImplementation(async engine => {
+      if (engine === 'muse') throw error
+      return { sessionId: 'found', transcriptPath: '/t/found.jsonl' }
+    })
+    vi.mocked(run.deps.registry.register).mockImplementation(request => {
+      Object.assign(rows[1]!, { sessionId: request.sessionId, transcriptPath: request.transcriptPath })
+      return { entry: rows[1]!, ...meta({ isNew: true }) } as never
+    })
+    const onProbeStatus = vi.fn(), onRemoved = vi.fn(), onDormant = vi.fn()
+    const reconciler = new TerminalAgentReconciler({
+      current: () => rows, backends: [], backendOrder: ['tmux'], onProbeStatus, onRemoved, onDormant,
+      onDiscovered: run.binding.bindObservedAgent, onObserved: run.binding.bindObservedAgent,
+      probe: async () => ({ processTableAvailable: true, targets: [], ambiguousPlacements: new Set(),
+        agents: rows.map(row => observed({ engine: row.engine, processIdentity: row.processIdentity! })) }),
+    })
+    try {
+      await expect(reconciler.start(60_000)).resolves.toBeUndefined()
+      expect(rows[0]!.sessionId).toBe('')
+      expect(rows[1]!.sessionId).toBe('found')
+      expect(run.deps.registry.register).toHaveBeenCalledOnce()
+      expect(run.deps.stoppedAgents.save).toHaveBeenCalledExactlyOnceWith(rows[1])
+      expect(onRemoved).not.toHaveBeenCalled(); expect(onDormant).not.toHaveBeenCalled()
+      expect(onProbeStatus).toHaveBeenCalledWith({ ready: true, error: null })
+      expect(console.log).toHaveBeenCalledWith('[discovery] held binding held · identity read limit')
+    } finally { reconciler.stop() }
   })
 
   it.each([new Error('reader unavailable'), 'reader unavailable'])('contains an optional attachment failure after binding', async error => {

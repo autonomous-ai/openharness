@@ -19,26 +19,19 @@ import { externalReadFailed } from '../evidence.js'
 
 import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join } from 'node:path'
+import { PI_FOLDER, PI_HEADER } from '../../../engines/pi/contract.js'
+import { readSessionHeader, sessionFolder, type NativeSessionHead } from '../../../engines/kit/sessionIdentity.js'
 
 import type { AgentCommandOwnershipSnapshot } from '../../engineBin.js'
 import { engineProcessMatch, resumeSessionId } from '../../tmux.js'
 import { forEachLine } from '../../transcriptLines.js'
-import { absoluteFolder, entries, fileStamp, parseLine, readHead, readJson, readTail, record, text } from './support.js'
+import { entries, fileStamp, parseLine, readHead, readJson, readTail, record, text } from './support.js'
 import { type ExternalProvider, type ExternalSession, type OwnerClaim, type ProcessView, type ScanContext, UNSETTLED } from './types.js'
 
-/** How much of a file is read for its header first: headers are a few hundred bytes. */
-const FIRST_BYTES = 16 * 1024
-/** Pi's own bound on a header: a larger first entry is not a session. */
-const HEAD_BYTES = 1024 * 1024
 /** Enough of a header to see its version, which a migration rewrites. */
 const LEAD_BYTES = 256
 const TAIL_BYTES = 64 * 1024
-/**
- * Pi's rule for an id (`--session-id` takes any such), kept to what Harness takes as one: 2 to 128
- * characters. One that ends `.jsonl` is read by `--session` as a file path, so it cannot be resumed.
- */
-const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9]$/
 
 /**
  * A process row carries no file identity, so the PATH walk behind a full ownership snapshot could
@@ -49,35 +42,19 @@ const NO_FILE_OWNERS: AgentCommandOwnershipSnapshot = {
   agentCandidates: [], cursorAgentCandidates: [], grokCandidates: [],
 }
 
-export interface PiHead { sessionId: string; cwd: string }
+export type PiHead = NativeSessionHead
 
 /**
  * A session file's id and folder, from its first entry. Blank and malformed lines before it are
  * skipped, as Pi skips them; any other first entry means the file is not a session.
  */
 export async function readPiHead(path: string): Promise<PiHead | null | typeof UNSETTLED> {
-  for (const bytes of [FIRST_BYTES, HEAD_BYTES]) {
-    const head = await readHead(path, bytes)
-    // The last piece has no newline: an entry still being written, or one cut by the read.
-    for (const line of head.split('\n').slice(0, -1)) {
-      if (!line.trim()) continue
-      const value = parseLine(line)
-      if (value === null) continue
-      const row = record(value)
-      if (row?.type !== 'session') return null
-      const id = text(row.id)
-      const cwd = absoluteFolder(row.cwd)
-      return SESSION_ID.test(id) && !id.endsWith('.jsonl') && cwd ? { sessionId: id, cwd: resolve(cwd) } : null
-    }
-    // The whole file, and no entry in it yet: its first one is still being written.
-    if (Buffer.byteLength(head) < bytes) return UNSETTLED
-  }
-  return null
+  return readSessionHeader(PI_HEADER, bytes => readHead(path, bytes))
 }
 
 /** The folder Pi keeps a working directory's sessions in, named as Pi names it. */
 export function piSessionFolder(cwd: string): string {
-  return `--${cwd.replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`
+  return sessionFolder(PI_FOLDER, cwd)
 }
 
 /** How far a title read got: where it stopped, the header's start then, and the name so far. */

@@ -1,0 +1,84 @@
+{
+  "muse:spoken": {
+    "sessionId": "spoken",
+    "transcriptPath": "<root>/home/.muse/sessions/2026/10/09/spoken/session.jsonl"
+  },
+  "muse:scheduled": {
+    "sessionId": "scheduled",
+    "transcriptPath": "<root>/home/.muse/sessions/2026/10/09/scheduled/session.jsonl"
+  },
+  "muse:task": null,
+  "muse:reminder": null,
+  "muse:delayed": {
+    "sessionId": "delayed",
+    "transcriptPath": "<root>/home/.muse/sessions/2026/10/09/delayed/session.jsonl"
+  },
+  "muse:malformed": null,
+  "muse:incomplete": null,
+  "muse:noWorkspace": null,
+  "muse:wrongWorkspace": null,
+  "muse:wrongEnvelope": null,
+  "muse:arrayEvent": null,
+  "muse:subagent": null,
+  "muse:ambiguous": null,
+  "muse:older-than-process": null,
+  "pi:header:valid": {
+    "sessionId": "custom.id-12",
+    "cwd": "/work/pi"
+  },
+  "pi:header:unicode": {
+    "sessionId": "custom.id-12",
+    "cwd": "/work/本"
+  },
+  "pi:header:malformedLead": {
+    "sessionId": "custom.id-12",
+    "cwd": "/work/pi"
+  },
+  "pi:header:wrongFirst": null,
+  "pi:header:arrayFirst": null,
+  "pi:header:stringFirst": null,
+  "pi:header:empty": "<unsettled>",
+  "pi:header:partial": "<unsettled>",
+  "pi:header:wrongId": null,
+  "pi:header:shortId": null,
+  "pi:header:longId": null,
+  "pi:header:fileId": null,
+  "pi:header:relativeCwd": null,
+  "pi:header:noCwd": null,
+  "pi:header:large": {
+    "sessionId": "custom.id-12",
+    "cwd": "/work/pi"
+  },
+  "pi:header:tooLarge": null,
+  "pi:folder:/work/pi": "--work-pi--",
+  "pi:folder:/work/pi/a-b": "--work-pi-a-b--",
+  "pi:folder:/work/pi-a/b": "--work-pi-a-b--",
+  "pi:folder:C:\\work\\pi": "--C--work-pi--",
+  "pi:folder:/work/本": "--work-本--",
+  "pi:resume:exact": "<root>/home/.pi/agent/sessions/--work-pi-resume--/2026-10-09_custom.id-12.jsonl",
+  "pi:resume:unwritten": null,
+  "pi:resume:missing-folder": null,
+  "pi:resume:missing-cwd": {
+    "error": "The Pi conversation location is unavailable."
+  },
+  "pi:resume:invalid:../escape": {
+    "error": "The Pi conversation location is unavailable."
+  },
+  "pi:resume:invalid:a": {
+    "error": "The Pi conversation location is unavailable."
+  },
+  "pi:resume:invalid:a.jsonl": {
+    "error": "The Pi conversation location is unavailable."
+  },
+  "pi:resume:empty": {
+    "error": "The Pi conversation file could not be read."
+  },
+  "pi:resume:bad-header": {
+    "error": "The Pi conversation file could not be read."
+  },
+  "pi:resume:duplicate": {
+    "error": "More than one file matches this Pi conversation."
+  },
+  "pi:resume:folder-collision": null,
+  "pi:resume:header-id-wins": null
+}

@@ -415,6 +415,36 @@ it('an unbound observation of the same process keeps its confirmed conversation'
   store.save({ ...saved, sessionId: '', transcriptPath: null, title: 'Renamed', boundAt: null, source: null })
   expect(store.get(saved.agentId)).toMatchObject({ sessionId: saved.sessionId, transcriptPath: '/history.jsonl', title: 'Renamed', boundAt: 1, source: 'hook' })
 })
+it('a pathless observation of the same conversation keeps its captured native path', async () => {
+  const { saved, store } = await fixture()
+  saved.hermesHome = '/fixture/hermes'
+  store.save({ ...saved, transcriptPath: '/history.jsonl', source: 'stop-repair' })
+  store.save({ ...saved, transcriptPath: null, title: 'A newer title', source: 'hook' })
+  expect(store.get(saved.agentId)).toMatchObject({ sessionId: saved.sessionId,
+    transcriptPath: '/history.jsonl', title: 'A newer title', source: 'hook' })
+  store.save({ ...saved, transcriptPath: '/replacement.jsonl' })
+  expect(store.get(saved.agentId)?.transcriptPath).toBe('/replacement.jsonl')
+})
+it.each(['agent', 'conversation', 'engine', 'registration', 'profile', 'hermes home', 'missing process', 'pid', 'start', 'ticks', 'executable'])
+('never transfers a captured path across a changed identity: %s', async mode => {
+  const { saved, store } = await fixture()
+  saved.processIdentity!.startTicks = 100
+  store.save({ ...saved, transcriptPath: '/history.jsonl' })
+  const next: RegisteredSession = { ...saved, transcriptPath: null, processIdentity: { ...saved.processIdentity! } }
+  if (mode === 'agent') next.agentId = 'another-agent'
+  if (mode === 'conversation') next.sessionId = 'another-conversation'
+  if (mode === 'engine') next.engine = 'claude'
+  if (mode === 'registration') next.registeredAt++
+  if (mode === 'profile') next.codexHome = '/another/profile'
+  if (mode === 'hermes home') next.hermesHome = '/another/hermes'
+  if (mode === 'missing process') next.processIdentity = null
+  if (mode === 'pid') next.processIdentity!.pid++
+  if (mode === 'start') { delete next.processIdentity!.startTicks; next.processIdentity!.startMarker = 'new' }
+  if (mode === 'ticks') next.processIdentity!.startTicks = 200
+  if (mode === 'executable') next.processIdentity!.executable = 'other'
+  store.save(next)
+  expect(store.get(next.agentId)?.transcriptPath).toBeNull()
+})
 it.each(['engine', 'missing', 'previous missing', 'pid', 'start', 'executable'])('does not transfer a binding to a different process: %s', async mode => {
   const { saved, store } = await fixture()
   store.save(mode === 'previous missing' ? { ...saved, processIdentity: null } : saved)
