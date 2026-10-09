@@ -1,8 +1,4 @@
 #!/bin/sh
-if [ "${1:-}" = connections ]; then
-    shift
-    exec /usr/bin/python3 /usr/lib/harness-os/connections/connections.py "$@"
-fi
 case "${1:-}" in
     install|upgrade|rollback)
         /usr/bin/hn-os _require-pc-system || exit "$?"

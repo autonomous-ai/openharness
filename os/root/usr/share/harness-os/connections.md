@@ -3,8 +3,7 @@
 The user connects services once, in `harness connections`. Every agent running
 as this user gets the same accounts. A connection on another computer does not
 grant access here. Never copy tokens between machines, into chat or into
-project files, and never read the files under
-`~/.local/share/harness-os/connections`.
+project files, and never read the files under `~/.harness/connections`.
 
 `harness connections list --json` lists this computer's connections. On the PC
 OS, choose **Connections** from the browser's New Tab page, or open
@@ -24,8 +23,8 @@ reconnect it in `harness connections`. Do not try to sign in from the agent.
 
 ## REST calls (services signed in through the Harness account)
 
-GitHub, Slack, Asana, HubSpot, PagerDuty, Google (Gmail, Calendar, Drive,
-BigQuery) and Microsoft 365 are signed in through the Harness account. Besides
+GitHub, Slack, Asana, HubSpot, Figma (`figma-api-app`) and Google (Gmail,
+Calendar, Drive) are signed in through the Harness account. Besides
 their MCP tools, their REST APIs can be called without seeing the token:
 
 ```sh
@@ -44,12 +43,10 @@ permissions. Ask when the requested action lacks authorization.
 | slack | `GET https://slack.com/api/auth.test` |
 | asana | `GET https://app.asana.com/api/1.0/users/me` |
 | hubspot | `GET https://api.hubapi.com/crm/v3/objects/contacts?limit=10` |
-| pagerduty | `GET https://api.pagerduty.com/users/me` |
+| figma-api-app | `GET https://api.figma.com/v1/me` |
 | gmail | `GET https://gmail.googleapis.com/gmail/v1/users/me/profile` |
 | google_calendar | `GET https://www.googleapis.com/calendar/v3/users/me/calendarList` |
 | google_drive | `GET https://www.googleapis.com/drive/v3/files` with `--query pageSize=10` |
-| google_bigquery | `GET https://bigquery.googleapis.com/bigquery/v2/projects` |
-| microsoft_365 | `GET https://graph.microsoft.com/v1.0/me` |
 
 Check the exit code, response body and a read-back before reporting a write as
 successful. A 401 means reconnect; a 403 can mean insufficient permissions;
