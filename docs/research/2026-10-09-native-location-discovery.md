@@ -29,3 +29,22 @@ The review of `94f7a2270` against `138ae6766` withheld approval for three concre
 Private real-file regressions change a selected Grok sidecar during a later sidecar read, switch Copilot/agy native claims during the real caller's transcript lookup, and fail Cursor realpath/stat validation beside a readable competing file. The affected 265-test run passed; typecheck found a new fixture missing required discovery fields, corrected before final gates. Final validation adds the private real-tmux contract and stand-in engine rows (installed vendor smoke rows excluded) and a Grok sidecar workload to the matched cost comparison. No golden artifact was changed.
 
 Independent review approved production head `7a962068f2dc8a3fce8ae3ec0a19bd79e087ba44` against `138ae6766febff6f094f1401705e4e4eb7f6ef9f`. All 21 deliberate wiring mutations failed assertions after a green baseline. At that source, types, 439 affected/architecture tests, master coverage, both bundled native lanes, and 57 private tmux cases passed; 15 installed vendor smoke rows were excluded. Core's 1,942 assertions passed but its gate correctly failed on one uncovered ownership-fence return. The existing deferred Copilot fixture now keeps the native claim stable through the added revalidation so it reaches that fence; production code is unchanged. Only core coverage and types need repeating for that fixture correction.
+
+## Matched runtime cost
+
+Node 22.23.2 on the same Intel macOS machine, three interleaved processes per source/workload, ten lookups per process. Former production is `138ae6766`; candidate is `b65769a31` (production unchanged from the independently approved `7a962068f`). Import and fixture setup are excluded from lookup CPU/latency; process peak RSS includes both. These are reference measurements, not thresholds. The [machine-readable report](2026-10-09-native-location-cost.json) retains every sample.
+
+| Workload | Median lookup, former → current | Median CPU per 10 lookups | Median peak RSS |
+|---|---:|---:|---:|
+| 160 Cursor projects | 5.65 → 11.25 ms | 77.42 → 161.12 ms | 85.37 → 89.41 MiB |
+| 160 Copilot process locks | 3.99 → 8.07 ms | 51.02 → 111.24 ms | 86.80 → 83.61 MiB |
+| 4,200 projects, no match | 120.55 → 8.98 ms | 1448.01 → 131.17 ms | 97.00 → 93.91 MiB |
+| 160 Grok sidecars, 60 KiB each | 30.02 → 122.90 ms | 351.90 → 1415.87 ms | 98.35 → 106.15 MiB |
+
+The complete second inspection approximately doubles ordinary Cursor/Copilot lookup cost on this corpus. The deliberately large Grok sidecars cost about four times as much: bounded complete reads, file replacement checks and final workspace validation replace unchecked reads. Fixed-size digests prevent retaining all those sidecar contents. This stress corpus is not a typical workspace path size. At the directory limit, former code reported absence after scanning 4,200 projects; current code holds with its reason after the bounded scan.
+
+Final local evidence: 1,942 core tests at 100% statements/branches/functions/lines per covered file; 265 master tests and one existing skip at 100%; 439 affected/architecture cases; two bundled native outage/recovery lanes; 57 private tmux cases and 15 explicitly excluded installed-vendor smoke rows; 313 serial resume tests at 100%; types; all 21 mutants assertion-caught. The failed coverage receipt remains failed; the passing core-only correction is recorded separately.
+
+Main advanced to `a18b55e3b` through Desktop-only #1117/#1116. The conflict-free integration changed no CLI source, fixture, dependency or toolchain input. The passing coverage/types/resume receipts can be reused for the final documentation commit with their declared CLI+Store/toolchain scopes; no equivalent full suite is repeated.
+
+Timing: baseline preparation began about 13:55 UTC; implementation and review corrections ended at 14:35, with a test-only coverage correction at 14:39. Local validation finished at 14:41:28, then matched measurement ran 14:42:38–14:42:57. Independent review overlapped those phases. Final automatic CI waiting and merge are recorded in the PR; publication is zero.
