@@ -61,7 +61,9 @@ const CONFIG = JSON.stringify({ connectors: {
         token_url: 'https://github.com/login/oauth/access_token', scopes: ['repo', 'read:user'], userinfo_url: 'https://api.github.com/user', mcp_url: 'https://api.githubcopilot.com/mcp/' },
       gmail: { auth_type: 'app', label: 'Gmail', client_id: 'g-client', client_secret: 'g-secret', auth_url: 'https://accounts.google.com/o/oauth2/v2/auth',
         token_url: 'https://oauth2.googleapis.com/token', scopes: ['https://www.googleapis.com/auth/gmail.readonly'], refresh: true, auth_style: 'header',
-        auth_params: { access_type: 'offline', prompt: 'consent' } },
+        auth_params: { access_type: 'offline', prompt: 'consent' }, transport: 'rest',
+        rest_entry: { auth: { in: 'header', name: 'Authorization', format: 'Bearer {access_token}' },
+          tools: [{ name: 'gmail_identity', request: { method: 'GET', url: 'https://www.googleapis.com/oauth2/v3/userinfo' } }] } },
       notion: { auth_type: 'app', client_id: 'n', auth_url: 'https://mcp.notion.com/authorize', token_url: 'https://mcp.notion.com/token', pkce: true },
       slack: { auth_type: 'app', client_id: 's', client_secret: 's-secret', auth_url: 'https://slack.com/oauth/v2/authorize', token_url: 'https://slack.com/api/oauth.v2.access',
         extra: { token_field: 'authed_user.access_token', mcp_url: 'https://mcp.slack.com/mcp' } },
@@ -184,6 +186,25 @@ describe('the connector gateway', () => {
     await post('/api/connectors/callback', { code: 'c', state: new URL(started.authorize_url).searchParams.get('state') }, {})
     const ready = (await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data
     expect(ready).toMatchObject({ access_token: 'xoxp-user', mcp_entry: { url: 'https://mcp.slack.com/mcp', headers: { Authorization: 'Bearer xoxp-user' } } })
+    expect(ready).toMatchObject({ transport: 'mcp', rest_entry: null })
+  })
+
+  it('hands a REST-only service\'s tools over verbatim, the token not filled in, on poll and refresh (Grid\'s rest_entry)', async () => {
+    const tools = { auth: { in: 'header', name: 'Authorization', format: 'Bearer {access_token}' },
+      tools: [{ name: 'gmail_identity', request: { method: 'GET', url: 'https://www.googleapis.com/oauth2/v3/userinfo' } }] }
+    expect(mocks.appRows.get('gmail')!.extra).toEqual({ rest_entry: tools, transport: 'rest' })
+    const listed = (await app.inject({ method: 'GET', url: '/api/connectors', headers: owner })).json().data.connectors
+    expect(Object.fromEntries(listed.map((row: { code: string, transport: string }) => [row.code, row.transport]))).toMatchObject({ gmail: 'rest', github: 'mcp', notion: '' })
+    const started = (await post('/api/connectors/start', { connector: 'gmail' })).json().data
+    answer = () => Response.json({ access_token: 'ya29.a', refresh_token: 'r1', expires_in: 3600 })
+    await post('/api/connectors/callback', { code: 'c', state: new URL(started.authorize_url).searchParams.get('state') }, {})
+    const ready = (await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data
+    expect(ready).toMatchObject({ transport: 'rest', rest_entry: tools })
+    expect(ready.mcp_entry).toBeUndefined()
+    expect(JSON.stringify(ready.rest_entry)).not.toContain('ya29')
+    answer = () => Response.json({ access_token: 'ya29.b', expires_in: 3600 })
+    const renewed = (await post('/api/connectors/refresh', { connector: 'gmail' })).json().data
+    expect(renewed).toMatchObject({ access_token: 'ya29.b', transport: 'rest', rest_entry: tools })
   })
 
   it('keeps the apps in connector_apps; a disabled one is not served', async () => {

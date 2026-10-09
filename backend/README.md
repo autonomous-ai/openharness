@@ -114,7 +114,10 @@ To turn it on:
    `connector_credentials` with their unique indexes. Both are kept as they are, not encrypted: the
    database is private.
 3. **The apps**, one row per service in `connector_apps` (`code`, `clientId`, `clientSecret`, `authUrl`,
-   `tokenUrl`, `scopes`, `extra: {mcp_url, token_field, mcp_auth_header}`, `enabled`…): edited in
+   `tokenUrl`, `scopes`, `extra: {mcp_url, token_field, mcp_auth_header, rest_entry, transport}`, `enabled`…).
+   A service with no MCP server the grant can use (Gmail, Google Drive, Calendar, Figma) has `rest_entry`, its
+   REST tools: the gateway hands it over with the token, untouched, and the computer's bridge serves those
+   tools to agents as MCP, calling the service itself. The rows are edited in
    Compass, or written from a file with `npm run connectors:import <config-connector-auth.json>` (the
    backend's `DATABASE_URL`). The file is the Grid control plane's shape; only `auth_type: app` entries
    are written. Production's are the `app` entries of Grid prod's

@@ -21,6 +21,7 @@
  * the tokens, it is kept as it is: this database is private.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'crypto'
+import type { Prisma } from '@prisma/client'
 import { pub } from './bus.js'
 import { prisma } from './prisma.js'
 import { env } from '../config/env.js'
@@ -59,9 +60,22 @@ export interface ConnectorApp {
   mcpUrl: string
   /** `header:<Name>` sends the raw token under that name; anything else is `Authorization: Bearer`. */
   mcpAuthHeader: string
+  /**
+   * A service with no MCP server the grant can use (Gmail with gmail.send, Drive, Calendar, Figma): its
+   * REST tools, which the computer serves to agents as MCP. Handed over verbatim, the token not filled in.
+   */
+  restEntry: Record<string, unknown> | null
+  /** `mcp`, `rest`, or `''` when linking stores a credential nothing can act on: as Grid derives it. */
+  transport: string
 }
 
 const str = (value: unknown): string => (typeof value === 'string' ? value : value == null ? '' : String(value))
+
+/** rest_entry and transport, as Grid reads them: the transport derived unless the config says it. */
+function wiring(rest: unknown, transport: unknown, mcpUrl: string): { restEntry: Record<string, unknown> | null, transport: string } {
+  const restEntry = rest && typeof rest === 'object' && !Array.isArray(rest) && Object.keys(rest).length ? rest as Record<string, unknown> : null
+  return { restEntry, transport: str(transport).trim().toLowerCase() || (mcpUrl ? 'mcp' : restEntry ? 'rest' : '') }
+}
 
 /** The `app` entries of a config-connector-auth.json document; others sign in from the computer. */
 export function parseConfig(raw: string): Record<string, ConnectorApp> {
@@ -78,6 +92,7 @@ export function parseConfig(raw: string): Record<string, ConnectorApp> {
     if (!str(entry.client_id) || !str(entry.auth_url) || !str(entry.token_url)) continue
     const scopes = Array.isArray(entry.scopes) ? entry.scopes.map(str) : str(entry.scopes).split(/[\s,]+/)
     const extra = (entry.extra && typeof entry.extra === 'object' ? entry.extra : {}) as Record<string, unknown>
+    const mcpUrl = str(entry.mcp_url) || str(extra.mcp_url)
     apps[code] = {
       code, label: str(entry.label) || code, description: str(entry.description), imageUrl: str(entry.image_url),
       clientId: str(entry.client_id), clientSecret: str(entry.client_secret),
@@ -85,8 +100,9 @@ export function parseConfig(raw: string): Record<string, ConnectorApp> {
       scopes: scopes.filter(Boolean), authStyle: str(entry.auth_style).toLowerCase(), pkce: entry.pkce === true, refresh: entry.refresh === true,
       authParams: Object.fromEntries(Object.entries((entry.auth_params ?? {}) as Record<string, unknown>).map(([k, v]) => [k, str(v)])),
       // As Grid reads them: these three live in `extra` (copied there from the device firmware's table).
-      tokenField: str(entry.token_field) || str(extra.token_field), mcpUrl: str(entry.mcp_url) || str(extra.mcp_url),
+      tokenField: str(entry.token_field) || str(extra.token_field), mcpUrl,
       mcpAuthHeader: str(entry.mcp_auth_header) || str(extra.mcp_auth_header),
+      ...wiring(entry.rest_entry ?? extra.rest_entry, entry.transport ?? extra.transport, mcpUrl),
     }
   }
   return apps
@@ -112,6 +128,7 @@ function fromRow(row: AppRow): ConnectorApp {
     scopes: row.scopes, authStyle: row.authStyle, pkce: row.pkce, refresh: row.refresh,
     authParams: Object.fromEntries(Object.entries(record(row.authParams)).map(([k, v]) => [k, str(v)])),
     tokenField: str(extra.token_field), mcpUrl: str(extra.mcp_url), mcpAuthHeader: str(extra.mcp_auth_header),
+    ...wiring(extra.rest_entry, extra.transport, str(extra.mcp_url)),
   }
 }
 
@@ -147,7 +164,8 @@ export async function importApps(raw: string): Promise<string[]> {
       scopes: config.scopes, authStyle: config.authStyle, pkce: config.pkce, refresh: config.refresh,
       authParams: config.authParams,
       extra: { ...record(entry.extra), ...(config.tokenField ? { token_field: config.tokenField } : {}),
-        ...(config.mcpUrl ? { mcp_url: config.mcpUrl } : {}), ...(config.mcpAuthHeader ? { mcp_auth_header: config.mcpAuthHeader } : {}) },
+        ...(config.mcpUrl ? { mcp_url: config.mcpUrl } : {}), ...(config.mcpAuthHeader ? { mcp_auth_header: config.mcpAuthHeader } : {}),
+        ...(config.restEntry ? { rest_entry: config.restEntry as Prisma.InputJsonObject } : {}), ...(str(entry.transport) ? { transport: config.transport } : {}) },
     }
     await prisma.connectorApp.upsert({ where: { code }, create: { code, ...fields }, update: fields })
   }
@@ -169,7 +187,7 @@ export async function list(userId: string): Promise<Record<string, unknown>[]> {
     const row = mine.get(a.code)
     return {
       code: a.code, label: a.label, description: a.description, image_url: a.imageUrl,
-      auth_type: 'app', mcp_url: a.mcpUrl, refresh: a.refresh, scopes: a.scopes,
+      auth_type: 'app', mcp_url: a.mcpUrl, transport: a.transport, refresh: a.refresh, scopes: a.scopes,
       status: row ? 'connected' : 'not_connected', account_name: row?.accountName ?? '',
       expires_at: row?.expiresAt ?? 0, connected_at: row ? Math.floor(row.connectedAt.getTime() / 1000) : 0,
     }
@@ -264,6 +282,10 @@ function tokenFor(config: ConnectorApp, payload: Record<string, unknown>, previo
     const headers = custom && custom.toLowerCase() !== 'authorization' ? { [custom]: access } : { Authorization: `Bearer ${access}` }
     token.mcp_entry = { url: config.mcpUrl, headers }
   }
+  // Verbatim, the token not filled in (Grid's rest_entry_for_client): the computer fills it per call, so a
+  // renewal never leaves it a stale copy. A fresh copy, since the apps are cached across requests.
+  token.rest_entry = config.restEntry ? structuredClone(config.restEntry) : null
+  token.transport = config.transport
   return token
 }
 
