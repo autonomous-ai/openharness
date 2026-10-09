@@ -9,6 +9,7 @@ import 'dart:async';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/auth/cli_login.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
+import 'package:harness/bootstrap/setup_progress.dart';
 import 'package:harness/core/config.dart';
 import 'package:harness/core/local_key_value_store.dart';
 import 'package:harness/core/models.dart';
@@ -22,6 +23,8 @@ import 'package:harness/update/desktop_updater.dart';
 import 'package:harness/update/manual_update_check.dart';
 import 'package:harness/widgets/update_notice.dart';
 import 'package:harness/widgets/bootstrapping_screen.dart';
+import 'package:harness/widgets/environment_setup_screen.dart';
+import 'package:harness/widgets/setup_tour.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -334,6 +337,11 @@ void main() {
     expect(app.status, AppStatus.authenticated);
     expect(app.isGuest, isTrue);
     expect(app.environmentReadiness.phase, EnvironmentSetupPhase.ready);
+    // Nobody had to act, so the install ran under the welcome tour, which
+    // stays up until it opens Harness at the end of its slide.
+    expect(app.setupTourShowing, isTrue);
+    app.finishSetupTour();
+    expect(app.setupTourShowing, isFalse);
     // The review — the screen with the Install button — is never painted.
     expect(
       painted,
@@ -389,6 +397,8 @@ void main() {
       expect(app.environmentInstallRequested, isFalse);
       expect(app.status, AppStatus.preparingEnvironment);
       expect(app.environmentReadiness.phase, EnvironmentSetupPhase.review);
+      // A password in Terminal needs a person: the setup screen, not the tour.
+      expect(app.setupTourShowing, isFalse);
       app.dispose();
     },
   );
@@ -429,6 +439,13 @@ void main() {
     expect(app.environmentSetupInFlight, isFalse);
     // No automatic retry loop: the next install waits for Retry.
     expect(app.environmentRecheckPending, isFalse);
+    // The tour stays and turns its install line into the failure and Retry.
+    expect(app.setupTourShowing, isTrue);
+    // Choosing manual setup hands over to the setup screen for good.
+    app.selectEnvironmentSetupMode(EnvironmentSetupMode.manual);
+    expect(app.setupTourShowing, isFalse);
+    app.selectEnvironmentSetupMode(EnvironmentSetupMode.automatic);
+    expect(app.setupTourShowing, isFalse);
     app.dispose();
   });
 
@@ -1647,12 +1664,165 @@ void main() {
     expect(app.environmentInstallRequested, isTrue);
     expect(app.environmentRecheckPending, isTrue);
     expect(app.environmentSetupInFlight, isFalse);
+    // Terminal needs a person, so the tour gives way to the setup screen.
+    expect(app.setupTourShowing, isFalse);
 
     await app.recheckEnvironmentStep(EnvironmentStep.tmux);
 
     expect(provisioner.installCalls, [isFalse, isTrue, isFalse]);
     expect(app.status, AppStatus.authenticated);
     expect(app.environmentRecheckPending, isFalse);
+    app.dispose();
+  });
+
+  // First launch on a fresh computer (onboarding redesign, 2026-10-08): the
+  // tour is the only screen of an unattended install, and Harness opens by
+  // itself once setup and the downloads beside it are done, at the end of the
+  // slide on screen.
+  testWidgets(
+    'a fresh install runs under the tour, which opens Harness by itself',
+    (tester) async {
+      final missing = EnvironmentReadiness(
+        steps: {
+          EnvironmentStep.harness: EnvironmentStepStatus.failed,
+          EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+        },
+        phase: EnvironmentSetupPhase.review,
+        plan: [EnvironmentPlanItem.harnessCli],
+      );
+      final ready = EnvironmentReadiness(
+        steps: {
+          for (final step in EnvironmentStep.values)
+            step: EnvironmentStepStatus.ready,
+        },
+        phase: EnvironmentSetupPhase.ready,
+        mode: EnvironmentSetupMode.automatic,
+      );
+      final gate = Completer<void>();
+      final app = _GuestApp(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: ConfigStore(storage: _FakeKeyValueStore()),
+        cliLogin: _FakeCliLogin(loggedIn: false),
+        environmentProvisioner: _GatedInstallProvisioner(missing, ready, gate),
+      );
+      // What the agent downloads report while they run.
+      app.setupDownloads.value = const SetupDownloads.pending(
+        lines: ['Agents: OpenCode 12 of 40 MB'],
+      );
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [appStateProvider.overrideWithValue(app)],
+          child: HarnessApp(
+            authenticatedScreen: (_) =>
+                const Scaffold(body: Text('Workspace reached')),
+          ),
+        ),
+      );
+      final line = find.byKey(const ValueKey('tour-install-line'));
+
+      final boot = app.bootstrap();
+      await tester.pump();
+      await tester.pump();
+      expect(find.byType(SetupTour), findsOneWidget);
+      expect(find.byType(EnvironmentSetupScreen), findsNothing);
+      expect(tester.widget<Text>(line).data, setupTourInstallLine);
+
+      // The download lines and the setup log sit under ▸.
+      await tester.tap(find.byKey(const ValueKey('tour-details-toggle')));
+      await tester.pump();
+      expect(
+        find.textContaining('Agents: OpenCode 12 of 40 MB'),
+        findsOneWidget,
+      );
+      expect(find.text('Copy diagnostics'), findsOneWidget);
+
+      gate.complete();
+      await boot;
+      await tester.pump();
+      expect(app.status, AppStatus.authenticated);
+      // Setup is done but a download is not: the slides carry on.
+      await tester.pump(const Duration(seconds: 13));
+      expect(find.byType(SetupTour), findsOneWidget);
+      expect(find.text('Workspace reached'), findsNothing);
+      expect(tester.widget<Text>(line).data, setupTourInstallLine);
+
+      app.setupDownloads.value = SetupDownloads.none;
+      await tester.pump();
+      expect(tester.widget<Text>(line).data, 'Harness is ready. Opening…');
+      await tester.pump(tourSlideDuration);
+      await tester.pump();
+      expect(find.byType(SetupTour), findsNothing);
+      expect(find.text('Workspace reached'), findsOneWidget);
+      expect(app.setupTourShowing, isFalse);
+
+      await tester.pumpWidget(const SizedBox());
+      app.dispose();
+    },
+  );
+
+  testWidgets('a failed install under the tour offers Retry, which installs '
+      'again', (tester) async {
+    final missing = EnvironmentReadiness(
+      steps: {
+        EnvironmentStep.harness: EnvironmentStepStatus.failed,
+        EnvironmentStep.tmux: EnvironmentStepStatus.ready,
+      },
+      phase: EnvironmentSetupPhase.review,
+      plan: [EnvironmentPlanItem.harnessCli],
+    );
+    final failed = missing.copyWith(
+      phase: EnvironmentSetupPhase.failed,
+      mode: EnvironmentSetupMode.automatic,
+      output: ['✗ managed Node >= 20 · harness version'],
+      failure: const EnvironmentFailure(
+        step: EnvironmentStep.harness,
+        title: 'Could not install Harness',
+        detail: 'Check your connection, then retry setup.',
+      ),
+    );
+    final provisioner = _ScriptedEnvironmentProvisioner([
+      missing,
+      failed,
+      failed,
+    ]);
+    final app = _GuestApp(
+      config: AppConfig.dev,
+      authSession: AuthSession(),
+      configStore: ConfigStore(storage: _FakeKeyValueStore()),
+      cliLogin: _FakeCliLogin(loggedIn: false),
+      environmentProvisioner: provisioner,
+    );
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appStateProvider.overrideWithValue(app)],
+        child: HarnessApp(authenticatedScreen: _swarm),
+      ),
+    );
+    await app.bootstrap();
+    await tester.pump();
+
+    final line = find.byKey(const ValueKey('tour-install-line'));
+    expect(tester.widget<Text>(line).data, 'Could not install Harness');
+    // Details opened by themselves, with the log.
+    expect(
+      find.textContaining('✗ managed Node >= 20 · harness version'),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('tour-retry')));
+    await tester.pump();
+    await tester.pump();
+    expect(provisioner.installCalls, [isFalse, isTrue, isTrue]);
+    expect(find.byType(SetupTour), findsOneWidget);
+
+    // Switch to Manual leaves the tour for the setup screen's commands.
+    await tester.tap(find.byKey(const ValueKey('tour-manual')));
+    await tester.pump();
+    expect(find.byType(SetupTour), findsNothing);
+    expect(find.byType(EnvironmentSetupScreen), findsOneWidget);
+    expect(app.environmentReadiness.mode, EnvironmentSetupMode.manual);
+
+    await tester.pumpWidget(const SizedBox());
     app.dispose();
   });
 }

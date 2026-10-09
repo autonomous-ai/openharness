@@ -367,6 +367,19 @@ abstract final class AppPalette {
   static Color get brandBolt =>
       AppTheme.pick(const Color(0xFF946500), const Color(0xFFE0A93B));
 
+  /// The welcome tour's amber (approved onboarding render, 2026-10-08): the
+  /// slide kicker, the current pager dot, the install bar and the
+  /// illustrations' highlights. Only the tour uses it; it is not an action
+  /// colour. Dark is the render's #FF9F0A (8.3:1 on the dark grounds); light is
+  /// deepened to stay text: 4.95:1 on Paper's background, 4.6:1 on its panel.
+  static Color get onboardingAccent =>
+      AppTheme.pick(const Color(0xFFA65A08), const Color(0xFFFF9F0A));
+
+  /// The tour's tagline gold, quieter than [onboardingAccent]. Light holds
+  /// 4.8:1 on Paper's deepest ground; dark is the render's #D4A574.
+  static Color get onboardingTagline =>
+      AppTheme.pick(const Color(0xFF7D5A2C), const Color(0xFFD4A574));
+
   static Color get textPrimary =>
       AppTheme.pick(const Color(0xFF1A1A18), const Color(0xFFF5F5F5));
 

@@ -168,6 +168,10 @@ Avoid repeatedly drawing cards inside a dialog.
   controls do not show a hand cursor. Color is never the only status signal.
 - Increase Contrast strengthens boundaries. Reduce Motion removes optional
   motion. Live terminal content is never blurred or scaled for decoration.
+- The welcome tour (first-run setup and Help ▸ Welcome Tour) has its own two
+  colours: amber `AppPalette.onboardingAccent` for the kicker, the current
+  pager dot and the install bar, and gold `AppPalette.onboardingTagline` for
+  the tagline. Nothing else uses them; actions there stay neutral or blue.
 
 The terminal's chosen color palette remains independent from UI focus blue.
 All modal veils share one 95% token: black in dark appearance, white in light.
