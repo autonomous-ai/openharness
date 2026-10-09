@@ -457,7 +457,7 @@ describe('binding a running process to its session', () => {
     const entry = agent({ engine, transcriptPath: '/t/s1.jsonl' })
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(entry)
     let answer!: () => void
-    if (engine === 'copilot') vi.mocked(processSessionOf).mockReturnValueOnce(new Promise(resolve => { answer = () => resolve('s2') }))
+    if (engine === 'copilot') vi.mocked(processSessionOf).mockResolvedValue('s2').mockReturnValueOnce(new Promise(resolve => { answer = () => resolve('s2') }))
     else vi.mocked(continuationOf).mockReturnValueOnce(new Promise(resolve => { answer = () => resolve({ sessionId: 's2', transcriptPath: '/t/s2.jsonl' }) }))
     const pending = run.binding.bindObservedAgent(observed({ engine }))
     entry.sessionId = 'newer'
