@@ -14,6 +14,7 @@ import { readStoreHomes } from './engines/kit/storeHomes.js'
 import { isInteractiveSource, readStoreSessionSource } from './engines/kit/storeSource.js'
 import { createPendingAdmissions, type AdmissionDecision } from './core/engines/pendingAdmission.js'
 import { paneReadIdentity } from './core/transcripts/readIdentity.js'
+import { processIdentityKey } from './lib/terminalRuntime.js'
 import { isRecentlyDeleted } from './lib/deletedSessions.js'
 import { registry, type RegisterInput, type RegisteredSession } from './lib/registry.js'
 import { sid } from './lib/log.js'
@@ -391,6 +392,7 @@ export function startHookServer(
 ): Promise<{ server: http.Server; port: number; localSocket: LocalSocketServer | null }> {
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
   const admissions = createPendingAdmissions()
+  let admissionArrival = 0
   // Filled in once the port is bound: the Host a request must name is the port actually taken.
   let hosts: ReadonlySet<string> = new Set()
   let lastRefusalLogAt = 0
@@ -499,6 +501,8 @@ export function startHookServer(
           console.warn('[hooks] restart the pane (or reload its plugins) to pick up the current build')
         }
         const engine = body.engine ?? 'claude'
+        // Capture before process resolution yields. Native time is unchanged across client retries.
+        const admissionOrder = { firedAt: hookFiredAt(req), arrival: ++admissionArrival }
         const processAgent = handlers.resolveHookAgent
           ? await handlers.resolveHookAgent({
             engine,
@@ -511,7 +515,11 @@ export function startHookServer(
             // (hook/notify.mjs, fallbackRegister), with a row of its own in place of the agent's, which
             // the running daemon's next save took in. Told the registration is pending, it writes nothing,
             // as for a transcript not yet written below, and the wait goes on here.
-            onWait: () => answer(200, { pending: true }),
+            // Hermes admission has a separate bounded queue after resolution. Do not
+            // claim a slot before one exists: its hook client can retry this live hold.
+            onWait: () => engine === 'hermes'
+              ? answer(202, { pending: false, retry: true, detail: 'Waiting for the Hermes process record; admission is not queued yet.' })
+              : answer(200, { pending: true }),
           })
           : body.tmuxPane ? registry.byPaneEngine(body.tmuxPane, engine) ?? null : null
         if (!processAgent || processAgent.engine !== engine) { ignore('no_matching_engine_process'); return }
@@ -534,6 +542,9 @@ export function startHookServer(
           // optimistically would hand the parent's pane to a sub-agent.
           const identity = paneReadIdentity(processAgent)
           const queued = admissions.submit(processAgent.agentId, body.sessionId!, {
+            order: { ...admissionOrder, scope: processAgent.processIdentity
+              ? processIdentityKey(engine, processAgent.processIdentity) : processAgent.agentId },
+            binding: { id: processAgent.sessionId, at: processAgent.boundAt },
             current: () => !isRecentlyDeleted(processAgent.agentId) && !isRecentlyDeleted(body.sessionId)
               && paneReadIdentity(registeredHookProcess(body, 'hermes')) === identity,
             inspect: () => inspectHermesKind(body.sessionId!),

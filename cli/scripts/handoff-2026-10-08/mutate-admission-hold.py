@@ -24,22 +24,29 @@ mutations = [
      "!isRecentlyDeleted(processAgent.agentId) && ", "", 'src/hookServer.hermes.spec.ts'),
     ('unverified child erases parent', 'src/core/engines/pendingAdmission.ts',
      "const queue = jobs.get(key) ?? []", "const queue: Job[] = []", 'src/core/engines/pendingAdmission.spec.ts'),
+    ('older retry replaces accepted conversation', 'src/core/engines/pendingAdmission.ts',
+     "const status = order.status(key, job.id, job.request.order)", "const status = 'current'", 'src/hookServer.hermes.spec.ts'),
+    ('live backpressure writes offline', 'hook/notify.mjs',
+     "if (res.statusCode === 429 || (res.statusCode === 202 && reply?.retry === true)) { resolve('held'); return }",
+     "if (false) { resolve('held'); return }", 'src/hookNotify.spec.ts', ['-t', 'Hermes live admission']),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 env.pop('TMUX', None)
 env.pop('TMUX_PANE', None)
 command = ['node', 'node_modules/vitest/vitest.mjs', 'run', '--maxWorkers=1']
-baseline = subprocess.run([*command, *sorted({item[4] for item in mutations})], cwd=cli, env=env,
-                          capture_output=True, text=True, timeout=90)
-if baseline.returncode:
-    sys.exit('Baseline failed; no mutations run.\n' + baseline.stdout[-5000:] + baseline.stderr[-5000:])
-for name, path, old, new, spec in mutations:
+baselines = [[*sorted({item[4] for item in mutations if len(item) == 5})]]
+baselines.extend([item[4], *item[5]] for item in mutations if len(item) == 6)
+for specs in baselines:
+    baseline = subprocess.run([*command, *specs], cwd=cli, env=env, capture_output=True, text=True, timeout=90)
+    if baseline.returncode:
+        sys.exit('Baseline failed; no mutations run.\n' + baseline.stdout[-5000:] + baseline.stderr[-5000:])
+for name, path, old, new, spec, *filters in mutations:
     target = cli / path
     source = target.read_text()
     assert source.count(old) == 1, (name, source.count(old))
     try:
         target.write_text(source.replace(old, new))
-        result = subprocess.run([*command, spec], cwd=cli, env=env, capture_output=True, text=True, timeout=90)
+        result = subprocess.run([*command, spec, *(filters[0] if filters else [])], cwd=cli, env=env, capture_output=True, text=True, timeout=90)
         caught = result.returncode != 0 and 'AssertionError' in result.stdout + result.stderr
         print(f'{name}: {"caught by assertion" if caught else "NOT PROVEN"}', flush=True)
         if not caught:

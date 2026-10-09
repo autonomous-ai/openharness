@@ -733,6 +733,40 @@ describe('hook notify terminal scope', () => {
     }
   })
 
+  it.each(['recovers', 'full', 'resolving', 'disconnects'] as const)('Hermes live admission %s retries within a bound and never writes an offline registry', async outcome => {
+    const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-hermes-held-'))
+    tmpDirs.push(dir)
+    const dataDir = join(dir, 'data')
+    mkdirSync(dataDir)
+    writeLegacyStateFile(join(dataDir, 'registry.json'), '[]')
+    let attempts = 0
+    const firedAt: unknown[] = []
+    const server = createServer((req, res) => {
+      req.resume()
+      req.on('end', () => {
+        attempts++
+        firedAt.push(req.headers['x-harness-hook-fired-at'])
+        if (outcome === 'disconnects' && attempts > 1) { res.destroy(); return }
+        if (outcome === 'recovers' && attempts === 3) { res.end(JSON.stringify({ pending: true })); return }
+        res.writeHead(outcome === 'resolving' ? 202 : 429)
+        res.end(JSON.stringify({ pending: false, retry: true, error: 'HOOK_ADMISSION_BUSY' }))
+      })
+    })
+    servers.push(server)
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('private fixture did not bind')
+    expect(await runHook({ port: address.port, tmuxPane: '%82', engine: 'hermes', processEngine: 'hermes',
+      processExecutable: 'python3', processArgs: 'python3 /opt/venvs/hermes/lib/python3.12/site-packages/hermes-agent/hermes',
+      dataDir, hermesHome: join(dir, 'hermes'), hermesSource: 'cli',
+      input: { hook_event_name: 'on_session_start', session_id: '20260810_120000_a1b2c3' },
+    })).toBe('{}\n')
+    expect(attempts).toBe(outcome === 'recovers' ? 3 : outcome === 'disconnects' ? 2 : 4)
+    expect(new Set(firedAt).size).toBe(1)
+    expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).toBe('[]')
+    expect(() => statSync(join(dataDir, 'registry-boot'))).toThrow()
+  })
+
   it.each([
     "import sys, runpy; sys.path.insert(0, '/opt/custom'); runpy.run_module('hermes_cli.main', run_name='__main__')",
     "import os, re, sys; sys.path.insert(0, '/opt/custom'); import hermes_bootstrap; from hermes_cli.main import main; sys.exit(main())",

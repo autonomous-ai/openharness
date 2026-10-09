@@ -2,20 +2,90 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createPendingAdmissions, type AdmissionDecision, type PendingAdmission } from './pendingAdmission.js'
 
 afterEach(() => vi.useRealTimers())
+let arrival = 0
 function request(overrides: Partial<PendingAdmission<string>> = {}): PendingAdmission<string> {
-  return { current: () => true, inspect: vi.fn(async () => ({ kind: 'accept' as const, value: 'home' })),
+  const sequence = ++arrival
+  return { order: { scope: 'process', firedAt: sequence, arrival: sequence }, current: () => true, inspect: vi.fn(async () => ({ kind: 'accept' as const, value: 'home' })),
     accept: vi.fn(), reject: vi.fn(), held: vi.fn(), ...overrides }
 }
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 
 describe('pending hook admission', () => {
+  it('can finish rejecting an in-flight child before admitting its equal-time parent', async () => {
+    const queue = createPendingAdmissions()
+    let finish!: (answer: AdmissionDecision<string>) => void
+    const child = request({ order: { scope: 'process', firedAt: 10, arrival: 1 },
+      inspect: () => new Promise(resolve => { finish = resolve }) })
+    const parent = request({ order: { scope: 'process', firedAt: 10, arrival: 2 } })
+    queue.submit('agent', 'child', child)
+    queue.submit('agent', 'parent', parent)
+    finish({ kind: 'reject', reason: 'delegated' }); await flush(); await flush()
+    expect(child.reject).toHaveBeenCalledExactlyOnceWith('delegated')
+    expect(parent.accept).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
+  it.each(['same', 'different'])('scopes pending candidates and acceptance to a replacement process with a %s session id', async id => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions()
+    let oldProcess = true
+    const old = request({ order: { scope: 'old-process', firedAt: 100, arrival: 1 }, current: () => oldProcess,
+      inspect: async () => ({ kind: 'hold', reason: 'unreadable' }) })
+    queue.submit('agent', 'old-session', old); await flush()
+    oldProcess = false
+    const replacement = request({ order: { scope: 'new-process', firedAt: 200, arrival: 2 } })
+    queue.submit('agent', id === 'same' ? 'old-session' : 'new-session', replacement); await flush()
+    expect(replacement.accept).toHaveBeenCalledOnce()
+    expect(old.accept).not.toHaveBeenCalled()
+    queue.close()
+  })
+
+  it('rejects older retries after the queue emptied and holds equal-time or unorderable conflicting intent', async () => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions({ retryMs: 20 })
+    const b = request({ order: { scope: 'process', firedAt: 20, arrival: 2 } })
+    queue.submit('agent', 'b', b); await flush()
+    const older = request({ order: { scope: 'process', firedAt: 10, arrival: 3 } })
+    queue.submit('agent', 'a', older); await flush()
+    expect(older.reject).toHaveBeenCalledExactlyOnceWith('stale_hook')
+    expect(older.accept).not.toHaveBeenCalled()
+    const equal = request({ order: { scope: 'process', firedAt: 20, arrival: 4 } })
+    queue.submit('agent', 'a', equal); await flush()
+    expect(equal.held).toHaveBeenCalledWith(expect.stringContaining('hook order'))
+    expect(equal.accept).not.toHaveBeenCalled()
+    const noTimestamp = request({ order: { scope: 'process', firedAt: undefined, arrival: 5 } })
+    queue.submit('agent', 'legacy', noTimestamp); await flush()
+    expect(noTimestamp.held).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
+  it('does not promote an older delivery over newer pending intent, and holds equal-time candidates', async () => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions({ retryMs: 20 })
+    const held = request({ order: { scope: 'process', firedAt: 20, arrival: 2 },
+      inspect: async () => ({ kind: 'hold', reason: 'waiting' }) })
+    queue.submit('agent', 'newer', held); await flush()
+    const older = request({ order: { scope: 'process', firedAt: 10, arrival: 3 } })
+    queue.submit('agent', 'older', older); await flush()
+    expect(older.inspect).not.toHaveBeenCalled()
+    const equal = request({ order: { scope: 'process', firedAt: 20, arrival: 4 } })
+    queue.submit('agent', 'equal', equal); await flush()
+    expect(equal.held).toHaveBeenCalledWith(expect.stringContaining('hook order'))
+    expect(equal.accept).not.toHaveBeenCalled()
+    // A fresh native hook disambiguates the intent and supersedes older candidates.
+    const fresh = request({ order: { scope: 'process', firedAt: 30, arrival: 5 } })
+    queue.submit('agent', 'newer', fresh); await flush()
+    expect(fresh.accept).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
   it('contains late async notifications without blocking reentrant admission or shutdown', async () => {
     vi.useFakeTimers()
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const queue = createPendingAdmissions()
     let reject!: (error: Error) => void
-    const newer = request()
-    const first = request({ accept: () => {
+    const newer = request({ order: { scope: 'process', firedAt: 2, arrival: 2 } })
+    const first = request({ order: { scope: 'process', firedAt: 1, arrival: 1 }, accept: () => {
       queue.submit('agent', 'newer', newer)
       return new Promise<void>((_, fail) => { reject = fail })
     } })
@@ -44,8 +114,9 @@ describe('pending hook admission', () => {
     const overflow = request()
     expect(queue.submit('agent', 'overflow', overflow)).toBe(false)
     expect(overflow.inspect).not.toHaveBeenCalled()
-    // Repeating a candidate refreshes its intent without consuming another slot.
+    // Repeating a delivery keeps its original place and timer without consuming another slot.
     expect(queue.submit('agent', 'child', child)).toBe(true); await flush(); await flush()
+    await vi.advanceTimersByTimeAsync(20)
     expect(child.reject).toHaveBeenCalledExactlyOnceWith('delegated')
     expect(parent.accept).toHaveBeenCalledExactlyOnceWith('parent')
     expect(vi.getTimerCount()).toBe(0)

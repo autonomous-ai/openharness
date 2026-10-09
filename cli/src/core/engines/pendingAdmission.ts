@@ -1,10 +1,14 @@
 /** Core owns pending hook admission. A late lookup cannot replace a newer hook or binding. */
+import { compareAdmissionOrder, createAdmissionOrder, type AdmissionOrder } from './admissionOrder.js'
+
 export type AdmissionDecision<T> =
   | { kind: 'accept'; value: T }
   | { kind: 'reject'; reason: string }
   | { kind: 'hold'; reason: string }
 
 export interface PendingAdmission<T> {
+  order: AdmissionOrder
+  binding?: { id: string; at: number | null }
   current: () => boolean
   inspect: () => Promise<AdmissionDecision<T>>
   accept: (value: T) => void | Promise<void>
@@ -16,6 +20,7 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { re
   type Job = { id: string; request: PendingAdmission<unknown>; timer: ReturnType<typeof setTimeout> | null; reason?: string }
   const jobs = new Map<string, Job[]>()
   const running = new Set<string>()
+  const order = createAdmissionOrder()
   let closed = false
   const current = (key: string, job: Job) => !closed && !!jobs.get(key)?.includes(job) && job.request.current()
   const selected = (key: string) => jobs.get(key)?.at(-1)
@@ -46,6 +51,7 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { re
   }
   const inspect = async (key: string, job: Job): Promise<void> => {
     if (!current(key, job)) { discard(key, job); return }
+    order.observe(key, job.request.order.scope, job.request.binding)
     let decision: AdmissionDecision<unknown>
     try { decision = await job.request.inspect() } catch {
       decision = { kind: 'hold', reason: 'The session source could not be read.' }
@@ -53,7 +59,14 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { re
     if (!current(key, job)) { discard(key, job); return }
     // A newer unverified hook pauses this candidate; it does not erase it. Hermes
     // children use their parent's process, and a rejected child must leave the parent pending.
-    if (selected(key) !== job) return
+    if (selected(key) !== job && decision.kind !== 'reject') return
+    const status = order.status(key, job.id, job.request.order)
+    if (status === 'older') decision = { kind: 'reject', reason: 'stale_hook' }
+    else if (decision.kind === 'accept') {
+      const tied = job.request.order.firedAt !== undefined && jobs.get(key)!.some(other => other !== job
+        && other.request.order.scope === job.request.order.scope && other.request.order.firedAt === job.request.order.firedAt)
+      if (status === 'ambiguous' || tied) decision = { kind: 'hold', reason: 'Waiting for unambiguous Hermes hook order; keeping the current conversation.' }
+    }
     if (decision.kind === 'hold') {
       job.timer = setTimeout(() => { job.timer = null; void run(key, job) }, retryMs)
       job.timer.unref()
@@ -64,6 +77,7 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { re
       return
     }
     if (decision.kind === 'accept') {
+      order.accept(key, job.id, job.request.order)
       jobs.delete(key)
       notified(job.request.accept(decision.value))
     } else {
@@ -78,19 +92,23 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { re
       const queue = jobs.get(key) ?? []
       const duplicate = queue.findIndex(job => job.id === id)
       if (duplicate === -1 && queue.length >= capacity) return false
+      if (duplicate !== -1 && queue[duplicate]!.request.order.scope === request.order.scope
+        && queue[duplicate]!.request.order.firedAt === request.order.firedAt) return true
       if (duplicate !== -1) { clearTimer(queue[duplicate]!); queue.splice(duplicate, 1) }
       const previous = queue.at(-1)
       if (previous) clearTimer(previous)
       const job: Job = { id, request: request as PendingAdmission<unknown>, timer: null }
       queue.push(job)
+      queue.sort((a, b) => compareAdmissionOrder(a.request.order, b.request.order))
       jobs.set(key, queue)
-      if (!running.has(key)) void run(key, job)
+      if (!running.has(key)) void run(key, selected(key)!)
       return true
     },
     close(): void {
       closed = true
       for (const queue of jobs.values()) for (const job of queue) clearTimer(job)
       jobs.clear()
+      order.close()
     },
   }
 }

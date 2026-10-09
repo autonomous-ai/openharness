@@ -25,7 +25,7 @@ afterEach(async () => {
   failures.clear()
   if (root) rmSync(root, { recursive: true, force: true })
 })
-async function fixture() {
+async function fixture(options: { waitOnResolution?: number } = {}) {
   root = mkdtempSync(join(tmpdir(), 'hermes-admission-'))
   for (const [key, value] of Object.entries({ HOME: join(root, 'home'), HERMES_HOME: join(root, 'home', '.hermes'),
     ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime') })) vi.stubEnv(key, value)
@@ -53,11 +53,20 @@ async function fixture() {
   const registered = vi.fn()
   const logs: string[] = []
   vi.spyOn(console, 'log').mockImplementation((...args) => { logs.push(args.map(String).join(' ')) })
-  const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {} })
+  let resume!: () => void
+  let resolutions = 0
+  const started = await startHookServer(0, { onRegistered: registered, onSessionEnd: () => {},
+    ...(options.waitOnResolution ? { resolveHookAgent: async ({ onWait }: { onWait?: () => void }) => {
+      if (++resolutions === options.waitOnResolution) { onWait?.(); await new Promise<void>(resolve => { resume = resolve }) }
+      return registry.byAgent(agent.agentId) ?? null
+    } } : {}),
+  })
   server = started.server
-  const hook = async (sessionId: string, status = 200) => {
+  let firedAt = Date.now()
+  const hook = async (sessionId: string, status = 200, fired = ++firedAt) => {
     const response = await fetch(`http://127.0.0.1:${started.port}/api/hook/session-start`, {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(join(root, 'data'))! },
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-harness-hook-token': readHookCredential(join(root, 'data'))!,
+        'x-harness-hook-fired-at': String(fired) },
       body: JSON.stringify({ engine: 'hermes', tmuxPane: '%1', sessionId, cwd: root, hookEvent: 'SessionStart' }),
     })
     expect(response.status).toBe(status)
@@ -66,7 +75,9 @@ async function fixture() {
     return body
   }
   const current = () => registry.byAgent(agent.agentId)!
-  return { home, store, hook, current, registered, logs, markDeleted }
+  return { home, store, hook, current, registered, logs, markDeleted, resume: () => resume(),
+    seed: (sessionId: string) => registry.register({ engine: 'hermes', sessionId, tmuxPane: '%1', cwd: root, processIdentity }),
+  }
 }
 
 it('holds an unreadable store without binding and retries after the store recovers', async () => {
@@ -174,13 +185,17 @@ it('contains an asynchronous onRegistered rejection after publishing exactly onc
   expect(f.registered).toHaveBeenCalledOnce()
 })
 
-it('reports capacity backpressure without claiming the extra hook was queued', async () => {
-  const f = await fixture()
+it.each([false, true])('reports capacity backpressure without claiming the extra hook was queued (resolution waits: %s)', async waits => {
+  const f = await fixture(waits ? { waitOnResolution: 65 } : {})
   f.store(f.home, [])
   for (let i = 0; i < 64; i++) await f.hook(`20261009_120000_${i.toString(16).padStart(6, '0')}`)
-  expect(await f.hook('20261009_120000_ffffff', 429)).toEqual({
-    pending: false, error: 'HOOK_ADMISSION_BUSY', detail: expect.stringContaining('was not queued'),
-  })
+  if (waits) {
+    expect(await f.hook('20261009_120000_ffffff', 202)).toMatchObject({ pending: false, retry: true })
+    f.resume()
+    await vi.waitFor(() => expect(f.logs.some(line => line.includes('this hook was not queued'))).toBe(true))
+  } else expect(await f.hook('20261009_120000_ffffff', 429)).toEqual({
+      pending: false, error: 'HOOK_ADMISSION_BUSY', detail: expect.stringContaining('was not queued'),
+    })
   expect(f.current().sessionId).toBe('')
   expect(f.registered).not.toHaveBeenCalled()
 })
@@ -193,4 +208,33 @@ it('does not make a verified default-home binding depend on unavailable profiles
   await f.hook(own)
   await vi.waitFor(() => expect(f.current().sessionId).toBe(own))
   expect(f.current().hermesHome).toBeNull()
+})
+
+it('never lets delayed process resolution or a retry of A replace a newer accepted B', async () => {
+  const f = await fixture({ waitOnResolution: 1 })
+  const a = '20261009_120000_888888', b = '20261009_120000_999999'
+  f.store(f.home, [[a, 'cli'], [b, 'cli']])
+  expect(await f.hook(a, 202, 1000)).toMatchObject({ pending: false, retry: true })
+  await f.hook(b, 200, 2000)
+  await vi.waitFor(() => expect(f.current().sessionId).toBe(b))
+  f.resume()
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('ignored · stale_hook'))).toBe(true))
+  await f.hook(a, 200, 1000)
+  await vi.waitFor(() => expect(f.logs.filter(line => line.includes('ignored · stale_hook'))).toHaveLength(2))
+  expect(f.current().sessionId).toBe(b)
+  expect(f.registered).toHaveBeenCalledOnce()
+})
+
+it('starts with the existing binding as authority when no hook watermark exists yet', async () => {
+  const f = await fixture()
+  const a = '20261009_120000_aaaaaa', b = '20261009_120000_bbbbbb'
+  f.store(f.home, [[a, 'cli'], [b, 'cli']])
+  f.seed(b)
+  const boundAt = f.current().boundAt!
+  await f.hook(a, 200, boundAt - 1)
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('ignored · stale_hook'))).toBe(true))
+  expect(f.current().sessionId).toBe(b)
+  await f.hook(a, 200, boundAt + 1)
+  await vi.waitFor(() => expect(f.current().sessionId).toBe(a))
+  expect(f.registered).toHaveBeenCalledOnce()
 })
