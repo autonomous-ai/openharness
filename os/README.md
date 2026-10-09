@@ -87,7 +87,9 @@ GitLab, Miro…) sign in directly from this computer; GitHub, Slack, Google,
 Figma and a few others sign in through the Harness account. Claude Code, Codex
 and OpenCode then get each service as an MCP server on a local bridge, which
 adds the credential and renews it before it expires. Tokens stay outside
-projects and agent configuration. See [Connections](connectors/README.md).
+projects and agent configuration. The same `harness connections` and the
+desktop app's Settings → Connectors work on every Harness computer; see
+[Connections](../cli/src/lib/connectors/README.md).
 
 ## Design
 

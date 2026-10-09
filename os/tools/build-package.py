@@ -58,11 +58,6 @@ def stage(source, runtime, destination, commit):
     browser_home = importlib.util.module_from_spec(browser_spec)
     browser_spec.loader.exec_module(browser_home)
     browser_home.stage(source, destination)
-    shutil.copytree(os_source / 'connectors', destination / 'usr/lib/harness-os/connections',
-                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    license_dir = destination / 'usr/share/licenses/harness-os-connections'
-    license_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(os_source / 'connectors/LICENSE', license_dir / 'LICENSE')
     special = {
         'LICENSE': 'usr/share/licenses/harness-os/LICENSE',
         'os/installer.py': 'usr/lib/harness-os/install.py',

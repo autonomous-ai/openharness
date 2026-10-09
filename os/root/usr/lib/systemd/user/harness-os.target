@@ -9,5 +9,5 @@ Requires=graphical-session.target
 PartOf=graphical-session.target
 # Portals can keep the standard target needed after our screen stops.
 PropagatesStopTo=graphical-session.target
-Wants=hn-screen.service harness-install.service harness-idle.service harness-update.timer harness-gpu-check.timer harness-connections.socket
+Wants=hn-screen.service harness-install.service harness-idle.service harness-update.timer harness-gpu-check.timer
 After=graphical-session-pre.target

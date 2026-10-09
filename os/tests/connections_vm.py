@@ -11,32 +11,38 @@ def exercise(vm):
 import json, os, pathlib, subprocess, sys, tempfile, time, urllib.error, urllib.request
 assert sys.platform == 'linux' and os.geteuid() != 0
 assert subprocess.check_output(['lsblk', '-dn', '-o', 'SERIAL', '/dev/vda'], text=True).strip() == 'HN_OS_TEST'
-sys.path.insert(0, '/usr/lib/harness-os/connections')
-import connection_store
 with tempfile.TemporaryDirectory(prefix='connections-native-') as temporary:
     root = pathlib.Path(temporary) / 'accounts'
-    env = dict(os.environ, CONNECTOR_CONFIGS_DIR=str(root))
+    env = dict(os.environ, HARNESS_CONNECTIONS_DIR=str(root))
     def cli(*args):
-        return subprocess.check_output(['harness', 'connections', *args], env=env, text=True, timeout=10)
+        return subprocess.check_output(['harness', 'connections', *args], env=env, text=True, timeout=20)
     assert json.loads(cli('list', '--json')) == []
-    vault = connection_store.Store(root)
-    vault.save('github', {'access_token': 'native-fixture-not-a-real-token', 'source': 'gateway',
-                          'account_name': 'fixture@example.invalid'})
+    root.mkdir(mode=0o700)
+    tokens = root / 'tokens.json'
+    tokens.write_text(json.dumps({'github': {'access_token': 'native-fixture-not-a-real-token', 'source': 'gateway',
+                                             'account_name': 'fixture@example.invalid'}}))
+    tokens.chmod(0o600)
     for _ in range(3):
         # Separate command processes use the same credentials, independent of an engine.
         info = json.loads(cli('info', 'github'))
         assert info['account'] == 'fixture@example.invalid', info
         assert 'native-fixture-not-a-real-token' not in json.dumps(info)
-    # The bridge's socket is waiting for agents; nothing runs until one calls it.
-    subprocess.run(['systemctl', '--user', 'is-active', '--quiet', 'harness-connections.socket'], check=True)
+    # The daemon's bridge answers agents on its fixed address; an address without this user's key is refused.
+    try:
+        urllib.request.build_opener(urllib.request.ProxyHandler({})).open(urllib.request.Request(
+            'http://127.0.0.1:51793/not-the-key/github/mcp', data=b'{}', headers={'Content-Type': 'application/json'}), timeout=5)
+        raise AssertionError('The bridge accepted an address without the key')
+    except urllib.error.HTTPError as error:
+        assert error.code == 404, error.code
+        error.close()
     process = subprocess.Popen(['harness', 'connections', 'serve', '--background'], env=env,
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        deadline = time.monotonic() + 5
+        deadline = time.monotonic() + 10
         while not (root / 'page.json').exists() and time.monotonic() < deadline:
             assert process.poll() is None
             time.sleep(.05)
-        page = connection_store.read_private(root / 'page.json')
+        page = json.loads((root / 'page.json').read_text())
         origin = 'http://127.0.0.1:' + str(page['port'])
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
@@ -75,8 +81,8 @@ print('Installed Connections CLI, shared local credentials and authenticated dis
                    '>/dev/null && exit 0; sleep .1; done; exit 1', timeout=10)
         # The helper is on demand, but waits 15 minutes for inactivity. Stop
         # this fixture's helper before the image test records idle RAM.
-        pattern = r'^/usr/bin/python3 /usr/lib/harness-os/connections/connections[.]py serve --background$'
+        pattern = r' connections serve --background$'
         vm.command('pkill -INT -u "$(id -u)" -f ' + shlex.quote(pattern) + '; '
                    'for n in $(seq 1 30); do ! pgrep -u "$(id -u)" -f ' + shlex.quote(pattern) +
                    ' >/dev/null && exit 0; sleep .1; done; exit 1', timeout=10)
-    return {'status': 'passed', 'scope': 'Installed CLI, shared fixture credentials, bridge socket, local API boundary, browser page and Add custom dialog; no provider authentication'}
+    return {'status': 'passed', 'scope': 'Installed CLI, shared fixture credentials, the daemon bridge, local API boundary, browser page and Add custom dialog; no provider authentication'}
