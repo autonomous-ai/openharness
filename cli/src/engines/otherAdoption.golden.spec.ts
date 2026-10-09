@@ -313,6 +313,22 @@ describe('what the core\'s adoption finds of the other engines\' conversations',
     check('owners', owners)
   }, 60_000)
 
+  it('keeps Kilo history and ownership in its own store when it is the only reader asked', async () => {
+    const provider = m.index.externalProviders(m.index.externalPaths(process.env)).find(row => row.engine === 'kilo')!
+    const sessions = await new m.external.ExternalSessions({ providers: [provider], excluded: [], log: () => {} }).scan()
+    const owners = await provider.owners!({
+      list: async () => [
+        { pid: 105, ppid: 1, executable: 'kilo', args: `kilo -s ${ID.kilo}` },
+        { pid: 104, ppid: 1, executable: 'opencode', args: `opencode -s ${ID.opencode}` },
+      ],
+      openFiles: async () => new Map(), openFilesOf: async () => new Map(), alive: () => true,
+    })
+    check('Kilo alone', {
+      sessions: await Promise.all(sessions.map(async session => ({ ...session, readHistory: await session.readHistory?.() }))),
+      owners, busy: await Promise.all(owners.map(owner => provider.busy!(owner))),
+    })
+  })
+
   it('has a recorded outcome for every case, and no other', () => {
     if (RECORD) return
     expect(Object.keys(recorded).sort()).toEqual(Object.keys(golden).sort())

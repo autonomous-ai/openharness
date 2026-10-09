@@ -414,5 +414,49 @@
    false,
    null
   ]
- ]
+ ],
+ "Kilo alone": {
+  "sessions": [
+   {
+    "sessionId": "ses_kiloperson",
+    "engine": "kilo",
+    "cwd": "/work/kilo",
+    "origin": "terminal",
+    "title": "Fix the build",
+    "mtime": 1789898410000,
+    "transcriptPath": null,
+    "readHistory": [
+     {
+      "type": "user_message",
+      "payload": {
+       "content": "please fix the build"
+      }
+     },
+     {
+      "type": "text_delta",
+      "payload": {
+       "content": "Done."
+      }
+     },
+     {
+      "type": "done",
+      "payload": {
+       "result": "success"
+      }
+     }
+    ]
+   }
+  ],
+  "owners": [
+   {
+    "sessionId": "ses_kiloperson",
+    "pid": 105,
+    "record": "<root>/home/.local/share/kilo/kilo.db#ses_kiloperson",
+    "fromArgs": true
+   }
+  ],
+  "busy": [
+   false
+  ]
+ }
 }
