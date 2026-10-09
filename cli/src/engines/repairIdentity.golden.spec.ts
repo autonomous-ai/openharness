@@ -86,6 +86,8 @@ it('records which Muse files identify a conversation', async () => {
     const cwd = `/work/muse/${name}`
     file(join(root, name, 'session.jsonl'), body(cwd))
     await check(`muse:${name}`, () => repair.findLiveSession('muse', cwd, clock.time, { bornOnly: true }))
+    // A malformed header must not affect later cases; keep spoken for the final age check.
+    if (name !== 'spoken') rmSync(join(root, name), { recursive: true, force: true })
   }
   file(join(root, 'parent', 'subagent', 'session.jsonl'), lines(header('/work/muse/child'), event('run', 'started')))
   await check('muse:subagent', () => repair.findLiveSession('muse', '/work/muse/child', clock.time))

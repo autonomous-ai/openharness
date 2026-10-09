@@ -384,6 +384,8 @@ async function findCases(): Promise<Record<string, unknown>> {
 // ------------------------------------------------------------------------------------------- continuation
 
 async function continuationCases(): Promise<Record<string, unknown>> {
+  const owned: string[] = []
+  const put = (path: string, text: string) => { owned.push(path); write(path, text) }
   const dir = join(root, 'claude/projects/-work-b')
   const marker = (id: unknown) => ({ type: 'continued-in', continuedInSessionId: id })
   const big = 'x'.repeat(300 * 1024)
@@ -402,20 +404,23 @@ async function continuationCases(): Promise<Record<string, unknown>> {
     'empty': '',
     'trailing blank lines': `${JSON.stringify(marker(C))}\n\n  \n`,
   }
-  write(join(dir, 'a0a0a0a0-0000-4000-8000-a0a0a0a0a0a0.jsonl'), jsonl({ type: 'ai-title' }, { type: 'agent-name' }))
+  put(join(dir, 'a0a0a0a0-0000-4000-8000-a0a0a0a0a0a0.jsonl'), jsonl({ type: 'ai-title' }, { type: 'agent-name' }))
+  owned.push(join(dir, 'c0c0c0c0-0000-4000-8000-c0c0c0c0c0c0.jsonl'))
   mkdirSync(join(dir, 'c0c0c0c0-0000-4000-8000-c0c0c0c0c0c0.jsonl'), { recursive: true })
-  write(join(dir, 'd0d0d0d0-0000-4000-8000-d0d0d0d0d0d0.jsonl'), jsonl({ type: 'file-history-snapshot', big }, { type: 'user' }))
-  write(join(dir, 'e0e0e0e0-0000-4000-8000-e0e0e0e0e0e0.jsonl'), jsonl({ type: 'mode' }, '{"type":"assistant","x":"\\"user\\""}'))
+  put(join(dir, 'd0d0d0d0-0000-4000-8000-d0d0d0d0d0d0.jsonl'), jsonl({ type: 'file-history-snapshot', big }, { type: 'user' }))
+  put(join(dir, 'e0e0e0e0-0000-4000-8000-e0e0e0e0e0e0.jsonl'), jsonl({ type: 'mode' }, '{"type":"assistant","x":"\\"user\\""}'))
   // Past the 256 KiB head and short of twice it, with no turn at all: taken for its length.
-  write(join(dir, 'f0f0f0f0-0000-4000-8000-f0f0f0f0f0f0.jsonl'), jsonl({ type: 'file-history-snapshot', big }))
+  put(join(dir, 'f0f0f0f0-0000-4000-8000-f0f0f0f0f0f0.jsonl'), jsonl({ type: 'file-history-snapshot', big }))
   const cases: Record<string, unknown> = {}
   for (const [name, text] of Object.entries(files)) {
     const path = join(dir, `${name.replace(/[^a-z]+/g, '-')}.jsonl`)
-    write(path, text)
+    put(path, text)
     cases[name] = await attempt(() => m.stores.continuationOf('claude', path))
   }
   cases['missing file'] = await attempt(() => m.stores.continuationOf('claude', join(dir, 'nope.jsonl')))
   cases['codex'] = await attempt(() => m.stores.continuationOf('codex', join(dir, 'continued-with-a-turn.jsonl')))
+  // Continuation bodies are not discovery headers. Do not carry these fixtures into the Linux pass.
+  for (const path of owned) rmSync(path, { recursive: true, force: true })
   return cases
 }
 
