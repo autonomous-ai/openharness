@@ -26,7 +26,19 @@ installer, system updates, PC drivers and boot splash.
 
 ## Build
 
-On the board, running Orange Pi's Debian 12 server image, with a clean checkout:
+With Docker, on any host:
+
+```sh
+bash os/platforms/orangepi-4pro/build-docker.sh \
+  Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147.img out/
+```
+
+It runs the three steps below in a privileged arm64 Debian 12 container from the committed
+HEAD, and writes `harness-orangepi4pro-debian12-<commit>.img.xz` with its `.sha256`. Named
+volumes keep cargo downloads and the compositor build between runs. An x86-64 host emulates
+arm64 with QEMU, so a first build there takes hours; an arm64 host builds natively.
+
+Or natively on the board, running Orange Pi's Debian 12 server image, with a clean checkout:
 
 ```sh
 sudo apt install build-essential musl-tools cmake ninja-build pkg-config python3-venv parted \

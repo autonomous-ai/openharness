@@ -23,18 +23,27 @@ cleanup() {
     for m in dev/pts dev proc sys; do mountpoint -q "$MNT/$m" && umount "$MNT/$m"; done
     mountpoint -q "$MNT" && umount "$MNT"
     [[ -n $LOOP ]] && losetup -d "$LOOP"
+    [[ -n $MADE_NODE ]] && rm -f "$MADE_NODE"
     rmdir "$MNT"
 }
+MADE_NODE=
 trap cleanup EXIT
 
 cp --sparse=always "$BASE" "$OUT"
 truncate -s +3G "$OUT"
 LOOP=$(losetup -fP --show "$OUT")
 parted -s "$LOOP" resizepart 1 100%
-partprobe "$LOOP"
-e2fsck -fy "${LOOP}p1" >/dev/null || true
-resize2fs "${LOOP}p1" >/dev/null
-mount "${LOOP}p1" "$MNT"
+partprobe "$LOOP" || true
+PART=${LOOP}p1
+if [[ ! -b $PART ]]; then
+    # A container (build-docker.sh) has no udev to create partition nodes.
+    IFS=: read -r major minor < "/sys/class/block/${LOOP#/dev/}p1/dev"
+    mknod "$PART" b "$major" "$minor"
+    MADE_NODE=$PART
+fi
+e2fsck -fy "$PART" >/dev/null || true
+resize2fs "$PART" >/dev/null
+mount "$PART" "$MNT"
 for m in dev dev/pts proc sys; do mount --bind "/$m" "$MNT/$m"; done
 # Network for the chroot; the image's own resolv.conf is restored afterwards.
 mv "$MNT/etc/resolv.conf" "$MNT/etc/resolv.conf.harness" 2>/dev/null || true
