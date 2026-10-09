@@ -726,13 +726,13 @@ try:
     # A phone approval is explicit. Closing its UI cancels the driver, and reopening never
     # accepts a previously selected row as consent to a different account.
     hn('account')
-    click_text('Sign in with your phone')
+    click_text('Continue with your phone')
     shown('Cancel sign-in')
     snapshot('phone-sign-in')
     keys('Escape')
     wait(lambda: login_events() == ['start', 'cancel'], 'closing account cancels the pending login')
     hn('account')
-    click_text('Sign in with your phone')
+    click_text('Continue with your phone')
     shown('Cancel sign-in')
     (BASE / 'approve').touch()
     # The phone that approved is signed in to the account: no second question here.

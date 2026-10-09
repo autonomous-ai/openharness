@@ -896,8 +896,9 @@ fn fill_rows(app: &App, kind: &PickerKind, picker: &mut Picker) {
             picker.hints = vec![("→/enter", "open"), ("enter", "set"), ("esc", "done")];
         }
         // (Typed into, it ranks by match, best first, as fzf does; empty, it keeps its groups. A
-        // query matches a command's name and keywords, not the description shown beside it.)
-        PickerKind::Commands => { picker.live = true; picker.set_rows(modal::command_rows_for(app, !picker.query.is_empty(), crate::settings::in_tmux(picker))); picker.hints = vec![("enter", "run"), ("M-k", "change its key")] }
+        // query matches a command's name and its keywords — what a row used to say beside it is
+        // searched, not shown, so hn's own commands still rank above tmux's.)
+        PickerKind::Commands => { picker.live = true; picker.search_extra = true; picker.set_rows(modal::command_rows_for(app, !picker.query.is_empty(), crate::settings::in_tmux(picker))); picker.hints = vec![("enter", "run"), ("M-k", "change its key")] }
         // ── keys ──
         PickerKind::Keybinds => { picker.keep_order = true; picker.set_rows(modal::keybind_rows(app)); picker.hints = vec![("enter", "change"), ("esc", "done")] }
         PickerKind::Help => { picker.set_rows(modal::mode_rows(app)); picker.hints = vec![("enter", "go")] }
