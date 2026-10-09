@@ -2890,9 +2890,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
   Future<void> _addPhone() async {
-    // Open, it is the offer a sign-in makes ([_maybeOfferPhone]) — and a
-    // sign-in made from inside it (its "Sign in…") must not open it again
-    // once it closes, so the offer is dropped on the way out too.
+    // Open, by hand or not, it is this computer's offer ([_maybeOfferPhone]),
+    // spent for good — and a sign-in made from inside it (its "Sign in…") must
+    // not open it again once it closes, so the offer is dropped on the way out
+    // too.
     app.dropPhoneOffer();
     // "Manage devices…" pops the dialog and asks for Settings, but this
     // [_dialog] is still open until the pop lands — a [_settings] made from
@@ -6325,12 +6326,14 @@ class _SwarmScreenState extends State<SwarmScreen> {
     });
   }
 
-  /// Add Phone, opened by itself right after a sign-in by hand when the
-  /// account has no phone yet ([AppNotifier.takePhoneOffer]).
+  /// Add Phone, opened by itself once on this computer: at the first launch
+  /// as a guest — the dialog asks for the sign-in, then shows the code — or
+  /// after the first sign-in by hand, when the account has no phone yet
+  /// ([AppNotifier.takePhoneOffer]).
   ///
-  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08):** "Open
-  /// it and sign in — it shows a code on the screen". A newcomer is not sent
-  /// looking for Add Phone in a menu, or in the command palette on Linux.
+  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08):** a
+  /// newcomer who got Harness from the phone is not sent looking for Add Phone
+  /// in a menu, or in the command palette on Linux.
   ///
   /// Waits for a clear screen — the sign-in sheet closed, no dialog or palette
   /// up — rather than opening over what somebody is in the middle of; the
@@ -6355,20 +6358,30 @@ class _SwarmScreenState extends State<SwarmScreen> {
       (_newHarness == null || _newHarnessEmbedded);
 
   Future<void> _offerPhone() async {
+    // A guest has no account to ask: its Add Phone asks for the sign-in.
+    final signedIn = app.signedIn;
     var hasPhone = false;
-    try {
-      final devices = await app.loadDevices();
-      // Any app on the account but this one — a phone, or a browser — has its
-      // way in already. A list that cannot be read offers it anyway: closing
-      // Add Phone costs less than a newcomer left looking for its code.
-      hasPhone =
-          devices?.devices.any((device) => !device.isMachine && !device.self) ??
-          false;
-    } catch (_) {
-      hasPhone = false;
+    if (signedIn) {
+      try {
+        final devices = await app.loadDevices();
+        // Any app on the account but this one — a phone, or a browser — has
+        // its way in already. A list that cannot be read offers it anyway:
+        // closing Add Phone costs less than a newcomer left looking for its
+        // code.
+        hasPhone =
+            devices?.devices.any(
+              (device) => !device.isMachine && !device.self,
+            ) ??
+            false;
+      } catch (_) {
+        hasPhone = false;
+      }
     }
-    // Signed out, or something opened meanwhile: not now.
-    if (!mounted || hasPhone || !app.signedIn || !_phoneOfferClear) return;
+    if (!mounted) return;
+    // Nothing to offer on this computer again.
+    if (hasPhone) return app.dropPhoneOffer();
+    // Signed in or out meanwhile, or something opened: not now.
+    if (app.signedIn != signedIn || !_phoneOfferClear) return;
     await _addPhone();
   }
 
