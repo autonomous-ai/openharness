@@ -683,6 +683,8 @@ export function engineFallbackPrelude(engine: AgentEngine, shellPath: string, tm
     // (a spec exercising the script, a wrapper piped somewhere) the engine's own status is the answer.
     + '  if ! [ -t 0 ]; then exit "$harness_status"; fi\n'
     + ENGINE_INPUT_DRAIN_SH
+    // The person's own shell gets back the developer folder they had (`noDevtoolsPrelude`).
+    + '  if [ "${HARNESS_DEVELOPER_DIR:-}" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi\n'
     + `  printf '\\n%s\\n' ${shellSingleQuote(`harness: ${command} exited ($harness_status). This pane is a shell now — run ${command} again, or stop the pane.`).replace('($harness_status)', `('"$harness_status"')`)}\n`
     + `  exec ${shellSingleQuote(shellPath)}${loginArgs}\n`
     + '}\n'
@@ -1024,13 +1026,20 @@ const MAC_DEVTOOLS: DevtoolsPlaces = {
  * tests: `xcode-select -p` (which answers without a dialog) runs only when none of the usual places
  * exists, in a command substitution, out of a Ctrl+Z's reach (`STOP_PROOF_FUNCTIONS`). A
  * `DEVELOPER_DIR` already set is the person's own choice and stays.
+ *
+ * `HARNESS_DEVELOPER_DIR=1` marks the one set here. A launch that inherits it (a daemon restarted from
+ * such a pane) decides again, and a pane that turns into the person's shell after its engine
+ * (`harness_after`) drops both: Xcode installed meanwhile would otherwise fail there. An explicit
+ * `xcode-select --install` still opens Apple's installer with it set (measured on the VM).
  */
 export function noDevtoolsPrelude(places: DevtoolsPlaces = MAC_DEVTOOLS): string {
   const xcodeSelect = shellSingleQuote(places.xcodeSelect)
   return [
+    'if [ "${HARNESS_DEVELOPER_DIR:-}" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi',
     `if [ -x ${xcodeSelect} ] && [ -z "\${DEVELOPER_DIR:-}" ] && [ ! -d ${shellSingleQuote(`${places.commandLineTools}/usr/bin`)} ] && [ ! -e ${shellSingleQuote(places.selectLink)} ] && ! harness_devtools=$(${xcodeSelect} -p 2>/dev/null); then`,
     `  DEVELOPER_DIR=${shellSingleQuote(places.commandLineTools)}`,
-    '  export DEVELOPER_DIR',
+    '  HARNESS_DEVELOPER_DIR=1',
+    '  export DEVELOPER_DIR HARNESS_DEVELOPER_DIR',
     'fi',
     '',
   ].join('\n')

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildEngineLaunchArgv, noDevtoolsPrelude, shellSingleQuote } from './engineLaunch.js'
+import { buildEngineLaunchArgv, engineFallbackPrelude, noDevtoolsPrelude, shellSingleQuote } from './engineLaunch.js'
 
 const roots: string[] = []
 afterEach(() => {
@@ -77,6 +77,22 @@ describe('an agent pane on a Mac without the developer tools', () => {
     expect(m.run('/bin/sh', { DEVELOPER_DIR: '/Applications/Xcode-beta.app/Contents/Developer' }).stdout)
       .toBe('DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer\n')
     expect(m.askedCount()).toBe(0)
+  })
+
+  it('decides again for a launch that inherited the one set here, and keeps nothing stale', () => {
+    // A daemon restarted from such a pane passes both on: the tools installed since, it drops them.
+    const m = mac()
+    const inherited = { DEVELOPER_DIR: m.places.commandLineTools, HARNESS_DEVELOPER_DIR: '1' }
+    expect(m.run('/bin/sh', inherited).stdout).toBe(`DEVELOPER_DIR=${m.places.commandLineTools}\n`)
+    mkdirSync(join(m.places.commandLineTools, 'usr', 'bin'), { recursive: true })
+    expect(m.run('/bin/sh', inherited).stdout).toBe('DEVELOPER_DIR=unset\n')
+  })
+
+  it("gives the person's own shell, after the engine, the developer folder they had", () => {
+    const after = engineFallbackPrelude('claude', '/bin/zsh', null)
+    const drop = after.indexOf('if [ "${HARNESS_DEVELOPER_DIR:-}" = 1 ]; then unset DEVELOPER_DIR HARNESS_DEVELOPER_DIR; fi')
+    expect(drop).toBeGreaterThan(-1)
+    expect(drop).toBeLessThan(after.indexOf("exec '/bin/zsh' -l"))
   })
 
   it('does nothing on a system without xcode-select', () => {
