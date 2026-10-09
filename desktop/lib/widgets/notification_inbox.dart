@@ -328,7 +328,7 @@ class _NotificationInboxState extends State<NotificationInbox> {
         ? HarnessActivity.starting
         : switch (row.unavailable) {
             null => row.activity,
-            'Starting' => HarnessActivity.starting,
+            'Starting' || 'Waiting' => HarnessActivity.starting,
             'Start failed' => HarnessActivity.failed,
             _ => HarnessActivity.offline,
           };

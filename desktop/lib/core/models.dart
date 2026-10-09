@@ -548,9 +548,14 @@ class Agent {
     final launch = launchRaw is Map
         ? Map<String, dynamic>.from(launchRaw)
         : const <String, dynamic>{};
+    // `held`: the daemon will not start it yet, and says why, such as a
+    // conversation another process may have open. Read as `ready` it showed
+    // only its name over an empty pane ("Unavailable"), with no reason
+    // (onboarding reopening a team's recent conversations, 2026-10-09).
     final launchState = switch (launch['state']) {
       'starting' => 'starting',
       'failed' => 'failed',
+      'held' => 'held',
       _ => 'ready',
     };
     final grid = j['grid'] as Map<String, dynamic>?;
@@ -609,7 +614,7 @@ class Agent {
       status: (j['status'] as String?) ?? 'active',
       launchState: launchState,
       launchError: launchState == 'failed' ? _safeLabel(launch['error']) : null,
-      launchDetail: launchState == 'failed'
+      launchDetail: launchState == 'failed' || launchState == 'held'
           ? _safeDetail(launch['detail'])
           : null,
       terminalAvailable: terminalAvailable,

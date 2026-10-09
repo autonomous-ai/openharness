@@ -70,7 +70,9 @@ HarnessActivity? harnessActivity(
     return HarnessActivity.offline;
   }
   if (agent.isStopped) return HarnessActivity.paused;
-  if (agent.launchState == 'starting') return HarnessActivity.starting;
+  if (agent.launchState == 'starting' || agent.launchState == 'held') {
+    return HarnessActivity.starting;
+  }
   if (agent.launchState == 'failed') {
     return agent.launchError == 'RESUME_UNCONFIRMED'
         ? HarnessActivity.needsInput

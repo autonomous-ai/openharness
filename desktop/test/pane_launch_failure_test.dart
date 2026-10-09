@@ -156,6 +156,81 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets(
+    'a harness the daemon holds back says it is waiting, and why, not "Unavailable"',
+    (tester) async {
+      // Onboarding reopening a team's recent conversations, 2026-10-09: held
+      // until the daemon could tell who had them open, each pane showed only
+      // its name and "Unavailable".
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'a0',
+            'name': 'Session a0',
+            'engine': 'claude',
+            'terminal': {'available': false},
+            'launch': {
+              'state': 'held',
+              'service': 'search',
+              'detail':
+                  "The conversation's current owner could not be verified.",
+            },
+          },
+        },
+      });
+      final agent = app.stateOf('m')!.agents.singleWhere((a) => a.id == 'a0');
+      expect(agent.launchState, 'held');
+      expect(
+        agent.launchDetail,
+        "The conversation's current owner could not be verified.",
+      );
+      await pump(tester);
+      expect(
+        find.textContaining(
+          "could not be verified. It starts here when that clears; close this pane to cancel.",
+        ),
+        findsWidgets,
+      );
+      expect(find.text('Unavailable'), findsNothing);
+      expect(find.textContaining('terminal unavailable'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a held harness whose waiting shell is up says Waiting, and takes no typing',
+    (tester) async {
+      // The daemon's waiting pane is a live shell (`heldPaneArgv`) that ignores
+      // input: what is typed there would be lost.
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'a0',
+            'name': 'Session a0',
+            'engine': 'claude',
+            'terminal': {'available': true},
+            'launch': {
+              'state': 'held',
+              'service': 'search',
+              'detail':
+                  'Waiting for the search service to verify this conversation.',
+            },
+          },
+        },
+      });
+      await pump(tester);
+      expect(find.text('Waiting'), findsWidgets);
+      expect(find.textContaining('close this pane to cancel'), findsWidgets);
+      expect(
+        tester.widget<TerminalPanel>(find.byType(TerminalPanel)).readOnly,
+        isTrue,
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('a launch that really failed offers Restart, with its reason', (
     tester,
   ) async {
