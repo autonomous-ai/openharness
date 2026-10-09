@@ -156,6 +156,7 @@ import '../widgets/workspace_welcome.dart';
 import '../widgets/workspace_machine_prompt.dart';
 import '../shortcuts/keyboard_practice.dart';
 import '../widgets/agent_alert_banners.dart';
+import '../widgets/phone_offer_card.dart';
 import '../settings/experimental_features.dart';
 
 class SwarmScreen extends StatefulWidget {
@@ -2916,19 +2917,28 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
   Future<void> _addPhone() async {
+    // Open, from its card or by hand, it is this computer's offer
+    // ([_phoneOfferCard]) spent for good — and a sign-in made from inside it
+    // (its "Sign in…") must not bring the card back once it closes, so the
+    // offer is dropped on the way out too.
+    app.dropPhoneOffer();
     // "Manage devices…" pops the dialog and asks for Settings, but this
     // [_dialog] is still open until the pop lands — a [_settings] made from
     // the callback would be refused. So it is remembered, and opened after.
     var manageDevices = false;
-    await _dialog(
-      () => showAddPhoneDialog(
-        context,
-        app,
-        keymap: _keymap,
-        onConnectMachine: () => unawaited(_openMachines()),
-        onManageDevices: () => manageDevices = true,
-      ),
-    );
+    try {
+      await _dialog(
+        () => showAddPhoneDialog(
+          context,
+          app,
+          keymap: _keymap,
+          onConnectMachine: () => unawaited(_openMachines()),
+          onManageDevices: () => manageDevices = true,
+        ),
+      );
+    } finally {
+      app.dropPhoneOffer();
+    }
     if (manageDevices && mounted) {
       await _settings(SettingsSection.accountDevices);
     }
@@ -6361,6 +6371,18 @@ class _SwarmScreenState extends State<SwarmScreen> {
     });
   }
 
+  /// Add Phone's card ([AppNotifier.phoneOfferShowing]) — not while a new
+  /// computer's first agents are being opened (`state/first_arrival.dart`): it
+  /// comes once the work is on the screen, and stands beside it.
+  Widget? _phoneOfferCard() {
+    if (kIsWeb || !app.phoneOfferShowing) return null;
+    if (app.firstArrival.pending || app.firstArrival.running) return null;
+    return PhoneOfferCard(
+      onAdd: () => unawaited(_addPhone()),
+      onDismiss: app.dropPhoneOffer,
+    );
+  }
+
   bool get _hasConnectedBrowserMachine => app.machineStates.values.any(
     (machine) =>
         !machine.machine.isShared &&
@@ -7325,7 +7347,10 @@ class _SwarmScreenState extends State<SwarmScreen> {
                           // Last in the stack, so a banner is never painted
                           // under a pane, a tab or the palette. It takes
                           // pointers only on the banners themselves.
-                          AgentAlertBanners(notifier: app),
+                          AgentAlertBanners(
+                            notifier: app,
+                            footer: _phoneOfferCard(),
+                          ),
                         ],
                       ),
                     ),

@@ -988,6 +988,7 @@ class AppNotifier extends ChangeNotifier {
       !_disposed && revision == _authRevision;
 
   int _invalidateAuthWork() {
+    _phoneOffer = false;
     _closeOwnerMemories();
     _stopMachineRecovery();
     api.resetAccountCache();
@@ -4421,6 +4422,7 @@ class AppNotifier extends ChangeNotifier {
       status = AppStatus.bootstrapping;
       notifyListeners();
       await _finishBootstrapSignedIn();
+      unawaited(_offerPhoneAtLaunch(revision));
     } catch (error, stack) {
       if (!_authWorkCurrent(revision)) return;
       debugPrint(
@@ -5653,6 +5655,8 @@ class AppNotifier extends ChangeNotifier {
         return;
       }
       _guestDeskRestorePending = false;
+      // The first sign-in on this computer offers Add Phone; a later one does not.
+      unawaited(_offerPhoneAfterSignIn(revision));
     } catch (error) {
       if (!_authWorkCurrent(revision)) return;
       status = wasGuest ? AppStatus.authenticated : AppStatus.unauthenticated;
@@ -5679,6 +5683,115 @@ class AppNotifier extends ChangeNotifier {
 
   /// The failed sign-in again, to the account the person chose the first time.
   Future<void> retryLogin() => login(signInProvider);
+
+  /// Whether the workspace offers Add Phone — "Your agents in your pocket.", a card in the window's
+  /// top-right (`widgets/phone_offer_card.dart`): as a guest, whose Add Phone asks for the sign-in
+  /// itself; signed in, on an account with no phone yet. Cleared when the account changes.
+  ///
+  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08).** It tells a newcomer to open
+  /// Add Phone on the computer (mobile `set_up_computer.dart`), so the button has to be on the
+  /// screen without anyone finding it in a menu, or in the command palette on Linux. Not after
+  /// [loginWithPhone]: that sign-in was a phone's, which has its way in already.
+  ///
+  /// ⚠️ **A card, not Add Phone opened by itself (owner, 2026-10-09).** A new install opens on
+  /// agents already at work (`state/first_arrival.dart`); a dialog over them broke that first moment
+  /// for everyone without a phone, to serve those with one. The card waits beside the work until it
+  /// is used or put away.
+  ///
+  /// ⚠️ **Once per computer (owner, 2026-10-09)**, not once per sign-in: it is offered at the first
+  /// launch, which a new install makes as a guest ([_offerPhoneAtLaunch]), or else after the first
+  /// sign-in by hand ([_offerPhoneAfterSignIn]) — never again once Add Phone has been opened here,
+  /// the card put away, or the account found to have a phone ([_phoneOfferDone]).
+  bool get phoneOfferShowing => _phoneOffer;
+  bool _phoneOffer = false;
+
+  /// Add Phone was opened — from the card or by hand — or the card was put away: nothing is left to
+  /// offer, now or on a later launch or sign-in. Also how a sign-in made from inside Add Phone (its
+  /// "Sign in…") does not bring the card back.
+  void dropPhoneOffer() {
+    final showing = _phoneOffer;
+    _phoneOffer = false;
+    _markPhoneOfferDone();
+    if (showing) notifyListeners();
+  }
+
+  /// This computer's record that Add Phone has had its offer ([phoneOfferShowing]), in the desktop's
+  /// state file beside the dial's ([DialState]).
+  static const _phoneOfferDoneKey = 'phone_offer_done';
+
+  /// [_phoneOfferDoneKey], once read or written.
+  bool? _phoneOfferDoneHere;
+
+  /// Whether Add Phone has had its offer on this computer.
+  ///
+  /// ⚠️ **Nowhere to remember it is taken as done.** A window with no state file (a test, a
+  /// fixture) or one that cannot be read would offer Add Phone at every launch and sign-in — the
+  /// very thing the record exists to stop — so it offers nothing.
+  Future<bool> _phoneOfferDone() async {
+    if (_phoneOfferDoneHere case final done?) return done;
+    final storage = _paneLayout?.storage;
+    if (storage == null) return true;
+    try {
+      return _phoneOfferDoneHere =
+          (await storage.read(_phoneOfferDoneKey)) == '1';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  void _markPhoneOfferDone() {
+    if (_phoneOfferDoneHere == true) return;
+    _phoneOfferDoneHere = true;
+    // Never awaited: a write that fails costs one more offer at the next launch.
+    _paneLayout?.storage.write(_phoneOfferDoneKey, '1').catchError((_) {});
+  }
+
+  /// The launch's half of the offer.
+  ///
+  /// ⚠️ **A new install opens as a guest**, on its desk, with no sign-in asked for — so "after the
+  /// first sign-in" alone never came for the newcomer the phone sent here, who was left looking at a
+  /// desk with no code on it. As a guest, Add Phone asks for the sign-in itself and then shows the
+  /// code. A computer that opens signed in has had its first sign-in already: nothing after a later
+  /// one.
+  Future<void> _offerPhoneAtLaunch(int revision) async {
+    if (viewer != null || !_authWorkCurrent(revision)) return;
+    if (signedIn) {
+      _markPhoneOfferDone();
+      return;
+    }
+    if (!isGuest || await _phoneOfferDone()) return;
+    if (!_authWorkCurrent(revision) || !isGuest) return;
+    _phoneOffer = true;
+    notifyListeners();
+  }
+
+  /// [_offerPhoneAtLaunch] or [_offerPhoneAfterSignIn], as launch and a sign-in by hand run them.
+  @visibleForTesting
+  Future<void> offerPhoneForTest({required bool atLaunch}) => atLaunch
+      ? _offerPhoneAtLaunch(_authRevision)
+      : _offerPhoneAfterSignIn(_authRevision);
+
+  /// The first sign-in by hand on this computer offers Add Phone — unless the account already has a
+  /// phone or a browser on it, which has its way in.
+  Future<void> _offerPhoneAfterSignIn(int revision) async {
+    if (viewer != null || await _phoneOfferDone()) return;
+    var hasPhone = false;
+    try {
+      final devices = await loadDevices();
+      hasPhone =
+          devices?.devices.any((device) => !device.isMachine && !device.self) ??
+          false;
+    } catch (_) {
+      // A list that cannot be read offers the card anyway: it costs one × to put away.
+    }
+    if (!_authWorkCurrent(revision) || !signedIn) return;
+    if (hasPhone) {
+      _markPhoneOfferDone();
+      return;
+    }
+    _phoneOffer = true;
+    notifyListeners();
+  }
 
   /// Sign in by a QR a signed-in phone approves, then a yes here to the account it names.
   Future<void> loginWithPhone() async {
