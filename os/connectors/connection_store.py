@@ -39,6 +39,8 @@ def load_catalog():
 
 CATALOG = load_catalog()
 SERVICES = {code: item["label"] for code, item in CATALOG.items()}
+# Codes saved before the catalog followed Grid's, and Grid's code for them now.
+RENAMED = {"apollo": "apollo_io", "supermetrics_marketing": "supermetrics"}
 
 
 def validate_code(code):
@@ -215,16 +217,19 @@ class Store:
         result = {}
         for code, entry in data.items():
             if isinstance(code, str) and CODE.fullmatch(code):
-                result[code] = clean_token(entry)
+                result.setdefault(RENAMED.get(code, code), clean_token(entry))
         return result
 
     def token(self, code):
-        return self.tokens().get(validate_code(code))
+        return self.tokens().get(RENAMED.get(validate_code(code), code))
 
     def put(self, code, entry):
         """Save one connection, replacing it. Call under locked()."""
         validate_code(code)
         data = self.file("tokens.json")
+        for old, new in RENAMED.items():
+            if new == code:
+                data.pop(old, None)  # Saved again under its current code.
         data[code] = clean_token(entry)
         write_private(self.root / "tokens.json", data)
 
@@ -234,9 +239,10 @@ class Store:
 
     def disconnect(self, code):
         validate_code(code)
+        names = {code} | {old for old, new in RENAMED.items() if new == code}
         with locked(self.root):
             data = self.file("tokens.json")
-            if data.pop(code, None) is not None:
+            if [data.pop(name) for name in names if name in data]:
                 write_private(self.root / "tokens.json", data)
 
     def client(self, issuer):

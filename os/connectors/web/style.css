@@ -17,6 +17,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-vi
 .pill{border-radius:8px;background:#1f1f1f;border-color:#1f1f1f;color:#bdbdbd;font-weight:600}
 .pill.selected{background:#2f45d8;border-color:#3d55ff;color:#fff}
 #notice{min-height:22px;color:#9fe0a8;margin:10px 0}
+.hint-line{margin:14px 0 0;color:#a3a3a3;font-size:14px}.hint-line code{color:#e8e8e8}
 .group h2{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#a3a3a3;margin:18px 0 10px}
 .count{color:#6f6f6f;margin-left:4px}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}

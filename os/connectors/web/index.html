@@ -20,8 +20,9 @@
     <button id="browse" class="pill selected" type="button" role="tab" aria-selected="true">Browse</button>
     <button id="connected" class="pill" type="button" role="tab" aria-selected="false">Connected</button>
   </div>
+  <p id="signed-out" class="hint-line" hidden>GitHub, Slack, Google and a few more sign in through your Harness account. Run <code>harness login</code>, then refresh to see them.</p>
   <p id="notice" role="status" aria-live="polite"></p>
-  <div id="sections"></div>
+  <div id="sections"><p class="empty">Loading connectors…</p></div>
   <footer>Accounts stay on this computer and are shared by every agent you run here. Disconnecting stops Harness from using an account; revoke it in the service's settings to remove it everywhere.</footer>
 </main>
 <dialog id="custom-dialog">

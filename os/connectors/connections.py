@@ -51,11 +51,38 @@ def custom_code(name, taken):
     return store.validate_code(code)
 
 
-def sign_in_for(vault, code):
+def services(offered=None):
+    """{code: item} the page offers. Signed in, the gateway's live list (the Grid
+    app's); otherwise the bundled snapshot. A service either list says can sign in
+    from this computer does so; one that needs the gateway is shown only when the
+    gateway offers it, or when it cannot be asked (offline)."""
+    signed_in = gateway.session() is not None
+    items = {}
+    for code, item in store.CATALOG.items():
+        if item["auth"] == "dcr" or (signed_in and not offered):
+            items[code] = dict(item)
+    for code, row in (offered or {}).items():
+        auth, url = row.get("auth_type"), row.get("mcp_url") or ""
+        if auth not in ("app", "dcr") or not store.CODE.fullmatch(code):
+            continue
+        item = items.get(code) or dict(store.CATALOG.get(code) or {"code": code, "description": ""})
+        if item.get("auth") != "dcr":
+            item["auth"] = auth
+        if url and (auth == "dcr" or not item.get("mcp_url")):
+            item["mcp_url"] = url
+        item["label"] = row.get("label") or item.get("label") or code
+        item["description"] = row.get("description") or item.get("description", "")
+        if item["auth"] == "dcr" and not item.get("mcp_url"):
+            continue
+        items[code] = item
+    return items
+
+
+def sign_in_for(vault, code, items=None):
     """The sign-in that connects CODE: the gateway's or this computer's own."""
-    item = store.CATALOG.get(code)
+    item = (items if items is not None else services(gateway.available())).get(code)
     if item is None:
-        raise store.StoreError("Unknown connection.")
+        raise store.StoreError("This service is not available. Run harness login to see every service.")
     if item["auth"] == "app":
         return gateway.SignIn(code)
     return oauth.SignIn(vault, item["mcp_url"])
@@ -118,27 +145,24 @@ class Flows:
 def catalog(vault, offered=None):
     """The page's cards: every service, connected first, then custom servers."""
     tokens = vault.tokens()
-    signed_in = gateway.session() is not None
-    offered = offered or {}
+    known = services(offered)
     items = []
-    for code, item in store.CATALOG.items():
+    for code, item in known.items():
         card = vault.status(code, tokens.get(code) or {})
-        card.update(description=item["description"], color=item["color"], auth=item["auth"], custom=False, reason="",
+        card.update(name=item["label"], description=item["description"], auth=item["auth"], custom=False,
                     icon="/icons/" + ICONS[code] if code in ICONS else "")
-        if item["auth"] == "app" and card["state"] == "not_connected":
-            if not signed_in:
-                card["reason"] = "Needs harness login"
-            elif offered and code not in offered:
-                card["reason"] = "Not available yet."
         items.append(card)
     for code, token in tokens.items():
-        if code in store.CATALOG:
+        if code in known:
             continue
+        # Connected earlier, or added by hand: still shown so it can be disconnected.
         card = vault.status(code, token)
-        card.update(description=token.get("mcp_entry", {}).get("url", ""), color="#59634b", auth="custom", custom=True,
-                    reason="", icon="")
+        custom = token.get("source") == "custom"
+        card.update(description=store.CATALOG.get(code, {}).get("description") or token.get("mcp_entry", {}).get("url", ""),
+                    auth="custom" if custom else token.get("source", "dcr"), custom=custom,
+                    icon="/icons/" + ICONS[code] if code in ICONS else "")
         items.append(card)
-    return {"connections": items, "signed_in": signed_in}
+    return {"connections": items, "signed_in": gateway.session() is not None}
 
 
 class PageServer(ThreadingHTTPServer):
@@ -254,7 +278,7 @@ class PageHandler(BaseHTTPRequestHandler):
             vault = self.server.vault
             if self.path == "/api/connect":
                 code = store.validate_code(data.get("connector"))
-                result = self.server.flows.start(code, sign_in_for(vault, code))
+                result = self.server.flows.start(code, sign_in_for(vault, code, services(self.server.gateway_offers())))
             elif self.path == "/api/custom":
                 result = self.custom(data)
             elif self.path == "/api/disconnect":
@@ -356,13 +380,15 @@ def open_page():
 def connect_here(code):
     """Sign in from the terminal: the same flow as the page, waited for here."""
     vault = store.Store()
-    sign_in = sign_in_for(vault, store.validate_code(code))
+    code = store.RENAMED.get(store.validate_code(code), code)
+    items = services(gateway.available())
+    sign_in = sign_in_for(vault, code, items)
     url = sign_in.prepare()
     if url:
         print("Opening the sign-in page. If it does not open, visit:\n" + url, flush=True)
         browse(url)
     finish(vault, code, sign_in.wait())
-    print(f"{store.SERVICES[code]} connected. Agents can use it now.")
+    print(f"{items[code]['label']} connected. Agents can use it now.")
     return 0
 
 

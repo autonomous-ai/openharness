@@ -18,6 +18,16 @@ harness connections disconnect linear
 harness connections call github GET https://api.github.com/user
 ```
 
+## Which services
+
+The list is the Grid app's: the connector gateway's `GET /v1/grid/connectors`.
+Signed in (`harness login`), the page follows that live list; signed out or
+offline it shows the bundled snapshot, `catalog.json`, limited to the services
+this computer signs in to by itself. `os/tools/update-connector-catalog.py`
+rebuilds the snapshot and its icons from the gateway. Codes are Grid's; a
+connection saved under an earlier code (`apollo`, `supermetrics_marketing`) is
+read under Grid's (`apollo_io`, `supermetrics`).
+
 ## Two ways to sign in
 
 `catalog.json` lists every service with its `auth`.
@@ -28,11 +38,9 @@ registers a public client for this computer (RFC 7591, `clients.json`), opens
 the service's consent page with PKCE S256 and receives the code on
 `http://127.0.0.1:51789-51792/callback`. No client secret ships with Harness and
 no Autonomous server is involved. Renewal goes straight to the service's token
-endpoint. 21 services, checked against their live metadata on 2026-10-08:
-
-Ahrefs, Airtable, Amplitude, Apollo.io, Atlassian (Jira, Confluence), Attio,
-Canva, ClickUp, Datadog, Figma, GitLab, Intercom, Klaviyo, Linear, monday.com,
-Notion, Sentry, Stripe, Supabase, Supermetrics, Vercel.
+endpoint. 78 of Grid's 86 services (2026-10-09): every one Grid marks `dcr`,
+plus Linear, Notion, Amplitude and monday.com, which Grid signs in through its
+gateway but whose MCP servers also allow self-registration.
 
 **`app`: through the Autonomous connector gateway.** These services do not let
 a computer register itself, so the OAuth app Autonomous registered with them is
@@ -43,8 +51,9 @@ renews tokens (`/connectors/refresh`). It needs the Harness sign-in
 out, the page says so instead of offering Connect. A service the gateway does
 not offer to this account shows "Not available yet".
 
-GitHub, Slack, Asana, HubSpot, PagerDuty, Gmail, Google Calendar, Google Drive,
-BigQuery, Microsoft 365.
+GitHub, Slack, Asana, HubSpot, Gmail, Google Calendar, Google Drive, Figma
+(`figma-api-app`). Signed out, these are not listed; the page says
+`harness login` shows them.
 
 **Add custom** takes any remote MCP server URL: one that asks for sign-in uses the
 `dcr` path, one with static headers (a personal token) is saved as given.

@@ -146,7 +146,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if self.headers.get("Authorization") != "Bearer grid-session":
             self.send(401, {})
         else:
-            self.send(200, {"connectors": [{"code": "github", "label": "GitHub", "auth_type": "app"}]})
+            self.send(200, {"connectors": [
+                {"code": "github", "label": "GitHub", "auth_type": "app", "mcp_url": "https://api.githubcopilot.com/mcp/"},
+                {"code": "linear", "label": "Linear", "auth_type": "app", "mcp_url": "https://mcp.linear.app/mcp"},
+                {"code": "newsvc", "label": "New Service", "auth_type": "dcr", "mcp_url": "https://mcp.newsvc.example/mcp",
+                 "description": "Added to Grid after this build."},
+                {"code": "manual-only", "label": "Manual", "auth_type": "pat"}]})
 
     def do_POST(self):
         if self.headers.get("Authorization") != "Bearer grid-session":
@@ -374,13 +379,39 @@ class ConnectorGateway(Case):
         self.assertIsNone(self.vault.token("github"))
         self.assertEqual(server.calls[-1], ("connectors/disconnect", {"connector": "github"}))
 
-    def test_signed_out_the_page_says_how_to_connect_these_services(self):
+    def test_signed_out_the_page_offers_only_what_this_computer_signs_in_to(self):
         self.gateway(signed_in=False)
-        cards = {c["connector"]: c for c in connections.catalog(self.vault)["connections"]}
-        self.assertIn("harness login", cards["github"]["reason"])
-        self.assertEqual(cards["linear"]["reason"], "")
+        page = connections.catalog(self.vault)
+        cards = {c["connector"]: c for c in page["connections"]}
+        self.assertFalse(page["signed_in"])
+        self.assertNotIn("github", cards)
+        self.assertNotIn("slack", cards)
+        self.assertEqual(cards["linear"]["auth"], "dcr")
+        self.assertEqual({c["auth"] for c in page["connections"]}, {"dcr"})
         with self.assertRaisesRegex(store.StoreError, "harness login"):
-            connections.sign_in_for(self.vault, "slack").prepare()
+            connections.sign_in_for(self.vault, "slack")
+
+    def test_signed_in_the_page_follows_the_gateway_and_still_prefers_this_computer(self):
+        self.gateway()
+        offered = gateway.available()
+        cards = {c["connector"]: c for c in connections.catalog(self.vault, offered)["connections"]}
+        self.assertEqual(cards["github"]["auth"], "app")
+        self.assertEqual(cards["linear"]["auth"], "dcr", "Grid's app service that allows self-registration")
+        self.assertEqual((cards["newsvc"]["name"], cards["newsvc"]["auth"]), ("New Service", "dcr"))
+        self.assertNotIn("slack", cards, "an app service the gateway does not offer")
+        self.assertNotIn("manual-only", cards)
+        items = connections.services(offered)
+        self.assertIsInstance(connections.sign_in_for(self.vault, "newsvc", items), oauth.SignIn)
+        self.assertIsInstance(connections.sign_in_for(self.vault, "github", items), gateway.SignIn)
+
+    def test_a_connection_saved_under_an_older_code_keeps_working_under_grids(self):
+        self.vault.save("apollo", {"access_token": "a", "mcp_entry": {"url": "https://mcp.apollo.io/mcp"}})
+        self.assertEqual(self.vault.token("apollo_io")["access_token"], "a")
+        self.assertEqual(self.vault.token("apollo")["access_token"], "a", "an agent still using the old address")
+        self.vault.save("apollo_io", {"access_token": "b", "mcp_entry": {"url": "https://mcp.apollo.io/mcp"}})
+        self.assertEqual(set(store.read_private(self.vault.root / "tokens.json")), {"apollo_io"})
+        self.vault.disconnect("apollo_io")
+        self.assertEqual(self.vault.tokens(), {})
 
 
 class Storage(Case):

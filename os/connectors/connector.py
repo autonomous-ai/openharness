@@ -58,13 +58,11 @@ OFFICIAL_HOSTS = {
     "gmail": ("googleapis.com",),
     "google_calendar": ("googleapis.com",),
     "google_drive": ("googleapis.com",),
-    "google_bigquery": ("googleapis.com",),
     "github": ("api.github.com",),
     "slack": ("slack.com",),
     "asana": ("app.asana.com",),
     "hubspot": ("api.hubapi.com",),
-    "pagerduty": ("api.pagerduty.com",),
-    "microsoft_365": ("graph.microsoft.com",),
+    "figma-api-app": ("api.figma.com",),
 }
 
 # Connectors whose API only accepts the credential as a query parameter on

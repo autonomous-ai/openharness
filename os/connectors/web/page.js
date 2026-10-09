@@ -51,8 +51,6 @@ function card(item) {
   } else if (item.state !== "not_connected") {
     if (item.state === "reconnect" && !item.custom) actions.append(button("Reconnect", () => connect(item)));
     actions.append(button("×", () => confirmDisconnect(item), "icon", "Disconnect " + item.name));
-  } else if (item.reason) {
-    actions.append(node("span", item.reason, "hint"));
   } else {
     actions.append(button("+", () => connect(item), "icon plus", "Connect " + item.name));
   }
@@ -92,6 +90,7 @@ function render() {
 async function refresh() {
   const result = await request("/api/connections");
   items = result.connections.sort((a, b) => a.name.localeCompare(b.name));
+  $("#signed-out").hidden = result.signed_in;
   render();
 }
 async function follow(item, flow) {
