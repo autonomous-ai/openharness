@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/auth/auth_session.dart';
 import 'package:harness/core/config.dart';
@@ -19,6 +21,10 @@ class _Daemon extends WsConn {
       );
   var state = 'held';
   var lists = 0;
+  var inFlight = 0, mostInFlight = 0;
+
+  /// When set, `agents_list` answers only when the test completes it, with the state at the ask.
+  Completer<void>? gate;
   Map<String, dynamic> agent() => {
     'id': 'a1',
     'name': 'fix the dial scroll',
@@ -39,8 +45,16 @@ class _Daemon extends WsConn {
   }) async {
     if (type != 'agents_list') return const {};
     lists++;
+    final answer = agent();
+    inFlight++;
+    if (inFlight > mostInFlight) mostInFlight = inFlight;
+    try {
+      await gate?.future;
+    } finally {
+      inFlight--;
+    }
     return {
-      'agents': [agent()],
+      'agents': [answer],
     };
   }
 }
@@ -87,11 +101,51 @@ void main() {
     expect(agent().launchState, 'held');
 
     daemon.state = 'ready';
-    await Future<void>.delayed(const Duration(milliseconds: 70));
+    // Backing off from 20 ms while nothing changed: 40, then 80 ms to the next read.
+    await Future<void>.delayed(const Duration(milliseconds: 250));
     expect(agent().launchState, 'ready');
     final settled = daemon.lists;
     await Future<void>.delayed(const Duration(milliseconds: 100));
     expect(daemon.lists, settled, reason: 'nothing held: no more reads');
+  });
+
+  test(
+    'a read asked before a push is thrown away, and reads never overlap',
+    () async {
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {'agent': daemon.agent()},
+      });
+      daemon.gate = Completer<void>();
+      // A read is asked while held, and answers only after the daemon's own push said ready.
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(daemon.inFlight, 1);
+      daemon.state = 'ready';
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {'agent': daemon.agent()},
+      });
+      expect(agent().launchState, 'ready');
+      daemon.gate!.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(
+        agent().launchState,
+        'ready',
+        reason: 'the older "held" answer is not applied',
+      );
+      expect(daemon.mostInFlight, 1);
+    },
+  );
+
+  test('backs off while nothing changes', () async {
+    app.heldLaunchSyncInterval = const Duration(milliseconds: 10);
+    await app.handleEventForTest('m', {
+      'type': 'agent_synced',
+      'payload': {'agent': daemon.agent()},
+    });
+    // 10, 20, 40, 80, then 100 ms apart: about five reads in 300 ms, not thirty.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    expect(daemon.lists, inInclusiveRange(4, 7));
   });
 
   test('a machine with nothing held is not read again', () async {
