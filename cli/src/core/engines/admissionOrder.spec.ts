@@ -40,6 +40,22 @@ it('uses arrival for already observed legacy deliveries but cannot infer that a 
   expect(compareAdmissionOrder(stamp(20, 9), stamp(30, 2))).toBeLessThan(0)
 })
 
+it('keeps native sorting transitive with a headerless delivery between two native events', () => {
+  const values = [stamp(20, 1), stamp(undefined, 2), stamp(10, 3)]
+  expect(values.sort(compareAdmissionOrder)).toEqual([stamp(undefined, 2), stamp(10, 3), stamp(20, 1)])
+  expect(compareAdmissionOrder(stamp(20, 1), stamp(20, 2))).toBeLessThan(0)
+  expect(compareAdmissionOrder(stamp(undefined, 1), stamp(undefined, 2))).toBeLessThan(0)
+})
+
+it('forgets removed process watermarks while retaining authority for a live process', () => {
+  const order = createAdmissionOrder(key => key === 'live')
+  order.accept('live', 'b', stamp(20))
+  order.accept('removed', 'b', stamp(20))
+  order.observe('live', 'process-1', undefined)
+  expect(order.status('live', 'a', stamp(10))).toBe('older')
+  expect(order.status('removed', 'a', stamp(10))).toBe('current')
+})
+
 it('retains current binding authority across a restart, external rebind and process replacement', () => {
   const order = createAdmissionOrder()
   order.observe('agent', 'process-1', undefined)

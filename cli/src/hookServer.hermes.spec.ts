@@ -140,6 +140,20 @@ it('recovers a held parent after rejecting its newer delegated hook', async () =
   expect(f.logs.some(line => line.includes('ignored · hermes_subagent'))).toBe(true)
 })
 
+it('recovers an equal-time parent after its child has already been held', async () => {
+  const f = await fixture()
+  f.store(f.home, [])
+  const parent = '20261009_120000_121212', child = '20261009_120000_343434'
+  await f.hook(child, 200, 1000)
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('held ·'))).toBe(true))
+  f.store(f.home, [[parent, 'cli']])
+  await f.hook(parent, 200, 1000)
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('unambiguous Hermes hook order'))).toBe(true))
+  f.store(f.home, [[parent, 'cli'], [child, 'tool']])
+  await vi.waitFor(() => expect(f.current().sessionId).toBe(parent), { timeout: 4_000 })
+  expect(f.registered).toHaveBeenCalledOnce()
+})
+
 it.each(['stat', 'readdir'] as const)('holds incomplete %s evidence, then discovers the recovered profile afresh', async operation => {
   const f = await fixture()
   f.store(f.home, [])

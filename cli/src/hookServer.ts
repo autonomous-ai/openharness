@@ -324,6 +324,11 @@ function registeredHookProcess(body: RegisterInput, engine: AgentEngine): Regist
   return body.tmuxPane ? registry.byPaneEngine(body.tmuxPane, engine) : undefined
 }
 
+function admissionProcessScope(session: RegisteredSession | undefined): string | undefined {
+  if (!session?.active) return undefined
+  return session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : session.agentId
+}
+
 /** The engine may correct an announcement; a failed correction leaves registration's checks intact. */
 export function knownTranscriptFor(body: RegisterInput, agent: RegisteredSession | undefined): string | undefined {
   const engine = body.engine ?? 'claude'
@@ -391,7 +396,7 @@ export function startHookServer(
   options: HookServerOptions = {},
 ): Promise<{ server: http.Server; port: number; localSocket: LocalSocketServer | null }> {
   const hookCredential = loadOrCreateHookCredential(env.ADAPTER_DATA_DIR)
-  const admissions = createPendingAdmissions()
+  const admissions = createPendingAdmissions({ isProcessCurrent: (key, scope) => admissionProcessScope(registry.byAgent(key)) === scope })
   let admissionArrival = 0
   // Filled in once the port is bound: the Host a request must name is the port actually taken.
   let hosts: ReadonlySet<string> = new Set()
@@ -542,8 +547,7 @@ export function startHookServer(
           // optimistically would hand the parent's pane to a sub-agent.
           const identity = paneReadIdentity(processAgent)
           const queued = admissions.submit(processAgent.agentId, body.sessionId!, {
-            order: { ...admissionOrder, scope: processAgent.processIdentity
-              ? processIdentityKey(engine, processAgent.processIdentity) : processAgent.agentId },
+            order: { ...admissionOrder, scope: admissionProcessScope(processAgent) ?? processAgent.agentId },
             binding: { id: processAgent.sessionId, at: processAgent.boundAt },
             current: () => !isRecentlyDeleted(processAgent.agentId) && !isRecentlyDeleted(body.sessionId)
               && paneReadIdentity(registeredHookProcess(body, 'hermes')) === identity,

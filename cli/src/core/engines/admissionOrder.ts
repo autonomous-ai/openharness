@@ -6,14 +6,19 @@ export interface AdmissionOrder {
 }
 
 export function compareAdmissionOrder(a: AdmissionOrder, b: AdmissionOrder): number {
-  return a.firedAt !== undefined && b.firedAt !== undefined ? a.firedAt - b.firedAt : a.arrival - b.arrival
+  if (a.firedAt === undefined) return b.firedAt === undefined ? a.arrival - b.arrival : -1
+  if (b.firedAt === undefined) return 1
+  return a.firedAt - b.firedAt || a.arrival - b.arrival
 }
 
 /** Only verified acceptance advances this process-incarnation watermark, never a delegated child. */
-export function createAdmissionOrder() {
+export function createAdmissionOrder(isProcessCurrent: (key: string, scope: string) => boolean = () => true) {
   const accepted = new Map<string, { id: string; order: AdmissionOrder }>()
   return {
     observe(key: string, scope: string, binding: { id: string; at: number | null } | undefined): void {
+      // Opportunistic lifecycle cleanup bounds history by the processes still alive,
+      // rather than every agent ever seen by a long-running daemon.
+      for (const [owner, value] of accepted) if (!isProcessCurrent(owner, value.order.scope)) accepted.delete(owner)
       if (!binding?.id) return
       const last = accepted.get(key)
       // A persisted binding protects a restarted core too. A changed binding made

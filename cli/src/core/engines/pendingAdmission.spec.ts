@@ -11,6 +11,83 @@ function request(overrides: Partial<PendingAdmission<string>> = {}): PendingAdmi
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 
 describe('pending hook admission', () => {
+  it('rechecks an already-held equal-time child so its parent can recover', async () => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions({ retryMs: 20 })
+    let readable = false
+    const child = request({ order: { scope: 'process', firedAt: 10, arrival: 1 },
+      inspect: async () => readable ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', reason: 'unreadable' } })
+    const parent = request({ order: { scope: 'process', firedAt: 10, arrival: 2 } })
+    queue.submit('agent', 'child', child); await flush()
+    queue.submit('agent', 'parent', parent); await flush()
+    expect(parent.accept).not.toHaveBeenCalled()
+    readable = true
+    await vi.advanceTimersByTimeAsync(40)
+    expect(child.reject).toHaveBeenCalledExactlyOnceWith('delegated')
+    expect(parent.accept).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
+  it('keeps newer queued native evidence when an older or headerless duplicate arrives', async () => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions({ retryMs: 20 })
+    let readable = false
+    const b = request({ order: { scope: 'process', firedAt: 20, arrival: 1 },
+      inspect: async () => readable ? { kind: 'accept', value: 'b20' } : { kind: 'hold', reason: 'unreadable' } })
+    const a = request({ order: { scope: 'process', firedAt: 15, arrival: 2 } })
+    const oldB = request({ order: { scope: 'process', firedAt: 10, arrival: 3 } })
+    const legacyB = request({ order: { scope: 'process', firedAt: undefined, arrival: 4 } })
+    queue.submit('agent', 'b', b); await flush()
+    queue.submit('agent', 'a', a); await flush()
+    queue.submit('agent', 'b', oldB); queue.submit('agent', 'b', legacyB)
+    await vi.advanceTimersByTimeAsync(20)
+    expect(a.inspect).not.toHaveBeenCalled()
+    expect(oldB.inspect).not.toHaveBeenCalled()
+    expect(legacyB.inspect).not.toHaveBeenCalled()
+    readable = true
+    await vi.advanceTimersByTimeAsync(20)
+    expect(b.accept).toHaveBeenCalledExactlyOnceWith('b20')
+    expect(a.accept).not.toHaveBeenCalled()
+    queue.close()
+  })
+
+  it.each([20, undefined])('refreshes stale authority for a same-delivery retry with timestamp %s', async firedAt => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions()
+    let live = true
+    const old = request({ order: { scope: 'process', firedAt, arrival: 1 }, current: () => live,
+      inspect: async () => ({ kind: 'hold', reason: 'unreadable' }) })
+    queue.submit('agent', 'session', old); await flush()
+    live = false
+    const fresh = request({ order: { scope: 'process', firedAt, arrival: 2 } })
+    queue.submit('agent', 'session', fresh); await flush()
+    expect(fresh.accept).toHaveBeenCalledOnce()
+    expect(old.accept).not.toHaveBeenCalled()
+    queue.close()
+  })
+
+  it('never selects known-older intent through a headerless candidate, and still drains verified children', async () => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions({ retryMs: 20 })
+    let readable = false
+    const inspect = async (): Promise<AdmissionDecision<string>> => readable
+      ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', reason: 'unreadable' }
+    const b = request({ order: { scope: 'process', firedAt: 20, arrival: 1 }, inspect })
+    const legacy = request({ order: { scope: 'process', firedAt: undefined, arrival: 2 }, inspect })
+    const a = request({ order: { scope: 'process', firedAt: 10, arrival: 3 } })
+    queue.submit('agent', 'b', b); await flush()
+    queue.submit('agent', 'legacy', legacy); await flush()
+    queue.submit('agent', 'a', a); await flush()
+    await vi.advanceTimersByTimeAsync(40)
+    expect(a.inspect).not.toHaveBeenCalled()
+    readable = true
+    await vi.advanceTimersByTimeAsync(60)
+    expect(b.reject).toHaveBeenCalledOnce()
+    expect(legacy.reject).toHaveBeenCalledOnce()
+    expect(a.accept).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
   it('can finish rejecting an in-flight child before admitting its equal-time parent', async () => {
     const queue = createPendingAdmissions()
     let finish!: (answer: AdmissionDecision<string>) => void
@@ -55,6 +132,7 @@ describe('pending hook admission', () => {
     expect(equal.accept).not.toHaveBeenCalled()
     const noTimestamp = request({ order: { scope: 'process', firedAt: undefined, arrival: 5 } })
     queue.submit('agent', 'legacy', noTimestamp); await flush()
+    await vi.advanceTimersByTimeAsync(20)
     expect(noTimestamp.held).toHaveBeenCalledOnce()
     queue.close()
   })

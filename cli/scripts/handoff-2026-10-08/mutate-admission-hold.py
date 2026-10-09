@@ -29,6 +29,17 @@ mutations = [
     ('live backpressure writes offline', 'hook/notify.mjs',
      "if (res.statusCode === 429 || (res.statusCode === 202 && reply?.retry === true)) { resolve('held'); return }",
      "if (false) { resolve('held'); return }", 'src/hookNotify.spec.ts', ['-t', 'Hermes live admission']),
+    ('held child is never revisited', 'src/core/engines/pendingAdmission.ts',
+     "const peer = leaders(key, job).find(other => other !== job)", "const peer: Job | undefined = undefined", 'src/core/engines/pendingAdmission.spec.ts'),
+    ('older duplicate downgrades intent', 'src/core/engines/pendingAdmission.ts',
+     "if (known !== undefined && (request.order.firedAt === undefined || request.order.firedAt < known)) return true",
+     "if (false) return true", 'src/core/engines/pendingAdmission.spec.ts'),
+    ('stale candidate hides refreshed authority', 'src/core/engines/pendingAdmission.ts',
+     "if (previous.request.current()) return true", "return true", 'src/core/engines/pendingAdmission.spec.ts'),
+    ('mixed order promotes older intent', 'src/core/engines/admissionOrder.ts',
+     "if (a.firedAt === undefined) return b.firedAt === undefined ? a.arrival - b.arrival : -1\n  if (b.firedAt === undefined) return 1\n  return a.firedAt - b.firedAt || a.arrival - b.arrival",
+     "return a.firedAt !== undefined && b.firedAt !== undefined ? a.firedAt - b.firedAt : a.arrival - b.arrival",
+     'src/core/engines/pendingAdmission.spec.ts'),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 env.pop('TMUX', None)

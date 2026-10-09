@@ -16,14 +16,24 @@ export interface PendingAdmission<T> {
   held: (reason: string) => void | Promise<void>
 }
 
-export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { retryMs?: number; capacity?: number } = {}) {
+export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProcessCurrent }: {
+  retryMs?: number; capacity?: number; isProcessCurrent?: (key: string, scope: string) => boolean
+} = {}) {
   type Job = { id: string; request: PendingAdmission<unknown>; timer: ReturnType<typeof setTimeout> | null; reason?: string }
   const jobs = new Map<string, Job[]>()
   const running = new Set<string>()
-  const order = createAdmissionOrder()
+  const order = createAdmissionOrder(isProcessCurrent)
   let closed = false
   const current = (key: string, job: Job) => !closed && !!jobs.get(key)?.includes(job) && job.request.current()
   const selected = (key: string) => jobs.get(key)?.at(-1)
+  // Known older intents wait behind the greatest native timestamp. Headerless and
+  // equal-time candidates remain incomparable, so each must get a chance to prove
+  // delegation or cancellation before another can publish.
+  const leaders = (key: string, job: Job): Job[] => {
+    const candidates = jobs.get(key)!.filter(other => other.request.order.scope === job.request.order.scope)
+    const latest = Math.max(...candidates.map(other => other.request.order.firedAt ?? -Infinity))
+    return candidates.filter(other => other.request.order.firedAt === undefined || other.request.order.firedAt === latest)
+  }
   const clearTimer = (job: Job) => { if (job.timer) { clearTimeout(job.timer); job.timer = null } }
   const discard = (key: string, job: Job) => {
     const queue = jobs.get(key)
@@ -36,9 +46,19 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { re
   // Notification can await optional interpretation. Its failure is contained, but it
   // cannot block the next core admission or cause a committed binding to be retried.
   const notified = (result: void | Promise<void>) => { void Promise.resolve(result).catch(report) }
-  const run = async (key: string, job: Job): Promise<void> => {
+  const run = async (key: string, job: Job, retry = false): Promise<void> => {
     running.add(key)
-    try { await inspect(key, job) } catch (error) {
+    try {
+      if (retry && current(key, job)) {
+        const peer = leaders(key, job).find(other => other !== job)
+        if (peer) {
+          const queue = jobs.get(key)!
+          queue.splice(queue.indexOf(peer), 1); queue.push(peer)
+          job = peer
+        }
+      }
+      await inspect(key, job)
+    } catch (error) {
       // A notification may throw after publication. Never retry that publication or
       // let its exception take down the daemon; a held read already has its retry.
       if (!job.timer) discard(key, job)
@@ -63,12 +83,11 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { re
     const status = order.status(key, job.id, job.request.order)
     if (status === 'older') decision = { kind: 'reject', reason: 'stale_hook' }
     else if (decision.kind === 'accept') {
-      const tied = job.request.order.firedAt !== undefined && jobs.get(key)!.some(other => other !== job
-        && other.request.order.scope === job.request.order.scope && other.request.order.firedAt === job.request.order.firedAt)
-      if (status === 'ambiguous' || tied) decision = { kind: 'hold', reason: 'Waiting for unambiguous Hermes hook order; keeping the current conversation.' }
+      const unresolved = leaders(key, job).some(other => other !== job)
+      if (status === 'ambiguous' || unresolved) decision = { kind: 'hold', reason: 'Waiting for unambiguous Hermes hook order; keeping the current conversation.' }
     }
     if (decision.kind === 'hold') {
-      job.timer = setTimeout(() => { job.timer = null; void run(key, job) }, retryMs)
+      job.timer = setTimeout(() => { job.timer = null; void run(key, job, true) }, retryMs)
       job.timer.unref()
       if (job.reason !== decision.reason) {
         job.reason = decision.reason
@@ -92,8 +111,16 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64 }: { re
       const queue = jobs.get(key) ?? []
       const duplicate = queue.findIndex(job => job.id === id)
       if (duplicate === -1 && queue.length >= capacity) return false
-      if (duplicate !== -1 && queue[duplicate]!.request.order.scope === request.order.scope
-        && queue[duplicate]!.request.order.firedAt === request.order.firedAt) return true
+      if (duplicate !== -1 && queue[duplicate]!.request.order.scope === request.order.scope) {
+        const previous = queue[duplicate]!
+        const known = previous.request.order.firedAt
+        if (known !== undefined && (request.order.firedAt === undefined || request.order.firedAt < known)) return true
+        if (known === request.order.firedAt) {
+          if (previous.request.current()) return true
+          // Same delivery, freshly verified after its old binding/route became stale.
+          request = { ...request, order: { ...request.order, arrival: previous.request.order.arrival } }
+        }
+      }
       if (duplicate !== -1) { clearTimer(queue[duplicate]!); queue.splice(duplicate, 1) }
       const previous = queue.at(-1)
       if (previous) clearTimer(previous)
