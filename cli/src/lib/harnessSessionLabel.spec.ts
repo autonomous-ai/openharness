@@ -2,11 +2,41 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { harnessPaneOwner, ownedHere, ownerCommand, paneOwnerFormat, paneOwnerOf } from './harnessSessionLabel.js'
+import { buildHarnessSessionLabel, harnessPaneOwner, isHarnessSessionFor, ownedHere, ownerCommand, paneOwnerFormat, paneOwnerOf } from './harnessSessionLabel.js'
 import { isolatedTmux } from '../testing/isolatedTmux.js'
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
+
+describe('panes created in the same millisecond', () => {
+  it('allocates distinct names for the same engine and keeps discovery recognition', () => {
+    const now = 1_700_000_000_000
+    const names = Array.from({ length: 128 }, () => buildHarnessSessionLabel('claude', now))
+    expect(new Set(names).size).toBe(names.length)
+    for (const name of names) {
+      expect(name).toMatch(/^harness-claude-1700000000000-/)
+      expect(name).toMatch(/^[A-Za-z0-9_-]+$/)
+      expect(isHarnessSessionFor(name, 'claude')).toBe(true)
+      expect(isHarnessSessionFor(name, 'codex')).toBe(false)
+    }
+  })
+
+  it('starts two real private panes concurrently with names allocated at the identical clock value', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'pane-label-'))
+    dirs.push(home)
+    const tmux = await isolatedTmux({ ...process.env, HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history') })
+    try {
+      // Start the disposable server first: this tests name allocation, not a tmux startup race.
+      await tmux.run('new-session', '-d', '-s', 'fixture-bootstrap', '/bin/sh', '-c', 'sleep 60')
+      const names = Array.from({ length: 2 }, () => buildHarnessSessionLabel('codex', 1_700_000_000_000))
+      const panes = await Promise.all(names.map(name => tmux.run('new-session', '-d', '-P', '-F', '#{pane_id}',
+        '-s', name, '/bin/sh', '-c', 'sleep 60')))
+      expect(new Set(panes).size).toBe(2)
+      const sessions = (await tmux.run('list-sessions', '-F', '#{session_name}')).split('\n')
+      for (const name of names) expect(sessions).toContain(name)
+    } finally { await tmux.close() }
+  })
+})
 
 describe('which daemon a pane belongs to', () => {
   it('is one tag per data folder: the same for one daemon every time, another for a daemon beside it', () => {
@@ -70,7 +100,9 @@ describe('the tag on a tmux before 3.0', () => {
   it('reads the window\'s tag only in a session Harness named, on a real tmux', async () => {
     // A pane the person split into an agent's window, once they had moved that window into their own
     // session, carries no tag of its own: the window's was taken for it, and it was styled as an agent.
-    const tmux = await isolatedTmux()
+    const home = mkdtempSync(join(tmpdir(), 'pane-owner-home-'))
+    dirs.push(home)
+    const tmux = await isolatedTmux({ ...process.env, HOME: home, ZDOTDIR: home, HISTFILE: join(home, 'history') })
     try {
       const tag = '0123456789abcdef'
       await tmux.run('new-session', '-d', '-s', 'harness-claude-1', '-x', '80', '-y', '24')

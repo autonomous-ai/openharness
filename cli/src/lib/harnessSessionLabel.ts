@@ -9,7 +9,7 @@
  *
  * The name says a pane is Harness's, not WHICH daemon's: see `HARNESS_OWNER_OPTION`.
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 
@@ -106,14 +106,15 @@ export function ownedHere(owner: string, sessionName: string, self: string): boo
 }
 
 export function buildHarnessSessionLabel(engine: string, now: number = Date.now()): string {
-  return `${HARNESS_SESSION_PREFIX}${engine}-${now}`.replace(/[^A-Za-z0-9_-]/g, '-')
+  // Concurrent creates can share a millisecond, and separate daemons can share the tmux server.
+  return `${HARNESS_SESSION_PREFIX}${engine}-${now}-${randomUUID()}`.replace(/[^A-Za-z0-9_-]/g, '-')
 }
 
 export function isHarnessSession(sessionName: string): boolean {
   return sessionName.startsWith(HARNESS_SESSION_PREFIX)
 }
 
-/** Whether a harness session was created FOR this engine — `harness-<engine>-<ts>` — rather than another. */
+/** Whether a harness session was created FOR this engine; old and new creation suffixes both qualify. */
 export function isHarnessSessionFor(sessionName: string, engine: string): boolean {
   return sessionName.startsWith(`${HARNESS_SESSION_PREFIX}${engine}-`)
 }
