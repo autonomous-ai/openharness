@@ -2,7 +2,7 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { services } from './catalog.js'
+import { label, services } from './catalog.js'
 import { sync } from './agents.js'
 import { disconnect, finish, signInFor } from './connect.js'
 import { call, CallFailure, OFFICIAL_HOSTS, type Output } from './call.js'
@@ -77,7 +77,7 @@ async function connectHere(vault: Store, raw: string, io: Output): Promise<numbe
 }
 
 function list(vault: Store, json: boolean, io: Output): number {
-  const records = Object.entries(vault.tokens()).sort(([a], [b]) => a.localeCompare(b)).map(([code, token]) => vault.status(code, code, token))
+  const records = Object.entries(vault.tokens()).sort(([a], [b]) => a.localeCompare(b)).map(([code, token]) => vault.status(code, label(code), token))
   if (json) { io.out(JSON.stringify(records) + '\n'); return 0 }
   if (!records.length) io.out('no connectors linked\n')
   for (const record of records) {
@@ -90,7 +90,7 @@ function list(vault: Store, json: boolean, io: Output): number {
 function info(vault: Store, code: string, io: Output): number {
   const token = vault.token(code)
   if (!token) throw new CallFailure(3, `${code}: not connected`)
-  const record = vault.status(code, code, token)
+  const record = vault.status(code, label(code), token)
   const when = (seconds?: number) => seconds ? new Date(seconds * 1000).toString() : 'not reported'
   io.out(JSON.stringify({
     connector: code, state: record.state, account: record.account,
