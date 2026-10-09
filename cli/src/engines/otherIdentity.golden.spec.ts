@@ -11,19 +11,32 @@
  * - Cursor's homes, and the hook command that names them.
  *
  * Every home is under a throwaway root named through the environment, which is pinned whatever the host sets;
- * file times are set, the clock and `process.platform` pinned (agy is asked about a process that does not exist,
- * through /proc, on every host), `TZ` is UTC, and no path's length matters. Results name the root `<root>`. One case
- * runs on the host's own platform: agy's lock, held open by this very process, read as each platform reads it.
+ * file times are set, the clock and `process.platform` pinned, `TZ` is UTC, and no path's length matters. Results
+ * name the root `<root>`. Agy's Linux descriptor lookup reads controlled /proc entries, never host processes.
  *
  * `RECORD_OTHER_ENGINES_GOLDEN=1` writes the fixture. Record it again only for a change meant to alter where these
  * engines' conversations are found, and say so in that change.
  */
-import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AgentEngine } from './types.js'
+
+const descriptors = vi.hoisted(() => new Map<string, string[]>())
+vi.mock('fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs,
+    readdir: async (path: string, ...args: unknown[]) => /^\/proc\/\d+\/fd$/.test(String(path))
+      ? (descriptors.get(String(path)) ?? []).map((_, index) => String(index))
+      : Reflect.apply(fs.readdir, fs, [path, ...args]),
+    readlink: async (path: string, ...args: unknown[]) => {
+      const match = /^(\/proc\/\d+\/fd)\/(\d+)$/.exec(String(path))
+      return match ? descriptors.get(match[1]!)?.[Number(match[2])] ?? '' : Reflect.apply(fs.readlink, fs, [path, ...args])
+    },
+  }
+})
 
 const GOLDEN = fileURLToPath(new URL('./__fixtures__/other-identity.golden.json', import.meta.url))
 const RECORD = process.env.RECORD_OTHER_ENGINES_GOLDEN === '1'
@@ -257,20 +270,17 @@ describe('where the core finds the other engines\' conversations', () => {
     check('repair', results)
   }, 60_000)
 
-  it('repairs agy\'s session from the lock its live process holds open, read as the host reads it', async () => {
+  it('repairs agy\'s session from controlled Linux descriptor evidence of its held lock', async () => {
     const id = UUID(50)
     file(home('.gemini', 'antigravity-cli', 'brain', id, '.system_generated', 'logs', 'transcript_full.jsonl'), '{}\n')
     const lock = file(home('.gemini', 'antigravity-cli', 'presence', `${id}.lock`))
     const results: unknown[] = []
-    // Linux reads /proc, any other host lsof: this process's own descriptors, the same on both.
-    Object.defineProperty(process, 'platform', platform)
+    descriptors.set('/proc/4242/fd', [lock])
     try {
-      const held = openSync(lock, 'r')
-      try {
-        results.push(['held', await m.repair.findLiveSession('agy', '/work/r', T0, { pid: process.pid })])
-      } finally { closeSync(held) }
-      results.push(['let go', await m.repair.findLiveSession('agy', '/work/r', T0, { pid: process.pid })])
-    } finally { Object.defineProperty(process, 'platform', { ...platform, value: 'linux' }) }
+      results.push(['held', await m.repair.findLiveSession('agy', '/work/r', T0, { pid: 4242 })])
+      descriptors.delete('/proc/4242/fd')
+      results.push(['let go', await m.repair.findLiveSession('agy', '/work/r', T0, { pid: 4242 })])
+    } finally { descriptors.clear() }
     check('repair agy lock', results)
   }, 60_000)
 
