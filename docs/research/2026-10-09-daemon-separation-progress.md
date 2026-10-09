@@ -1,6 +1,6 @@
 # Daemon separation continuation, 2026-10-09
 
-The architectural requirements and remaining order are in the [handoff](2026-10-08-daemon-separation-handoff.md). No release is authorized.
+The architectural requirements and remaining order are in the [handoff](2026-10-08-daemon-separation-handoff.md). No release is authorized. The current remaining scope is the [completion checklist](2026-10-09-daemon-core-completion.md); the sections below are the historical implementation record.
 
 ## Crash resume
 
