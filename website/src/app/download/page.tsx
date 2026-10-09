@@ -4,24 +4,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import styles from "./page.module.css";
-import {
-  DESKTOP_DOWNLOAD_LINUX_ARM64_URL,
-  DESKTOP_DOWNLOAD_LINUX_X64_URL,
-  DESKTOP_DOWNLOAD_URL,
-  INSTALL_COMMAND,
-} from "@/lib/installCommand";
+import { buildsFor } from "@/lib/desktopPlatform";
+import { INSTALL_COMMAND } from "@/lib/installCommand";
+import { useVisitorPlatform } from "@/lib/useVisitorPlatform";
 
 const commands = [
   { id: "install", label: "1. Install", value: INSTALL_COMMAND },
   { id: "login", label: "2. Sign in", value: "harness login" },
   { id: "start", label: "3. Start", value: "harness start" },
 ] as const;
-
-const downloads = [
-  { name: "macOS", detail: "Apple silicon + Intel", href: DESKTOP_DOWNLOAD_URL },
-  { name: "Linux (x64)", detail: "AppImage", href: DESKTOP_DOWNLOAD_LINUX_X64_URL },
-  { name: "Linux (ARM64)", detail: "AppImage", href: DESKTOP_DOWNLOAD_LINUX_ARM64_URL },
-];
 
 type CommandId = (typeof commands)[number]["id"];
 
@@ -30,6 +21,7 @@ export default function Page() {
   const [copied, setCopied] = useState<CommandId | null>(null);
   const [copyError, setCopyError] = useState(false);
   const reset = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const platform = useVisitorPlatform();
 
   useEffect(() => () => {
     if (reset.current) clearTimeout(reset.current);
@@ -74,13 +66,17 @@ export default function Page() {
             <div className={styles.sectionBody}>
               <p className={styles.description}>One workspace for all your agents and machines.</p>
               <div className={styles.downloads}>
-                {downloads.map(({ name, detail, href }) => (
-                  <a className={styles.download} href={href} key={href}>
-                    <span className={styles.platform}>{name}</span>
-                    <span className={styles.platformDetail}>{detail}</span>
-                    <span className={styles.downloadAction}>[ Download ]</span>
-                  </a>
-                ))}
+                {buildsFor(platform).map(({ id, name, detail, href }) => {
+                  // Any Mac marks macOS (both builds run on either CPU); a Linux CPU nobody named marks neither.
+                  const suggested = id === platform;
+                  return (
+                    <a className={suggested ? `${styles.download} ${styles.suggested}` : styles.download} href={href} key={href}>
+                      <span className={styles.platform}>{name}</span>
+                      <span className={styles.platformDetail}>{suggested ? `${detail} · this computer` : detail}</span>
+                      <span className={styles.downloadAction}>[ Download ]</span>
+                    </a>
+                  );
+                })}
               </div>
               <p className={styles.note}>
                 Signed and notarized on macOS.<br />

@@ -85,6 +85,7 @@
 .download:focus-visible .platform,
 .download:focus-visible .downloadAction { font-weight: 700; }
 .platformDetail { color: var(--download-muted); font-size: 12px; }
+.suggested .platformDetail { color: var(--download-foreground); }
 .downloadAction { text-align: right; white-space: nowrap; }
 
 .commands { list-style: none; display: grid; gap: 1lh; margin-bottom: 1lh; }
