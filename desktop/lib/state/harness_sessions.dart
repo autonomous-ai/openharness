@@ -46,10 +46,11 @@ String? harnessSessionUnavailable(MachineState? machine, Agent? agent) {
 }
 
 /// What a harness the daemon holds back says: its reason, such as a
-/// conversation another process may have open, and that it starts by itself.
+/// conversation another process may have open, and the way out. Closing the
+/// pane cancels the held start (a move from a terminal included).
 String heldLaunchDetail(Agent agent) =>
     '${agent.launchDetail ?? 'Harness is not starting it yet.'} '
-    'It starts here by itself once that clears.';
+    'It starts here when that clears; close this pane to cancel.';
 
 /// A session appears once, however many tabs or viewers show it.
 class HarnessSession {

@@ -1638,6 +1638,7 @@ class _PaneContent extends StatelessWidget {
           label: 'Waiting',
           icon: AppIcons.hourglass,
           detail: heldLaunchDetail(agent),
+          banner: true,
         );
       } else if (agent == null || !agent.terminalAvailable) {
         notice = terminalNotice(
@@ -1701,12 +1702,15 @@ class _PaneContent extends StatelessWidget {
           // Launch progress/failure describes the engine, not permission to
           // type into its terminal. Connection and control ownership still
           // gate input independently in TerminalPanel/TerminalSession.
+          // A held harness's terminal is the daemon's waiting shell, which
+          // ignores what is typed: nothing there reaches the agent.
           readOnly:
               machine == null ||
               needsLink ||
               offline ||
               agent == null ||
-              !agent.terminalAvailable,
+              !agent.terminalAvailable ||
+              agent.launchState == 'held',
           notice: notice,
           onToggleComposer: () => notifier.toggleComposer(pane.id),
           onClose: single && !swarmMode ? null : close,

@@ -188,12 +188,45 @@ void main() {
       await pump(tester);
       expect(
         find.textContaining(
-          "could not be verified. It starts here by itself once that clears.",
+          "could not be verified. It starts here when that clears; close this pane to cancel.",
         ),
         findsWidgets,
       );
       expect(find.text('Unavailable'), findsNothing);
       expect(find.textContaining('terminal unavailable'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'a held harness whose waiting shell is up says Waiting, and takes no typing',
+    (tester) async {
+      // The daemon's waiting pane is a live shell (`heldPaneArgv`) that ignores
+      // input: what is typed there would be lost.
+      await app.handleEventForTest('m', {
+        'type': 'agent_synced',
+        'payload': {
+          'agent': {
+            'id': 'a0',
+            'name': 'Session a0',
+            'engine': 'claude',
+            'terminal': {'available': true},
+            'launch': {
+              'state': 'held',
+              'service': 'search',
+              'detail':
+                  'Waiting for the search service to verify this conversation.',
+            },
+          },
+        },
+      });
+      await pump(tester);
+      expect(find.text('Waiting'), findsWidgets);
+      expect(find.textContaining('close this pane to cancel'), findsWidgets);
+      expect(
+        tester.widget<TerminalPanel>(find.byType(TerminalPanel)).readOnly,
+        isTrue,
+      );
       await tester.pumpWidget(const SizedBox());
     },
   );

@@ -7462,6 +7462,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
         agent != null &&
         agent.terminalAvailable &&
         agent.launchState != 'failed' &&
+        agent.launchState != 'held' &&
         machine.nodeOnline != false &&
         !(machine.isLocalMachine && !machine.usesLocalTransport) &&
         !(machine.isRemote && !machine.isLocalMachine && machine.needsLink) &&
