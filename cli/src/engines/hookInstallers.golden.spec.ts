@@ -10,7 +10,7 @@
  * `RECORD_HOOK_GOLDEN=1` writes the fixture. Record it again only for a change meant to alter what lands
  * in an engine's settings, and say so in that change.
  */
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -303,7 +303,15 @@ beforeAll(async () => {
   }
   // Longest first: Claude Code's command is the start of Codex's, and every command contains the folders below.
   commands.sort(([a], [b]) => b.length - a.length)
-  tokens = [...commands, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]
+  // Codex's review records hash a command, which names this machine's folders: each known one by its command.
+  const { reviewHash } = await import('./kit/hookReview.js')
+  const { hooks: codex } = await import('./codex/hookContract.js')
+  const hashes: Array<[string, string]> = []
+  for (const [cmd, token] of commands.filter(([, token]) => token.startsWith('<command codex'))) {
+    for (const { event, matcher } of EVENTS.codex) hashes.push([reviewHash(codex.settings.reviewed!, event, matcher, { command: cmd, timeout: 5 }), `<hash ${event} ${token.slice(1, -1)}>`])
+  }
+  // The real path first: on macOS the temporary folder is reached through /var, and Codex keys by /private/var.
+  tokens = [...hashes, ...commands, [notify.HOOK_SCRIPT, '<script>'], [process.execPath, '<node>'], [realpathSync(root), '<root>'], [root, '<root>'], [`.${process.pid}.`, '.<pid>.']]
 })
 
 afterAll(() => {
