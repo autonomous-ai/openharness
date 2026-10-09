@@ -302,7 +302,7 @@ void main() {
     await tester.tap(find.text('Choose file…'));
     await tester.pumpAndSettle();
     expect(find.text('On the dial'), findsOneWidget);
-    for (final label in ['Rest', 'Working', 'Asking']) {
+    for (final label in ['Idle', 'Working', 'Asking']) {
       expect(find.text(label), findsOneWidget);
     }
     expect(find.text('412 KB · 87 colours'), findsOneWidget);
@@ -575,18 +575,25 @@ void main() {
         ('running', 'Running'),
         ('review', 'Review'),
       ]) {
-        expect(inCard(row, label), findsOneWidget);
+        // The idle row's title matches its Idle chip.
+        expect(
+          inCard(row, label),
+          row == 'idle' ? findsNWidgets(2) : findsOneWidget,
+        );
         expect(inCard(row, '4 frames'), findsOneWidget);
       }
       expect(card('jumping'), findsNothing);
       for (final (state, row) in [
-        ('Rest', 'idle'),
+        ('Idle', 'idle'),
         ('Working', 'running'),
         ('Listening', 'review'),
         ('Sending', 'waving'),
         ('Asking', 'waiting'),
       ]) {
-        expect(inCard(row, state), findsOneWidget);
+        expect(
+          inCard(row, state),
+          row == 'idle' ? findsNWidgets(2) : findsOneWidget,
+        );
       }
       expect(inCard('runningRight', 'Working'), findsNothing);
       expect(title(tester), 'Running');
@@ -977,12 +984,13 @@ void main() {
       expect(more, findsOneWidget);
       final line = tester.getCenter(more).dy;
       for (final label in shown) {
-        expect(tester.getCenter(inCard('idle', label)).dy, line);
+        // The chips come after the title, which reads Idle too.
+        expect(tester.getCenter(inCard('idle', label).last).dy, line);
       }
       final box = tester.getRect(card('idle'));
       expect(tester.getRect(more).right, lessThanOrEqualTo(box.right));
       expect(
-        tester.getRect(inCard('idle', shown.first)).top,
+        tester.getRect(inCard('idle', shown.first).last).top,
         greaterThan(tester.getRect(inCard('idle', '4 frames')).bottom),
         reason: 'under the title, at the bottom',
       );
@@ -1549,7 +1557,7 @@ void main() {
         for (final (i, row) in petRows.indexed) {
           expect(
             find.descendant(of: card(row), matching: find.text(labels[i])),
-            findsOneWidget,
+            row == 'idle' ? findsNWidgets(2) : findsOneWidget,
           );
           heights.add(tester.getSize(card(row)).height);
         }

@@ -14,7 +14,7 @@ import 'pet_source.dart';
 
 /// The dial states a row can be picked for, and their labels.
 const petStateLabels = {
-  'rest': 'Rest',
+  'rest': 'Idle',
   'working': 'Working',
   'listening': 'Listening',
   'sending': 'Sending',
