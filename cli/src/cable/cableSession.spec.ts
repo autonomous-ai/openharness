@@ -2478,11 +2478,18 @@ describe('spoken output search purpose', () => {
     /** A pack the size of two slices; the crc field is the u32 at offset 18, as in the real header. */
     const pack = (fill: number, size = 20_000) => { const b = Buffer.alloc(size, fill); b[4] = 1; b.writeUInt32LE(0xdeadbeef, 18); return b }
     const packs: Record<string, Buffer> = { [A]: pack(1), [B]: pack(2, 100), [NEW]: pack(3, 100) }
+    /** The version 1 bytes of a pack, shorter and with their own crc: the id is the same. */
+    const v1Packs: Record<string, Buffer> = {}
     const fakeStore = (mapping: { all: string | null; engines: Record<string, string> }) => {
       const store = {
         current: mapping,
         mapping: () => ({ all: store.current.all, engines: { ...store.current.engines } }),
-        pack: async (id: string) => packs[id],
+        // A different size for each version, as the real store's bytes are; the asked version is kept for the specs.
+        asked: [] as Array<[string, number | undefined]>,
+        pack: async (id: string, version?: number) => {
+          store.asked.push([id, version])
+          return version === 1 ? v1Packs[id] ?? packs[id] : packs[id]
+        },
       }
       return store
     }
@@ -2645,6 +2652,45 @@ describe('spoken output search purpose', () => {
       await settle()
       expect(session.petDial().supported).toBe(true)
       expect(port.sent.filter((m) => m.t === 'pet.offer')).toHaveLength(1)
+      await session.stop()
+    })
+
+    it('a dial that reads pets:1 gets the version 1 pack and pets:2 the version 2 one, of the same id', async () => {
+      v1Packs[A] = pack(4, 19_000)
+      v1Packs[A].writeUInt32LE(0x1111, 18)
+      packs[A][4] = 2
+      const offerFor = async (pets: number) => {
+        const store = fakeStore({ all: A, engines: {} })
+        const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+        port.say({ ...hello, pets, petIds: [] })
+        await settle()
+        const offers = port.sent.filter((m) => m.t === 'pet.offer')
+        await session.stop()
+        return { offers, asked: store.asked }
+      }
+      try {
+        const one = await offerFor(1)
+        expect(one.asked[0]).toEqual([A, 1])
+        expect(one.offers).toEqual([{ t: 'pet.offer', id: A, size: 19_000, crc: 0x1111 }])
+        const two = await offerFor(2)
+        expect(two.asked[0]).toEqual([A, 2])
+        expect(two.offers).toEqual([{ t: 'pet.offer', id: A, size: 20_000, crc: 0xdeadbeef }])
+        // A dial newer than we are is given what we write.
+        expect((await offerFor(5)).asked[0]).toEqual([A, 2])
+      } finally {
+        packs[A][4] = 1
+        delete v1Packs[A]
+      }
+    })
+
+    it('a pack newer than the dial reads is not offered', async () => {
+      const store = fakeStore({ all: B, engines: {} })
+      packs[B][4] = 2
+      const { session, port } = await connect(makeHost({ pets: () => store as unknown as PetStore }))
+      port.say({ ...hello, pets: 1, petIds: [] })
+      await settle()
+      expect(port.sent.filter((m) => m.t === 'pet.offer')).toEqual([])
+      packs[B][4] = 1
       await session.stop()
     })
 

@@ -193,7 +193,7 @@ describe('convertPet', () => {
     const s = simple()
     s.rows.waving = [frame(blob(9, 99, 9))]
     s.rows.review = [frame(blob(1, 2, 3))]
-    expect(convertPet(s, { rest: 'idle', working: 'running', listening: 'review', sending: 'waving', asking: 'waiting' })).toEqual(convertPet(s))
+    expect(convertPet(s, { rest: 'idle', working: 'running', listening: 'review', sending: 'waving', asking: 'waiting', relaxing: 'idle' })).toEqual(convertPet(s))
   })
 
   it('chosen rows play their states; empty listening, sending and asking fall back to the rest row', () => {
@@ -214,7 +214,25 @@ describe('convertPet', () => {
     expect(pet.small.loops.done.length).toBe(2)
     expect(pet.small.loops.asking).toEqual(pet.small.loops.done)
     // Only the frames the pack plays are in it: the waving row is not.
+    // The relaxing scene follows the rest row, whose full-size frames the sending scene already holds.
     expect(pet.frames.length).toBe(2 + 1 + 3 + 1 + 2)
+  })
+
+  it('relaxing plays the rest row by default, a chosen row when given, and falls back to rest when empty', () => {
+    const s = simple()
+    s.rows.review = [frame(blob(1, 2, 3)), frame(blob(4, 5, 6)), frame(blob(7, 8, 9))]
+    s.rows.jumping = [frame(blob(11, 12, 13)), frame(blob(14, 15, 16))]
+    const plain = convertPet(s)
+    expect(plain.relaxing).toMatchObject({ stepMs: 120, dx: 0, dy: 0 })
+    expect(plain.relaxing.frames.length).toBe(s.rows.idle.length)
+    // full-size frames, like the working scene's
+    expect(plain.frames[plain.relaxing.frames[0]].cell).toBe(plain.frames[plain.working.frames[0]].cell)
+    const chosen = convertPet(s, { relaxing: 'jumping' })
+    expect(chosen.relaxing.frames.length).toBe(2)
+    expect(convertPet(s, { relaxing: 'waiting' }).relaxing).toEqual(plain.relaxing)
+    // Its frames come last, so a version 1 pack can leave them out.
+    expect(Math.max(...chosen.relaxing.frames)).toBe(chosen.frames.length - 1)
+    expect(chosen.working).toEqual(plain.working)
   })
 
   it('an empty failed row falls back to the rest row', () => {

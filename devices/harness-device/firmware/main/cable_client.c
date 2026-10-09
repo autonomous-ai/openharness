@@ -326,9 +326,9 @@ static void send_hello(void)
     // Carried on every greeting so the app's pane opens on what the device holds rather than on what
     // this computer last sent it — which after a reboot, a reset or a second window is not the same.
     msg_settings(&root);
-    // Custom pets: the pack version this build understands (a number, so a later format can say 2), and
-    // these packs are already held, so the daemon sends only what is missing.
-    msg_number(&root, "pets", 1);
+    // Custom pets: the newest pack version this build reads (2: a pack may carry a relaxing scene, pet_store.c; it
+    // still reads 1), and these packs are already held, so the daemon sends only what is missing.
+    msg_number(&root, "pets", 2);
     {
         char held[PET_STORE_MAX_PACKS][17];
         const size_t n = pet_store_held(held, PET_STORE_MAX_PACKS);

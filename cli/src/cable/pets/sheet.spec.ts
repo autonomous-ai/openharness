@@ -103,7 +103,7 @@ describe('resolvePetRows', () => {
 
   it('without a choice: today’s table, with listening, sending and asking falling back to idle', () => {
     expect(resolvePetRows(parse({ idle: 2, running: 2 }))).toEqual({
-      rest: 'idle', working: 'running', listening: 'idle', sending: 'idle', asking: 'idle',
+      rest: 'idle', working: 'running', listening: 'idle', sending: 'idle', asking: 'idle', relaxing: 'idle',
     })
     expect(resolvePetRows(parse({ idle: 2, running: 2, review: 1, waving: 1, waiting: 1 }))).toEqual(DEFAULT_PET_ROWS)
   })
@@ -111,8 +111,16 @@ describe('resolvePetRows', () => {
   it('a choice overrides the default per key; an empty chosen listening, sending or asking row falls back to rest', () => {
     const sheet = parse({ jumping: 2, runningLeft: 3, failed: 1 })
     expect(resolvePetRows(sheet, { rest: 'jumping', working: 'runningLeft', sending: 'failed', asking: 'waiting' })).toEqual({
-      rest: 'jumping', working: 'runningLeft', listening: 'jumping', sending: 'failed', asking: 'jumping',
+      rest: 'jumping', working: 'runningLeft', listening: 'jumping', sending: 'failed', asking: 'jumping', relaxing: 'jumping',
     })
+  })
+
+  it('relaxing follows the rest row unless chosen; an empty chosen row falls back to rest', () => {
+    const sheet = parse({ idle: 2, running: 2, review: 1 })
+    expect(resolvePetRows(sheet, { relaxing: 'review' }).relaxing).toBe('review')
+    expect(resolvePetRows(sheet, { relaxing: 'waving' }).relaxing).toBe('idle')
+    expect(resolvePetRows(sheet, { rest: 'review' }).relaxing).toBe('review')
+    expect(resolvePetRows(sheet, { rest: 'review', relaxing: 'idle' }).relaxing).toBe('idle')
   })
 
   it('the chosen rest and working rows must have frames', () => {

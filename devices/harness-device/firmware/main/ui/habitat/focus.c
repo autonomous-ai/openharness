@@ -36,9 +36,12 @@
  * every frame — name, mark, card (drawn under a recap, an invisible placeholder otherwise, so the count and
  * order never move), recap ×4, status, resting line ×2, lower-arc status — each empty
  * where it has nothing to say. Do not make one conditional. The lower arc is a working scene's
- * status line (arc_status below); every other state, and every other engine, leaves it empty. A scene's
- * overlay (Codex's sandbox bubble) takes the first recap line's slot, which a working scene (no recap)
- * leaves empty, and is emitted after the scene's own run so it draws over it.
+ * status line (arc_status below), or a relaxing scene's quiet line; every other state, and every other engine,
+ * leaves it empty. A scene's overlay (Codex's sandbox bubble, its paper plane) takes the first recap line's slot,
+ * which a working or relaxing scene (no recap) leaves empty, and is emitted after the scene's own run so it draws
+ * over it. A relaxing scene with SHAPES (Claude's balls, Muse's beach ball: pets.h ht_pet_shapes_t) emits them after
+ * the eleven, `count` ring arcs on every step of it (an empty slot keeps a shape's place), so on that face the
+ * runs are 11 + count, the same on every frame of it.
  */
 // The text column of the working and resting lines: 384 px at x 41. The recap has its own: 364 px at
 // x 51 (233 - 182), each line centred in it (LVGL's centring, as every label here), up to four lines 43 px apart, centred vertically in the area
@@ -57,6 +60,7 @@ enum { MARK_SIZE = 56, TITLE_BOTTOM = HT_ARC_Y + HT_ARC_CELL_HEIGHT, COL_X = 41,
 #define FOCUS_FG      0xeaeaf0u
 #define FOCUS_EMPTY   0x585863u
 #define FOCUS_VOICE   0x00ff2fu
+#define FOCUS_REST    0x9a9aa6u   // the relaxing face's lower-arc line: the working line's arc and font, quiet grey
 
 /*
  * WHAT AN AGENT WITH NOTHING YET SAYS, in place of "No activity yet" (owner, 2026-10-01): an
@@ -78,27 +82,50 @@ static const char *const RESTING[] = {
     HOLD_FOR_TABS, HOLD_FOR_TABS, HOLD_FOR_TABS, HOLD_FOR_TABS, HOLD_FOR_TABS,
     TAP_THE_NAME, TAP_THE_NAME, TAP_THE_NAME, TAP_THE_NAME, TAP_THE_NAME,
 };
+/*
+ * THE RELAXING FACE'S LINES (owner, 2026-10-09: mockup/relaxing.html): one short line on the lower arc, two or three
+ * words, picked the same way — "Tap to talk" 10, "Hold for tabs" 5, "Tap name for panes" 5, every other line once.
+ * Each fits the lower arc's 390 px (Tap name for panes, the longest, is 248).
+ */
+#define TAP_TALK "Tap to talk"
+#define HOLD_TABS "Hold for tabs"
+#define TAP_NAME "Tap name for panes"
+static const char *const RELAXING[] = {
+    TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK, TAP_TALK,
+    HOLD_TABS, HOLD_TABS, HOLD_TABS, HOLD_TABS, HOLD_TABS,
+    TAP_NAME, TAP_NAME, TAP_NAME, TAP_NAME, TAP_NAME,
+    "What's next?", "Your move", "Say the word", "Ask away",
+};
 static struct {
     bool showing;           // the last home face drawn was a resting one
     char who[64];           // ... for this recipient
+    const char *const *list;   // ... from this list (RESTING or RELAXING)
     const char *line;
     uint32_t seed;
 } resting;
-static const char *resting_line(const ht_character_face_t *f)
+static const char *pick_line(const ht_character_face_t *f, const char *const *list, unsigned n)
 {
     const char *who = f->recipient ? f->recipient : "";
-    if (!resting.showing || !resting.line || strncmp(resting.who, who, sizeof resting.who - 1)) {
-        const unsigned n = sizeof RESTING / sizeof RESTING[0];
+    if (!resting.showing || !resting.line || resting.list != list || strncmp(resting.who, who, sizeof resting.who - 1)) {
         // An LCG stirred with the clock: no entropy source is needed to look random on a dial.
         resting.seed = resting.seed * 1664525u + 1013904223u + f->clock_ms;
         unsigned pick = (resting.seed >> 16) % n;
         // Never the same words twice running: past every copy of the last line (copies are adjacent).
-        while (resting.line && !strcmp(RESTING[pick], resting.line)) pick = (pick + 1) % n;
-        resting.line = RESTING[pick];
+        while (resting.line && !strcmp(list[pick], resting.line)) pick = (pick + 1) % n;
+        resting.line = list[pick];
+        resting.list = list;
         snprintf(resting.who, sizeof resting.who, "%s", who);
     }
     resting.showing = true;
     return resting.line;
+}
+static const char *resting_line(const ht_character_face_t *f)
+{
+    return pick_line(f, RESTING, sizeof RESTING / sizeof RESTING[0]);
+}
+static const char *relaxing_line(const ht_character_face_t *f)
+{
+    return pick_line(f, RELAXING, sizeof RELAXING / sizeof RELAXING[0]);
 }
 
 /*
@@ -186,6 +213,24 @@ static const ht_pet_scene_t *working_scene(const ht_character_face_t *f, const c
     const ht_pet_t *pet = pet_for(f);
     if (!pet || !pet->working_scene || pet_holds(f) || f->mood == HT_CHARACTER_LISTENING) return NULL;
     return pet_state(f, recap) == HT_PET_WORKING ? pet->working_scene : NULL;
+}
+/*
+ * THE RELAXING SCENE (owner, 2026-10-09: mockup/relaxing.html): the resting face of an agent with nothing to show —
+ * no recap, no question, no working line, no status of its own, idle — laid out like the working face when its pet
+ * has one: the name on the upper arc, the scene in the mark's slot placed as a working scene is, no text in the
+ * middle, one quiet line on the lower arc (RELAXING). Claude juggles, Codex plays with its paper plane, Muse keeps a
+ * beach ball up off its head (mockup/muse-play.html D); a custom pack of version 2 may carry one. A pet without one keeps today's resting face. Not while
+ * held (clock 0, asleep, offline), as the working scene.
+ */
+static const ht_pet_scene_t *relaxing_scene(const ht_character_face_t *f, const char *recap)
+{
+    const ht_pet_t *pet = pet_for(f);
+    if (!pet || !pet->relaxing_scene || f->voice || pet_holds(f) || f->mood == HT_CHARACTER_LISTENING) return NULL;
+    if ((recap && *recap) || (f->activity && *f->activity) || (f->status && *f->status)) return NULL;
+    // Done with no recap relaxes too: an agent whose turn just ended rests in DONE, which is where most resting
+    // faces are (owner, 2026-10-09: the Devices tab's Codex kept the old face after its turn).
+    const ht_pet_state_t state = pet_state(f, recap);
+    return state == HT_PET_IDLE || state == HT_PET_DONE ? pet->relaxing_scene : NULL;
 }
 static void scene_origin(const ht_pet_scene_t *sc, int bias, int *x, int *y);
 /*
@@ -371,6 +416,15 @@ static void scene_wave(ht_scene_t *s, const ht_pet_scene_t *sc, int bias, int si
     for (int i = 0; i < 3; i++) c[i] = (unsigned)floorf((float)w->rgb[i] * a + 0.5f);
     ht_ring_arc(s, cx16, cy16, r16, w->w16, side ? 180 : 0, w->half_deg, ht_rgb(c[0] << 16 | c[1] << 8 | c[2]));
 }
+// A scene's shape k at this clock (pets.h ht_pet_shapes_t) as one ring arc over the scene's origin; an empty slot
+// (w16 0) is an empty ring at its centre. The frame's step_dy moves the frame alone, not its shapes.
+static void scene_shape(ht_scene_t *s, const ht_pet_scene_t *sc, int bias, unsigned k, uint32_t clock_ms)
+{
+    const ht_pet_shape_t *p = &sc->shapes->at[scene_step(sc, clock_ms) * sc->shapes->count + k];
+    int x, y;
+    scene_origin(sc, bias, &x, &y);
+    ht_ring_arc(s, x * 16 + p->cx16, y * 16 + p->cy16, p->r16, p->w16, p->mid_deg, p->half_deg, p->rgb);
+}
 /*
  * THE LISTENING WORD on the lower arc of the voice face (owner, 2026-10-02: rhythm B, mockup/listening_arc.py):
  * the word at 30 % brightness, a band two letters wide sweeping left to right in 900 ms, then 400 ms at rest —
@@ -416,11 +470,18 @@ static const ht_pet_scene_t *sending_scene(const ht_character_face_t *f)
     const ht_pet_t *pet = pet_for(f);
     return pet && f->voice && f->mood != HT_CHARACTER_LISTENING && !pet_holds(f) ? pet->sending_scene : NULL;
 }
-// Whether steps a and b of the loop starting at `at` draw the same: the scene's frame and its overlay's.
+// Whether steps a and b of the loop starting at `at` draw the same: the scene's frame, its overlay's and its shapes.
 static bool step_same(const ht_pet_scene_t *sc, unsigned at, unsigned a, unsigned b)
 {
     if (sc->loop[at + a] != sc->loop[at + b]) return false;
     if (sc->step_dy && sc->step_dy[at + a] != sc->step_dy[at + b]) return false;
+    if (sc->shapes)
+        for (unsigned k = 0; k < sc->shapes->count; k++) {
+            const ht_pet_shape_t *p = &sc->shapes->at[(at + a) * sc->shapes->count + k],
+                                 *q = &sc->shapes->at[(at + b) * sc->shapes->count + k];
+            if (p->cx16 != q->cx16 || p->cy16 != q->cy16 || p->r16 != q->r16 || p->w16 != q->w16 ||
+                p->mid_deg != q->mid_deg || p->half_deg != q->half_deg || p->rgb != q->rgb) return false;
+        }
     const ht_pet_overlay_t *o = sc->overlay;
     return !o || (o->loop[at + a] == o->loop[at + b] && o->at[at + a][0] == o->at[at + b][0] &&
                   o->at[at + a][1] == o->at[at + b][1]);
@@ -466,6 +527,8 @@ uint32_t ht_focus_pet_next_ms(const ht_character_face_t *f, const char *recap)
         return work && work < next ? work : next;
     }
     if (sc) return scene_next_ms(sc, 0, f->clock_ms);
+    const ht_pet_scene_t *rs = relaxing_scene(f, recap);
+    if (rs) return scene_next_ms(rs, 0, f->clock_ms);
     ht_pet_state_t state = pet_state(f, recap);
     uint32_t each = pet->step_ms[state], now = f->clock_ms / each;
     unsigned steps = ht_pet_steps(pet);
@@ -777,6 +840,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     else if (retry) snprintf(status, sizeof status, "%s", f->status);
     bool empty = !has_recap && !status[0];
     if (!empty) resting.showing = false;
+    const ht_pet_scene_t *relax = empty ? relaxing_scene(f, recap) : NULL;
 
     // The body, laid out first.
     ht_lv_label_t body;
@@ -790,6 +854,8 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         recap_n = n;
     } else if (status[0]) {
         ht_lv_label(&body, sf, status, COL_W, 1, true);
+    } else if (relax) {
+        body.lines = 0;                                  // nothing in the middle: the line is on the lower arc
     } else {
         ht_lv_label(&body, ef, resting_line(f), EMPTY_W, 2, false);
     }
@@ -845,11 +911,12 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
     const ht_pet_scene_t *alert = scene ? alert_scene(f, recap, &alert_step, NULL) : NULL;   // never without its scene
     ht_rect_t drawn_alert;
     bool coded = !alert && code_alert(f, recap, &drawn_alert);   // a custom pet's alert, drawn in code
-    if (scene) {
-        // The working scene in the mark's slot: centred on the glass, a touch low for its hat.
+    if (scene || relax) {
+        // The working (or relaxing) scene in the mark's slot: centred on the glass, a touch low for its hat.
+        const ht_pet_scene_t *sc = scene ? scene : relax;
         int sx, sy;
-        scene_origin(scene, 4, &sx, &sy);
-        ht_cell_sprite(s, sx, sy + scene_dy(scene, 0, f->clock_ms), scene_frame(scene, 0, f->clock_ms));
+        scene_origin(sc, 4, &sx, &sy);
+        ht_cell_sprite(s, sx, sy + scene_dy(sc, 0, f->clock_ms), scene_frame(sc, 0, f->clock_ms));
     } else if (pet) {
         // The engine's pet, centred in the mark's box, lifted by its step's hop.
         bool hold = pet_holds(f);
@@ -917,8 +984,8 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
             int cw = ht_measure(cf, count);
             ht_text(s, drawn_alert.x + (ALERT_W - cw) / 2, drawn_alert.y + (ALERT_H - cf->height) / 2, cw, cf,
                     ht_rgb(FOCUS_FG), ht_rgb(ALERT_BLUE), count);
-        } else if (n == 0 && scene && scene->overlay)
-            scene_overlay(s, scene, 4, 0, f->clock_ms, rf);
+        } else if (n == 0 && (scene ? scene : relax) && (scene ? scene : relax)->overlay)
+            scene_overlay(s, scene ? scene : relax, 4, 0, f->clock_ms, rf);
         else no_text(s, rf);
     }
 
@@ -944,8 +1011,8 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         int n = body.lines < 2 ? body.lines : 2, top = HT_HEIGHT / 2 - n * 50 / 2;
         label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, top + 25 + 36 * 93 / 256 - ht_pfont(ef)->ascent, 50, ef,
                    ht_rgb(FOCUS_EMPTY), s->background);
-    } else if (empty) label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, body_y, ef->height, ef,
-                          ht_rgb(FOCUS_EMPTY), s->background);
+    } else if (empty && !relax) label_runs(s, &body, 2, (HT_WIDTH - EMPTY_W) / 2, body_y, ef->height, ef,
+                                     ht_rgb(FOCUS_EMPTY), s->background);
     else { no_text(s, ef); no_text(s, ef); }
 
     // The scene's status on the lower curve (or in the slot above when a footer has the bottom); an empty slot otherwise (the count never moves).
@@ -954,8 +1021,16 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         char arc[HT_TEXT_BYTES];
         status_fitted(arc, sizeof arc, f, NULL, &ht_arc_inter_lower, HT_ARC_SPAN);
         ht_arc_status_face(s, ht_rgb(FOCUS_VOICE), arc, &ht_arc_inter_lower);
-    }
+    } else if (relax && !f->notices && !f->footer_action)
+        // The relaxing face's one line, in the working line's arc and font, quiet grey. Left out (an empty slot) when
+        // the bell pill (y 400, notices > 0; this face has no bubble to tell them) or a footer control (y 389..439)
+        // has the lower edge.
+        ht_arc_status_face(s, ht_rgb(FOCUS_REST), relaxing_line(f), &ht_arc_inter_lower);
     if (s->count == before) no_text(s, sf);
+
+    // The relaxing scene's shapes (Claude's balls, Muse's beach ball), after the eleven: the same count every step.
+    if (relax && relax->shapes)
+        for (unsigned k = 0; k < relax->shapes->count; k++) scene_shape(s, relax, 4, k, f->clock_ms);
 }
 
 void ht_focus_portrait(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, uint16_t ink,

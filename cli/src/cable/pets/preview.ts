@@ -20,7 +20,8 @@ export function frameUrl(frame: IndexedFrame, palette: number[]): string {
   return `data:image/png;base64,${PNG.sync.write(png).toString('base64')}`
 }
 
-// What the Devices tab animates: every scene's frames as data URLs, with the step each is shown for.
+// What the Devices tab animates: every scene's (not relaxing: the app does not show it, and it would add a full-size
+// scene to a reply that is capped) frames as data URLs, with the step each is shown for.
 export function previewFrames(pet: ConvertedPet) {
   const url = (indices: number[]) => indices.map((i) => frameUrl(pet.frames[i], pet.palette))
   return {
