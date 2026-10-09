@@ -165,7 +165,7 @@ void main() {
       expect(runs.first, [
         '/bin/bash',
         '-c',
-        'set -o pipefail; curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path',
+        'set -o pipefail; curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path; exit \$?',
         AgentPrefetch.downloadName,
       ]);
       expect(runs.last[2], contains("export PATH='/rt/node-v22/bin':"));
@@ -288,6 +288,118 @@ void main() {
       await prefetch.everything;
       expect(marker.existsSync(), isFalse);
     });
+
+    test('a create whose pane waits for the download waits only until the download runs under its marker', () async {
+      final dir = Directory.systemTemp.createTempSync('prefetch-markers-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final opencode = _Install();
+      final starting = Completer<Process>();
+      final prefetch = AgentPrefetch(
+        start: (_, _) => starting.future,
+        skip: () => false,
+        installed: (_) => false,
+        managedNode: () => null,
+        nodePoll: const Duration(milliseconds: 5),
+        markerDir: () => dir.path,
+      )..start();
+      // Not running yet: the pane could not see it.
+      final early = prefetch.waitFor(
+        'opencode',
+        const Duration(minutes: 10),
+        paneWaits: true,
+      );
+      expect(early, isNotNull);
+      var handedOver = false;
+      unawaited(early!.then((_) => handedOver = true));
+      await pumpEventQueue();
+      expect(handedOver, isFalse);
+      starting.complete(opencode);
+      await pumpEventQueue();
+      expect(handedOver, isTrue, reason: 'the marker is written');
+      expect(
+        prefetch.waitFor(
+          'opencode',
+          const Duration(minutes: 10),
+          paneWaits: true,
+        ),
+        isNull,
+      );
+      // Codex and Claude Code have no marker until setup's Node is there and their npm runs.
+      expect(
+        prefetch.waitFor('codex', const Duration(minutes: 10), paneWaits: true),
+        isNotNull,
+      );
+      opencode.finish(0);
+    });
+
+    test('without a marker, a create whose pane waits for the download waits for all of it', () async {
+      final dir = Directory.systemTemp.createTempSync('prefetch-markers-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final notADir = File('${dir.path}/file')..writeAsStringSync('');
+      final opencode = _Install();
+      final prefetch = AgentPrefetch(
+        start: (_, _) async => opencode,
+        skip: () => false,
+        installed: (_) => false,
+        managedNode: () => null,
+        nodeWait: Duration.zero,
+        markerDir: () => '${notADir.path}/run',
+      )..start();
+      await pumpEventQueue();
+      var done = false;
+      unawaited(
+        prefetch
+            .waitFor('opencode', const Duration(minutes: 10), paneWaits: true)!
+            .then((_) => done = true),
+      );
+      await pumpEventQueue();
+      expect(done, isFalse);
+      opencode.finish(0);
+      await pumpEventQueue();
+      expect(done, isTrue);
+    });
+
+    // bash 5.1 and later (Linux), dash and zsh run a `-c` script's last command in place of the
+    // shell: npm under the marker's pid then no longer carries the name the pane checks it against.
+    for (final shell in ['/bin/bash', '/bin/zsh']) {
+      test(
+        'the npm download keeps its name while it runs ($shell)',
+        skip: File(shell).existsSync() ? false : 'no $shell here',
+        () async {
+          final dir = Directory.systemTemp.createTempSync('prefetch-shell-');
+          addTearDown(() => dir.deleteSync(recursive: true));
+          final bin = Directory('${dir.path}/rt/bin')
+            ..createSync(recursive: true);
+          File('${bin.path}/npm').writeAsStringSync('#!/bin/sh\nsleep 2\n');
+          await Process.run('chmod', ['755', '${bin.path}/npm']);
+          final opencode = _Install()..finish(1);
+          final prefetch = AgentPrefetch(
+            // OpenCode's real download is never started here; npm is the fake above.
+            start: (executable, arguments) => arguments[1].contains('npm')
+                ? Process.start(executable, arguments)
+                : Future.value(opencode),
+            skip: () => false,
+            installed: (_) => false,
+            managedNode: () => '${bin.path}/node',
+            nodePoll: const Duration(milliseconds: 5),
+            markerDir: () => '${dir.path}/run',
+            shell: shell,
+          )..start();
+          final marker = File('${dir.path}/run/downloading-codex');
+          final deadline = DateTime.now().add(const Duration(seconds: 5));
+          while (!marker.existsSync() && DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+          final pid = marker.readAsStringSync();
+          // Past the moment the shell would have replaced itself with npm, and npm's with sleep.
+          await Future<void>.delayed(const Duration(milliseconds: 600));
+          final ps = await Process.run('ps', ['-p', pid, '-o', 'command=']);
+          expect(ps.stdout as String, contains(AgentPrefetch.downloadName));
+          await prefetch.everything;
+          expect(marker.existsSync(), isFalse);
+        },
+      );
+    }
 
     test('starts nothing on a computer that already has an agent', () {
       var started = false;
@@ -530,6 +642,9 @@ void main() {
       installed = false;
       install = _Install();
       connection = _Connection();
+      // Markers are written, as on a real computer: an older CLI's create still waits.
+      final markers = Directory.systemTemp.createTempSync('prefetch-markers-');
+      addTearDown(() => markers.deleteSync(recursive: true));
       app = AppNotifier(
         config: AppConfig.dev,
         authSession: AuthSession(),
@@ -540,6 +655,7 @@ void main() {
           skip: () => false,
           installed: (_) => installed,
           managedNode: () => null,
+          markerDir: () => markers.path,
         ),
       );
       machine(local: true);
@@ -568,20 +684,17 @@ void main() {
       expect(connection.creates, hasLength(2));
     });
 
-    test(
-      'a CLI whose pane waits for the download itself gets the create at once',
-      () async {
-        app.machineStates['m']!.engines.replace([
-          const EngineAvailability(
-            engine: 'opencode',
-            installed: false,
-            waitsForDownload: true,
-          ),
-        ]);
-        await app.createAgent('m', engine: 'opencode', folder: '/work');
-        expect(connection.creates.single['engine'], 'opencode');
-      },
-    );
+    test('a CLI whose pane waits for the download itself gets the create once the download runs under its marker', () async {
+      app.machineStates['m']!.engines.replace([
+        const EngineAvailability(
+          engine: 'opencode',
+          installed: false,
+          waitsForDownload: true,
+        ),
+      ]);
+      await app.createAgent('m', engine: 'opencode', folder: '/work');
+      expect(connection.creates.single['engine'], 'opencode');
+    });
 
     test('an agent not downloaded during setup never waits for it', () async {
       await app.createAgent('m', engine: 'cursor', folder: '/work');

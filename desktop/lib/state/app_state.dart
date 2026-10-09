@@ -11384,16 +11384,16 @@ class AppNotifier extends ChangeNotifier {
         creation._projectNameRetries < 64;
     // An agent still downloading beside setup ([AgentPrefetch]): the pane would start a second install
     // of it. Waited for here, once the creation is registered (its tab and split are held), and only
-    // for what is left of [agentPrefetchWait] since that download began.
+    // for what is left of [agentPrefetchWait] since that download began. A CLI whose pane waits for
+    // the download itself shows it in the pane instead, once the pane can see it.
     final prefetchedEngine = choices['engine'];
     if (!creation.awaitingConfirmation &&
         prefetchedEngine is String &&
-        machine.isLocalMachine &&
-        // A CLI whose pane waits for the download itself shows it in the pane instead.
-        machine.engines[prefetchedEngine]?.waitsForDownload != true) {
+        machine.isLocalMachine) {
       final download = agentPrefetch?.waitFor(
         prefetchedEngine,
         agentPrefetchWait,
+        paneWaits: machine.engines[prefetchedEngine]?.waitsForDownload == true,
       );
       if (download != null) {
         await download;

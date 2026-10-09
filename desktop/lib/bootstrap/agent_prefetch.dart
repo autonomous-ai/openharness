@@ -53,7 +53,9 @@ class AgentPrefetch {
     Duration nodeWait = const Duration(minutes: 5),
     String? Function()? markerDir,
     bool? warmOpenCode,
+    String shell = '/bin/bash',
   }) : _warm = warmOpenCode ?? !kUnderTest,
+       _shell = shell,
        _markerDir =
            markerDir ??
            (() => kUnderTest || _home == null ? null : '$_home/.harness/run'),
@@ -93,12 +95,21 @@ class AgentPrefetch {
   /// Runs OpenCode once after its download ([_warmOpenCode]). Off under test unless asked for.
   final bool _warm;
 
+  /// What runs a download's script; the specs try each shell a computer may have.
+  final String _shell;
+
   /// The download's own name for itself on its command line, which is how a pane tells it from a
   /// process that took over a stale marker's pid.
   static const downloadName = 'harness-download';
 
   final Map<String, Future<void>> _downloads = {};
   final Map<String, DateTime> _startedAt = {};
+
+  /// Completes once the engine's download runs under its marker, which is when a pane can wait
+  /// for it itself.
+  final Map<String, Completer<void>> _marked = {};
+  Completer<void> _markedFor(String engine) =>
+      _marked.putIfAbsent(engine, Completer<void>.new);
   final Set<String> _settled = {};
   Future<void>? _everything;
   final ValueNotifier<AgentDownloads> _progress = ValueNotifier(
@@ -154,7 +165,16 @@ class AgentPrefetch {
   /// download started. Null when there is nothing to wait for — none started, it settled, the agent
   /// is in place, or the budget is spent — so a slow download costs the first create at most
   /// [budget] and every later one nothing.
-  Future<void>? waitFor(String engine, Duration budget) {
+  ///
+  /// When the pane waits for the download itself ([paneWaits], the CLI's `waitsForDownload`), only
+  /// until the download runs under its marker: before that (Codex and Claude Code wait for setup's
+  /// Node first) or without one (a marker that could not be written) the pane could not see it and
+  /// would install a second time.
+  Future<void>? waitFor(
+    String engine,
+    Duration budget, {
+    bool paneWaits = false,
+  }) {
     final running = _downloads[engine];
     final since = _startedAt[engine];
     if (running == null ||
@@ -165,15 +185,17 @@ class AgentPrefetch {
     }
     final left = budget - _now().difference(since);
     if (left <= Duration.zero) return null;
-    return running.timeout(left, onTimeout: () {});
+    if (!paneWaits) return running.timeout(left, onTimeout: () {});
+    final marked = _markedFor(engine);
+    if (marked.isCompleted) return null;
+    return Future.any([running, marked.future]).timeout(left, onTimeout: () {});
   }
 
   Future<void> _runOpenCode() async {
     await _run(
       'OpenCode',
       const ['opencode'],
-      '/bin/bash',
-      ['-c', command, downloadName],
+      command,
       () => _installed('opencode'),
     );
     await _warmOpenCode();
@@ -236,23 +258,29 @@ class AgentPrefetch {
     await _run(
       'Codex and Claude Code',
       const ['codex', 'claude'],
-      '/bin/bash',
-      ['-c', script, downloadName],
+      script,
       () => _installed('codex') && _installed('claude'),
     );
   }
 
+  /// Runs [script] as the download named [downloadName]. It ends on `exit`: bash 5.1 and later (Linux),
+  /// dash and zsh run a script's last command in place of the shell, and npm under the shell's pid no
+  /// longer carries the name a pane checks the marker's pid against (measured with zsh and dash,
+  /// 2026-10-09), so the pane took the download for something else and installed a second time.
   Future<void> _run(
     String what,
     List<String> engines,
-    String executable,
-    List<String> arguments,
+    String script,
     bool Function() inPlace,
   ) async {
     final started = _now();
     final markers = <File>[];
     try {
-      final process = await _start(executable, arguments);
+      final process = await _start(_shell, [
+        '-c',
+        '$script; exit \$?',
+        downloadName,
+      ]);
       final dir = _markerDir();
       if (dir != null) {
         try {
@@ -263,8 +291,11 @@ class AgentPrefetch {
                 ..writeAsStringSync('${process.pid}'),
             );
           }
+          for (final engine in engines) {
+            if (!_markedFor(engine).isCompleted) _markedFor(engine).complete();
+          }
         } on FileSystemException {
-          // Without a marker a pane that opens early waits in the create instead, as before.
+          // Without a marker a pane cannot see the download, so a create waits for it instead.
         }
       }
       // Drained so a full pipe never stalls the installer; only the tail is kept for the log.
