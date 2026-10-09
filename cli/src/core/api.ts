@@ -1,3 +1,4 @@
+import type { AgentTokenUsage, AgentUsageTarget } from '../lib/agentUsageWire.js'
 import type { GridAssignmentProcess, GridAssignmentAnswer } from '../lib/gridAssignmentWire.js'
 /**
  * The boundary the services stand on (docs/design/2026-10-03-harnessd.md, "The core boundary"):
@@ -107,7 +108,15 @@ export const CONVERSATIONS_OFF: ConversationReads = {
   transcriptOk: async () => false,
 }
 
+export interface UsagePort {
+  read(target: AgentUsageTarget): Promise<Record<string, unknown>>
+  stop(): void
+}
+export const USAGE_FALLBACKS: PortFallbacks<UsagePort> = { read: later(FAIL), stop: undefined }
+
 export interface CoreApi {
+  /** Last aggregate observation, never a transcript read. Optional for services that do not ask. */
+  usage?: (target: AgentUsageTarget) => Promise<AgentTokenUsage | null>
   /** The daemon's data folder; a service keeps its own files in it. */
   dataDir: string
   terminals: TerminalsPort
@@ -1301,6 +1310,7 @@ export const STORE_OFF: StorePort = {
 /** Each port is filled by the service that owns it when that service starts, and is null while the
  *  service is off: the core never waits on one. */
 export interface CorePorts {
+  usage: UsagePort | null
   store: StorePort | null
   search: SearchPort | null
   viewers: ViewersPort | null
@@ -1316,7 +1326,7 @@ export interface CorePorts {
 }
 
 export function emptyPorts(): CorePorts {
-  return { store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
+  return { usage: null, store: null, search: null, viewers: null, models: null, workspaces: null, teams: null, devices: null, wifi: null, monitor: null, orchestrator: null, sharing: null, recaps: null }
 }
 
 export interface CoreApiDeps {

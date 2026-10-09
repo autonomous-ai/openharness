@@ -3,7 +3,7 @@ import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentTokenUsageCache, agentTokenUsage } from './agentTokenUsage.js'
+import { AgentTokenUsageCache } from './agentTokenUsage.js'
 import { agentFrame } from './agentFrame.js'
 import { forgetAgentProject } from './agentProject.js'
 import { SessionGitHistoryStore, sessionGitHistory } from './sessionGitHistory.js'
@@ -61,7 +61,6 @@ describe('session work from transcript through Git and PR history', () => {
     now = Date.parse('2026-09-27T13:00:00Z')
     usage = new AgentTokenUsageCache(join(directory, 'usage'), { now: () => now })
     history = new SessionGitHistoryStore(join(directory, 'history'))
-    vi.spyOn(agentTokenUsage, 'get').mockImplementation(target => usage.get(target))
     vi.spyOn(sessionGitHistory, 'get').mockImplementation(target => history.get(target))
     vi.spyOn(sessionGitHistory, 'observe').mockImplementation((target, context) => history.observe(target, context))
     vi.spyOn(sessionGitHistory, 'recordPullRequest').mockImplementation((...args) => history.recordPullRequest(...args))
@@ -82,7 +81,7 @@ describe('session work from transcript through Git and PR history', () => {
     const first = await frame()
     expect(first.gitContext).toMatchObject({ state: 'workspace', current: { branch: 'hn/nfc' },
       history: { branches: [{ branch: 'hn/nfc' }] } })
-    expect(await readSessionGitPullRequest(agent, { history: true })).toMatchObject({
+    expect(await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), history: true })).toMatchObject({
       history: { pullRequests: [{ result: { number: 12, state: 'Open' } }] },
     })
     git(ship, 'switch', '-c', 'hn/preview')
@@ -92,7 +91,7 @@ describe('session work from transcript through Git and PR history', () => {
     expect(next.gitContext.history?.branches.map(b => b.branch).sort()).toEqual(['hn/nfc', 'hn/preview'])
     rows[0] = pr(12, 'hn/nfc', true)
     now += 61_000
-    const refreshed = await readSessionGitPullRequest(agent, { history: true })
+    const refreshed = await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), history: true })
     expect('history' in refreshed && refreshed.history.pullRequests.map(p => p.result?.status === 'found' && [p.result.number, p.result.state]))
       .toEqual([[13, 'Open'], [12, 'Merged']])
     // Another session's branch exists in the same repository, but has no association here.
@@ -106,7 +105,7 @@ describe('session work from transcript through Git and PR history', () => {
     git(ship, 'branch', '-D', 'hn/nfc')
     forgetAgentProject(ship)
     rows[0] = pr(12, 'hn/nfc', true)
-    const result = await readSessionGitPullRequest(agent, { history: true })
+    const result = await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), history: true })
     expect('history' in result && result.history.pullRequests.map(p => p.result?.status === 'found' && [p.result.number, p.result.state]))
       .toEqual([[13, 'Open'], [12, 'Merged']])
   })
@@ -114,7 +113,7 @@ describe('session work from transcript through Git and PR history', () => {
   it('keeps completed PRs when the same branch also has open work', async () => {
     agent.cwd = ship; agent.transcriptPath = null
     rows = [pr(12, 'hn/nfc', true), pr(14, 'hn/nfc')]
-    const result = await readSessionGitPullRequest(agent, { history: true })
+    const result = await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), history: true })
     expect('history' in result && result.history.pullRequests.map(p => p.result?.status === 'found' && [p.result.number, p.result.state]))
       .toEqual([[14, 'Open'], [12, 'Merged']])
   })
@@ -126,21 +125,21 @@ describe('session work from transcript through Git and PR history', () => {
     expect(first.project?.branch).toBe('hn/nfc')
     expect(first.gitContext.current).toMatchObject({ cwd: ship, branch: 'hn/nfc', worktree: true })
     const expected = { cwd: ship, branch: 'hn/nfc', remote: 'github.com/acme/app' }
-    expect(await readSessionGitPullRequest(agent, { expected })).toMatchObject({ status: 'found', number: 12, context: expected })
+    expect(await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), expected })).toMatchObject({ status: 'found', number: 12, context: expected })
 
     git(ship, 'switch', '-c', 'hn/preview')
     await receipt('preview', join(ship, 'tui'), 13)
     const second = await frame()
     expect(second.gitContext.current?.branch).toBe('hn/preview')
     expect(second.gitContext.version!.revision).toBeGreaterThan(first.gitContext.version!.revision)
-    expect((await readSessionGitPullRequest(agent, { expected })).status).toBe('unavailable')
-    expect(await readSessionGitPullRequest(agent)).toMatchObject({ status: 'found', number: 13 })
+    expect((await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), expected })).status).toBe('unavailable')
+    expect(await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent) })).toMatchObject({ status: 'found', number: 13 })
     expect(agent.cwd).toBe(ship)
 
     git(home, 'worktree', 'remove', '--force', ship)
     git(home, 'branch', '-D', 'hn/nfc', 'hn/preview')
     rows = rows.map(p => pr(p.number, p.head.ref, true))
-    const removed = await readSessionGitPullRequest(agent, { history: true })
+    const removed = await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), history: true })
     expect(removed).toMatchObject({ status: 'unavailable', gitContext: { checkouts: [] } })
     expect('history' in removed && removed.history.pullRequests.map(p => p.result?.status === 'found' && p.result.state)).toEqual(['Merged', 'Merged'])
     await history.settled()
@@ -148,7 +147,7 @@ describe('session work from transcript through Git and PR history', () => {
     expect(restarted.branches.map(b => b.branch).sort()).toEqual(['hn/nfc', 'hn/preview'])
     expect(restarted.pullRequests).toHaveLength(2)
     vi.mocked(github.readPullRequestUrl).mockResolvedValue({ status: 'unavailable' })
-    const offline = await readSessionGitPullRequest(agent, { history: true })
+    const offline = await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), history: true })
     expect('history' in offline && offline.history.pullRequests).toEqual(restarted.pullRequests)
   })
 
@@ -167,7 +166,7 @@ describe('session work from transcript through Git and PR history', () => {
       history: { pullRequests: [{ url: 'https://github.com/acme/app/pull/397' }] } })
     expect(value.gitContext.checkouts?.map(p => p.branch)).toEqual(['original', 'hn/nfc'])
     expect(value.gitContext.history?.branches.map(p => p.branch).sort()).toEqual(['hn/nfc', 'original'])
-    const result = await readSessionGitPullRequest(agent, { history: true })
+    const result = await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), history: true })
     expect(result).toMatchObject({ history: { pullRequests: [{ result: { status: 'found', number: 397, state: 'Merged' } }] } })
     expect(agent.cwd).toBe(home)
   })
@@ -179,7 +178,7 @@ describe('session work from transcript through Git and PR history', () => {
       await receipt('elsewhere', home)
       return { status: 'found', number: 12, state: 'Open', url: rows[0].html_url }
     })
-    expect(await readSessionGitPullRequest(agent, {
+    expect(await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent),
       expected: { cwd: ship, branch: 'hn/nfc', remote: 'github.com/acme/app' },
     })).toMatchObject({ status: 'unavailable', context: { cwd: home, branch: 'original', remote: 'github.com/acme/app' } })
   })
@@ -191,21 +190,21 @@ describe('session work from transcript through Git and PR history', () => {
     expect(value.gitContext).toMatchObject({ state: 'multiple', current: null,
       recentWork: { project: { cwd: ship, branch: 'hn/nfc' } } })
     const expected = { cwd: ship, branch: 'hn/nfc', remote: 'github.com/acme/app' }
-    expect(await readSessionGitPullRequest(agent, { expected })).toMatchObject({ status: 'found', number: 12, context: expected })
-    expect((await readSessionGitPullRequest(agent, { expected: { ...expected, cwd: home, branch: 'original' } })).status).toBe('unavailable')
+    expect(await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), expected })).toMatchObject({ status: 'found', number: 12, context: expected })
+    expect((await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), expected: { ...expected, cwd: home, branch: 'original' } })).status).toBe('unavailable')
     expect(agent.cwd).toBe(home)
   })
 
   it('refreshes the visible open-first page, including multiple PRs for one branch', async () => {
     await receipt('nfc', ship)
     rows = [pr(12, 'hn/nfc'), pr(14, 'hn/nfc')]
-    await readSessionGitPullRequest(agent)
+    await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent) })
     for (const number of [20, 21, 22, 23]) {
       const item = pr(number, 'old', true); rows.push(item)
       await history.recordPullRequest(agent, { url: item.html_url, cwd: ship, at: '2026-09-27T16:00:00Z' },
         { status: 'found', number, url: item.html_url, state: 'Merged' }, '2026-09-27T16:00:00Z')
     }
-    const result = await readSessionGitPullRequest(agent, { history: true })
+    const result = await readSessionGitPullRequest(agent, { usage: async () => usage.get(agent), history: true })
     expect('lookups' in result && result.lookups.map(p => p.url)).toEqual([12, 14, 20, 21].map(n => `https://github.com/acme/app/pull/${n}`))
   })
 })

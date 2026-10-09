@@ -18,14 +18,16 @@ describe('account usage in its own process', () => {
       run: (given) => { options = given; return service },
       start: (core) => { api = core; return { usage_read: async () => ({ providers: [] }) } },
     })
-    expect(handle).toBe(service)
+    handle.stop()
+    expect(service.stop).toHaveBeenCalledOnce()
     expect(options).toMatchObject({ name: 'usage', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
     expect(await options!.requests.usage_read!({}, { local: true, owner: true })).toEqual({ providers: [] })
+    expect(await options!.requests.agentUsage!({}, { local: true, owner: true })).toEqual({ error: 'INVALID_USAGE_TARGET' })
     await expect(api!.account.accessToken()).rejects.toThrow('usage holds no credential')
   })
 
   it('runs as a real service by default', () => {
     runUsageService({ dataDir: '/data', socketPath: '/data/daemon-1.sock', machineId: 'm', token: 't' })
-    expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'usage', requests: { usage_read: expect.any(Function) } }))
+    expect(runServiceProcess).toHaveBeenCalledWith(expect.objectContaining({ name: 'usage', requests: { usage_read: expect.any(Function), agentUsage: expect.any(Function) } }))
   })
 })

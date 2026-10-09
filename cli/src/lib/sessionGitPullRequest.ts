@@ -1,6 +1,6 @@
 import type { RegisteredSession } from './registry.js'
 import { agentProject, forgetAgentProject } from './agentProject.js'
-import { agentTokenUsage } from './agentTokenUsage.js'
+import type { AgentTokenUsage } from './agentUsageWire.js'
 import { sessionGitContext } from './sessionGitContext.js'
 import { sessionGitHistory } from './sessionGitHistory.js'
 import { readBranchPullRequest, readGitPullRequest, readPullRequestUrl } from './gitPullRequest.js'
@@ -9,9 +9,10 @@ export type ExpectedGitContext = { cwd: string; branch: string; remote: string |
 /** The branch badge and session history share the same resolved checkout. Existing callers may
  * omit expected context; new clients bind their reply to the branch they displayed when asking. */
 export async function readSessionGitPullRequest(agent: RegisteredSession, options: {
+  usage?: () => Promise<AgentTokenUsage | null>;
   expected?: ExpectedGitContext; history?: boolean; offset?: number;
 } = {}) {
-  const work = agentTokenUsage.get(agent)?.work
+  const work = (await options.usage?.())?.work
   const resolve = async (observed = work) => {
     const saved = await sessionGitHistory.get(agent)
     if (options.history) for (const cwd of [agent.cwd, ...saved.branches.map(b => b.cwd), ...(observed?.current.map(b => b.cwd) ?? [])]) {
@@ -35,7 +36,7 @@ export async function readSessionGitPullRequest(agent: RegisteredSession, option
       { url: pr.url, cwd: current!.cwd, at: context.observedAt ?? checkedAt }, recorded, pr.checkedAt ?? checkedAt)
   }
   const refreshMovedWork = async () => {
-    const latest = agentTokenUsage.get(agent)?.work
+    const latest = (await options.usage?.())?.work
     if (JSON.stringify(latest) === JSON.stringify(work)) return
     context = await resolve(latest)
     await sessionGitHistory.observe(agent, context)

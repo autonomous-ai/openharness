@@ -2,10 +2,24 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RegisteredSession } from '../lib/registry.js'
 import { agentsIn, daemonIn, isSession, processCoreApi, type ShownAgent } from './processCoreApi.js'
 import { turnsLink } from './turnsLink.js'
+import { usageTarget } from '../lib/agentUsageWire.js'
 
 const agent = (agentId: string, over: Partial<RegisteredSession> = {}) => ({ agentId, sessionId: `s-${agentId}`, engine: 'claude', cwd: `/work/${agentId}`, ...over }) as RegisteredSession
 
 describe('the core API a light service runs on in its own process', () => {
+  it('reads only an exact validated usage snapshot, without reading a transcript', async () => {
+    const target = usageTarget(agent('a', { transcriptPath: '/fixture/session', registeredAt: 1 }))
+    expect(await processCoreApi('/data', 'projects').usage!(target)).toBeNull()
+    const ask = vi.fn(async () => ({ target, value: { totalTokens: 4, updatedAt: '2026-10-01T00:00:00Z' } }))
+    const api = processCoreApi('/data', 'projects', { ask })
+    expect(await api.usage!(target)).toMatchObject({ totalTokens: 4 })
+    for (const answer of [{}, { target: { ...target, sessionId: 'other' }, value: null }, { target, value: { totalTokens: -1 } }]) {
+      ask.mockResolvedValueOnce(answer as never)
+      expect(await api.usage!(target)).toBeNull()
+    }
+    ask.mockRejectedValueOnce(new Error('offline'))
+    expect(await api.usage!(target)).toBeNull()
+  })
   it('answers the agents from what the core last said, by agent id or session id', () => {
     const live = [agent('a1'), agent('a2')]
     const api = processCoreApi('/data', 'projects', { live: () => live, advertised: () => [live[1]] })

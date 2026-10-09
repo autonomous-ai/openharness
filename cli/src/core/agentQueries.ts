@@ -1,3 +1,4 @@
+import { usageTargetKey, usageTarget, validUsageTarget } from '../lib/agentUsageWire.js'
 /**
  * What a service in its own process may ask the core of the agents (`service_query`, core/serviceLinks.ts)
  * when it has no link module of its own to answer it (the viewers, workspaces and the teams do):
@@ -8,7 +9,12 @@
  */
 import type { CoreApi } from './api.js'
 
-export function answerAgentQuery(core: Pick<CoreApi, 'agents'>, query: string): Record<string, unknown> {
+export function answerAgentQuery(core: Pick<CoreApi, 'agents' | 'usage'>, query: string, payload: Record<string, unknown> = {}): Record<string, unknown> | Promise<Record<string, unknown>> {
+  if (query === 'agentUsage') {
+    const target = payload.target
+    if (!validUsageTarget(target) || !core.agents.all().some(row => usageTargetKey(row) === usageTargetKey(target))) return { error: 'STALE_USAGE_TARGET' }
+    return Promise.resolve(core.usage?.(target) ?? null).then(value => ({ target: usageTarget(target), value }))
+  }
   if (query === 'agents') return { agents: core.agents.all().map((session) => ({ ...session, displayName: core.agents.displayName(session) })) }
   if (query === 'live') return { agents: core.agents.live() }
   if (query === 'advertised') return { agents: core.agents.advertised() }

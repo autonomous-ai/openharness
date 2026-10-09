@@ -5,14 +5,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { env } from '../config/env.js'
-import type { RegisteredSession } from './registry.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import { emptyOutputLedger, ingestOutput, outputSnapshot, validOutputLedger, type AgentOutputStats, type OutputLedger } from './agentOutputStats.js'
 import { emptySessionWork, ingestSessionWork, sessionWorkSnapshot, validSessionWork, type SessionWork, type SessionWorkLedger } from './sessionWork.js'
 
-export type AgentTokenUsage = { totalTokens: number | null; updatedAt: string; inputTokens?: number; outputTokens?: number; cachedTokens?: number; output?: AgentOutputStats; work?: SessionWork }
-type Target = Pick<RegisteredSession, 'engine' | 'sessionId' | 'transcriptPath' | 'codexHome' | 'agentId' | 'forkedFrom' | 'registeredAt'>
-  & Partial<Pick<RegisteredSession, 'cwd'>>
+import { usageTargetKey, type AgentTokenUsage, type AgentUsageTarget as Target } from './agentUsageWire.js'
+export type { AgentTokenUsage } from './agentUsageWire.js'
 type Buckets = [number, number, number, number]
 type CodexTotals = [number, number, number, number]
 type Checkpoint = {
@@ -26,6 +24,7 @@ type Checkpoint = {
 type Entry = {
   target: Target; value: AgentTokenUsage | null; checked: number; pending: Promise<void> | null;
   fingerprint?: string;
+  readable?: boolean;
   dirty?: boolean;
   timer?: NodeJS.Timeout;
 }
@@ -45,6 +44,9 @@ function keyFor(s: Target): string | null {
   if (s.engine !== 'opencode' && !s.transcriptPath) return null
   return hash(JSON.stringify([s.engine, s.codexHome ?? '', s.sessionId, s.transcriptPath,
     s.forkedFrom ? s.registeredAt : null]))
+}
+function cacheKeyFor(s: Target): string | null {
+  return keyFor(s) ? usageTargetKey(s) : null
 }
 function targetSnapshot(s: Target): Target {
   return { agentId: s.agentId, sessionId: s.sessionId, engine: s.engine, transcriptPath: s.transcriptPath,
@@ -147,7 +149,7 @@ export class AgentTokenUsageCache {
   /** Synchronous cache lookup. A cold or unsupported count is unknown, never invented as zero. */
   get(target: Target): AgentTokenUsage | null {
     if (this.disposed) return null
-    const key = keyFor(target)
+    const key = cacheKeyFor(target)
     if (!key) return null
     let entry = this.entries.get(key)
     if (!entry) {
@@ -158,7 +160,7 @@ export class AgentTokenUsageCache {
       }
       entry = { target: targetSnapshot(target), value: null, checked: -Infinity, pending: null }
       this.entries.set(key, entry)
-      this.schedule(key, entry)
+      this.schedule(keyFor(target)!, entry)
     }
     entry.target = targetSnapshot(target)
     // Once hydrated, frames only read memory. Existing transcript events drive refreshes;
@@ -171,19 +173,33 @@ export class AgentTokenUsageCache {
   changed(target: Target): void {
     if (this.disposed) return
     this.get(target)
-    const key = keyFor(target)
+    const key = cacheKeyFor(target)
     const entry = key && this.entries.get(key)
     if (!entry || entry.timer) return
     if (this.now() - entry.checked >= (this.options.refreshMs ?? REFRESH_MS)) {
-      this.schedule(key!, entry)
+      this.schedule(keyFor(target)!, entry)
       return
     }
     const delay = Math.max(500, (this.options.refreshMs ?? REFRESH_MS) - (this.now() - entry.checked))
     entry.timer = setTimeout(() => {
       entry.timer = undefined
-      this.schedule(key!, entry)
+      this.schedule(keyFor(entry.target)!, entry)
     }, delay)
     entry.timer.unref()
+  }
+
+  /** A bounded service request. The caller coalesces events; this refreshes even a warm worker
+   * after core reconnect, and returns the exact requested target's current aggregate. */
+  async read(target: Target): Promise<AgentTokenUsage | null> {
+    if (this.disposed) throw new Error('Usage reader is disposed')
+    this.get(target)
+    const key = cacheKeyFor(target)
+    const entry = key && this.entries.get(key)
+    if (!entry) throw new Error('Usage reader is unavailable')
+    if (!entry.pending) this.schedule(keyFor(target)!, entry)
+    await this.settled()
+    if (!entry.readable) throw new Error('Usage source is unavailable')
+    return entry.value
   }
 
   /** Useful for a clean shutdown and isolated integration tests. Never awaited by a list frame. */
@@ -201,7 +217,8 @@ export class AgentTokenUsageCache {
       if (this.disposed) return
       entry.dirty = false
       entry.checked = this.now()
-      try { await this.refresh(key, entry) } catch { /* An unreadable usage file must never affect a harness. */ }
+      entry.readable = false
+      try { entry.readable = await this.refresh(key, entry) } catch { /* An unreadable usage file must never affect a harness. */ }
     })
     entry.pending = task
     this.queue = task.finally(() => {
@@ -271,12 +288,12 @@ export class AgentTokenUsageCache {
       await rename(temporary, file)
     } finally { await unlink(temporary).catch(() => {}) }
   }
-  private async refresh(key: string, entry: Entry): Promise<void> {
+  private async refresh(key: string, entry: Entry): Promise<boolean> {
     let nextFingerprint: string | undefined
     // Warm, unchanged transcripts need one stat, no checkpoint or transcript reads.
     if (entry.fingerprint && entry.target.transcriptPath) {
       const info = await stat(entry.target.transcriptPath).catch(() => null)
-      if (info && entry.fingerprint === `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`) return
+      if (info && entry.fingerprint === `${info.dev}:${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`) return true
     }
     let state = await this.load(key)
     this.publish(entry, state)
@@ -290,10 +307,10 @@ export class AgentTokenUsageCache {
       if (!result.ok) result = await read(database,
         'SELECT tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, 0 AS tokens_cache_write FROM session WHERE id = ?',
         [entry.target.sessionId], limits)
-      if (!result.ok || result.rows.length !== 1) return
+      if (!result.ok || result.rows.length !== 1) return false
       const row = result.rows[0]
       if (!['tokens_input', 'tokens_output', 'tokens_reasoning', 'tokens_cache_read', 'tokens_cache_write']
-        .every(key => typeof row[key] === 'number' && Number.isSafeInteger(row[key]) && Number(row[key]) >= 0)) return
+        .every(key => typeof row[key] === 'number' && Number.isSafeInteger(row[key]) && Number(row[key]) >= 0)) return false
       state.total = sum(Object.values(row).map(tokens))
       state.usage = [tokens(row.tokens_input) + tokens(row.tokens_cache_read) + tokens(row.tokens_cache_write),
         tokens(row.tokens_output) + tokens(row.tokens_reasoning), tokens(row.tokens_cache_read)]
@@ -303,12 +320,12 @@ export class AgentTokenUsageCache {
       const file = await open(path, 'r')
       try {
         const info = await file.stat()
-        if (!info.isFile() || info.size > MAX_TRANSCRIPT_BYTES) return
+        if (!info.isFile() || info.size > MAX_TRANSCRIPT_BYTES) return false
         const inode = `${info.dev}:${info.ino}`
         const fingerprint = `${inode}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`
         if (state.inode === inode && state.size === info.size && state.mtime === info.mtimeMs) {
           entry.fingerprint = fingerprint
-          return
+          return true
         }
         const boundary = async (offset: number) => {
           const length = Math.min(256, offset)
@@ -355,11 +372,12 @@ export class AgentTokenUsageCache {
         nextFingerprint = fingerprint
       } finally { await file.close() }
     }
-    if (!Number.isSafeInteger(state.total)) return
+    if (!Number.isSafeInteger(state.total)) return false
     state.updatedAt = new Date(this.now()).toISOString()
     await this.save(key, state)
     entry.fingerprint = nextFingerprint
     this.publish(entry, state)
+    return true
   }
 }
 
@@ -367,5 +385,3 @@ function validBuckets(value: unknown): value is Buckets {
   return Array.isArray(value) && value.length === 4
     && value.every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0)
 }
-
-export const agentTokenUsage = new AgentTokenUsageCache(join(env.ADAPTER_DATA_DIR, 'agent-token-usage'))

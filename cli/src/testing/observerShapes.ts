@@ -1,5 +1,8 @@
+import { createAgentUsage } from '../services/agentUsage.js'
+import { createUsageLink } from '../core/usageLink.js'
+import type { AgentUsageTarget } from '../lib/agentUsageWire.js'
 /** Former-code composition for moving optional search and usage observations out of core. */
-import { AgentTokenUsageCache } from '../lib/agentTokenUsage.js'
+import type { AgentTokenUsageCache } from '../lib/agentTokenUsage.js'
 import { ExternalSessions, OpenSessions, type ExternalSessionsOptions, type OpenSessionsOptions } from '../lib/sessionSearch/external.js'
 import { createAdoption, type AdoptDeps } from '../core/agents/adopt.js'
 
@@ -21,5 +24,10 @@ export function externalShapes(sessionsOptions: ExternalSessionsOptions, openOpt
 }
 
 export function usageShapes(...args: ConstructorParameters<typeof AgentTokenUsageCache>) {
-  return new AgentTokenUsageCache(...args)
+  let onChanged: ((target: AgentUsageTarget) => void) | undefined
+  const reader = createAgentUsage(...args)
+  const link = createUsageLink({ call: payload => reader.read(JSON.parse(JSON.stringify(payload))), now: args[1]?.now,
+    changed: target => onChanged?.(target) })
+  return { ...link.port, settled: link.settled, dispose: () => { link.port.stop(); reader.stop() },
+    get onChanged() { return onChanged }, set onChanged(value) { onChanged = value } }
 }

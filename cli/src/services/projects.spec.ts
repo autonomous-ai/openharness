@@ -30,6 +30,14 @@ function setup() {
 }
 
 describe('the project and folder readers', () => {
+  it('asks core for aggregate work evidence, and falls back to unknown', async () => {
+    const { core, ask } = setup()
+    await ask('git_pull_request', { agentId: 'a1' })
+    const options = vi.mocked(readSessionGitPullRequest).mock.calls.at(-1)![1]!
+    expect(await options.usage!()).toBeNull()
+    core.usage = async () => ({ totalTokens: 1, updatedAt: '2026-10-01T00:00:00Z' })
+    expect(await options.usage!()).toMatchObject({ totalTokens: 1 })
+  })
   afterEach(() => { vi.clearAllMocks() })
 
   it('answer exactly the requests they declare', () => {
@@ -39,10 +47,10 @@ describe('the project and folder readers', () => {
   it('git_pull_request: an agent\'s branch and pull request, asked by either id, with the context it was shown', async () => {
     const { ask } = setup()
     expect(await ask('git_pull_request', { agentId: 's-a1', history: true, offset: 20 })).toEqual({ status: 'found', number: 12 })
-    expect(readSessionGitPullRequest).toHaveBeenLastCalledWith(row('a1', '/work/app'), { expected: undefined, history: true, offset: 20 })
+    expect(readSessionGitPullRequest).toHaveBeenLastCalledWith(row('a1', '/work/app'), { usage: expect.any(Function), expected: undefined, history: true, offset: 20 })
     const context = { cwd: '/work/app', branch: 'feature', remote: null }
     await ask('git_pull_request', { agentId: 'a1', context, offset: 'later' })
-    expect(readSessionGitPullRequest).toHaveBeenLastCalledWith(row('a1', '/work/app'), { expected: context, history: false, offset: undefined })
+    expect(readSessionGitPullRequest).toHaveBeenLastCalledWith(row('a1', '/work/app'), { usage: expect.any(Function), expected: context, history: false, offset: undefined })
     await ask('git_pull_request', { agentId: 'a1', context: { cwd: '/w', branch: 'b', remote: 'origin' } })
     expect(readSessionGitPullRequest).toHaveBeenCalledTimes(3)
   })

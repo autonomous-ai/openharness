@@ -34,6 +34,17 @@ describe('owning-machine token cache', () => {
   })
   afterEach(async () => { store.dispose(); await store.settled(); vi.useRealTimers(); await rm(dir, { recursive: true, force: true }) })
 
+  it('reports unavailable instead of null when a worker is full or disposed', async () => {
+    let release!: () => void
+    const held = new Promise<void>(done => { release = done })
+    const worker = new AgentTokenUsageCache(join(dir, 'bounded-worker'), { readSqlite: async () => { await held; return { ok: false, reason: 'unavailable' } as never } })
+    const database = { ...target, engine: 'opencode' as const, transcriptPath: null }
+    for (let i = 0; i < 512; i++) worker.get({ ...database, agentId: `agent-${i}`, sessionId: `session-${i}` })
+    await expect(worker.read(database)).rejects.toThrow('unavailable')
+    worker.dispose(); release(); await worker.settled()
+    await expect(worker.read({ ...database, agentId: 'agent-0', sessionId: 'session-0' })).rejects.toThrow('disposed')
+  })
+
   it('coalesces activity bursts, captures their final usage, and does not poll idle harnesses', async () => {
     await writeFile(target.transcriptPath!, claude('one'))
     await read()
