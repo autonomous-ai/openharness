@@ -445,7 +445,8 @@ describe('the daemon\'s shape', () => {
 
   it('transcript location, native process evidence and profile discovery have no lazy implementation dependency', () => {
     for (const entry of ['core/agents/bind.ts', 'core/engines/cursorDiscovery.ts', 'engines/identities.ts',
-      'engines/kit/sessionLocation.ts', 'engines/kit/transcriptDiscovery.ts', 'lib/terminalAgentDiscovery.ts', 'lib/sqliteRead.ts']) {
+      'engines/kit/sessionLocation.ts', 'engines/kit/transcriptDiscovery.ts', 'lib/terminalAgentDiscovery.ts', 'lib/sqliteRead.ts',
+      'lib/sessionRepair.ts', 'engines/repairIdentities.ts', 'engines/kit/sessionIdentity.ts']) {
       const imports = importsFor(entry, readFileSync(join(SRC, entry), 'utf8'))
       expect(imports.filter(one => one.dynamic || /inProcess\.js$/.test(one.from)), entry).toEqual([])
     }

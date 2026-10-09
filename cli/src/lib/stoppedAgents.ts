@@ -122,6 +122,18 @@ export class StoppedAgentStore {
       session = { ...session, sessionId: previous.sessionId, transcriptPath: previous.transcriptPath,
         boundAt: previous.boundAt, source: previous.source }
     }
+    // With optional readers absent, Stop can capture a path the live row has not learned.
+    // Hooks during its checkpoint and the final forget both save that pathless row. They
+    // must not erase the captured path, or Close succeeds but Resume loses the conversation.
+    if (session.sessionId && !session.transcriptPath && previous?.transcriptPath
+      && session.sessionId === previous.sessionId && session.engine === previous.engine
+      && session.registeredAt === previous.registeredAt
+      && (session.codexHome ?? null) === (previous.codexHome ?? null)
+      && (session.hermesHome ?? null) === (previous.hermesHome ?? null)
+      && sameProcessIdentity(session.processIdentity, previous.processIdentity)
+      && session.processIdentity!.executable === previous.processIdentity!.executable) {
+      session = { ...session, transcriptPath: previous.transcriptPath }
+    }
     secureStateDirectory(dirname(this.directory))
     secureStateDirectory(this.directory)
     const snapshot = {

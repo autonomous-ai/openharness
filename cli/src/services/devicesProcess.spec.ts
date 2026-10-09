@@ -236,6 +236,27 @@ describe('the core\'s doors, across the link', () => {
     expect(api.clients.sendToWindow('w1', { type: 'dial_form', payload: {} })).toBe(false)
     expect(f.notices).toHaveLength(8)
   })
+
+  // A dial says hello before its process is connected to a core that just started (2026-10-09, a user's
+  // log: hello at 14:22:54.141, connected at 14:22:54.525): the core must still hear that it watches, or it
+  // makes no cards for it and the dial shows Working for turns that ended, and no recaps.
+  it('tell a core that connects whether a dial is watching, as they last said it', () => {
+    const f = setup()
+    const api = f.api()
+    api.clients.dialWatching(true)
+    expect(f.notices).toEqual([])
+    f.connect()
+    expect(f.notices).toEqual([['dialWatching', { watching: true }]])
+    // A core that restarts while the dial stays is told again.
+    f.options().onDisconnected!()
+    f.connect()
+    expect(f.notices).toEqual([['dialWatching', { watching: true }], ['dialWatching', { watching: true }]])
+    // No dial any more: a new core starts out knowing that, and is told nothing.
+    api.clients.dialWatching(false)
+    f.options().onDisconnected!()
+    f.connect()
+    expect(f.notices).toHaveLength(3)
+  })
 })
 
 describe('what the core tells the devices, reaching their port', () => {

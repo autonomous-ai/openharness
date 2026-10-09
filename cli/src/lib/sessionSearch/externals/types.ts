@@ -52,7 +52,8 @@ export interface ExternalSession {
 }
 
 /** A file's head that cannot be judged yet: the engine is still writing its first lines. */
-export const UNSETTLED: unique symbol = Symbol('unsettled')
+export { UNSETTLED } from '../../../engines/kit/sessionIdentity.js'
+import { UNSETTLED } from '../../../engines/kit/sessionIdentity.js'
 
 export interface ScanContext {
   /** `read`, run again only when `fingerprint` (a file's size and time) changed since the last scan. */

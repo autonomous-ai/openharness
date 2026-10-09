@@ -4,21 +4,14 @@ import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 /**
- * Repair reads the other engines' files with their own code, loaded when it is asked (engines/inProcess.ts). An
- * engine whose code could not be loaded has no repair answer, as when nothing is found; Claude Code's and Codex's
- * repair loads nothing. `sessionRepair.spec.ts` and `engines/otherIdentity.golden.spec.ts` pin the answers.
+ * Native repair remains available while optional interpretation is missing or still loading.
+ * The former-code golden pins the answers; these tests deliberately withhold all optional readers.
  */
-const loader = vi.hoisted(() => ({ refused: new Set<string>(), asked: [] as string[] }))
-vi.mock('../engines/inProcess.js', async (real) => {
-  const actual = await real<typeof import('../engines/inProcess.js')>()
-  return {
-    ...actual,
-    loadEngine: vi.fn(async (name: Parameters<typeof actual.loadEngine>[0]) => {
-      loader.asked.push(name)
-      return loader.refused.has(name) ? null : actual.loadEngine(name)
-    }),
-  }
-})
+const loader = vi.hoisted(() => ({ stalled: false, asked: [] as string[] }))
+vi.mock('../engines/inProcess.js', () => ({ loadEngine: vi.fn(async (name: string) => {
+  loader.asked.push(name)
+  return loader.stalled ? new Promise(() => {}) : null
+}) }))
 
 const STARTED_AT = Date.parse('2026-10-08T09:00:00Z')
 const CWD = '/work/project'
@@ -43,6 +36,9 @@ beforeAll(async () => {
     JSON.stringify({ payload: { kind: 'run', event: { kind: 'started', prompt: 'hi' } } }),
   ].join('\n') + '\n')
   utimesSync(museFile, new Date(STARTED_AT + 5_000), new Date(STARTED_AT + 5_000))
+  const piDirectory = join(root, 'pi', 'agent', 'sessions', '--work-project--')
+  mkdirSync(piDirectory, { recursive: true })
+  writeFileSync(join(piDirectory, '2026-10-09_abc123.jsonl'), JSON.stringify({ type: 'session', id: 'abc123', cwd: CWD }) + '\n')
   vi.resetModules()
   repair = await import('./sessionRepair.js')
 })
@@ -52,21 +48,20 @@ afterAll(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-describe('session repair, with the other engines\' code loaded when asked', () => {
-  it('binds by the engine\'s own reader, loaded for that engine alone', async () => {
+describe('session repair, independent of optional readers', () => {
+  it.each(['missing', 'stalled'])('finds Muse and Pi identity while optional code is %s', async mode => {
+    loader.stalled = mode === 'stalled'
     loader.asked.length = 0
-    expect(await repair.findLiveSession('muse', CWD, STARTED_AT)).toMatchObject({ sessionId: UUID })
-    expect(loader.asked).toEqual(['muse'])
-  })
-
-  it('has no answer for an engine whose code could not be loaded', async () => {
-    loader.refused = new Set(['muse', 'copilot', 'agy', 'pi'])
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      expect(await repair.findLiveSession('muse', CWD, STARTED_AT)).toBeNull()
-      expect(await repair.findLiveSession('copilot', CWD, STARTED_AT, { pid: 4242 })).toBeNull()
-      expect(await repair.findLiveSession('agy', CWD, STARTED_AT, { pid: 4242 })).toBeNull()
-      await expect(repair.findResumedTranscript('pi', 'abc123', { cwd: CWD })).rejects.toThrow('The Pi conversation location is unavailable.')
-    } finally { loader.refused = new Set() }
+      const value = await Promise.race([
+        Promise.all([repair.findLiveSession('muse', CWD, STARTED_AT), repair.findResumedTranscript('pi', 'abc123', { cwd: CWD })]),
+        new Promise(resolve => { timer = setTimeout(() => resolve('blocked on optional code'), 1000) }),
+      ])
+      expect(value).toEqual([{ sessionId: UUID, transcriptPath: join(root, 'muse', 'sessions', '2026', '10', '08', UUID, 'session.jsonl') },
+        join(root, 'pi', 'agent', 'sessions', '--work-project--', '2026-10-09_abc123.jsonl')])
+      expect(loader.asked).toEqual([])
+    } finally { clearTimeout(timer); loader.stalled = false }
   })
 
   it('loads nothing for Claude Code, Codex, or an engine whose files or stores it reads itself', async () => {
@@ -76,6 +71,7 @@ describe('session repair, with the other engines\' code loaded when asked', () =
     await repair.findResumedTranscript('claude', UUID)
     await repair.findLiveSession('grok', CWD, STARTED_AT)
     await repair.findLiveSession('pi', CWD, STARTED_AT)
+    await repair.findLiveSession('copilot', CWD, STARTED_AT, { pid: 4242 })
     // Hermes's homes are declared: its stores are read without its code.
     await repair.findLiveSession('hermes', CWD, STARTED_AT)
     expect(loader.asked).toEqual([])
