@@ -276,19 +276,21 @@ export class RuntimeProfileState {
       modelConfirmed: current?.model === target.model,
       effortConfirmed: current?.effort === target.effort,
     })
+    this.accepted(this.state(session.sessionId))
     return true
   }
 
   cancelControl(sessionId: string): void {
     const control = this.controls.get(sessionId)
     this.controls.delete(sessionId)
+    this.accepted(this.state(sessionId))
     this.wake(sessionId)
     if (control) this.scheduleChanged(sessionId)
   }
 
   finishControl(session: RegisteredSession): void {
-    const control = this.controls.get(session.sessionId)
     this.controls.delete(session.sessionId)
+    this.accepted(this.state(session.sessionId))
     this.wake(session.sessionId)
     this.scheduleChanged(session.sessionId)
   }

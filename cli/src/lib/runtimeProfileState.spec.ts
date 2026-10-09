@@ -79,13 +79,36 @@ describe('late optional profile observations', () => {
     })), agent = session('claude')
     manager.hydrate(agent, [])
     manager.confirmEffort(agent.sessionId, 'high')
-    manager.beginControl(agent, { sessionId: agent.agentId, engine: agent.engine, model: 'new-model', effort: 'high' })
+    manager.beginControl(agent, { id: 'target', sessionId: agent.agentId, engine: agent.engine, model: 'new-model', effort: 'high' })
     const pending = manager.ingestConfig(agent)
     manager.ingest(agent, '{"confirm":true}')
     finish('low')
     await pending
     expect(await manager.waitForProfile(agent.sessionId, 10)).toBe(true)
     expect(manager.getState(agent.sessionId).effort).toBe('high')
+    manager.forget(agent.sessionId)
+  })
+
+  it.each(['cancel', 'finish'] as const)('invalidates config and hydration across a complete control %s cycle', async end => {
+    let finish!: (effort: string) => void
+    const manager = new RuntimeProfileState(() => ({ ...claudeRuntime,
+      configuredEffort: () => new Promise<string>(resolve => { finish = resolve }),
+    })), agent = session('claude')
+    manager.hydrate(agent, [])
+    manager.confirmEffort(agent.sessionId, 'high')
+    const before = manager.getState(agent.sessionId)
+    const pending = manager.ingestConfig(agent), stage = manager.beginHydrate(agent)
+    stage.ingest(JSON.stringify({ type: 'assistant', message: { model: 'staged-model' } }))
+    expect(manager.beginControl(agent, { id: 'target', sessionId: agent.agentId, engine: agent.engine,
+      model: 'new-model', effort: 'high' })).toBe(true)
+    if (end === 'cancel') manager.cancelControl(agent.sessionId)
+    else manager.finishControl(agent)
+    finish('low')
+    expect(await pending).toBe(false)
+    const install = vi.fn(() => true)
+    expect(stage.commitWith!(install)).toBe(false)
+    expect(install).not.toHaveBeenCalled()
+    expect(manager.getState(agent.sessionId)).toEqual(before)
     manager.forget(agent.sessionId)
   })
 

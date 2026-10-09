@@ -42,6 +42,7 @@ it('fences deferred config, staged history and detached pane observations agains
   expect(old.hermesHome).toBe(input.hermesHome)
   finish('low')
   expect(await pending).toBe(false)
+  expect(profiles.getState(old.sessionId)).toEqual(before)
   const install = vi.fn(() => true)
   expect(staged.commitWith!(install)).toBe(false)
   expect(install).not.toHaveBeenCalled()
