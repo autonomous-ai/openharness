@@ -36,6 +36,7 @@ import '../auth/cli_link.dart';
 import '../auth/cli_login.dart';
 import '../bootstrap/agent_prefetch.dart';
 import '../bootstrap/environment_provisioner.dart';
+import '../bootstrap/setup_progress.dart';
 import '../core/viewer_mode.dart';
 import '../core/config.dart';
 import '../core/sleep_aware.dart';
@@ -1040,6 +1041,47 @@ class AppNotifier extends ChangeNotifier {
   /// racing the first.
   bool get environmentSetupInFlight => _environmentSetupInFlight;
   bool get environmentInstallRequested => _environmentInstallRequested;
+
+  // --- Setup tour (onboarding redesign, 2026-10-08) -----------------------
+  // A fresh computer whose setup installs with nobody at the keyboard sees a
+  // tour of Harness instead of the install screen, with the install as one
+  // line under it (`widgets/setup_tour.dart`). Everything else about setup is
+  // unchanged; these three members are the whole of the tour's state here.
+  bool _setupTour = false;
+
+  /// Whether RootShell shows the setup tour in place of whatever [status]
+  /// would show. Set when launch takes the unattended install path; cleared
+  /// by [finishSetupTour] once the tour has opened Harness. It also gives way,
+  /// for good, as soon as setup needs a person — a Terminal password, manual
+  /// mode, or the method choice — because those are the existing setup
+  /// screen's job.
+  bool get setupTourShowing {
+    if (_setupTour && _setupNeedsPerson(environmentReadiness)) {
+      _setupTour = false;
+    }
+    return _setupTour;
+  }
+
+  static bool _setupNeedsPerson(EnvironmentReadiness readiness) =>
+      readiness.mode == EnvironmentSetupMode.manual ||
+      readiness.phase == EnvironmentSetupPhase.chooseMethod ||
+      readiness.needsTerminal ||
+      readiness.plan.any((item) => item.requiresTerminal);
+
+  /// The tour has shown its last slide with everything done: show the app.
+  void finishSetupTour() {
+    if (!_setupTour) return;
+    _setupTour = false;
+    notifyListeners();
+  }
+
+  /// What is still downloading beside setup (see [SetupDownloads]). The tour
+  /// opens Harness only once this says done as well as setup. The agent
+  /// downloads set `.value` here; nothing pending is the default, so a
+  /// computer with nothing to download opens as soon as setup is finished.
+  final ValueNotifier<SetupDownloads> setupDownloads = ValueNotifier(
+    SetupDownloads.none,
+  );
 
   // The daemon's own advertised local-ws endpoint — the dial target for EVERY machine's data plane
   // now, not just this computer's own one (see src/lib/remoteRelay.ts in the harness CLI repo: a
@@ -4162,6 +4204,9 @@ class AppNotifier extends ChangeNotifier {
         if (result.plan.any((item) => item.step == EnvironmentStep.harness)) {
           agentPrefetch?.start();
         }
+        // Nobody needs to act on this install, so it runs under the setup
+        // tour rather than on the install screen.
+        _setupTour = true;
         status = AppStatus.preparingEnvironment;
         result = await _installUnattended(result);
       }
@@ -16769,6 +16814,7 @@ class AppNotifier extends ChangeNotifier {
       cli.waitingNote.removeListener(_loginWaitingChanged);
     }
     _closeOwnerMemories();
+    setupDownloads.dispose();
     experimentalFeatures.dispose();
     deviceHosts.dispose();
     viewer?.auth.dispose();
