@@ -4292,11 +4292,16 @@ class AppNotifier extends ChangeNotifier {
       final firstHarness =
           result.plan.any((item) => item.step == EnvironmentStep.harness) &&
           !harnessInstalledBefore();
+      // OpenCode, Codex and Claude Code download meanwhile when it has no agent at all
+      // ([AgentPrefetch.start] decides), on Linux too, where the apt step waits for a password in
+      // Terminal and setup keeps its own screen: a fresh Ubuntu VM (2026-10-09) ended setup on an empty
+      // box and installed OpenCode in its first pane, about 90 s to a first result against 55 s on a Mac.
+      // Not for someone who chose to install by hand.
+      if (firstHarness && result.mode != EnvironmentSetupMode.manual) {
+        agentPrefetch?.start();
+      }
       if (!result.isReady && _canInstallUnattended(result, mode: null)) {
         if (firstHarness) {
-          // OpenCode, Codex and Claude Code download meanwhile when it has no agent at all
-          // ([AgentPrefetch.start] decides).
-          agentPrefetch?.start();
           _publishAgentDownloads();
           // Nobody needs to act on this install, so it runs under the welcome tour rather than on
           // the install screen.

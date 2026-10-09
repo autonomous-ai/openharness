@@ -47,10 +47,13 @@ class AgentPrefetch {
     bool Function()? skip,
     bool Function(String engine)? installed,
     String? Function()? managedNode,
+    bool Function()? curl,
     void Function(String line)? log,
     DateTime Function()? now,
     Duration nodePoll = const Duration(seconds: 1),
-    Duration nodeWait = const Duration(minutes: 5),
+    // Long enough for a person to finish setup's apt step in Terminal (Linux), which brings curl and
+    // comes before Harness's Node.
+    Duration nodeWait = const Duration(minutes: 15),
     String? Function()? markerDir,
     bool? warmOpenCode,
     String shell = '/bin/bash',
@@ -65,6 +68,7 @@ class AgentPrefetch {
        _skip = skip ?? (() => alreadyHasAnAgent(_home)),
        _installed = installed ?? _agentInPlace,
        _managedNode = managedNode ?? _managedNodePath,
+       _curl = curl ?? (kUnderTest ? (() => true) : _hasCurl),
        _log = log ?? ((_) {}),
        _now = now ?? DateTime.now,
        _nodePoll = nodePoll,
@@ -82,6 +86,7 @@ class AgentPrefetch {
   final bool Function() _skip;
   final bool Function(String engine) _installed;
   final String? Function() _managedNode;
+  final bool Function() _curl;
   final void Function(String line) _log;
   final DateTime Function() _now;
   final Duration _nodePoll;
@@ -192,6 +197,13 @@ class AgentPrefetch {
   }
 
   Future<void> _runOpenCode() async {
+    // A fresh Ubuntu has no curl until setup's apt step installs it (`environment_provisioner.dart`).
+    if (!await _until(_curl)) {
+      _log('OpenCode was not downloaded during setup: curl never arrived');
+      return;
+    }
+    // A create's wait counts from the download itself, not from the wait for curl before it.
+    _startedAt['opencode'] = _now();
     await _run(
       'OpenCode',
       const ['opencode'],
@@ -234,12 +246,8 @@ class AgentPrefetch {
   /// Codex and Claude Code, once setup has put Harness's Node in place: one npm, so the two never
   /// write the same global prefix at once.
   Future<void> _npmWhenNodeIsThere() async {
-    final deadline = _now().add(_nodeWait);
-    String? node = _managedNode();
-    while (node == null && _now().isBefore(deadline)) {
-      await Future<void>.delayed(_nodePoll);
-      node = _managedNode();
-    }
+    String? node;
+    await _until(() => (node = _managedNode()) != null);
     if (node == null) {
       _log(
         'Codex and Claude Code were not downloaded during setup: Harness\'s Node never arrived',
@@ -248,7 +256,7 @@ class AgentPrefetch {
     }
     // A create's wait counts from the download itself, not from the wait for Node before it.
     _startedAt['codex'] = _startedAt['claude'] = _now();
-    final bin = File(node).parent.path;
+    final bin = File(node!).parent.path;
     final script = [
       'set -o pipefail',
       'export PATH=${_quote(bin)}:"\$PATH"',
@@ -340,6 +348,23 @@ class AgentPrefetch {
       }
     }
   }
+
+  /// Whether [there] holds, asked every [_nodePoll] until [_nodeWait] has passed: what a download needs
+  /// from setup (curl, Harness's Node) arrives while setup runs.
+  Future<bool> _until(bool Function() there) async {
+    final deadline = _now().add(_nodeWait);
+    var found = there();
+    while (!found && _now().isBefore(deadline)) {
+      await Future<void>.delayed(_nodePoll);
+      found = there();
+    }
+    return found;
+  }
+
+  /// curl on the PATH the app runs downloads with.
+  static bool _hasCurl() => (Platform.environment['PATH'] ?? '/usr/bin:/bin')
+      .split(':')
+      .any((dir) => dir.isNotEmpty && File('$dir/curl').existsSync());
 
   static String _quote(String text) => "'${text.replaceAll("'", "'\\''")}'";
 
