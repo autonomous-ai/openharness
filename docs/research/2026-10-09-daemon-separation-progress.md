@@ -124,7 +124,9 @@ and corrected; review approved `08fc7d1fa` against `79c658faa`. The final Linux
 shard exposed an old Command Code fixture delivering records before loading the
 reader. Matching production ordering then reproduced a queued-refresh race:
 a queued read could revoke the explicit config read its caller awaited. The
-queue now checks both its original read token and evidence revision. New tests
+queue now checks its original read token; core control and confirmation revoke
+that token too. Repeated same-model records in one watcher batch preserve the
+dependent refresh, which reads the latest accepted model. New tests
 cover explicit-read and confirmation supersession; final review/CI are pending.
 
 On `08fc7d1fa`, typecheck, architecture, 1,789 core tests at per-file 100%, 265

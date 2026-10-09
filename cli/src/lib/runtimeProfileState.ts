@@ -53,6 +53,11 @@ export class RuntimeProfileState {
 
   private version(state: RuntimeState): number { return this.versions.get(state) ?? 0 }
   private accepted(state: RuntimeState): void { this.versions.set(state, this.version(state) + 1) }
+  private authoritative(state: RuntimeState): void {
+    this.accepted(state)
+    // Core confirmation/control revokes queued reads as well as reads already in flight.
+    this.configReads.set(state, {})
+  }
   private currentSession(session: RegisteredSession, identity = readIdentity(session)): RegisteredSession | undefined {
     const current = this.resolve ? this.resolve(session.agentId) : session
     return current && readIdentity(current) === identity && readIdentity(session) === identity ? current : undefined
@@ -103,11 +108,11 @@ export class RuntimeProfileState {
     const identity = readIdentity(session)
     return { session, state, control: this.controls.get(session.sessionId),
       refreshConfig: (override) => {
-        const read = this.configReads.get(state), revision = this.version(state)
+        const read = this.configReads.get(state)
         // Finish accepting the synchronous observation before starting its dependent config read.
         queueMicrotask(() => {
           if (this.states.get(session.sessionId) === state && this.currentSession(session, identity)
-            && this.configReads.get(state) === read && this.version(state) === revision) {
+            && this.configReads.get(state) === read) {
             void this.ingestConfig(session, override ?? silent).catch(() => undefined)
           }
         })
@@ -278,7 +283,7 @@ export class RuntimeProfileState {
       modelConfirmed: current?.model === target.model,
       effortConfirmed: current?.effort === target.effort,
     })
-    this.accepted(this.state(session.sessionId))
+    this.authoritative(this.state(session.sessionId))
     return true
   }
 
@@ -286,7 +291,7 @@ export class RuntimeProfileState {
     const control = this.controls.get(sessionId)
     this.controls.delete(sessionId)
     const state = this.states.get(sessionId)
-    if (state) this.accepted(state)
+    if (state) this.authoritative(state)
     this.wake(sessionId)
     if (control) this.scheduleChanged(sessionId)
   }
@@ -294,7 +299,7 @@ export class RuntimeProfileState {
   finishControl(session: RegisteredSession): void {
     this.controls.delete(session.sessionId)
     const state = this.states.get(session.sessionId)
-    if (state) this.accepted(state)
+    if (state) this.authoritative(state)
     this.wake(session.sessionId)
     this.scheduleChanged(session.sessionId)
   }
@@ -304,7 +309,7 @@ export class RuntimeProfileState {
     const state = this.state(sessionId)
     state.effort = effort
     state.observedAt = Date.now()
-    this.accepted(state)
+    this.authoritative(state)
     const control = this.controls.get(sessionId)
     if (control) control.effortConfirmed = control.target.effort === effort
     this.wake(sessionId)
@@ -315,7 +320,7 @@ export class RuntimeProfileState {
     state.model = target.model
     state.effort = target.effort
     state.observedAt = Date.now()
-    this.accepted(state)
+    this.authoritative(state)
     const control = this.controls.get(target.sessionId)
     if (control?.target.id === target.id) {
       control.modelConfirmed = true
