@@ -5,7 +5,7 @@ import { externalSessionAnswer, externalSessionRequest, externalUnavailable,
 import { ExternalSessions, OpenSessions, externalSessionCatalog, type ExternalSessionsOptions, type OpenSessionsOptions,
   type SessionOwner } from '../lib/sessionSearch/external.js'
 import { externalEvidence, externalReadFailed } from '../lib/sessionSearch/evidence.js'
-import { folderKey, harnessTtys, processTtys, processView, scanMemo } from '../lib/sessionSearch/externals/support.js'
+import { harnessTtys, processTtys, processView, sameProject, scanMemo } from '../lib/sessionSearch/externals/support.js'
 import type { Ownership, OwnerClaim, ProcessView, RunningProcess } from '../lib/sessionSearch/externals/types.js'
 
 export interface ExternalReaderOptions extends ExternalSessionsOptions {
@@ -63,13 +63,15 @@ export function createExternalSessions(options: ExternalReaderOptions) {
       const ownership = async (view: ProcessView): Promise<Ownership> =>
         await provider.ownership?.(view) ?? { claims: await provider.owners!(view), unresolved: [] }
       // A process the provider could not place may hold any conversation its own picker lists: Claude Code's
-      // `/resume` lists only its working folder's. One elsewhere cannot hold this one; one there, or one whose
-      // folder could not be read, might, and then nobody can say who holds it. Before, any such process on the
-      // machine held every adoption (CLI 0.3.70: "launched 0 of 4 · 4 still waiting" behind two old TUIs).
-      const folder = await folderKey(session.cwd)
+      // `/resume` lists its project's (sameProject, kept wide). One far from this folder cannot hold this one;
+      // one near it, or one whose folder could not be read, might, and then nobody can say who holds it. Before,
+      // any such process on the machine held every adoption (CLI 0.3.70: "launched 0 of 4 · 4 still waiting"
+      // behind two old TUIs). The conversation its arguments name is its fromArgs claim's to answer.
+      const ids = [session.sessionId, ...session.aliases ?? []]
       const placed = async (found: Ownership): Promise<OwnerClaim[]> => {
         for (const process of found.unresolved) {
-          if (process.cwd !== null && await folderKey(process.cwd) !== folder) continue
+          if (process.named !== undefined && ids.includes(process.named)) continue
+          if (process.cwd !== null && !await sameProject(process.cwd, session.cwd)) continue
           externalReadFailed(new Error('an unplaced process may hold it'), 'current owner')
           throw new Error('an unplaced process may hold it')
         }

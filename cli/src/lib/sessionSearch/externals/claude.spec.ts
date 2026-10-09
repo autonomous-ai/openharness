@@ -149,9 +149,10 @@ describe('claudeProvider', () => {
         { sessionId: A, pid: 101, record: join(root, 'sessions', '101.json') },
         { sessionId: B, pid: 201, record: '', fromArgs: true },
       ],
-      unresolved: [{ pid: 202, cwd: '/work/other' }, { pid: 203, cwd: null }],
+      // Named or not, a record-less process may have moved on: it stays unplaced beside its claim.
+      unresolved: [{ pid: 201, cwd: null, named: B }, { pid: 202, cwd: '/work/other' }, { pid: 203, cwd: null }],
     } })
-    expect(asked).toEqual([[202, 203]])
+    expect(asked).toEqual([[201, 202, 203]])
     // The display reader is as it was: exact records only, and no folder is read.
     expect(await provider.ownership!(machine)).toEqual({ claims: [{ sessionId: A, pid: 101, record: join(root, 'sessions', '101.json') }], unresolved: [] })
     expect(asked).toHaveLength(1)

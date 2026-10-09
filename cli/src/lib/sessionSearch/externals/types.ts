@@ -122,6 +122,8 @@ export interface OwnerClaim {
 export interface UnresolvedOwner {
   pid: number
   cwd: string | null
+  /** The conversation its arguments name, which it started on; it may since have moved to another. */
+  named?: string
 }
 
 /** A provider's whole answer about who holds what: its exact claims, and the processes it could not place. */

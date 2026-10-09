@@ -111,7 +111,7 @@ it('Codex FD claims require an actual engine process; a command-prefix helper is
 /**
  * CLI 0.3.70: two long-running `claude` TUIs started before Claude Code kept `sessions/<pid>.json` held every
  * adoption on the machine ("held · search · launched 0 of 4"). A process with no record may hold only what its
- * arguments name, or what its own `/resume` lists: its working folder's conversations.
+ * arguments name, or what its own `/resume` lists: its project's conversations.
  */
 function unplaced() {
   const root = mkdtempSync(join(tmpdir(), 'adoption-unplaced-')); roots.push(root)
@@ -178,18 +178,46 @@ it.each([
   ['--resume=', (session: string) => `claude --resume=${session}`],
   ['--session-id', (session: string) => `claude --session-id ${session}`],
   ['--session-id=', (session: string) => `claude --session-id=${session}`],
-])('a record-less Claude started with %s holds only that conversation, and is never stopped for it', async (_flag, args) => {
+])('a record-less Claude started with %s holds that conversation, and may have moved to another of its folder', async (_flag, args) => {
   const test = unplaced()
   test.stray.args = args(test.other)
-  // Whatever its folder: its arguments place it.
+  // Wherever it is, the conversation its arguments name may be open there: never stopped for it.
+  for (const folder of [test.elsewhere, test.cwd, null]) {
+    if (folder) test.state.cwds.set(202, folder); else test.state.cwds.clear()
+    expect(await test.inspect(test.other), String(folder)).toMatchObject({ ok: true, owner: { pid: 202, fromArgs: true, tty: '/dev/fixture-202' }, busy: true, generation: `ps:${started}` })
+    expect(await test.inspect(test.other)).not.toHaveProperty('busyConfirmed')
+  }
+  // `/resume` or `/clear` inside moves it to another conversation of its folder: nobody can say which.
   test.state.cwds.set(202, test.cwd)
-  expect(await test.inspect(test.other)).toMatchObject({ ok: true, owner: { pid: 202, fromArgs: true, tty: '/dev/fixture-202' }, busy: true, generation: `ps:${started}` })
-  expect(await test.inspect(test.other)).not.toHaveProperty('busyConfirmed')
+  expect(await test.inspect()).toMatchObject(unverified)
+  test.state.cwds.clear()
+  expect(await test.inspect()).toMatchObject(unverified)
+  // In another folder, it cannot have this one.
+  test.state.cwds.set(202, test.elsewhere)
   expect(await test.inspect()).toMatchObject({ ok: true, owner: null })
-  expect(test.state.asked).toEqual([])
   // Beside an exact owner of the same conversation, two processes may have it.
   test.stray.args = args(id); test.own(); test.state.processes = [test.owner, test.stray]
   expect(await test.inspect()).toMatchObject({ ok: false })
+})
+
+it('a record-less Claude in a folder of the same project may hold it: above, below, or another worktree of its repository', async () => {
+  const test = unplaced()
+  const below = join(test.cwd, 'packages', 'app'); mkdirSync(below, { recursive: true })
+  for (const folder of [below, test.root]) {
+    test.state.cwds.set(202, folder)
+    expect(await test.inspect(), folder).toMatchObject(unverified)
+  }
+  // The conversation's folder is a worktree; the process works in the repository it was added from.
+  const main = join(test.root, 'main'); mkdirSync(join(main, '.git', 'worktrees', 'project'), { recursive: true })
+  writeFileSync(join(test.cwd, '.git'), `gitdir: ${join(main, '.git', 'worktrees', 'project')}\n`)
+  test.state.cwds.set(202, main)
+  expect(await test.inspect()).toMatchObject(unverified)
+  // Another repository, or a sibling folder outside any, is another project.
+  const unrelated = join(test.root, 'unrelated'); mkdirSync(join(unrelated, '.git'), { recursive: true })
+  for (const folder of [unrelated, test.elsewhere]) {
+    test.state.cwds.set(202, folder)
+    expect(await test.inspect(), folder).toMatchObject({ ok: true, owner: null })
+  }
 })
 
 it('a fork names only its parent: a record-less `--fork-session` is placed by its folder', async () => {

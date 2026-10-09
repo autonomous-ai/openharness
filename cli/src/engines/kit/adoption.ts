@@ -191,7 +191,7 @@ async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { re
       claims.push({ sessionId: text(row?.[owners.id]), pid, record: path })
     }
   }
-  const unresolved: number[] = []
+  const unresolved: Array<{ pid: number; named?: string }> = []
   if (externalEvidenceActive()) {
     const ownership = agentCommandOwnershipSnapshot()
     for (const process of await view.list()) {
@@ -203,15 +203,16 @@ async function recordOwners(engine: ExternalEngine, owners: Extract<Owners, { re
       // No record. This used to fail every conversation: one long-running `claude` started before it kept
       // records (two such TUIs on a developer's Mac, days old) held every adoption on the machine forever,
       // "The conversation's current owner could not be verified" (CLI 0.3.70). Such a process can hold only
-      // the conversation its arguments name or, moved on with `/resume`, one its folder's picker lists. The
-      // first is a claim never stopped on; the second admission judges against each conversation's folder.
+      // the conversation its arguments name and, moved on with `/resume` or `/clear`, one its folder's picker
+      // lists. The first is a claim never stopped on; for the rest it stays unplaced, and admission judges it
+      // against each conversation's folder. A name alone is not enough: it is where it started, not where it is.
       const named = namedSession(engine, process.args, owners.sessionFlags ?? [], pattern)
       if (named) claims.push({ sessionId: named, pid: process.pid, record: '', fromArgs: true })
-      else unresolved.push(process.pid)
+      unresolved.push({ pid: process.pid, ...(named ? { named } : {}) })
     }
   }
-  const cwds = unresolved.length ? await view.cwds(unresolved) : new Map<number, string>()
-  return { claims, unresolved: unresolved.map(pid => ({ pid, cwd: cwds.get(pid) ?? null })) }
+  const cwds = unresolved.length ? await view.cwds(unresolved.map(row => row.pid)) : new Map<number, string>()
+  return { claims, unresolved: unresolved.map(row => ({ ...row, cwd: cwds.get(row.pid) ?? null })) }
 }
 
 async function openFileOwners(engine: ExternalEngine, open: Extract<Owners, { open: unknown }>['open'], view: ProcessView): Promise<OwnerClaim[]> {

@@ -1,13 +1,13 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { UNSETTLED } from './types.js'
 import {
-  absoluteFolder, entries, epochMs, fileStamp, firstLine, folderKey, harnessTtys, listProcesses, parseLine, parseLsof, parseTtys,
-  processAlive, processCwds, processTtys, processView, readHead, readJson, readTail, readText, record, run, scanMemo, text, UUID,
+  absoluteFolder, entries, epochMs, fileStamp, firstLine, folderKey, gitCommonDir, harnessTtys, listProcesses, parseLine, parseLsof, parseTtys,
+  processAlive, processCwds, processTtys, processView, readHead, readJson, readTail, readText, record, run, sameProject, scanMemo, text, UUID,
   within,
 } from './support.js'
 
@@ -241,6 +241,37 @@ describe('processes', () => {
     }
     // A folder that is gone keeps its spelling, less a trailing slash.
     expect(await folderKey(`${join(dir, 'gone')}/`)).toBe(join(dir, 'gone'))
+  })
+
+  it("finds a repository's shared store from any of its folders and worktrees, without running git", async () => {
+    const dir = home()
+    const main = join(dir, 'main'), tree = join(dir, 'tree'), sub = join(dir, 'sub'), odd = join(dir, 'odd')
+    mkdirSync(join(main, '.git', 'worktrees', 'tree'), { recursive: true }); mkdirSync(join(main, 'src', 'deep'), { recursive: true })
+    mkdirSync(join(tree, 'src'), { recursive: true }); mkdirSync(sub); mkdirSync(odd)
+    // A worktree names its own folder in the store, relative or absolute; a submodule its own store.
+    writeFileSync(join(tree, '.git'), 'gitdir: ../main/.git/worktrees/tree\n')
+    mkdirSync(join(main, '.git', 'modules', 'sub'), { recursive: true })
+    writeFileSync(join(sub, '.git'), `gitdir: ${join(main, '.git', 'modules', 'sub')}\n`)
+    writeFileSync(join(odd, '.git'), 'not a pointer\n')
+    const store = await folderKey(join(main, '.git'))
+    expect(await gitCommonDir(join(main, 'src', 'deep'), '/')).toBe(store)
+    expect(await gitCommonDir(join(tree, 'src'), '/')).toBe(store)
+    expect(await gitCommonDir(sub, '/')).toBe(await folderKey(join(main, '.git', 'modules', 'sub')))
+    expect(await gitCommonDir(odd, '/')).toBeNull()
+    // Not past the ceiling: a `.git` above it does not make every folder one project.
+    mkdirSync(join(dir, 'nested', 'a'), { recursive: true }); mkdirSync(join(dir, 'nested', '.git'))
+    expect(await gitCommonDir(join(dir, 'nested', 'a'), join(dir, 'nested'))).toBeNull()
+    expect(await gitCommonDir(join(dir, 'nested', 'a'), dir)).toBe(await folderKey(join(dir, 'nested', '.git')))
+    // The default ceiling is the folder holding the homes.
+    expect(await gitCommonDir(dirname(homedir()))).toBeNull()
+
+    expect(await sameProject(main, join(main, 'src', 'deep'), '/')).toBe(true)
+    expect(await sameProject(join(main, 'src', 'deep'), main, '/')).toBe(true)
+    expect(await sameProject(join(tree, 'src'), join(main, 'src'), '/')).toBe(true)
+    expect(await sameProject(sub, main, '/')).toBe(false)
+    expect(await sameProject(odd, join(dir, 'nested', 'a'), '/')).toBe(false)
+    // A name that only starts like the other is another folder.
+    expect(await sameProject(join(dir, 'mainly'), join(dir, 'main'), dir)).toBe(false)
   })
 
   it('lists the real machine: this very process is among them, with its own open files', async () => {
