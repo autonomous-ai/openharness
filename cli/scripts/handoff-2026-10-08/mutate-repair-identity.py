@@ -37,14 +37,17 @@ for name in ['TMUX', 'TMUX_PANE', 'RECORD_REPAIR_IDENTITY_GOLDEN']:
 
 
 def run(specs):
-    return subprocess.run(['node', 'node_modules/vitest/vitest.mjs', 'run', *specs, '--maxWorkers=2'],
+    # Ownership mutants need these focused regressions, not the unrelated 2,050-file catalog cost test.
+    pattern = ['--testNamePattern=pathless observation|captured path'] if specs == [saved] else []
+    return subprocess.run(['node', 'node_modules/vitest/vitest.mjs', 'run', *specs, *pattern, '--maxWorkers=2'],
                           cwd=cli, env=env, capture_output=True, text=True, timeout=180)
 
 
-baseline = run([golden, eager, bounded, bind, stop, saved])
-if baseline.returncode:
-    print(baseline.stdout + baseline.stderr)
-    raise SystemExit('baseline failed; no mutants ran')
+for specs in [[golden, eager, bounded, bind, stop], [saved]]:
+    baseline = run(specs)
+    if baseline.returncode:
+        print(baseline.stdout + baseline.stderr)
+        raise SystemExit('baseline failed; no mutants ran')
 print('unchanged baseline passed', flush=True)
 for label, relative, before, after, spec in mutations:
     path = cli / relative
