@@ -42,6 +42,8 @@ class WebRtcTerminalP2pLinkFactory implements TerminalP2pLinkFactory {
     void Function(String reason)? onUnavailable,
     void Function(String step, Duration elapsed)? onStep,
     bool upgrade = false,
+    TerminalP2pDataSink? onViewerData,
+    void Function(bool open)? onViewerState,
   }) => WebRtcTerminalP2pLink(
     policy: policy,
     sendSignal: sendSignal,
@@ -50,6 +52,8 @@ class WebRtcTerminalP2pLinkFactory implements TerminalP2pLinkFactory {
     onUnavailable: onUnavailable,
     onStep: onStep,
     upgrade: upgrade,
+    onViewerData: onViewerData,
+    onViewerState: onViewerState,
   );
 }
 
@@ -69,6 +73,8 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
     this.onUnavailable,
     this.onStep,
     this.upgrade = false,
+    this.onViewerData,
+    this.onViewerState,
   });
 
   final TerminalP2pPolicy policy;
@@ -79,12 +85,18 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
   final void Function(String reason)? onUnavailable;
   final void Function(String step, Duration elapsed)? onStep;
 
+  /// Non-null opens `viewer-v1` beside the terminal's channel.
+  final TerminalP2pDataSink? onViewerData;
+  final void Function(bool open)? onViewerState;
+
   @override
   final String sessionId = _uuidV4();
 
   final Stopwatch _clock = Stopwatch()..start();
   RTCPeerConnection? _pc;
   RTCDataChannel? _channel;
+  RTCDataChannel? _viewerChannel;
+  bool _viewerOpen = false;
   bool _ready = false;
   bool _starting = false;
   bool _finished = false;
@@ -111,10 +123,12 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
   void _step(String label) => onStep?.call(label, _elapsed);
 
   @override
-  bool get isReady => _ready && _channelCanSend;
+  bool get isReady => _ready && _canSend(_channel);
 
-  bool get _channelCanSend {
-    final channel = _channel;
+  @override
+  bool get viewerReady => _viewerOpen && _canSend(_viewerChannel);
+
+  static bool _canSend(RTCDataChannel? channel) {
     return channel != null &&
         channel.state == RTCDataChannelState.RTCDataChannelOpen &&
         (channel.bufferedAmount ?? 0) < terminalP2pMaxBufferedBytes;
@@ -168,6 +182,15 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
       );
       _channel = channel;
       _wireChannel(channel);
+      // Same SDP, one negotiation; only when asked for — see [viewerP2pChannel].
+      if (onViewerData != null) {
+        final viewer = await pc.createDataChannel(
+          viewerP2pChannel,
+          RTCDataChannelInit()..ordered = true,
+        );
+        _viewerChannel = viewer;
+        _wireViewerChannel(viewer);
+      }
       await _createOffer(pc);
     } catch (error) {
       appLog.warn('p2p', 'peer connection setup failed', error: error);
@@ -310,6 +333,43 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
   }
 
   @override
+  bool sendViewer(Object data) {
+    final channel = _viewerChannel;
+    if (!viewerReady || channel == null) return false;
+    try {
+      final message = data is String
+          ? RTCDataChannelMessage(data)
+          : RTCDataChannelMessage.fromBinary(asBytes(data));
+      // Fire-and-forget like [send]; a refusal ends only the viewer.
+      unawaited(
+        channel.send(message).catchError((Object error) {
+          appLog.warn('p2p', 'viewer channel send failed', error: error);
+          _dropViewer(channel);
+        }),
+      );
+      return true;
+    } catch (_) {
+      _dropViewer(channel);
+      return false;
+    }
+  }
+
+  void _setViewerOpen(bool open) {
+    if (_viewerOpen == open) return;
+    _viewerOpen = open;
+    onViewerState?.call(open);
+  }
+
+  /// Ends the viewer alone, as the CLI does on a send error: reported closed,
+  /// and the channel closed so the machine falls back to the relay too.
+  void _dropViewer(RTCDataChannel channel) {
+    if (_viewerChannel != channel || _finished) return;
+    _viewerChannel = null;
+    _setViewerOpen(false);
+    unawaited(channel.close().catchError((Object _) {}));
+  }
+
+  @override
   Future<bool> sendWithBackpressureRetry(
     Object data, {
     Duration drain = const Duration(seconds: 5),
@@ -386,14 +446,19 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
         'reason': reason,
       });
     }
+    _setViewerOpen(false);
     final channel = _channel;
+    final viewer = _viewerChannel;
     final pc = _pc;
     _channel = null;
+    _viewerChannel = null;
     _pc = null;
-    try {
-      await channel?.close();
-    } catch (_) {
-      /* already closed */
+    for (final dc in [channel, viewer]) {
+      try {
+        await dc?.close();
+      } catch (_) {
+        /* already closed */
+      }
     }
     // dispose() alone: natively it IS close, and it cancels the Dart event
     // subscription first — a close() before it removes the native handler that
@@ -485,6 +550,31 @@ class WebRtcTerminalP2pLink implements TerminalP2pLink {
     channel.onMessage = (message) {
       if (_channel != channel || _finished) return;
       onData(message.isBinary ? message.binary : message.text);
+    };
+  }
+
+  /// Nothing here reaches [_fail]: the viewer never takes the terminal down.
+  void _wireViewerChannel(RTCDataChannel channel) {
+    channel.onDataChannelState = (state) {
+      if (_viewerChannel != channel || _finished) return;
+      switch (state) {
+        case RTCDataChannelState.RTCDataChannelOpen:
+          _setViewerOpen(true);
+        case RTCDataChannelState.RTCDataChannelClosing:
+        case RTCDataChannelState.RTCDataChannelClosed:
+          // Reported only, and on the next turn as in [_wireChannel]: a caller that stops the
+          // link from this report would otherwise close this channel's stream inside the
+          // plugin's callback, which then adds this same state to it and throws.
+          scheduleMicrotask(() {
+            if (_viewerChannel == channel && !_finished) _setViewerOpen(false);
+          });
+        case RTCDataChannelState.RTCDataChannelConnecting:
+          break;
+      }
+    };
+    channel.onMessage = (message) {
+      if (_viewerChannel != channel || _finished) return;
+      onViewerData?.call(message.isBinary ? message.binary : message.text);
     };
   }
 

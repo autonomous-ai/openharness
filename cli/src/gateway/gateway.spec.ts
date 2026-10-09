@@ -12,7 +12,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BackendSocket } from '../backendSocket.js'
 import type { Asker } from '../core/api.js'
 import * as C from '../lib/e2ee/core.js'
-import { TerminalBinaryKind } from '../lib/terminalBinary.js'
+import { createViewersLink } from '../core/viewersLink.js'
+import { encodeGatewayBinary, GatewayBinary } from '../lib/gatewayWire.js'
+import { encodeTerminalLocal, TerminalBinaryKind } from '../lib/terminalBinary.js'
+import { VIEWER_PART_BYTES } from '../lib/viewerFrameParts.js'
+import { fakeCore } from '../testing/fakeCore.js'
 import { bindMessageRequest } from '../testing/socketCore.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from '../testing/relaySocket.js'
 import type { DeviceLogTrustOutcome } from '../lib/e2ee/deviceLogSyncer.js'
@@ -95,6 +99,24 @@ describe('a remote client, as the core hears it', () => {
     expect(JSON.stringify(upstreamOf(socket).queue.filter((item) => !(item.msg as { targetConnId?: string }).targetConnId))).not.toContain('secret-harness')
     expect(window.filter((frame) => frame.type === 'dsh_list_result')).toEqual([])
     await socket.unregisterLocalClient('local:window')
+    await socket.stop()
+  })
+
+  it('gets a pushed surface\'s state and errors sealed to it alone, though it never asked for them', async () => {
+    const socket = relaySocket(MACHINE)
+    vi.spyOn(gatewayOf(socket), 'connected').mockReturnValue(true)
+    const phone = await pairedClient(socket, 'phone-1')
+    await pairedClient(socket, 'phone-2')
+    const surfaceId = 'a'.repeat(32)
+    // The path the viewers' answers take (core/api.ts `clients.viewerFrame`, then the socket's).
+    expect(socket.sendViewerFrame('phone-1', 'surface_state', { surfaceId, hostActions: [{ url: 'https://secret.example' }] })).toBe(true)
+    expect(socket.sendViewerFrame('phone-1', 'surface_error', { surfaceId, error: 'VIEWER_UNAVAILABLE', detail: 'secret-detail' })).toBe(true)
+    const pushed = queuedFor(socket, 'phone-1').filter((frame) => String(frame.type).startsWith('surface_'))
+    expect(pushed.map((frame) => frame.type)).toEqual(['surface_state', 'surface_error'])
+    expect(JSON.stringify(upstreamOf(socket).queue)).not.toMatch(/secret/)
+    expect(phone.open(pushed[0])).toEqual({ surfaceId, hostActions: [{ url: 'https://secret.example' }] })
+    expect(phone.open(pushed[1])).toEqual({ surfaceId, error: 'VIEWER_UNAVAILABLE', detail: 'secret-detail' })
+    expect(queuedFor(socket, 'phone-2').filter((frame) => String(frame.type).startsWith('surface_'))).toEqual([])
     await socket.stop()
   })
 
@@ -213,6 +235,278 @@ describe('terminal streams on a client\'s P2P channel', () => {
     gateway.terminalBinary('phone-1', bytes(LIVE))
     expect(viaP2p.calls).toBe(1)
     await socket.stop()
+  })
+})
+
+describe('a viewer surface on a client\'s viewer-v1 channel', () => {
+  type Pool = {
+    viewerReady(connId: string): boolean
+    sendViewer(connId: string, data: unknown): boolean
+    waitViewerLow(connId: string, below: number, timeoutMs: number): Promise<boolean>
+    send(connId: string, data: unknown): boolean
+    deps: { onViewerData?(connId: string, data: string | Buffer): void; onViewerState?(connId: string, state: 'open' | 'closed'): void }
+  }
+  const SURFACE = '0123abcd-0123-4567-89ab-0123456789ab'
+  const part = (seq: number, index: number, parts: number, streamId = SURFACE) => ({
+    kind: TerminalBinaryKind.viewerFrame, streamId, seq, compressed: false, bytes: new Uint8Array([255, 216, index]),
+    viewer: { part: index, parts, width: 390, height: 844, scale: 3 },
+  })
+  async function viewerRig() {
+    const socket = relaySocket(MACHINE)
+    const gateway = gatewayOf(socket)
+    const pool = (gateway as unknown as { terminalP2p: Pool }).terminalP2p
+    const phone = await pairedClient(socket, 'phone-1')
+    const ready = vi.spyOn(pool, 'viewerReady').mockReturnValue(true)
+    const sendViewer = vi.spyOn(pool, 'sendViewer').mockReturnValue(true)
+    const waits: Array<(low: boolean) => void> = []
+    const waitLow = vi.spyOn(pool, 'waitViewerLow').mockImplementation(() => new Promise((resolve) => { waits.push(resolve) }))
+    const relay = vi.spyOn((gateway as unknown as { link: { sendBinary(b: Uint8Array): boolean } }).link, 'sendBinary')
+    const wrap = vi.spyOn(gateway.e2ee, 'wrapTerminalBinary')
+    /** What went on the channel, as the parts that were sealed for it (connection, seq, part). */
+    const sent = () => sendViewer.mock.calls.map(([connId, data]) => {
+      const at = wrap.mock.results.findIndex((r) => Buffer.from(r.value as Uint8Array).equals(data as Buffer))
+      const clear = wrap.mock.calls[at][1]
+      return [connId, clear.seq, clear.viewer!.part]
+    })
+    return { socket, gateway, pool, phone, ready, sendViewer, waits, waitLow, relay, wrap, sent }
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  it('seals each part to the client and sends it only on its viewer channel, never the relay', async () => {
+    const rig = await viewerRig()
+    const p2pSend = vi.spyOn(rig.pool, 'send')
+    // No viewer channel: refused at once, nothing queued.
+    rig.ready.mockReturnValue(false)
+    expect(rig.gateway.viewerBinary('phone-1', part(1, 0, 1))).toBe(false)
+    rig.ready.mockReturnValue(true)
+    expect(rig.gateway.viewerBinary('phone-1', part(2, 0, 1))).toBe(true)
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(1))
+    rig.waits[0](true)
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(1))
+    expect(rig.sent()).toEqual([['phone-1', 2, 0]])
+    expect(rig.sendViewer.mock.calls[0][1]).toBeInstanceOf(Buffer)
+    // A throw while sealing costs that part, not the frames behind it.
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    rig.wrap.mockImplementationOnce(() => { throw new Error('seal') })
+    rig.gateway.viewerBinary('phone-1', part(3, 1, 2))
+    rig.gateway.viewerBinary('phone-1', part(4, 1, 2))
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(2))
+    expect(error.mock.calls.flat().join(' ')).toContain('seal')
+    // A connection with no session has nothing to seal it with: nothing goes.
+    expect(rig.gateway.viewerBinary('phone-2', part(1, 0, 1))).toBe(true)
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(2))
+    rig.waits[1](true)
+    await settle()
+    expect(rig.sendViewer).toHaveBeenCalledTimes(2)
+    expect(rig.relay).not.toHaveBeenCalled()
+    expect(p2pSend).not.toHaveBeenCalled()
+    // Only what reached the channel is counted: the sealed sizes of the two sent parts.
+    expect(rig.gateway.viewerP2pBytes).toBe(rig.sendViewer.mock.calls.reduce((n, [, d]) => n + (d as Buffer).length, 0))
+    expect(rig.gateway.viewerP2pBytes).toBeGreaterThan(0)
+    rig.sendViewer.mockReturnValue(false)
+    const before = rig.gateway.viewerP2pBytes
+    rig.gateway.viewerBinary('phone-1', part(9, 0, 1))
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(3))
+    rig.waits[2](true)
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(3))
+    expect(rig.gateway.viewerP2pBytes).toBe(before)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ;(rig.gateway as unknown as { viewerState(c: string, s: string): void }).viewerState('phone-1', 'closed')
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(new RegExp(`closed bytes=${before} total=${before}$`)))
+    await rig.socket.stop()
+  })
+
+  it('takes a pushed surface\'s frames from the viewers in their own process while it runs in the core\'s', async () => {
+    // HARNESSD_SERVICES=viewers: no gateway link, so the core reads the viewers' binary itself and hands it to
+    // this gateway, as core/main.ts wires `clients.viewerBinary` to the socket's gateway.
+    const rig = await viewerRig()
+    const core = fakeCore({ clients: { viewerBinary: (connId, part) => rig.socket.gateway?.viewerBinary(connId, part) ?? false } })
+    const viewers = createViewersLink(core, () => true)
+    viewers.binary(encodeGatewayBinary(GatewayBinary.viewer, 'phone-1', encodeTerminalLocal(part(5, 0, 1))!)!)
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(1))
+    rig.waits[0](true)
+    await vi.waitFor(() => expect(rig.sent()).toEqual([['phone-1', 5, 0]]))
+    await rig.socket.stop()
+  })
+
+  it('sends every part of a dense frame that starts just under 1 MiB buffered: parts are not held to the terminal\'s 2 MiB', async () => {
+    const socket = relaySocket(MACHINE)
+    const gateway = gatewayOf(socket)
+    await pairedClient(socket, 'phone-1')
+    // The real pool, with a viewer channel whose buffer grows by what is sent and never drains.
+    const pool = (gateway as unknown as { terminalP2p: { entries: Map<string, unknown> } }).terminalP2p
+    const channel = { readyState: 'open', bufferedAmount: 1023 * 1024, bufferedAmountLowThreshold: 0, sent: 0,
+      bufferedAmountLow: { asPromise: () => new Promise<unknown[]>(() => {}) },
+      send(data: Buffer) { this.sent++; this.bufferedAmount += data.length } }
+    pool.entries.set('phone-1', { viewerReady: true, viewerChannel: channel })
+    const big = (index: number) => ({ ...part(1, index, 4), bytes: new Uint8Array(VIEWER_PART_BYTES) })
+    for (let index = 0; index < 4; index++) expect(gateway.viewerBinary('phone-1', big(index))).toBe(true)
+    await vi.waitFor(() => expect(channel.sent).toBe(4))
+    expect(channel.bufferedAmount).toBeGreaterThan(2 * 1024 * 1024)
+    pool.entries.delete('phone-1')
+    await socket.stop()
+  })
+
+  it('a part the channel refuses drops the rest of its frame, and the next frame still goes', async () => {
+    const rig = await viewerRig()
+    rig.sendViewer.mockReturnValueOnce(true).mockReturnValueOnce(false)
+    for (let index = 0; index < 3; index++) rig.gateway.viewerBinary('phone-1', part(1, index, 3))
+    rig.gateway.viewerBinary('phone-1', part(2, 0, 1))
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(1))
+    rig.waits[0](true)
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(2))
+    rig.waits[1](true)
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(3))
+    expect(rig.sent()).toEqual([['phone-1', 1, 0], ['phone-1', 1, 1], ['phone-1', 2, 0]])
+    await rig.socket.stop()
+  })
+
+  it('waits for the channel to drain under 1 MiB before each frame, one frame at a time per connection', async () => {
+    const rig = await viewerRig()
+    rig.gateway.viewerBinary('phone-1', part(1, 0, 2))
+    rig.gateway.viewerBinary('phone-1', part(1, 1, 2))
+    rig.gateway.viewerBinary('phone-1', part(2, 0, 1))
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(1))
+    expect(rig.waitLow).toHaveBeenCalledWith('phone-1', 1024 * 1024, 5_000)
+    expect(rig.sendViewer).not.toHaveBeenCalled()
+    rig.waits[0](true)
+    // The second part of a frame does not wait; the next frame waits again, after the last part went.
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(2))
+    expect(rig.sent()).toEqual([['phone-1', 1, 0], ['phone-1', 1, 1]])
+    rig.waits[1](true)
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(3))
+    expect(rig.sent().at(-1)).toEqual(['phone-1', 2, 0])
+    // A channel that does not drain in time: that frame is dropped whole, and the next one still goes.
+    rig.gateway.viewerBinary('phone-1', part(3, 0, 2))
+    rig.gateway.viewerBinary('phone-1', part(3, 1, 2))
+    rig.gateway.viewerBinary('phone-1', part(4, 0, 1))
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(3))
+    rig.waits[2](false)
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(4))
+    rig.waits[3](true)
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(4))
+    expect(rig.sent().at(-1)).toEqual(['phone-1', 4, 0])
+    await rig.socket.stop()
+  })
+
+  it('a closed viewer channel fails the frame waiting on it at once, and leaves the terminal streams on P2P', async () => {
+    const rig = await viewerRig()
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const p2pSend = vi.spyOn(rig.pool, 'send').mockReturnValue(true)
+    const LIVE = '00000000-0000-4000-8000-000000000002'
+    rig.gateway.terminal('phone-1', 'terminal_ready', { requestId: 'open-1', streamId: LIVE })
+    await dispatchDown(rig.socket, rig.phone.seal('terminal_resync', { streamId: LIVE }), 'phone-1', 'p2p')
+    // A TURN→direct promote may say open twice: nothing changes for it.
+    rig.pool.deps.onViewerState!('phone-1', 'open')
+    rig.pool.deps.onViewerState!('phone-1', 'open')
+    rig.gateway.viewerBinary('phone-1', part(1, 0, 2))
+    rig.gateway.viewerBinary('phone-1', part(1, 1, 2))
+    rig.gateway.viewerBinary('phone-1', part(5, 1, 2))
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(1))
+    // The channel closes while the frame waits for it to drain (its wait would only give up at 5 s).
+    const queued = (rig.gateway as unknown as { viewerQueues: Map<string, { chain: Promise<void> }> }).viewerQueues.get('phone-1')!.chain
+    rig.ready.mockReturnValue(false)
+    rig.pool.deps.onViewerState!('phone-1', 'closed')
+    await queued
+    expect(rig.sendViewer).not.toHaveBeenCalled()
+    expect(rig.gateway.viewerBinary('phone-1', part(2, 0, 1))).toBe(false)
+    expect(log.mock.calls.flat().join('\n')).toContain('[viewer-p2p] phone-1 closed')
+    // The terminal's stream is still on its own channel.
+    rig.gateway.terminalBinary('phone-1', { kind: TerminalBinaryKind.output, streamId: LIVE, seq: 1, compressed: false, bytes: new Uint8Array([104]) })
+    expect(p2pSend.mock.calls.filter(([, data]) => typeof data !== 'string')).toHaveLength(1)
+    // Open again, frames go again.
+    rig.ready.mockReturnValue(true)
+    rig.pool.deps.onViewerState!('phone-1', 'open')
+    expect(rig.gateway.viewerBinary('phone-1', part(3, 0, 1))).toBe(true)
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(2))
+    rig.waits[1](true)
+    await vi.waitFor(() => expect(rig.sent()).toEqual([['phone-1', 3, 0]]))
+    await rig.socket.stop()
+  })
+
+  it('drops only the frame whose wait failed: another surface\'s frame with the same seq still goes', async () => {
+    const rig = await viewerRig()
+    const OTHER = '89abcdef-0123-4567-89ab-0123456789ab'
+    rig.gateway.viewerBinary('phone-1', part(7, 0, 2))
+    rig.gateway.viewerBinary('phone-1', part(7, 0, 2, OTHER))
+    rig.gateway.viewerBinary('phone-1', part(7, 1, 2))
+    rig.gateway.viewerBinary('phone-1', part(7, 1, 2, OTHER))
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(1))
+    rig.waits[0](false)
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(2))
+    rig.waits[1](true)
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(2))
+    expect(rig.wrap.mock.calls.map(([, clear]) => [clear.streamId, clear.viewer!.part])).toEqual([[OTHER, 0], [OTHER, 1]])
+    await rig.socket.stop()
+  })
+
+  it('a wait that throws drops its frame, rather than sending the rest of it without its first part', async () => {
+    const rig = await viewerRig()
+    rig.waitLow.mockImplementationOnce(() => Promise.reject(new Error('channel gone')))
+    rig.gateway.viewerBinary('phone-1', part(1, 0, 2))
+    rig.gateway.viewerBinary('phone-1', part(1, 1, 2))
+    rig.gateway.viewerBinary('phone-1', part(2, 0, 1))
+    await vi.waitFor(() => expect(rig.waits).toHaveLength(1))
+    rig.waits[0](true)
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(1))
+    expect(rig.sent()).toEqual([['phone-1', 2, 0]])
+    await rig.socket.stop()
+  })
+
+  it('keeps nothing waiting between frames: a long-lived channel does not pile up a waiter per frame', async () => {
+    // Racing every frame's wait against one promise that settles only at close kept a reaction per frame
+    // alive for the channel's life (~310 B each, ~33 MB/h at 30 fps). Between frames the queue holds its
+    // chain and nothing else that waits.
+    const rig = await viewerRig()
+    rig.waitLow.mockResolvedValue(true)
+    for (let seq = 1; seq <= 50; seq++) rig.gateway.viewerBinary('phone-1', part(seq, 0, 1))
+    await vi.waitFor(() => expect(rig.sendViewer).toHaveBeenCalledTimes(50))
+    const queue = (rig.gateway as unknown as { viewerQueues: Map<string, Record<string, unknown>> }).viewerQueues.get('phone-1')!
+    await queue.chain
+    const waiting = Object.entries(queue).filter(([key, value]) => key !== 'chain' && (value instanceof Promise || typeof value === 'function'))
+    expect(waiting).toEqual([])
+    await rig.socket.stop()
+  })
+
+  it('carries only viewer frames on the viewer channel, and never a viewer frame on the relay', async () => {
+    const rig = await viewerRig()
+    const output = { kind: TerminalBinaryKind.output, streamId: SURFACE, seq: 1, compressed: false, bytes: new Uint8Array([104]) }
+    expect(rig.gateway.viewerBinary('phone-1', output)).toBe(false)
+    expect(rig.gateway.terminalBinary('phone-1', part(1, 0, 1))).toBe(false)
+    await settle()
+    expect(rig.wrap).not.toHaveBeenCalled()
+    expect(rig.relay).not.toHaveBeenCalled()
+    await rig.socket.stop()
+  })
+
+  it('takes a client\'s surface frames only from its viewer channel, never over the relay', async () => {
+    const rig = await viewerRig()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const frame = vi.spyOn(rig.socket.fromGateway, 'frame').mockResolvedValue(undefined)
+    await dispatchDown(rig.socket, rig.phone.seal('surface_input', { surfaceId: 'x', events: [] }), 'phone-1', 'relay')
+    expect(frame).not.toHaveBeenCalled()
+    await dispatchDown(rig.socket, rig.phone.seal('surface_input', { surfaceId: 'x', events: [] }), 'phone-1', 'p2p')
+    expect(frame).toHaveBeenCalledTimes(1)
+    await rig.socket.stop()
+  })
+
+  it('hands the core a client\'s sealed surface frames from its viewer channel, and nothing else', async () => {
+    const rig = await viewerRig()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const frame = vi.spyOn(rig.socket.fromGateway, 'frame').mockResolvedValue(undefined)
+    const onData = rig.pool.deps.onViewerData!
+    // A terminal's frame on the viewer channel, plaintext, a big one, binary, and what is not JSON: dropped.
+    onData('phone-1', JSON.stringify(rig.phone.seal('terminal_input', { streamId: 's', data: 'ls' })))
+    onData('phone-1', JSON.stringify({ type: 'surface_input', payload: { surfaceId: 'x', events: [] } }))
+    onData('phone-1', JSON.stringify(rig.phone.seal('surface_input', { surfaceId: 'x', events: [], pad: 'x'.repeat(600 * 1024) })))
+    onData('phone-1', Buffer.from([1, 2, 3]))
+    onData('phone-1', '{not json')
+    onData('phone-1', 'null')
+    onData('phone-1', JSON.stringify({ payload: {} }))
+    onData('phone-1', JSON.stringify(rig.phone.seal('surface_input', { surfaceId: 'x', events: [{ type: 'click' }] })))
+    await vi.waitFor(() => expect(frame).toHaveBeenCalledTimes(1))
+    expect(frame).toHaveBeenCalledWith('phone-1', { type: 'surface_input', payload: { surfaceId: 'x', events: [{ type: 'click' }] } }, 'p2p', 'web')
+    await rig.socket.stop()
   })
 })
 

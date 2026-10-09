@@ -5,6 +5,8 @@ import { catalogEntry } from '../dsh/catalog.js'
 import { installedDsh } from '../dsh/installed.js'
 import { dshViewerName } from '../dsh/manifest.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { VIEWER_PART_BYTES } from '../lib/viewerFrameParts.js'
+import { TerminalBinaryKind } from '../lib/terminalBinary.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { startViewers } from './viewers.js'
 
@@ -23,6 +25,7 @@ vi.mock('../lib/viewerForwarder.js', () => ({
 vi.mock('../lib/interactiveViewer.js', () => ({
   InteractiveViewers: class {
     request = vi.fn(async () => ({ data: 'jpeg' }))
+    push = vi.fn()
     refresh = vi.fn()
     closeConnection = vi.fn()
     closeAll = vi.fn()
@@ -236,6 +239,39 @@ describe('the DSH viewers service', () => {
       port.closed()
       expect(forwarder.closeAll).toHaveBeenCalled()
       expect(surfaces.closeAll).toHaveBeenCalled()
+    })
+
+    it('pushes a surface to a client over its viewer channel: frames in parts as binary, answers through the core', () => {
+      const { core, port, forwarder, surfaces } = setup()
+      const surfaceId = 'a'.repeat(32)
+      for (const type of ['surface_open', 'surface_input', 'surface_ack', 'surface_close']) {
+        expect(port.stream('c1', type, { surfaceId })).toBe(true)
+        expect(surfaces.push).toHaveBeenLastCalledWith('c1', type, { surfaceId }, expect.any(Object))
+      }
+      expect(forwarder.handle).not.toHaveBeenCalled()
+      const sink = surfaces.push.mock.calls[0][3]
+      // A frame bigger than one part goes as two, each a viewer frame part for that surface.
+      vi.mocked(core.clients.viewerBinary).mockReturnValue(true)
+      const shot = { seq: 3, jpeg: Buffer.alloc(VIEWER_PART_BYTES + 1, 7), width: 390, height: 844, scale: 2 }
+      expect(sink.frame('c1', surfaceId, shot)).toBe(true)
+      const parts = vi.mocked(core.clients.viewerBinary).mock.calls
+      expect(parts.map(([connId, part]) => [connId, part.kind, part.seq, part.viewer?.part, part.viewer?.parts, part.bytes.length]))
+        .toEqual([['c1', TerminalBinaryKind.viewerFrame, 3, 0, 2, VIEWER_PART_BYTES], ['c1', TerminalBinaryKind.viewerFrame, 3, 1, 2, 1]])
+      // The channel refusing a part ends the push: the rest of that frame is not sent.
+      vi.mocked(core.clients.viewerBinary).mockClear().mockReturnValue(false)
+      expect(sink.frame('c1', surfaceId, shot)).toBe(false)
+      expect(core.clients.viewerBinary).toHaveBeenCalledTimes(1)
+      // A frame that cannot ride the channel (an id no client mints) is not pushed at all.
+      expect(sink.frame('c1', 'not-hex', shot)).toBe(false)
+      expect(core.clients.viewerBinary).toHaveBeenCalledTimes(1)
+      // Its state and errors go to the client as frames of their own type, over the sealed relay target.
+      sink.state('c1', { type: 'surface_state', surfaceId, input: 'i1', ok: true })
+      expect(core.clients.viewerFrame).toHaveBeenLastCalledWith('c1', 'surface_state', { surfaceId, input: 'i1', ok: true })
+      sink.state('c1', { type: 'surface_error', surfaceId, error: 'VIEWER_UNAVAILABLE' })
+      expect(core.clients.viewerFrame).toHaveBeenLastCalledWith('c1', 'surface_error', { surfaceId, error: 'VIEWER_UNAVAILABLE' })
+      // The connection going ends its pushed surfaces with the rest.
+      port.closed('c1')
+      expect(surfaces.closeConnection).toHaveBeenCalledWith('c1')
     })
 
     it('stops forwarding to a viewer that moved or stopped, before another process can take its port', () => {

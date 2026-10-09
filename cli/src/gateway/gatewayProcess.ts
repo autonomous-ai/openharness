@@ -186,12 +186,13 @@ export function runGatewayService(options: GatewayServiceOptions): ServiceProces
     }
   }
 
-  /** The core's terminal bytes for a remote client, or for a window's session on another machine. */
+  /** The core's terminal bytes for a remote client, a viewer surface's frame part for one, or a window's session's bytes. */
   const onBinary = (raw: Uint8Array): void => {
     const decoded = decodeGatewayBinary(raw)
     const clear = decoded && decodeTerminalLocal(decoded.bytes)
     if (!decoded || !clear) return
     if (decoded.kind === GatewayBinary.window) void windows.get(decoded.id)?.sendBinary(clear)
+    else if (decoded.kind === GatewayBinary.viewer) running?.port.viewerBinary(decoded.id, clear)
     else running?.port.terminalBinary(decoded.id, clear)
   }
 

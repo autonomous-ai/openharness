@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { encodeGatewayBinary, GatewayBinary } from '../lib/gatewayWire.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import { encodeTerminalLocal, TerminalBinaryKind, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { VIEWERS_UNAVAILABLE } from './api.js'
 import { createViewersLink, SURFACE_WAIT_MS, VIEWERS_BUFFER_LIMIT } from './viewersLink.js'
@@ -192,6 +194,20 @@ describe('a viewer served to a client over its connection, through the viewers\'
     link.notice({ kind: 'viewer', connId: 'c1', type: 'viewer_data' })
     expect(notify).toHaveBeenCalledTimes(1)
     expect(core.clients.viewerFrame).toHaveBeenLastCalledWith('c1', 'viewer_data', {})
+  })
+
+  it('hands a pushed surface\'s frame part from the process to whichever gateway is live, read once here', () => {
+    const { core, link } = setup()
+    const part: TerminalBinaryClear = { kind: TerminalBinaryKind.viewerFrame, streamId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', seq: 4,
+      compressed: false, bytes: new Uint8Array([255, 216]), viewer: { part: 0, parts: 1, width: 390, height: 844, scale: 3 } }
+    const local = encodeTerminalLocal(part)!
+    link.binary(encodeGatewayBinary(GatewayBinary.viewer, 'phone-1', local)!)
+    expect(core.clients.viewerBinary).toHaveBeenCalledWith('phone-1', part)
+    // Only under the viewer kind, and only what reads as a frame: never a client's terminal bytes, nor noise.
+    link.binary(encodeGatewayBinary(GatewayBinary.remote, 'phone-1', local)!)
+    link.binary(encodeGatewayBinary(GatewayBinary.viewer, 'phone-1', new Uint8Array([1, 2]))!)
+    link.binary(new Uint8Array([9]))
+    expect(core.clients.viewerBinary).toHaveBeenCalledTimes(1)
   })
 
   it('ignores a notice that is not a stream\'s frame for a connection', () => {

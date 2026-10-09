@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -15,10 +16,13 @@ void main() {
 
   late FakeWebRtc webrtc;
   late LinkLog log;
+  // What the caller does on a viewer state report, beyond recording it.
+  void Function(bool open)? onViewer;
 
   setUp(() {
     webrtc = FakeWebRtc();
     log = LinkLog();
+    onViewer = null;
   });
   tearDown(() => webrtc.dispose());
 
@@ -36,6 +40,7 @@ void main() {
   WebRtcTerminalP2pLink newLink({
     bool upgrade = false,
     TerminalP2pPolicy p = policy,
+    bool viewer = false,
   }) {
     final link = const WebRtcTerminalP2pLinkFactory().create(
       policy: p,
@@ -45,14 +50,22 @@ void main() {
       onUnavailable: log.unavailable.add,
       onStep: (step, _) => log.steps.add(step),
       upgrade: upgrade,
+      onViewerData: viewer ? log.viewerData.add : null,
+      onViewerState: (open) {
+        log.viewerStates.add(open);
+        onViewer?.call(open);
+      },
     ) as WebRtcTerminalP2pLink;
     addTearDown(() => link.stop(notifyPeer: false));
     return link;
   }
 
   /// A link whose offer has gone out.
-  Future<WebRtcTerminalP2pLink> offered({bool upgrade = false}) async {
-    final link = newLink(upgrade: upgrade);
+  Future<WebRtcTerminalP2pLink> offered({
+    bool upgrade = false,
+    bool viewer = false,
+  }) async {
+    final link = newLink(upgrade: upgrade, viewer: viewer);
     link.start();
     await eventually(() => webrtc.named('setLocalDescription').isNotEmpty);
     await settle();
@@ -74,8 +87,9 @@ void main() {
   Future<WebRtcTerminalP2pLink> open({
     String local = 'host',
     String remote = 'srflx',
+    bool viewer = false,
   }) async {
-    final link = await offered();
+    final link = await offered(viewer: viewer);
     await link.handleSignal('p2p_answer', signal(link, {'sdp': 'v=0 answer'}));
     webrtc.stats = statsFor(local: local, remote: remote);
     await webrtc.channelState('open');
@@ -562,6 +576,208 @@ void main() {
       await link.stop();
       expect(log.states.last, 'closed:closed');
     });
+  });
+
+  group('the viewer channel', () {
+    /// Terminal and viewer both open.
+    Future<WebRtcTerminalP2pLink> both() async {
+      final link = await open(viewer: true);
+      await webrtc.channelState('open', channel: FakeWebRtc.viewerChannelId);
+      expect(await eventually(() => link.viewerReady), isTrue);
+      return link;
+    }
+
+    test('is not opened for a caller that reads no viewer data', () async {
+      final link = await open();
+      expect(
+        webrtc.named('createDataChannel').map((c) => c.arguments['label']),
+        [terminalP2pChannel],
+        reason: 'a machine from before viewer-v1 refuses the label',
+      );
+      expect(link.viewerReady, isFalse);
+      expect(link.sendViewer('x'), isFalse);
+      await link.stop(notifyPeer: false);
+      expect(webrtc.named('dataChannelClose'), hasLength(1));
+      expect(log.viewerStates, isEmpty);
+    });
+
+    test('rides the same offer: terminal-v1 then viewer-v1, both ordered, both before it', () async {
+      await offered(viewer: true);
+      final created = webrtc.named('createDataChannel').toList();
+      expect(created.map((c) => c.arguments['label']), [
+        terminalP2pChannel,
+        viewerP2pChannel,
+      ]);
+      for (final call in created) {
+        expect((call.arguments['dataChannelDict'] as Map)['ordered'], isTrue);
+      }
+      final offerAt = webrtc.calls.indexWhere((c) => c.method == 'createOffer');
+      expect(webrtc.calls.lastIndexOf(created.last), lessThan(offerAt));
+      expect(webrtc.named('createOffer'), hasLength(1));
+    });
+
+    test(
+      'opening is reported, and its frames go out on it, not the terminal\'s',
+      () async {
+        final link = await open(viewer: true);
+        expect(link.viewerReady, isFalse);
+        expect(link.sendViewer('early'), isFalse);
+        await webrtc.channelState('open', channel: FakeWebRtc.viewerChannelId);
+        expect(await eventually(() => link.viewerReady), isTrue);
+        expect(log.viewerStates, [true]);
+
+        expect(link.sendViewer('{"type":"viewer_input"}'), isTrue);
+        expect(link.sendViewer(Uint8List.fromList([9])), isTrue);
+        expect(link.send('{"type":"terminal_input"}'), isTrue);
+        await settle();
+        final sends = webrtc.named('dataChannelSend').toList();
+        expect(sends.map((c) => c.arguments['dataChannelId']), [
+          FakeWebRtc.viewerChannelId,
+          FakeWebRtc.viewerChannelId,
+          FakeWebRtc.dataChannelId,
+        ]);
+        expect(sends[0].arguments['data'], '{"type":"viewer_input"}');
+        expect(sends[1].arguments['type'], 'binary');
+      },
+    );
+
+    test('what arrives on it reaches onViewerData, never onData', () async {
+      await both();
+      await webrtc.message(
+        '{"type":"viewer_frame"}',
+        channel: FakeWebRtc.viewerChannelId,
+      );
+      await webrtc.message([7, 8], channel: FakeWebRtc.viewerChannelId);
+      await webrtc.message('{"type":"terminal_output"}');
+      expect(await eventually(() => log.viewerData.length == 2), isTrue);
+      expect(log.viewerData, [
+        '{"type":"viewer_frame"}',
+        [7, 8],
+      ]);
+      expect(log.data, ['{"type":"terminal_output"}']);
+    });
+
+    test(
+      'closing reports the viewer closed and leaves the terminal alone',
+      () async {
+        final link = await both();
+        await webrtc.channelState(
+          'closing',
+          channel: FakeWebRtc.viewerChannelId,
+        );
+        await webrtc.channelState(
+          'closed',
+          channel: FakeWebRtc.viewerChannelId,
+        );
+        await settle();
+        expect(log.viewerStates, [true, false]);
+        expect(link.viewerReady, isFalse);
+        expect(link.sendViewer('x'), isFalse);
+        expect(link.isReady, isTrue);
+        expect(log.unavailable, isEmpty);
+        expect(log.states.last, 'open');
+        expect(webrtc.named('peerConnectionDispose'), isEmpty);
+        expect(link.send('still here'), isTrue);
+      },
+    );
+
+    test(
+      'a caller may stop the link from the viewer\'s closed report',
+      () async {
+        final link = await both();
+        // Reported on the next turn: a stop inside flutter_webrtc's own callback would close the
+        // viewer channel's stream before the plugin adds this same state to it, and throw.
+        // Without the deferral this fails only if stop() closes the viewer channel before the terminal's.
+        onViewer = (open) {
+          if (!open) unawaited(link.stop(notifyPeer: false));
+        };
+        await webrtc.channelState(
+          'closing',
+          channel: FakeWebRtc.viewerChannelId,
+        );
+        expect(
+          await eventually(() => log.states.last == 'closed:closed'),
+          isTrue,
+        );
+        expect(log.viewerStates, [true, false]);
+        expect(
+          webrtc
+              .named('dataChannelClose')
+              .map((c) => c.arguments['dataChannelId']),
+          unorderedEquals([
+            FakeWebRtc.dataChannelId,
+            FakeWebRtc.viewerChannelId,
+          ]),
+        );
+        expect(log.unavailable, isEmpty);
+      },
+    );
+
+    test('a send the native side refuses ends only the viewer', () async {
+      final link = await both();
+      webrtc.failing.add('dataChannelSend');
+      expect(link.sendViewer('x'), isTrue);
+      expect(await eventually(() => log.viewerStates.length == 2), isTrue);
+      expect(log.viewerStates, [true, false]);
+      expect(link.viewerReady, isFalse);
+      expect(link.isReady, isTrue);
+      expect(log.unavailable, isEmpty);
+      expect(log.states.last, 'open');
+      expect(webrtc.named('peerConnectionDispose'), isEmpty);
+    });
+
+    test('a backed-up viewer is not ready; the terminal still is', () async {
+      final link = await both();
+      await webrtc.buffered(
+        terminalP2pMaxBufferedBytes + 1,
+        channel: FakeWebRtc.viewerChannelId,
+      );
+      expect(link.viewerReady, isFalse);
+      expect(link.sendViewer('x'), isFalse);
+      expect(link.isReady, isTrue);
+      await webrtc.buffered(10, channel: FakeWebRtc.viewerChannelId);
+      expect(link.viewerReady, isTrue);
+    });
+
+    test(
+      'the terminal channel closing still fails the whole link, viewer with it',
+      () async {
+        final link = await both();
+        await webrtc.channelState('closing');
+        expect(
+          await eventually(() => log.states.contains('failed:channel_closed')),
+          isTrue,
+        );
+        expect(
+          await eventually(() => log.states.last == 'closed:channel_closed'),
+          isTrue,
+        );
+        expect(log.unavailable, ['channel_closed']);
+        expect(log.viewerStates, [true, false]);
+        expect(link.viewerReady, isFalse);
+        expect(link.sendViewer('x'), isFalse);
+      },
+    );
+
+    test(
+      'stopping closes both channels and reports the viewer closed',
+      () async {
+        final link = await both();
+        await link.stop(notifyPeer: false);
+        expect(
+          webrtc
+              .named('dataChannelClose')
+              .map((c) => c.arguments['dataChannelId']),
+          unorderedEquals([
+            FakeWebRtc.dataChannelId,
+            FakeWebRtc.viewerChannelId,
+          ]),
+        );
+        expect(webrtc.named('peerConnectionDispose'), hasLength(1));
+        expect(log.viewerStates, [true, false]);
+        expect(link.viewerReady, isFalse);
+      },
+    );
   });
 
   group('helpers', () {

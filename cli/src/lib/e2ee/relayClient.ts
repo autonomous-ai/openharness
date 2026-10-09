@@ -52,6 +52,7 @@ export class RelaySessionCrypto {
   private epoch = ''
   private p2pVersion = 0
   private viewerVersion = 0
+  private p2pViewer = 0
   private strict = false
   private readonly groupRecv: Map<string, number> // epoch -> highest counter seen
 
@@ -62,6 +63,7 @@ export class RelaySessionCrypto {
   get ready(): boolean { return this.c2s !== null && this.s2c !== null }
   get terminalP2pVersion(): number { return this.p2pVersion }
   get viewerForwardingVersion(): number { return this.viewerVersion }
+  get p2pViewerVersion(): number { return this.p2pViewer }
   /** The daemon opens every sealed type and refuses STRICT_DOWN_TYPES unsealed (its welcome said so). */
   get strictDown(): boolean { return this.strict }
 
@@ -91,7 +93,7 @@ export class RelaySessionCrypto {
     } catch { return false }
     const opened = C.aeadOpen(keys.s2c, 0, C.utf8('e2e-welcome'), C.b64d(encB64))
     if (!opened) return false
-    let initial: { groupKey?: string; epoch?: string; features?: { terminalP2p?: unknown; viewerForwarding?: unknown; strictDown?: unknown } }
+    let initial: { groupKey?: string; epoch?: string; features?: { terminalP2p?: unknown; viewerForwarding?: unknown; strictDown?: unknown; p2pViewer?: unknown } }
     try { initial = JSON.parse(new TextDecoder().decode(opened)) as typeof initial } catch { return false }
     if (!initial.groupKey || !initial.epoch) return false
     this.c2s = keys.c2s
@@ -104,6 +106,7 @@ export class RelaySessionCrypto {
       ? Number(initial.features?.terminalP2p)
       : 0
     this.viewerVersion = initial.features?.viewerForwarding === 1 ? 1 : 0
+    this.p2pViewer = initial.features?.p2pViewer === 1 ? 1 : 0
     this.strict = initial.features?.strictDown === 1
     return true
   }

@@ -22,9 +22,12 @@ import { DshVerdictWatcher, type DshVerdict } from '../dsh/verdict.js'
 import { DshViewerManager } from '../dsh/viewer.js'
 import { ViewerLedger } from '../dsh/viewerLedger.js'
 import type { AgentDshContext } from '../lib/agentFrame.js'
-import { InteractiveViewers } from '../lib/interactiveViewer.js'
+import { InteractiveViewers, type PushSink } from '../lib/interactiveViewer.js'
 import { sid } from '../lib/log.js'
 import type { RegisteredSession } from '../lib/registry.js'
+import type { TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { splitViewerFrame } from '../lib/viewerFrameParts.js'
+import { SURFACE_DOWN_TYPES } from '../lib/viewerFrames.js'
 import { ViewerForwarder } from '../lib/viewerForwarder.js'
 
 /** This machine's viewers, served to clients over their connections: what `ViewersPort` names `stream`,
@@ -34,12 +37,22 @@ export function serveViewers(
   target: (agentId: string) => string | null,
   /** A stream's frame to the one connection that opened it (`CoreApi.clients.viewerFrame`). */
   send: (connId: string, type: string, payload: Record<string, unknown>) => boolean,
+  /** A pushed surface's frame part to that client's viewer channel (`CoreApi.clients.viewerBinary`). */
+  binary: (connId: string, part: TerminalBinaryClear) => boolean,
 ) {
   const forwarder = new ViewerForwarder({ target, send })
   const surfaces = new InteractiveViewers(target)
+  // A surface pushed over the client's viewer channel (`surface_*`): its frames go there as binary parts, in
+  // order, and the first part the channel refuses ends the push; its answers go as frames of their own type.
+  const sink: PushSink = {
+    frame: (connId, surfaceId, { seq, jpeg, ...size }) =>
+      splitViewerFrame(surfaceId, seq, jpeg, size)?.every((part) => binary(connId, part)) ?? false,
+    state: (connId, { type, ...payload }) => { send(connId, String(type), payload) },
+  }
   return {
     stream: (connId: string, type: string, payload: Record<string, unknown>): boolean => {
-      forwarder.handle(connId, type, payload)
+      if (SURFACE_DOWN_TYPES.has(type)) surfaces.push(connId, type as Parameters<InteractiveViewers['push']>[1], payload, sink)
+      else forwarder.handle(connId, type, payload)
       return true
     },
     surface: (connId: string, payload: Record<string, unknown>) => surfaces.request(connId, payload),
@@ -91,7 +104,8 @@ export function startViewers(core: CoreApi, ports: CorePorts): void {
   // restart. Only pids whose live start time matches what that daemon recorded are touched.
   const viewerLedger = new ViewerLedger({ log: (line) => console.log(line) })
   viewerLedger.reapOrphans()
-  const served = serveViewers((agentId) => dshViewers.forwardingUrl(agentId), (connId, type, payload) => core.clients.viewerFrame(connId, type, payload))
+  const served = serveViewers((agentId) => dshViewers.forwardingUrl(agentId), (connId, type, payload) => core.clients.viewerFrame(connId, type, payload),
+    (connId, part) => core.clients.viewerBinary(connId, part))
   const dshViewers = new DshViewerManager({
     onUrl: (agentId, url) => {
       dshFrameFor(agentId).viewerUrl = url

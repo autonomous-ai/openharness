@@ -9,13 +9,16 @@ import 'package:harness_mobile/e2ee/bytes.dart';
 import 'package:harness_mobile/e2ee/keys.dart';
 import 'package:harness_mobile/e2ee/relay_session_crypto.dart';
 import 'package:harness_mobile/e2ee/terminal_cipher.dart';
+import 'package:harness_mobile/p2p/terminal_p2p_plugin.dart';
 import 'package:harness_mobile/terminal/terminal_binary.dart';
 import 'package:harness_mobile/viewer/e2ee_relay_codec.dart';
 import 'package:harness_mobile/ws/relay_codec.dart';
 import 'package:harness_mobile/ws/terminal_transport_plugin.dart';
+import 'package:harness_mobile/ws/viewer_p2p.dart';
 import 'package:harness_mobile/ws/ws_conn.dart';
 
 import '../e2ee/machine_session.dart';
+import '../p2p/fakes.dart' show FakeLinkFactory;
 import 'fake_relay.dart';
 
 /// A second wire that takes whatever it is told to, and writes down every time the connection
@@ -82,6 +85,9 @@ class _Wire implements TerminalTransportPlugin {
   }
 
   @override
+  ViewerP2p? get viewer => null;
+
+  @override
   void dispose({bool notifyPeer = false}) {
     disposed = true;
     calls.add('dispose');
@@ -120,7 +126,10 @@ void main() {
         ),
       );
 
-  WsConn newConn({RelayCodecFactory? relayCodecs}) {
+  WsConn newConn({
+    RelayCodecFactory? relayCodecs,
+    TerminalTransportPluginFactory? plugins,
+  }) {
     final conn = WsConn(
       wsBaseUrl: relay.url,
       connectChannel: relay.connect,
@@ -132,12 +141,14 @@ void main() {
       onEvent: events.add,
       onStatus: statuses.add,
       relayCodecs: relayCodecs ?? codecs(),
-      transportPlugins: (host, id) {
-        expect(id, machineId);
-        final wire = _Wire(host);
-        wires.add(wire);
-        return wire;
-      },
+      transportPlugins:
+          plugins ??
+          (host, id) {
+            expect(id, machineId);
+            final wire = _Wire(host);
+            wires.add(wire);
+            return wire;
+          },
     );
     conn.onBinaryFrame = (frame) async => binaries.add(frame);
     addTearDown(conn.close);
@@ -342,6 +353,32 @@ void main() {
         isFalse,
       );
     });
+  });
+
+  test('viewerP2p is the p2p plugin\'s viewer, null otherwise', () async {
+    final (other, _, _) = await connected();
+    expect(other.viewerP2p, isNull, reason: 'not the p2p plugin');
+    await other.close();
+    final plugins = <TerminalP2pPlugin>[];
+    final conn = newConn(
+      plugins: (host, id) {
+        final plugin = TerminalP2pPlugin(
+          host: host,
+          machineId: id,
+          links: FakeLinkFactory(),
+        );
+        plugins.add(plugin);
+        return plugin;
+      },
+    );
+    expect(conn.viewerP2p, isNull, reason: 'no plugin before the dial');
+    final session = relay.nextSession();
+    unawaited(conn.connect());
+    await session.timeout(const Duration(seconds: 5));
+    await conn.waitUntilReady(timeout: const Duration(seconds: 5));
+    expect(conn.viewerP2p, same(plugins.single.viewer));
+    await conn.close();
+    expect(conn.viewerP2p, isNull);
   });
 
   test('every dial gets a wire of its own; the old one is torn down', () async {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -168,4 +169,150 @@ void main() {
       session.dispose();
     },
   );
+  Map<String, dynamic> streamed(int seq) => {...picture(), 'seq': seq, 'scale': 2};
+
+  testWidgets('stays inside v1 until the machine answers with seq', (tester) async {
+    final requests = <Map<String, dynamic>>[];
+    final session = InteractiveViewerSession((payload) async {
+      requests.add(payload);
+      return picture();
+    });
+    session.configure(const Size(3000, 2000), true, scale: 2);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(requests.first['width'], 1920);
+    expect(requests.first['height'], 1200);
+    expect(requests.first.containsKey('after'), isFalse);
+    expect(session.isV2, isFalse);
+    session.dispose();
+  });
+
+  testWidgets('long-polls after seq and sends input as its own request', (tester) async {
+    final requests = <Map<String, dynamic>>[];
+    final polls = <Completer<Map<String, dynamic>>>[];
+    final session = InteractiveViewerSession((payload) {
+      requests.add(payload);
+      if (payload['op'] == 'close') return Future.value({'closed': true});
+      if (payload['op'] == 'input') return Future.value({'ok': true, 'seq': 1, 'editable': true});
+      final reply = Completer<Map<String, dynamic>>();
+      polls.add(reply);
+      return reply.future;
+    });
+    session.configure(const Size(800, 600), true, scale: 2);
+    await tester.pump(const Duration(milliseconds: 1));
+    polls[0].complete(streamed(1));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(session.isV2, isTrue);
+    expect(requests.last, containsPair('after', 1));
+    expect(requests.last, containsPair('scale', 2.0));
+    session.input({'type': 'text', 'text': 'hi'});
+    await tester.pump(const Duration(milliseconds: 1));
+    final input = requests.lastWhere((r) => r['op'] == 'input');
+    expect(input['events'], [{'type': 'text', 'text': 'hi'}]);
+    expect(session.editable, isTrue);
+    polls.last.complete({'seq': 1, 'unchanged': true});
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(requests.last['op'], 'frame');
+    session.dispose();
+  });
+
+  testWidgets('a resize goes out as an empty input, debounced', (tester) async {
+    final requests = <Map<String, dynamic>>[];
+    final session = InteractiveViewerSession((payload) {
+      requests.add(payload);
+      if (payload['op'] == 'input') return Future.value({'ok': true, 'seq': 1});
+      if (requests.where((r) => r['op'] == 'frame').length == 1) return Future.value(streamed(1));
+      return Completer<Map<String, dynamic>>().future; // a poll that keeps waiting
+    });
+    session.configure(const Size(800, 600), true);
+    await tester.pump(const Duration(milliseconds: 1));
+    session.configure(const Size(900, 600), true);
+    session.configure(const Size(1000, 600), true);
+    await tester.pump(const Duration(milliseconds: 50));
+    expect(requests.where((r) => r['op'] == 'input'), isEmpty);
+    await tester.pump(const Duration(milliseconds: 100));
+    final resize = requests.where((r) => r['op'] == 'input').toList();
+    expect(resize, hasLength(1));
+    expect(resize.single['width'], 1000);
+    expect(resize.single['events'], isEmpty);
+    session.dispose();
+  });
+
+  testWidgets('a resize that lands while input is in flight goes out when it returns', (tester) async {
+    final requests = <Map<String, dynamic>>[];
+    final typing = Completer<Map<String, dynamic>>();
+    final session = InteractiveViewerSession((payload) {
+      requests.add(payload);
+      if (payload['op'] == 'close') return Future.value({'closed': true});
+      if (payload['op'] == 'input') {
+        return requests.where((r) => r['op'] == 'input').length == 1 ? typing.future : Future.value({'ok': true, 'seq': 1});
+      }
+      if (requests.where((r) => r['op'] == 'frame').length == 1) return Future.value(streamed(1));
+      return Completer<Map<String, dynamic>>().future; // a poll that keeps waiting
+    });
+    session.configure(const Size(800, 600), true);
+    await tester.pump(const Duration(milliseconds: 1));
+    session.input({'type': 'text', 'text': 'a'});
+    await tester.pump(const Duration(milliseconds: 1));
+    session.configure(const Size(1000, 600), true);
+    await tester.pump(const Duration(milliseconds: 150)); // the resize timer fires while typing is in flight
+    typing.complete({'ok': true, 'seq': 1});
+    await tester.pump(const Duration(milliseconds: 1));
+    final inputs = requests.where((r) => r['op'] == 'input').toList();
+    expect(inputs, hasLength(2));
+    expect(inputs.last['width'], 1000);
+    expect(inputs.last['events'], isEmpty);
+    session.dispose();
+  });
+
+  testWidgets('a copied selection lands on the clipboard callback', (tester) async {
+    final copied = <String>[];
+    final session = InteractiveViewerSession((payload) {
+      if (payload['op'] == 'input') return Future.value({'ok': true, 'seq': 1, 'clipboard': 'hello'});
+      if (payload['op'] == 'close') return Future.value({'closed': true});
+      return payload.containsKey('after') ? Completer<Map<String, dynamic>>().future : Future.value(streamed(1));
+    }, onClipboard: copied.add);
+    session.configure(const Size(800, 600), true);
+    await tester.pump(const Duration(milliseconds: 1));
+    session.input({'type': 'copy'});
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(copied, ['hello']);
+    session.dispose();
+  });
+
+  testWidgets('host actions on an unchanged v2 reply are delivered', (tester) async {
+    final actions = <Map<String, dynamic>>[];
+    var polls = 0;
+    final session = InteractiveViewerSession((payload) {
+      if (payload['op'] == 'close') return Future.value({'closed': true});
+      if (payload.containsKey('after')) {
+        if (++polls > 1) return Completer<Map<String, dynamic>>().future;
+        return Future.value({'seq': 1, 'unchanged': true, 'hostActions': [{'action': 'assistant'}]});
+      }
+      return Future.value(streamed(1));
+    }, onHostAction: actions.add);
+    session.configure(const Size(800, 600), true);
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(actions, [{'action': 'assistant'}]);
+    session.dispose();
+  });
+
+  testWidgets('a pushed frame arrives as bytes; base64 data still works', (tester) async {
+    final replies = <Completer<Map<String, dynamic>>>[];
+    final session = InteractiveViewerSession((payload) {
+      if (payload['op'] != 'frame') return Future.value({'ok': true});
+      replies.add(Completer());
+      return replies.last.future;
+    });
+    session.configure(const Size(800, 600), true);
+    await tester.pump(const Duration(milliseconds: 1));
+    replies.last.complete({'bytes': Uint8List.fromList([7, 8]), 'mime': 'image/jpeg', 'seq': 1});
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(session.error, isNull);
+    expect(session.image, [7, 8]);
+    replies.last.complete(streamed(2));
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(session.image, [1, 2, 3]);
+    session.dispose();
+  });
 }

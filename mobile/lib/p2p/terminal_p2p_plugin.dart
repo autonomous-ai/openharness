@@ -2,12 +2,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:harness_mobile/e2ee/envelope.dart' show encryptedDownTypes;
 import 'package:harness_mobile/logging/app_log.dart';
 import 'package:harness_mobile/terminal/terminal_binary.dart';
 import 'package:harness_mobile/ws/terminal_transport_plugin.dart';
+import 'package:harness_mobile/ws/viewer_p2p.dart';
 
 import 'terminal_p2p_link.dart';
 import 'terminal_p2p_policy.dart';
+import 'viewer_frame_assembler.dart';
 
 /// The phone's port of the harness CLI's `RemoteRelayPool` P2P orchestration
 /// (`remoteRelay.ts`): where the desktop lets its local daemon decide which wire
@@ -136,6 +139,10 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
   /// demotion resets it along with the attempt count: the next link is its own.
   bool _upgradeDone = false;
 
+  late final _viewer = _ViewerP2pImpl(this);
+  @override
+  ViewerP2p get viewer => _viewer;
+
   String get _sid =>
       machineId.length > 8 ? machineId.substring(0, 8) : machineId;
 
@@ -197,6 +204,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     _pendingOpens.clear();
     _streams.clear();
     _migrating.clear();
+    _viewer._close();
     unawaited(shadow?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
     unawaited(orphan?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
     unawaited(link?.stop(reason: 'relay_closed', notifyPeer: notifyPeer));
@@ -233,11 +241,14 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     final policy = _policy;
     if (policy == null || _link != null || _disposed) return;
     var wasDirect = false;
+    final viewer = _viewerOn;
     late final TerminalP2pLink link;
     link = links.create(
       policy: policy,
       sendSignal: _sendSignal,
       onData: _handleP2pData,
+      onViewerData: viewer ? _handleViewerData : null,
+      onViewerState: viewer ? _onViewerState : null,
       onStep: (step, elapsed) =>
           _log('step · $step +${elapsed.inMilliseconds}ms'),
       onState: (state, setup, reason) {
@@ -271,6 +282,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
             // Without this the plugin is stuck: `_link` still points at a finished
             // instance and `_startP2p`'s own guard blocks every future attempt.
             _link = null;
+            _viewer._sync();
             _scheduleRetry();
           case TerminalP2pLinkState.connecting:
           case TerminalP2pLinkState.closed:
@@ -291,6 +303,12 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       host.send({'type': type, 'payload': payload}, force: TransportVia.ws),
     );
   }
+
+  /// A machine from before `viewer-v1` refuses the label, which crashed the CLI's
+  /// werift initiator — so the link only opens it for one that announced it.
+  bool get _viewerOn => host.codec.p2pViewerVersion == 1;
+
+  void _onViewerState(bool open) => _viewer._sync();
 
   void _scheduleRetry() {
     if (_disposed) return;
@@ -428,6 +446,20 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
         _upgradeWaitResolve?.call();
       }
       await host.deliverBinary(local);
+    });
+  }
+
+  /// `viewer-v1` carries only viewer-frame parts down, sealed like terminal
+  /// binary; anything else there is dropped (`surface_state` rides the relay).
+  void _handleViewerData(Object data) {
+    if (data is String) return;
+    host.enqueueInbound(() async {
+      if (_disposed) return;
+      final bytes = asBytes(data);
+      if (bytes.length > 512 * 1024) return;
+      final local = host.codec.decodeBinary(bytes);
+      final part = local == null ? null : decodeViewerPart(local);
+      if (part != null) _viewer._add(part);
     });
   }
 
@@ -601,6 +633,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     _upgradeWaitResolve = null;
     final link = _link;
     _link = null;
+    _viewer._sync();
     final streamIds = List.of(_p2pStreams);
     _p2pStreams.clear();
     _pendingOpens.clear();
@@ -700,6 +733,8 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       // Identical to the primary's wiring — nothing routes real data here before
       // promotion, and after it this IS the primary.
       onData: _handleP2pData,
+      onViewerData: _viewerOn ? _handleViewerData : null,
+      onViewerState: _viewerOn ? _onViewerState : null,
       onStep: (step, elapsed) => _log(
         'upgrade step · attempt=$attempt $step +${elapsed.inMilliseconds}ms',
       ),
@@ -792,6 +827,7 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
     // and stays p2p; only the link behind them changes.
     _link = shadow;
     _upgradeShadow = null;
+    _viewer._sync(force: true);
     final acked = await _waitForUpgradeMilestone(() {
       for (final streamId in streamIds) {
         unawaited(
@@ -865,4 +901,98 @@ class TerminalP2pPlugin implements TerminalTransportPlugin {
       }, force: TransportVia.ws),
     );
   }
+}
+
+/// [ViewerP2p] over whichever link is the plugin's primary right now.
+class _ViewerP2pImpl implements ViewerP2p {
+  _ViewerP2pImpl(this._plugin);
+
+  final TerminalP2pPlugin _plugin;
+  final _readiness = StreamController<bool>.broadcast();
+  bool _lastReady = false;
+
+  /// streamId → its frames and its own assembler (one per surface), released
+  /// when its last subscription is cancelled.
+  final _surfaces =
+      <String, (StreamController<ViewerFrame>, ViewerFrameAssembler)>{};
+
+  @override
+  bool get ready {
+    final plugin = _plugin;
+    return !plugin._disposed &&
+        (plugin._link?.viewerReady ?? false) &&
+        plugin._viewerOn;
+  }
+
+  @override
+  String get via => _plugin._link?.transport == TerminalP2pTransport.relay
+      ? 'turn'
+      : 'direct';
+
+  @override
+  bool send(String type, Map<String, dynamic> payload) {
+    // Only a type the envelope always seals: anything else would cross in the clear.
+    if (!ready || !encryptedDownTypes.contains(type)) return false;
+    final sealed = _plugin.host.codec.encodeFrame({
+      'type': type,
+      'payload': payload,
+    });
+    return sealed != null && _plugin._link!.sendViewer(jsonEncode(sealed));
+  }
+
+  @override
+  Stream<ViewerFrame> frames(String surfaceId) {
+    final streamId = _surfaceStreamId(surfaceId);
+    if (streamId == null || _readiness.isClosed) return const Stream.empty();
+    return _surfaces
+        .putIfAbsent(streamId, () {
+          late final StreamController<ViewerFrame> frames;
+          frames = StreamController<ViewerFrame>.broadcast(
+            onCancel: () {
+              if (identical(_surfaces[streamId]?.$1, frames)) {
+                _surfaces.remove(streamId);
+              }
+              unawaited(frames.close());
+            },
+          );
+          return (frames, ViewerFrameAssembler());
+        })
+        .$1
+        .stream;
+  }
+
+  @override
+  Stream<bool> get readiness => _readiness.stream;
+
+  void _add(ViewerPart part) {
+    final surface = _surfaces[part.streamId];
+    final frame = surface?.$2.add(part);
+    if (frame != null) surface!.$1.add(frame);
+  }
+
+  void _sync({bool force = false}) {
+    if (_readiness.isClosed) return;
+    final now = ready;
+    if (now == _lastReady && !force) return;
+    _lastReady = now;
+    _readiness.add(now);
+  }
+
+  void _close() {
+    _sync();
+    unawaited(_readiness.close());
+    for (final (controller, _) in List.of(_surfaces.values)) {
+      unawaited(controller.close());
+    }
+    _surfaces.clear();
+  }
+}
+
+/// The streamId a surface's parts carry: its 32-hex id as a UUID, as the CLI's
+/// `surfaceStreamId` (viewerFrameParts.ts) maps it.
+String? _surfaceStreamId(String surfaceId) {
+  if (!RegExp(r'^[0-9a-f]{32}$').hasMatch(surfaceId)) return null;
+  return '${surfaceId.substring(0, 8)}-${surfaceId.substring(8, 12)}'
+      '-${surfaceId.substring(12, 16)}-${surfaceId.substring(16, 20)}'
+      '-${surfaceId.substring(20)}';
 }

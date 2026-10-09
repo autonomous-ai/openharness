@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { deriveTerminalBinaryKey, openTerminalBinary, sealTerminalBinary } from './e2ee/terminalSeal.js'
 import {
   decodeTerminalLocal,
+  decodeTerminalPlain,
   encodeTerminalLocal,
+  encodeTerminalPlain,
   parseTerminalBinaryEnvelope,
+  terminalBinaryType,
+  type TerminalBinaryClear,
   TerminalBinaryKind,
   TERMINAL_BINARY_IMAGE_PASTE_MAX_CIPHERTEXT_BYTES,
   TERMINAL_BINARY_MAX_CIPHERTEXT_BYTES,
@@ -30,6 +34,45 @@ describe('terminal binary protocol v3', () => {
     expect(decodeTerminalLocal(local)).toBeNull()
     expect(encodeTerminalLocal({ ...frame, kind: TerminalBinaryKind.output })).toBeNull()
     expect(encodeTerminalLocal({ ...frame, tabId: 'bad\ntab' })).toBeNull()
+  })
+  it('round-trips a viewer frame part through the sealed v3 envelope and HTRL', () => {
+    const clear: TerminalBinaryClear = { kind: TerminalBinaryKind.viewerFrame, streamId, seq: 3,
+      bytes: new Uint8Array([0xff, 0xd8, 1, 2]), compressed: false,
+      viewer: { part: 0, parts: 1, width: 800, height: 600, scale: 2 } }
+    const local = encodeTerminalLocal(clear)!
+    expect(decodeTerminalLocal(local)).toMatchObject({ kind: TerminalBinaryKind.viewerFrame, seq: 3,
+      viewer: { part: 0, parts: 1, width: 800, height: 600, scale: 2 } })
+    expect(openTerminalBinary(key, sealTerminalBinary(key, 1, clear)!)?.frame).toMatchObject({ viewer: clear.viewer, seq: 3 })
+    expect(terminalBinaryType(TerminalBinaryKind.viewerFrame)).toBe('viewer_frame')
+  })
+  it('refuses a compressed viewer frame and a viewer frame without its geometry', () => {
+    expect(encodeTerminalPlain({ kind: TerminalBinaryKind.viewerFrame, streamId, seq: 1, bytes: new Uint8Array(1), compressed: true,
+      viewer: { part: 0, parts: 1, width: 1, height: 1, scale: 1 } })).toBeNull()
+    expect(encodeTerminalPlain({ kind: TerminalBinaryKind.viewerFrame, streamId, seq: 1, bytes: new Uint8Array(1), compressed: false })).toBeNull()
+  })
+  it('refuses on decode what encode would never write: geometry out of range, ZLIB, a cut-short header', () => {
+    const valid = encodeTerminalPlain({ kind: TerminalBinaryKind.viewerFrame, streamId, seq: 1, bytes: new Uint8Array([1]), compressed: false,
+      viewer: { part: 0, parts: 2, width: 800, height: 600, scale: 1 } })!
+    expect(decodeTerminalPlain(TerminalBinaryKind.viewerFrame, 0, valid)?.viewer).toEqual({ part: 0, parts: 2, width: 800, height: 600, scale: 1 })
+    // Each u16 of the 10-byte viewer header (part, parts, width, height, centi-scale) set out of its range.
+    const bad: Array<[offset: number, value: number]> = [
+      [24, 2], [26, 0], [26, 17], [28, 0], [28, 7681], [30, 0], [30, 7681], [32, 49], [32, 301],
+    ]
+    for (const [offset, value] of bad) {
+      const plain = Uint8Array.from(valid)
+      new DataView(plain.buffer).setUint16(offset, value, false)
+      expect(decodeTerminalPlain(TerminalBinaryKind.viewerFrame, 0, plain), `offset ${offset} = ${value}`).toBeNull()
+    }
+    expect(decodeTerminalPlain(TerminalBinaryKind.viewerFrame, 1, valid)).toBeNull()  // FLAG_ZLIB
+    expect(decodeTerminalPlain(TerminalBinaryKind.viewerFrame, 0, valid.subarray(0, 33))).toBeNull()
+  })
+  it('tolerates an empty part: its header is whole, and judging the JPEG is not the codec\'s job', () => {
+    // The splitter never makes one (viewerFrameParts refuses an empty JPEG), but the codec's encode writes one,
+    // and decode must not refuse what encode writes.
+    const empty = encodeTerminalPlain({ kind: TerminalBinaryKind.viewerFrame, streamId, seq: 1, bytes: new Uint8Array(0), compressed: false,
+      viewer: { part: 0, parts: 1, width: 800, height: 600, scale: 1 } })!
+    expect(empty).toHaveLength(34)
+    expect(decodeTerminalPlain(TerminalBinaryKind.viewerFrame, 0, empty)?.bytes).toEqual(new Uint8Array(0))
   })
   it('derives the cross-platform terminal key in its own nonce domain', () => {
     expect(Buffer.from(deriveTerminalBinaryKey(key)).toString('hex')).toBe(

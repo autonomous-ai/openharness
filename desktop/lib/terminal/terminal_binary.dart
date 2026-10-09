@@ -47,7 +47,11 @@ enum TerminalBinaryKind {
   /// never a Ctrl+V replay — unlike [imagePaste], the goal here is only "the pane gets a valid
   /// path"). See [TerminalSession.pasteFile]. Upload (client→CLI) only; nothing ever sends this
   /// back down.
-  pasteFile(7);
+  pasteFile(7),
+
+  /// One part of a viewer surface's JPEG frame, machine -> client, on the viewer data channel
+  /// (cli/src/lib/viewerFrameParts.ts). Carries [ViewerPartMeta] after the seq; never zlib/swarm.
+  viewerFrame(8);
 
   final int code;
   const TerminalBinaryKind(this.code);
@@ -77,6 +81,14 @@ int maxTerminalPayloadBytesFor(TerminalBinaryKind kind) {
   }
 }
 
+/// A viewerFrame's part header: 5 big-endian u16 at plain offset 24, then the JPEG bytes.
+/// Bounds mirror `validViewer` in the CLI's terminalBinary.ts.
+typedef ViewerPartMeta = ({int part, int parts, int width, int height, int centiScale});
+const _viewerMetaBytes = 10;
+bool _validViewer(ViewerPartMeta m) =>
+    m.parts >= 1 && m.parts <= 16 && m.part < m.parts && m.width >= 1 && m.width <= 7680 &&
+    m.height >= 1 && m.height <= 7680 && m.centiScale >= 50 && m.centiScale <= 300;
+
 class TerminalBinaryFrame {
   final TerminalBinaryKind kind;
   final String streamId;
@@ -86,6 +98,7 @@ class TerminalBinaryFrame {
   final int? cols;
   final int? rows;
   final String? tabId;
+  final ViewerPartMeta? viewer;
 
   const TerminalBinaryFrame({
     required this.kind,
@@ -96,6 +109,7 @@ class TerminalBinaryFrame {
     this.cols,
     this.rows,
     this.tabId,
+    this.viewer,
   });
 }
 
@@ -137,6 +151,17 @@ Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
   if (frame.kind == TerminalBinaryKind.sync && frame.bytes.isNotEmpty) {
     return null;
   }
+  final viewer = frame.viewer;
+  if (frame.kind == TerminalBinaryKind.viewerFrame) {
+    if (frame.compressed ||
+        frame.tabId != null ||
+        viewer == null ||
+        !_validViewer(viewer)) {
+      return null;
+    }
+  } else if (viewer != null) {
+    return null;
+  }
   final scope = frame.tabId == null ? null : utf8.encode(frame.tabId!);
   if (scope != null &&
       (!_canCarrySwarm(frame.kind) ||
@@ -145,6 +170,8 @@ Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
   }
   final metaBytes = frame.kind == TerminalBinaryKind.keyframe
       ? 28
+      : viewer != null
+      ? 24 + _viewerMetaBytes
       : 24 + (scope == null ? 0 : 1 + scope.length);
   final output = Uint8List(metaBytes + frame.bytes.length)..setRange(0, 16, id);
   final view = ByteData.sublistView(output);
@@ -162,6 +189,14 @@ Uint8List? encodeTerminalPlain(TerminalBinaryFrame frame) {
     }
     view.setUint16(24, cols, Endian.big);
     view.setUint16(26, rows, Endian.big);
+  }
+  if (viewer != null) {
+    view
+      ..setUint16(24, viewer.part, Endian.big)
+      ..setUint16(26, viewer.parts, Endian.big)
+      ..setUint16(28, viewer.width, Endian.big)
+      ..setUint16(30, viewer.height, Endian.big)
+      ..setUint16(32, viewer.centiScale, Endian.big);
   }
   if (scope != null) {
     output[24] = scope.length;
@@ -182,11 +217,16 @@ TerminalBinaryFrame? decodeTerminalPlain(
               kind == TerminalBinaryKind.sync ||
               kind == TerminalBinaryKind.paste ||
               kind == TerminalBinaryKind.imagePaste ||
-              kind == TerminalBinaryKind.pasteFile) &&
+              kind == TerminalBinaryKind.pasteFile ||
+              kind == TerminalBinaryKind.viewerFrame) &&
           (flags & _flagZlib) != 0)) {
     return null;
   }
-  var metaBytes = kind == TerminalBinaryKind.keyframe ? 28 : 24;
+  var metaBytes = kind == TerminalBinaryKind.keyframe
+      ? 28
+      : kind == TerminalBinaryKind.viewerFrame
+      ? 24 + _viewerMetaBytes
+      : 24;
   String? tabId;
   if ((flags & _flagSwarm) != 0) {
     if (plaintext.length < 25) return null;
@@ -205,6 +245,17 @@ TerminalBinaryFrame? decodeTerminalPlain(
   final view = ByteData.sublistView(plaintext);
   final seq = readWireCounter(view, 16);
   if (seq == null) return null;
+  ViewerPartMeta? viewer;
+  if (kind == TerminalBinaryKind.viewerFrame) {
+    viewer = (
+      part: view.getUint16(24, Endian.big),
+      parts: view.getUint16(26, Endian.big),
+      width: view.getUint16(28, Endian.big),
+      height: view.getUint16(30, Endian.big),
+      centiScale: view.getUint16(32, Endian.big),
+    );
+    if (!_validViewer(viewer)) return null;
+  }
   return TerminalBinaryFrame(
     kind: kind,
     streamId: _uuidString(Uint8List.sublistView(plaintext, 0, 16)),
@@ -212,6 +263,7 @@ TerminalBinaryFrame? decodeTerminalPlain(
     bytes: Uint8List.fromList(plaintext.sublist(metaBytes)),
     compressed: (flags & _flagZlib) != 0,
     tabId: tabId,
+    viewer: viewer,
     cols: kind == TerminalBinaryKind.keyframe
         ? view.getUint16(24, Endian.big)
         : null,

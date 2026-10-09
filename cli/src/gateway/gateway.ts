@@ -26,7 +26,8 @@ import { E2eeManager, type LinkedPeer, type PairResult } from '../lib/e2ee/manag
 import { MachinePeerStore } from '../lib/e2ee/machinePeers.js'
 import { logFrame, sid } from '../lib/log.js'
 import { BACKEND_ONLY_DOWN_TYPES, GATEWAY_REQUEST_TYPES, isLocalClientId, logSafeType } from '../lib/relayFrames.js'
-import { encodeTerminalHop, TerminalHopDirection, type TerminalBinaryClear } from '../lib/terminalBinary.js'
+import { SURFACE_DOWN_TYPES } from '../lib/viewerFrames.js'
+import { encodeTerminalHop, TerminalBinaryKind, TerminalHopDirection, type TerminalBinaryClear } from '../lib/terminalBinary.js'
 import {
   TerminalP2pResponderPool,
   TERMINAL_P2P_DOWN_TYPES,
@@ -37,6 +38,24 @@ import {
 import { UpstreamLink } from './upstream.js'
 
 type Frame = Record<string, unknown>
+
+/** A viewer frame waits until the viewer channel holds under this much, then all its parts go: with a
+ *  connection's frames sent one at a time, the channel holds about this plus one frame (at most 16 parts
+ *  of 480 KiB, 7.5 MiB) (docs/superpowers/specs/2026-10-08-viewer-p2p-design.md, "Push with backpressure"). */
+const VIEWER_LOW_BYTES = 1024 * 1024
+/** How long a frame waits for that before it is dropped: a channel this stuck is not keeping up anyway. */
+const VIEWER_LOW_WAIT_MS = 5_000
+
+/** One connection's viewer frames, in order, across all its surfaces: what it is sending, the frame each
+ *  surface gave up on (streamId → seq), whether its channel closed, and the frame waiting to drain. */
+interface ViewerQueue {
+  chain: Promise<void>
+  dropped: Map<string, number>
+  gone: boolean
+  /** Set only while a frame waits; the close calls it. A promise kept for the queue's life and raced by
+   *  every frame instead held a reaction per frame until the close (~310 B each, ~33 MB/h at 30 fps). */
+  wake: ((low: boolean) => void) | null
+}
 
 export interface RelayGatewayOptions {
   /** Backend-resolved machine id, persisted by the SSO login preflight; in isolated unit tests, the token. */
@@ -57,6 +76,7 @@ export class RelayGateway implements GatewayPort {
   private readonly terminalP2p: TerminalP2pResponderPool
   private readonly p2pPendingOpens = new Map<string, Set<string>>()
   private readonly p2pStreams = new Map<string, Set<string>>()
+  private readonly viewerQueues = new Map<string, ViewerQueue>()
   /**
    * The terminal streams each remote client has open, as the core's frames to it say: `terminal_ready`
    * opens one, `terminal_closed` ends it. A stream a client moves onto its P2P channel must be one it
@@ -152,6 +172,8 @@ export class RelayGateway implements GatewayPort {
       sendSignal: (connId, type, payload) => this.sendP2pSignal(connId, type, payload),
       onData: (connId, data) => this.handleP2pData(connId, data),
       onUnavailable: (connId, reason) => this.demoteP2pConnection(connId, reason),
+      onViewerData: (connId, data) => this.handleViewerData(connId, data),
+      onViewerState: (connId, state) => this.viewerState(connId, state),
     })
   }
 
@@ -285,6 +307,8 @@ export class RelayGateway implements GatewayPort {
   /** Pairwise-encrypted binary terminal output/keyframe. The hop prefix exposes
    * only connId and direction to the opaque backend relay. */
   terminalBinary(connId: string, clear: TerminalBinaryClear): boolean {
+    // A viewer frame never takes the relay (the backend does not carry the kind) nor a terminal's channel.
+    if (clear.kind === TerminalBinaryKind.viewerFrame) return false
     const clientFrame = this.e2ee.wrapTerminalBinary(connId, clear)
     if (!clientFrame) return false
     if (this.p2pStreams.get(connId)?.has(clear.streamId)) {
@@ -294,6 +318,66 @@ export class RelayGateway implements GatewayPort {
     const packet = encodeTerminalHop(TerminalHopDirection.up, connId, clientFrame)
     if (!packet) return false
     return this.link.sendBinary(packet)
+  }
+
+  /** Sealed bytes handed to viewer channels, in all (`viewerP2pBytes`) and per connection; reported when a channel closes. */
+  viewerP2pBytes = 0
+  private readonly viewerConnBytes = new Map<string, number>()
+
+  /**
+   * A viewer surface's frame part, sealed to the client like its terminal bytes, and only ever on its
+   * `viewer-v1` channel: never the relay, because the backend does not carry this kind. False when the
+   * connection has no viewer channel, which ends that surface's push and sends the client back to its WS
+   * long-poll. Parts go in order per connection; each frame first waits for the channel to drain.
+   */
+  viewerBinary(connId: string, clear: TerminalBinaryClear): boolean {
+    // Defense in depth: this channel carries viewer frames only, as the relay carries none of them.
+    if (clear.kind !== TerminalBinaryKind.viewerFrame || !this.terminalP2p.viewerReady(connId)) return false
+    let q = this.viewerQueues.get(connId)
+    if (!q) {
+      q = { chain: Promise.resolve(), dropped: new Map(), gone: false, wake: null }
+      this.viewerQueues.set(connId, q)
+    }
+    const queue = q
+    queue.chain = queue.chain.then(async () => {
+      // Its channel closed: what it still held is for no channel, not for one that opened since.
+      if (queue.gone) return
+      if (clear.viewer?.part === 0) {
+        // The pool's wait only gives up at its timeout when the channel closes; the close wakes it at once.
+        // A wait that throws is a channel that will not drain: the frame is dropped like a timed-out one.
+        const low = await new Promise<boolean>((resolve) => {
+          queue.wake = resolve
+          this.terminalP2p.waitViewerLow(connId, VIEWER_LOW_BYTES, VIEWER_LOW_WAIT_MS).then(resolve, () => resolve(false))
+        })
+        queue.wake = null
+        // Per surface: one queue serves every surface of the connection, interleaved, and each has its own
+        // seqs; one surface's dropped frame must not drop, or be forgotten by, another's.
+        if (low) queue.dropped.delete(clear.streamId)
+        else queue.dropped.set(clear.streamId, clear.seq)
+      }
+      // The rest of a frame whose first part could not go would never make a whole frame.
+      if (queue.dropped.get(clear.streamId) === clear.seq) return
+      const sealed = this.e2ee.wrapTerminalBinary(connId, clear)
+      if (sealed && this.terminalP2p.sendViewer(connId, Buffer.from(sealed))) {
+        this.viewerP2pBytes += sealed.length
+        this.viewerConnBytes.set(connId, (this.viewerConnBytes.get(connId) ?? 0) + sealed.length)
+      } else queue.dropped.set(clear.streamId, clear.seq)  // a part that did not go leaves no whole frame to finish
+    }).catch((err) => {
+      // A throw while sealing costs this part, never the frames behind it.
+      console.error('[viewer-p2p] frame send failed:', err instanceof Error ? err.message : err)
+    })
+    return true
+  }
+
+  /** The viewer channel opened or closed. Open may be said twice (a TURN→direct promote); closed fails
+   *  what waits on it. The terminal streams have their own channel and stay where they are. */
+  private viewerState(connId: string, state: 'open' | 'closed'): void {
+    if (state === 'open') { console.warn(`[viewer-p2p] ${sid(connId)} open`); return }
+    console.warn(`[viewer-p2p] ${sid(connId)} closed bytes=${this.viewerConnBytes.get(connId) ?? 0} total=${this.viewerP2pBytes}`)
+    this.viewerConnBytes.delete(connId)
+    const queue = this.viewerQueues.get(connId)
+    if (queue) { queue.gone = true; queue.wake?.(false) }
+    this.viewerQueues.delete(connId)
   }
 
   /**
@@ -421,6 +505,12 @@ export class RelayGateway implements GatewayPort {
     // grid-name incident was exactly a bypass nobody could see.
     if (transport !== 'relay' && BACKEND_ONLY_DOWN_TYPES.has(type)) {
       console.warn(`[backend] ignoring ${type} from ${transport} (${connId}) — only the backend may send it`)
+      return
+    }
+    // Surface frames belong to the client's `viewer-v1` channel; over the relay a client uses the proxy's
+    // `viewer_surface` long-poll instead, so one arriving there is not a client of this protocol.
+    if (SURFACE_DOWN_TYPES.has(type) && transport !== 'p2p') {
+      console.warn(`[backend] ignoring ${type} from ${transport} (${connId}) — only on the viewer channel`)
       return
     }
     if (connId.startsWith('observer:')) {
@@ -680,6 +770,16 @@ export class RelayGateway implements GatewayPort {
     }
     if (data.length > 512 * 1024) return
     this.enqueueTerminalBinary(connId, data)
+  }
+
+  /** A client's JSON on its viewer channel: sealed surface control frames only, opened in `dispatchDown`.
+   *  Binary from the client has no meaning on this channel. */
+  private handleViewerData(connId: string, data: TerminalP2pData): void {
+    if (typeof data !== 'string' || Buffer.byteLength(data, 'utf8') > 512 * 1024) return
+    let frame: Frame
+    try { frame = JSON.parse(data) as Frame } catch { return }
+    if (typeof frame?.type !== 'string' || !SURFACE_DOWN_TYPES.has(frame.type)) return
+    this.enqueueDown(frame, connId, 'p2p')
   }
 
   /** What the core has told a remote client about its terminal streams: one opened, one closed. */

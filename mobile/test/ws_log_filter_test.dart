@@ -24,6 +24,11 @@ void main() {
     }
   });
 
+  test('a viewer surface\'s frames and input never reach the log', () {
+    // Requested at frame rate, and each reply is somebody's screen.
+    expect(WsConn.worthLogging('viewer_surface'), isFalse);
+  });
+
   test('the frames a log is read for still are', () {
     for (final type in const ['node_status', 'agent_created', 'turn_ended']) {
       expect(WsConn.worthLogging(type), isTrue, reason: type);

@@ -10,7 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 class FakeWebRtc {
   FakeWebRtc() {
     _messenger.setMockMethodCallHandler(_method, _onCall);
-    for (final name in ['FlutterWebRTC.Event', _pcEvents, _dcEvents]) {
+    for (final name in _eventChannels) {
       _messenger.setMockMethodCallHandler(
         MethodChannel(name),
         (_) async => null,
@@ -20,10 +20,21 @@ class FakeWebRtc {
 
   static const _method = MethodChannel('FlutterWebRTC.Method');
   static const peerConnectionId = 'pc1';
+
+  /// Channels get `dc1`, `dc2`, … in the order they are created: `terminal-v1` is `dc1`, and
+  /// `viewer-v1`, when the link opens one, `dc2`.
   static const dataChannelId = 'dc1';
+  static const viewerChannelId = 'dc2';
   static const _pcEvents = 'FlutterWebRTC/peerConnectionEvent$peerConnectionId';
-  static const _dcEvents =
-      'FlutterWebRTC/dataChannelEvent$peerConnectionId$dataChannelId';
+  static String _dcEvents(String id) =>
+      'FlutterWebRTC/dataChannelEvent$peerConnectionId$id';
+  static final _eventChannels = [
+    'FlutterWebRTC.Event',
+    _pcEvents,
+    _dcEvents(dataChannelId),
+    _dcEvents(viewerChannelId),
+  ];
+  int _channels = 0;
 
   TestDefaultBinaryMessenger get _messenger =>
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -62,7 +73,8 @@ class FakeWebRtc {
       case 'createPeerConnection':
         return {'peerConnectionId': peerConnectionId};
       case 'createDataChannel':
-        return {'id': 1, 'flutterId': dataChannelId};
+        _channels++;
+        return {'id': _channels, 'flutterId': 'dc$_channels'};
       case 'createOffer':
         return {'sdp': offerSdp, 'type': 'offer'};
       case 'setLocalDescription':
@@ -98,28 +110,31 @@ class FakeWebRtc {
   Future<void> connection(String state) =>
       _event(_pcEvents, {'event': 'peerConnectionState', 'state': state});
 
-  Future<void> channelState(String state) => _event(_dcEvents, {
-    'event': 'dataChannelStateChanged',
-    'id': 1,
-    'state': state,
-  });
+  Future<void> channelState(String state, {String channel = dataChannelId}) =>
+      _event(_dcEvents(channel), {
+        'event': 'dataChannelStateChanged',
+        'id': int.parse(channel.substring(2)),
+        'state': state,
+      });
 
-  Future<void> message(Object data) => _event(_dcEvents, {
-    'event': 'dataChannelReceiveMessage',
-    'id': 1,
-    'type': data is String ? 'text' : 'binary',
-    'data': data is String ? data : Uint8List.fromList(data as List<int>),
-  });
+  Future<void> message(Object data, {String channel = dataChannelId}) =>
+      _event(_dcEvents(channel), {
+        'event': 'dataChannelReceiveMessage',
+        'id': int.parse(channel.substring(2)),
+        'type': data is String ? 'text' : 'binary',
+        'data': data is String ? data : Uint8List.fromList(data as List<int>),
+      });
 
-  Future<void> buffered(int amount) => _event(_dcEvents, {
-    'event': 'dataChannelBufferedAmountChange',
-    'bufferedAmount': amount,
-    'changedAmount': 0,
-  });
+  Future<void> buffered(int amount, {String channel = dataChannelId}) =>
+      _event(_dcEvents(channel), {
+        'event': 'dataChannelBufferedAmountChange',
+        'bufferedAmount': amount,
+        'changedAmount': 0,
+      });
 
   void dispose() {
     _messenger.setMockMethodCallHandler(_method, null);
-    for (final name in ['FlutterWebRTC.Event', _pcEvents, _dcEvents]) {
+    for (final name in _eventChannels) {
       _messenger.setMockMethodCallHandler(MethodChannel(name), null);
     }
   }
@@ -195,6 +210,8 @@ class LinkLog {
   final signals = <Signal>[];
   final states = <String>[];
   final data = <Object>[];
+  final viewerData = <Object>[];
+  final viewerStates = <bool>[];
   final unavailable = <String>[];
   final steps = <String>[];
   final _opened = Completer<void>();

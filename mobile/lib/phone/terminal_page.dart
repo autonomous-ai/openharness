@@ -60,6 +60,7 @@ import 'phone_navigation.dart';
 import 'phone_search_catalog.dart' show phoneAgentId;
 import 'agent_index.dart';
 import 'terminal_title.dart';
+import 'viewer_page.dart';
 import 'welcome/focus_hints.dart';
 
 import 'package:harness_mobile/demo/sample_mode.dart';
@@ -2411,6 +2412,17 @@ class _TerminalPageState extends State<TerminalPage>
   }
 
   List<PhoneSheetAction> _agentActions(Agent agent) => [
+    if (agent.hasViewer)
+      PhoneSheetAction(
+        icon: LucideIcons.monitor300,
+        label: agent.viewerName ?? 'Viewer',
+        chevron: true,
+        onTap: () => Navigator.of(context).push(
+          phoneRoute(
+            (_) => ViewerPage(notifier: widget.notifier, machineId: widget.machineId, agent: agent),
+          ),
+        ),
+      ),
     PhoneSheetAction(
       icon: LucideIcons.gitBranch300,
       label: 'Branches and pull requests',

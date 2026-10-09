@@ -5,6 +5,10 @@ import { pickTurnUrl, selectStunUrls, type StunSelector } from './stunSelect.js'
 
 export const TERMINAL_P2P_PROTOCOL_VERSION = 1
 export const TERMINAL_P2P_CHANNEL = 'terminal-v1'
+/** The viewer surface's channel, on the terminal's peer connection: one negotiation serves both. It is
+ *  a passenger — its close or error only ends the viewer stream (which falls back to the relay), never
+ *  the terminal channel or the connection; a failed connection still ends both. */
+export const VIEWER_P2P_CHANNEL = 'viewer-v1'
 /**
  * The budget covers BOTH peers' gathering, not just ours, and 10s was too tight for that.
  *
@@ -117,6 +121,8 @@ export interface TerminalP2pInitiatorDeps {
    *  RemoteRelayPool's TURN-to-direct upgrade), not a fresh session — tags the offer so the responder
    *  routes it to acceptUpgradeOffer() instead of tearing down the connId's live entry. */
   upgrade?: boolean
+  onViewerData?: (data: TerminalP2pData) => void
+  onViewerState?: (state: 'open' | 'closed') => void
 }
 
 type ReadyWaiter = (ready: boolean) => void
@@ -198,6 +204,13 @@ function channelCanSend(channel: RTCDataChannel | null): channel is RTCDataChann
     && channel.bufferedAmount < TERMINAL_P2P_MAX_BUFFERED_BYTES
 }
 
+/** The viewer channel is not held to the terminal's 2 MiB ceiling: its sender bounds it (the gateway waits for it to
+ *  drain under 1 MiB before each frame, and a surface has at most two frames un-acked). Refusing a part past 2 MiB
+ *  only cut a dense frame (> ~1.4 MB) short after it had started, stalling its push until the ack timeout. */
+function viewerCanSend(channel: RTCDataChannel | null): channel is RTCDataChannel {
+  return channel?.readyState === 'open'
+}
+
 /**
  * Waits for `channel`'s send buffer to drop back under the ceiling, using the
  * `bufferedAmountLowThreshold`/`bufferedAmountLow` plumbing this file already configures
@@ -208,15 +221,44 @@ function channelCanSend(channel: RTCDataChannel | null): channel is RTCDataChann
  * closure or if the buffer hasn't cleared within `timeoutMs` — either way, the caller's existing
  * fall-back-to-relay-and-demote behavior is exactly what should happen next.
  */
-export async function waitForBufferedAmountLow(channel: RTCDataChannel, timeoutMs: number): Promise<boolean> {
+export async function waitForBufferedAmountLow(
+  channel: RTCDataChannel,
+  timeoutMs: number,
+  below = TERMINAL_P2P_MAX_BUFFERED_BYTES,
+): Promise<boolean> {
   if (channel.readyState !== 'open') return false
-  if (channel.bufferedAmount < TERMINAL_P2P_MAX_BUFFERED_BYTES) return true
+  if (channel.bufferedAmount < below) return true
   try {
     await channel.bufferedAmountLow.asPromise(timeoutMs)
   } catch {
     return false // timed out, or the channel errored while we waited
   }
-  return channel.readyState === 'open' && channel.bufferedAmount < TERMINAL_P2P_MAX_BUFFERED_BYTES
+  return channel.readyState === 'open' && channel.bufferedAmount < below
+}
+
+/**
+ * Wires a `viewer-v1` channel on either side. `live()` drops events from a channel its owner has let
+ * go of (stopped, torn down, or replaced). Close and error only report the viewer closed: the viewer
+ * must never take the terminal down with it, so nothing here can reach `fail()` or `onUnavailable`.
+ */
+function wireViewerChannel(
+  channel: RTCDataChannel,
+  live: () => boolean,
+  setOpen: (open: boolean) => void,
+  onData: (data: TerminalP2pData) => void,
+): void {
+  channel.bufferedAmountLowThreshold = 256 * 1024
+  channel.stateChanged.subscribe((state) => {
+    if (!live()) return
+    if (state === 'open') setOpen(true)
+    else if (state === 'closed' || state === 'closing') setOpen(false)
+  })
+  channel.onMessage.subscribe((data) => { if (live()) onData(data) })
+  channel.error.subscribe(() => {
+    if (!live()) return
+    setOpen(false)
+    try { channel.close() } catch { /* already closed */ }
+  })
 }
 
 /** Source side: owns the offerer for one pooled remote-machine relay connection. */
@@ -228,6 +270,8 @@ export class TerminalP2pInitiator {
   private pc: RTCPeerConnection | null = null
   private channel: RTCDataChannel | null = null
   private ready = false
+  private viewerChannel: RTCDataChannel | null = null
+  private viewerOpen = false
   private starting = false
   private finished = false
   private timeout: ReturnType<typeof setTimeout> | null = null
@@ -246,6 +290,28 @@ export class TerminalP2pInitiator {
   }
 
   get isReady(): boolean { return this.ready && channelCanSend(this.channel) }
+
+  get viewerReady(): boolean { return this.viewerOpen && viewerCanSend(this.viewerChannel) }
+
+  /** Like `send()`, but a failure ends only the viewer channel; the caller falls back to the relay. */
+  sendViewer(data: TerminalP2pData): boolean {
+    const channel = this.viewerChannel
+    if (!this.viewerReady || !viewerCanSend(channel)) return false
+    try {
+      channel.send(data)
+      return true
+    } catch {
+      this.setViewerOpen(false)
+      try { channel.close() } catch { /* already closed */ }
+      return false
+    }
+  }
+
+  private setViewerOpen(open: boolean): void {
+    if (this.viewerOpen === open) return
+    this.viewerOpen = open
+    this.deps.onViewerState?.(open ? 'open' : 'closed')
+  }
 
   /**
    * Which path ICE actually nominated, once the channel is open. 'relay' means the bytes are going
@@ -311,10 +377,21 @@ export class TerminalP2pInitiator {
     this.step('stun-raced')
     const pc = new RTCPeerConnection(peerConfig(stunUrls, turnChoice(this.deps.policy.turn, udpReachable)))
     const channel = pc.createDataChannel(TERMINAL_P2P_CHANNEL, { ordered: true })
+    // Created before the offer so it is in the same SDP: one negotiation, no renegotiation later. Only
+    // for a caller that reads viewer data: a responder from before viewer-v1 refuses the label at once,
+    // its stream reset lands before its DCEP ACK, and werift then rejects "channel not found" with no
+    // handler (reproduced: new initiator against the previous responder, every run). That rejection
+    // would take down a service process, which has no unhandledRejection guard.
+    const viewer = this.deps.onViewerData ? pc.createDataChannel(VIEWER_P2P_CHANNEL, { ordered: true }) : null
     this.pc = pc
     this.channel = channel
+    this.viewerChannel = viewer
     this.wirePeer(pc)
     this.wireChannel(channel)
+    if (viewer) {
+      wireViewerChannel(viewer, () => this.viewerChannel === viewer && !this.finished,
+        (open) => this.setViewerOpen(open), (data) => this.deps.onViewerData?.(data))
+    }
     void this.createOffer(pc)
   }
 
@@ -427,9 +504,12 @@ export class TerminalP2pInitiator {
         reason,
       })
     }
+    this.setViewerOpen(false)
     try { this.channel?.close() } catch { /* already closed */ }
+    try { this.viewerChannel?.close() } catch { /* already closed */ }
     const pc = this.pc
     this.channel = null
+    this.viewerChannel = null
     this.pc = null
     if (pc) await pc.close().catch(() => { /* best effort */ })
     this.deps.onState?.('closed', this.now() - this.startedAt, reason)
@@ -494,6 +574,8 @@ export interface TerminalP2pResponderPoolDeps {
   onData: (connId: string, data: TerminalP2pData) => void
   onUnavailable?: (connId: string, reason: string) => void
   selectStunUrls?: StunSelector
+  onViewerData?: (connId: string, data: TerminalP2pData) => void
+  onViewerState?: (connId: string, state: 'open' | 'closed') => void
 }
 
 interface ResponderEntry {
@@ -501,6 +583,8 @@ interface ResponderEntry {
   pc: RTCPeerConnection
   channel: RTCDataChannel | null
   ready: boolean
+  viewerChannel: RTCDataChannel | null
+  viewerReady: boolean
   timeout: ReturnType<typeof setTimeout>
   disconnectGraceTimer: ReturnType<typeof setTimeout> | null
   closing: boolean
@@ -576,6 +660,42 @@ export class TerminalP2pResponderPool {
     }
   }
 
+  viewerReady(connId: string): boolean {
+    const entry = this.entries.get(connId)
+    return !!entry?.viewerReady && viewerCanSend(entry.viewerChannel)
+  }
+
+  /** Like `send()`, but a failure ends only the viewer channel, never the connection. */
+  sendViewer(connId: string, data: TerminalP2pData): boolean {
+    const entry = this.entries.get(connId)
+    const channel = entry?.viewerChannel ?? null
+    if (!entry?.viewerReady || !viewerCanSend(channel)) return false
+    try {
+      channel.send(data)
+      return true
+    } catch {
+      this.setViewerReady(connId, entry, false)
+      try { channel.close() } catch { /* already closed */ }
+      return false
+    }
+  }
+
+  /** Resolves true once the viewer channel's send buffer is under `below`; false on close or timeout. */
+  async waitViewerLow(connId: string, below: number, timeoutMs: number): Promise<boolean> {
+    const channel = this.entries.get(connId)?.viewerChannel
+    if (!channel) return false
+    // werift fires bufferedAmountLow on reaching <= threshold; one under `below` makes that mean `< below`.
+    if (channel.bufferedAmount >= below) channel.bufferedAmountLowThreshold = Math.max(0, below - 1)
+    return waitForBufferedAmountLow(channel, timeoutMs, below)
+  }
+
+  /** Only the primary's viewer is reported: a trial's channel is not carrying anything until promote(). */
+  private setViewerReady(connId: string, entry: ResponderEntry, open: boolean): void {
+    if (entry.viewerReady === open) return
+    entry.viewerReady = open
+    if (this.entries.get(connId) === entry) this.deps.onViewerState?.(connId, open ? 'open' : 'closed')
+  }
+
   /** Shared teardown body for both the primary map and the shadow map — takes the entry directly
    *  rather than looking it up by connId, because by the time promote() needs to close the OLD primary,
    *  `entries.get(connId)` already points at the just-promoted shadow. Looking it up again here would
@@ -593,12 +713,14 @@ export class TerminalP2pResponderPool {
       })
     }
     try { entry.channel?.close() } catch { /* already closed */ }
+    try { entry.viewerChannel?.close() } catch { /* already closed */ }
     await entry.pc.close().catch(() => { /* best effort */ })
   }
 
   async closeConnection(connId: string, reason = 'closed', notifyPeer = true): Promise<void> {
     const entry = this.entries.get(connId)
     if (entry && !entry.closing) {
+      this.setViewerReady(connId, entry, false) // while it is still the primary, so it is reported
       this.entries.delete(connId)
       // Every reason but 'superseded' retires the connId for good, so drop its generation counter too
       // or the map grows for the life of the daemon. 'superseded' is excluded because that call comes
@@ -684,6 +806,8 @@ export class TerminalP2pResponderPool {
       pc,
       channel: null,
       ready: false,
+      viewerChannel: null,
+      viewerReady: false,
       closing: false,
       disconnectGraceTimer: null,
       timeout: setTimeout(() => {
@@ -729,8 +853,19 @@ export class TerminalP2pResponderPool {
       if (entry.disconnectGraceTimer) { clearTimeout(entry.disconnectGraceTimer); entry.disconnectGraceTimer = null }
     })
     entry.pc.onDataChannel.subscribe((channel) => {
+      if (isCurrent() && channel.label === VIEWER_P2P_CHANNEL && !entry.viewerChannel) {
+        entry.viewerChannel = channel
+        // Same liveness rule as onMessage below, so the channel keeps working after promote(), and data
+        // a client sends on the trial between its cutover and our promote() is not dropped.
+        const live = (): boolean => (this.entries.get(connId) === entry || this.shadowEntries.get(connId) === entry) && !entry.closing
+        wireViewerChannel(channel, live, (open) => this.setViewerReady(connId, entry, open),
+          (data) => this.deps.onViewerData?.(connId, data))
+        return
+      }
       if (!isCurrent() || channel.label !== TERMINAL_P2P_CHANNEL) {
-        channel.close()
+        // Deferred until werift has sent its DCEP ACK: closed here, the stream reset reaches the peer
+        // first and a werift peer then rejects "channel not found" unhandled (see begin()'s comment).
+        setImmediate(() => { try { channel.close() } catch { /* already closed */ } })
         return
       }
       entry.channel = channel
@@ -798,6 +933,8 @@ export class TerminalP2pResponderPool {
     this.shadowOfferSeq.delete(connId)
     const old = this.entries.get(connId)
     this.entries.set(connId, shadow)
+    // The viewer moved to a new channel: report it, since the old one's close is never reported.
+    if (shadow.viewerReady || old?.viewerReady) this.deps.onViewerState?.(connId, shadow.viewerReady ? 'open' : 'closed')
     // notifyPeer:false — the initiator closes its own old side once OUR ack reaches it, so an abort
     // frame from here would only race that and risk landing after the initiator already moved on.
     if (old && !old.closing) void this.teardown(connId, old, 'upgraded', false)

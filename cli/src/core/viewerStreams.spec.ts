@@ -49,6 +49,26 @@ describe('this machine\'s viewers, served to a client over its connection', () =
     expect(viewers.closed).not.toHaveBeenCalled()
   })
 
+  it('answers a pushed surface\'s frames with VIEWERS_UNAVAILABLE while nobody serves them, so the client falls back', () => {
+    const { send, streams, off } = setup(false)
+    const surfaceId = 'a'.repeat(32)
+    streams.frame('c1', 'surface_open', { surfaceId, open: 'o1', agentId: 'a1' })
+    off()
+    streams.frame('c1', 'surface_ack', { surfaceId, seq: 3, open: 'o1' })
+    streams.frame('c1', 'surface_input', { surfaceId, input: 'i1', open: 'o1' })
+    const error = { surfaceId, error: 'VIEWERS_UNAVAILABLE', detail: NOT_SERVED, open: 'o1' }
+    expect(send.mock.calls).toEqual([
+      // The input never reached a surface: unapplied, so the client sends it again over WS. Only an input says so.
+      ['c1', 'surface_error', error], ['c1', 'surface_error', error], ['c1', 'surface_error', { ...error, input: 'i1', unapplied: true }],
+    ])
+    // A close needs no answer, and a frame naming no surface or a bad open has nothing to echo.
+    streams.frame('c1', 'surface_close', { surfaceId })
+    streams.frame('c1', 'surface_open', { surfaceId: '../x' })
+    streams.frame('c1', 'surface_ack', { surfaceId, open: 'x'.repeat(65), input: 7 })
+    expect(send).toHaveBeenCalledTimes(4)
+    expect(send).toHaveBeenLastCalledWith('c1', 'surface_error', { surfaceId, error: 'VIEWERS_UNAVAILABLE', detail: NOT_SERVED })
+  })
+
   it('asks the viewers for a client\'s rendered frame', async () => {
     const { viewers, streams } = setup()
     await expect(streams.surface('c1', { surfaceId: 'v' })).resolves.toEqual({ data: 'jpeg' })

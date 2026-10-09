@@ -204,6 +204,16 @@ class Agent {
   /// the field.
   final String? resumeMode;
 
+  /// The harness's viewer page on its machine (`agentFrame.ts` `viewerUrl`), shown through the
+  /// remote surface — the phone never loads it directly. Null when the harness has none.
+  final String? viewerUrl;
+
+  /// Why the viewer is not running, when it is not.
+  final String? viewerError;
+  final String? viewerName;
+
+  bool get hasViewer => viewerUrl != null || viewerError != null;
+
   const Agent({
     required this.id,
     this.sessionId,
@@ -232,6 +242,9 @@ class Agent {
     this.tokensUpdatedAt,
     this.outputStats,
     this.resumeMode,
+    this.viewerUrl,
+    this.viewerError,
+    this.viewerName,
   });
 
   factory Agent.fromJson(Map<String, dynamic> j) {
@@ -300,7 +313,20 @@ class Agent {
           : null,
       outputStats: AgentOutputStats.fromJson(j['outputStats']),
       resumeMode: _safeResumeMode(j['resumeMode']),
+      viewerUrl: _safeViewerUrl(j['viewerUrl']),
+      viewerError: _safeDetail(j['viewerError']),
+      viewerName: _safeLabel(j['viewerName']),
     );
+  }
+
+  /// A plain http(s) URL with a host, nothing else: it names the page the machine renders.
+  static String? _safeViewerUrl(Object? raw) {
+    if (raw is! String || raw.isEmpty || raw.length > 2048) return null;
+    if (RegExp(r'[\x00-\x1f\x7f\s]').hasMatch(raw)) return null;
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !uri.hasAuthority) return null;
+    if (uri.scheme != 'http' && uri.scheme != 'https') return null;
+    return raw;
   }
 
   Agent copyWith({String? name, AgentGitContext? gitContext}) => Agent(
@@ -331,6 +357,9 @@ class Agent {
     tokensUpdatedAt: tokensUpdatedAt,
     outputStats: outputStats,
     resumeMode: resumeMode,
+    viewerUrl: viewerUrl,
+    viewerError: viewerError,
+    viewerName: viewerName,
   );
 
   /// Saved work the daemon is no longer running, as the desktop's [Agent] reads

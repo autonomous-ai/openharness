@@ -33,6 +33,8 @@ class BrowserTerminalP2pLinkFactory implements TerminalP2pLinkFactory {
     void Function(String reason)? onUnavailable,
     void Function(String step, Duration elapsed)? onStep,
     bool upgrade = false,
+    TerminalP2pDataSink? onViewerData,
+    void Function(bool open)? onViewerState,
   }) => BrowserTerminalP2pLink(
     policy: policy,
     sendSignal: sendSignal,
@@ -41,6 +43,8 @@ class BrowserTerminalP2pLinkFactory implements TerminalP2pLinkFactory {
     onUnavailable: onUnavailable,
     onStep: onStep,
     upgrade: upgrade,
+    onViewerData: onViewerData,
+    onViewerState: onViewerState,
   );
 }
 
@@ -59,6 +63,8 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
     this.onUnavailable,
     this.onStep,
     this.upgrade = false,
+    this.onViewerData,
+    this.onViewerState,
   });
 
   final TerminalP2pPolicy policy;
@@ -69,12 +75,18 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
   final void Function(String reason)? onUnavailable;
   final void Function(String step, Duration elapsed)? onStep;
 
+  /// Non-null opens `viewer-v1` beside the terminal's channel.
+  final TerminalP2pDataSink? onViewerData;
+  final void Function(bool open)? onViewerState;
+
   @override
   final String sessionId = p2pSessionId();
 
   final Stopwatch _clock = Stopwatch()..start();
   RTCPeerConnection? _pc;
   RTCDataChannel? _channel;
+  RTCDataChannel? _viewerChannel;
+  bool _viewerOpen = false;
   bool _ready = false;
   bool _starting = false;
   bool _finished = false;
@@ -98,10 +110,12 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
   void _step(String label) => onStep?.call(label, _elapsed);
 
   @override
-  bool get isReady => _ready && _channelCanSend;
+  bool get isReady => _ready && _canSend(_channel);
 
-  bool get _channelCanSend {
-    final channel = _channel;
+  @override
+  bool get viewerReady => _viewerOpen && _canSend(_viewerChannel);
+
+  static bool _canSend(RTCDataChannel? channel) {
     return channel != null &&
         channel.readyState == 'open' &&
         channel.bufferedAmount < terminalP2pMaxBufferedBytes;
@@ -139,6 +153,15 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
       )..binaryType = 'arraybuffer';
       _channel = channel;
       _wireChannel(channel);
+      // Same SDP, one negotiation; only when asked for — see [viewerP2pChannel].
+      if (onViewerData != null) {
+        final viewer = pc.createDataChannel(
+          viewerP2pChannel,
+          RTCDataChannelInit(ordered: true),
+        )..binaryType = 'arraybuffer';
+        _viewerChannel = viewer;
+        _wireViewerChannel(viewer);
+      }
       await _createOffer(pc);
     } catch (error) {
       appLog.warn('p2p', 'peer connection setup failed', error: error);
@@ -299,6 +322,35 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
   }
 
   @override
+  bool sendViewer(Object data) {
+    final channel = _viewerChannel;
+    if (!viewerReady || channel == null) return false;
+    try {
+      channel.send(data is String ? data.toJS : asBytes(data).toJS);
+      return true;
+    } catch (error) {
+      appLog.warn('p2p', 'viewer channel send failed', error: error);
+      _dropViewer(channel);
+      return false;
+    }
+  }
+
+  void _setViewerOpen(bool open) {
+    if (_viewerOpen == open) return;
+    _viewerOpen = open;
+    onViewerState?.call(open);
+  }
+
+  /// Ends the viewer alone, as the CLI does on an error: reported closed, and
+  /// the channel closed so the machine falls back to the relay too.
+  void _dropViewer(RTCDataChannel channel) {
+    if (_viewerChannel != channel || _finished) return;
+    _viewerChannel = null;
+    _setViewerOpen(false);
+    channel.close();
+  }
+
+  @override
   Future<bool> sendWithBackpressureRetry(
     Object data, {
     Duration drain = const Duration(seconds: 5),
@@ -321,7 +373,7 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
     } on TimeoutException {
       return false;
     }
-    return _channelCanSend;
+    return _canSend(_channel);
   }
 
   @override
@@ -365,11 +417,15 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
         'reason': reason,
       });
     }
+    _setViewerOpen(false);
     final channel = _channel;
+    final viewer = _viewerChannel;
     final pc = _pc;
     _channel = null;
+    _viewerChannel = null;
     _pc = null;
     channel?.close();
+    viewer?.close();
     pc?.close();
     onState?.call(TerminalP2pLinkState.closed, _elapsed, reason);
   }
@@ -432,14 +488,33 @@ class BrowserTerminalP2pLink implements TerminalP2pLink {
       }
     }).toJS;
     channel.onmessage = ((MessageEvent event) {
-      if (_channel != channel || _finished) return;
-      final data = event.data;
-      if (data.isA<JSString>()) {
-        onData((data as JSString).toDart);
-      } else if (data.isA<JSArrayBuffer>()) {
-        onData((data as JSArrayBuffer).toDart.asUint8List());
-      }
+      if (_channel == channel && !_finished) _deliver(event.data, onData);
     }).toJS;
+  }
+
+  /// Nothing here reaches [_fail]: the viewer never takes the terminal down.
+  void _wireViewerChannel(RTCDataChannel channel) {
+    bool live() => _viewerChannel == channel && !_finished;
+    channel.onopen = ((Event _) {
+      if (live()) _setViewerOpen(true);
+    }).toJS;
+    channel.onclose = ((Event _) {
+      if (live()) _setViewerOpen(false);
+    }).toJS;
+    channel.onerror = ((Event _) {
+      if (live()) _dropViewer(channel);
+    }).toJS;
+    channel.onmessage = ((MessageEvent event) {
+      if (live()) _deliver(event.data, onViewerData!);
+    }).toJS;
+  }
+
+  static void _deliver(JSAny? data, TerminalP2pDataSink sink) {
+    if (data.isA<JSString>()) {
+      sink((data as JSString).toDart);
+    } else if (data.isA<JSArrayBuffer>()) {
+      sink((data as JSArrayBuffer).toDart.asUint8List());
+    }
   }
 
   Future<void> _opened() async {

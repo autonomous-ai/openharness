@@ -5,9 +5,13 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/web/p2p/terminal_p2p_plugin.dart';
 import 'package:harness/ws/relay_codec.dart';
 import 'package:harness/ws/terminal_transport_plugin.dart';
+import 'package:harness/ws/viewer_p2p.dart';
 import 'package:harness/ws/ws_conn.dart';
+
+import 'p2p/fakes.dart' show FakeLinkFactory;
 
 /// A relay session that seals nothing — the handshake shape of the real one, with
 /// the frames left readable so the test can see what crossed the socket.
@@ -28,6 +32,9 @@ class _PassThroughCodec implements RelayCodec {
 
   @override
   int get terminalP2pVersion => 1;
+
+  @override
+  int get p2pViewerVersion => 0;
 
   @override
   Map<String, dynamic>? encodeFrame(Map<String, dynamic> frame) => frame;
@@ -101,6 +108,9 @@ class _RecordingPlugin implements TerminalTransportPlugin {
     calls.add('sendBinary:${localFrame.length}');
     return takeBinary;
   }
+
+  @override
+  ViewerP2p? get viewer => null;
 
   @override
   void dispose({bool notifyPeer = false}) {
@@ -198,6 +208,45 @@ void main() {
       await conn.close();
     },
   );
+
+  test('viewerP2p is the p2p plugin\'s viewer, null otherwise', () async {
+    final (other, _, _, _) = await connect();
+    expect(other.viewerP2p, isNull, reason: 'not the p2p plugin');
+    await other.close();
+    socketReady = Completer<WebSocket>();
+    final connected = Completer<void>();
+    final plugins = <TerminalP2pPlugin>[];
+    final conn = WsConn(
+      wsBaseUrl: 'ws://127.0.0.1:${server.port}',
+      autonomousEnv: 'prod',
+      machineId: 'machine-1',
+      accessTokenProvider: (_, _) async => 'test-token',
+      onAuthFailure: (_) {},
+      relayCodecs: (_) async => _PassThroughCodec(),
+      transportPlugins: (host, machineId) {
+        final plugin = TerminalP2pPlugin(
+          host: host,
+          machineId: machineId,
+          links: FakeLinkFactory(),
+        );
+        plugins.add(plugin);
+        return plugin;
+      },
+      onStatus: (status) {
+        if (status == ConnectionStatus.connected && !connected.isCompleted) {
+          connected.complete();
+        }
+      },
+      onEvent: (_) {},
+    );
+    expect(conn.viewerP2p, isNull, reason: 'no plugin before the dial');
+    await conn.connect();
+    await connected.future.timeout(const Duration(seconds: 2));
+    await _settle();
+    expect(conn.viewerP2p, same(plugins.single.viewer));
+    await conn.close();
+    expect(conn.viewerP2p, isNull);
+  });
 
   test('signaling goes to the plugin and never to onEvent', () async {
     final (conn, plugin, events, _) = await connect();

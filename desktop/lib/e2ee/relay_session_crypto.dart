@@ -61,6 +61,7 @@ class RelaySessionCrypto {
   String _epoch = '';
   final Map<String, int> _groupRecv = {};
   int _terminalP2pVersion = 0;
+  int _p2pViewerVersion = 0;
   bool _strictDown = false;
 
   bool get ready => _c2s != null && _s2c != null;
@@ -71,6 +72,9 @@ class RelaySessionCrypto {
 
   /// The machine's `features.terminalP2p` — 0 when it offers no P2P terminal channel.
   int get terminalP2pVersion => _terminalP2pVersion;
+
+  /// The machine's `features.p2pViewer`: it serves viewer surfaces as viewerFrame parts over P2P.
+  int get p2pViewerVersion => _p2pViewerVersion;
 
   Map<String, dynamic> helloFrame() => {
     'type': 'e2e_hello',
@@ -115,6 +119,7 @@ class RelaySessionCrypto {
       final features = initial!['features'];
       final p2p = features is Map ? features['terminalP2p'] : null;
       _terminalP2pVersion = p2p is int ? p2p : 0;
+      _p2pViewerVersion = features is Map && features['p2pViewer'] == 1 ? 1 : 0;
       _strictDown = features is Map && features['strictDown'] == 1;
       return true;
     } on FormatException {
