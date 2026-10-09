@@ -15,6 +15,7 @@ enum SettingsSection {
   accountDevices(AppIcons.shieldCheck, 'Your devices'),
   profiles(AppIcons.monitor, 'Profiles'),
   usage(AppIcons.chartNoAxesColumn, 'Usage'),
+  connectors(AppIcons.plug, 'Connectors'),
   customize(AppIcons.palette, 'Customize'),
   notifications(AppIcons.bell, 'Notifications'),
   experimental(AppIcons.flaskConical, 'Experimental'),
@@ -64,7 +65,8 @@ List<SettingsGroup> get settingsGroups =>
 @visibleForTesting
 List<SettingsGroup> settingsGroupsFor({required bool debugSurface}) {
   bool visible(SettingsSection section) =>
-      (!kIsWeb || section != SettingsSection.devices) &&
+      // This computer's own: the Autonomous robots and the services its agents use.
+      (!kIsWeb || (section != SettingsSection.devices && section != SettingsSection.connectors)) &&
       (debugSurface || !_kDeveloperSections.contains(section));
   return [
     for (final group in _kSettingsGroups)
@@ -96,6 +98,8 @@ const _kSettingsGroups = [
     SettingsSection.notifications,
     SettingsSection.experimental,
     SettingsSection.devices,
+    // The services this computer's agents use (Linear, Notion, GitHub…), connected once for all of them.
+    SettingsSection.connectors,
     SettingsSection.account,
     // Beside Account: the devices signed in to it, each trusted by the others because of that.
     SettingsSection.accountDevices,

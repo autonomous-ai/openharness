@@ -24,19 +24,14 @@ class PackageIdentity(unittest.TestCase):
             with patch.object(package, 'validate_runtime', return_value={'source_commit': 'a' * 40}):
                 identity = package.stage(Path(__file__).resolve().parents[2], runtime, destination, 'a' * 40)
             config = destination / 'etc/skel/.config/opencode'
-            self.assertTrue((destination / 'usr/lib/harness-os/connections/connections.py').is_file())
+            # Connections are the CLI's (`harness connections`, its daemon's bridge): no OS copy.
+            self.assertFalse((destination / 'usr/lib/harness-os/connections').exists())
+            self.assertFalse((destination / 'usr/lib/systemd/user/harness-connections.socket').exists())
             self.assertTrue((destination / 'usr/share/harness-os/browser-home/home.crx').is_file())
             self.assertEqual((destination / 'usr/lib/harness-os/browser_home.py').stat().st_mode & 0o777, 0o755)
             self.assertTrue((destination / 'etc/chromium/native-messaging-hosts/ai.autonomous.harness_home.json').is_file())
-            self.assertTrue((destination / 'usr/lib/harness-os/connections/web/index.html').is_file())
-            for name in ('bridge.py', 'catalog.json', 'oauth.py', 'gateway.py', 'agents.py', 'renew.py'):
-                self.assertTrue((destination / 'usr/lib/harness-os/connections' / name).is_file(), name)
-            socket = (destination / 'usr/lib/systemd/user/harness-connections.socket').read_text()
-            self.assertIn('ListenStream=127.0.0.1:51793', socket)
-            self.assertIn('harness-connections.socket', (destination / 'usr/lib/systemd/user/harness-os.target').read_text())
-            self.assertTrue((destination / 'usr/share/licenses/harness-os-connections/LICENSE').is_file())
             self.assertIn('harness connections', (destination / 'usr/share/harness-os/connections.md').read_text())
-            self.assertIn('/usr/lib/harness-os/connections/connections.py', (destination / 'usr/bin/harness').read_text())
+            self.assertNotIn('connections', (destination / 'usr/bin/harness').read_text())
             self.assertFalse((config / 'AGENTS.md').is_symlink())
             self.assertIn('/usr/share/harness-os/guide.md', (config / 'AGENTS.md').read_text())
             self.assertIn('Super+n', (destination / 'usr/share/harness-os/guide.md').read_text())

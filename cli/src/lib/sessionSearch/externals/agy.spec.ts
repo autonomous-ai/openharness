@@ -165,7 +165,7 @@ describe('agyProvider', () => {
           [91702, [join(real, 'presence', `${ID2}.lock`), join(real, 'presence', 'not-an-id.lock'), join(real, 'elsewhere', `${ID3}.lock`), join(real, 'presence', `${ID3}.pid`)]],
         ])
       },
-      openFilesOf: async () => { throw new Error('not used') },
+      cwds: async () => new Map(), openFilesOf: async () => { throw new Error('not used') },
       alive: () => true,
     }
     const claims = await provider.owners!(view)
@@ -184,7 +184,7 @@ describe('agyProvider', () => {
     const view = (rows: RunningProcess[]): ProcessView => ({
       list: async () => rows,
       openFiles: async () => { asked++; return new Map([[5, [join(home, 'presence', `${ID}.lock`)]]]) },
-      openFilesOf: async () => new Map(),
+      cwds: async () => new Map(), openFilesOf: async () => new Map(),
       alive: () => true,
     })
     expect(await provider.owners!(view([row(1, 'zsh', '-zsh')]))).toEqual([])

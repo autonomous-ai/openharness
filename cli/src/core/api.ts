@@ -470,6 +470,8 @@ export const PROJECTS_REQUESTS = ['git_pull_request', 'git_project_info', 'scm_p
 export const WINDOW_NAMES_REQUESTS = ['window_name'] as const
 /** Change agent's handoff file, prepared in the edge host (services/handoff.ts). */
 export const HANDOFF_REQUESTS = ['agent_handoff_prepare'] as const
+/** Connected services for every local agent, and their MCP bridge, in the edge host (services/connectors.ts). */
+export const CONNECTORS_REQUESTS = ['connectors'] as const
 /**
  * Models (services/models.ts).
  *

@@ -8553,6 +8553,28 @@ class AppNotifier extends ChangeNotifier {
     );
   }
 
+  /// The `connectors` request to [machineId]'s daemon: its connected services
+  /// (Settings → Connectors). Never carries a token either way.
+  Future<Map<String, dynamic>> connectors(
+    String machineId,
+    Map<String, dynamic> payload, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final machine = stateOf(machineId);
+    if (machine == null ||
+        machine.machine.isShared ||
+        machine.needsLink ||
+        machine.nodeOnline == false ||
+        machine.connectionStatus != ConnectionStatus.connected) {
+      throw StateError('Reconnect this computer to manage its connections.');
+    }
+    final connection = _conn(machineId);
+    if (!connection.isReady) {
+      throw StateError('Reconnect this computer to manage its connections.');
+    }
+    return connection.request('connectors', payload: payload, timeout: timeout);
+  }
+
   Future<Map<String, dynamic>> controlLocalModel(
     String machineId,
     String modelId, {

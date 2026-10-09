@@ -69,7 +69,7 @@ function view(rows: RunningProcess[], alive: (pid: number) => boolean = () => tr
   return {
     list: async () => { listed++; return rows },
     openFiles: async () => new Map(),
-    openFilesOf: async () => new Map(),
+    cwds: async () => new Map(), openFilesOf: async () => new Map(),
     alive,
     listed: () => listed,
   }

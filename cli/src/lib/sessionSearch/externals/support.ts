@@ -5,8 +5,9 @@
 
 import { execFile } from 'node:child_process'
 import type { Dirent } from 'node:fs'
-import { open, readdir, readFile, stat } from 'node:fs/promises'
-import { isAbsolute, relative, resolve } from 'node:path'
+import { open, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 import { isHarnessSession, paneOwnerFormat } from '../../harnessSessionLabel.js'
 import { processRows } from '../../tmux.js'
@@ -226,11 +227,86 @@ export async function listProcesses(read: typeof processRows = processRows): Pro
   })
 }
 
+/**
+ * Each of [pids]' working folder. Linux says it in /proc; macOS only through lsof, asked once for every pid
+ * (`-a -d cwd`: that one descriptor) under the same timeout and output bound as its open files. A pid whose
+ * folder cannot be read (gone, another user's) is left out: unknown, which admission reads as "may hold any".
+ */
+export async function processCwds(
+  pids: readonly number[],
+  exec: Run = run,
+  os: NodeJS.Platform = process.platform,
+  link: (path: string) => Promise<string> = readlink,
+): Promise<Map<number, string>> {
+  const cwds = new Map<number, string>()
+  if (!pids.length) return cwds
+  if (os === 'linux') {
+    await Promise.all(pids.map(async (pid) => {
+      const cwd = await link(`/proc/${pid}/cwd`).catch(() => null)
+      if (cwd) cwds.set(pid, cwd)
+    }))
+    return cwds
+  }
+  for (const [pid, files] of parseLsof(await exec('lsof', ['-n', '-P', '-a', '-d', 'cwd', '-Fpn', '-p', pids.join(',')], 3_000) ?? '')) {
+    if (files[0]) cwds.set(pid, files[0])
+  }
+  return cwds
+}
+
+/**
+ * A folder as one key whichever way it was spelled: a trailing slash, `..`, or a link (macOS's /tmp is
+ * /private/tmp, and lsof reports the resolved one). A folder that cannot be resolved keeps its spelling.
+ */
+export async function folderKey(path: string): Promise<string> {
+  const absolute = resolve(path)
+  return realpath(absolute).catch(() => absolute)
+}
+
+/**
+ * The git store a folder's repository shares with all its worktrees, read from disk without running git: the
+ * first `.git` above it, a folder (the store itself) or a worktree's `gitdir:` file, whose
+ * `<store>/worktrees/<name>` names the store two levels up. Null outside a repository. The walk stops at the
+ * folder holding the homes, so a stray `.git` there cannot make every project one.
+ */
+export async function gitCommonDir(folder: string, stop: string = dirname(homedir())): Promise<string | null> {
+  const ceiling = await folderKey(stop)
+  let dir = await folderKey(folder)
+  for (let depth = 0; depth < 128 && dir !== ceiling; depth++) {
+    const dotgit = join(dir, '.git')
+    const found = await stat(dotgit).catch(() => null)
+    if (found?.isDirectory()) return folderKey(dotgit)
+    if (found?.isFile()) {
+      const named = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(dotgit, 'utf8').catch(() => ''))?.[1]
+      if (!named) return null
+      const gitdir = resolve(dir, named)
+      return folderKey(/[\\/]worktrees[\\/][^\\/]+[\\/]?$/.test(gitdir) ? dirname(dirname(gitdir)) : gitdir)
+    }
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return null
+}
+
+/**
+ * Whether a process working in [a] might list a conversation of [b] in its own picker: Claude Code's `/resume`
+ * lists its own folder's, and newer versions its repository's worktrees too, so the same folder or one git
+ * store. Never a folder merely above or below: a TUI left open in the home folder is common, and counting
+ * every folder below it would hold every adoption on the machine again, the bug this check replaced.
+ */
+export async function sameProject(a: string, b: string, stop?: string): Promise<boolean> {
+  const [x, y] = await Promise.all([folderKey(a), folderKey(b)])
+  if (x === y) return true
+  const [left, right] = await Promise.all([gitCommonDir(x, stop), gitCommonDir(y, stop)])
+  return left !== null && left === right
+}
+
 /** The machine's processes, looked at once per view: the list is read on first use and kept. */
 export function processView(
   exec: Run = run,
   alive: (pid: number) => boolean = processAlive,
   list: () => Promise<RunningProcess[]> = listProcesses,
+  cwds: (pids: readonly number[]) => Promise<Map<number, string>> = (pids) => processCwds(pids, exec),
 ): ProcessView {
   let listed: Promise<RunningProcess[]> | null = null
   return {
@@ -241,6 +317,7 @@ export function processView(
     openFilesOf: async (commands) => commands.length
       ? parseLsof(await exec('lsof', ['-n', '-P', '-Fpn', ...commands.flatMap((name) => ['-c', name])], 3_000) ?? '')
       : new Map(),
+    cwds,
     alive,
   }
 }
