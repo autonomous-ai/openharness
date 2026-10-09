@@ -1,4 +1,5 @@
 /** Stop retains the logical session before retiring its process and terminal. */
+import { externalResumePending } from './externalResume.js'
 import { captureResumeIdentity } from './captureResumeIdentity.js'
 import { isTerminalEngine } from '../engines/types.js'
 import type { registry as liveRegistry, RegisteredSession } from './registry.js'
@@ -11,6 +12,7 @@ import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js
 
 export interface StopAgentServiceDeps {
   settlePane?: (agentId: string) => Promise<void>
+  cancelExternal?: (entry: RegisteredSession, current: () => boolean) => Promise<boolean>
   registry: Pick<typeof liveRegistry, 'resolve'>
   stoppedAgents: StoppedAgentStore
   restartJobs: AgentRestartCoordinator
@@ -66,6 +68,12 @@ export function createStopAgentService(deps: StopAgentServiceDeps) {
       await deps.settlePane?.(sessionId)
       const live = registry.resolve(sessionId)
       if (!live) return
+      if (externalResumePending(live.externalResume)) {
+        try {
+          if (!deps.cancelExternal || !await deps.cancelExternal(live, () => options.current?.() !== false)) throw new Error('Adoption cancellation is unavailable.')
+        } catch (error) { throw new AgentStopError(error instanceof Error ? error.message : 'Adoption could not be cancelled.') }
+        return
+      }
       // A row still starting has no process yet, and the one it gains while this stop runs is the engine
       // it launched, not a replacement. Comparing it refused every Stop pressed on a starting agent with
       // "Harness changed… Try stopping again" (e2e/races.e2e.ts). The process is still checked exactly

@@ -1112,12 +1112,38 @@ function installIfMissingScript(recipe: EngineInstallRecipe, runtimeNode: string
     // A previously installed npm launcher also needs Node. Resolve the runtime before executing
     // it, not just before installing it; fresh users often have no system node on PATH.
     npmRuntimePrelude(recipe, runtimeNode),
+    // Desktop Harness downloads OpenCode, Codex and Claude Code beside a fresh computer's setup and
+    // names the downloading process in `~/.harness/run/downloading-<engine>`. A pane that opens
+    // meanwhile waits for that download, under the same line and bar, rather than starting a second
+    // install into the folder it is writing (two npm installs into one prefix can break both). A
+    // marker whose process is gone, or is not that download, is ignored. At most ten minutes.
+    // The waiting runs in command substitutions, out of a Ctrl+Z's reach (STOP_PROOF_FUNCTIONS), with
+    // the bar sent to the terminal through standard error. A wait ended early (Ctrl-C, the ten
+    // minutes) while the download still runs ends the pane rather than starting a second install.
+    ...(friendly ? [
+      'harness_wait_download() {',
+      '  harness_dl_pid=$(cat "$HOME/.harness/run/downloading-$1" 2>/dev/null) || return 0',
+      "  case \"$harness_dl_pid\" in ''|*[!0-9]*) return 0 ;; esac",
+      '  kill -0 "$harness_dl_pid" 2>/dev/null || return 0',
+      '  ps -p "$harness_dl_pid" -o command= 2>/dev/null | grep -q harness-download || return 0',
+      '  if [ "$harness_quiet" -eq 1 ]; then',
+      '    harness_dl_w=$( ( harness_dl_i=0; while kill -0 "$harness_dl_pid" 2>/dev/null && [ "$harness_dl_i" -lt 1200 ]; do sleep 0.5; harness_dl_i=$((harness_dl_i + 1)); done ) | '
+        + `${shellSingleQuote(runtimeNode)} -e ${shellSingleQuote(INSTALL_PROGRESS_JS)} ${shellSingleQuote(label)} ${seconds} "$harness_install_log" ${friendly.messageWaiting ? 1 : 0} >&2 ) || :`,
+      '  else',
+      `    printf '%s\\n' ${shellSingleQuote(`harness: ${label} is downloading in the background; waiting for it`)}`,
+      '    harness_dl_i=0; while kill -0 "$harness_dl_pid" 2>/dev/null && [ "$harness_dl_i" -lt 1200 ]; do harness_dl_w=$(sleep 0.5) || :; harness_dl_i=$((harness_dl_i + 1)); done',
+      '  fi',
+      `  if kill -0 "$harness_dl_pid" 2>/dev/null; then printf '\\n%s\\n' ${shellSingleQuote(`${label} is still downloading. Try again in a minute.`)}; exit 1; fi`,
+      '  hash -r 2>/dev/null || true',
+      '}',
+    ] : []),
     'harness_quiet=0',
     ...(friendly ? [
       'harness_install_log="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '.log"',
       // Beside the log rather than in a temporary folder: nothing machine-specific in the script.
       'harness_install_rc="$HOME/.harness/logs/install-' + friendly.engine.replace(/[^a-z0-9-]/g, '') + '-$$.rc"',
       `[ -x ${shellSingleQuote(runtimeNode)} ] && mkdir -p "$HOME/.harness/logs" 2>/dev/null && harness_quiet=1`,
+      `harness_find_engine "$1" || harness_wait_download ${shellSingleQuote(friendly.engine.replace(/[^a-z0-9-]/g, ''))}`,
     ] : []),
     'if ! harness_find_engine "$1"; then',
     ...(recipe.executable.npmGlobal ? [

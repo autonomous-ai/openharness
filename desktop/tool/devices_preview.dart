@@ -66,8 +66,7 @@ class DevicesReviewStorage implements LocalKeyValueStore {
 
 class _Experiments implements ExperimentalSettingsTransport {
   final features = {
-    for (final feature in ExperimentalFeature.values)
-      feature.id: feature == ExperimentalFeature.devicesTab,
+    for (final feature in ExperimentalFeature.values) feature.id: false,
   };
   int revision = 0;
   @override
@@ -429,18 +428,6 @@ class _PreviewState extends State<_Preview> {
                           : 'Reconnect devices',
                     ),
                   ),
-                ),
-                TextButton(
-                  onPressed: switching
-                      ? null
-                      : () async {
-                          await app.experimentalFeatures.set(
-                            ExperimentalFeature.devicesTab,
-                            !app.devicesEnabled,
-                          );
-                          if (app.devicesEnabled) app.openDevices();
-                        },
-                  child: const Text('Toggle experiment'),
                 ),
               ],
             ),

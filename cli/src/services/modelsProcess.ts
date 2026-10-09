@@ -101,10 +101,7 @@ export function modelsCoreApi(dataDir: string, ask: (query: string, payload?: Pa
     turns: { send: () => {}, stop: () => {}, recent: async () => [], asks: async () => [], ...DELIVERIES_OFF },
     questions: { answer: () => {}, answerReviewed: async () => false },
     transcripts: { databaseHistory: () => undefined, lastTurn: UNASKED.lastTurn },
-    external: {
-      sessions: { list: () => [], scan: async () => [] },
-      open: { known: () => new Map(), fresh: async () => new Map() },
-    },
+
     account: {
       mintGridName: async () => {
         const answer = await ask('mintGridName')

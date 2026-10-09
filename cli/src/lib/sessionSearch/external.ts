@@ -9,13 +9,21 @@
  * the machine's processes, and one way to stop a terminal's process.
  */
 
-import { open } from 'node:fs/promises'
-
-import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, run, scanMemo } from './externals/support.js'
+import { harnessTtys as readHarnessTtys, processAlive, processTtys, processView, scanMemo } from './externals/support.js'
 import type { ExternalEngine, ExternalProvider, ExternalSession, OwnerClaim, ProcessView } from './externals/types.js'
+import { externalReadFailed } from './evidence.js'
 
 export type { ExternalEngine, ExternalOrigin, ExternalProvider, ExternalSession } from './externals/types.js'
 export { processAlive } from './externals/support.js'
+
+/** Canonical records outrank aliases; the newest canonical record wins across stores and homes. */
+export function externalSessionCatalog(rows: readonly ExternalSession[]): { found: ExternalSession[]; byId: Map<string, ExternalSession> } {
+  const byId = new Map<string, ExternalSession>()
+  for (const row of [...rows].sort((a, b) => b.mtime - a.mtime)) if (!byId.has(row.sessionId)) byId.set(row.sessionId, row)
+  const found = [...byId.values()]
+  for (const row of found) for (const alias of row.aliases ?? []) if (!byId.has(alias)) byId.set(alias, row)
+  return { found, byId }
+}
 
 export interface ExternalSessionsOptions {
   providers: readonly ExternalProvider[]
@@ -55,22 +63,16 @@ export class ExternalSessions {
         this.lastGood.set(provider.engine, sessions)
         all.push(...sessions)
       } catch (error) {
+        externalReadFailed(error, 'session store')
         // One engine's store failing (locked, mid-migration) keeps what it said last time.
         this.opts.log?.(`[search] ${provider.engine} sessions not read: ${error instanceof Error ? error.message : error}`)
         all.push(...this.lastGood.get(provider.engine) ?? [])
       }
     }
     this.memo.prune()
-    all.sort((a, b) => b.mtime - a.mtime)
-    // One id, one conversation: the newest record of it wins.
-    const byId = new Map<string, ExternalSession>()
-    for (const session of all) if (!byId.has(session.sessionId)) byId.set(session.sessionId, session)
-    this.found = [...byId.values()]
-    // An older id of a conversation that carried on under a new one finds the conversation.
-    for (const session of this.found) {
-      for (const alias of session.aliases ?? []) if (!byId.has(alias)) byId.set(alias, session)
-    }
-    this.byId = byId
+    const catalog = externalSessionCatalog(all)
+    this.found = catalog.found
+    this.byId = catalog.byId
     return this.found
   }
 }
@@ -209,66 +211,4 @@ export class OpenSessions {
   }
 }
 
-export interface StopOptions {
-  alive?: (pid: number) => boolean
-  kill?: (pid: number, signal: NodeJS.Signals) => void
-  sleep?: (ms: number) => Promise<void>
-  /** Writes to the owner's terminal; tests replace it. */
-  writeTty?: (tty: string, text: string) => Promise<void>
-  /** The foreground job [pid] leads, if it leads one; tests replace it. */
-  job?: (pid: number) => Promise<number | null>
-}
-
-/**
- * The foreground job an engine leads in its terminal: the process group it heads, when that group is
- * the one the terminal is showing. Its whole job is signalled then, so what it started for its screen
- * goes with it (Hermes's terminal UI runs a Node child its Python does not pass SIGTERM to). An
- * engine that does not lead its job (Codex's native binary under its Node launcher, anything run
- * without job control) is signalled alone: its group may hold the shell it runs in.
- */
-export async function foregroundJob(pid: number, exec: typeof run = run): Promise<number | null> {
-  const out = await exec('ps', ['-o', 'pgid=,tpgid=', '-p', String(pid)], 3_000)
-  const [pgid, tpgid] = (out ?? '').trim().split(/\s+/).map(Number)
-  return pgid === pid && tpgid === pid ? pid : null
-}
-
-/**
- * What a terminal gets back after its engine is stopped from outside: the main screen, no mouse
- * reporting, and a cursor. A TUI that quit cleanly already restored them, and then these change
- * nothing; Codex leaves its cursor hidden, and a TUI made to quit leaves whatever it had on.
- */
-export const TERMINAL_RESTORE = '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h'
-
-/**
- * Stops the terminal process that has a session open, so Harness can resume it: asked to quit
- * (SIGTERM, which the engines answer by saving and restoring the terminal), then made to after five
- * seconds, and the terminal put back. Whether the process is gone.
- */
-export async function stopSessionOwner(owner: Pick<SessionOwner, 'pid' | 'tty'>, opts: StopOptions = {}): Promise<boolean> {
-  const alive = opts.alive ?? processAlive
-  const kill = opts.kill ?? ((pid: number, signal: NodeJS.Signals) => { process.kill(pid, signal) })
-  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
-  const gone = async (ms: number): Promise<boolean> => {
-    for (let waited = 0; waited < ms; waited += 100) {
-      if (!alive(owner.pid)) return true
-      await sleep(100)
-    }
-    return !alive(owner.pid)
-  }
-  const job = await (opts.job ?? foregroundJob)(owner.pid).catch(() => null)
-  const signal = (name: NodeJS.Signals): void => {
-    try { kill(job ? -job : owner.pid, name) } catch { /* already gone */ }
-  }
-  signal('SIGTERM')
-  if (!await gone(5_000)) {
-    signal('SIGKILL')
-    if (!await gone(2_000)) return false
-  }
-  if (owner.tty) await (opts.writeTty ?? writeTty)(owner.tty, TERMINAL_RESTORE).catch(() => undefined)
-  return true
-}
-
-export async function writeTty(tty: string, content: string): Promise<void> {
-  const handle = await open(tty, 'w')
-  try { await handle.write(content) } finally { await handle.close() }
-}
+export { foregroundJob, stopSessionOwner, writeTty, TERMINAL_RESTORE, type StopOptions } from '../externalOwnerControl.js'

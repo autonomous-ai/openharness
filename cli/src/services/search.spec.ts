@@ -5,8 +5,12 @@ import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionSearchIndexOptions } from '../lib/sessionSearch/indexer.js'
 import { fakeCore } from '../testing/fakeCore.js'
 import { SESSION_SEARCH_FILE, SessionSearchStore } from '../lib/sessionSearch/store.js'
+import { createExternalSessions } from './externalSessions.js'
 import { SEARCH_REQUESTS, searchRequests, startSearch } from './search.js'
 
+const captures = vi.hoisted(() => ({ index: null as unknown }))
+vi.mock('../lib/sessionSearch/externals/index.js', () => ({ externalProviders: () => [] }))
+vi.mock('./externalSessions.js', () => ({ createExternalSessions: vi.fn() }))
 vi.mock('../lib/sessionSearch/store.js', () => ({ SESSION_SEARCH_FILE: 'session-search.db', SessionSearchStore: { open: vi.fn() } }))
 // The index, recording what it was built with so its callbacks can be driven directly.
 vi.mock('../lib/sessionSearch/indexer.js', async (real) => {
@@ -15,7 +19,11 @@ vi.mock('../lib/sessionSearch/indexer.js', async (real) => {
     ...actual,
     SessionSearchIndex: class {
       started = false
-      constructor(readonly opts: SessionSearchIndexOptions) {}
+      constructor(readonly opts: SessionSearchIndexOptions) { captures.index = this }
+      touch = vi.fn()
+      deleteHistory = vi.fn()
+      session = vi.fn(() => ({ title: 'Indexed' }))
+      stop = vi.fn()
       start() { this.started = true }
     },
   }
@@ -34,14 +42,14 @@ function setup(agents: RegisteredSession[] = [], external: unknown[] = [], owned
   const core = fakeCore({
     agents: { all: vi.fn(() => agents), displayName: vi.fn((s: RegisteredSession) => `name of ${s.agentId}`) },
     transcripts: { databaseHistory: vi.fn((s: RegisteredSession) => (s.engine === 'opencode' ? reader : undefined)) },
-    external: {
-      sessions: { list: vi.fn(() => external), scan: vi.fn(async () => []) } as unknown as CoreApi['external']['sessions'],
-      open: { known: vi.fn(), fresh: vi.fn() } as unknown as CoreApi['external']['open'],
-    },
+
   })
+  const readers = { sessions: { list: vi.fn(() => external), scan: vi.fn(async () => []) },
+    open: { known: vi.fn(), fresh: vi.fn() }, inspect: vi.fn(async () => ({ ok: true })) }
+  vi.mocked(createExternalSessions).mockReturnValue(readers as never)
   const ports = emptyPorts()
   const requests = startSearch(core, ports)
-  return { core, ports, store, requests, index: ports.search as unknown as Recorded }
+  return { core, ports, store, requests, readers, index: captures.index as Recorded }
 }
 
 describe('the session search service', () => {
@@ -54,10 +62,10 @@ describe('the session search service', () => {
 
   describe('starting', () => {
     it('opens the index in the core\'s data folder, starts it, and answers the core through its port and the apps through its requests', () => {
-      const { core, index, requests } = setup()
+      const { readers, index, requests } = setup()
       expect(SessionSearchStore.open).toHaveBeenCalledWith(join('/data', SESSION_SEARCH_FILE))
       expect(index.started).toBe(true)
-      expect(index.opts.openSessions).toBe(core.external.open)
+      expect(index.opts.openSessions).toBe(readers.open)
       expect(Object.keys(requests ?? {})).toEqual([...SEARCH_REQUESTS])
     })
 
@@ -65,8 +73,8 @@ describe('the session search service', () => {
       const { core } = setup()
       vi.mocked(SessionSearchStore.open).mockReturnValueOnce(null)
       const ports = emptyPorts()
-      expect(startSearch(core, ports)).toBeUndefined()
-      expect(ports.search).toBeNull()
+      expect(startSearch(core, ports)).toEqual({})
+      expect(ports.search?.inspect).toBeTypeOf('function')
       expect(console.warn).toHaveBeenCalledWith('[search] node:sqlite is not available on this Node — session search is off')
     })
 
@@ -75,7 +83,7 @@ describe('the session search service', () => {
       const { core } = setup()
       vi.mocked(SessionSearchStore.open).mockImplementationOnce(() => { throw new Error('disk I/O error') })
       startSearch(core, ports)
-      expect(ports.search).toBeNull()
+      expect(ports.search?.inspect).toBeTypeOf('function')
       expect(console.error).toHaveBeenCalledWith('[search] could not open the session index:', 'disk I/O error')
       vi.mocked(SessionSearchStore.open).mockImplementationOnce(() => { throw 'locked' })
       startSearch(core, ports)
@@ -191,12 +199,31 @@ describe('the session search service', () => {
     })
 
     it('keeps every agent\'s sessions while the agent exists, looks again for others, and logs as the daemon does', async () => {
-      const { core, index } = setup([row({ agentId: 'a1' }), row({ agentId: 'a2' })])
+      const { readers, index } = setup([row({ agentId: 'a1' }), row({ agentId: 'a2' })])
       expect([...index.opts.agents!()]).toEqual(['a1', 'a2'])
       await index.opts.discover!()
-      expect(core.external.sessions.scan).toHaveBeenCalled()
+      expect(readers.sessions.scan).toHaveBeenCalled()
       index.opts.log!('[search] indexed 3 sessions')
       expect(console.log).toHaveBeenCalledWith('[search] indexed 3 sessions')
     })
   })
+})
+
+it('keeps external inspection available without SQLite and sends every port through the owned readers/index', async () => {
+  const { core, ports, requests, readers } = setup()
+  const request = { engine: 'claude' as const, sessionId: 'conversation' }
+  expect(Object.keys(requests)).toEqual([...SEARCH_REQUESTS])
+  expect(await ports.search!.inspect(request)).toEqual({ ok: true })
+  expect(readers.inspect).toHaveBeenCalledWith(request)
+  const options = vi.mocked(createExternalSessions).mock.calls.at(-1)![0]
+  expect(options.title?.('conversation')).toBe('Indexed')
+  ports.search!.touch('conversation'); ports.search!.deleteHistory('conversation'); ports.search!.session('conversation'); ports.search!.stop()
+  vi.mocked(SessionSearchStore.open).mockReturnValueOnce(null)
+  const offline = startSearch(core, ports, { providers: [], title: id => id === 'named' ? 'Name' : undefined })
+  const withoutIndex = vi.mocked(createExternalSessions).mock.calls.at(-1)![0]
+  expect(withoutIndex.title?.('named')).toBe('Name')
+  expect(withoutIndex.title?.('unnamed')).toBeUndefined()
+  expect(offline).toEqual({})
+  expect(await ports.search!.inspect(request)).toEqual({ ok: true })
+  ports.search!.touch('conversation'); ports.search!.deleteHistory('conversation'); expect(ports.search!.session('conversation')).toBeUndefined(); ports.search!.stop()
 })

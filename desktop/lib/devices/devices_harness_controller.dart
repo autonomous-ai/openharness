@@ -106,7 +106,7 @@ class DevicesHarnessController extends ChangeNotifier {
         if (!_current(owner)) return;
         if (failure != null) {
           // This package ships with the CLI and is deliberately absent from
-          // dsh_list. The Store exposes it through the account's experiment.
+          // dsh_list. The Store lists it as a bundled workspace.
           // A missing bundle requires a Harness update,
           // not a Store install or a raw INVALID_DSH message in the dashboard.
           error = switch (_creation!.refusal) {

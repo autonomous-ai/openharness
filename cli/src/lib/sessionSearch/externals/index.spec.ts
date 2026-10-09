@@ -66,10 +66,10 @@ describe('the other engines\' readers, loaded on first use', () => {
     await cursor.owners!(none)
     await cursor.busy!({ pid: 1, record: '' })
     expect(vi.mocked(loadEngine).mock.calls).toEqual([['cursor']])
-    // Kilo's reader is OpenCode's, loaded with Kilo's code; Claude Code's and Codex's are declared, and load nothing.
+    // Kilo explicitly asks OpenCode's shared store reader; its own runtime entry stays independent.
     vi.mocked(loadEngine).mockClear()
     for (const engine of ['kilo', 'claude', 'codex']) await providers.find((provider) => provider.engine === engine)!.owners!(none)
-    expect(vi.mocked(loadEngine).mock.calls).toEqual([['kilo']])
+    expect(vi.mocked(loadEngine).mock.calls).toEqual([['opencode']])
   })
 
   it('lists nothing and holds nothing open for an engine whose code could not be loaded', async () => {

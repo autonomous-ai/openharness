@@ -148,6 +148,15 @@ describe('restartAgent', () => {
     expect(d.calls.filter((c) => c === 'terminate')).toHaveLength(1)
   })
 
+  it('keeps a strict imported conversation bound when its resume cannot be verified', async () => {
+    const buildArgv = vi.fn(() => ['claude', '--resume', 'imported'])
+    const d = deps({ buildArgv, waitForProcess: async () => null })
+    expect(await restartAgent({ engine: 'claude', sessionId: 'imported', resumeOnly: true }, false, d)).toMatchObject({ ok: false })
+    expect(buildArgv).toHaveBeenCalledExactlyOnceWith({ bypassPermission: false, resumeSessionId: 'imported' })
+    expect(d.calls.filter(call => call === 'respawn')).toHaveLength(1)
+    expect(d.calls).not.toContain('keepAbandoned')
+  })
+
   it('fails outright when even the fresh fallback relaunch never comes up', async () => {
     const d = deps({ waitForProcess: async () => null })
     const outcome = await restartAgent({ engine: 'codex', sessionId: 'sess-1' }, false, d)

@@ -1,5 +1,5 @@
 /** Route profile interpretation to workers while keeping accepted state and control authority in core. */
-import type { LegacyRuntimeProfileManager } from '../../lib/runtimeProfileManager.js'
+import type { RuntimeProfileState } from '../../lib/runtimeProfileState.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 import type { RuntimeProfile, RuntimeRecord } from '../../engines/facets/runtime.js'
@@ -16,7 +16,7 @@ export interface ProfileHydration {
 }
 
 export interface RuntimeProfilesDeps {
-  legacy: LegacyRuntimeProfileManager
+  local: RuntimeProfileState
   handles(engine: string): boolean
   resolve(id: string): RegisteredSession | undefined
   transport: RuntimeTransport
@@ -32,12 +32,12 @@ function evidence(frames: readonly LiveFrame[]): RuntimeRecord[] {
   return records
 }
 
-export function createRuntimeProfiles({ legacy, handles, resolve, transport }: RuntimeProfilesDeps) {
+export function createRuntimeProfiles({ local, handles, resolve, transport }: RuntimeProfilesDeps) {
   let changed: ((id: string) => void) | null = null
   const remote = createRuntimeSessions({ resolve, transport, changed: id => changed?.(id) })
-  legacy.onChanged = id => changed?.(id)
-  const forId = (id: string) => handles(resolve(id)?.engine ?? '') ? remote : legacy
-  const forSession = (session: RegisteredSession) => handles(session.engine) ? remote : legacy
+  local.onChanged = id => changed?.(id)
+  const forId = (id: string) => handles(resolve(id)?.engine ?? '') ? remote : local
+  const forSession = (session: RegisteredSession) => handles(session.engine) ? remote : local
   const rawUnavailable = (): never => { throw new EngineReadError('ENGINE_INVALID_REQUEST') }
   const observe = async (session: RegisteredSession, operation: { kind: 'config' } | { kind: 'pane'; text: string }, silent: boolean): Promise<boolean> => {
     const before = remote.selectedModel(session)
@@ -57,23 +57,23 @@ export function createRuntimeProfiles({ legacy, handles, resolve, transport }: R
     confirmControlProfile: (target: RuntimeProfile) => forId(target.sessionId).confirmControlProfile(target),
     waitForModel: (id: string, timeout: number) => forId(id).waitForModel(id, timeout),
     waitForProfile: (id: string, timeout: number) => forId(id).waitForProfile(id, timeout),
-    forget(id: string): void { remote.forget(id); legacy.forget(id) },
+    forget(id: string): void { remote.forget(id); local.forget(id) },
     stop(): void { remote.stop(); changed = null },
     withoutChangeEvents<T>(run: () => Promise<T>): Promise<T> {
-      return remote.withoutChangeEvents(() => legacy.withoutChangeEvents(run))
+      return remote.withoutChangeEvents(() => local.withoutChangeEvents(run))
     },
     ingest(session: RegisteredSession, line: string, silent = false): boolean {
-      return handles(session.engine) ? rawUnavailable() : legacy.ingest(session, line, silent)
+      return handles(session.engine) ? rawUnavailable() : local.ingest(session, line, silent)
     },
     hydrate(session: RegisteredSession, lines: string[]): void {
       if (handles(session.engine)) rawUnavailable()
-      legacy.hydrate(session, lines)
+      local.hydrate(session, lines)
     },
     transcriptFields(session: RegisteredSession, line: string) {
-      return handles(session.engine) ? rawUnavailable() : legacy.transcriptFields(session, line)
+      return handles(session.engine) ? rawUnavailable() : local.transcriptFields(session, line)
     },
     beginHydrate(session: RegisteredSession): ProfileHydration {
-      if (!handles(session.engine)) return legacy.beginHydrate(session)
+      if (!handles(session.engine)) return local.beginHydrate(session)
       const pending = remote.stage(session, true, true)
       return { ingest: rawUnavailable, commit: rawUnavailable,
         ingestFrames: frames => pending.ingest(evidence(frames)),
@@ -84,36 +84,38 @@ export function createRuntimeProfiles({ legacy, handles, resolve, transport }: R
       return remote.prepare(session, evidence(frames))
     },
     ingestPane(session: RegisteredSession, text: string, silent = false): boolean | Promise<boolean> {
-      return handles(session.engine) ? observe(session, { kind: 'pane', text }, silent) : legacy.ingestPane(session, text, silent)
+      return handles(session.engine) ? observe(session, { kind: 'pane', text }, silent) : local.ingestPane(session, text, silent)
     },
+    capturePane: (session: RegisteredSession, capture: (id: string, historyLines?: number) => Promise<string | null>,
+      historyLines?: number, silent = false) => forSession(session).capturePane(session, capture, historyLines, silent),
     ingestConfig(session: RegisteredSession, silent = false): Promise<boolean> {
-      return handles(session.engine) ? observe(session, { kind: 'config' }, silent) : legacy.ingestConfig(session, silent)
+      return handles(session.engine) ? observe(session, { kind: 'config' }, silent) : local.ingestConfig(session, silent)
     },
     async supportsControl(session: RegisteredSession): Promise<boolean> {
       if (session.gateway) return false
-      return handles(session.engine) ? (await remote.read(session, { kind: 'describe' })).supportsControl : legacy.supportsControl(session)
+      return handles(session.engine) ? (await remote.read(session, { kind: 'describe' })).supportsControl : local.supportsControl(session)
     },
     async effortAllowed(session: RegisteredSession, model: string, effort: string, listed: readonly string[] | null): Promise<boolean> {
       return handles(session.engine)
         ? (await remote.read(session, { kind: 'effort', model, effort, listed: listed && [...listed] })).effortAllowed!
-        : legacy.effortAllowed(session, model, effort, listed)
+        : local.effortAllowed(session, model, effort, listed)
     },
     async codexCatalog(session: RegisteredSession) {
-      return handles(session.engine) ? (await remote.read(session, { kind: 'catalog' })).catalog! : legacy.codexCatalog(session)
+      return handles(session.engine) ? (await remote.read(session, { kind: 'catalog' })).catalog! : local.codexCatalog(session)
     },
     async modelsForSession(session: RegisteredSession) {
       if (session.gateway) return []
-      return handles(session.engine) ? (await remote.read(session, { kind: 'models' })).models! : legacy.modelsForSession(session)
+      return handles(session.engine) ? (await remote.read(session, { kind: 'models' })).models! : local.modelsForSession(session)
     },
     async modelsForSessions(sessions: RegisteredSession[]) {
       return (await Promise.all(sessions.map(session => this.modelsForSession(session)))).flat()
     },
-    cursorTarget: legacy.cursorTarget.bind(legacy),
-    devinTarget: legacy.devinTarget.bind(legacy),
-    commandcodeTarget: legacy.commandcodeTarget.bind(legacy),
-    hermesTarget: legacy.hermesTarget.bind(legacy),
-    opencodeCatalog: legacy.opencodeCatalog.bind(legacy),
-    kiloCatalog: legacy.kiloCatalog.bind(legacy),
+    cursorTarget: local.cursorTarget.bind(local),
+    devinTarget: local.devinTarget.bind(local),
+    commandcodeTarget: local.commandcodeTarget.bind(local),
+    hermesTarget: local.hermesTarget.bind(local),
+    opencodeCatalog: local.opencodeCatalog.bind(local),
+    kiloCatalog: local.kiloCatalog.bind(local),
   }
 }
 

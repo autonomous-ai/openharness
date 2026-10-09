@@ -15,7 +15,7 @@ function setup(isolated = true) {
     cwd: '/tmp', transcriptPath: '/tmp/transcript' } as RegisteredSession
   const target = { sessionId: session.agentId, engine: session.engine, model: 'reported-model', effort: 'high' }
   const id = encodeRuntimeProfile(target)
-  const legacy = new RuntimeProfileManager()
+  const local = new RuntimeProfileManager()
   const read = vi.fn(async (_engine: string, context: RuntimeContext, operation: RuntimeOperation): Promise<RuntimeAnswer> => {
     const state = { ...context.state, model: target.model, effort: target.effort }
     return { state, cliVersion: session.cliVersion, selectedModel: id, control: context.control ?? null,
@@ -23,18 +23,18 @@ function setup(isolated = true) {
       ...(operation.kind === 'catalog' ? { catalog: [{ slug: target.model, displayName: 'Worker choice', listed: true, defaultEffort: 'high', efforts: ['high'] }] } : {}),
       ...(operation.kind === 'effort' ? { effortAllowed: operation.effort === 'high' } : {}) }
   })
-  const profiles = createRuntimeProfiles({ legacy, handles: engine => isolated && engine === 'codex',
+  const profiles = createRuntimeProfiles({ local, handles: engine => isolated && engine === 'codex',
     resolve: value => [session.agentId, session.sessionId].includes(value) ? session : undefined,
     transport: { read, connected: vi.fn(), disconnected: vi.fn() } })
   active.push(profiles)
-  return { session, target: { ...target, id }, legacy, read, profiles }
+  return { session, target: { ...target, id }, local, read, profiles }
 }
 afterEach(() => { active.splice(0).forEach(p => p.stop()); vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('runtime profile routing', () => {
   it('uses only worker reports for isolated observations, catalog and eligibility', async () => {
     const t = setup(), { profiles: p, session: s } = t
-    const inline = vi.spyOn(t.legacy, 'ingestPane').mockImplementation(() => { throw new Error('inline reader called') })
+    const inline = vi.spyOn(t.local, 'ingestPane').mockImplementation(() => { throw new Error('inline reader called') })
     expect(p.selectedModel(s)).toBeNull()
     expect(await p.ingestPane(s, 'vendor UI')).toBe(true)
     expect(p.selectedModel(s)).toBe(t.target.id)
@@ -58,6 +58,17 @@ describe('runtime profile routing', () => {
     expect(await t.profiles.modelsForSession(t.session)).toEqual([])
     expect(await t.profiles.supportsControl(t.session)).toBe(false)
     expect(t.read).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('routes a profile capture with its authority intact (worker: %s)', async isolated => {
+    const t = setup(isolated), capture = vi.fn(async () => 'vendor pane')
+    const inline = vi.spyOn(t.local, 'capturePane').mockResolvedValue('vendor pane')
+    expect(await t.profiles.capturePane(t.session, capture)).toBe('vendor pane')
+    if (isolated) {
+      expect(capture).toHaveBeenCalledWith(t.session.agentId, undefined)
+      expect(t.read).toHaveBeenCalledWith('codex', expect.anything(), { kind: 'pane', text: 'vendor pane' })
+      expect(inline).not.toHaveBeenCalled()
+    } else expect(inline).toHaveBeenCalledWith(t.session, capture, undefined, false)
   })
 
   it('stages compact evidence atomically and rejects frames from unsupported workers', async () => {
@@ -91,23 +102,23 @@ describe('runtime profile routing', () => {
     expect(changed).toHaveBeenCalledWith(s.sessionId)
     p.cancelControl(s.sessionId)
     p.forget(s.sessionId); expect(p.getState(s.sessionId)).toEqual(blankRuntimeState())
-    t.legacy.onChanged?.('legacy-session'); expect(changed).toHaveBeenLastCalledWith('legacy-session')
-    p.stop(); t.legacy.onChanged?.('later'); expect(changed).toHaveBeenLastCalledWith('legacy-session')
+    t.local.onChanged?.('local-session'); expect(changed).toHaveBeenLastCalledWith('local-session')
+    p.stop(); t.local.onChanged?.('later'); expect(changed).toHaveBeenLastCalledWith('local-session')
   })
 
   it('preserves explicit inline compatibility and the unchanged other-engine methods', async () => {
-    const t = setup(false), { profiles: p, session: s, legacy } = t
-    const pane = vi.spyOn(legacy, 'ingestPane').mockReturnValue(true)
-    const config = vi.spyOn(legacy, 'ingestConfig').mockResolvedValue(true)
-    const raw = vi.spyOn(legacy, 'ingest').mockReturnValue(false)
-    const hydrate = vi.spyOn(legacy, 'hydrate').mockImplementation(() => {})
-    const fields = vi.spyOn(legacy, 'transcriptFields').mockReturnValue(['model'])
+    const t = setup(false), { profiles: p, session: s, local } = t
+    const pane = vi.spyOn(local, 'ingestPane').mockReturnValue(true)
+    const config = vi.spyOn(local, 'ingestConfig').mockResolvedValue(true)
+    const raw = vi.spyOn(local, 'ingest').mockReturnValue(false)
+    const hydrate = vi.spyOn(local, 'hydrate').mockImplementation(() => {})
+    const fields = vi.spyOn(local, 'transcriptFields').mockReturnValue(['model'])
     const stage = { ingest: vi.fn(), commit: vi.fn() }
-    vi.spyOn(legacy, 'beginHydrate').mockReturnValue(stage)
-    vi.spyOn(legacy, 'supportsControl').mockReturnValue(true)
-    vi.spyOn(legacy, 'effortAllowed').mockReturnValue(true)
-    vi.spyOn(legacy, 'codexCatalog').mockResolvedValue([])
-    vi.spyOn(legacy, 'modelsForSession').mockResolvedValue([])
+    vi.spyOn(local, 'beginHydrate').mockReturnValue(stage)
+    vi.spyOn(local, 'supportsControl').mockReturnValue(true)
+    vi.spyOn(local, 'effortAllowed').mockReturnValue(true)
+    vi.spyOn(local, 'codexCatalog').mockResolvedValue([])
+    vi.spyOn(local, 'modelsForSession').mockResolvedValue([])
     expect(p.ingestPane(s, 'pane')).toBe(true); expect(pane).toHaveBeenCalledWith(s, 'pane', false)
     expect(await p.ingestConfig(s)).toBe(true); expect(config).toHaveBeenCalledWith(s, false)
     expect(p.ingest(s, '{}')).toBe(false); expect(raw).toHaveBeenCalledWith(s, '{}', false)

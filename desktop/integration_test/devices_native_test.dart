@@ -126,11 +126,6 @@ void main() {
       await tester.ensureVisible(find.byKey(const Key('devices-add')));
       await tester.pumpAndSettle();
       await capture('dark-devices-dsh');
-      await app.experimentalFeatures.set(ExperimentalFeature.devicesTab, false);
-      await tester.pumpAndSettle();
-      await native(tester, 'devices');
-      expect(app.swarms.any((tab) => tab.isDevices), isFalse);
-      expect(find.byType(DevicesScreen), findsNothing);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       app.dispose();

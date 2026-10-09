@@ -6,3 +6,5 @@
 export { CopilotNormalizer, copilotHistoryTurnOpen, copilotMessagesToEvents, lastCopilotTurnText } from './normalizer.js'
 export { copilotSessionCwd, copilotSessionForPid, findCopilotTranscript } from './session.js'
 export { copilotProvider } from '../../lib/sessionSearch/externals/copilot.js'
+
+export { createRuntimeProfileReader } from './profileReader.js'

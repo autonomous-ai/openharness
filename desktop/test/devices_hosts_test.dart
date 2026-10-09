@@ -104,7 +104,6 @@ void main() {
     }
     app.experimentalFeatures.bind('a', transport: AccountSettings('a'));
     await app.experimentalFeatures.refresh();
-    await app.experimentalFeatures.set(ExperimentalFeature.devicesTab, true);
     final controller = DevicesController(
       hosts: app.deviceHosts,
       accountId: 'a',
@@ -196,7 +195,6 @@ void main() {
     );
     app.experimentalFeatures.bind('a', transport: AccountSettings('a'));
     await app.experimentalFeatures.refresh();
-    await app.experimentalFeatures.set(ExperimentalFeature.devicesTab, true);
     connection.unsupported = true;
     await app.refreshDevices();
     expect(app.deviceHosts.host('m')!.available, isFalse);

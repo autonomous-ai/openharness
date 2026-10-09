@@ -107,6 +107,6 @@ export function createHeldLaunches({ registry, restore, log }: HeldLaunchesDeps)
  * What a held agent's pane runs while it waits: the reason, and nothing to type into. It survives the interrupt a
  * person might send it, and the agent's launch takes the pane over (`respawn`) once the service is ready.
  */
-export function heldPaneArgv(detail: string): string[] {
-  return ['/bin/sh', '-c', 'trap "" INT QUIT TSTP; printf "%s\\n" "$1"; while :; do sleep 3600; done', 'harness-held', detail]
+export function heldPaneArgv(detail: string, token?: string): string[] {
+  return ['/bin/sh', '-c', 'trap "" INT QUIT TSTP; printf "%s\\n" "$1"; while :; do sleep 3600; done', 'harness-held', detail, ...(token ? [token] : [])]
 }

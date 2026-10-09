@@ -30,8 +30,11 @@ export function Viewer({ harness }: { harness: OpenHarness }) {
   </section>;
   return <section ref={section} className={styles.viewer} aria-label="Output viewer">
     <iframe title={`${harness.title} output`} srcDoc={previewDocument(html)} sandbox={harness.example ? 'allow-scripts allow-downloads allow-modals' : 'allow-scripts'} referrerPolicy="no-referrer" />
-    {fullscreen.supported && <button type="button" className={styles.viewerButton} onClick={fullscreen.toggle} aria-label={fullscreen.active ? 'Exit full screen' : 'View output full screen'} title={fullscreen.active ? 'Exit full screen' : 'Full screen'}>
-      {fullscreen.active ? <Minimize2 /> : <Maximize2 />}
-    </button>}
+    {/* Under the output, never over it: a corner control would cover the page's own controls. */}
+    {fullscreen.supported && <div className={styles.viewerBar}>
+      <button type="button" onClick={fullscreen.toggle} aria-label={fullscreen.active ? 'Exit full screen' : 'View output full screen'}>
+        {fullscreen.active ? <Minimize2 /> : <Maximize2 />}<span>{fullscreen.active ? 'Exit full screen' : 'Full screen'}</span>
+      </button>
+    </div>}
   </section>;
 }

@@ -106,6 +106,9 @@ Future<AccountSettings> _bind(ExperimentalFeaturesStore features) async {
   return server;
 }
 
+/// The Store workspaces still behind an account experiment. Devices is not one.
+final _gated = ExperimentalStoreHarness.values.where((h) => h.feature != null);
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUpAll(() async {
@@ -118,45 +121,53 @@ void main() {
         .load();
   });
 
-  test('each confirmed flag controls its own listing, including advertised records', () async {
-    final features = ExperimentalFeaturesStore(pollInterval: Duration.zero);
-    addTearDown(features.dispose);
-    List<DshEntry> visible() =>
-        storeVisibleHarnesses(_advertised, features).toList();
-    expect(visible(), [_ordinary]);
-    final server = await _bind(features);
-    expect(visible(), [_ordinary]);
-    for (final harness in ExperimentalStoreHarness.values) {
-      final ack = Completer<Map<String, dynamic>>();
-      server.writeOverride = () => ack.future;
-      final saving = features.set(harness.feature, true);
+  test(
+    'Devices is always listed; each confirmed flag controls its own listing',
+    () async {
+      final features = ExperimentalFeaturesStore(pollInterval: Duration.zero);
+      addTearDown(features.dispose);
+      List<DshEntry> visible() =>
+          storeVisibleHarnesses(_advertised, features).toList();
+      const devices = ExperimentalStoreHarness.devices;
       expect(visible(), [
         _ordinary,
-      ], reason: 'Wait for account acknowledgement');
-      server.features[harness.feature.id] = true;
-      server.revision++;
-      ack.complete(server.snapshot);
-      await saving;
-      expect(visible(), [_ordinary, harness.entry]);
-      server.writeOverride = null;
-      await features.set(harness.feature, false);
-      expect(visible(), [_ordinary]);
-    }
-    for (final harness in ExperimentalStoreHarness.values) {
-      await features.set(harness.feature, true);
-    }
-    expect(visible().map((entry) => entry.name), [
-      'Marp',
-      'Devices',
-      'Companions',
-    ]);
-    await features.set(ExperimentalFeature.devicesTab, false);
-    expect(visible().map((entry) => entry.name), ['Marp', 'Companions']);
-    features.bind('account-b');
-    expect(visible(), [
-      _ordinary,
-    ], reason: 'Never inherit another account’s flags');
-  });
+        devices.entry,
+      ], reason: 'Devices needs no account and no experiment');
+      final server = await _bind(features);
+      expect(visible(), [_ordinary, devices.entry]);
+      for (final harness in _gated) {
+        final feature = harness.feature!;
+        final ack = Completer<Map<String, dynamic>>();
+        server.writeOverride = () => ack.future;
+        final saving = features.set(feature, true);
+        expect(visible(), [
+          _ordinary,
+          devices.entry,
+        ], reason: 'Wait for account acknowledgement');
+        server.features[feature.id] = true;
+        server.revision++;
+        ack.complete(server.snapshot);
+        await saving;
+        expect(visible(), [_ordinary, devices.entry, harness.entry]);
+        server.writeOverride = null;
+        await features.set(feature, false);
+        expect(visible(), [_ordinary, devices.entry]);
+      }
+      for (final harness in _gated) {
+        await features.set(harness.feature!, true);
+      }
+      expect(visible().map((entry) => entry.name), [
+        'Marp',
+        'Devices',
+        'Companions',
+      ]);
+      features.bind('account-b');
+      expect(visible(), [
+        _ordinary,
+        devices.entry,
+      ], reason: 'Never inherit another account’s flags');
+    },
+  );
 
   test(
     'unavailable experiments and failed saves cannot reveal a listing',
@@ -164,17 +175,25 @@ void main() {
       final features = ExperimentalFeaturesStore(pollInterval: Duration.zero);
       addTearDown(features.dispose);
       final server = await _bind(features);
+      const devices = ExperimentalStoreHarness.devices;
+      const feature = ExperimentalFeature.focusBarCreature;
       server.writeOverride = () async => throw StateError('offline');
-      await features.set(ExperimentalFeature.devicesTab, true);
-      expect(storeVisibleHarnesses(_advertised, features), [_ordinary]);
-      server.features[ExperimentalFeature.devicesTab.id] = true;
+      await features.set(feature, true);
+      expect(storeVisibleHarnesses(_advertised, features), [
+        _ordinary,
+        devices.entry,
+      ]);
+      server.features[feature.id] = true;
       server.revision++;
       server.readOverride = () async => {
         ...server.snapshot,
-        'available': {ExperimentalFeature.devicesTab.id: false},
+        'available': {feature.id: false},
       };
       await features.refresh();
-      expect(storeVisibleHarnesses(_advertised, features), [_ordinary]);
+      expect(storeVisibleHarnesses(_advertised, features), [
+        _ordinary,
+        devices.entry,
+      ]);
     },
   );
 
@@ -188,9 +207,9 @@ void main() {
     final search = SwarmSearchController(app, [])..setQuery('*');
     addTearDown(search.dispose);
     expect(search.isStoreMode, isTrue);
-    expect(search.storeEntries.keys, [_ordinary.id]);
-    for (final harness in ExperimentalStoreHarness.values) {
-      await app.experimentalFeatures.set(harness.feature, true);
+    expect(search.storeEntries.keys, [_ordinary.id, 'autonomous/devices']);
+    for (final harness in _gated) {
+      await app.experimentalFeatures.set(harness.feature!, true);
     }
     expect(
       search.storeEntries.keys,
@@ -208,7 +227,7 @@ void main() {
     );
     expect(search.storeEntries, contains('autonomous/devices'));
     app.experimentalFeatures.bind(null);
-    expect(search.storeEntries.keys, [_ordinary.id]);
+    expect(search.storeEntries.keys, [_ordinary.id, 'autonomous/devices']);
   });
 
   Future<_App> mount(
@@ -242,11 +261,11 @@ void main() {
             ..dsh.replace(_advertised);
     }
     await _bind(app.experimentalFeatures);
-    if (id != null && enabled) {
-      await app.experimentalFeatures.set(
-        ExperimentalStoreHarness.forId(id)!.feature,
-        true,
-      );
+    final feature = id == null
+        ? null
+        : ExperimentalStoreHarness.forId(id)!.feature;
+    if (feature != null && enabled) {
+      await app.experimentalFeatures.set(feature, true);
     }
     app.openStore();
     await tester.pumpWidget(
@@ -287,14 +306,17 @@ void main() {
           .entries
           .map((entry) => entry.id)
           .toList();
-      expect(ids(), isNot(contains('autonomous/devices')));
-      expect(ids(), isNot(contains('autonomous/pair')));
-      await app.experimentalFeatures.set(ExperimentalFeature.devicesTab, true);
-      await tester.pumpAndSettle();
       expect(ids(), contains('autonomous/devices'));
       expect(ids(), isNot(contains('autonomous/pair')));
+      await app.experimentalFeatures.set(
+        ExperimentalFeature.focusBarCreature,
+        true,
+      );
+      await tester.pumpAndSettle();
+      expect(ids(), contains('autonomous/devices'));
+      expect(ids(), contains('autonomous/pair'));
       // Open from Store discovery; its canonical product identity is stable.
-      final card = find.byKey(const ValueKey('store-card:autonomous/devices'));
+      final card = find.byKey(const ValueKey('store-card:autonomous/pair'));
       await tester.ensureVisible(card);
       await tester.tap(card);
       await tester.pumpAndSettle();
@@ -304,38 +326,44 @@ void main() {
             find.byKey(const ValueKey('store-primary-action')),
           )
           .onPressed!;
-      await app.experimentalFeatures.set(ExperimentalFeature.devicesTab, false);
+      await app.experimentalFeatures.set(
+        ExperimentalFeature.focusBarCreature,
+        false,
+      );
       // An already captured callback must be harmless even before the next frame.
       oldOpen();
       expect(app.activeSwarm.isStore, isTrue);
       await tester.pumpAndSettle();
       expect(find.text('Open'), findsNothing);
-      expect(ids(), isNot(contains('autonomous/devices')));
+      expect(ids(), isNot(contains('autonomous/pair')));
+      expect(ids(), contains('autonomous/devices'));
       await tester.pumpWidget(const SizedBox());
     },
   );
 
   for (final harness in ExperimentalStoreHarness.values) {
-    testWidgets(
-      'a disabled ${harness.entry.name} deep link cannot expose its page',
-      (tester) async {
-        final app = await mount(tester, id: harness.entry.id, enabled: false);
-        expect(find.byType(StoreDiscover), findsOneWidget);
-        expect(
-          find.byKey(const ValueKey('store-primary-action')),
-          findsNothing,
-        );
-        await openStoreAgent(
-          tester.element(find.byType(StoreTab)),
-          app,
-          harness.entry.id,
-          'm',
-        );
-        expect(app.activeSwarm.isStore, isTrue);
-        expect(app.swarms, hasLength(1));
-        await tester.pumpWidget(const SizedBox());
-      },
-    );
+    if (harness.feature != null) {
+      testWidgets(
+        'a disabled ${harness.entry.name} deep link cannot expose its page',
+        (tester) async {
+          final app = await mount(tester, id: harness.entry.id, enabled: false);
+          expect(find.byType(StoreDiscover), findsOneWidget);
+          expect(
+            find.byKey(const ValueKey('store-primary-action')),
+            findsNothing,
+          );
+          await openStoreAgent(
+            tester.element(find.byType(StoreTab)),
+            app,
+            harness.entry.id,
+            'm',
+          );
+          expect(app.activeSwarm.isStore, isTrue);
+          expect(app.swarms, hasLength(1));
+          await tester.pumpWidget(const SizedBox());
+        },
+      );
+    }
     for (final local in [false, true]) {
       testWidgets(
         '${harness.entry.name} opens and reuses its app workspace (local=$local)',
