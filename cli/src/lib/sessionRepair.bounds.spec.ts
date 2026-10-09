@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { constants } from 'node:buffer'
-import { mkdirSync, mkdtempSync, renameSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -47,7 +47,7 @@ beforeEach(async () => {
   vi.mocked(fs.readlink).mockReset().mockImplementation(actual.readlink)
   const processes = await vi.importActual<typeof import('node:child_process')>('node:child_process')
   vi.mocked(execFile).mockReset().mockImplementation(processes.execFile)
-  root = mkdtempSync(join(tmpdir(), 'identity-bounds-'))
+  root = realpathSync(mkdtempSync(join(tmpdir(), 'identity-bounds-')))
   const homes = { HOME: join(root, 'home'), ADAPTER_DATA_DIR: join(root, 'data'),
     CLAUDE_PROJECTS_DIR: join(root, 'claude', 'projects'), CODEX_HOME: join(root, 'codex'),
     COPILOT_HOME: join(root, 'copilot'), GROK_HOME: join(root, 'grok'), PI_HOME: join(root, 'pi'), MUSE_HOME: join(root, 'muse') }
