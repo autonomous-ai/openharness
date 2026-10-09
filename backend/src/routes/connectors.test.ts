@@ -55,6 +55,8 @@ vi.mock('../config/env.js', () => {
         token_url: 'https://oauth2.googleapis.com/token', scopes: ['https://www.googleapis.com/auth/gmail.readonly'], refresh: true, auth_style: 'header',
         auth_params: { access_type: 'offline', prompt: 'consent' } },
       notion: { auth_type: 'app', client_id: 'n', auth_url: 'https://mcp.notion.com/authorize', token_url: 'https://mcp.notion.com/token', pkce: true },
+      slack: { auth_type: 'app', client_id: 's', client_secret: 's-secret', auth_url: 'https://slack.com/oauth/v2/authorize', token_url: 'https://slack.com/api/oauth.v2.access',
+        extra: { token_field: 'authed_user.access_token', mcp_url: 'https://mcp.slack.com/mcp' } },
       linear: { auth_type: 'dcr', mcp_url: 'https://mcp.linear.app/mcp' },
     } }) } }
 })
@@ -88,7 +90,7 @@ describe('the connector gateway', () => {
   it('lists only the services that sign in here, never a secret', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/connectors', headers: owner })
     const codes = res.json().data.connectors.map((row: { code: string }) => row.code)
-    expect(codes).toEqual(['github', 'gmail', 'notion'])
+    expect(codes).toEqual(['github', 'gmail', 'notion', 'slack'])
     expect(res.body).not.toContain('secret')
     expect((await app.inject({ method: 'GET', url: '/api/connectors' })).statusCode).toBe(401)
   })
@@ -169,6 +171,14 @@ describe('the connector gateway', () => {
     expect(mocks.rows.size).toBe(0)
     expect((await post('/api/connectors/start', { connector: 'linear' })).statusCode).toBe(404)
     expect((await post('/api/connectors/start', { connector: '../x' })).statusCode).toBe(404)
+  })
+
+  it('reads token_field and mcp_url from `extra`, where Grid\'s config keeps them (Slack\'s user token)', async () => {
+    const started = (await post('/api/connectors/start', { connector: 'slack' })).json().data
+    answer = () => Response.json({ ok: true, access_token: 'xoxb-bot', authed_user: { access_token: 'xoxp-user' } })
+    await post('/api/connectors/callback', { code: 'c', state: new URL(started.authorize_url).searchParams.get('state') }, {})
+    const ready = (await post('/api/connectors/poll', { pickup_code: started.pickup_code })).json().data
+    expect(ready).toMatchObject({ access_token: 'xoxp-user', mcp_entry: { url: 'https://mcp.slack.com/mcp', headers: { Authorization: 'Bearer xoxp-user' } } })
   })
 
   it('stores only hashes of the state and the pickup code', async () => {

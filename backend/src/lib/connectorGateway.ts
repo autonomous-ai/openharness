@@ -84,7 +84,9 @@ export function parseConfig(raw: string): Record<string, ConnectorApp> {
       authUrl: str(entry.auth_url), tokenUrl: str(entry.token_url), refreshUrl: str(entry.refresh_url), userinfoUrl: str(entry.userinfo_url),
       scopes: scopes.filter(Boolean), authStyle: str(entry.auth_style).toLowerCase(), pkce: entry.pkce === true, refresh: entry.refresh === true,
       authParams: Object.fromEntries(Object.entries((entry.auth_params ?? {}) as Record<string, unknown>).map(([k, v]) => [k, str(v)])),
-      tokenField: str(entry.token_field), mcpUrl: str(entry.mcp_url) || str(extra.mcp_url), mcpAuthHeader: str(entry.mcp_auth_header) || str(extra.mcp_auth_header),
+      // As Grid reads them: these three live in `extra` (copied there from the device firmware's table).
+      tokenField: str(entry.token_field) || str(extra.token_field), mcpUrl: str(entry.mcp_url) || str(extra.mcp_url),
+      mcpAuthHeader: str(entry.mcp_auth_header) || str(extra.mcp_auth_header),
     }
   }
   return apps
