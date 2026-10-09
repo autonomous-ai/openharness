@@ -278,6 +278,10 @@ class _RootShellState extends ConsumerState<RootShell>
         await _menuDialog(() => showShortcutsSheet(context));
       case 'keyboardPractice':
         await _menuDialog(() => showKeyboardPractice(context));
+      case 'welcomeTour':
+        // Over the setup tour it would be the same slides twice.
+        if (ref.read(appStateProvider).setupTourShowing) return;
+        await _menuDialog(() => showWelcomeTour(context));
       case 'showAbout':
         // macOS shows AppKit's standard About panel; the Linux bar's row lands
         // here, with the version the Linux release stamps beside the binary.
