@@ -1,0 +1,101 @@
+{
+  "nativeHooks": true,
+  "node": "v22.23.2",
+  "platform": "darwin",
+  "tmux": "tmux 3.5a",
+  "samples": [
+    {
+      "bundle": "baseline",
+      "readyMs": 2017.0236180000002,
+      "atReady": {
+        "cpuMs": 310,
+        "rssMiB": 76.2890625
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 252.12965399999985,
+          "coreCpuMs": 30,
+          "rssMiB": 77.859375
+        },
+        {
+          "phase": "warm",
+          "requestMs": 129.017922,
+          "coreCpuMs": 10,
+          "rssMiB": 78.234375
+        }
+      ]
+    },
+    {
+      "bundle": "candidate",
+      "readyMs": 1583.9035439999998,
+      "atReady": {
+        "cpuMs": 300,
+        "rssMiB": 78.76171875
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 229.55663000000004,
+          "coreCpuMs": 30,
+          "rssMiB": 79.578125
+        },
+        {
+          "phase": "warm",
+          "requestMs": 134.9243489999999,
+          "coreCpuMs": 10,
+          "rssMiB": 80.7421875
+        }
+      ]
+    },
+    {
+      "bundle": "candidate",
+      "readyMs": 1632.7975390000001,
+      "atReady": {
+        "cpuMs": 300,
+        "rssMiB": 76.97265625
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 231.3424210000003,
+          "coreCpuMs": 30,
+          "rssMiB": 77.72265625
+        },
+        {
+          "phase": "warm",
+          "requestMs": 143.41917400000057,
+          "coreCpuMs": 20,
+          "rssMiB": 79.23046875
+        }
+      ]
+    },
+    {
+      "bundle": "baseline",
+      "readyMs": 1499.192669,
+      "atReady": {
+        "cpuMs": 300,
+        "rssMiB": 79.05859375
+      },
+      "launches": [
+        {
+          "phase": "cold",
+          "requestMs": 182.13429099999848,
+          "coreCpuMs": 30,
+          "rssMiB": 80.53515625
+        },
+        {
+          "phase": "warm",
+          "requestMs": 91.47403399999894,
+          "coreCpuMs": 10,
+          "rssMiB": 80.7734375
+        }
+      ]
+    }
+  ],
+  "baseline": "ee33093971d27e9dcda7f2ae8c35f54b61cec0bb (same production tree as reviewed 2b5e0b057574e7a9ffe0f191992e672d55229ffc)",
+  "bundleSha256": {
+    "baseline": "75d1c875df5a17dede8f99eef620cafb83eb2f6bfc1033596c5b5ebd84f1d63c",
+    "candidate": "a5f3452c8634ea92bbe80c59f5c74da05969266c970dcaf58cb8d9261ecf28b3"
+  }
+}

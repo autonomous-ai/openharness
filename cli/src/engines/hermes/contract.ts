@@ -3,6 +3,7 @@
  * core.md). It imports nothing of Hermes's code.
  */
 import { join } from 'node:path'
+import { env as hookEnvironment } from '../../config/env.js'
 import type { StoreHomes } from '../kit/storeHomes.js'
 import type { StoreSourceRule } from '../kit/storeSource.js'
 
@@ -47,3 +48,28 @@ export const HERMES_SOURCE: StoreSourceRule = {
   interactive: ['', 'cli', 'tui'],
   maxBuffer: 1 << 20,
 }
+
+/** A profile needs its own command as soon as config exists, before its first history row (#191). */
+export const HERMES_CONFIG_HOMES = { directory: 'profiles', file: 'config.yaml', max: 64 } as const
+
+/** pre_llm_call registers resumed sessions too; on_session_start only fires for a new one. */
+export const HERMES_HOOK_SETTINGS = {
+  home: hookEnvironment.HERMES_HOME,
+  homes: HERMES_CONFIG_HOMES,
+  begin: '# machine-adapter: session discovery (managed block — safe to delete)',
+  end: '# machine-adapter: end',
+  events: ['on_session_start', 'pre_llm_call'],
+  timeout: 10,
+  allowlist: 'shell-hooks-allowlist.json',
+  ownership: ['notify.mjs', '--engine hermes'],
+  messages: {
+    missing: '[hooks] no Hermes config at {file} — skipping (run hermes once first)',
+    foreign: '[hooks] {file} has its own `hooks:` block — leaving it untouched.',
+    manual: '[hooks] add these entries under it manually to mirror Hermes sessions:',
+    current: '[hooks] Hermes session hooks already installed',
+    installed: '[hooks] installed Hermes session hooks → {file}',
+    collapsed: '[hooks] installed Hermes session hooks (collapsed {removed} stale blocks) → {file}',
+    after: '[hooks] (takes effect on the next hermes session start)',
+    failed: '[hooks] failed to write Hermes config.yaml:',
+  },
+} as const satisfies import('../kit/nativeHookYaml.js').NativeYamlHooks

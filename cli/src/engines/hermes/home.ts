@@ -21,19 +21,18 @@
  * home yet — it is a profile whose first session has not started.
  */
 
-import { readdirSync, realpathSync, statSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '../../config/env.js'
-import { HERMES_HISTORY_ID_RE, HERMES_HOMES, HERMES_PROFILE, hermesDbPath } from './contract.js'
+import { HERMES_HISTORY_ID_RE, HERMES_HOMES, HERMES_PROFILE, HERMES_CONFIG_HOMES, hermesDbPath } from './contract.js'
 import { forgetStoreHomes, listStoreHomes } from '../kit/storeHomes.js'
+import { nativeHookHomes } from '../kit/nativeHookHomes.js'
 import { profileFromEnv } from '../kit/processFacts.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
 import type { AgentEngine } from '../types.js'
 
 /** `YYYYMMDD_HHMMSS_<hex>`, or an editor's (ACP) uuid — the shapes `reader.ts` reads history for. */
 const SESSION_ID_RE = HERMES_HISTORY_ID_RE
-/** A person with hundreds of profile folders has a different problem; this keeps the scan bounded. */
-const MAX_PROFILES = 64
 
 export { hermesDbPath } from './contract.js'
 
@@ -65,16 +64,7 @@ export async function listHermesHomes(defaultHome = env.HERMES_HOME): Promise<st
  * as it has a config, which is at creation. Synchronous because every hook installer is.
  */
 export function hermesConfigHomes(defaultHome = env.HERMES_HOME): string[] {
-  const homes = [defaultHome]
-  let entries: string[] = []
-  try { entries = readdirSync(join(defaultHome, 'profiles')) } catch { return homes }
-  for (const name of entries.slice(0, MAX_PROFILES)) {
-    const home = join(defaultHome, 'profiles', name)
-    try {
-      if (statSync(join(home, 'config.yaml')).isFile()) homes.push(home)
-    } catch { /* not a profile folder, or no config yet */ }
-  }
-  return homes
+  return nativeHookHomes(HERMES_CONFIG_HOMES, defaultHome)
 }
 
 /** Forget the listing — for a test, and for an installer that has just made a profile. */

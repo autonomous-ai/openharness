@@ -64,7 +64,7 @@ export interface CreateAgentDeps {
   /** Whether engine hooks are installed at all (DISABLE_HOOK_INSTALL). */
   hooksDisabled: boolean
   /** OpenCode's plugin, installed again before an OpenCode spawn (core/engines/hooks.ts
-   *  `installOpencodePluginBeforeSpawn`): false when the other engines' installers could not be loaded. */
+   *  `installOpencodePluginBeforeSpawn`): eager, independent of optional interpretation. */
   installOpencodePlugin: (port: number) => Promise<boolean>
   /** The facts about this machine a launch of `engine` needs (lib/gridLaunch.ts). */
   gridLaunchMachine: (engine: AgentEngine) => GridLaunchMachine
@@ -238,8 +238,7 @@ export function createAgentCreator({
     if (codexHome && !hooksDisabled) engineHooks.codex.installIn(hookPort, codexHome)
     // OpenCode may have upgraded from 1.x to 2.x while this daemon was running. Its new TUI must
     // not discover our old server plugin; the cached version probe changes with the executable.
-    // Its installer is loaded with the other engines' (engines/inProcess.ts): one that could not be loaded
-    // refuses the create, since an OpenCode with no plugin never tells the daemon its session.
+    // Native installation is eager. A plugin is how this engine tells the daemon its session.
     if (engine === 'opencode' && !hooksDisabled && !await installOpencodePlugin(hookPort)) {
       const detail = 'OpenCode\'s plugin installer could not be loaded'
       console.warn(`[agent] create opencode refused · ${detail}`)

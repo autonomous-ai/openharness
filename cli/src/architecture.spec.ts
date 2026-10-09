@@ -430,9 +430,8 @@ describe('the daemon\'s shape', () => {
     for (const [entry, batch] of FACETS_FREE_OF_THEM) {
       expect([...closureOf(entry).keys()].filter(theirs), `${entry}, free of their code since ${batch}`).toEqual([])
     }
-    // (o2) The start's hook step loads the other engines' installers through the loader; since (o6) it reaches none
-    // of their code at all (above).
-    expect(closureOf('core/engines/hooks.ts').has('lib/hooks.ts'), 'core/engines/hooks.ts loads lib/hooks.ts through engines/inProcess.ts').toBe(false)
+    // Native installation is eager, composed from declarations; the legacy entry is only an alias.
+    expect(closureOf('core/engines/hooks.ts').has('lib/hooks.ts')).toBe(false)
     // What an engine declares is data the kit reads: its own walk reaches the kit, the engines' types and the
     // environment, and nothing of any engine's code.
     const contracts = [...closure.keys()].filter((file) => /^engines\/\w+\/contract\.ts$/.test(file))
@@ -449,6 +448,15 @@ describe('the daemon\'s shape', () => {
       'lib/sessionRepair.ts', 'engines/repairIdentities.ts', 'engines/kit/sessionIdentity.ts']) {
       const imports = importsFor(entry, readFileSync(join(SRC, entry), 'utf8'))
       expect(imports.filter(one => one.dynamic || /inProcess\.js$/.test(one.from)), entry).toEqual([])
+    }
+  })
+
+  it('native hook installation never loads optional code and reaches only engine declarations', () => {
+    for (const entry of ['core/engines/hooks.ts', 'engines/nativeHooks.ts', 'engines/kit/nativeHookSettings.ts',
+      'engines/kit/nativeHookYaml.ts', 'engines/kit/nativeHookHomes.ts', 'engines/kit/nativePlugin.ts']) {
+      const imports = importsFor(entry, readFileSync(join(SRC, entry), 'utf8'))
+      expect(imports.filter(one => one.dynamic || /inProcess\.js$/.test(one.from)), entry).toEqual([])
+      expect([...closureOf(entry).keys()].filter(theirs), entry).toEqual([])
     }
   })
 
