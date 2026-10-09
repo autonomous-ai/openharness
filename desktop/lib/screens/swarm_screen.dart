@@ -2890,19 +2890,27 @@ class _SwarmScreenState extends State<SwarmScreen> {
   /// Harness ▸ Add Phone… and `> add phone`: the QR a phone scans to sign in
   /// and pair with this computer. See `widgets/add_phone_dialog.dart`.
   Future<void> _addPhone() async {
+    // Open, it is the offer a sign-in makes ([_maybeOfferPhone]) — and a
+    // sign-in made from inside it (its "Sign in…") must not open it again
+    // once it closes, so the offer is dropped on the way out too.
+    app.dropPhoneOffer();
     // "Manage devices…" pops the dialog and asks for Settings, but this
     // [_dialog] is still open until the pop lands — a [_settings] made from
     // the callback would be refused. So it is remembered, and opened after.
     var manageDevices = false;
-    await _dialog(
-      () => showAddPhoneDialog(
-        context,
-        app,
-        keymap: _keymap,
-        onConnectMachine: () => unawaited(_openMachines()),
-        onManageDevices: () => manageDevices = true,
-      ),
-    );
+    try {
+      await _dialog(
+        () => showAddPhoneDialog(
+          context,
+          app,
+          keymap: _keymap,
+          onConnectMachine: () => unawaited(_openMachines()),
+          onManageDevices: () => manageDevices = true,
+        ),
+      );
+    } finally {
+      app.dropPhoneOffer();
+    }
     if (manageDevices && mounted) {
       await _settings(SettingsSection.accountDevices);
     }
@@ -6317,6 +6325,53 @@ class _SwarmScreenState extends State<SwarmScreen> {
     });
   }
 
+  /// Add Phone, opened by itself right after a sign-in by hand when the
+  /// account has no phone yet ([AppNotifier.takePhoneOffer]).
+  ///
+  /// ⚠️ **The phone's first screen counts on it (owner, 2026-10-08):** "Open
+  /// it and sign in — it shows a code on the screen". A newcomer is not sent
+  /// looking for Add Phone in a menu, or in the command palette on Linux.
+  ///
+  /// Waits for a clear screen — the sign-in sheet closed, no dialog or palette
+  /// up — rather than opening over what somebody is in the middle of; the
+  /// offer lapses by itself if that takes too long.
+  void _maybeOfferPhone() {
+    if (kIsWeb || !app.phoneOfferPending || !_phoneOfferClear) return;
+    if (!app.takePhoneOffer()) return;
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => unawaited(_offerPhone()),
+    );
+  }
+
+  /// ⚠️ New Harness counts only open over the screen: embedded in the welcome
+  /// page it is what an empty workspace shows — the very screen a first
+  /// sign-in lands on, which waiting on it would never offer Add Phone from.
+  bool get _phoneOfferClear =>
+      _routeIsCurrent &&
+      !_dialogOpen &&
+      !_commandBarOpen &&
+      !_spokenPaletteOpen &&
+      _search == null &&
+      (_newHarness == null || _newHarnessEmbedded);
+
+  Future<void> _offerPhone() async {
+    var hasPhone = false;
+    try {
+      final devices = await app.loadDevices();
+      // Any app on the account but this one — a phone, or a browser — has its
+      // way in already. A list that cannot be read offers it anyway: closing
+      // Add Phone costs less than a newcomer left looking for its code.
+      hasPhone =
+          devices?.devices.any((device) => !device.isMachine && !device.self) ??
+          false;
+    } catch (_) {
+      hasPhone = false;
+    }
+    // Signed out, or something opened meanwhile: not now.
+    if (!mounted || hasPhone || !app.signedIn || !_phoneOfferClear) return;
+    await _addPhone();
+  }
+
   bool get _hasConnectedBrowserMachine => app.machineStates.values.any(
     (machine) =>
         !machine.machine.isShared &&
@@ -6903,6 +6958,7 @@ class _SwarmScreenState extends State<SwarmScreen> {
     builder: (context, _) {
       grid.AppTheme.watch(context);
       _maybeLink();
+      _maybeOfferPhone();
       _scheduleWelcomeComposer();
       if (app.panes.isEmpty) {
         WidgetsBinding.instance.addPostFrameCallback(
