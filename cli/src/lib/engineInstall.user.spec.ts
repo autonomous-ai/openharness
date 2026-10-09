@@ -18,6 +18,8 @@ afterEach(() => {
   for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true })
 })
 
+const installLog = (home: string) => readFileSync(join(home, '.harness/logs/install-codex.log'), 'utf8')
+
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'harness-user-engine-'))
   roots.push(root)
@@ -89,6 +91,49 @@ describe('engine installation for a fresh OS user', () => {
     writeFileSync(probe, '#!/bin/sh\nshift\nexec /bin/sh -c "$@"\n', { mode: 0o700 })
     vi.stubEnv('PATH', f.env.PATH)
     await expect(commandAvailableInInteractiveShell(f.name, probe, f.recipe)).resolves.toBe(true)
+  })
+
+  // OpenCode's installer downloads from GitHub Releases, which some networks cannot reach. A `curl |
+  // bash` whose curl fails still exits 0, so both a silent and a failing first line must fall back.
+  for (const [label, command] of [['exits 0 but installs nothing', 'true | sh'], ['fails', 'exit 7']]) {
+    it(`installs the npm fallback when the first installer ${label}`, () => {
+      const f = fixture()
+      const result = f.run(f.runtime('node-one'), { ...f.recipe, command, fallback: f.recipe.command })
+      expect(result.status, result.stdout + result.stderr).toBe(0)
+      // The pane shows a bar while it installs; what happened is in the install log.
+      expect(installLog(f.home)).toContain('trying the npm package instead')
+      expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
+      expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(true)
+      expect(readdirSync(join(f.home, '.harness/logs')).filter((file) => file.endsWith('.rc'))).toEqual([])
+    })
+  }
+
+  it('reports the fallback failure as the install failure', () => {
+    const f = fixture()
+    const result = f.run(f.runtime('node-one'), { ...f.recipe, command: 'true', fallback: 'exit 9' })
+    expect(result.status).toBe(1)
+    // The end of the log, under the friendly view's one-line verdict.
+    expect(result.stdout).toContain('Codex could not be installed.')
+    expect(result.stdout).toContain('trying the npm package instead')
+    expect(result.stdout).not.toContain('ENGINE_READY:')
+  })
+
+  it('does not fall back after an install the person ended with Ctrl-C', () => {
+    const f = fixture()
+    const result = f.run(f.runtime('node-one'), { ...f.recipe, command: 'exit 130', fallback: f.recipe.command })
+    expect(result.status).toBe(1)
+    expect(result.stdout).not.toContain('trying the npm package instead')
+    expect(installLog(f.home)).not.toContain('trying the npm package instead')
+    expect(result.stdout).toContain('Codex could not be installed.')
+    expect(existsSync(join(f.home, '.local/bin', f.name))).toBe(false)
+  })
+
+  it('does not run the fallback when the first installer worked', () => {
+    const f = fixture()
+    const result = f.run(f.runtime('node-one'), { ...f.recipe, fallback: 'exit 9' })
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout).not.toContain('trying the npm package instead')
+    expect(result.stdout).toContain('ENGINE_READY:')
   })
 
   it('keeps using an existing global engine instead of installing another copy', () => {

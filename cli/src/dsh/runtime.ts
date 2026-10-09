@@ -2,15 +2,15 @@
  * Create snapshots instructions/env/argv; resume reads that snapshot; fork copies it under a new
  * key. Toolchains and skill assets stay at their installed package paths, as in spec 1.
  */
-import { createHash } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join, resolve } from 'node:path'
 import { z } from 'zod'
 import { PROCESS_ENGINES, type AgentEngine } from '../engines/types.js'
+import { instructionFileOf, launchContract } from '../engines/launches.js'
 import { HARNESS_BOOTSTRAP, harnessAdapter } from './adapters.js'
 import { installedDsh, type InstalledDsh } from './installed.js'
 import { dshAccountEnv, dshLaunch, type DshAccount, type DshLaunch } from './launch.js'
-import { compatibleHarnessEngines } from './compatibility.js'
 import { skillDirsIn } from './materialize.js'
 
 const Snapshot = z.object({
@@ -48,7 +48,14 @@ function isLink(path: string): boolean {
 
 function writeManagedFile(path: string, body: string): void {
   if (isLink(path)) throw new Error(`Refusing to replace a symlink: ${path}`)
-  writeFileSync(path, body, { mode: 0o600 })
+  // A killed Store must never truncate the context an already-running agent is reading.
+  const temporary = `${path}.${randomUUID()}.tmp`
+  const mode = existsSync(path) ? lstatSync(path).mode & 0o777 : 0o600
+  const fd = openSync(temporary, 'wx', mode)
+  try {
+    try { writeFileSync(fd, body); fsyncSync(fd) } finally { closeSync(fd) }
+    renameSync(temporary, path)
+  } finally { rmSync(temporary, { force: true }) }
 }
 
 /** Older versions appended a marker without an end marker. Remove only text that exactly matches
@@ -97,13 +104,15 @@ export function migrateHarnessInstructions(workspace: string, current: Installed
 function installBootstrap(workspace: string, engine: AgentEngine): void {
   const adapter = harnessAdapter(engine)
   const file = adapter.instructionFiles.find(name => existsSync(join(workspace, name)))
-    ?? (engine === 'claude' ? 'CLAUDE.md' : 'AGENTS.md')
+    ?? instructionFileOf(engine) ?? 'AGENTS.md'
   const path = join(workspace, file)
   const before = existsSync(path) ? readFileSync(path, 'utf8') : ''
   if (before.includes(HARNESS_BOOTSTRAP)) return
   if (before.includes('<!-- harness:runtime')) throw new Error(`The Harness bootstrap in ${path} was edited; restore it before launching.`)
-  const projectRules = engine === 'claude' && existsSync(join(workspace, 'AGENTS.md')) && !before.split('\n').some(line => line.trim() === '@AGENTS.md')
-    ? '@AGENTS.md\n' : ''
+  // An engine that reads the project's AGENTS.md only through an import line in its own file gets that line.
+  const imports = launchContract(engine)?.instructionImport
+  const projectRules = imports && existsSync(join(workspace, imports.file)) && !before.split('\n').some(line => line.trim() === imports.line)
+    ? `${imports.line}\n` : ''
   // Preserve all project bytes. Only the generic, env-dispatched bootstrap is shared by sessions.
   writeManagedFile(path, `${before}${before.endsWith('\n') || !before ? '' : '\n'}\n${projectRules}${HARNESS_BOOTSTRAP}`)
 }
@@ -134,15 +143,6 @@ function snapshot(dsh: InstalledDsh, workspace: string, engine: AgentEngine): Ru
  * Why `engine` cannot run the harness `id`, or null when it can. The words are what a refused
  * create says, so they name what WOULD work rather than only what was wrong.
  */
-export function incompatibleHarnessEngine(id: string, manifest: { kind?: string; engine?: AgentEngine },
-  engine: AgentEngine): string | null {
-  const supported = compatibleHarnessEngines(manifest)
-  if (supported.includes(engine)) return null
-  return supported.length
-    ? `${id} supports ${supported.join(', ')}; ${engine} is not compatible`
-    : `${id} cannot run as an agent`
-}
-
 /**
  * The runtime bundle a fork copies. A session records its key when it is created; one created
  * before keys were recorded still has a bundle under its agent id if it ran on this version, and
@@ -151,20 +151,6 @@ export function incompatibleHarnessEngine(id: string, manifest: { kind?: string;
 export function forkRuntimeKey(source: { cwd: string; agentId: string; dshRuntime?: string | null }): string | null {
   if (source.dshRuntime) return source.dshRuntime
   return existsSync(join(harnessRuntimeDir(source.cwd, source.agentId), 'runtime.json')) ? source.agentId : null
-}
-
-/**
- * `prepare`, refused rather than thrown. A runtime that cannot be prepared — a missing skill, a
- * corrupt snapshot, an occupied path — has to fail the one create or fork that asked for it, never
- * the daemon that is serving every other session.
- */
-export function harnessLaunchOrRefusal(prepare: () => DshLaunch):
-  { ok: true; launch: DshLaunch } | { ok: false; error: 'DSH_RUNTIME_FAILED'; detail: string } {
-  try {
-    return { ok: true, launch: prepare() }
-  } catch (error) {
-    return { ok: false, error: 'DSH_RUNTIME_FAILED', detail: error instanceof Error ? error.message : String(error) }
-  }
 }
 
 export function prepareHarnessLaunch(dsh: InstalledDsh, workspace: string, engine: AgentEngine,

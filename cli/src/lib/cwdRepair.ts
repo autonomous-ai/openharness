@@ -1,5 +1,6 @@
 /**
- * Put Claude rows back in the folder their transcript belongs to.
+ * Put rows back in the folder their transcript belongs to, for an engine that keeps transcripts by the folder
+ * they began in (Claude Code: `projectFolder` in its discovery contract, engines/discoveries.ts).
  *
  * Until `register` stopped taking the hook's cwd on every prompt (registry.ts), a Claude row's `cwd`
  * followed the session's shell into whatever subfolder, sibling repo or temp dir the agent last
@@ -8,7 +9,7 @@
  * the corrected code would still relaunch them in the wrong place. So it puts them right first, before
  * `restoreAgents` recreates a single pane.
  *
- * The proof is the transcript's own location (claudeProject.ts): a row whose cwd does not round-trip to
+ * The proof is the transcript's own location (engines/kit/projectFolder.ts): a row whose cwd does not round-trip to
  * the project directory its transcript lives in is moved to the folder the transcript names. A row whose
  * transcript names no such folder (renamed since; a bridge file with no cwd line) is left alone and said
  * so, once per boot. Cheap and idempotent — only mismatching rows read a transcript, and a repaired row
@@ -16,7 +17,7 @@
  * keep.
  */
 import type { RegisteredSession } from './registry.js'
-import { claudeProjectMatches, claudeTranscriptCwd, isClaudeProjectTranscript } from './claudeProject.js'
+import { transcriptProject } from '../engines/discoveries.js'
 
 export interface CwdRepairDeps {
   registry: {
@@ -36,9 +37,10 @@ export interface CwdRepairSummary { registry: number; archived: number }
 
 /** The folder a row should be in, or null when the row is fine or nothing can prove otherwise. */
 export function repairedCwd(row: RegisteredSession, log: (message: string) => void): string | null {
-  if (row.engine !== 'claude' || !row.cwd || !row.transcriptPath || !isClaudeProjectTranscript(row.transcriptPath)) return null
-  if (claudeProjectMatches(row.cwd, row.transcriptPath)) return null
-  const folder = claudeTranscriptCwd(row.transcriptPath)
+  const project = transcriptProject(row.engine)
+  if (!project || !row.cwd || !row.transcriptPath || !project.isProjectTranscript(row.transcriptPath)) return null
+  if (project.belongs(row.cwd, row.transcriptPath)) return null
+  const folder = project.cwdOf(row.transcriptPath)
   if (!folder) {
     log(`[repair] ${row.agentId.slice(0, 8)} cwd ${row.cwd} is not its transcript's project folder, and the transcript names no matching folder — left as is`)
     return null
@@ -46,7 +48,7 @@ export function repairedCwd(row: RegisteredSession, log: (message: string) => vo
   return folder === row.cwd ? null : folder
 }
 
-export async function repairClaudeCwd(deps: CwdRepairDeps): Promise<CwdRepairSummary> {
+export async function repairProjectCwds(deps: CwdRepairDeps): Promise<CwdRepairSummary> {
   const summary: CwdRepairSummary = { registry: 0, archived: 0 }
   // Folders proved so far, by agent: what a transcript-less fork (its history lives in the source's
   // file, not one of its own) inherits from the row it was forked from.
@@ -54,7 +56,7 @@ export async function repairClaudeCwd(deps: CwdRepairDeps): Promise<CwdRepairSum
   const forks: RegisteredSession[] = []
   const inherit = (row: RegisteredSession): string | null => {
     const source = row.forkedFrom?.agentId
-    if (!source || row.transcriptPath || row.engine !== 'claude' || !row.cwd) return null
+    if (!source || row.transcriptPath || !transcriptProject(row.engine) || !row.cwd) return null
     const folder = proved.get(source)
     return folder && folder !== row.cwd ? folder : null
   }

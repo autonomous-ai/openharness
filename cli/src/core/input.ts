@@ -15,19 +15,23 @@ import type { CommandCodeNormalizer } from '../engines/commandcode/normalizer.js
 import { deviceErrorText } from './cardText.js'
 import { adaptSlashCommand } from '../lib/goalCommand.js'
 import { sid } from '../lib/log.js'
-import type { LiveEvent } from '../lib/normalize.js'
+import type { LiveEvent } from '../engines/kit/events.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import { SessionInputController, type SessionInputDelivery, type SessionInputDeps } from '../lib/sessionInput.js'
 import { passingHold } from '../lib/messageHolds.js'
 import type { ScreenReader } from '../lib/screenReader.js'
+import type { SubmissionReader } from '../lib/submissionReader.js'
 import type { ScreenReading } from '../engines/facets/screen.js'
 import { TERMINAL_LEASE_REFUSED, terminalActionNotStarted, type TerminalActionResult } from '../lib/terminalTypes.js'
 import type { TerminalControl } from './terminals/control.js'
+import { launchBound } from './engines/sessionBinding.js'
 
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
 export interface InputDeps {
   readScreen: ScreenReader
+  /** Claude Code's and Codex's reading of a prompt typed into their pane, from their worker (core/engines/submissions.ts). */
+  submission: SubmissionReader
   resolve: (id: string) => RegisteredSession | undefined
   byAgent: (agentId: string) => RegisteredSession | undefined
   terminal: Pick<TerminalControl, 'captureTerminal' | 'validateTerminal' | 'submitTerminalAction' | 'keyTerminalAction' | 'pinTerminalControl'>
@@ -88,7 +92,10 @@ export function messageWriter({ readScreen, resolve, terminal: { captureTerminal
         // (a re-attach can blank one capture): only what is on screen holds the Enter back, never a
         // read that failed once. Still not read after that, it is held, as nothing says it is safe.
         for (let tries = 1; ; tries++) {
-          const next = await readScreen(session, await captureTerminal(id))
+          // Read under the record as it now stands when it is the launch typed into, bound to its first
+          // conversation since (sessionBinding.ts `launchBound`); under any other change, as typed, which
+          // the reading's fence refuses.
+          const next = await readScreen(launchBound(session, resolve(id)), await captureTerminal(id))
           const before = next ? next.messageHold : 'screen_unreadable'
           if (before === 'popup_open') return null
           if (!before || !passingHold(before) || tries >= ENTER_CHECK_TRIES) return before
@@ -114,6 +121,7 @@ export function sessionInputDeps(
   return {
     beforeSubmit: (id, text, tabId, deliveryId) => teams.prepare(id, text, tabId, deliveryId),
     readScreen: deps.readScreen,
+    submission: deps.submission,
     getSession: (id) => resolve(id),
     onDelivery: (event) => {
       device()?.delivery(event)
@@ -170,6 +178,7 @@ export function deviceInputDeps(
     inject: messageWriter(deps),
     sendKey: keyTerminalAction,
     capture: captureTerminal,
+    submission: deps.submission,
     // Whatever a message is not typed into, the Device's waits for it to close, rather than be refused.
     isAwaitingUser: async session => {
       const pane = await captureTerminal(session.agentId)

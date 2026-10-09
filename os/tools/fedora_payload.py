@@ -62,7 +62,8 @@ def stage(source, runtime, destination, commit, runtime_commit, agent=None):
           ['session', 'session-settings.py', 'runtime-path', 'wait-runtime', 'virtio-2d', 'open-wifi', 'open-updates', 'screen-action', 'screenshot', 'lock', 'files']],
         *['usr/lib/systemd/user/' + name for name in
           ['harness-os.target', 'hn-screen.service', 'harness-daemon.service', 'harness-idle.service',
-           'harness-update.service', 'harness-update.timer']],
+           'harness-update.service', 'harness-update.timer', 'harness-connections.socket',
+           'harness-connections.service']],
     ]
     for name in paths:
         target = destination / name

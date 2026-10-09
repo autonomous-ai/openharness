@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   anthropicBaseUrl,
+  answerGridLaunch,
   buildGridEngineLaunch,
+  contractEngines,
+  contractEnvVarNames,
   describeGridLaunch,
   gridCapableEngines,
+  GRID_CONFLICTING_ENV_VARS,
   gridConflictingEnvToClear,
   gridProviderId,
   gridEnvVarNames,
@@ -328,10 +332,62 @@ describe('describeGridLaunch', () => {
   })
 })
 
+describe("answerGridLaunch: models' answer when the core asks for a launch", () => {
+  const machine: GridLaunchMachine = { hermesSystemManaged: false }
+  const API: GridLaunchOverride = { networkId: 'api:openrouter', networkName: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: 'old', model: 'q' }
+  const asSavedNow = vi.fn((override: GridLaunchOverride) => ({ override: { ...override, apiKey: 'new' }, apiBase: override.baseUrl }))
+
+  it('builds what it was sent on a create or a retarget check', () => {
+    expect(answerGridLaunch({ engine: 'claude', override: WITH_MODEL, machine }, asSavedNow)).toEqual({ ok: true, launch: launchOf('claude', WITH_MODEL), override: WITH_MODEL })
+    expect(asSavedNow).not.toHaveBeenCalled()
+  })
+
+  it('on a relaunch builds from the API as saved now, says the endpoint it read, and refuses one that cannot be read', () => {
+    const answer = answerGridLaunch({ engine: 'claude', override: API, machine, refresh: true }, asSavedNow)
+    expect(answer).toMatchObject({ ok: true, override: { ...API, apiKey: 'new' }, apiBase: API.baseUrl, launch: { env: { ANTHROPIC_AUTH_TOKEN: 'new' } } })
+    // The endpoint was read even when the engine then cannot go there: the core's assignment learns it either way.
+    expect(answerGridLaunch({ engine: 'amp', override: API, machine, refresh: true }, asSavedNow)).toMatchObject({ ok: false, error: 'GRID_ENGINE_UNSUPPORTED', apiBase: API.baseUrl })
+    expect(answerGridLaunch({ engine: 'claude', override: API, machine, refresh: true }, () => ({ error: 'API_UNAVAILABLE', detail: 'gone' })))
+      .toEqual({ ok: false, error: 'API_UNAVAILABLE', detail: 'gone' })
+    // A grid's launch is refreshed to itself, with no endpoint to learn.
+    const grid = answerGridLaunch({ engine: 'claude', override: WITH_MODEL, machine, refresh: true }, (override) => ({ override }))
+    expect(grid).toMatchObject({ ok: true, override: WITH_MODEL })
+    expect(grid).not.toHaveProperty('apiBase')
+    expect(answerGridLaunch({ engine: 'amp', override: WITH_MODEL, machine, refresh: true }, (override) => ({ override }))).not.toHaveProperty('apiBase')
+  })
+})
+
+describe('the lists the core declares for every launch (lib/gridLaunchWire.ts), held to the contracts', () => {
+  // The core reads them with no models service running — an agent leaving a grid has its variables cleared, a
+  // picker offers grid models to the engines that take them — so they are declared there, not built. A declared
+  // list drifts the first time an engine's contract gains a variable, and the symptom would be a "cleared" agent
+  // still running on the grid it was supposedly moved off: this is what keeps them equal.
+  it('names the engines the contracts can point at a grid, in their order', () => {
+    expect([...gridCapableEngines()]).toEqual(contractEngines())
+  })
+
+  it('names, for every engine, the variables its contract sets on the fullest launch it can get', () => {
+    for (const engine of ENGINES) expect(gridEnvVarNames(engine), engine).toEqual(contractEnvVarNames(engine))
+  })
+
+  it('clears every variable a contract points an engine with, and the inherited vendor key no contract sets', () => {
+    // Each exception with its reason: a contract that gains a variable fails here until it is placed.
+    const NOT_A_DESTINATION = {
+      // A window size the launch tells Claude Code, not where it sends anything.
+      CLAUDE_CODE_MAX_CONTEXT_TOKENS: 'a hint',
+      // Each engine's own config pointer, written by that engine's launch into the daemon's own folder.
+      OPENCODE_CONFIG: 'its own config file',
+      PI_CODING_AGENT_DIR: 'its own config folder',
+    }
+    // Set by no contract, and what outranks a grid when inherited (the module doc's first measurement).
+    const INHERITED_ONLY = ['ANTHROPIC_API_KEY']
+    const set = new Set(contractEngines().flatMap((engine) => contractEnvVarNames(engine)))
+    const expected = [...set].filter((name) => !Object.hasOwn(NOT_A_DESTINATION, name)).concat(INHERITED_ONLY)
+    expect([...GRID_CONFLICTING_ENV_VARS].sort()).toEqual(expected.sort())
+  })
+})
+
 describe('gridEnvVarNames', () => {
-  // Derived from the contract rather than listed by hand: a second list would drift the first time
-  // an engine's contract gained a variable, and the symptom would be a "cleared" agent still running
-  // on the grid it was supposedly moved off.
   it('names every variable claude is launched with', () => {
     // GRID_API_KEY among them: the probe asks for a launch with web tools, and moving an agent to
     // another grid has to take the old grid's MCP credential out of the pane with everything else.

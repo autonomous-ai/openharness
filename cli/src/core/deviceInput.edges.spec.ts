@@ -5,6 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AutonomousDeviceInput, type DeviceInputDeps } from './deviceInput.js'
+import { inlineSubmission } from '../testing/inlineSubmission.js'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { TerminalActionResult } from '../lib/terminalTypes.js'
 
@@ -20,7 +21,7 @@ function lock(overrides: Partial<DeviceInputDeps> = {}) {
   const device = new AutonomousDeviceInput({
     getSession: () => claude,
     validateRuntime: async () => true, inject: async () => executed, sendKey: async () => true,
-    capture: async () => '› ', acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
+    capture: async () => '› ', submission: inlineSubmission, acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
     onDelivery, onInputStatus, ...overrides,
   })
   const states = (deliveryId: string) => onDelivery.mock.calls.map(([event]) => event).filter((event) => event.deliveryId === deliveryId)
@@ -122,6 +123,60 @@ describe('the pane writer lock, at its edges', () => {
       await vi.waitFor(() => expect(f.onInputStatus).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'd1', mode, phase: 'submitted' })))
       f.device.forget('agent')
     }
+  })
+
+  it('writes a busy Claude Code turn into its own queue, and never claims steering for an engine retargeted after it was queued', async () => {
+    for (const [engine, mode] of [['claude', 'native_queue'], ['commandcode', 'native_input'], ['codex', 'steering']] as const) {
+      // Queued for a native engine; the registry row changes in place before it is typed.
+      const session = codex('0.200.0')
+      const f = lock({ getSession: () => session, validateRuntime: async () => { session.engine = engine; return true } })
+      f.device.onTurnStarted('agent', 'already working')
+      f.device.submit('agent', 'and this', 'd1')
+      await vi.waitFor(() => expect(f.onInputStatus).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'd1', mode, phase: 'submitted' })))
+      f.device.forget('agent')
+    }
+  })
+
+  it('reads the composer through the engine\'s worker, and takes no reading as an unreadable pane', async () => {
+    vi.useFakeTimers()
+    const sendKey = vi.fn(async () => true)
+    // The draft is still there as the worker reads it: the one evidence-backed Enter.
+    const pending = lock({ sendKey, submission: { ...inlineSubmission, read: async () => ({ draft: true, composer: true, nativeDraft: 'pending' }) } })
+    pending.device.submit('agent', 'hello', 'd1')
+    await vi.advanceTimersByTimeAsync(1_600)
+    expect(sendKey).toHaveBeenCalledWith('agent', 'Enter')
+    pending.device.forget('agent')
+    for (const read of [async () => null, async () => { throw new Error('worker gone') }]) {
+      sendKey.mockClear()
+      const f = lock({ sendKey, submission: { ...inlineSubmission, read } })
+      f.device.submit('agent', 'hello', 'd2')
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(sendKey).not.toHaveBeenCalled()
+      expect(f.onInputStatus).toHaveBeenLastCalledWith(expect.objectContaining({ deliveryId: 'd2', phase: 'unconfirmed' }))
+      f.device.forget('agent')
+    }
+    // The agent gone by the time the pane was read: nothing to read it for.
+    let present = true
+    const read = vi.fn(async () => ({ draft: false, composer: true, nativeDraft: 'clear' as const }))
+    const gone = lock({ sendKey, getSession: () => present ? claude : undefined, submission: { ...inlineSubmission, read }, capture: async () => { present = false; return '› ' } })
+    gone.device.submit('agent', 'hello', 'd3')
+    await vi.advanceTimersByTimeAsync(1_600)
+    expect(read).not.toHaveBeenCalled()
+    gone.device.forget('agent')
+  })
+
+  it('drops a reading that comes back after the write was settled', async () => {
+    const reading = held<{ draft: boolean; composer: boolean; nativeDraft: 'pending' } | null>()
+    const sendKey = vi.fn(async () => true)
+    const f = lock({ sendKey, submission: { ...inlineSubmission, read: () => reading.promise } })
+    f.device.submit('agent', 'hello', 'd1')
+    await vi.waitFor(() => expect(f.states('d1')).toEqual(['queued', 'delivered']))
+    f.device.onTurnStarted('agent', 'hello')
+    reading.resolve({ draft: true, composer: true, nativeDraft: 'pending' })
+    await vi.waitFor(() => expect(f.states('d1')).toEqual(['queued', 'delivered', 'started']))
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(sendKey).not.toHaveBeenCalled()
+    f.device.forget('agent')
   })
 
   it('finishes a write whose turn began while it was being typed', async () => {

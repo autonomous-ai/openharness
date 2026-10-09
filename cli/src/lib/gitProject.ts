@@ -63,6 +63,23 @@ const worktrees = (path: string) => git(path, ['worktree', 'list', '--porcelain'
 const real = (path: string) => realpath(path).catch(() => normalize(path))
 const isDirectory = (path: string) => stat(path).then(info => info.isDirectory(), () => false)
 
+/** Whether `path` or a folder above it holds `.git`: a directory, or the file a linked worktree has.
+ *  Checked before any `git` runs in a folder that may not be a checkout: on a Mac without the Command
+ *  Line Tools, `/usr/bin/git` is Apple's stub, and running it opens the "install the command line
+ *  developer tools" dialog in front of whatever the person is doing (fresh macOS VM, 2026-10-08). */
+export async function insideGitCheckout(path: string): Promise<boolean> {
+  // From the real path, as git walks it: a link to a repository's subfolder (`~/web` →
+  // `~/mono/packages/web`) is inside that checkout although nothing above the link is.
+  const start = await realpath(path).catch(() => path)
+  for (let dir = start; ; dir = dirname(dir)) {
+    const found = await stat(join(dir, '.git')).then(() => true, (error: NodeJS.ErrnoException) =>
+      // Only "nothing there" rules a checkout out; anything else (EACCES, EIO) is left to git.
+      error.code !== 'ENOENT' && error.code !== 'ENOTDIR')
+    if (found) return true
+    if (dirname(dir) === dir) return false
+  }
+}
+
 /** The main checkout, when `root` is one of its linked worktrees. */
 async function mainCheckout(root: string, trees: Worktree[]): Promise<string | null> {
   if (trees.length < 2 || !trees[0]!.usable) return null
@@ -114,6 +131,12 @@ export async function readGitProject(requested: string, options: { refresh?: boo
   try { path = await realpath(requested) } catch { return { isGit: false, branches: [] } }
   // Same word and same roots as projectPreview's fence, so the two read alike.
   if (!(await withinRoots(path, [homedir(), ...(options.knownRoots ?? [])]))) return { error: 'FORBIDDEN' }
+  // A folder with no `.git` in it or above it is not a Git project, and saying so needs no git. On a
+  // Mac without the Command Line Tools, `/usr/bin/git` is Apple's installer stub: it exits 1 (not
+  // git's 128), so every new harness in an existing folder failed with "Could not check Git" on a
+  // fresh Mac (macOS VM, 2026-10-08). GIT_DIR and friends are cleared for `git` below, so this is the
+  // same discovery git itself would make.
+  if (!(await insideGitCheckout(path))) return { isGit: false, branches: [] }
   let root: string
   try { root = await git(path, ['rev-parse', '--show-toplevel']) }
   catch (error) {

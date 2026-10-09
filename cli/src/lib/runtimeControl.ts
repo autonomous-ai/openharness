@@ -1,29 +1,13 @@
+import type { ModelControlFor } from './modelControl.js'
+import { RuntimeProfileControlError } from '../engines/facets/modelControl.js'
+export { RuntimeProfileControlError, type RuntimeProfileErrorCode } from '../engines/facets/modelControl.js'
 import type { ScreenReader } from './screenReader.js'
 import { stripAnsi } from '../engines/kit/pane.js'
 export type { PaneInspection, PaneTakeover } from '../engines/facets/screen.js'
 import { parseRuntimeProfile } from './runtimeProfileWire.js'
 import type { RegisteredSession } from './registry.js'
-import { devinModelCommandResult } from '../engines/devin/runtimeProfile.js'
-import { countCommandcodeRefusals } from '../engines/commandcode/runtimeProfile.js'
-import { parseHermesPickerPage } from '../engines/hermes/runtimeProfile.js'
-import { parsePiFooterProfile, parsePiThinkingSelection, piThinkingSteps } from '../engines/pi/runtimeProfile.js'
-import {
-  countOpencodePickers,
-  opencodeRowMatches,
-  opencodeRowNamesModel,
-  parseOpencodePickerRows,
-  type OpencodeModelTarget,
-  type OpencodePickerRow,
-} from '../engines/opencode/runtimeProfile.js'
-import {
-  chooseCodexRow,
-  codexDigitPressable,
-  codexEffortRows,
-  parseCodexPicker,
-  sameCodexPicker,
-  type CodexCatalogModel,
-  type CodexPicker,
-} from '../engines/codex/modelPicker.js'
+import type { OpencodeModelTarget, OpencodePickerRow } from '../engines/opencode/runtimeProfile.js'
+import { engineNow, isOtherEngine, loadEngine, type InProcessModules, type OtherEngine } from '../engines/inProcess.js'
 import {
   type CursorModelTarget,
   type RuntimeProfile,
@@ -33,12 +17,6 @@ import {
 const COMMAND_CONFIRM_MS = 8_000
 const PICKER_OPEN_MS = 3_000
 const PICKER_STEP_MS = 2_000
-/**
- * How far apart the two reads of a Codex model list are, which must agree before a digit is pressed on
- * it (see reachCodexEfforts): long enough for a redraw in flight to land, short beside the seconds a
- * switch takes to confirm.
- */
-const CODEX_SETTLE_MS = 250
 /** Hard bound on ladder keystrokes — twice pi's seven levels, so a desynchronised walk still terminates. */
 const PI_LADDER_MAX_STEPS = 14
 /** Hermes' longest picker page is a provider's model list; twice its size still terminates. */
@@ -50,30 +28,13 @@ function hermesProviderMatches(row: string, provider: string): boolean {
   return name === key || name.replace(/[^a-z0-9]/g, '').includes(key.replace(/[^a-z0-9]/g, ''))
 }
 
-export type RuntimeProfileErrorCode =
-  | 'AGENT_NOT_FOUND'
-  | 'INVALID_RUNTIME_PROFILE'
-  | 'BUSY'
-  | 'UNSUPPORTED_CLI_VERSION'
-  | 'MODEL_UNAVAILABLE'
-  | 'EFFORT_UNSUPPORTED'
-  | 'PLAN_SCOPE_AMBIGUOUS'
-  | 'CONFIRM_TIMEOUT'
-  | 'TMUX_FAILED'
-
-export class RuntimeProfileControlError extends Error {
-  constructor(readonly code: RuntimeProfileErrorCode) {
-    super(code)
-  }
-}
-
 export interface RuntimeProfileControllerDeps {
+  modelControlFor: ModelControlFor
   readScreen: ScreenReader
   manager: Pick<RuntimeProfileManager, 'getState' | 'selectedModel' | 'codexCatalog' | 'modelsForSession'
     | 'beginControl' | 'finishControl' | 'cancelControl' | 'confirmEffort' | 'waitForProfile' | 'waitForModel'
     | 'devinTarget' | 'opencodeCatalog' | 'commandcodeTarget' | 'ingestConfig' | 'hermesTarget' | 'cursorTarget' | 'confirmControlProfile'> & {
       supportsControl(session: RegisteredSession): boolean | Promise<boolean>
-      effortAllowed(session: RegisteredSession, model: string, effort: string, listed: readonly string[] | null): boolean | Promise<boolean>
       ingestPane(session: RegisteredSession, text: string, silent?: boolean): boolean | Promise<boolean>
     }
   getSession: (sessionId: string) => RegisteredSession | undefined
@@ -147,11 +108,6 @@ export function parseCursorParameterRows(capture: string): CursorParameterRow[] 
   return rows.length ? rows : null
 }
 
-/** The lists a model is chosen from, as against the reasoning screens that follow them. */
-function isCodexList(picker: CodexPicker): boolean {
-  return picker.kind === 'quick' || picker.kind === 'models' || picker.kind === 'reserve'
-}
-
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -159,13 +115,20 @@ function sleep(ms: number): Promise<void> {
 export class RuntimeProfileController {
   constructor(private readonly deps: RuntimeProfileControllerDeps) {}
 
+  /** An engine's own code for its pane driver: loaded before the driver runs (`setProfile` refuses without it). */
+  private engine<Name extends OtherEngine>(name: Name): InProcessModules[Name] {
+    return engineNow(name, 'a switch was driven')!
+  }
+
   async setProfile(sessionId: string, encoded: unknown): Promise<void> {
     const registeredSession = this.deps.getSession(sessionId)
     if (!registeredSession) throw new RuntimeProfileControlError('AGENT_NOT_FOUND')
     const observed = this.deps.manager.getState(registeredSession.sessionId)
-    const session: RegisteredSession = registeredSession.cliVersion || !observed.cliVersion
-      ? registeredSession
-      : { ...registeredSession, cliVersion: observed.cliVersion }
+    // Keep transaction cleanup on the conversation that began it, even if the registry row
+    // is rebound in place while a native driver awaits its worker.
+    const session: RegisteredSession = structuredClone(registeredSession)
+    session.cliVersion ||= observed.cliVersion
+    const native = this.deps.modelControlFor(session)
     const target = parseRuntimeProfile(encoded)
     // Either id identifies the agent: the encoded profile now carries the agent id, but one minted
     // before the id cutover (or by a client that still knows the session) must keep working.
@@ -178,18 +141,16 @@ export class RuntimeProfileController {
       console.warn(`[runtime-profile] unsupported ${session.engine} CLI version ${session.cliVersion ?? 'unknown'} for ${sessionId.slice(0, 8)}`)
       throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
     }
-    // Codex's own catalog: which efforts each model takes, and the names its picker shows them by.
-    const codexCatalog = session.engine === 'codex' ? await this.deps.manager.codexCatalog(session) : []
-    if (session.engine === 'codex') {
-      const listed = codexCatalog.find((entry) => entry.slug === target.model)?.efforts ?? null
-      if (!await this.deps.manager.effortAllowed(session, target.model, target.effort, listed)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
-    }
+    await native?.validate({ stage: 'target', target, state: observed })
     const options = await this.deps.manager.modelsForSession(session)
     if (!options.some((option) => option.id === target.id)) {
       const sameModel = options.some((option) => parseRuntimeProfile(option.id)?.model === target.model)
       throw new RuntimeProfileControlError(sameModel ? 'EFFORT_UNSUPPORTED' : 'MODEL_UNAVAILABLE')
     }
-    if (session.engine === 'codex' && observed.mode === 'plan') throw new RuntimeProfileControlError('PLAN_SCOPE_AMBIGUOUS')
+    await native?.validate({ stage: 'scope', target, state: observed })
+    // The other engines' pane drivers read the pane with their engine's own code, loaded in this process: without
+    // it the switch is refused before any key is sent.
+    if (!native && isOtherEngine(session.engine) && !await loadEngine(session.engine)) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
     const release = this.deps.acquireInput(session.agentId)
     if (!release) throw new RuntimeProfileControlError('BUSY')
     let controlStarted = false
@@ -200,16 +161,12 @@ export class RuntimeProfileController {
       if (!capture) throw new RuntimeProfileControlError('TMUX_FAILED')
       const inspection = (await this.deps.readScreen(session, capture))?.pane
       if (!inspection) throw new RuntimeProfileControlError('BUSY')
-      if (session.engine === 'codex' && inspection.plan) throw new RuntimeProfileControlError('PLAN_SCOPE_AMBIGUOUS')
+      await native?.validate({ stage: 'scope', target, state: observed, pane: inspection })
       if (!inspection.idle) throw new RuntimeProfileControlError('BUSY')
       if (!this.deps.manager.beginControl(session, target)) throw new RuntimeProfileControlError('BUSY')
       controlStarted = true
-      if (session.engine === 'claude') {
-        await this.setClaude(session, target, current, options)
-      } else if (session.engine === 'codex') {
-        pickerOpen = true
-        await this.setCodex(session, target, codexCatalog)
-        pickerOpen = false
+      if (native) {
+        await native.apply({ target, current, options })
       } else if (session.engine === 'devin') {
         // No picker is ever opened — `/model <id>` is a single command — so there is nothing to Escape out
         // of if this throws.
@@ -261,55 +218,6 @@ export class RuntimeProfileController {
     }
   }
 
-  private async setClaude(
-    session: RegisteredSession,
-    target: RuntimeProfile,
-    current: RuntimeProfile | null,
-    options: Array<{ id: string }>,
-  ): Promise<void> {
-    if (current?.model !== target.model) {
-      if (!await this.deps.sendText(session.agentId, `/model ${target.model}`)) {
-        throw new RuntimeProfileControlError('TMUX_FAILED')
-      }
-      if (!await this.waitClaudeModel(session)) throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
-    }
-
-    if (current?.effort === target.effort) {
-      this.deps.manager.confirmEffort(session.sessionId, target.effort)
-      return
-    }
-
-    const hasExplicitEffort = options.some((option) => {
-      const profile = parseRuntimeProfile(option.id)
-      return profile?.model === target.model && profile.effort !== 'auto'
-    })
-    if (!hasExplicitEffort && target.effort === 'auto') {
-      this.deps.manager.confirmEffort(session.sessionId, 'auto')
-      return
-    }
-    if (!await this.deps.sendText(session.agentId, `/effort ${target.effort}`)) {
-      throw new RuntimeProfileControlError('TMUX_FAILED')
-    }
-    if (!await this.deps.manager.waitForProfile(session.sessionId, COMMAND_CONFIRM_MS)) {
-      await this.deps.sendKey(session.agentId, 'Enter')
-      if (!await this.deps.manager.waitForProfile(session.sessionId, 2_000)) {
-        throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
-      }
-    }
-  }
-
-  private async waitClaudeModel(session: RegisteredSession): Promise<boolean> {
-    if (await this.deps.manager.waitForModel(session.sessionId, 1_200)) return true
-    const capture = await this.deps.capture(session.agentId, 80)
-    if (capture && /switch model|change model|continue.*model|re-read.*history/i.test(stripAnsi(capture))) {
-      await this.deps.sendKey(session.agentId, 'Enter')
-    } else {
-      // Claude and Codex can swallow the first Enter immediately after a terminal literal write.
-      await this.deps.sendKey(session.agentId, 'Enter')
-    }
-    return this.deps.manager.waitForModel(session.sessionId, COMMAND_CONFIRM_MS)
-  }
-
   /**
    * Devin takes the whole profile in one command: `/model <id>` accepts the exact id from
    * `devin models list` (effort included), and answers in the pane — `✓ Model set to <name>` or
@@ -324,11 +232,11 @@ export class RuntimeProfileController {
     }
     const answered = await this.waitPane(
       session.agentId,
-      (value) => devinModelCommandResult(stripAnsi(value)) !== null,
+      (value) => this.engine('devin').devinModelCommandResult(stripAnsi(value)) !== null,
       COMMAND_CONFIRM_MS,
     )
     if (!answered) throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
-    if (devinModelCommandResult(stripAnsi(answered)) === 'unavailable') {
+    if (this.engine('devin').devinModelCommandResult(stripAnsi(answered)) === 'unavailable') {
       throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
     }
     // The acknowledgement line is not the state — the footer is, and only `ingestPane` reads it. Nothing
@@ -389,12 +297,13 @@ export class RuntimeProfileController {
     // firing them blind is what an open-loop drive looks like, and it is exactly how this went wrong: a
     // stale first read sent the cursor to `off` and committed it. Re-reading also means a ladder that
     // scrolls, clamps at an end, or gains a level cannot desynchronise the walk.
-    let selection = parsePiThinkingSelection(stripAnsi(ladder))
-    if (!selection || piThinkingSteps(selection, effort) === null) {
+    const pi = this.engine('pi')
+    let selection = pi.parsePiThinkingSelection(stripAnsi(ladder))
+    if (!selection || pi.piThinkingSteps(selection, effort) === null) {
       throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
     }
     for (let guard = 0; selection !== effort && guard < PI_LADDER_MAX_STEPS; guard++) {
-      const steps = piThinkingSteps(selection as string, effort)
+      const steps = pi.piThinkingSteps(selection as string, effort)
       if (steps === null || steps === 0) break
       if (!await this.deps.sendKey(session.agentId, steps > 0 ? 'Down' : 'Up')) {
         throw new RuntimeProfileControlError('TMUX_FAILED')
@@ -402,14 +311,14 @@ export class RuntimeProfileController {
       const moved = await this.waitPane(
         session.agentId,
         (value) => {
-          const next = parsePiThinkingSelection(stripAnsi(value))
+          const next = pi.parsePiThinkingSelection(stripAnsi(value))
           return !!next && next !== selection
         },
         PICKER_STEP_MS,
       )
       // No movement means the cursor is pinned at an end of the ladder — pressing on cannot reach it.
       if (!moved) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
-      selection = parsePiThinkingSelection(stripAnsi(moved))
+      selection = pi.parsePiThinkingSelection(stripAnsi(moved))
     }
     if (selection !== effort) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
     await this.deps.sendKey(session.agentId, 'Enter')
@@ -459,9 +368,10 @@ export class RuntimeProfileController {
    * two do, the list does not narrow and this refuses rather than guessing.
    */
   private async driveOpencodePicker(session: RegisteredSession, entry: OpencodeModelTarget): Promise<void> {
-    if (await this.pickOpencodeRow(session, entry, entry.filter, opencodeRowMatches)) return
+    const opencode = this.engine('opencode')
+    if (await this.pickOpencodeRow(session, entry, entry.filter, opencode.opencodeRowMatches)) return
     if (entry.modelFilter === entry.filter) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-    if (!await this.pickOpencodeRow(session, entry, entry.modelFilter, opencodeRowNamesModel)) {
+    if (!await this.pickOpencodeRow(session, entry, entry.modelFilter, opencode.opencodeRowNamesModel)) {
       throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
     }
   }
@@ -481,13 +391,14 @@ export class RuntimeProfileController {
     // "Is a picker open?" cannot be asked of a capture that carries scrollback — an EARLIER picker is
     // still up there, so the check passes before this one opens and the filter would be typed into the
     // composer and submitted as a message. Count the openings instead and wait for one more.
-    const before = countOpencodePickers(stripAnsi(await this.deps.capture(session.agentId, 100) ?? ''))
+    const opencode = this.engine('opencode')
+    const before = opencode.countOpencodePickers(stripAnsi(await this.deps.capture(session.agentId, 100) ?? ''))
     if (!await this.deps.sendText(session.agentId, '/models')) {
       throw new RuntimeProfileControlError('TMUX_FAILED')
     }
     if (!await this.waitPane(
       session.agentId,
-      (v) => countOpencodePickers(stripAnsi(v)) > before,
+      (v) => opencode.countOpencodePickers(stripAnsi(v)) > before,
       PICKER_OPEN_MS,
     )) {
       throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
@@ -497,10 +408,10 @@ export class RuntimeProfileController {
     }
     const narrowed = await this.waitPane(
       session.agentId,
-      (v) => (parseOpencodePickerRows(stripAnsi(v)) ?? []).length === 1,
+      (v) => (opencode.parseOpencodePickerRows(stripAnsi(v)) ?? []).length === 1,
       PICKER_STEP_MS,
     )
-    const rows = narrowed ? parseOpencodePickerRows(stripAnsi(narrowed)) ?? [] : []
+    const rows = narrowed ? opencode.parseOpencodePickerRows(stripAnsi(narrowed)) ?? [] : []
     if (rows.length !== 1 || !matches(entry, rows[0])) {
       // Leave the pane as it was found. A picker left open with a dead filter in it swallows whatever
       // the user types next, and the retry below would type its filter on top of this one.
@@ -546,7 +457,8 @@ export class RuntimeProfileController {
     // Success prints NOTHING and a refusal prints one line, so both have to be watched at once — and the
     // refusal has to be a NEW one. Matching the text anywhere in the capture reported failure in 25ms off
     // a refusal still sitting in the scrollback from an earlier model, while the level had in fact applied.
-    const refusalsBefore = countCommandcodeRefusals(stripAnsi(await this.deps.capture(session.agentId, 100) ?? ''))
+    const commandcode = this.engine('commandcode')
+    const refusalsBefore = commandcode.countCommandcodeRefusals(stripAnsi(await this.deps.capture(session.agentId, 100) ?? ''))
     if (!await this.deps.sendText(session.agentId, `/effort ${target.effort}`)) {
       throw new RuntimeProfileControlError('TMUX_FAILED')
     }
@@ -556,7 +468,7 @@ export class RuntimeProfileController {
       await this.deps.manager.ingestConfig(session, true).catch(() => false)
       if (this.deps.manager.selectedModel(session) === target.id) return
       const capture = stripAnsi(await this.deps.capture(session.agentId, 100) ?? '')
-      if (countCommandcodeRefusals(capture) > refusalsBefore) {
+      if (commandcode.countCommandcodeRefusals(capture) > refusalsBefore) {
         throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
       }
       await sleep(150)
@@ -581,7 +493,7 @@ export class RuntimeProfileController {
     }
     const opened = await this.waitPane(
       session.agentId,
-      (v) => !!parseHermesPickerPage(stripAnsi(v)),
+      (v) => !!this.engine('hermes').parseHermesPickerPage(stripAnsi(v)),
       PICKER_OPEN_MS,
     )
     if (!opened) throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
@@ -591,7 +503,7 @@ export class RuntimeProfileController {
       await this.walkHermesPage(session, (row) => hermesProviderMatches(row, entry.provider))
       if (!await this.waitPane(
         session.agentId,
-        (v) => (parseHermesPickerPage(stripAnsi(v))?.rows ?? []).some((row) => row === entry.id),
+        (v) => (this.engine('hermes').parseHermesPickerPage(stripAnsi(v))?.rows ?? []).some((row) => row === entry.id),
         PICKER_OPEN_MS,
       )) {
         throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
@@ -611,7 +523,7 @@ export class RuntimeProfileController {
   ): Promise<void> {
     for (let guard = 0; guard < HERMES_PAGE_MAX_STEPS; guard++) {
       const capture = await this.deps.capture(session.agentId, 100)
-      const page = capture ? parseHermesPickerPage(stripAnsi(capture)) : null
+      const page = capture ? this.engine('hermes').parseHermesPickerPage(stripAnsi(capture)) : null
       if (!page || !page.selected) throw new RuntimeProfileControlError('TMUX_FAILED')
       if (wanted(page.selected)) {
         if (!await this.deps.sendKey(session.agentId, 'Enter')) {
@@ -626,7 +538,7 @@ export class RuntimeProfileController {
         throw new RuntimeProfileControlError('TMUX_FAILED')
       }
       const moved = await this.waitPane(session.agentId, (v) => {
-        const next = parseHermesPickerPage(stripAnsi(v))
+        const next = this.engine('hermes').parseHermesPickerPage(stripAnsi(v))
         return !!next?.selected && next.selected !== page.selected
       }, PICKER_STEP_MS)
       if (!moved) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
@@ -641,138 +553,6 @@ export class RuntimeProfileController {
       return parseRuntimeProfile(this.deps.manager.selectedModel(session))?.model === target.model
     }, COMMAND_CONFIRM_MS)
     return !!confirmed
-  }
-
-  /**
-   * Codex's `/model`: a quick menu of auto presets with an `All models` row (0.145 and later), the full
-   * list (`Select Model and Effort`), then the chosen model's reasoning picker, each row pressed by its
-   * digit, which selects the row and accepts it. How a row is read and chosen, and why, is in
-   * engines/codex/modelPicker.ts. Confirmed, as it always was, by the `thread_settings_applied` record
-   * Codex writes once the choice is applied (RuntimeProfileManager `ingestCodex`).
-   */
-  private async setCodex(session: RegisteredSession, target: RuntimeProfile, catalog: CodexCatalogModel[]): Promise<void> {
-    if (!await this.deps.sendText(session.agentId, '/model')) throw new RuntimeProfileControlError('TMUX_FAILED')
-    let picker = await this.waitCodexPicker(session, () => true, 900)
-    if (!picker) {
-      await this.deps.sendKey(session.agentId, 'Enter')
-      picker = await this.waitCodexPicker(session, () => true, PICKER_OPEN_MS)
-    }
-    if (!picker) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-    if (!isCodexList(picker)) {
-      // Opened on a reasoning screen: back to the list it was opened from, so the model is chosen too.
-      if (!await this.deps.sendKey(session.agentId, 'Escape')) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-      if (!await this.waitCodexPicker(session, isCodexList, PICKER_STEP_MS)) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-    }
-    const reached = await this.reachCodexEfforts(session, target, catalog)
-    if (reached !== 'applied') await this.pickCodexEffort(session, target, reached)
-    if (!await this.deps.manager.waitForProfile(session.sessionId, COMMAND_CONFIRM_MS)) {
-      throw new RuntimeProfileControlError('CONFIRM_TIMEOUT')
-    }
-  }
-
-  /**
-   * From the list on screen to the target model's reasoning picker, through `All models` when the quick
-   * menu is first; or 'applied' when the model's row applied it at once (a model with one effort).
-   *
-   * Every digit is pressed from a list read twice, CODEX_SETTLE_MS apart, the same both times. Codex
-   * 0.160 draws the list from its cache and redraws it in place when the server answers, and a model
-   * added or reordered then renumbers the rows: a digit read off the first drawing lands on another
-   * model. The reasoning picker that opens names its model in its title, and a title naming any other
-   * model than the row pressed means the list moved anyway, so nothing more is pressed.
-   */
-  private async reachCodexEfforts(
-    session: RegisteredSession,
-    target: RuntimeProfile,
-    catalog: CodexCatalogModel[],
-  ): Promise<CodexPicker | 'applied'> {
-    let reread = false
-    for (let lists = 0; lists < 2; lists++) {
-      const list = await this.settledCodexList(session)
-      if (!list) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-      let choice = chooseCodexRow(list, target, catalog)
-      if ('error' in choice && choice.error === 'MODEL_UNAVAILABLE' && !reread) {
-        // Codex saves the catalog its picker refreshed from to models_cache.json, so a model or a name
-        // that came with the refresh is there to read now.
-        reread = true
-        catalog = await this.deps.manager.codexCatalog(session)
-        choice = chooseCodexRow(list, target, catalog)
-      }
-      if ('error' in choice) throw new RuntimeProfileControlError(choice.error)
-      if (!await this.deps.sendKey(session.agentId, String(choice.row.number))) throw new RuntimeProfileControlError('TMUX_FAILED')
-      if (choice.opens === 'list') {
-        if (!await this.waitCodexPicker(session, (next) => next.kind === 'models', PICKER_STEP_MS)) {
-          throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-        }
-        continue
-      }
-      if (choice.opens === 'applied') return 'applied'
-      const next = await this.waitCodexAfterModelRow(session)
-      if (next === 'closed') return 'applied'
-      if (!next) throw new RuntimeProfileControlError('UNSUPPORTED_CLI_VERSION')
-      if (next.model !== choice.row.name) throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-      return next
-    }
-    throw new RuntimeProfileControlError('MODEL_UNAVAILABLE')
-  }
-
-  /** The target's effort in its reasoning picker, through Advanced Reasoning for Max and Ultra. */
-  private async pickCodexEffort(session: RegisteredSession, target: RuntimeProfile, picker: CodexPicker): Promise<void> {
-    const rows = codexEffortRows(picker)
-    let row = target.effort === 'auto' ? rows.defaultRow : rows.efforts.get(target.effort) ?? null
-    if (row === null && (target.effort === 'max' || target.effort === 'ultra') && rows.advancedRow !== null
-      && codexDigitPressable(rows.advancedRow)) {
-      if (!await this.deps.sendKey(session.agentId, String(rows.advancedRow))) throw new RuntimeProfileControlError('TMUX_FAILED')
-      const advanced = await this.waitCodexPicker(session, (next) => next.kind === 'advanced', PICKER_STEP_MS)
-      row = advanced ? codexEffortRows(advanced).efforts.get(target.effort) ?? null : null
-    }
-    if (row === null || !codexDigitPressable(row)) throw new RuntimeProfileControlError('EFFORT_UNSUPPORTED')
-    if (!await this.deps.sendKey(session.agentId, String(row))) throw new RuntimeProfileControlError('TMUX_FAILED')
-  }
-
-  /** The first Codex picker on the pane that `wanted` takes, polled until `timeoutMs`. */
-  private async waitCodexPicker(
-    session: RegisteredSession,
-    wanted: (picker: CodexPicker) => boolean,
-    timeoutMs: number,
-  ): Promise<CodexPicker | null> {
-    const capture = await this.waitPane(session.agentId, (value) => {
-      const picker = parseCodexPicker(value)
-      return !!picker && wanted(picker)
-    }, timeoutMs)
-    return capture ? parseCodexPicker(capture) : null
-  }
-
-  /** A model list that reads the same twice, CODEX_SETTLE_MS apart (see reachCodexEfforts). */
-  private async settledCodexList(session: RegisteredSession): Promise<CodexPicker | null> {
-    let previous: CodexPicker | null = null
-    const deadline = Date.now() + PICKER_STEP_MS
-    while (Date.now() < deadline) {
-      const capture = await this.deps.capture(session.agentId, 100)
-      const picker = capture ? parseCodexPicker(capture) : null
-      const list = picker && isCodexList(picker) ? picker : null
-      if (list && previous && sameCodexPicker(previous, list)) return list
-      previous = list
-      await sleep(CODEX_SETTLE_MS)
-    }
-    return null
-  }
-
-  /**
-   * After a model's row: its reasoning picker, or 'closed' when the picker went away and the composer
-   * is back, which is a model the catalog did not describe applying its one effort at once.
-   */
-  private async waitCodexAfterModelRow(session: RegisteredSession): Promise<CodexPicker | 'closed' | null> {
-    const deadline = Date.now() + PICKER_STEP_MS
-    while (Date.now() < deadline) {
-      const capture = await this.deps.capture(session.agentId, 100)
-      if (capture) {
-        const picker = parseCodexPicker(capture)
-        if (picker?.kind === 'efforts') return picker
-        if (!picker && (await this.deps.readScreen(session, capture))?.pane.idle) return 'closed'
-      }
-      await sleep(100)
-    }
-    return null
   }
 
   private async setCursor(session: RegisteredSession, target: RuntimeProfile): Promise<void> {

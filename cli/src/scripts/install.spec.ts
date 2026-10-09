@@ -956,6 +956,19 @@ describe("scripts/install.sh command contract", () => {
       },
     });
 
+
+  it("leaves grid to its first use on the desktop app's first run", () => {
+    const scratch = mkdtempSync(join(tmpdir(), "harness-grid-desktop-"));
+    try {
+      const { home } = gridFixture(scratch);
+      const result = runGridStep(scratch, home, "desktop");
+      expect(result.stdout).not.toContain("Installing the managed grid");
+      expect(existsSync(join(home, ".harness", "runtime", "current-grid"))).toBe(false);
+      expect(existsSync(join(scratch, "curl-invocations"))).toBe(false);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
   it("downloads, verifies and records the managed grid read-only, and links nothing", () => {
     const scratch = mkdtempSync(join(tmpdir(), "harness-grid-managed-"));
     try {
@@ -987,7 +1000,7 @@ describe("scripts/install.sh command contract", () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toContain("checksum verification");
-      expect(result.stdout).toContain("fetched by the daemon");
+      expect(result.stdout).toContain("set up the first time a grid feature is used");
       expect(existsSync(join(home, ".harness", "runtime", "current-grid"))).toBe(false);
       expect(readdirSync(join(home, ".harness", "runtime")).filter((n) => n.startsWith(".grid-staging-"))).toEqual([]);
     } finally {

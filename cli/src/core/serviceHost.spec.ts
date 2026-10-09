@@ -97,13 +97,13 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const h = host()
       const port = startSearch(h, {
         ...new FakeSearch(),
-        touch: () => { throw new Error('store closed') },
+        touch: () => { throw new Error('catalog closed') },
         session: () => { throw 'bad row' },
       })
       expect(testPort(h).touch('s1')).toBeUndefined()
       expect(testPort(h).session('s1')).toBeUndefined()
       expect(port).toBeDefined()
-      expect(h.lines).toEqual(['[services] search.touch failed · store closed', '[services] search.session failed · bad row'])
+      expect(h.lines).toEqual(['[services] search.touch failed · catalog closed', '[services] search.session failed · bad row'])
     })
 
     it('goes back to the one request when its fallback is FAIL, sync or async', async () => {
@@ -143,7 +143,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
     it('after five failures within the window: stopped, unbound, and its calls answered without reaching it', async () => {
       const h = host()
       const real = new FakeSearch()
-      real.touch = () => { throw new Error('store closed') }
+      real.touch = () => { throw new Error('catalog closed') }
       startSearch(h, real)
       const captured = testPort(h)
       const unbind = vi.fn()
@@ -269,7 +269,7 @@ describe('hosting services so one that fails cannot take the core down', () => {
     it('returns at once, and replies when a promised answer comes', async () => {
       const h = host()
       let answer!: (value: Record<string, unknown>) => void
-      h.services.serve('store', () => ({ dsh_list: () => new Promise((resolve) => { answer = resolve }) }), fakeCore(), ['dsh_list'])
+      h.services.serve('catalog', () => ({ dsh_list: () => new Promise((resolve) => { answer = resolve }) }), fakeCore(), ['dsh_list'])
       const { got, reply } = collect()
       expect(h.services.route('dsh_list', {}, ASKER, reply)).toBe(true)
       expect(got).toEqual([])
@@ -282,8 +282,8 @@ describe('hosting services so one that fails cannot take the core down', () => {
       h.services.start('search', () => { throw new Error('index locked') }, fakeCore(), SEARCH, ['session_search'])
       h.services.start('viewers', () => {}, fakeCore(), VIEWERS, ['viewer_list'])
       const switchedOff = vi.fn()
-      h.services.serve('store', () => ({ dsh_list: () => { throw new Error('catalog corrupt') } }), fakeCore(), ['dsh_list'])
-      h.services.onOff('store', switchedOff)
+      h.services.serve('catalog', () => ({ dsh_list: () => { throw new Error('catalog corrupt') } }), fakeCore(), ['dsh_list'])
+      h.services.onOff('catalog', switchedOff)
       const { got, reply } = collect()
       h.services.route('session_search', {}, ASKER, reply)
       h.services.route('viewer_list', {}, ASKER, reply)
@@ -292,17 +292,17 @@ describe('hosting services so one that fails cannot take the core down', () => {
       expect(got).toEqual([
         { error: 'SERVICE_UNAVAILABLE', service: 'search', retryable: false },
         { error: 'SERVICE_UNAVAILABLE', service: 'viewers', retryable: false },
-        { error: 'SERVICE_FAILED', service: 'store' },
-        { error: 'SERVICE_UNAVAILABLE', service: 'store', retryable: false },
+        { error: 'SERVICE_FAILED', service: 'catalog' },
+        { error: 'SERVICE_UNAVAILABLE', service: 'catalog', retryable: false },
       ])
-      expect(h.services.isOff('store')).toBe(true)
+      expect(h.services.isOff('catalog')).toBe(true)
       expect(switchedOff).toHaveBeenCalledOnce()
-      expect(h.lines.at(-1)).toBe('[services] store switched off after 1 failures in 60s · it stays off until the daemon restarts')
+      expect(h.lines.at(-1)).toBe('[services] catalog switched off after 1 failures in 60s · it stays off until the daemon restarts')
     })
 
     it('answers a handler that throws, rejects or replies with nothing SERVICE_FAILED, and counts each against its service', async () => {
       const h = host({ maxFailures: 3 })
-      h.services.serve('store', () => ({
+      h.services.serve('catalog', () => ({
         a: () => { throw new Error('bad row') },
         b: async () => { throw 'closed' },
         c: () => undefined as unknown as Record<string, unknown>,
@@ -310,33 +310,33 @@ describe('hosting services so one that fails cannot take the core down', () => {
       const { got, reply } = collect()
       for (const type of ['a', 'b', 'c']) h.services.route(type, {}, ASKER, reply)
       await vi.waitFor(() => expect(got).toHaveLength(3))
-      expect(got).toEqual([{ error: 'SERVICE_FAILED', service: 'store' }, { error: 'SERVICE_FAILED', service: 'store' }, { error: 'SERVICE_FAILED', service: 'store' }])
+      expect(got).toEqual([{ error: 'SERVICE_FAILED', service: 'catalog' }, { error: 'SERVICE_FAILED', service: 'catalog' }, { error: 'SERVICE_FAILED', service: 'catalog' }])
       expect(h.lines).toEqual([
-        '[services] store.a failed · bad row',
-        '[services] store.b failed · closed',
-        '[services] store.c failed · c was answered with no reply',
-        '[services] store switched off after 3 failures in 60s · it stays off until the daemon restarts',
+        '[services] catalog.a failed · bad row',
+        '[services] catalog.b failed · closed',
+        '[services] catalog.c failed · c was answered with no reply',
+        '[services] catalog switched off after 3 failures in 60s · it stays off until the daemon restarts',
       ])
     })
 
     it('leaves off a service that claims a request another answers, or that answers other than it declared', () => {
       const h = host()
-      h.services.serve('store', () => ({ dsh_list: () => ({ dsh: [] }) }), fakeCore(), ['dsh_list'])
+      h.services.serve('catalog', () => ({ dsh_list: () => ({ dsh: [] }) }), fakeCore(), ['dsh_list'])
       h.services.serve('rival', () => ({ dsh_list: () => ({}) }), fakeCore(), ['dsh_list'])
       h.services.serve('loose', () => ({ a: () => ({}), b: () => ({}), c: () => ({}) }), fakeCore(), ['a'])
       h.services.serve('looser', () => ({ d: () => ({}), e: () => ({}) }), fakeCore(), ['d'])
       h.services.serve('short', () => ({}), fakeCore(), ['x', 'y'])
       h.services.serve('shorter', () => ({}), fakeCore(), ['z'])
       expect(['rival', 'loose', 'looser', 'short', 'shorter'].every((name) => h.services.isOff(name))).toBe(true)
-      expect(h.services.isOff('store')).toBe(false)
+      expect(h.services.isOff('catalog')).toBe(false)
       expect(h.lines).toEqual([
-        '[services] rival did not start · dsh_list is answered by store · the core runs without it',
+        '[services] rival did not start · dsh_list is answered by catalog · the core runs without it',
         '[services] loose did not start · it answers b, c without declaring them · the core runs without it',
         '[services] looser did not start · it answers e without declaring it · the core runs without it',
         '[services] short did not start · it declares x, y without answering them · the core runs without it',
         '[services] shorter did not start · it declares z without answering it · the core runs without it',
       ])
-      // The store keeps its own requests.
+      // The catalog keeps its own requests.
       const { got, reply } = collect()
       h.services.route('dsh_list', {}, ASKER, reply)
       return vi.waitFor(() => expect(got).toEqual([{ dsh: [] }]))
@@ -382,14 +382,14 @@ describe('hosting services so one that fails cannot take the core down', () => {
     })
 
     it('fails one request on every ask, and leaves the service\'s others alone', async () => {
-      const h = host({ faults: testFaults('store.dsh_list') })
-      h.services.serve('store', () => ({ dsh_list: () => ({ dsh: [] }), dsh_remove: () => ({ ok: true }) }), fakeCore(), ['dsh_list', 'dsh_remove'])
+      const h = host({ faults: testFaults('catalog.dsh_list') })
+      h.services.serve('catalog', () => ({ dsh_list: () => ({ dsh: [] }), dsh_remove: () => ({ ok: true }) }), fakeCore(), ['dsh_list', 'dsh_remove'])
       const got: Array<Record<string, unknown>> = []
       h.services.route('dsh_list', {}, { local: true, owner: true }, (result) => got.push(result))
       h.services.route('dsh_remove', {}, { local: true, owner: true }, (result) => got.push(result))
       await vi.waitFor(() => expect(got).toHaveLength(2))
-      expect(got).toEqual([{ error: 'SERVICE_FAILED', service: 'store' }, { ok: true }])
-      expect(h.lines).toEqual(['[services] store.dsh_list failed · injected fault: store.dsh_list'])
+      expect(got).toEqual([{ error: 'SERVICE_FAILED', service: 'catalog' }, { ok: true }])
+      expect(h.lines).toEqual(['[services] catalog.dsh_list failed · injected fault: catalog.dsh_list'])
     })
   })
 })

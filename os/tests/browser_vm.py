@@ -438,6 +438,8 @@ def main():
                         help='Explicitly overlay a candidate browser launcher; omit to test the packaged image')
     parser.add_argument('--compositor-config', type=Path,
                         help='Explicitly overlay a candidate compositor configuration; omit to test the packaged image')
+    parser.add_argument('--home-source', type=Path,
+                        help='Stage and exercise this source checkout\'s signed browser start page on the disposable disk')
     parser.add_argument('--memory-profile', action='store_true',
                         help='Capture finite read-only memory snapshots; separate from ordinary focus acceptance')
     parser.add_argument('--zram-config', type=Path,
@@ -554,6 +556,10 @@ def main():
             # Signal the actual running compositor, including the private
             # OS-owned executable. Exact-image acceptance needs no reload.
             vm.command('pkill -HUP -u "$(id -u)" -x labwc')
+        if args.home_source:
+            import browser_home_vm
+            browser_home_vm.overlay(vm, args.home_source.resolve(), result)
+            browser_home_vm.exercise(vm, result)
         if args.memory_profile:
             data = Path(__file__).with_name('browser_memory.py').read_bytes()
             result['memory_observer_sha256'] = hashlib.sha256(data).hexdigest()

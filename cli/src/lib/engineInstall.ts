@@ -25,6 +25,11 @@ export interface EngineInstallExecutable {
 export interface EngineInstallRecipe {
   /** The first-party line a person would paste into a POSIX shell. */
   readonly command: string
+  /**
+   * A second first-party line, run only when [command] leaves no executable behind. For a vendor
+   * whose native installer depends on one download host that some networks cannot reach.
+   */
+  readonly fallback?: string
   /** First-party documentation used to verify the command. */
   readonly source: string
   /** Ordered, source-owned ways to locate the binary after installation. */
@@ -57,6 +62,11 @@ export const ENGINE_INSTALL: Readonly<Record<ProcessEngine, EngineInstallRecipe>
     // The native installer downloads one matching binary. npm installs both the
     // baseline and AVX2 Linux packages, doubling the installed footprint.
     command: 'curl -fsSL https://opencode.ai/install | bash',
+    // OpenCode is the default agent, and its installer downloads the binary from GitHub Releases.
+    // From a Vietnamese network on 2026-10-08, release-assets.githubusercontent.com timed out while
+    // the npm registry answered, so a fresh user there could not start a first harness. The npm
+    // package carries the same binaries as optional dependencies and needs no GitHub download.
+    fallback: 'npm install -g opencode-ai',
     source: 'https://opencode.ai/docs',
     executable: { names: ['opencode'], npmGlobal: true, homeRelativePaths: ['.opencode/bin/opencode'] },
   },

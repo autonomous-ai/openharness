@@ -9,7 +9,7 @@ import { BackendSocket } from './backendSocket.js'
 import { relaySocket } from './testing/relaySocket.js'
 import { bindLaunchRequests } from './testing/socketCore.js'
 import { env } from './config/env.js'
-import { emptyPorts } from './core/api.js'
+import { emptyPorts, STORE_OFF, STORE_FALLBACKS } from './core/api.js'
 import { createServiceHost } from './core/serviceHost.js'
 import { refreshDshRegistry } from './dsh/catalog.js'
 import { dshInstallDir, invalidateInstalledDsh, upsertInstalledRecord } from './dsh/installed.js'
@@ -30,7 +30,10 @@ describe('the DSH requests on the local socket', () => {
     const host = createServiceHost(emptyPorts(), { log: () => {}, faults })
     const deps: StoreDeps = { prepare: () => true, refresh: refreshDshRegistry, rows: dshListRows, mutate: (input, progress) => mutate(input, progress), remove: (id) => remove(id) }
     const core = fakeCore({ clients: { dshInstallStatus: (status) => socket.send({ type: 'dsh_install_status', payload: status }) } })
-    host.serve('store', (api) => startStore(api, deps), core, STORE_REQUESTS)
+    host.start('store', (api, ports) => {
+      ports.store = STORE_OFF
+      return startStore(api, deps)
+    }, core, STORE_FALLBACKS, STORE_REQUESTS)
     socket.serviceRouter = (type, payload, asker, reply) => host.route(type, payload, asker, reply)
   }
   beforeEach(() => {

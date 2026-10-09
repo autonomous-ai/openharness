@@ -1,53 +1,62 @@
 /**
  * Relaunch helpers: what a restart, a retarget, a restore or a resume needs to bring an agent's pane
  * back. Its launch overrides, rebuilt from the row (an API's key as saved now); the web-search decision
- * refreshed; a permission flag the engine no longer takes dropped, rather than the pane; and a Codex
- * rollout repaired for resume, with the tail moved to its new length.
+ * refreshed; a permission flag the engine no longer takes dropped, rather than the pane; and the history made
+ * resumable (Codex's rollout, engines/launchPrep.ts), with the tail moved to its new length.
  *
  * Moved verbatim out of `runForeground` (the core boundary, step 10: docs/design/2026-10-03-harnessd.md).
  */
-import { prepareCodexResume } from '../../engines/codex/portableHistory.js'
-import { ApiConnectionError, type ApiConnections } from '../../lib/apiConnections.js'
-import { refreshApiLaunch } from '../../lib/apiModels.js'
+import { loadEngine } from '../../engines/inProcess.js'
+import { prepareResume, repairedItemsName } from '../../engines/launchPrep.js'
 import { dropPermissionFlagIfUnsupported } from '../../lib/engineLaunch.js'
-import { isApiLaunch } from '../../lib/gridLaunch.js'
+import { rememberApiBase } from '../../lib/gridAssignment.js'
+import { gridUnavailable, type GridLaunchAnswer, type GridLaunchRequest } from '../../lib/gridLaunchWire.js'
 import { buildLaunchOverrides, type LaunchOverrides, type LaunchOverridesDeps, type LaunchOverridesResult, type LaunchSource } from '../../lib/launchOverrides.js'
+import type { ModelsPort } from '../api.js'
 import { sid } from '../../lib/log.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 
+/**
+ * The models service's grid launch, as every launch in the core asks it (`ModelsPort.gridLaunch`): its answer, or,
+ * when models is down or answers nothing usable, the refusal that says so (`gridUnavailable`), never a launch on
+ * the engine's own login and never a wait past the call's bound (core/serviceLinks.ts). A saved API's endpoint
+ * the answer read is one the core's grid assignment recognises from then on, as when the core read it itself.
+ */
+export function gridLaunchThrough(models: () => Pick<ModelsPort, 'gridLaunch'>) {
+  return async (request: GridLaunchRequest): Promise<GridLaunchAnswer> => {
+    let answer: GridLaunchAnswer
+    try { answer = await models().gridLaunch(request) } catch { return gridUnavailable(request.engine, request.override) }
+    if (answer.apiBase) rememberApiBase(answer.apiBase)
+    return answer
+  }
+}
+
 export interface LaunchHelperDeps {
   /** Writes the saved APIs' tool instructions into the agent's folder before it launches. */
   prepareApiTools: (cwd: string | null | undefined, engine: string) => void
-  savedApis: ApiConnections
   launchOverridesDeps: LaunchOverridesDeps
   setGridLaunch: typeof registry.setGridLaunch
   /** Moves a session's tail to a byte (Watcher.setTail). */
   setTail: (sessionId: string, offset: number) => void
 }
 
-export function createLaunchHelpers({ prepareApiTools, savedApis, launchOverridesDeps, setGridLaunch, setTail }: LaunchHelperDeps) {
+export function createLaunchHelpers({ prepareApiTools, launchOverridesDeps, setGridLaunch, setTail }: LaunchHelperDeps) {
   // Whatever the source (the row itself, or a grid override the desktop just sent), the agent's DSH,
   // workspace and named agent come from the row: a retarget must not silently drop the harness the
   // agent is, or bring a pane opened as `harness-compute` back as a general session.
   // An agent on a saved API's model relaunches with that API's endpoint and key as saved now, so a key
-  // pasted since takes effect, and a removed API is refused rather than kept on its old key.
+  // pasted since takes effect, and a removed API is refused rather than kept on its old key: the models
+  // service reads them as it builds the launch (`buildLaunchOverrides`, `refresh`).
   const relaunchOverrides = async (session: RegisteredSession, source: LaunchSource = session): Promise<LaunchOverridesResult> => {
+    // OpenCode's version decides its relaunch's argv, read by OpenCode's own code (lib/launchOverrides.ts): loaded
+    // here, before anything is written, and the relaunch refused without it.
+    if (session.engine === 'opencode' && !await loadEngine('opencode')) {
+      return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
+    }
     await prepareInstructionWrites(session.cwd)
     prepareApiTools(session.cwd, session.engine)
-    let gridLaunch = source.gridLaunch ?? null
-    if (gridLaunch && isApiLaunch(gridLaunch)) {
-      try {
-        gridLaunch = refreshApiLaunch(savedApis, gridLaunch)
-      } catch (error) {
-        return {
-          ok: false,
-          error: 'API_UNAVAILABLE',
-          detail: error instanceof ApiConnectionError ? error.message : `${gridLaunch.networkName} could not be read from saved APIs.`,
-        }
-      }
-    }
-    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch }, session.agentId)
+    return buildLaunchOverrides(launchOverridesDeps, session.engine, { dsh: session.dsh ?? null, dshRuntime: session.dshRuntime ?? null, cwd: session.cwd, agent: session.agent ?? null, scmLaunch: session.scmLaunch ?? null, ...source, gridLaunch: source.gridLaunch ?? null }, session.agentId)
   }
 
   /**
@@ -93,13 +102,13 @@ export function createLaunchHelpers({ prepareApiTools, savedApis, launchOverride
   }
 
   const prepareSessionResume = (session: RegisteredSession): void => {
-    const repair = prepareCodexResume(session)
+    const repair = prepareResume(session)
     if (repair.repairedItems) {
       // The rollout we tail was just shrunk in place. Move the tail to the repaired length now, before
       // the resumed engine appends, or the watcher would read the whole repaired history as new lines
       // and the live normalizer would replay the conversation into web/device. See Watcher.setTail.
       if (repair.repairedBytes !== undefined) setTail(session.sessionId, repair.repairedBytes)
-      console.log(`[resume] repaired ${repair.repairedItems} Codex reasoning items · backup: ${repair.backupPath}`)
+      console.log(`[resume] repaired ${repair.repairedItems} ${repairedItemsName(session.engine)} · backup: ${repair.backupPath}`)
     }
   }
   return { relaunchOverrides, refreshGridWebSearch, downgradedPermission, prepareSessionResume }

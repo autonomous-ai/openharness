@@ -87,6 +87,27 @@ describe('the lean bundle a release carries', () => {
     }
   })
 
+  it.each([
+    // Each a string its module alone holds: lib/questionPane.ts's, lib/hooks.ts's (its Amp plugin's), Amp's thread
+    // export's (engines/amp/threadExport.ts), and the name the bundle keeps for Cursor's sub-agents' reader
+    // (engines/cursor/subagent.ts), Devin's switch reader (engines/devin/runtimeProfile.ts), agy's lock reader
+    // (engines/agy/session.ts), Cursor's discovery (engines/cursor/discovery.ts) and Hermes's adoption reader
+    // (lib/sessionSearch/externals/hermes.ts), which the core's own files only call.
+    ['pane readers', 'Native screen reader must be injected'],
+    ['hook installers', 'Mirrors this Amp thread to the machine adapter'],
+    ['own code: Amp\'s', 'AMP_DISABLE_PLUGINS'],
+    ['own code: Cursor\'s', '"loadCursorReplayTaskLinks"'],
+    ['runtime profiles: Devin\'s', '"devinModelCommandResult"'],
+    ['identity: agy\'s', '"agyConversationForPid"'],
+    ['identity: Cursor\'s discovery', '"CursorTranscriptDiscovery"'],
+    ['adoption: Hermes\'s reader', '"hermesProvider"'],
+  ])('leaves the other engines\' %s out of the core until it needs them', (_, marker) => {
+    // engines/inProcess.ts imports them (docs/design/2026-10-08-other-engines-out-of-core.md): a file of the
+    // core's own, which Node reads only then.
+    expect([...files].some(([name, code]) => name.startsWith('core-') && code.includes(marker))).toBe(true)
+    expect([...loads('core')].filter((name) => files.get(name)!.includes(marker))).toEqual([])
+  })
+
   it('gives the core its own code and none of the CLI\'s commands, which parsing cli.js cost it', () => {
     const core = loads('core')
     const text = [...core].map((name) => files.get(name)!).join('\n')

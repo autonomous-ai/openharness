@@ -287,6 +287,7 @@ export class TerminalBackendCoordinator {
       if (!backend) continue
       const validation = await this.validateRuntime(backend, runtime, session)
       if (validation.state !== 'alive') continue
+      if (options?.allowed && !options.allowed()) return terminalActionNotStarted('terminal control revoked')
       const result = await backend.submitText(runtime, text, options)
       if (result.state === 'succeeded') {
         lease.runtime = runtime

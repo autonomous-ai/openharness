@@ -12,8 +12,8 @@ import { statSync } from 'node:fs'
 import type { BackendSocket } from '../../backendSocket.js'
 import { installedDsh } from '../../dsh/installed.js'
 import { harnessEnvToClear } from '../../dsh/launch.js'
-import { forkRuntimeKey, harnessLaunchOrRefusal, prepareHarnessLaunch } from '../../dsh/runtime.js'
-import { opencodeMajorVersion } from '../../engines/opencode/version.js'
+import type { DshThrough } from './dshThrough.js'
+import { loadEngine } from '../../engines/inProcess.js'
 import type { TurnRecaps } from '../turns/recaps.js'
 import { createAndRegisterPane } from '../../lib/createAgentPane.js'
 import { enginePathOverride } from '../../lib/engineBin.js'
@@ -44,10 +44,11 @@ export interface ForkAgentDeps {
   relaunchOverrides: ReturnType<typeof createLaunchHelpers>['relaunchOverrides']
   /** This account's private grid, as the socket knows it (BackendSocket.gridName). */
   gridName: () => string | null
+  dshLaunch: Pick<DshThrough, 'launch'>
 }
 
 export function createAgentForker({
-  tmuxBackend, registry, mirror, pendingForkInherit, watchNewPane, announceSession, attachDsh, prepareApiTools, relaunchOverrides, gridName,
+  tmuxBackend, registry, mirror, pendingForkInherit, watchNewPane, announceSession, attachDsh, prepareApiTools, relaunchOverrides, gridName, dshLaunch,
 }: ForkAgentDeps) {
   const forkAgent: ForkAgent = async ({ agentId, name, prompt }) => {
     if (!tmuxBackend) return { ok: false, error: 'TMUX_UNAVAILABLE' }
@@ -74,6 +75,10 @@ export function createAgentForker({
     }
     const plan = planFork({ engine, sessionId: source.sessionId, name: sourceName, cwd: source.cwd }, memory, prompt)
     if (!plan.ok) return { ok: false, error: plan.error, detail: plan.detail }
+    // Which OpenCode is installed decides a fork's named agent (below). Its probe is OpenCode's own code, loaded for
+    // OpenCode alone (engines/inProcess.ts), here before anything is written: without it, no fork.
+    const opencode = engine === 'opencode' ? await loadEngine('opencode') : null
+    if (engine === 'opencode' && !opencode) return { ok: false, error: 'ENGINE_UNAVAILABLE', detail: 'OpenCode\'s code could not be loaded' }
 
     const label = buildHarnessSessionLabel(engine)
     await prepareInstructionWrites(source.cwd)
@@ -86,17 +91,16 @@ export function createAgentForker({
       if (!installed) return { ok: false, error: 'INVALID_DSH', detail: `${source.dsh} is no longer installed on this machine` }
       // Narrowed above; a closure would lose that, so the checked values are named here.
       const cwd = source.cwd
-      const sourceKey = forkRuntimeKey({ cwd, agentId: source.agentId, dshRuntime: source.dshRuntime })
-      const prepared = harnessLaunchOrRefusal(() => prepareHarnessLaunch(installed, cwd, engine, label,
-        { privateGrid: gridName() }, sourceKey))
-      if (!prepared.ok) return prepared
+      const prepared = await dshLaunch.launch({ dsh: source.dsh, workspace: cwd, engine, key: label,
+        account: { privateGrid: gridName() }, forkOf: { agentId: source.agentId, dshRuntime: source.dshRuntime ?? null } })
+      if (!prepared.ok) return { ok: false, error: prepared.error, detail: prepared.detail }
       dshEnv = prepared.launch.env
       dshArgs = prepared.launch.args
       dshLabel = installed.manifest.name
     }
     // The row's own login, model and profile, as a restart and a resume relaunch it (launch.ts): a Codex
-    // agent moved back off a grid names its provider again (`-c model_provider=…`,
-    // engines/codex/ownLoginProvider.ts) and the model it had before the grid (`-m`), and a profile gets
+    // agent moved back off a grid names its provider again (`-c model_provider=…`, `ownProvider` in
+    // engines/codex/launch.ts) and the model it had before the grid (`-m`), and a profile gets
     // its hooks. A fork was launched without any of them, and came back on Codex's default model where a
     // restart of its source came back on the source's own (e2e/forks.e2e.ts). The harness and the named
     // agent are the fork's own (a new runtime, above and below), so they are not rebuilt here.
@@ -105,7 +109,7 @@ export function createAgentForker({
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
     // as a general session rather than handing the v2 TUI an `--agent` it exits on.
-    const forkMajor = opencodeMajorVersion()
+    const forkMajor = opencode ? opencode.opencodeMajorVersion() : null
     const extraArgs = [...built.overrides.extraArgs, ...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     const launchOptions = {

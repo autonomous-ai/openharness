@@ -221,7 +221,7 @@ export function createRuntimeSessions(deps: RuntimeSessionDeps) {
     },
     finishControl(s: RegisteredSession): void {
       const view = byId(s.agentId)
-      if (!view) return
+      if (!view || view.identity !== binding(s)) return
       view.control = undefined; view.revision++; wake(view.sessionId); notify(view)
     },
     confirmEffort(id: string, effort: string): void {

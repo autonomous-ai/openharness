@@ -1,8 +1,11 @@
 import { EventEmitter } from 'node:events'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import WebSocket from 'ws'
 import type { MasterChannel } from '../harnessd/coreLink.js'
-import { hostServices, LEAVE_GRACE_MS, REFUSED, runServiceProcess, serviceFaults, type ServiceHostOptions, type ServiceProcessOptions } from './process.js'
+import { heldOffFile, hostServices, LEAVE_GRACE_MS, REFUSED, runServiceProcess, serviceFaults, type ServiceHostOptions, type ServiceProcessOptions } from './process.js'
 
 /** A socket that records what it is sent, and is told what the core says. */
 class FakeSocket extends EventEmitter {
@@ -405,6 +408,30 @@ describe('a service in its own process', () => {
       .toEqual({ start: true, crash: true, leak: true, calls: new Set(['hang', 'session_search']) })
     expect(serviceFaults({ HARNESSD_TEST_FAULTS: 'devices,searching' }, 'search')).toEqual({ start: false, crash: false, leak: false, calls: new Set() })
     expect(serviceFaults({}, 'search')).toEqual({ start: false, crash: false, leak: false, calls: new Set() })
+  })
+
+  it('waits to go to the core while the file a test names exists, its own only, and goes once it is gone', () => {
+    expect(heldOffFile({ HARNESSD_TEST_HOLD_CONNECT: 'models:/tmp/a:b' }, 'models')).toBe('/tmp/a:b')
+    expect(heldOffFile({ HARNESSD_TEST_HOLD_CONNECT: 'models:/tmp/a' }, 'search')).toBeNull()
+    expect(heldOffFile({ HARNESSD_TEST_HOLD_CONNECT: 'models' }, 'models')).toBeNull()
+    expect(heldOffFile({}, 'models')).toBeNull()
+    const dir = mkdtempSync(join(tmpdir(), 'held-off-'))
+    try {
+      const file = join(dir, 'hold')
+      writeFileSync(file, '')
+      const service = run({ env: { HARNESSD_TEST_HOLD_CONNECT: `search:${file}` } })
+      vi.advanceTimersByTime(1_000)
+      expect(sockets).toHaveLength(0)
+      rmSync(file)
+      vi.advanceTimersByTime(200)
+      expect(sockets).toHaveLength(1)
+      service.stop()
+      // Stopped while held: it never goes.
+      writeFileSync(file, '')
+      run({ env: { HARNESSD_TEST_HOLD_CONNECT: `search:${file}` } }).stop()
+      vi.advanceTimersByTime(1_000)
+      expect(sockets).toHaveLength(1)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   it('fails its start when a test asks it to, before it connects, as a service whose start throws', () => {

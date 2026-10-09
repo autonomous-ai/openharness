@@ -1,15 +1,16 @@
 /**
  * The Harness Store on this machine: the harnesses (DSHs) installed here, and installing, updating and
  * removing one (`dsh_list`, `dsh_install`, `dsh_update`, `dsh_remove`; store/spec/README.md § Wire).
- * The core never calls it, so it has no port: it only answers the apps. What each request reads off its
- * payload and replies is dsh/wire.ts.
+ * Its launch port prepares package workspaces and runtime context; core owns every session and pane.
+ * What each app request reads off its payload and replies is dsh/wire.ts.
  *
  * Install and update take minutes for a toolchain. Their handlers return a promise, so the socket never
  * holds anything else for them, and they say how they are going as `dsh_install_status` pushes, which
  * the apps show in the create dialog. Agents already running from a harness that is removed keep running:
  * their processes hold what they need.
  */
-import type { CoreApi, ServiceRequests } from '../core/api.js'
+import type { CoreApi, CorePorts, ServiceRequests } from '../core/api.js'
+import { storeLaunchPort } from './storeLaunch.js'
 import { ensureBundledCoreHarnesses } from '../dsh/builtins.js'
 import { refreshDshRegistry } from '../dsh/catalog.js'
 import { removeDsh } from '../dsh/install.js'
@@ -58,4 +59,22 @@ export function startStore(core: CoreApi, deps: StoreDeps = DEFAULTS): ServiceRe
         .then(dshInstallReply, internal)
     },
   }
+}
+
+export function startStoreInCore(core: CoreApi, ports: CorePorts, prepared?: () => void): ServiceRequests {
+  const requests = startStore(core)
+  const launch = storeLaunchPort()
+  ports.store = {
+    dshMaterialize: async request => {
+      const answer = await launch.dshMaterialize(request)
+      if (answer.ok || !answer.unavailable) prepared?.()
+      return answer
+    },
+    dshLaunch: async request => {
+      const answer = await launch.dshLaunch(request)
+      if (answer.ok || !answer.unavailable) prepared?.()
+      return answer
+    },
+  }
+  return requests
 }

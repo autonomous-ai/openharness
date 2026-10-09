@@ -8,6 +8,7 @@ import { stoppedAgents } from './stoppedAgents.js'
 import { AgentRestartCoordinator } from './restartAgent.js'
 import { CloseAgentService, inspectCloseActivity as inspectCloseReading } from './closeAgentService.js'
 import { createStopAgentService } from './stopAgentService.js'
+import { inlineNativeControls } from '../testing/inlineNativeControls.js'
 import { SessionCheckpointStore } from './sessionCheckpoint.js'
 import { processRows } from './tmux.js'
 import { checkPidRuntime, terminateDeletedAgent } from './deleteAgentFallback.js'
@@ -52,6 +53,8 @@ beforeEach(() => {
     tmuxBackend: { kill: killPane },
     agentReconciler: { suppress: vi.fn(), holdRoute: vi.fn(), releaseRoute: vi.fn(), trigger: vi.fn(async () => {}) },
     forgetSession: id => registry.removeAgent(id), markDeleted: vi.fn(), clearDeleted: vi.fn(),
+    // The real chain: the core's broker, Codex's own control in process, the process table mocked above.
+    stopNative: inlineNativeControls({ rows: processRows }).stop,
   })
   checkpointDirectory = join(env.ADAPTER_DATA_DIR, 'unused-checkpoints', row.agentId)
   const checkpoints = new SessionCheckpointStore(checkpointDirectory)

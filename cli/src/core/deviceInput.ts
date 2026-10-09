@@ -11,11 +11,11 @@
 import { createHash } from 'node:crypto'
 import type { RegisteredSession } from '../lib/registry.js'
 import type { SessionInputDelivery } from '../lib/sessionInput.js'
-import type { LiveEvent } from '../lib/normalize.js'
+import type { LiveEvent } from '../engines/kit/events.js'
 import { isMessageHold } from '../lib/messageHolds.js'
 import { enterWithheldReason, type TerminalActionResult } from '../lib/terminalTypes.js'
-
-const NATIVE = new Set(['claude', 'codex'])
+import type { SubmissionReader } from '../lib/submissionReader.js'
+import type { SubmissionPolicy } from '../engines/facets/submission.js'
 const VERIFY_MS = 1500
 const TTL_MS = 5 * 60_000
 export interface DeviceInputStatus {
@@ -58,6 +58,8 @@ export interface DeviceInputDeps {
   inject: (id: string, text: string) => Promise<boolean | TerminalActionResult>
   sendKey: (id: string, key: string) => Promise<boolean | TerminalActionResult>
   capture: (id: string) => Promise<string | null>
+  /** The engine's reading of its composer after a paste, from its worker; core decides on it. */
+  submission: Pick<SubmissionReader, 'read' | 'policy'>
   isAwaitingUser?: (session: RegisteredSession) => Promise<boolean>
   acquireControl: (id: string) => (() => void) | null
   legacySubmit: (id: string, text: string, deliveryId: string) => void
@@ -68,13 +70,16 @@ export interface DeviceInputDeps {
   onForget?: (id: string) => void
 }
 const fingerprint = (text: string) => createHash('sha256').update(text.replace(/\r\n/g, '\n').trim()).digest('hex')
-const visible = (text: string) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-const normalize = (text: string) => text.replace(/\s+/g, ' ').trim()
-function draft(capture: string, content: string): 'pending' | 'clear' | 'unreadable' {
-  const lines = visible(capture).split('\n')
-  const index = lines.findLastIndex(line => /[›❯]/u.test(line) && !/[›❯]\s*\d+\.\s/u.test(line))
-  if (index < 0) return 'unreadable'
-  return normalize(lines.slice(index).join('\n')).includes(normalize(content)) ? 'pending' : 'clear'
+/**
+ * How a message typed mid-turn is taken, as the engine declares it: steering from the release it names on,
+ * its own mode before that or with no release known. An engine without a policy (one retargeted after its
+ * message was queued) is native input: never claimed as steering.
+ */
+function busyMode(policy: SubmissionPolicy | undefined, session: RegisteredSession): DeviceInputStatus['mode'] {
+  const busy = policy?.busyInput ?? { mode: 'native_input' }
+  const version = session.cliVersion?.match(/(\d+)\.(\d+)\.(\d+)/)
+  const [major, minor] = busy.steeringSince ?? [Infinity, 0]
+  return version && (Number(version[1]) > major || (Number(version[1]) === major && Number(version[2]) >= minor)) ? 'steering' : busy.mode
 }
 const executed = (result: boolean | TerminalActionResult) => result === true || (typeof result !== 'boolean' && result.dispatch === 'executed')
 const rejected = (result: boolean | TerminalActionResult) => result === false || (typeof result !== 'boolean' && (result.dispatch === 'not_started' || result.dispatch === 'rejected'))
@@ -84,6 +89,11 @@ export class AutonomousDeviceInput {
   private states = new Map<string, State>()
   private writers = new Map<string, Writer>()
   constructor(private readonly deps: DeviceInputDeps) {}
+  /** The engines whose TUI takes a message typed mid-turn, which this route queues and verifies itself
+   *  (Claude Code and Codex, as their submission policies declare); every other engine's goes the legacy way. */
+  private native(engine: string): boolean {
+    return this.deps.submission.policy(engine)?.typesWhileBusy === true
+  }
   private state(id: string): State {
     let state = this.states.get(id)
     if (!state) { state = { busy: false, userAction: false, queue: [], pending: [], writing: false }; this.states.set(id, state) }
@@ -117,7 +127,7 @@ export class AutonomousDeviceInput {
     const session = this.deps.getSession(id)
     if (!session) { this.deps.onDelivery({ sessionId: id, deliveryId, state: 'rejected', reason: 'agent_gone' }); return }
     const state = this.state(id)
-    if (!NATIVE.has(session.engine)) {
+    if (!this.native(session.engine)) {
       this.deps.legacySubmit(id, content, deliveryId)
       this.deps.onInputStatus({ sessionId: id, deliveryId, mode: state.busy ? 'daemon_queue' : 'direct', phase: state.busy ? 'waiting_for_turn' : 'waiting_for_writer' })
       return
@@ -194,9 +204,7 @@ export class AutonomousDeviceInput {
         this.later(id, state)
         return
       }
-      const version = session.cliVersion?.match(/(\d+)\.(\d+)\.(\d+)/)
-      item.mode = !state.busy ? 'direct' : session.engine === 'claude' ? 'native_queue'
-        : version && (Number(version[1]) > 0 || Number(version[2]) >= 106) ? 'steering' : 'native_input'
+      item.mode = !state.busy ? 'direct' : busyMode(this.deps.submission.policy(session.engine), session)
       this.deps.onDispatch?.(id, item.deliveryId, item.content)
       item.dispatched = true
       state.pending.push(item)
@@ -234,7 +242,8 @@ export class AutonomousDeviceInput {
     try {
       const pane = await this.deps.capture(id)
       if (this.states.get(id) !== state || state.active !== item) return
-      const evidence = pane ? draft(pane, item.content) : 'unreadable'
+      const evidence = pane ? await this.draft(id, pane, item.content) : 'unreadable'
+      if (this.states.get(id) !== state || state.active !== item) return
       if (item.started || evidence === 'clear') {
         this.status(id, item, 'accepted'); this.finishWrite(id, state, item); return
       }
@@ -268,6 +277,12 @@ export class AutonomousDeviceInput {
       if (this.states.get(id) !== state) { state.release?.(); state.release = undefined }
       if (item.started) this.finishWrite(id, state, item)
     }
+  }
+  /** Whether the prompt is still in the engine's composer, as its worker reads it; no reading is unreadable. */
+  private async draft(id: string, pane: string, content: string): Promise<'pending' | 'clear' | 'unreadable'> {
+    const session = this.deps.getSession(id)
+    const reading = session ? await this.deps.submission.read(session, pane, content).catch(() => null) : null
+    return reading?.nativeDraft ?? 'unreadable'
   }
   onTurnStarted(id: string, content: string): void {
     const state = this.state(id)
@@ -323,6 +338,6 @@ export class AutonomousDeviceInput {
 /** Filter only the Autonomous Device view. Shared normalizers and other consumers stay unchanged.
  * A same-batch end immediately preceding new input is not sufficient completion evidence.
  */
-export function isDeviceInputBoundary(engine: string, events: readonly LiveEvent[], index: number): boolean {
-  return NATIVE.has(engine) && events[index]?.type === 'turn_ended' && events[index + 1]?.type === 'turn_started'
+export function isDeviceInputBoundary(policy: SubmissionPolicy | undefined, events: readonly LiveEvent[], index: number): boolean {
+  return policy?.typesWhileBusy === true && events[index]?.type === 'turn_ended' && events[index + 1]?.type === 'turn_started'
 }

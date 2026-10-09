@@ -9,9 +9,11 @@ import { BackendSocket } from './backendSocket.js'
 import { dispatchDown, gatewayOf, relaySocket, upstreamOf } from './testing/relaySocket.js'
 import { AGENT_OPENED_THROTTLE_MS } from './core/agents/update.js'
 import { deviceAgentListItem, deviceAgentRow } from './core/agents/list.js'
-import { grokHistoryPage } from './core/transcripts/history.js'
+import { wholeHistoryPage } from './core/transcripts/history.js'
+import { grokMessagesToEvents } from './engines/grok/normalizer.js'
 import { bindAgentList, bindAgentUpdate, bindCancelRequest, bindLaunchRequests, bindCloseRequests, bindMessageRequest, bindPurgeRequest, bindQuestionResponse, bindStopRequest, bindTerminalRequests } from './testing/socketCore.js'
 import { emptyPorts, MODELS_FALLBACKS, MODELS_OFF, MONITOR_FALLBACKS, type ModelsPort } from './core/api.js'
+import { classifyGridAssignment } from './lib/gridAssignment.js'
 import { createServiceHost, ServiceUnavailableError } from './core/serviceHost.js'
 import { MODELS_REQUESTS, startModels } from './services/models.js'
 import { SHELL_REQUESTS, startShell } from './services/shell.js'
@@ -35,7 +37,6 @@ import * as gitProject from './lib/gitProject.js'
 import * as scmProjects from './scm/scmProjects.js'
 import * as machineResources from './lib/machineResources.js'
 import * as projectFolder from './lib/projectFolder.js'
-import * as claudeTrust from './lib/claudeTrust.js'
 import * as projectPreview from './lib/projectPreview.js'
 import * as opencodeVersion from './engines/opencode/version.js'
 import { randomUUID } from 'node:crypto'
@@ -635,9 +636,15 @@ vi.mock('./lib/gridAttach.js', async (real) => ({
 }))
 // Never the person's real ~/.claude.json or ~/.codex/config.toml: creating an agent records folder trust,
 // and an unmocked run of these specs used to write test paths into the developer's own config.
-vi.mock('./lib/claudeTrust.js', () => ({
-  claudeTrusts: vi.fn(() => false), codexTrusts: vi.fn(() => false),
-  preTrustClaudeProject: vi.fn(() => 'trusted'), preTrustCodexProject: vi.fn(() => 'trusted'),
+const claudeTrust = vi.hoisted(() => ({
+  claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
+  preTrustClaudeProject: vi.fn((_path: string) => 'trusted' as const), preTrustCodexProject: vi.fn((_path: string, _profile?: string | null) => 'trusted' as const),
+}))
+vi.mock('./engines/launchPrep.js', async (real) => ({
+  ...await real<object>(),
+  folderTrust: (engine: string, profile?: string | null) => engine === 'claude'
+    ? { trusts: (path: string) => claudeTrust.claudeTrusts(path), record: (path: string) => claudeTrust.preTrustClaudeProject(path) }
+    : engine === 'codex' ? { trusts: (path: string) => claudeTrust.codexTrusts(path, profile), record: (path: string) => claudeTrust.preTrustCodexProject(path, profile) } : null,
 }))
 
 function parseSent(ws: InstanceType<typeof wsMock.MockWebSocket>): Array<Record<string, unknown>> {
@@ -3015,8 +3022,8 @@ describe('Grok session_get history', () => {
   ).split('\n').filter(Boolean)
 
   it('replays the real transcript for both legacy and web-paginated requests', () => {
-    const full = grokHistoryPage(fixture, false)
-    const paginated = grokHistoryPage(fixture, true)
+    const full = wholeHistoryPage(grokMessagesToEvents(fixture), false)
+    const paginated = wholeHistoryPage(grokMessagesToEvents(fixture), true)
 
     expect(full.events).toEqual(paginated.events)
     expect(full.events[0]).toMatchObject({ type: 'user_message' })
@@ -3311,10 +3318,10 @@ describe('grid_models_list says whether this machine has a grid CLI', () => {
 describe('a move onto a grid model asks models where it goes', () => {
   /** A daemon whose models is a stub, asked over a local frame. Where the move goes, grid's set-up before
    *  it and the prewarm after it are the models service's (services/models.spec.ts). */
-  function daemon(moveTarget: ModelsPort['moveTarget'] | null) {
+  function daemon(moveTarget: ModelsPort['moveTarget'] | null, apiTarget: ModelsPort['apiTarget'] = () => Promise.reject(new Error('no APIs'))) {
     const socket = relaySocket('token')
     const moved = vi.fn()
-    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved })
+    if (moveTarget) socket.models = () => ({ annotation: () => null, lists: () => Promise.reject(new Error('no lists')), moveTarget, moved, apiTarget })
     const retargeted = vi.fn(async (_request: { agentId: string; grid: unknown }) => ({ ok: true as const }))
     socket.onRetargetAgent = retargeted
     const frames: Array<Record<string, unknown>> = []
@@ -3360,6 +3367,36 @@ describe('a move onto a grid model asks models where it goes', () => {
       const d = daemon(down)
       expect(await d.ask('agent_retarget', { agentId: 'a1', gridModel: 'Own-Model' }))
         .toMatchObject({ error: 'GRID_UNAVAILABLE', detail: 'Models are unavailable. Try again.' })
+      expect(d.retargeted).not.toHaveBeenCalled()
+      await d.done()
+    }
+  })
+
+  const API = { networkId: 'api:router', networkName: 'Router', baseUrl: 'https://router.fixture.invalid/v1', apiKey: 'fixture-key', model: 'vendor/model-a' }
+
+  it("a move onto a saved API's model: the launch models read, its endpoint recognised from then on, no grid started", async () => {
+    const apiTarget = vi.fn(async () => ({ target: API, apiBase: API.baseUrl }))
+    const d = daemon(vi.fn(), apiTarget)
+    const env = { ANTHROPIC_BASE_URL: 'https://router.fixture.invalid', ANTHROPIC_MODEL: 'vendor/model-a' }
+    expect(classifyGridAssignment('claude', env)).toBeNull()
+    expect(await d.ask('agent_retarget', { agentId: 'a1', apiConnection: 'router', apiModel: ' vendor/model-a ' })).toMatchObject({ retargeted: true })
+    expect(apiTarget).toHaveBeenCalledWith({ connectionId: 'router', model: 'vendor/model-a' })
+    expect(d.retargeted).toHaveBeenCalledWith({ agentId: 'a1', grid: API })
+    // Read in models' process: only the answer's endpoint can teach the core's grid assignment.
+    expect(classifyGridAssignment('claude', env)).toEqual({ baseUrl: 'https://router.fixture.invalid', model: 'vendor/model-a' })
+    expect(d.moved).not.toHaveBeenCalled()
+    await d.done()
+  })
+
+  it('a saved API that cannot be used says why in models\' words; models down or off says so; nothing moves', async () => {
+    const refused = daemon(vi.fn(), async () => ({ detail: 'This API is not saved. Add it in Models → APIs.' }))
+    expect(await refused.ask('agent_retarget', { agentId: 'a1', apiConnection: 'gone', apiModel: 'vendor/model-a' }))
+      .toMatchObject({ error: 'API_UNAVAILABLE', detail: 'This API is not saved. Add it in Models → APIs.' })
+    expect(refused.retargeted).not.toHaveBeenCalled()
+    await refused.done()
+    for (const d of [daemon(vi.fn(), async () => { throw new Error('models is down') }), daemon(null)]) {
+      expect(await d.ask('agent_retarget', { agentId: 'a1', apiConnection: 'router', apiModel: 'vendor/model-a' }))
+        .toMatchObject({ error: 'API_UNAVAILABLE', detail: 'The models service is not running, so this API cannot be used now. Try again in a moment.' })
       expect(d.retargeted).not.toHaveBeenCalled()
       await d.done()
     }

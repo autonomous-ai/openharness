@@ -28,6 +28,12 @@ writeFileSync(join(bin, 'tmux'), `#!/bin/sh\nexec ${quote(tmuxBinary)} -L ${quot
 for (const key of Object.keys(process.env)) {
   if (/^(HARNESS|CODEX|CLAUDE|ANTHROPIC|OPENAI)_/.test(key) || key === 'CLAUDECODE') delete process.env[key]
 }
+// A home of the fixture's own, for the tmux server and every shell and engine it starts. With the person's,
+// the shell a fixture pane keeps after its engine exits wrote the commands typed into it to their real
+// ~/.zsh_history (two `printf 'SURVIVING_SHELL_…'` lines per run, found 2026-10-08). macOS's /etc/zshrc puts
+// zsh's history in ${ZDOTDIR:-$HOME}, so both point here; HISTFILE covers a bash.
+const home = join(root, 'home'); mkdirSync(home)
+Object.assign(process.env, { HOME: home, ZDOTDIR: home, HISTFILE: join(home, '.shell_history') })
 Object.assign(process.env, {
   PATH: `${bin}:${process.env.PATH}`, ADAPTER_DATA_DIR: join(root, 'data'), ADAPTER_RUNTIME_DIR: join(root, 'runtime'),
   ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id'), HARNESS_AUTH_DIR: join(root, 'auth'), DSH_DIR: join(root, 'dsh'),
@@ -51,12 +57,16 @@ const { AgentRestartCoordinator } = await import('../src/lib/restartAgent.js')
 const { resolvePaneEngineProcess, checkSessionRuntime, lookupPaneEngineProcess, tmuxPaneProcessTree } = await import('../src/lib/tmux.js')
 const { probeTerminalAgents } = await import('../src/lib/terminalAgentDiscovery.js')
 const { captureResumeIdentity } = await import('../src/lib/captureResumeIdentity.js')
-const { claudeProcessSession } = await import('../src/lib/sessionRepair.js')
+const { processSessionOf } = await import('../src/lib/sessionRepair.js')
 const { checkPidRuntime } = await import('../src/lib/deleteAgentFallback.js')
 const { startHookServer } = await import('../src/hookServer.js')
 const { BackendSocket } = await import('../src/backendSocket.js')
 const { bindNativeResumeRequests } = await import('../src/testing/nativeResumeSocket.js')
-const { installCodexHooks } = await import('../src/lib/hooks.js')
+const { engineHooks } = await import('../src/engines/hooks.js')
+// The engines' screen readers and Codex's shared app-server control, composed in this process as the
+// daemon's inline mode does: the fixture runs no engine workers.
+const { readInlineScreen } = await import('../src/testing/inlineScreen.js')
+const { inlineNativeControls } = await import('../src/testing/inlineNativeControls.js')
 const backend = new TmuxBackend()
 const socketBackend = new BackendSocket('fixture-only')
 const hooks: Array<{ engine: string; sessionId: string }> = []
@@ -121,7 +131,7 @@ try {
         { timestamp, type: 'event_msg', payload: { type: 'task_complete', turn_id: sessionId, last_agent_message: `Retained ${marker}` } },
       ].map(row => JSON.stringify(row)).join('\n') + '\n')
       writeFileSync(join(profile, 'config.toml'), `model_provider = "fixture"\ncheck_for_update_on_startup = false\n[model_providers.fixture]\nname = "Local fixture"\nbase_url = "http://127.0.0.1:9/v1"\nwire_api = "responses"\nrequires_openai_auth = false\n[projects.${JSON.stringify(cwd)}]\ntrust_level = "trusted"\n[features]\nhooks = true\n`)
-      installCodexHooks(server.port, profile)
+      engineHooks.codex.installIn(server.port, profile)
 
     }
     const old = registry.openPendingAgent({ engine, runtimes: [{ backend: 'tmux', paneId: '%99999' }], cwd, codexHome: engine === 'codex' ? profile : null, defaultName: `Native ${engine} fixture` })!
@@ -156,6 +166,7 @@ try {
       registry, stoppedAgents, restartJobs: jobs, stopJobs, tmuxBackend: backend,
       agentReconciler: { suppress: () => {}, holdRoute: () => {}, releaseRoute: () => {}, trigger: async () => {} },
       forgetSession: id => { registry.removeAgent(id); socketBackend.send({ type: 'agent_deleted', payload: { agentId: id, retained: true } }) }, markDeleted: () => {}, clearDeleted: () => {},
+      stopNative: inlineNativeControls().stop,
     })
     socketBackend.closeAgentService?.dispose()
     socketBackend.closeAgentService = new CloseAgentService({
@@ -173,7 +184,7 @@ try {
           for (const line of raw) lineToEvents(line, state)
           if (raw.length) turnOpen = state.turnOpen
         }
-        return inspectCloseActivity(row, screen, turnOpen, false)
+        return inspectCloseActivity(row, await readInlineScreen(row, screen), turnOpen, false)
       },
       checkpoint: async (row, phase) => sessionCheckpoints.save(row, {
         screen: phase === 'before' ? await tmux('capture-pane', '-p', '-S', '-2000', '-t', row.tmuxPane) : null,
@@ -274,7 +285,7 @@ try {
     assert.equal(unbound.sessionId, '')
     assert.equal((await captureResumeIdentity(unbound)).sessionId, sessionId)
     if (engine === 'claude') {
-      assert.equal((await claudeProcessSession(unbound.processIdentity!.pid, cwd,
+      assert.equal((await processSessionOf('claude', unbound.processIdentity!.pid, cwd,
         Date.parse(unbound.processIdentity!.startMarker)))?.sessionId, sessionId,
       'Claude native process metadata identifies the conversation before Stop')
     }

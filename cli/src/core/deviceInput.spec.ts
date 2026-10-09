@@ -1,4 +1,5 @@
 import { readInlineScreen } from '../testing/inlineScreen.js'
+import { inlineSubmission } from '../testing/inlineSubmission.js'
 import { CodexNormalizer } from '../engines/codex/normalizer.js'
 import { lineToEvents, newTurnState, type LiveEvent } from '../lib/normalize.js'
 import { randomUUID } from 'node:crypto'
@@ -13,7 +14,7 @@ function makeDevice(overrides: Partial<DeviceInputDeps>): AutonomousDeviceInput 
   return new AutonomousDeviceInput({
     getSession: () => ({ agentId: 'agent', engine: 'claude' }) as RegisteredSession,
     validateRuntime: async () => true, inject: async () => true, sendKey: async () => true,
-    capture: async () => '› ', acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
+    capture: async () => '› ', submission: inlineSubmission, acquireControl: () => () => {}, legacySubmit: vi.fn(), legacyCancel: () => false,
     onDelivery: vi.fn(), onInputStatus: vi.fn(), ...overrides,
   })
 }
@@ -30,7 +31,7 @@ function fixture(engine: 'claude' | 'codex' | 'commandcode' = 'codex') {
     submit: (id, text, delivery) => controller.submit(id, text, delivery), cancelDelivery: id => controller.cancelDelivery(id),
     stop: async () => true, answer: async () => true, recent: () => [], emit: frame => events.push(frame),
   })
-  const legacy: SessionInputController = new SessionInputController({ readScreen: readInlineScreen,
+  const legacy: SessionInputController = new SessionInputController({ readScreen: readInlineScreen, submission: inlineSubmission,
     getSession: () => available ? session : undefined, validateRuntime: async () => available,
     inject: (id, text) => controller.legacyWrite(id, () => inject(id, text)),
     sendKey: (id, key) => controller.legacyWrite(id, () => sendKey(id, key)), capture, onError: vi.fn(),
@@ -42,7 +43,7 @@ function fixture(engine: 'claude' | 'codex' | 'commandcode' = 'codex') {
     legacyCancel: id => legacy.cancelDelivery(id),
     onForget: id => service.agentGone(id),
     getSession: () => available ? session : undefined, validateRuntime: async () => available,
-    inject, capture, sendKey, onDelivery: event => service.delivery(event),
+    inject, capture, sendKey, submission: inlineSubmission, onDelivery: event => service.delivery(event),
     onInputStatus: event => service.inputStatus(event),
   })
   const send = (key: string, text = key, focusRevision?: string) => service.request('device', {
@@ -346,7 +347,7 @@ it.each(['codex', 'claude'] as const)('%s Device filter rejects an inferred comp
     : lineToEvents(JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }), claude)
   const observe = (events: LiveEvent[]) => {
     for (const [index, event] of events.entries()) {
-      if (isDeviceInputBoundary(engine, events, index)) continue
+      if (isDeviceInputBoundary(inlineSubmission.policy(engine), events, index)) continue
       if (event.type === 'turn_started') f.start(event.payload.userMessage)
       if (event.type === 'turn_ended') f.end()
     }

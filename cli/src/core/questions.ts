@@ -16,6 +16,7 @@ import type { TerminalControl } from './terminals/control.js'
 type Frame = { type: string; agentId?: string; dbSessionId?: string; payload: Record<string, unknown> }
 
 export interface QuestionDeps {
+  questionControlFor: import('../lib/questionControl.js').QuestionControlFor
   readQuestion: import('../lib/questionController.js').QuestionWatcherDeps['readQuestion']
   resolve: (id: string) => RegisteredSession | undefined
   terminal: Pick<TerminalControl, 'captureTerminal' | 'submitTerminal' | 'keyTerminal'>
@@ -31,12 +32,13 @@ export interface QuestionDeps {
 }
 
 export function createQuestions({
-  readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, deviceInput,
+  questionControlFor, readQuestion, resolve, terminal, acquireTerminalControl, clients, agentIdFor, sessionTurnOpen, someoneCanAnswer, deviceInput,
 }: QuestionDeps) {
   const { captureTerminal, submitTerminal, keyTerminal } = terminal
   // AskUserQuestion bridge: mirrors the question to the device's question screen, and keys the device's
   // answer back into the CLI's own terminal dialog.
   const questions = new AskQuestionController({
+    questionControlFor,
     getSession: (id) => resolve(id),
     capture: captureTerminal,
     readQuestion,

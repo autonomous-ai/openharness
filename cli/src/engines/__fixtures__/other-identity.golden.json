@@ -1,0 +1,2225 @@
+{
+ "register": [
+  [
+   "commandcode",
+   "/work/My Project",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-my-project/0b6f4f2e-6c1a-4c55-9a51-000000000001.jsonl",
+    "cwd": "/work/My Project",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000001"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/My Project",
+   "not-a-uuid",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-my-project/not-a-uuid.jsonl",
+    "cwd": "/work/My Project",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/My Project",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/My Project",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/camelCaseRepo",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000002",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-camel-case-repo/0b6f4f2e-6c1a-4c55-9a51-000000000002.jsonl",
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000002"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/camelCaseRepo",
+   "not-a-uuid",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-camel-case-repo/not-a-uuid.jsonl",
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/camelCaseRepo",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/camelCaseRepo",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/über-ünïcødé",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000003",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-ueber-uenicode/0b6f4f2e-6c1a-4c55-9a51-000000000003.jsonl",
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000003"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/über-ünïcødé",
+   "not-a-uuid",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-ueber-uenicode/not-a-uuid.jsonl",
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/über-ünïcødé",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/über-ünïcødé",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "commandcode",
+   "/",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000004",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/root/0b6f4f2e-6c1a-4c55-9a51-000000000004.jsonl",
+    "cwd": "/",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000004"
+   }
+  ],
+  [
+   "commandcode",
+   "/",
+   "not-a-uuid",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/root/not-a-uuid.jsonl",
+    "cwd": "/",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "commandcode",
+   "/",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "commandcode",
+   "/",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/a/../b",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000005",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-a-b/0b6f4f2e-6c1a-4c55-9a51-000000000005.jsonl",
+    "cwd": "/work/a/../b",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000005"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/a/../b",
+   "not-a-uuid",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-a-b/not-a-uuid.jsonl",
+    "cwd": "/work/a/../b",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/a/../b",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "commandcode",
+   "/work/a/../b",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "commandcode",
+   "named inside",
+   {
+    "transcriptPath": "<root>/home/.commandcode/projects/work-x/0b6f4f2e-6c1a-4c55-9a51-000000000090.jsonl",
+    "cwd": "/work/x",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000090"
+   }
+  ],
+  [
+   "commandcode",
+   "named outside",
+   null
+  ],
+  [
+   "grok",
+   "/work/My Project",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+   {
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2FMy%20Project/0b6f4f2e-6c1a-4c55-9a51-000000000001/updates.jsonl",
+    "cwd": "/work/My Project",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000001"
+   }
+  ],
+  [
+   "grok",
+   "/work/My Project",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "grok",
+   "/work/My Project",
+   "../escape",
+   null
+  ],
+  [
+   "grok",
+   "/work/My Project",
+   "with space",
+   null
+  ],
+  [
+   "grok",
+   "/work/camelCaseRepo",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000002",
+   {
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2FcamelCaseRepo/0b6f4f2e-6c1a-4c55-9a51-000000000002/updates.jsonl",
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000002"
+   }
+  ],
+  [
+   "grok",
+   "/work/camelCaseRepo",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "grok",
+   "/work/camelCaseRepo",
+   "../escape",
+   null
+  ],
+  [
+   "grok",
+   "/work/camelCaseRepo",
+   "with space",
+   null
+  ],
+  [
+   "grok",
+   "/work/über-ünïcødé",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000003",
+   {
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2F%C3%BCber-%C3%BCn%C3%AFc%C3%B8d%C3%A9/0b6f4f2e-6c1a-4c55-9a51-000000000003/updates.jsonl",
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000003"
+   }
+  ],
+  [
+   "grok",
+   "/work/über-ünïcødé",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "grok",
+   "/work/über-ünïcødé",
+   "../escape",
+   null
+  ],
+  [
+   "grok",
+   "/work/über-ünïcødé",
+   "with space",
+   null
+  ],
+  [
+   "grok",
+   "/",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000004",
+   {
+    "transcriptPath": "<root>/home/.grok/sessions/%2F/0b6f4f2e-6c1a-4c55-9a51-000000000004/updates.jsonl",
+    "cwd": "/",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000004"
+   }
+  ],
+  [
+   "grok",
+   "/",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "grok",
+   "/",
+   "../escape",
+   null
+  ],
+  [
+   "grok",
+   "/",
+   "with space",
+   null
+  ],
+  [
+   "grok",
+   "/work/a/../b",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000005",
+   {
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2Fa%2F..%2Fb/0b6f4f2e-6c1a-4c55-9a51-000000000005/updates.jsonl",
+    "cwd": "/work/a/../b",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000005"
+   }
+  ],
+  [
+   "grok",
+   "/work/a/../b",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "grok",
+   "/work/a/../b",
+   "../escape",
+   null
+  ],
+  [
+   "grok",
+   "/work/a/../b",
+   "with space",
+   null
+  ],
+  [
+   "grok",
+   "named inside",
+   {
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2Fx/0b6f4f2e-6c1a-4c55-9a51-000000000090/updates.jsonl",
+    "cwd": "/work/x",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000090"
+   }
+  ],
+  [
+   "grok",
+   "named outside",
+   null
+  ],
+  [
+   "agy",
+   "/work/My Project",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+   {
+    "transcriptPath": "<root>/home/.gemini/antigravity-cli/brain/0b6f4f2e-6c1a-4c55-9a51-000000000001/.system_generated/logs/transcript_full.jsonl",
+    "cwd": "/work/My Project",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000001"
+   }
+  ],
+  [
+   "agy",
+   "/work/My Project",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "agy",
+   "/work/My Project",
+   "../escape",
+   null
+  ],
+  [
+   "agy",
+   "/work/My Project",
+   "with space",
+   null
+  ],
+  [
+   "agy",
+   "/work/camelCaseRepo",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000002",
+   {
+    "transcriptPath": "<root>/home/.gemini/antigravity-cli/brain/0b6f4f2e-6c1a-4c55-9a51-000000000002/.system_generated/logs/transcript_full.jsonl",
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000002"
+   }
+  ],
+  [
+   "agy",
+   "/work/camelCaseRepo",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "agy",
+   "/work/camelCaseRepo",
+   "../escape",
+   null
+  ],
+  [
+   "agy",
+   "/work/camelCaseRepo",
+   "with space",
+   null
+  ],
+  [
+   "agy",
+   "/work/über-ünïcødé",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000003",
+   {
+    "transcriptPath": "<root>/home/.gemini/antigravity-cli/brain/0b6f4f2e-6c1a-4c55-9a51-000000000003/.system_generated/logs/transcript_full.jsonl",
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000003"
+   }
+  ],
+  [
+   "agy",
+   "/work/über-ünïcødé",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "agy",
+   "/work/über-ünïcødé",
+   "../escape",
+   null
+  ],
+  [
+   "agy",
+   "/work/über-ünïcødé",
+   "with space",
+   null
+  ],
+  [
+   "agy",
+   "/",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000004",
+   {
+    "transcriptPath": "<root>/home/.gemini/antigravity-cli/brain/0b6f4f2e-6c1a-4c55-9a51-000000000004/.system_generated/logs/transcript_full.jsonl",
+    "cwd": "/",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000004"
+   }
+  ],
+  [
+   "agy",
+   "/",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "agy",
+   "/",
+   "../escape",
+   null
+  ],
+  [
+   "agy",
+   "/",
+   "with space",
+   null
+  ],
+  [
+   "agy",
+   "/work/a/../b",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000005",
+   {
+    "transcriptPath": "<root>/home/.gemini/antigravity-cli/brain/0b6f4f2e-6c1a-4c55-9a51-000000000005/.system_generated/logs/transcript_full.jsonl",
+    "cwd": "/work/a/../b",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000005"
+   }
+  ],
+  [
+   "agy",
+   "/work/a/../b",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "agy",
+   "/work/a/../b",
+   "../escape",
+   null
+  ],
+  [
+   "agy",
+   "/work/a/../b",
+   "with space",
+   null
+  ],
+  [
+   "agy",
+   "named inside",
+   {
+    "transcriptPath": "<root>/home/.gemini/antigravity-cli/brain/0b6f4f2e-6c1a-4c55-9a51-000000000090/.system_generated/logs/transcript_full.jsonl",
+    "cwd": "/work/x",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000090"
+   }
+  ],
+  [
+   "agy",
+   "named outside",
+   null
+  ],
+  [
+   "copilot",
+   "/work/My Project",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+   {
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000001/events.jsonl",
+    "cwd": "/work/My Project",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000001"
+   }
+  ],
+  [
+   "copilot",
+   "/work/My Project",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "copilot",
+   "/work/My Project",
+   "../escape",
+   null
+  ],
+  [
+   "copilot",
+   "/work/My Project",
+   "with space",
+   null
+  ],
+  [
+   "copilot",
+   "/work/camelCaseRepo",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000002",
+   {
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000002/events.jsonl",
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000002"
+   }
+  ],
+  [
+   "copilot",
+   "/work/camelCaseRepo",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "copilot",
+   "/work/camelCaseRepo",
+   "../escape",
+   null
+  ],
+  [
+   "copilot",
+   "/work/camelCaseRepo",
+   "with space",
+   null
+  ],
+  [
+   "copilot",
+   "/work/über-ünïcødé",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000003",
+   {
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000003/events.jsonl",
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000003"
+   }
+  ],
+  [
+   "copilot",
+   "/work/über-ünïcødé",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "copilot",
+   "/work/über-ünïcødé",
+   "../escape",
+   null
+  ],
+  [
+   "copilot",
+   "/work/über-ünïcødé",
+   "with space",
+   null
+  ],
+  [
+   "copilot",
+   "/",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000004",
+   {
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000004/events.jsonl",
+    "cwd": "/",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000004"
+   }
+  ],
+  [
+   "copilot",
+   "/",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "copilot",
+   "/",
+   "../escape",
+   null
+  ],
+  [
+   "copilot",
+   "/",
+   "with space",
+   null
+  ],
+  [
+   "copilot",
+   "/work/a/../b",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000005",
+   {
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000005/events.jsonl",
+    "cwd": "/work/a/../b",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000005"
+   }
+  ],
+  [
+   "copilot",
+   "/work/a/../b",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "copilot",
+   "/work/a/../b",
+   "../escape",
+   null
+  ],
+  [
+   "copilot",
+   "/work/a/../b",
+   "with space",
+   null
+  ],
+  [
+   "copilot",
+   "named inside",
+   {
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000090/events.jsonl",
+    "cwd": "/work/x",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000090"
+   }
+  ],
+  [
+   "copilot",
+   "named outside",
+   null
+  ],
+  [
+   "cursor",
+   "/work/My Project",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000001"
+   }
+  ],
+  [
+   "cursor",
+   "/work/My Project",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "cursor",
+   "/work/My Project",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "cursor",
+   "/work/My Project",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "cursor",
+   "/work/camelCaseRepo",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000002",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000002"
+   }
+  ],
+  [
+   "cursor",
+   "/work/camelCaseRepo",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "cursor",
+   "/work/camelCaseRepo",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "cursor",
+   "/work/camelCaseRepo",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "cursor",
+   "/work/über-ünïcødé",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000003",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000003"
+   }
+  ],
+  [
+   "cursor",
+   "/work/über-ünïcødé",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "cursor",
+   "/work/über-ünïcødé",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "cursor",
+   "/work/über-ünïcødé",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "cursor",
+   "/",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000004",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000004"
+   }
+  ],
+  [
+   "cursor",
+   "/",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "cursor",
+   "/",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "cursor",
+   "/",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "cursor",
+   "/work/a/../b",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000005",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000005"
+   }
+  ],
+  [
+   "cursor",
+   "/work/a/../b",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "cursor",
+   "/work/a/../b",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "cursor",
+   "/work/a/../b",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "cursor",
+   "named inside",
+   {
+    "transcriptPath": "<root>/home/.cursor/projects/work-x/agent-transcripts/0b6f4f2e-6c1a-4c55-9a51-000000000090/0b6f4f2e-6c1a-4c55-9a51-000000000090.jsonl",
+    "cwd": "/work/x",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000090"
+   }
+  ],
+  [
+   "cursor",
+   "named outside",
+   null
+  ],
+  [
+   "pi",
+   "/work/My Project",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000001"
+   }
+  ],
+  [
+   "pi",
+   "/work/My Project",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "pi",
+   "/work/My Project",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "pi",
+   "/work/My Project",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/My Project",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "pi",
+   "/work/camelCaseRepo",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000002",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000002"
+   }
+  ],
+  [
+   "pi",
+   "/work/camelCaseRepo",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "pi",
+   "/work/camelCaseRepo",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "pi",
+   "/work/camelCaseRepo",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/camelCaseRepo",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "pi",
+   "/work/über-ünïcødé",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000003",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000003"
+   }
+  ],
+  [
+   "pi",
+   "/work/über-ünïcødé",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "pi",
+   "/work/über-ünïcødé",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "pi",
+   "/work/über-ünïcødé",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/über-ünïcødé",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "pi",
+   "/",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000004",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000004"
+   }
+  ],
+  [
+   "pi",
+   "/",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "pi",
+   "/",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "pi",
+   "/",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "pi",
+   "/work/a/../b",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000005",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000005"
+   }
+  ],
+  [
+   "pi",
+   "/work/a/../b",
+   "not-a-uuid",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "not-a-uuid"
+   }
+  ],
+  [
+   "pi",
+   "/work/a/../b",
+   "../escape",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "../escape"
+   }
+  ],
+  [
+   "pi",
+   "/work/a/../b",
+   "with space",
+   {
+    "transcriptPath": null,
+    "cwd": "/work/a/../b",
+    "sessionId": "with space"
+   }
+  ],
+  [
+   "pi",
+   "named inside",
+   {
+    "transcriptPath": "<root>/home/.pi/agent/sessions/--work-x--/2026_0b6f4f2e-6c1a-4c55-9a51-000000000090.jsonl",
+    "cwd": "/work/x",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000090"
+   }
+  ],
+  [
+   "pi",
+   "named outside",
+   null
+  ],
+  [
+   "muse",
+   "/work/My Project",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+   null
+  ],
+  [
+   "muse",
+   "/work/My Project",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "muse",
+   "/work/My Project",
+   "../escape",
+   null
+  ],
+  [
+   "muse",
+   "/work/My Project",
+   "with space",
+   null
+  ],
+  [
+   "muse",
+   "/work/camelCaseRepo",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000002",
+   null
+  ],
+  [
+   "muse",
+   "/work/camelCaseRepo",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "muse",
+   "/work/camelCaseRepo",
+   "../escape",
+   null
+  ],
+  [
+   "muse",
+   "/work/camelCaseRepo",
+   "with space",
+   null
+  ],
+  [
+   "muse",
+   "/work/über-ünïcødé",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000003",
+   null
+  ],
+  [
+   "muse",
+   "/work/über-ünïcødé",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "muse",
+   "/work/über-ünïcødé",
+   "../escape",
+   null
+  ],
+  [
+   "muse",
+   "/work/über-ünïcødé",
+   "with space",
+   null
+  ],
+  [
+   "muse",
+   "/",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000004",
+   null
+  ],
+  [
+   "muse",
+   "/",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "muse",
+   "/",
+   "../escape",
+   null
+  ],
+  [
+   "muse",
+   "/",
+   "with space",
+   null
+  ],
+  [
+   "muse",
+   "/work/a/../b",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000005",
+   null
+  ],
+  [
+   "muse",
+   "/work/a/../b",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "muse",
+   "/work/a/../b",
+   "../escape",
+   null
+  ],
+  [
+   "muse",
+   "/work/a/../b",
+   "with space",
+   null
+  ],
+  [
+   "muse",
+   "named inside",
+   {
+    "transcriptPath": "<root>/home/.muse/sessions/2026/10/08/0b6f4f2e-6c1a-4c55-9a51-000000000090/session.jsonl",
+    "cwd": "/work/x",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000090"
+   }
+  ],
+  [
+   "muse",
+   "named outside",
+   null
+  ],
+  [
+   "amp",
+   "/work/My Project",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000001",
+   null
+  ],
+  [
+   "amp",
+   "/work/My Project",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "amp",
+   "/work/My Project",
+   "../escape",
+   null
+  ],
+  [
+   "amp",
+   "/work/My Project",
+   "with space",
+   null
+  ],
+  [
+   "amp",
+   "/work/camelCaseRepo",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000002",
+   null
+  ],
+  [
+   "amp",
+   "/work/camelCaseRepo",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "amp",
+   "/work/camelCaseRepo",
+   "../escape",
+   null
+  ],
+  [
+   "amp",
+   "/work/camelCaseRepo",
+   "with space",
+   null
+  ],
+  [
+   "amp",
+   "/work/über-ünïcødé",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000003",
+   null
+  ],
+  [
+   "amp",
+   "/work/über-ünïcødé",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "amp",
+   "/work/über-ünïcødé",
+   "../escape",
+   null
+  ],
+  [
+   "amp",
+   "/work/über-ünïcødé",
+   "with space",
+   null
+  ],
+  [
+   "amp",
+   "/",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000004",
+   null
+  ],
+  [
+   "amp",
+   "/",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "amp",
+   "/",
+   "../escape",
+   null
+  ],
+  [
+   "amp",
+   "/",
+   "with space",
+   null
+  ],
+  [
+   "amp",
+   "/work/a/../b",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000005",
+   null
+  ],
+  [
+   "amp",
+   "/work/a/../b",
+   "not-a-uuid",
+   null
+  ],
+  [
+   "amp",
+   "/work/a/../b",
+   "../escape",
+   null
+  ],
+  [
+   "amp",
+   "/work/a/../b",
+   "with space",
+   null
+  ],
+  [
+   "amp",
+   "named inside",
+   {
+    "transcriptPath": "<root>/data/amp-sessions/T-0b6f4f2e-6c1a-4c55-9a51-000000000090.jsonl",
+    "cwd": "/work/x",
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000090"
+   }
+  ],
+  [
+   "amp",
+   "named outside",
+   null
+  ]
+ ],
+ "valid transcripts": [
+  [
+   "claude",
+   true,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "codex",
+   true,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "cursor",
+   true,
+   [
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "opencode",
+   false,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "pi",
+   true,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "hermes",
+   false,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "commandcode",
+   true,
+   [
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "devin",
+   false,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "muse",
+   true,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "amp",
+   true,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    true,
+    false
+   ],
+   false
+  ],
+  [
+   "kilo",
+   false,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "grok",
+   true,
+   [
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "agy",
+   true,
+   [
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ],
+  [
+   "copilot",
+   true,
+   [
+    false,
+    false,
+    false,
+    true,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   true
+  ],
+  [
+   "terminal",
+   false,
+   [
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   false
+  ]
+ ],
+ "cursor homes": [
+  [
+   {},
+   "<root>/home/.cursor",
+   "<root>/home/.cursor"
+  ],
+  [
+   {
+    "CURSOR_DATA_DIR": "/data/cursor"
+   },
+   "<root>/home/.cursor",
+   "/data/cursor"
+  ],
+  [
+   {
+    "CURSOR_CONFIG_DIR": "/config/cursor"
+   },
+   "/config/cursor",
+   "<root>/home/.cursor"
+  ],
+  [
+   {
+    "XDG_CONFIG_HOME": "/xdg"
+   },
+   "/xdg/cursor",
+   "<root>/home/.cursor"
+  ],
+  [
+   {
+    "CURSOR_CONFIG_DIR": "  ",
+    "XDG_CONFIG_HOME": "  /xdg2 ",
+    "CURSOR_DATA_DIR": " "
+   },
+   "/xdg2/cursor",
+   "<root>/home/.cursor"
+  ]
+ ],
+ "hook command": "'<node>' '<script>' --port 19473 --data-dir '<root>/data' --claude-projects-dir '<root>/home/.claude/projects' --codex-home '<root>/home/.codex' --grok-home '<root>/home/.grok' --cursor-home '<root>/home/.cursor' --hermes-home '<root>/home/.hermes' --commandcode-home '<root>/home/.commandcode' --devin-home '<root>/home/.local/share/devin/cli' --agy-home '<root>/home/.gemini/antigravity-cli' --copilot-home '<root>/home/.copilot' --engine cursor",
+ "bind": [
+  [
+   "cursor",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000031",
+   [
+    {
+     "engine": "cursor",
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000031",
+     "transcriptPath": "<root>/home/.cursor/projects/p/agent-transcripts/0b6f4f2e-6c1a-4c55-9a51-000000000031/0b6f4f2e-6c1a-4c55-9a51-000000000031.jsonl",
+     "cwd": "/work/g",
+     "source": "terminal-resume",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "cursor"
+     },
+     "hookEvent": "TerminalResumeDiscovery"
+    }
+   ]
+  ],
+  [
+   "cursor",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000039",
+   []
+  ],
+  [
+   "grok",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000032",
+   [
+    {
+     "engine": "grok",
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000032",
+     "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2Fg/0b6f4f2e-6c1a-4c55-9a51-000000000032/updates.jsonl",
+     "cwd": "/work/g",
+     "source": "terminal-resume",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "grok"
+     },
+     "hookEvent": "TerminalResumeDiscovery"
+    }
+   ]
+  ],
+  [
+   "grok",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000039",
+   []
+  ],
+  [
+   "agy",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000033",
+   [
+    {
+     "engine": "agy",
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000033",
+     "transcriptPath": "<root>/home/.gemini/antigravity-cli/brain/0b6f4f2e-6c1a-4c55-9a51-000000000033/.system_generated/logs/transcript_full.jsonl",
+     "cwd": "/work/g",
+     "source": "terminal-resume",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "agy"
+     },
+     "hookEvent": "TerminalResumeDiscovery"
+    }
+   ]
+  ],
+  [
+   "agy",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000039",
+   [
+    {
+     "engine": "agy",
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000039",
+     "cwd": "/work/g",
+     "source": "terminal-resume",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "agy"
+     },
+     "hookEvent": "TerminalResumeDiscovery"
+    }
+   ]
+  ],
+  [
+   "copilot",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000034",
+   [
+    {
+     "engine": "copilot",
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000034",
+     "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000034/events.jsonl",
+     "cwd": "/work/g",
+     "source": "terminal-resume",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "copilot"
+     },
+     "hookEvent": "TerminalResumeDiscovery"
+    }
+   ]
+  ],
+  [
+   "copilot",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000039",
+   [
+    {
+     "engine": "copilot",
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000039",
+     "cwd": "/work/g",
+     "source": "terminal-resume",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "copilot"
+     },
+     "hookEvent": "TerminalResumeDiscovery"
+    }
+   ]
+  ],
+  [
+   "copilot /resume",
+   [
+    {
+     "engine": "copilot",
+     "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000035",
+     "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000035/events.jsonl",
+     "cwd": "/work/g",
+     "source": "copilot-resume",
+     "runtimes": [
+      {
+       "backend": "tmux",
+       "paneId": "%1"
+      }
+     ],
+     "primaryRuntimeKey": "tmux:%1",
+     "processIdentity": {
+      "pid": 4242,
+      "startMarker": "Mon Oct  8 10:00:00 2026",
+      "executable": "copilot"
+     },
+     "hookEvent": "CopilotResume"
+    }
+   ]
+  ]
+ ],
+ "repair": [
+  [
+   "pi",
+   null,
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000041",
+    "transcriptPath": "<root>/home/.pi/agent/sessions/--work-r--/2026_0b6f4f2e-6c1a-4c55-9a51-000000000041.jsonl"
+   }
+  ],
+  [
+   "pi",
+   {
+    "bornOnly": true
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000041",
+    "transcriptPath": "<root>/home/.pi/agent/sessions/--work-r--/2026_0b6f4f2e-6c1a-4c55-9a51-000000000041.jsonl"
+   }
+  ],
+  [
+   "pi",
+   {
+    "pid": 5151
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000041",
+    "transcriptPath": "<root>/home/.pi/agent/sessions/--work-r--/2026_0b6f4f2e-6c1a-4c55-9a51-000000000041.jsonl"
+   }
+  ],
+  [
+   "pi",
+   {
+    "pid": 99999999
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000041",
+    "transcriptPath": "<root>/home/.pi/agent/sessions/--work-r--/2026_0b6f4f2e-6c1a-4c55-9a51-000000000041.jsonl"
+   }
+  ],
+  [
+   "commandcode",
+   null,
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000042",
+    "transcriptPath": "<root>/home/.commandcode/projects/work-r/0b6f4f2e-6c1a-4c55-9a51-000000000042.jsonl"
+   }
+  ],
+  [
+   "commandcode",
+   {
+    "bornOnly": true
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000042",
+    "transcriptPath": "<root>/home/.commandcode/projects/work-r/0b6f4f2e-6c1a-4c55-9a51-000000000042.jsonl"
+   }
+  ],
+  [
+   "commandcode",
+   {
+    "pid": 5151
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000042",
+    "transcriptPath": "<root>/home/.commandcode/projects/work-r/0b6f4f2e-6c1a-4c55-9a51-000000000042.jsonl"
+   }
+  ],
+  [
+   "commandcode",
+   {
+    "pid": 99999999
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000042",
+    "transcriptPath": "<root>/home/.commandcode/projects/work-r/0b6f4f2e-6c1a-4c55-9a51-000000000042.jsonl"
+   }
+  ],
+  [
+   "amp",
+   null,
+   {
+    "sessionId": "T-0b6f4f2e-6c1a-4c55-9a51-000000000043",
+    "transcriptPath": "<root>/data/amp-sessions/T-0b6f4f2e-6c1a-4c55-9a51-000000000043.jsonl"
+   }
+  ],
+  [
+   "amp",
+   {
+    "bornOnly": true
+   },
+   {
+    "sessionId": "T-0b6f4f2e-6c1a-4c55-9a51-000000000043",
+    "transcriptPath": "<root>/data/amp-sessions/T-0b6f4f2e-6c1a-4c55-9a51-000000000043.jsonl"
+   }
+  ],
+  [
+   "amp",
+   {
+    "pid": 5151
+   },
+   {
+    "sessionId": "T-0b6f4f2e-6c1a-4c55-9a51-000000000043",
+    "transcriptPath": "<root>/data/amp-sessions/T-0b6f4f2e-6c1a-4c55-9a51-000000000043.jsonl"
+   }
+  ],
+  [
+   "amp",
+   {
+    "pid": 99999999
+   },
+   {
+    "sessionId": "T-0b6f4f2e-6c1a-4c55-9a51-000000000043",
+    "transcriptPath": "<root>/data/amp-sessions/T-0b6f4f2e-6c1a-4c55-9a51-000000000043.jsonl"
+   }
+  ],
+  [
+   "muse",
+   null,
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000044",
+    "transcriptPath": "<root>/home/.muse/sessions/2026/10/08/0b6f4f2e-6c1a-4c55-9a51-000000000044/session.jsonl"
+   }
+  ],
+  [
+   "muse",
+   {
+    "bornOnly": true
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000044",
+    "transcriptPath": "<root>/home/.muse/sessions/2026/10/08/0b6f4f2e-6c1a-4c55-9a51-000000000044/session.jsonl"
+   }
+  ],
+  [
+   "muse",
+   {
+    "pid": 5151
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000044",
+    "transcriptPath": "<root>/home/.muse/sessions/2026/10/08/0b6f4f2e-6c1a-4c55-9a51-000000000044/session.jsonl"
+   }
+  ],
+  [
+   "muse",
+   {
+    "pid": 99999999
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000044",
+    "transcriptPath": "<root>/home/.muse/sessions/2026/10/08/0b6f4f2e-6c1a-4c55-9a51-000000000044/session.jsonl"
+   }
+  ],
+  [
+   "grok",
+   null,
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000046",
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2Fr/0b6f4f2e-6c1a-4c55-9a51-000000000046/updates.jsonl"
+   }
+  ],
+  [
+   "grok",
+   {
+    "bornOnly": true
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000046",
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2Fr/0b6f4f2e-6c1a-4c55-9a51-000000000046/updates.jsonl"
+   }
+  ],
+  [
+   "grok",
+   {
+    "pid": 5151
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000046",
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2Fr/0b6f4f2e-6c1a-4c55-9a51-000000000046/updates.jsonl"
+   }
+  ],
+  [
+   "grok",
+   {
+    "pid": 99999999
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000046",
+    "transcriptPath": "<root>/home/.grok/sessions/%2Fwork%2Fr/0b6f4f2e-6c1a-4c55-9a51-000000000046/updates.jsonl"
+   }
+  ],
+  [
+   "copilot",
+   null,
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000047",
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000047/events.jsonl"
+   }
+  ],
+  [
+   "copilot",
+   {
+    "bornOnly": true
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000047",
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000047/events.jsonl"
+   }
+  ],
+  [
+   "copilot",
+   {
+    "pid": 5151
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000048"
+   }
+  ],
+  [
+   "copilot",
+   {
+    "pid": 99999999
+   },
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000047",
+    "transcriptPath": "<root>/home/.copilot/session-state/0b6f4f2e-6c1a-4c55-9a51-000000000047/events.jsonl"
+   }
+  ],
+  [
+   "hermes",
+   null,
+   {
+    "sessionId": "20261008_110000_a1b2",
+    "hermesHome": "<root>/home/.hermes"
+   }
+  ],
+  [
+   "hermes",
+   {
+    "bornOnly": true
+   },
+   {
+    "sessionId": "20261008_110000_a1b2",
+    "hermesHome": "<root>/home/.hermes"
+   }
+  ],
+  [
+   "hermes",
+   {
+    "pid": 5151
+   },
+   {
+    "sessionId": "20261008_110000_a1b2",
+    "hermesHome": "<root>/home/.hermes"
+   }
+  ],
+  [
+   "hermes",
+   {
+    "pid": 99999999
+   },
+   {
+    "sessionId": "20261008_110000_a1b2",
+    "hermesHome": "<root>/home/.hermes"
+   }
+  ],
+  [
+   "agy",
+   null,
+   null
+  ],
+  [
+   "agy",
+   {
+    "bornOnly": true
+   },
+   null
+  ],
+  [
+   "agy",
+   {
+    "pid": 5151
+   },
+   null
+  ],
+  [
+   "agy",
+   {
+    "pid": 99999999
+   },
+   null
+  ],
+  [
+   "hermes",
+   "/work/p",
+   {
+    "sessionId": "20261008_110500_c3d4",
+    "hermesHome": "<root>/home/.hermes/profiles/work"
+   }
+  ],
+  [
+   "hermes",
+   "/work/both",
+   null
+  ],
+  [
+   "hermes",
+   "/work/none",
+   null
+  ],
+  [
+   "pi resumed",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000041",
+   "/work/r",
+   "<root>/home/.pi/agent/sessions/--work-r--/2026_0b6f4f2e-6c1a-4c55-9a51-000000000041.jsonl"
+  ],
+  [
+   "pi resumed",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000041",
+   "/work/other",
+   null
+  ],
+  [
+   "pi resumed",
+   "0b6f4f2e-6c1a-4c55-9a51-000000000049",
+   "/work/r",
+   null
+  ],
+  [
+   "pi resumed",
+   "bad id",
+   "/work/r",
+   "threw The Pi conversation location is unavailable."
+  ]
+ ],
+ "repair agy lock": [
+  [
+   "held",
+   {
+    "sessionId": "0b6f4f2e-6c1a-4c55-9a51-000000000050",
+    "transcriptPath": "<root>/home/.gemini/antigravity-cli/brain/0b6f4f2e-6c1a-4c55-9a51-000000000050/.system_generated/logs/transcript_full.jsonl"
+   }
+  ],
+  [
+   "let go",
+   null
+  ]
+ ]
+}

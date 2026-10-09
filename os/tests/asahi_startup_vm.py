@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fresh encrypted install -> account -> UEFI unlock -> Harness -> second boot."""
 import argparse
+from vm_artifacts import discard_passed_disks
 import json
 from pathlib import Path
 import platform
@@ -163,11 +164,15 @@ def main():
         try:
             if vm:
                 vm.close()
+        except BaseException as error:
+            receipt.update(status='failed', cleanup_error=str(error))
+            raise
         finally:
             receipt.update(finished_at=time.time(), original_source_unchanged=digest(source) == args.sha256)
             if not receipt['original_source_unchanged']:
                 receipt.update(status='failed', error='The source image changed.')
             (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+            discard_passed_disks(output, receipt, maintenance, disk)
     if receipt['status'] != 'passed':
         raise SystemExit(1)
 

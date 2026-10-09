@@ -1,7 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgyNormalizer } from '../../engines/agy/normalizer.js'
+import { engineNow, loadEngine } from '../../engines/inProcess.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { createAgyBackstop, type AgyBackstopDeps } from './agyBackstop.js'
+
+// agy's code is loaded by its session's attach before any Stop can arm the backstop; a test may say it could not be.
+vi.mock('../../engines/inProcess.js', async (real) => {
+  const actual = await real<typeof import('../../engines/inProcess.js')>()
+  return { ...actual, engineNow: vi.fn(actual.engineNow) }
+})
+beforeAll(async () => { await loadEngine('agy') })
 
 const IDLE = 'done.\n\n  ? for shortcuts'
 const BUSY = 'thinking…\n\n  esc to cancel'
@@ -34,6 +42,15 @@ describe('the agy idle backstop', () => {
     expect(deps.drain).toHaveBeenCalledWith('s1')
     expect(deps.emit).toHaveBeenCalledWith('s1', [{ type: 'turn_ended', payload: {} }])
     expect(String(log.mock.calls[0][0])).toContain('closed by the agy idle backstop')
+  })
+
+  it('stops watching, closing nothing, when agy\'s code could not be loaded', async () => {
+    const { deps, backstop } = setup()
+    vi.mocked(engineNow).mockReturnValueOnce(null)
+    backstop.armAgyIdleWatch('s1')
+    await vi.advanceTimersByTimeAsync(15_000 * 3)
+    expect(deps.captureTerminal).toHaveBeenCalledTimes(1)
+    expect(deps.emit).not.toHaveBeenCalled()
   })
 
   it('keeps watching a busy or unreadable pane, up to forty checks, then stops', async () => {

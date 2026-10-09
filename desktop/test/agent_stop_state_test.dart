@@ -89,6 +89,29 @@ void main() {
     expect(app.stateOf('m')!.agents.any((a) => a.id == 'a0'), isFalse);
   });
 
+  // An engine that exits at start (Claude Code that cannot reach Anthropic)
+  // leaves its shell under a new identity. Its tile moves there, so the error
+  // stays on screen; without a successor the tile closes as before.
+  test('an engine that exited hands its tiles to the shell it left behind', () async {
+    final pane = app.adoptSessionForTest(terminal('a0', []));
+    final tab = app.activeSwarm;
+    await app.handleEventForTest('m', {
+      'type': 'agent_deleted',
+      'payload': {'agentId': 'a0', 'retained': true, 'successor': 'shell-1'},
+    });
+    expect(app.allPanes, [pane]);
+    expect(tab.panes, [pane]);
+    expect(pane.agentId, 'shell-1');
+    expect(app.stateOf('m')!.agents.any((a) => a.id == 'a0'), isFalse);
+
+    final other = app.adoptSessionForTest(terminal('a1', []));
+    await app.handleEventForTest('m', {
+      'type': 'agent_deleted',
+      'payload': {'agentId': 'a1', 'retained': true},
+    });
+    expect(app.allPanes.contains(other), isFalse);
+  });
+
   for (final change in ['machine', 'session', 'dispose']) {
     test('late stop cannot remove a changed $change', () async {
       final stop = app.deleteAgent('m', 'a0');

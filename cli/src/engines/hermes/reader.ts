@@ -13,21 +13,15 @@
 
 import type { LiveEvent } from '../../lib/normalize.js'
 import { sqliteReadAll } from '../../lib/sqliteRead.js'
+import { HERMES_HISTORY_ID_RE, HERMES_SOURCE } from './contract.js'
+import { isInteractiveSource, storeSessionSource } from '../kit/storeSource.js'
 import {
   messageToEvents, newHermesTurnState, isTerminalFinish,
   type HermesTurnState, type HmMessage,
 } from './normalizer.js'
 
-// `YYYYMMDD_HHMMSS_<hex>` — CLI/TUI use 6 hex chars, the gateway 8.
-const SESSION_ID_RE = /^[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}$/
-/**
- * Every id a Hermes store keeps a conversation under: the ones above, and an editor's. The ACP adapter
- * names its sessions with a uuid4 (`acp_adapter/session.py`; all six ACP rows on the machine measured
- * were uuids), so their history is readable too. `hermesSessionSource` keeps the narrower shape: it
- * decides whether a hook's session is a pane's own, and editors' sessions never are.
- */
-export const HERMES_HISTORY_ID_RE =
-  /^(?:[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{4,16}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/
+// Every id a Hermes store keeps a conversation under, declared (contract.ts): homes are found by it too.
+export { HERMES_HISTORY_ID_RE } from './contract.js'
 const POLL_MS = 1_000
 const MAX_BUFFER = 32 * 1024 * 1024
 
@@ -75,18 +69,11 @@ export async function readHermesMessages(
 }
 
 /**
- * True when this session id belongs to a DELEGATION CHILD rather than to the CLI the user is looking at.
- *
- * A hermes sub-agent is a full hermes session of its own and runs the same shell hooks, so it announces
- * itself to the adapter from the parent's pane. Measured live: dispatching two sub-agents fired
- * `on_session_start` for `20260805_111618_8e3027` / `…_0777bc` 0.2s after the parent's rows appeared, the
- * pane re-bound to them, and the parent was `forgotten` mid-turn — taking its delegation bookkeeping and
- * its sub-agent list with it. `sessions.source` separates them: 'cli'/'tui' for the real one, 'subagent'/'tool'
- * for the children (`cwd` also points into `/tmp`, but source is the explicit marker).
- *
+ * Whether a session's source is the CLI's the user is looking at rather than a DELEGATION CHILD's. Declared
+ * (contract.ts `HERMES_SOURCE`, which says why), read by the kit.
  */
 export function isHermesInteractiveSource(source: string): boolean {
-  return source === '' || source === 'cli' || source === 'tui'
+  return isInteractiveSource(HERMES_SOURCE, source)
 }
 
 export async function isHermesSubagentSession(dbPath: string, sessionId: string): Promise<boolean> {
@@ -95,21 +82,10 @@ export async function isHermesSubagentSession(dbPath: string, sessionId: string)
 }
 
 /**
- * `sessions.source` for one id, or null when the row is not there YET — which is a real state, not an
- * error: measured, a delegation child's `on_session_start` hook reached the adapter 110ms BEFORE hermes
- * inserted its row, so an immediate lookup said "not a sub-agent" and the child took over the pane.
- * Callers that can afford to wait should treat null as "ask again shortly".
- *
- * Read through `lib/sqliteRead` like every other query against this store: hermes writes to this DB
- * constantly, and the read's busy wait is bounded there so a contended lookup cannot park the daemon.
+ * `sessions.source` for one id, or null when the row is not there YET: ask again shortly (kit/storeSource.ts).
  */
 export async function hermesSessionSource(dbPath: string, sessionId: string): Promise<string | null> {
-  if (!SESSION_ID_RE.test(sessionId)) return ''
-  const result = await sqliteReadAll(dbPath, 'SELECT source FROM sessions WHERE id = ?;', [sessionId], { maxBuffer: 1 << 20 })
-  if (!result.ok) return '' // no reader / db locked — treat as a normal session, exactly as before
-  if (result.rows.length === 0) return null
-  const source = result.rows[0]?.source
-  return typeof source === 'string' ? source : ''
+  return storeSessionSource(HERMES_SOURCE, dbPath, sessionId)
 }
 
 export interface HermesReaderDeps {

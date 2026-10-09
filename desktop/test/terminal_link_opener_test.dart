@@ -112,6 +112,25 @@ void main() {
     );
     expect(launched, isEmpty);
   });
+  // A new user's first harness ends "Created index.html — open it in a browser".
+  test('opens a page the agent named, in its project folder', () async {
+    expect(
+      await opener.open(
+        'index.html',
+        isLocalMachine: true,
+        workingDirectory: '/Users/me/harnesses/date-page',
+      ),
+      isNull,
+    );
+    expect(checked, ['/Users/me/harnesses/date-page/index.html']);
+    expect(launched.single.toFilePath(), '/Users/me/harnesses/date-page/index.html');
+    expect(await opener.open('/tmp/report.pdf', isLocalMachine: true), isNull);
+    expect(
+      await opener.open('index.html', isLocalMachine: true, workingDirectory: 'relative/dir'),
+      contains('full file path'),
+    );
+  });
+
   test('does not invent the agent cwd for relative paths', () async {
     expect(
       await opener.open('output/preview.png', isLocalMachine: true),

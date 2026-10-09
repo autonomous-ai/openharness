@@ -26,9 +26,8 @@ import type { CloseAgentService } from './lib/closeAgentService.js'
 import { ENGINES, type AgentEngine } from './engines/types.js'
 import { gridCliPresence } from './lib/gridBinary.js'
 import { GRID_FLEET_PROTOCOL, GRID_FLEET_MAX_TIMEOUT_MS } from './lib/gridFleetProtocol.js'
-import { ApiConnectionError, ApiConnections } from './lib/apiConnections.js'
-import { resolveApiTarget } from './lib/apiModels.js'
-import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunch.js'
+import { rememberApiBase } from './lib/gridAssignment.js'
+import { isApiLaunch, parseGridLaunchOverride, type GridLaunchOverride } from './lib/gridLaunchWire.js'
 import type { ScmLaunchRecord } from './scm/types.js'
 import { probeEngines } from './lib/engineProbe.js'
 import { engineInstallRecipe } from './lib/engineInstall.js'
@@ -63,7 +62,6 @@ export class BackendSocket {
   /** This machine's name as Harness shows it (Machines), from the backend's `machine_meta`. Null
    *  until the first one arrives. */
   private machineDisplayName: string | null = null
-  private readonly apiConnections = new ApiConnections(env.ADAPTER_DATA_DIR)
   /** The relay and its E2EE (gateway/gateway.ts): the one way to a remote client. Null in a unit test
    *  that has none, which then serves this computer alone. */
   private gatewayPort: GatewayPort | null = null
@@ -421,7 +419,7 @@ export class BackendSocket {
    * can be switched off or run in a process of its own; set by core/main.ts. Unset (tests), it reads as
    * models being off.
    */
-  models: (() => Pick<ModelsPort, 'annotation' | 'lists' | 'moveTarget' | 'moved'>) | null = null
+  models: (() => Pick<ModelsPort, 'annotation' | 'lists' | 'moveTarget' | 'moved' | 'apiTarget'>) | null = null
 
   /** Set the account's private grid name from the reconcile that just confirmed it, so the RPCs
    *  answer with it at once rather than waiting for the next `machine_meta` (`lib/gridAttach.ts`). */
@@ -946,7 +944,7 @@ export class BackendSocket {
           // A full probe starts interactive login shells and is intentionally detached from this
           // connection's ordered RPC chain. Request ids make its eventual reply safe to deliver out
           // of order; keeping it awaited here made a Create click sit behind an unrelated sweep.
-          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined)
+          void this.engineProbeProvider(asked && asked.length > 0 ? asked : undefined, { accounts: true })
             .then((availability) => reply(type, requestId, {
               engines: availability.map((entry) => ({
                 engine: entry.engine,
@@ -954,6 +952,7 @@ export class BackendSocket {
                 command: entry.command,
                 installable: entry.installable,
                 installCommand: entry.installable ? engineInstallRecipe(entry.engine)?.command ?? null : null,
+                ...(entry.signedIn !== undefined ? { signedIn: entry.signedIn, lastUsedAt: entry.lastUsedAt ?? null } : {}),
                 // Static per-CLI-version capability, not a probe result: its mere presence is what
                 // lets an older CLI (which never sends the field) keep reading as "unknown" rather
                 // than "no", per the desktop app's `EngineAvailability.fromJson`.
@@ -1001,9 +1000,10 @@ export class BackendSocket {
           // not know. A client that sends the full `grid` object still works unchanged.
           const picked = typeof payload.gridModel === 'string' ? payload.gridModel : ''
           // `apiConnection` + `apiModel`: a model of an API saved on this machine. Same rule as a grid
-          // model — the app names it, and the endpoint and key are read here, from the store — and
-          // only for whoever may manage those APIs (`api_connections`): this machine's own app, or
-          // its owner's paired session. The key itself never leaves this daemon either way.
+          // model — the app names it, and the endpoint and key are read on this machine, from its store, by
+          // the models service that keeps it (`ModelsPort.apiTarget`) — and only for whoever may manage those
+          // APIs (`api_connections`): this machine's own app, or its owner's paired session. The key itself
+          // never leaves this daemon either way.
           const api = typeof payload.apiConnection === 'string' ? payload.apiConnection : ''
           if (api && (picked || payload.grid !== undefined || clear)) {
             reply(type, requestId, { error: 'INVALID_GRID', detail: 'Choose an API model, a grid model or the own login, not several.' })
@@ -1011,15 +1011,18 @@ export class BackendSocket {
           }
           if (api) {
             if (!owner) { reply(type, requestId, { error: 'OWNER_REQUIRED' }); return }
-            try {
-              payload.grid = await resolveApiTarget(this.apiConnections, api, typeof payload.apiModel === 'string' ? payload.apiModel.trim() : '')
-            } catch (error) {
+            const model = typeof payload.apiModel === 'string' ? payload.apiModel.trim() : ''
+            const resolved = this.models ? await this.models().apiTarget({ connectionId: api, model }).catch(() => null) : null
+            if (!resolved || !('target' in resolved)) {
               reply(type, requestId, {
                 error: 'API_UNAVAILABLE',
-                detail: error instanceof ApiConnectionError ? error.message : 'This API could not be used. Try again.',
+                detail: resolved?.detail ?? 'The models service is not running, so this API cannot be used now. Try again in a moment.',
               })
               return
             }
+            // An agent on it from now on reports that API's model, as when the socket read the store itself.
+            rememberApiBase(resolved.apiBase)
+            payload.grid = resolved.target
           }
           if (picked && payload.grid === undefined && !clear) {
             // The grid the model was picked FROM, when the picker says (a shared grid's section); the

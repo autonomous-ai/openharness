@@ -51,7 +51,7 @@ that process. A process per risk, not per feature (`SERVICE_HOSTS` in `src/harne
 
 | Process | Services | Why its own | Started |
 |---|---|---|---|
-| `engine-claude`, `engine-codex` | history/last-turn readers and live parsers (`src/engines/worker/`) | engine parsing outside core; read-only snapshots and no core capabilities | on demand |
+| `engine-claude`, `engine-codex` | history, live parsers, runtime profiles, screens, submission readings, model control, question navigation and Codex's app-server connection (`src/engines/worker/`) | engine behavior outside core; snapshots and revocable model- and question-control grants | on demand |
 | `search` | search | native `node:sqlite`, the index's memory | always |
 | `viewers` | viewers, store | the viewer servers, the remote viewer streams and rendered surfaces, minutes-long installs | always |
 | `edge` | workspaces, usage, monitor, projects, handoff, recaps, windowNames, shell | light pure-JS services: isolated from the core, not from each other | always |
@@ -142,8 +142,8 @@ master too old to run it starts it beside itself, still in its own process (`src
   never retried as a new launch. `e2e/shell.e2e.ts` keeps an attached terminal working across an edge crash.
 - The gateway owns account/backend HTTP and the single writer of `machines.json` (`gateway/accountHttp.ts`).
   The core retains its reported list for stale replies during a restart, bound to the current account.
-  The Store prepares bundled harnesses before reporting `prepared`; the core waits at most five seconds
-  before restore. The lean bundle shares one asset file, loaded by the Store and never by the core.
+  The Store prepares bundled harnesses before reporting `prepared`; package agents wait held until
+  preparation is available, after the core reports ready. The lean bundle shares one asset file, loaded by the Store and never by the core.
 - A service that writes turns into agents (a team's question, the orchestrator's guidance) delivers each
   under an id of its own through `core.turns.deliver`, hears what became of it through `onDelivery`, and
   takes one back with `cancelDelivery` (core/deliveries.ts). In its own process `services/turnsLink.ts`

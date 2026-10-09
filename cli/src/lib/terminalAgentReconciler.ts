@@ -184,7 +184,7 @@ export class TerminalAgentReconciler {
    * `finally`, but a future refactor that drops that `finally` must not leave a route permanently
    * invisible to reconciliation.
    */
-  holdRoute(routeKey: string, autoReleaseMs = 30_000): void {
+  holdRoute(routeKey: string, autoReleaseMs = 30_000): () => void {
     this.heldRoutes.add(routeKey)
     this.routeTouched.set(routeKey, ++this.routeSeq)
     const existing = this.heldRouteTimers.get(routeKey)
@@ -192,6 +192,8 @@ export class TerminalAgentReconciler {
     const timer = setTimeout(() => this.releaseRoute(routeKey), autoReleaseMs)
     timer.unref?.()
     this.heldRouteTimers.set(routeKey, timer)
+    // A cancelled restore cannot release the newer Stop/restart that took this route over.
+    return () => { if (this.heldRouteTimers.get(routeKey) === timer) this.releaseRoute(routeKey) }
   }
 
   /** Resume normal reconciliation for a route held by `holdRoute`. Idempotent. */

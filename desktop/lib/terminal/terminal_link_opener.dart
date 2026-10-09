@@ -38,6 +38,7 @@ class TerminalLinkOpener {
     required bool isLocalMachine,
     Future<String> Function(String target)? downloadRemote,
     bool Function()? isCancelled,
+    String? workingDirectory,
   }) async {
     if (RegExp(r'[\x00-\x1f\x7f]').hasMatch(target)) {
       return 'This link is not supported.';
@@ -65,7 +66,7 @@ class TerminalLinkOpener {
             return 'This link is not supported.';
           }
           if (!isMediaPath(parsed.scheme == 'file' ? parsed.path : target)) {
-            return 'Only image and video files can be opened here.';
+            return 'Only images, videos, web pages and PDFs can be opened here.';
           }
           if (downloadRemote == null) {
             return 'This file is on another machine. Update Harness to download a preview.';
@@ -94,15 +95,25 @@ class TerminalLinkOpener {
             path = '$_homeDirectory/${path.substring(2)}';
           }
           if (!isMediaPath(path)) {
-            return 'Only image and video files can be opened here.';
+            return 'Only images, videos, web pages and PDFs can be opened here.';
           }
           final absolute = _windows
               ? RegExp(r'^[a-z]:[\\/]', caseSensitive: false).hasMatch(path)
               : path.startsWith('/') && !path.startsWith('//');
           if (!absolute) {
-            // Agent frames do not advertise cwd. Never resolve against Desktop's
-            // process directory, which belongs to a different app and workspace.
-            return 'Use the full file path to open this preview. The harness’s working folder is not available.';
+            // Resolve against the harness's own project folder when the pane
+            // knows it; never against Desktop's process directory, which
+            // belongs to a different app and workspace.
+            final cwd = workingDirectory;
+            final cwdAbsolute = cwd != null &&
+                (_windows
+                    ? RegExp(r'^[a-z]:[\\/]', caseSensitive: false).hasMatch(cwd)
+                    : cwd.startsWith('/'));
+            if (!cwdAbsolute) {
+              return 'Use the full file path to open this preview. The harness’s working folder is not available.';
+            }
+            final separator = _windows ? '\\' : '/';
+            path = cwd.endsWith(separator) ? '$cwd$path' : '$cwd$separator$path';
           }
           if (!await _fileExists(path)) {
             return 'This file is not available on this computer. It may still be generating or may have moved.';

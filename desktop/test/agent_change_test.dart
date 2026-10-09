@@ -456,6 +456,32 @@ void main() {
       expect(notices, [hint]);
     });
 
+    // Claude Code exited before it read the task (no Anthropic); the person
+    // picked OpenCode and should not have to type the task again.
+    test('nothing said yet, but an unread first message: the new agent starts on it', () async {
+      final (connection, app) = await open();
+      connection.handoff = (p) => {
+        ...handoffOk(p),
+        'file': null,
+        'degraded': <String>[],
+      };
+      app.rememberFirstMessageForTest('m', 'a0', 'make a small web page');
+      expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+      expect(connection.creations.single['prompt'], 'make a small web page');
+      expect(notices, isEmpty);
+    });
+
+    test('a conversation to hand off wins over the first message', () async {
+      final (connection, app) = await open();
+      connection.handoff = handoffOk;
+      app.rememberFirstMessageForTest('m', 'a0', 'make a small web page');
+      expect(await app.changeAgent('m', 'a0', 'claude'), isNull);
+      expect(
+        connection.creations.single['prompt'] as String,
+        isNot('make a small web page'),
+      );
+    });
+
     final bad = <String, Map<String, dynamic> Function(Map<String, dynamic>)>{
       'UNSUPPORTED': (_) => {'error': 'UNSUPPORTED'},
       'BUSY': (_) => {'error': 'BUSY'},

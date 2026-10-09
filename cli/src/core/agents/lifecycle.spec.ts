@@ -35,6 +35,7 @@ function setup(over: Partial<LifecycleDeps> = {}) {
     forgetSession: vi.fn(),
     markDeleted: vi.fn(),
     clearDeleted: vi.fn(),
+    stopNative: vi.fn(async () => {}),
     sessionCheckpoints: {} as never,
     mirror: { deleteHistory: vi.fn() },
     sessionSearch: { deleteHistory: vi.fn() },
@@ -62,7 +63,7 @@ describe('stopping, purging and resuming an agent', () => {
     expect(createStopAgentService).toHaveBeenCalledWith({
       registry: deps.registry, stoppedAgents: deps.stoppedAgents, restartJobs: deps.restartJobs, stopJobs: lifecycle.stopJobs,
       tmuxBackend: null, agentReconciler: deps.agentReconciler, forgetSession: deps.forgetSession,
-      markDeleted: deps.markDeleted, clearDeleted: deps.clearDeleted,
+      markDeleted: deps.markDeleted, clearDeleted: deps.clearDeleted, stopNative: deps.stopNative,
     })
     expect(lifecycle.stopAgent).toBe(vi.mocked(createStopAgentService).mock.results[0].value)
     expect(createResumeAgentService).toHaveBeenCalledWith({

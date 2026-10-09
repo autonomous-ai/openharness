@@ -5,6 +5,7 @@ The maintenance VM sees only regular cloned image files. This does not install
 on a Mac, publish a password-bearing image, or claim physical keyboard support.
 """
 import argparse
+from vm_artifacts import discard_passed_disks
 import hashlib
 import json
 from pathlib import Path
@@ -231,6 +232,7 @@ def main():
             if not receipt['source_unchanged']:
                 receipt.update(status='failed', error='Original source image changed.')
             (output / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+            discard_passed_disks(output, receipt, maintenance, disk)
     if receipt['status'] != 'passed':
         raise SystemExit(1)
 

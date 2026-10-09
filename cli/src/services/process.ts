@@ -11,6 +11,7 @@
  * its own state meanwhile. It answers the requests the core routes to it, hears what the core tells it,
  * and asks the core what it needs to know.
  */
+import { existsSync } from 'node:fs'
 import WebSocket from 'ws'
 import type { Asker, ServiceRequests } from '../core/api.js'
 import { heartbeatInterval, processLoopDelay, type LoopDelay, type MasterChannel } from '../harnessd/coreLink.js'
@@ -165,6 +166,19 @@ export function hostServices(options: ServiceHostOptions): ServiceHost {
   return { add: (service) => { services.push(service) }, leave }
 }
 
+/**
+ * `HARNESSD_TEST_HOLD_CONNECT=<service>:<file>`, for the end-to-end suite: the file this service waits on before it
+ * goes to the core, for as long as it exists. A service that is running and not there yet, held exactly as long as
+ * a test needs (e2e/serviceProcesses.e2e.ts, models at boot); unset, nothing waits.
+ */
+export function heldOffFile(env: NodeJS.ProcessEnv, name: string): string | null {
+  const [service, file] = (env.HARNESSD_TEST_HOLD_CONNECT ?? '').split(/:(.*)/s)
+  return service === name && file ? file : null
+}
+
+/** How often a held-off service looks again (`heldOffFile`). */
+const HELD_OFF_POLL_MS = 200
+
 /** One service in its process: its own link to the core, answering what the core routes to it. */
 export function runServiceProcess(options: ServiceProcessOptions): ServiceProcess {
   const env = options.env ?? process.env
@@ -278,8 +292,13 @@ export function runServiceProcess(options: ServiceProcessOptions): ServiceProces
       })
   }
 
+  const heldOff = heldOffFile(env, options.name)
   // Only ever run at start and from the reconnect timer, which `stop` clears.
   const dial = (): void => {
+    if (heldOff && existsSync(heldOff)) {
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; dial() }, HELD_OFF_POLL_MS)
+      return
+    }
     const ws = connect(`ws+unix://${options.socketPath}:/api/local-ws`)
     socket = ws
     ws.on('open', () => {

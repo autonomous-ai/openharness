@@ -628,6 +628,34 @@ if [ "$1" = "paste-buffer" ] && [ "$TMUX_SUBMIT_FAIL" = "1" ]; then exit 2; fi
       expect(await sendToTmux('%7', 'clear to send', async () => null)).toBe(true)
       expect(commands().at(-1)).toBe('send-keys -t %7 Enter')
 
+      // A revoked engine operation must not paste after waiting for a tmux room or buffer load.
+      writeFileSync(argsFile, '')
+      expect(await sendToTmux('%7', '/model next', undefined, () => false)).toBe(false)
+      expect(readFileSync(argsFile, 'utf8')).toBe('')
+      writeFileSync(argsFile, '')
+      expect(await sendToTmux('%7', '/model next', undefined, () => readFileSync(argsFile, 'utf8') === '')).toBe(false)
+      expect(commands()).toEqual(['load-buffer -b buffer -', 'delete-buffer -b buffer'])
+
+      // Revocation while the caller awaits a final admission check must withhold Enter.
+      writeFileSync(argsFile, '')
+      let allowed = true
+      expect(await sendToTmux('%7', '/model next', async () => { allowed = false; return null }, () => allowed))
+        .toEqual({ withheld: 'terminal control revoked' })
+      expect(commands()).toEqual(['load-buffer -b buffer -', 'paste-buffer -t %7 -b buffer -p -d'])
+
+      // tmux 3.4 can queue a paste behind a terminal attach. Revocation follows it through that queue.
+      writeFileSync(argsFile, '')
+      assumeTmuxVersion({ major: 3, minor: 4 })
+      allowed = true
+      const leave = await tmuxControlGate.enter('attach')
+      const queued = sendToTmux('%7', '/model next', undefined, () => allowed)
+      await new Promise(resolve => setTimeout(resolve, 10))
+      allowed = false
+      leave()
+      expect(await queued).toBe(false)
+      expect(readFileSync(argsFile, 'utf8')).toBe('')
+      assumeTmuxVersion(null)
+
       writeFileSync(argsFile, '')
       process.env.TMUX_SUBMIT_FAIL = '1'
       expect(await sendToTmux('%7', 'must not send')).toBe(false)

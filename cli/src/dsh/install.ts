@@ -23,6 +23,7 @@ import { catalogEntry, refreshDshRegistry } from './catalog.js'
 import { resolveDshCommand } from './materialize.js'
 import { runDshCommand } from './shell.js'
 import { lockDsh, dshBusy } from './lock.js'
+import { insideGitCheckout } from '../lib/gitProject.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -351,7 +352,9 @@ export async function installDsh(opts: DshInstallOptions): Promise<DshInstallRes
       if (!unlock) return dshBusy(manifest.id)
       realDir = linked.realDir
       dir = placeAt(manifest.id, { linkTo: realDir })
-      commit = await gitHead(realDir)
+      // A linked folder need not be a checkout, and git there on a Mac without the Command Line Tools
+      // is Apple's install dialog (insideGitCheckout).
+      commit = await insideGitCheckout(realDir) ? await gitHead(realDir) : null
     } else {
       const cloned = await cloneInstall(opts.source, opts.ref, opts.path, opts.onLine, opts.cloneRetryDelaysMs)
       if (!cloned.ok) { progress({ id: null, phase: 'failed', detail: cloned.detail, error: cloned.error }); return cloned }

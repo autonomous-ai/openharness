@@ -279,6 +279,68 @@ void main() {
           },
         });
 
+    // Notifications are off until somebody wants them; the one offer comes
+    // when an agent finished while the person was away and nothing told them.
+    test('an agent that finished while away offers notifications once, on return', () async {
+      os = _Recorder();
+      state = AppLifecycleState.inactive;
+      final app = AppNotifier(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        alerts: AlertSounds(
+          store: AlertSoundStore(storage: _Memory()),
+          channel: const MethodChannel('test/no-sound'),
+        ),
+        agentAlerts: AgentAlerts(store: ScreenAlertStore(storage: _Memory())),
+        systemNotifications: SystemNotifications(store: store(on: false), notifier: os),
+      )..lifecycle = () => state;
+      addTearDown(app.dispose);
+      app.notificationOfferStoreForTest = NotificationOfferStore(storage: _Memory());
+      app.machines = [_machine];
+      app.machineStates['m1'] = MachineState(_machine)
+        ..agents = [const Agent(id: 'a1', name: 'Fix login', engine: 'codex')];
+      var offers = 0;
+      app.notificationOffer = () => offers++;
+      app.appLifecycleChanged(AppLifecycleState.inactive);
+      await finish(app);
+      await Future<void>.delayed(Duration.zero);
+      expect(os.shown, isEmpty);
+      expect(offers, 0, reason: 'not while the person is away');
+      state = AppLifecycleState.resumed;
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      expect(offers, 1);
+      expect(app.notificationOfferStoreForTest.value, isTrue);
+
+      state = AppLifecycleState.inactive;
+      app.appLifecycleChanged(AppLifecycleState.inactive);
+      await app.handleMachineEventForTest('m1', {
+        'type': 'turn_summary',
+        'agentId': 'a1',
+        'payload': {
+          'agentId': 'a1',
+          'notification': {'id': 'result-a1-2', 'kind': 'done'},
+        },
+      });
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      expect(offers, 1, reason: 'asked once, whatever the answer');
+
+      await app.acceptNotificationOffer();
+      expect(app.systemNotifications.store.value, isTrue);
+      expect(os.authorizations, 1);
+    });
+
+    test('no offer when notifications are already on', () async {
+      final app = wired();
+      addTearDown(app.dispose);
+      app.notificationOfferStoreForTest = NotificationOfferStore(storage: _Memory());
+      var offers = 0;
+      app.notificationOffer = () => offers++;
+      app.appLifecycleChanged(AppLifecycleState.inactive);
+      await finish(app);
+      app.appLifecycleChanged(AppLifecycleState.resumed);
+      expect(offers, 0);
+    });
+
     test('an agent that finishes while the window is behind something reaches the system', () async {
       final app = wired();
       addTearDown(app.dispose);

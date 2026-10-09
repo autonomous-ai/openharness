@@ -182,6 +182,8 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // A new session is a notification to every control client: on a tmux before 3.7, not while one
     // attaches (tmuxControlGate.ts).
     const result = await inTmuxRoom('notify', () => new Promise<{ error: ExecError | null; stdout: string; stderr: string }>((resolve) => {
+      if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stdout: '', stderr: '' }); return }
+      request.onDispatch?.()
       run('tmux', args, { timeout: 5_000 }, (error, stdout, stderr) => resolve({
         error: error as ExecError | null,
         stdout,
@@ -189,6 +191,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
       }))
     }), features)
     if (result.error) {
+      if (result.error.code === 'HARNESS_CANCELLED') return terminalActionNotStarted(result.error.message)
       if (result.error.code === 'ENOENT') return terminalActionNotStarted('tmux is unavailable')
       // tmux says exactly why it refused — "duplicate session", "protocol version mismatch",
       // a .tmux.conf error, a directory it cannot enter. Dropping stderr here turned every one of
@@ -256,12 +259,15 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
     // A respawn replaces the pane's start command, which carries its tag before tmux 3.0 (`create`).
     args.push('-t', runtime.paneId, ...this.ownedCommand(features, this.owner(), request.command))
     const result = await new Promise<{ error: NodeJS.ErrnoException | null; stderr: string }>((resolve) => {
+      if (request.current?.() === false) { resolve({ error: Object.assign(new Error('The harness changed before pane dispatch'), { code: 'HARNESS_CANCELLED' }), stderr: '' }); return }
+      request.onDispatch?.()
       run('tmux', args, { timeout: 5_000 }, (error, _stdout, stderr) => resolve({
         error: error as NodeJS.ErrnoException | null,
         stderr,
       }))
     })
     if (!result.error) return TERMINAL_ACTION_SUCCEEDED
+    if (result.error.code === 'HARNESS_CANCELLED') return terminalActionNotStarted(result.error.message)
     if (result.error.code === 'ENOENT') return terminalActionNotStarted('tmux is unavailable')
     // `-k` means the old process may already be gone even though the new one never started, so this
     // cannot be reported as "nothing happened".
@@ -438,7 +444,7 @@ export class TmuxBackend implements TerminalBackend<TmuxRuntimeRef> {
   }
 
   async submitText(runtime: TmuxRuntimeRef, text: string, options?: SubmitOptions): Promise<TerminalActionResult> {
-    const sent = await sendToTmux(runtime.paneId, text, options?.beforeEnter)
+    const sent = await sendToTmux(runtime.paneId, text, options?.beforeEnter, options?.allowed)
     return typeof sent === 'boolean' ? legacyActionResult(sent, 'tmux submission') : terminalEnterWithheld(sent.withheld)
   }
 

@@ -1,7 +1,8 @@
 import { stripVTControlCharacters } from 'node:util'
 import type { AgentEngine } from '../types.js'
 import type { ComposerState, MessageHold, PaneInspection, PaneModal, PaneView, ScreenReading } from '../facets/screen.js'
-import { isApprovalDialog } from './questionPane.js'
+import { inspectPane } from './pane.js'
+import { isApprovalDialog, parseQuestionPane } from './questionPane.js'
 const HOLDS: Record<NonNullable<PaneModal>, MessageHold> = {
   rewind: 'rewind_picker_open', transcript: 'transcript_open', search: 'search_open', trust: 'trust_open',
   update: 'update_prompt_open', model: 'model_prompt_open', sign_in: 'sign_in_open', permission: 'permission_open', menu: 'menu_open',
@@ -39,4 +40,18 @@ function teamHold(engine: AgentEngine, capture: string, pane: PaneInspection, qu
     }
   }
   return null
+}
+/** A pane with no capture, as the core reads it for a session whose screen it reads in its own process. */
+export function uncapturedScreen(): ScreenReading {
+  return { pane: { idle: false, plan: false, dialog: false, draft: false }, question: null, messageHold: null,
+    teamHold: 'team_waiting_unavailable', activity: null, busy: false, stoppedGoal: false }
+}
+/**
+ * The terminal's screen: a shell no engine draws, read with the kit alone. It is the reading the other engines'
+ * readers give a terminal (lib/legacyScreen.ts: the kit's pane and dialog readers, no engine's own), kept apart
+ * from them so that a terminal tile neither loads their code nor goes unread when it cannot load
+ * (engines/inProcess.ts). engines/otherScreens.golden.spec.ts holds the two to the same reading.
+ */
+export function terminalScreen(capture: string | null): ScreenReading {
+  return capture === null ? uncapturedScreen() : assembleScreen('terminal', capture, inspectPane('terminal', capture), parseQuestionPane(capture))
 }

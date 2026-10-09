@@ -46,6 +46,16 @@ malformed reply or changed identity supplies no evidence. Message and question
 writes fail closed; close/activity checks remain unknown. The existing bounded
 input queue may retry an unreadable screen, without typing anything first.
 
+One change of identity is not a reason: the check before a message's Enter, and
+the session input's checks after it (its screen and submission readings), read
+under the record as it then stands when that record is the launch the message was
+typed into, bound to its first conversation since (`core/engines/sessionBinding.ts`
+`launchBound`). An engine draws its composer before its first hook binds the
+conversation, so a message sent while it starts was otherwise left typed and
+unsent or, its turn starting after the verify window, reported unconfirmed. A
+rebind, a rotation, another pane or another process is read under the record as
+typed, and fails closed.
+
 Worker startup and async loading have a deadline and recycle the worker on a
 timeout. A synchronous parser stall is contained by core's deadline and the
 master's existing heartbeat/restart policy. It can cost that engine's other

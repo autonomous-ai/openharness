@@ -393,3 +393,15 @@ export function isApprovalDialog(view: QuestionView): boolean {
  * draws an unnumbered list navigated with the arrow keys, so its rows carry an index and are reached by
  * walking down to them.
  */
+
+/**
+ * The keys that select a row of a dialog that numbers nothing: walk to it from the first row, then commit. The
+ * row's `number` carries its index there (facets/screen.ts `walk`). Amp stacks its rows (`down`); Kilo, and
+ * OpenCode's permission prompt that Kilo inherited, lay them side by side (`right`). Returned as a list because
+ * `sendKey` sends exactly one tmux key name per call.
+ */
+export function walkKeys(walk: NonNullable<QuestionRow['walk']>, row: QuestionRow): string[] {
+  const index = Number(row.number)
+  const steps = Number.isFinite(index) && index > 0 ? index : 0
+  return [...Array(steps).fill(walk === 'right' ? 'Right' : 'Down'), 'Enter']
+}

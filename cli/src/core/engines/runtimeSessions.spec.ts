@@ -228,6 +228,19 @@ describe('core runtime profile authority', () => {
     await vi.advanceTimersByTimeAsync(120); expect(t.changed).toHaveBeenCalledTimes(2)
   })
 
+  it('does not finish a replacement binding’s model transaction with an old session snapshot', async () => {
+    const t = setup(); await t.seed()
+    const previous = structuredClone(t.s)
+    expect(t.sessions.beginControl(previous, profile(previous))).toBe(true)
+    t.s.boundAt = 2
+    await t.seed()
+    expect(t.sessions.beginControl(t.s, profile(t.s))).toBe(true)
+    t.sessions.finishControl(previous)
+    expect(t.sessions.beginControl(t.s, profile(t.s))).toBe(false)
+    t.sessions.finishControl(t.s)
+    expect(t.sessions.beginControl(t.s, profile(t.s))).toBe(true)
+  })
+
   it('confirms public-id and legacy-id targets and cleans up waiters on timeout, forget and shutdown', async () => {
     vi.useFakeTimers()
     const t = setup(); await t.seed()

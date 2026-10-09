@@ -13,6 +13,7 @@ import { buildEngineCommandArgv, namedAgentArgs, supportsNamedAgent } from '../.
 import { buildLaunchOverrides, type LaunchOverridesDeps, type LaunchSource } from '../../lib/launchOverrides.js'
 import { binaryOnPath } from '../../lib/binaryOnPath.js'
 import { opencodeMajorVersion } from './version.js'
+import { gridLaunchInProcess } from '../../testing/gridLaunchInProcess.js'
 
 const installed = binaryOnPath('opencode')
 
@@ -24,7 +25,7 @@ describe.skipIf(!installed)('the installed opencode TUI accepts every flag we pa
   const help = helpResult ? `${helpResult.stdout}\n${helpResult.stderr}` : ''
   const major = installed ? opencodeMajorVersion() : null
   const deps: LaunchOverridesDeps = {
-    machine: () => ({ hermesSystemManaged: false, opencodeMajor: major }),
+    machine: () => ({ hermesSystemManaged: false, opencodeMajor: major }), gridLaunch: gridLaunchInProcess(),
     writeGridConfigDir: async (key) => `/state/grid-engine-config/${key}`,
     tmuxSupportsSessionEnv: async () => true,
     installCodexHooks: () => {},

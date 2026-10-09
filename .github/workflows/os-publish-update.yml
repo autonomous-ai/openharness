@@ -1,0 +1,60 @@
+name: Harness OS update publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      update_run_id:
+        description: 'Successful Harness OS development_update run containing the exact package and native upgrade receipt'
+        required: true
+        type: string
+      publish:
+        description: 'Publish verified OS update assets and advance the OS feed; the matching ISO release must already exist'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: harness-os-update-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v6
+        with:
+          name: harness-development-update
+          path: os/update-input
+          run-id: ${{ inputs.update_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify native evidence, package and public asset bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPDATE_RUN: ${{ inputs.update_run_id }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "$PUBLISH" == true ]]; then args+=(--publish); fi
+          python3 os/tools/publish-update.py \
+            --bundle os/update-input/work/development-update \
+            --receipt os/update-input/test-results/runtime-update/receipt.json \
+            --run "$UPDATE_RUN" --output os/update-publication "${args[@]}"
+      - name: Retain publication evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: harness-os-update-publication
+          path: os/update-publication/
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0

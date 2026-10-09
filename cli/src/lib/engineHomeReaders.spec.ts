@@ -2,8 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
-import { CodexActivityReader } from './runtimeActivity.js'
-import { stopSharedCodexSession } from './codexSessionLifecycle.js'
+import { composedCodex } from '../testing/inlineNativeControls.js'
 import { createHarnessResourcesReader } from './harnessResources.js'
 import type { RegisteredSession } from './registry.js'
 
@@ -28,7 +27,7 @@ afterEach(() => {
 it('reads live activity from the login shell Codex server, keeping an explicit agent profile', async () => {
   const home = movedHome()
   const connect = vi.fn(async (_home: string) => ({ request: async () => ({ thread: { id: 'conversation', status: { type: 'active' } } }), close: () => {} }))
-  const reader = new CodexActivityReader({ connect, now: () => 1000,
+  const reader = composedCodex({ connect, now: () => 1000,
     rows: async () => [{ ...session().processIdentity!, parentPid: 1, args: 'codex resume conversation' }],
   })
   try {
@@ -44,11 +43,11 @@ it('stops the shared conversation in the login shell Codex home instead of overl
   const home = movedHome()
   const request = vi.fn(async () => ({ thread: { id: 'conversation', status: { type: 'notLoaded' } } }))
   const connect = vi.fn(async (_home: string) => ({ request, close: () => {} }))
-  await stopSharedCodexSession(session(), () => true, {
-    daemonIdentity: async path => path === home ? { pid: 90, processStartTime: start } : null,
+  await composedCodex({
+    daemonIdentity: async (path: string) => path === home ? { pid: 90, processStartTime: start } : null,
     rows: async () => [{ pid: 90, parentPid: 1, executable: 'codex', args: 'codex app-server', startMarker: start }],
     connect,
-  })
+  }).stop(session(), () => true)
   expect(connect).toHaveBeenCalledWith(home)
   expect(request).toHaveBeenCalledWith('thread/read', { threadId: 'conversation' })
 })

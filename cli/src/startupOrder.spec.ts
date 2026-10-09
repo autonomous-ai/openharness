@@ -84,7 +84,7 @@ function callArguments(source: string, call: string): { text: string; at: number
 }
 
 /** Every call whose dependencies run DURING start-up, before `runForeground` has finished its body. */
-const STARTUP_CALLS = ['await repairClaudeCwd({', 'await restoreAgents({']
+const STARTUP_CALLS = ['await repairProjectCwds({', 'await restoreAgents({']
 
 /** What the prologue is allowed to do before the master's update is listened for: nothing that can throw. */
 const PROLOGUE_CALLS = new Set(['installTimestampedConsole'])
@@ -113,7 +113,7 @@ describe('the core\'s start-up order (core/main.ts)', () => {
     for (const risky of [
       'requireTmuxAvailable(',      // throws outright when tmux is missing
       'await startHookServer(',     // EADDRINUSE on a fixed port with no fallback
-      'installSessionHooks(',       // 13 vendor settings files, any of which can be unreadable
+      'installEngineHooks(',        // 13 vendor settings files, any of which can be unreadable
       'await restoreAgents({',      // tmux, the registry, and the closures a bad edit puts in a dead zone
       'await agentReconciler.start(',
       'loadCursorPendingTasks(',    // a file lock that can hang, not just throw
@@ -234,11 +234,14 @@ describe('the core\'s request gate (core/main.ts)', () => {
     expect(yields, 'bind the relay callbacks before connect() first').toEqual([])
   })
 
-  it('opens the gate, tells the master it is ready, then says so — last', () => {
+  it('opens the gate, tells the master it is ready, says so, and only then launches what waits for a service', () => {
     const ready = at('coreLink.ready()', opened)
     const logged = at("console.log('[cli] ready')", ready)
     const tail = source.slice(opened, from + text.length).split('\n').map((line) => line.trim()).filter(Boolean)
-    expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')"])
+    // Readiness never waits on a service: the agents the boot held for one are launched after it, in the background
+    // (core/agents/heldLaunches.ts).
+    expect(tail).toEqual(['backend.openRequests()', 'daemonBoot.openRequests = null', 'coreLink.ready()', "console.log('[cli] ready')",
+      'void heldLaunches.restoreHeld()'])
     expect(logged).toBeGreaterThan(ready)
   })
 })
