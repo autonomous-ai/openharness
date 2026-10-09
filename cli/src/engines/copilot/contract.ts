@@ -1,3 +1,5 @@
+import { join as hookPath } from 'node:path'
+import { env as hookEnvironment } from '../../config/env.js'
 /**
  * What the core knows of Copilot without loading its code: declared data, read in line on the hook path
  * (docs/design/2026-10-08-other-engines-out-of-core.md). It imports nothing of Copilot's code.
@@ -26,3 +28,24 @@ export function copilotTranscriptPath(copilotHome: string, sessionId: string): s
   if (!SESSION_ID.test(sessionId)) return null
   return join(copilotHome, 'session-state', sessionId, 'events.jsonl')
 }
+
+/** The engine reads each JSON file in its hooks directory. This file is ours; preToolUse is fail-closed and is deliberately absent. Tool cards come from its transcript. */
+export const COPILOT_HOOK_SETTINGS = {
+  file: hookPath(hookEnvironment.COPILOT_HOME, 'hooks', 'harness.json'),
+  "engine": "copilot",
+  "schema": "file",
+  "events": [
+    "sessionStart",
+    "userPromptSubmitted",
+    "agentStop",
+    "sessionEnd"
+  ],
+  "version": 1,
+  "eventFlag": "--copilot-event",
+  "messages": {
+    "current": "[hooks] Copilot lifecycle hooks already installed",
+    "installed": "[hooks] installed Copilot lifecycle hooks → {file}",
+    "after": "[hooks] (takes effect on the next copilot session start)",
+    "failed": "[hooks] failed to write Copilot hook file:"
+  }
+} as const satisfies import('../kit/nativeHookSettings.js').NativeHookSettings

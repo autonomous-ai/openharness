@@ -8,7 +8,7 @@ import { engineHooks } from '../../engines/hooks.js'
 import { sessionStoreContracts, type SessionStoreEngine } from '../../engines/sessionStoreContracts.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
 import { adoptHomes, movedHomes } from '../../lib/engineHomes.js'
-import { loadEngine, type InProcessModules } from '../../engines/inProcess.js'
+import * as nativeHooks from '../../engines/nativeHooks.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
 import { processRows } from '../../lib/terminalAgentDiscovery.js'
@@ -188,13 +188,11 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
 
 /**
  * OpenCode's plugin, installed again before an OpenCode spawn (core/agents/create.ts): OpenCode may have moved
- * from 1.x to 2.x under a running daemon, and its new TUI must not find the old server plugin. False when the
- * other engines' installers could not be loaded.
+ * from 1.x to 2.x under a running daemon, and its new TUI must not find the old server plugin. Installation
+ * never depends on loading its optional interpreter.
  */
 export async function installOpencodePluginBeforeSpawn(port: number): Promise<boolean> {
-  const installers = await loadEngine('hooks')
-  if (!installers) return false
-  installers.installOpencodePlugin(port)
+  nativeHooks.installOpencodePlugin(port)
   return true
 }
 
@@ -208,23 +206,22 @@ export interface InstallEngineHooksOptions {
 }
 
 /**
- * The other engines' installers, in the order they have always run. Their code is loaded only here, once, as
- * the core starts (engines/inProcess.ts `hooks`), and only when one of them is to be installed.
+ * The other engines' declarations are installed in their original order, without an optional import.
  */
-const OTHER_INSTALLERS: Array<[string, (installers: InProcessModules['hooks']) => (port: number) => void]> = [
-  ['cursor', (installers) => installers.installCursorHooks],
-  ['opencode', (installers) => installers.installOpencodePlugin],
-  ['kilo', (installers) => installers.installKiloPlugin],
-  ['pi', (installers) => installers.installPiExtension],
+const OTHER_INSTALLERS: Array<[string, (port: number) => void]> = [
+  ['cursor', nativeHooks.installCursorHooks],
+  ['opencode', nativeHooks.installOpencodePlugin],
+  ['kilo', nativeHooks.installKiloPlugin],
+  ['pi', nativeHooks.installPiExtension],
   // A self-update refreshes plugin files here; running engine processes pick them up according to each
   // vendor's own plugin reload lifecycle.
-  ['amp', (installers) => installers.installAmpPlugin],
-  ['hermes', (installers) => installers.installHermesHooks],
-  ['devin', (installers) => installers.installDevinHooks],
-  ['commandcode', (installers) => installers.installCommandCodeHooks],
-  ['grok', (installers) => installers.installGrokHooks],
-  ['agy', (installers) => installers.installAgyHooks],
-  ['copilot', (installers) => installers.installCopilotHooks],
+  ['amp', nativeHooks.installAmpPlugin],
+  ['hermes', nativeHooks.installHermesHooks],
+  ['devin', nativeHooks.installDevinHooks],
+  ['commandcode', nativeHooks.installCommandCodeHooks],
+  ['grok', nativeHooks.installGrokHooks],
+  ['agy', nativeHooks.installAgyHooks],
+  ['copilot', nativeHooks.installCopilotHooks],
 ]
 
 /**
@@ -234,10 +231,9 @@ const OTHER_INSTALLERS: Array<[string, (installers: InProcessModules['hooks']) =
  * files owned by thirteen different CLIs, and one that is malformed, read-only or mid-write is not
  * a reason for the other twelve to go uninstalled — let alone for the daemon not to come up.
  *
- * Claude Code's and Codex's first, in line, as before. Then the other engines' installers are loaded, at this
- * same step, which the caller awaits so that nothing it starts next (a restored pane among them) runs before
- * their hooks are in place. Installers that could not be loaded are skipped and named, as one that throws is.
- * Never rejects.
+ * Claude Code's and Codex's first, then the other engines, all in line before any restored pane starts.
+ * An unavailable interpreter cannot delay this step. A vendor whose settings throw is named and skipped;
+ * durable launch holds for preparation failures are a separate behavior change. Never rejects.
  */
 export async function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): Promise<void> {
   const hookStep = (vendor: string, install: () => void): void => {
@@ -264,13 +260,5 @@ export async function installEngineHooks(port: number, options: InstallEngineHoo
   adopt(options.environment ?? process.env)
   void options.loginShell?.then(adopt)
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port))
-  const others = OTHER_INSTALLERS.filter(([vendor]) => !options.only || options.only.has(vendor))
-  if (!others.length) return
-  const installers = await loadEngine('hooks')
-  for (const [vendor, installer] of others) {
-    hookStep(vendor, () => {
-      if (!installers) throw new Error('its installer could not be loaded')
-      installer(installers)(port)
-    })
-  }
+  for (const [vendor, install] of OTHER_INSTALLERS) hookStep(vendor, () => install(port))
 }
