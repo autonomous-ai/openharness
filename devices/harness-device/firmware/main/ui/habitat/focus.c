@@ -39,7 +39,7 @@
  * status line (arc_status below), or a relaxing scene's quiet line; every other state, and every other engine,
  * leaves it empty. A scene's overlay (Codex's sandbox bubble, its paper plane) takes the first recap line's slot,
  * which a working or relaxing scene (no recap) leaves empty, and is emitted after the scene's own run so it draws
- * over it. A relaxing scene with SHAPES (Claude's balls, Muse's bubbles: pets.h ht_pet_shapes_t) emits them after
+ * over it. A relaxing scene with SHAPES (Claude's balls, Muse's beach ball: pets.h ht_pet_shapes_t) emits them after
  * the eleven, `count` ring arcs on every step of it (an empty slot keeps a shape's place), so on that face the
  * runs are 11 + count, the same on every frame of it.
  */
@@ -218,8 +218,8 @@ static const ht_pet_scene_t *working_scene(const ht_character_face_t *f, const c
  * THE RELAXING SCENE (owner, 2026-10-09: mockup/relaxing.html): the resting face of an agent with nothing to show —
  * no recap, no question, no working line, no status of its own, idle — laid out like the working face when its pet
  * has one: the name on the upper arc, the scene in the mark's slot placed as a working scene is, no text in the
- * middle, one quiet line on the lower arc (RELAXING). Claude juggles, Codex plays with its paper plane, Muse watches
- * soap bubbles; a custom pack of version 2 may carry one. A pet without one keeps today's resting face. Not while
+ * middle, one quiet line on the lower arc (RELAXING). Claude juggles, Codex plays with its paper plane, Muse keeps a
+ * beach ball up off its head (mockup/muse-play.html D); a custom pack of version 2 may carry one. A pet without one keeps today's resting face. Not while
  * held (clock 0, asleep, offline), as the working scene.
  */
 static const ht_pet_scene_t *relaxing_scene(const ht_character_face_t *f, const char *recap)
@@ -1028,7 +1028,7 @@ void ht_focus_face(ht_scene_t *s, const ht_character_face_t *f, uint8_t frame, u
         ht_arc_status_face(s, ht_rgb(FOCUS_REST), relaxing_line(f), &ht_arc_inter_lower);
     if (s->count == before) no_text(s, sf);
 
-    // The relaxing scene's shapes (Claude's balls, Muse's bubbles), after the eleven: the same count every step.
+    // The relaxing scene's shapes (Claude's balls, Muse's beach ball), after the eleven: the same count every step.
     if (relax && relax->shapes)
         for (unsigned k = 0; k < relax->shapes->count; k++) scene_shape(s, relax, 4, k, f->clock_ms);
 }

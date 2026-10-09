@@ -752,11 +752,12 @@ def generate_alert(prefix, engine, work_code, work_prefix):
 
 
 # ---- THE RELAXING SCENES: the resting face laid out like the working one (owner, 2026-10-09, mockup/relaxing.html) ----
-# Claude juggles three balls, Codex throws and catches its paper plane, Muse watches soap bubbles; 24 steps each. The
+# Claude juggles three balls, Codex throws and catches its paper plane, Muse keeps a beach ball up off its head
+# (mockup/muse-play.html D, owner 2026-10-09: it moves as a whole, never bending a joint); 24 steps each. The
 # bodies are stored like the other scenes (palette cells, cell 1) and placed where the mockup's glass has them (bias 4,
-# as the working scene); the balls and bubbles are NOT stored: per step a few shapes (ht_pet_shapes_t) that focus.c
+# as the working scene); the balls are NOT stored: per step a few shapes (ht_pet_shapes_t) that focus.c
 # draws as ring arcs. Claude's and Muse's come from assets/pets/<engine>/relax{/,.json} (exported by
-# mockup/relax_export.py from clawd_juggle.py B and muse_relax.py A); Codex's from its pack, drawn here (relaxing.py).
+# mockup/relax_export.py from clawd_juggle.py B and muse_play.py D); Codex's from its pack, drawn here (relaxing.py).
 RELAX_N = 24
 RELAX_BIAS = 4
 

@@ -1662,7 +1662,7 @@ static void focus_face(void)
  * THE RELAXING FACE (owner, 2026-10-09: mockup/relaxing.html). Claude, Codex and Muse with nothing to show play their
  * relaxing scene in the mark's run, placed as a working scene is; nothing in the middle (the recap slots, the status
  * and the two resting lines empty; Codex's plane the overlay in run 3); one line on the lower arc in quiet grey,
- * Inter Medium 26, from the new list, held while the face stays up; the balls and bubbles (Claude, Muse) are ring arcs
+ * Inter Medium 26, from the new list, held while the face stays up; the balls (Claude's three, Muse's beach ball) are ring arcs
  * after the eleven runs, as many on every step. The incremental redraw from step to step is exact, the ink stays inside
  * r 230, and the schedule wakes on each step that draws differently. Every other engine keeps today's resting face.
  */
@@ -1674,7 +1674,7 @@ static void focus_relaxing(void)
     static const char *const lines[] = {"Tap to talk", "Hold for tabs", "Tap name for panes", "What's next?",
                                         "Your move", "Say the word", "Ask away"};
     static const struct { const char *engine; unsigned shapes, step_ms; bool overlay; } want[] = {
-        {"claude", 6, 55, false}, {"codex", 0, 120, true}, {"muse", 24, 140, false}};
+        {"claude", 6, 55, false}, {"codex", 0, 120, true}, {"muse", 8, 100, false}};
     for (unsigned e = 0; e < 3; e++) {
         const ht_pet_t *pet = pet_of(want[e].engine);
         const ht_pet_scene_t *rs = pet->relaxing_scene;
@@ -1684,6 +1684,7 @@ static void focus_relaxing(void)
         const char *held = NULL;
         unsigned arcs_ink = 0;
         bool moved = false;
+        int ball_at[24] = {0};
         for (unsigned step = 0; step < 2 * rs->steps; step++) {
             ht_character_face_t f = {.recipient = "Payments refactor", .engine = want[e].engine, .activity = "",
                 .status = "", .hint = "", .detail = "", .mood = HT_CHARACTER_IDLE, .foreground = 0xffff, .dim = 0x8410,
@@ -1711,8 +1712,32 @@ static void focus_relaxing(void)
             if (!held) held = arc->text; else assert(!strcmp(held, arc->text));   // held while the face stays up
             for (unsigned k = 0; k < want[e].shapes; k++) {
                 const ht_run_t *r = &scene.runs[11 + k];
+                const ht_pet_shape_t *at = &rs->shapes->at[st * rs->shapes->count + k];
                 assert(r->ring.set);
+                // placed from the scene's origin (the frame's step_dy moves the frame alone), as the step lists it
+                assert(r->ring.cx16 == ((466 - rs->w) / 2 + rs->dx) * 16 + at->cx16);
+                assert(r->ring.cy16 == (233 + 4 - rs->h / 2 + rs->dy) * 16 + at->cy16);
+                assert(r->ring.r16 == at->r16 && r->ring.w16 == at->w16 && r->ring.colour == at->rgb);
                 if (r->ring.w16) arcs_ink += (unsigned)(r->ink_box.w * r->ink_box.h);
+            }
+            if (e == 2) {
+                // Muse's keepy-uppy (mockup/muse-play.html D): the beach ball is six 60-degree wedges round one
+                // centre, reaching it, then the white centre disc on it and the highlight up and left of it.
+                const ht_run_t *b0 = &scene.runs[11];
+                for (unsigned k = 0; k < 8; k++) {
+                    const ht_run_t *r = &scene.runs[11 + k];
+                    assert(r->ring.w16);
+                    if (k < 7) assert(r->ring.cx16 == b0->ring.cx16 && r->ring.cy16 == b0->ring.cy16);
+                    if (k < 6) assert(r->ring.w16 >= 2 * r->ring.r16);              // a wedge: the band reaches the centre
+                }
+                assert(scene.runs[18].ring.cx16 < b0->ring.cx16 && scene.runs[18].ring.cy16 < b0->ring.cy16);
+                // It meets the ball on steps 0 and 12 (a squash, the ball low on its head), hops on 1 and 13, the ball
+                // highest halfway between; the ball always above the body's top.
+                int ball_y = b0->ring.cy16 / 16, top = m->y;
+                assert(ball_y < top + 12);
+                if (st % 12 == 1) assert(rs->step_dy && rs->step_dy[st] < 0);
+                else assert(!rs->step_dy || !rs->step_dy[st]);
+                ball_at[st] = ball_y;
             }
             ink_inside_r230(&scene);
             if (!step) ht_raster(&scene, (ht_rect_t){0, 0, HT_WIDTH, HT_HEIGHT}, partial);   // what the glass holds
@@ -1736,8 +1761,17 @@ static void focus_relaxing(void)
             prev = scene;
         }
         assert(moved);
+        if (e == 2) {   // Muse: five body pictures (the squash, the hop, eyes up, eyes on the ball high, wide-eyed)
+            unsigned seen = 0;
+            for (unsigned st = 0; st < rs->steps; st++) seen |= 1u << rs->loop[st];
+            assert(__builtin_popcount(seen) == 5);
+            for (unsigned st = 0; st < 24; st++)      // lowest as it meets the head, up and down between, highest at 6, 18
+                assert(st % 12 == 0 ? ball_at[st] >= ball_at[(st + 23) % 24] : st % 12 <= 6 ? ball_at[st] < ball_at[st - 1]
+                                    : ball_at[st] >= ball_at[st - 1]);
+            assert(ball_at[0] - ball_at[6] > 40 && ball_at[12] - ball_at[18] > 40);
+        }
         // The raster budget: the code-drawn shapes stay small (each ring arc rasterises only its ink box).
-        assert(arcs_ink / (2 * rs->steps) <= 8000);   // Muse at most ~6.4k px a step, Claude ~1.7k
+        assert(arcs_ink / (2 * rs->steps) <= 8000);   // Claude ~1.7k px a step, Muse's ball ~1.5k
         // Not relaxing: working, a recap, a question, a status of its own, held (clock 0, asleep), the voice screen.
         ht_character_face_t g = {.recipient = "x", .engine = want[e].engine, .activity = "", .status = "", .hint = "",
             .detail = "", .mood = HT_CHARACTER_IDLE, .clock_ms = 1234};
@@ -1783,7 +1817,7 @@ static void focus_relaxing(void)
         for (unsigned r = 0; r < 10; r++) known |= !strcmp(said, today[r]);
         assert(known);
     }
-    puts("Focus relaxing: Claude juggles, Codex's plane, Muse's bubbles; constant runs, exact redraws, grey arc line; others unchanged PASS");
+    puts("Focus relaxing: Claude juggles, Codex's plane, Muse's keepy-uppy; constant runs, exact redraws, grey arc line; others unchanged PASS");
 }
 
 static void footer_layout(void)

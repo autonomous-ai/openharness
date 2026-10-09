@@ -57,7 +57,7 @@ typedef struct {
 } ht_pet_waves_t;
 /*
  * Shapes drawn in code over a scene, a few per step, instead of stored props (the relaxing scenes: Claude's three
- * juggling balls, Muse's soap bubbles; mockup/relaxing.html "For the firmware"). Step s draws `count` ring arcs
+ * juggling balls, Muse's beach ball; mockup/relaxing.html "For the firmware", mockup/muse-play.html D). Step s draws `count` ring arcs
  * (ht_ring_arc), shape k at at[s * count + k]: its centre in sixteenths of a px from the scene's top-left (like the
  * waves'), the band `w16` wide around radius `r16`, over mid_deg +- half_deg (anticlockwise from 3 o'clock; a disc is
  * half_deg 180 with the band reaching the centre), in `rgb` (native RGB565, as ht_rgb() returns). w16 0 is an empty
