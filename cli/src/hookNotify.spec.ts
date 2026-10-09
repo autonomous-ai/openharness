@@ -742,6 +742,7 @@ describe('hook notify terminal scope', () => {
     let attempts = 0
     const firedAt: unknown[] = []
     const server = createServer((req, res) => {
+      if (req.method !== 'POST') { req.resume(); res.writeHead(405).end(); return }
       req.resume()
       req.on('end', () => {
         attempts++
