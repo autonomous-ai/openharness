@@ -148,13 +148,17 @@ pub(super) fn activate(app: &mut App, mut form: Box<Form>) {
             crate::commands::execute(app, "choose-tree -Zs");
         }
         Field::Terminal => {
-            // This action opens the selected folder without sending the task to a shell.
-            let Project::Folder(cwd) = &form.draft.project else {
-                form.error = "Choose an existing project folder for a terminal.".into();
-                store_form(app, form);
-                return;
+            // This action opens the selected folder without sending the task to a shell; a new project
+            // has none yet, so the shell opens at home, where the form was opened from.
+            let cwd = match &form.draft.project {
+                Project::Folder(cwd) => cwd.clone(),
+                Project::New(_) if !form.home.is_empty() => form.home.clone(),
+                _ => {
+                    form.error = "Choose an existing project folder for a terminal.".into();
+                    store_form(app, form);
+                    return;
+                }
             };
-            let cwd = cwd.clone();
             let machine = crate::input::shell_machine(app, Some(&(form.draft.machine.clone(), String::new())));
             let backing = app.focused().and_then(|p| app.panes.get(&p)).is_some_and(|p| {
                 app.fleet.agent(&p.machine_id, &p.agent_id).is_some_and(|a|
@@ -434,9 +438,7 @@ mod tests {
             assert!(matches!(&app.welcome.forms[&tab].draft.project,
                 Project::Folder(path) if path == "/srv/remote-project"));
             crate::input::handle(&mut app, crossterm::event::Event::Paste("keep this remote task".into()));
-            event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-            assert_eq!(app.welcome.forms[&tab].focus, Field::Create);
-            assert!(app.welcome.forms[&tab].error.is_empty(), "task Enter only selects Start");
+            // One Enter with a task submits it.
             event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
             let form = &app.welcome.forms[&tab];
             assert_eq!(form.draft.machine, "remote");
@@ -447,6 +449,22 @@ mod tests {
             event(&mut app, KeyCode::Esc, KeyModifiers::NONE);
             assert!(!editing(&app));
         }
+    }
+
+    // A window opened from home gets a new project for its harness; its terminal still opens at home.
+    #[tokio::test]
+    async fn a_terminal_from_a_window_opened_at_home_opens_at_home() {
+        let mut app = app();
+        let home = std::env::var("HOME").unwrap();
+        app.homes.insert(crate::local::MACHINE.into(), home.clone());
+        ensure(&mut app, None, Some(home.clone()));
+        let tab = app.tab().id.clone();
+        assert!(matches!(&app.welcome.forms[&tab].draft.project, Project::New(_)));
+        let mut form = take_active(&mut app).unwrap();
+        form.focus = Field::Terminal;
+        activate(&mut app, form);
+        let error = app.welcome.forms.get(&tab).map(|f| f.error.clone()).unwrap_or_default();
+        assert!(!error.contains("existing project folder"), "{error}");
     }
 
     #[tokio::test]
@@ -483,8 +501,6 @@ mod tests {
         form.focus = Field::Task;
         store_form(&mut app, form);
         render(&mut app);
-        event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-        assert_eq!(app.welcome.forms[&tab].focus, Field::Create);
         event(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         assert!(app.welcome.forms[&tab].error.contains("cannot start with a task"));
         event(&mut app, KeyCode::Esc, KeyModifiers::NONE);

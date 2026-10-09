@@ -56,6 +56,7 @@ mod new_harness;
 mod mouse;
 mod options;
 mod os_welcome;
+mod first_run;
 mod paste;
 mod pane;
 mod pane_frame;

@@ -90,6 +90,28 @@ LAUNCHER="$BIN_DIR/harness"
 TUI_BIN="$HOME/.harness/bin/harness-tui"
 HN_LAUNCHER="$BIN_DIR/hn"
 
+# The PATH of the terminal this runs in, before the steps below put ~/.local/bin on the installer's
+# own: the closing advice is about the person's PATH. Checked against the installer's, the advice to
+# fix it never printed, and on a fresh Mac the `hn` it said to type was "command not found" (macOS VM,
+# 2026-10-09).
+ORIGINAL_PATH="$PATH"
+
+# A computer with no coding agent and no Harness yet, before this install changes that: hn's first
+# window opens on OpenCode there, so step 4b downloads it, as the desktop app does during its setup
+# (desktop/lib/bootstrap/agent_prefetch.dart `alreadyHasAnAgent`, the same places).
+no_agent_yet() {
+  for path in "$HOME/.harness/cli" "$HOME/.claude" "$HOME/.codex" "$HOME/.opencode/bin/opencode" \
+      "$HOME/.bun/bin/opencode" "$HOME/.config/opencode" "$HOME/.local/share/opencode"; do
+    [ -e "$path" ] && return 1
+  done
+  for name in claude codex opencode; do
+    command -v "$name" >/dev/null 2>&1 && return 1
+  done
+  return 0
+}
+NEW_COMPUTER=0
+if no_agent_yet; then NEW_COMPUTER=1; fi
+
 # Shared by every download in this file — tmux in step 1 and Node in step 2 — so both manifests are
 # read by one implementation. Everything here must run in plain POSIX sh: there is no Node yet.
 
@@ -757,6 +779,41 @@ fi
 # 4. Ensure ~/.local/bin is on PATH (per shell), idempotently — defined up with the other helpers.
 ensure_path_rc
 
+# 4b. OpenCode, on a computer with no agent at all (NEW_COMPUTER) with a person at the terminal (a
+#     Docker build or a provisioning script gets no agent it did not ask for): hn's first window opens
+#     on it with a task typed, so it is downloaded now rather than in front of the person in that pane.
+#     The CLI's recipe (cli/src/lib/engineInstall.ts) with --no-modify-path, as the desktop app runs
+#     it: Harness finds ~/.opencode/bin itself. Never under --desktop, whose app downloads it beside
+#     this install. After step 4, so stopping a slow download leaves a working PATH, and never longer
+#     than three minutes; optional either way: a pane installs it, with the npm fallback.
+#     HARNESS_INSTALL_ATTENDED=1 says a person is there when stdout is not a terminal (the specs).
+if [ "$INSTALL_MODE" = "standalone" ] && [ "$NEW_COMPUTER" = 1 ] \
+    && { [ -t 1 ] || [ "${HARNESS_INSTALL_ATTENDED:-}" = 1 ]; }; then
+  # The mark hn's first start takes (tui/src/first_run.rs): OpenCode with a task typed, not a shell.
+  mkdir -p "$HOME/.harness/tui" && : > "$HOME/.harness/tui/first-run" || true
+  echo "▸ Downloading OpenCode, the free coding agent hn starts with"
+  ( curl -fsSL --connect-timeout 20 https://opencode.ai/install | bash -s -- --no-modify-path ) >/dev/null 2>&1 &
+  download=$!
+  waited=0
+  while kill -0 "$download" 2>/dev/null && [ "$waited" -lt 180 ]; do sleep 1; waited=$((waited + 1)); done
+  kill "$download" 2>/dev/null || true
+  wait "$download" 2>/dev/null || true
+  if [ -x "$HOME/.opencode/bin/opencode" ]; then
+    # Run once, `--version` only, as the desktop does: macOS checks a new binary on its first run
+    # (3.9 s against 0.4 s after, fresh VM, 2026-10-09), which would be hn's first pane's. Never
+    # longer than 20 s.
+    "$HOME/.opencode/bin/opencode" --version >/dev/null 2>&1 &
+    warm=$!
+    ( sleep 20; kill "$warm" 2>/dev/null ) >/dev/null 2>&1 &
+    watchdog=$!
+    wait "$warm" 2>/dev/null || true
+    kill "$watchdog" 2>/dev/null || true
+    echo "  ✓ OpenCode ready"
+  else
+    echo "  · OpenCode will be installed when hn first starts it"
+  fi
+fi
+
 # 5. Final verification. Use the launcher by absolute path because this process cannot update its
 #    parent shell's PATH. Installation never authenticates or starts the adapter implicitly.
 "$NODE_BIN" --version >/dev/null 2>&1 || { echo "✗ Managed Node verification failed." >&2; exit 30; }
@@ -795,7 +852,12 @@ else
   echo ""
   echo "  Start here — every harness on every machine, in this terminal:"
   echo ""
-  echo "      hn                             # start locally; no login required"
+  # A command that works in THIS terminal: ~/.local/bin is only on new terminals' PATH (step 6).
+  case ":${ORIGINAL_PATH}:" in
+    *":$BIN_DIR:"*) hn_command=hn ;;
+    *) hn_command="~/.local/bin/hn" ;;
+  esac
+  printf '      %-31s# start locally; no login required\n' "$hn_command"
   echo ""
   echo "  Or set this computer up step by step — three commands, in this order:"
   echo ""
@@ -816,7 +878,7 @@ fi
 # 6. Make `harness` usable by NAME. We already added ~/.local/bin to your rc for NEW terminals (step 4);
 #    a piped `curl … | sh` can't touch the CURRENT shell's PATH, so print the one line that fixes it here
 #    now — but ONLY when ~/.local/bin isn't already on PATH (many Linux distros add it), to avoid nagging.
-case ":${PATH}:" in
+case ":${ORIGINAL_PATH}:" in
   *":$BIN_DIR:"*) : ;;  # already on PATH → `harness` works immediately, nothing to do
   *)
     echo ""
