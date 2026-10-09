@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -59,7 +59,18 @@ function fixture() {
       env, encoding: 'utf8', timeout: 20_000,
     })
   }
-  return { home, shared, name, recipe, env, runtime, run }
+  // The same run without blocking the event loop, for a test that has a process of its own to keep going.
+  const runAsync = (node: string, install = recipe, shell = '/bin/sh') => new Promise<{ status: number | null, stdout: string, stderr: string }>((resolve) => {
+    const argv = buildEngineLaunchArgv('codex', { installIfMissing: install }, shell, node, 'grid', null)
+    const script = argv[argv.indexOf('harness-engine') - 1]
+    const child = spawn(shell, ['-c', script, 'harness-engine', name, 'argument with spaces'], { env, stdio: ['ignore', 'pipe', 'pipe'] })
+    let stdout = '', stderr = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.stderr.on('data', (chunk) => { stderr += chunk })
+    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000)
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }) })
+  })
+  return { home, shared, name, recipe, env, runtime, run, runAsync }
 }
 
 describe('engine installation for a fresh OS user', () => {
@@ -134,6 +145,45 @@ describe('engine installation for a fresh OS user', () => {
     expect(result.status, result.stdout + result.stderr).toBe(0)
     expect(result.stdout).not.toContain('trying the npm package instead')
     expect(result.stdout).toContain('ENGINE_READY:')
+  })
+
+  // Desktop Harness downloads the agents beside a fresh computer's setup and names the process in
+  // ~/.harness/run/downloading-<engine>; a pane opened meanwhile must wait for it, never install twice.
+  it('waits for the download Desktop Harness has under way instead of installing a second time', async () => {
+    const f = fixture()
+    const node = f.runtime('node-one')
+    const run = join(f.home, '.harness/run')
+    mkdirSync(run, { recursive: true })
+    // The download: a while, then the same install the pane would have run, into the same prefix.
+    const install = `sleep 2; npm_config_prefix=${shellSingleQuote(join(f.home, '.local'))} NPM_CONFIG_PREFIX=${shellSingleQuote(join(f.home, '.local'))} ${f.recipe.command}`
+    const download = spawn('/bin/sh', ['-c', install, 'harness-download'], {
+      env: { ...f.env, PATH: `${join(node, '..')}:${f.env.PATH}` }, stdio: 'ignore',
+    })
+    writeFileSync(join(run, 'downloading-codex'), String(download.pid))
+    const started = Date.now()
+    // The pane's own install would fail: only the download can have put the engine there.
+    const result = await f.runAsync(node, { ...f.recipe, command: 'exit 93' })
+    expect(result.status, result.stdout + result.stderr).toBe(0)
+    expect(result.stdout).toContain('Installing Codex')
+    expect(result.stdout).toContain('ENGINE_READY:["argument with spaces"]')
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1500)
+  })
+
+  it('ignores a download marker whose process is gone or is something else', () => {
+    const f = fixture()
+    const run = join(f.home, '.harness/run')
+    mkdirSync(run, { recursive: true })
+    // A pid that is alive but not a download (this test runner), then one that is not alive at all.
+    writeFileSync(join(run, 'downloading-codex'), String(process.pid))
+    const busy = f.run(f.runtime('node-one'))
+    expect(busy.status, busy.stdout + busy.stderr).toBe(0)
+    expect(busy.stdout).toContain('ENGINE_READY:')
+    const g = fixture()
+    mkdirSync(join(g.home, '.harness/run'), { recursive: true })
+    writeFileSync(join(g.home, '.harness/run/downloading-codex'), '999999')
+    const gone = g.run(g.runtime('node-one'))
+    expect(gone.status, gone.stdout + gone.stderr).toBe(0)
+    expect(gone.stdout).toContain('ENGINE_READY:')
   })
 
   it('keeps using an existing global engine instead of installing another copy', () => {

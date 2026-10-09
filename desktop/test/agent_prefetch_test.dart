@@ -9,6 +9,7 @@ import 'package:harness/bootstrap/agent_prefetch.dart';
 import 'package:harness/bootstrap/environment_provisioner.dart';
 import 'package:harness/bootstrap/setup_progress.dart';
 import 'package:harness/core/config.dart';
+import 'package:harness/core/engine_availability.dart';
 import 'package:harness/core/models.dart';
 import 'package:harness/state/app_state.dart';
 import 'package:harness/ws/ws_conn.dart';
@@ -165,6 +166,7 @@ void main() {
         '/bin/bash',
         '-c',
         'set -o pipefail; curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path',
+        AgentPrefetch.downloadName,
       ]);
       expect(runs.last[2], contains("export PATH='/rt/node-v22/bin':"));
       expect(runs.last[2], contains('NPM_CONFIG_PREFIX="\$HOME/.local"'));
@@ -233,6 +235,32 @@ void main() {
         expect(lines, contains(contains("Harness's Node never arrived")));
       },
     );
+
+    test('names each download in a marker while it runs, for a pane that opens meanwhile', () async {
+      final dir = Directory.systemTemp.createTempSync('prefetch-markers-');
+      addTearDown(() => dir.deleteSync(recursive: true));
+      final opencode = _Install();
+      final arguments = <List<String>>[];
+      final prefetch = AgentPrefetch(
+        start: (_, args) async {
+          arguments.add(args);
+          return opencode;
+        },
+        skip: () => false,
+        installed: (_) => false,
+        managedNode: () => null,
+        nodeWait: Duration.zero,
+        markerDir: () => dir.path,
+      )..start();
+      await pumpEventQueue();
+      final marker = File('${dir.path}/downloading-opencode');
+      expect(marker.readAsStringSync(), '${opencode.pid}');
+      // The download's name for itself, which a pane checks the pid against.
+      expect(arguments.single.last, AgentPrefetch.downloadName);
+      opencode.finish(0);
+      await prefetch.everything;
+      expect(marker.existsSync(), isFalse);
+    });
 
     test('starts nothing on a computer that already has an agent', () {
       var started = false;
@@ -381,16 +409,15 @@ void main() {
     }
 
     test(
-      'the tour waits for the downloads, one Details line naming each agent',
+      'the tour waits for OpenCode only; Codex and Claude Code go on behind it',
       () async {
         final app = await tourFor(nodeWait: const Duration(minutes: 5));
         final downloads = app.setupDownloads.value;
         expect(
           downloads.done,
-          isFalse,
-          reason: 'Codex and Claude Code wait for Node',
+          isTrue,
+          reason: 'OpenCode is in place; the other two wait in their own panes',
         );
-        expect(downloads.left, isNotNull);
         expect(downloads.lines, [
           'Agents: OpenCode ✓ · Codex downloading · Claude Code downloading',
         ]);
@@ -513,6 +540,21 @@ void main() {
       await app.createAgent('m', engine: 'opencode', folder: '/work');
       expect(connection.creates, hasLength(2));
     });
+
+    test(
+      'a CLI whose pane waits for the download itself gets the create at once',
+      () async {
+        app.machineStates['m']!.engines.replace([
+          const EngineAvailability(
+            engine: 'opencode',
+            installed: false,
+            waitsForDownload: true,
+          ),
+        ]);
+        await app.createAgent('m', engine: 'opencode', folder: '/work');
+        expect(connection.creates.single['engine'], 'opencode');
+      },
+    );
 
     test('an agent not downloaded during setup never waits for it', () async {
       await app.createAgent('m', engine: 'cursor', folder: '/work');

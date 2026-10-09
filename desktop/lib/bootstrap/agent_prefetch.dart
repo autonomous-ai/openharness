@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/test_run.dart';
+
 /// Where the downloads beside setup stand, for the setup tour's bottom line.
 @immutable
 class AgentDownloads {
@@ -49,7 +51,11 @@ class AgentPrefetch {
     DateTime Function()? now,
     Duration nodePoll = const Duration(seconds: 1),
     Duration nodeWait = const Duration(minutes: 5),
-  }) : _start =
+    String? Function()? markerDir,
+  }) : _markerDir =
+           markerDir ??
+           (() => kUnderTest || _home == null ? null : '$_home/.harness/run'),
+       _start =
            start ??
            ((executable, arguments) => Process.start(executable, arguments)),
        _skip = skip ?? (() => alreadyHasAnAgent(_home)),
@@ -76,6 +82,15 @@ class AgentPrefetch {
   final DateTime Function() _now;
   final Duration _nodePoll;
   final Duration _nodeWait;
+
+  /// Where a download names its process while it runs (`downloading-<engine>`), so a pane that opens
+  /// meanwhile waits for it rather than installing the engine again (the CLI's
+  /// `harness_wait_download`). Null writes none (tests).
+  final String? Function() _markerDir;
+
+  /// The download's own name for itself on its command line, which is how a pane tells it from a
+  /// process that took over a stale marker's pid.
+  static const downloadName = 'harness-download';
 
   final Map<String, Future<void>> _downloads = {};
   final Map<String, DateTime> _startedAt = {};
@@ -148,10 +163,13 @@ class AgentPrefetch {
     return running.timeout(left, onTimeout: () {});
   }
 
-  Future<void> _runOpenCode() => _run('OpenCode', '/bin/bash', [
-    '-c',
-    command,
-  ], () => _installed('opencode'));
+  Future<void> _runOpenCode() => _run(
+    'OpenCode',
+    const ['opencode'],
+    '/bin/bash',
+    ['-c', command, downloadName],
+    () => _installed('opencode'),
+  );
 
   /// Codex and Claude Code, once setup has put Harness's Node in place: one npm, so the two never
   /// write the same global prefix at once.
@@ -177,21 +195,40 @@ class AgentPrefetch {
       'export npm_config_prefix="\$HOME/.local" NPM_CONFIG_PREFIX="\$HOME/.local"',
       'npm install -g ${npmPackages.join(' ')}',
     ].join('; ');
-    await _run('Codex and Claude Code', '/bin/bash', [
-      '-c',
-      script,
-    ], () => _installed('codex') && _installed('claude'));
+    await _run(
+      'Codex and Claude Code',
+      const ['codex', 'claude'],
+      '/bin/bash',
+      ['-c', script, downloadName],
+      () => _installed('codex') && _installed('claude'),
+    );
   }
 
   Future<void> _run(
     String what,
+    List<String> engines,
     String executable,
     List<String> arguments,
     bool Function() inPlace,
   ) async {
     final started = _now();
+    final markers = <File>[];
     try {
       final process = await _start(executable, arguments);
+      final dir = _markerDir();
+      if (dir != null) {
+        try {
+          Directory(dir).createSync(recursive: true);
+          for (final engine in engines) {
+            markers.add(
+              File('$dir/downloading-$engine')
+                ..writeAsStringSync('${process.pid}'),
+            );
+          }
+        } on FileSystemException {
+          // Without a marker a pane that opens early waits in the create instead, as before.
+        }
+      }
       // Drained so a full pipe never stalls the installer; only the tail is kept for the log.
       final tail = <String>[];
       void keep(String line) {
@@ -224,6 +261,14 @@ class AgentPrefetch {
       );
     } catch (error) {
       _log('$what download during setup did not start: $error');
+    } finally {
+      for (final marker in markers) {
+        try {
+          marker.deleteSync();
+        } on FileSystemException {
+          // Gone already; a pane ignores a marker whose process has ended anyway.
+        }
+      }
     }
   }
 
