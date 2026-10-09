@@ -30,6 +30,12 @@ const descriptors = vi.hoisted(() => new Map<string, string[]>())
 vi.mock('fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs,
+    // Keep a streamed descriptor listing private as well as the former readdir path.
+    opendir: async (path: string, ...args: unknown[]) => /^\/proc\/\d+\/fd$/.test(String(path))
+      ? { async *[Symbol.asyncIterator]() {
+        for (const [index] of (descriptors.get(String(path)) ?? []).entries()) yield { name: String(index) }
+      } }
+      : Reflect.apply(fs.opendir, fs, [path, ...args]),
     readdir: async (path: string, ...args: unknown[]) => /^\/proc\/\d+\/fd$/.test(String(path))
       ? (descriptors.get(String(path)) ?? []).map((_, index) => String(index))
       : Reflect.apply(fs.readdir, fs, [path, ...args]),

@@ -1,0 +1,656 @@
+{
+  "baseline": "138ae6766febff6f094f1401705e4e4eb7f6ef9f",
+  "candidate": "b65769a31314b19513188c1dd4b73a3392e539d7",
+  "method": "Three interleaved processes per source/workload, ten lookups per process, same private 160-entry corpus (4200 at directory bound; Grok uses 160 sidecars of 60 KiB each), Node toolchain and warm filesystem cache. Lookup latency/CPU excludes import/setup; peak RSS includes them. No real engine, home, process probe or daemon. Reference measurements, not performance thresholds.",
+  "elapsedSeconds": 19.2,
+  "samples": [
+    {
+      "workload": "transcript",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        6.69,
+        5.69,
+        5.94,
+        6.13,
+        5.53,
+        5.33,
+        5.58,
+        5.61,
+        5.44,
+        5.44
+      ],
+      "cpuMs": 77.419,
+      "peakRssMiB": 85.3671875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 1
+    },
+    {
+      "workload": "transcript",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        14.15,
+        12.32,
+        12.45,
+        11.21,
+        11.72,
+        11.86,
+        11.15,
+        11.22,
+        11.57,
+        10.62
+      ],
+      "cpuMs": 161.125,
+      "peakRssMiB": 90.20703125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 1
+    },
+    {
+      "workload": "transcript",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        14.02,
+        12.45,
+        12.08,
+        10.87,
+        11.35,
+        10.89,
+        10.47,
+        10.9,
+        11.06,
+        10.52
+      ],
+      "cpuMs": 156.288,
+      "peakRssMiB": 87.1953125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 2
+    },
+    {
+      "workload": "transcript",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        7.43,
+        5.75,
+        5.78,
+        5.89,
+        5.43,
+        5.21,
+        5.71,
+        5.5,
+        5.08,
+        5.01
+      ],
+      "cpuMs": 76.944,
+      "peakRssMiB": 85.1015625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 2
+    },
+    {
+      "workload": "transcript",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        6.43,
+        5.74,
+        5.95,
+        5.84,
+        5.81,
+        5.42,
+        5.76,
+        5.6,
+        5.5,
+        5.31
+      ],
+      "cpuMs": 77.93,
+      "peakRssMiB": 86.5625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 3
+    },
+    {
+      "workload": "transcript",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        14.47,
+        12.85,
+        12.06,
+        13.41,
+        11.28,
+        11.09,
+        11.11,
+        10.98,
+        11.12,
+        10.72
+      ],
+      "cpuMs": 162.784,
+      "peakRssMiB": 89.41015625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 3
+    },
+    {
+      "workload": "process",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        4.6,
+        3.79,
+        4.08,
+        4.19,
+        4.25,
+        3.49,
+        3.6,
+        3.43,
+        3.98,
+        4.12
+      ],
+      "cpuMs": 50.544,
+      "peakRssMiB": 88.08203125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 1
+    },
+    {
+      "workload": "process",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        10.59,
+        8.82,
+        8.04,
+        9.23,
+        7.68,
+        7.9,
+        7.52,
+        8.11,
+        7.32,
+        7.73
+      ],
+      "cpuMs": 109.573,
+      "peakRssMiB": 83.61328125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 1
+    },
+    {
+      "workload": "process",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        12.29,
+        9.19,
+        8.49,
+        8.44,
+        7.89,
+        8.04,
+        7.3,
+        7.56,
+        7.14,
+        8.2
+      ],
+      "cpuMs": 111.241,
+      "peakRssMiB": 84.22265625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 2
+    },
+    {
+      "workload": "process",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        5.1,
+        3.75,
+        4.01,
+        4.35,
+        4.32,
+        3.56,
+        3.5,
+        3.58,
+        3.97,
+        4.16
+      ],
+      "cpuMs": 51.851,
+      "peakRssMiB": 85.4609375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 2
+    },
+    {
+      "workload": "process",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        4.48,
+        3.96,
+        4.44,
+        4.22,
+        4.36,
+        3.58,
+        3.51,
+        3.38,
+        3.96,
+        3.99
+      ],
+      "cpuMs": 51.023,
+      "peakRssMiB": 86.796875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 3
+    },
+    {
+      "workload": "process",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        11,
+        9.15,
+        8.1,
+        8.37,
+        9.15,
+        7.93,
+        8.24,
+        7.93,
+        7.64,
+        7.71
+      ],
+      "cpuMs": 112.047,
+      "peakRssMiB": 83.2734375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 3
+    },
+    {
+      "workload": "limit",
+      "entries": 4200,
+      "iterations": 10,
+      "outcomes": {
+        "absent": 10
+      },
+      "latenciesMs": [
+        140,
+        121.08,
+        121.08,
+        120.21,
+        122.27,
+        119.48,
+        117.99,
+        117.11,
+        124.77,
+        126.58
+      ],
+      "cpuMs": 1448.156,
+      "peakRssMiB": 99.34765625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 1
+    },
+    {
+      "workload": "limit",
+      "entries": 4200,
+      "iterations": 10,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        12.96,
+        10.15,
+        8.99,
+        8.98,
+        8.6,
+        8.54,
+        8.01,
+        8.6,
+        11.12,
+        9.97
+      ],
+      "cpuMs": 131.252,
+      "peakRssMiB": 92.546875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 1
+    },
+    {
+      "workload": "limit",
+      "entries": 4200,
+      "iterations": 10,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        13.64,
+        9.97,
+        9.04,
+        8.85,
+        8.33,
+        8.47,
+        8.27,
+        8.34,
+        11.11,
+        10.01
+      ],
+      "cpuMs": 131.174,
+      "peakRssMiB": 97.16015625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 2
+    },
+    {
+      "workload": "limit",
+      "entries": 4200,
+      "iterations": 10,
+      "outcomes": {
+        "absent": 10
+      },
+      "latenciesMs": [
+        138.99,
+        120.7,
+        123.9,
+        120.88,
+        119,
+        122.33,
+        120.39,
+        118.71,
+        119.25,
+        127.16
+      ],
+      "cpuMs": 1448.008,
+      "peakRssMiB": 96.7265625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 2
+    },
+    {
+      "workload": "limit",
+      "entries": 4200,
+      "iterations": 10,
+      "outcomes": {
+        "absent": 10
+      },
+      "latenciesMs": [
+        138.87,
+        118.62,
+        117.78,
+        131.24,
+        118.77,
+        118.27,
+        120.05,
+        117.15,
+        118.17,
+        126.87
+      ],
+      "cpuMs": 1444.428,
+      "peakRssMiB": 96.99609375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 3
+    },
+    {
+      "workload": "limit",
+      "entries": 4200,
+      "iterations": 10,
+      "outcomes": {
+        "held": 10
+      },
+      "latenciesMs": [
+        12.94,
+        9.04,
+        9.11,
+        8.71,
+        8.23,
+        8.63,
+        8.23,
+        8.39,
+        11.23,
+        10.44
+      ],
+      "cpuMs": 129.796,
+      "peakRssMiB": 93.90625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 3
+    },
+    {
+      "workload": "grok-sidecars",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        33.34,
+        32.29,
+        34.48,
+        33.18,
+        34.56,
+        30.53,
+        28.45,
+        29.89,
+        31.81,
+        28.58
+      ],
+      "cpuMs": 373.933,
+      "peakRssMiB": 103.04296875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 1
+    },
+    {
+      "workload": "grok-sidecars",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        131.26,
+        123.75,
+        121.27,
+        117.47,
+        123.65,
+        119.33,
+        124.53,
+        117.49,
+        117.62,
+        114.63
+      ],
+      "cpuMs": 1411.79,
+      "peakRssMiB": 104.85546875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 1
+    },
+    {
+      "workload": "grok-sidecars",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        129.77,
+        123.82,
+        121.32,
+        120.79,
+        130.88,
+        119.08,
+        116.53,
+        116.93,
+        115.64,
+        116.1
+      ],
+      "cpuMs": 1415.866,
+      "peakRssMiB": 106.15234375,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 2
+    },
+    {
+      "workload": "grok-sidecars",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        31.19,
+        29.51,
+        28.81,
+        28.25,
+        32.06,
+        29.04,
+        28.06,
+        32.23,
+        31.83,
+        30.15
+      ],
+      "cpuMs": 351.898,
+      "peakRssMiB": 94.48046875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 2
+    },
+    {
+      "workload": "grok-sidecars",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        31.15,
+        28.4,
+        27.71,
+        27.66,
+        28.41,
+        28.1,
+        28.11,
+        30.93,
+        31.81,
+        27.53
+      ],
+      "cpuMs": 339.905,
+      "peakRssMiB": 98.34765625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "baseline",
+      "sample": 3
+    },
+    {
+      "workload": "grok-sidecars",
+      "entries": 160,
+      "iterations": 10,
+      "outcomes": {
+        "exact": 10
+      },
+      "latenciesMs": [
+        130.96,
+        123.96,
+        122.15,
+        119.85,
+        135.24,
+        131.75,
+        134.24,
+        129.13,
+        127.71,
+        151.96
+      ],
+      "cpuMs": 1513.03,
+      "peakRssMiB": 109.546875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64",
+      "source": "candidate",
+      "sample": 3
+    }
+  ]
+}

@@ -39,6 +39,7 @@ import { randomUUID } from 'crypto'
 import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { machineNames } from './machineNames.js'
 import { cursorDataDir } from '../engines/cursor/contract.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { env } from '../config/env.js'
 import { sessionFolderOf, sessionRoots } from './engineHomes.js'
 import { findSessionFileOf, sessionMetaOf } from '../engines/sessionFiles.js'
@@ -965,12 +966,24 @@ function transcriptRoots(engine: AgentEngine, root: (() => string) | 'store', co
 }
 
 export function validTranscriptPath(engine: AgentEngine, filePath: string, codexHome?: string, allowMissing = false): boolean {
+  return checkTranscriptPath(engine, filePath, codexHome, allowMissing, false)
+}
+
+/** Existing control candidates: an unreadable path cannot be excluded from a complete identity pool. */
+export function inspectTranscriptPath(engine: AgentEngine, filePath: string): boolean {
+  return checkTranscriptPath(engine, filePath, undefined, false, true)
+}
+
+function checkTranscriptPath(engine: AgentEngine, filePath: string, codexHome: string | undefined, allowMissing: boolean, strict: boolean): boolean {
   const rootFor = TRANSCRIPT_ROOT[engine]
   if (!rootFor) return false
   try {
     const missing = allowMissing && !existsSync(filePath)
     const actual = missing ? join(realpathSync(dirname(filePath)), basename(filePath)) : realpathSync(filePath)
-    const within = (root: string): boolean => { try { return isWithin(realpathSync(root), actual) } catch { return false } }
+    const within = (root: string): boolean => {
+      try { return isWithin(realpathSync(root), actual) }
+      catch (error) { if (strict) throw error; return false }
+    }
     const st = statSync(missing ? dirname(actual) : actual)
     if (!(missing ? st.isDirectory() : st.isFile()) || !transcriptRoots(engine, rootFor, codexHome).some(within)) return false
     if (engine === 'cursor') {
@@ -980,6 +993,7 @@ export function validTranscriptPath(engine: AgentEngine, filePath: string, codex
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
     return uid === null || st.uid === uid
   } catch {
+    if (strict) throw new IdentityReadUnavailable('the transcript path could not be validated')
     return false
   }
 }

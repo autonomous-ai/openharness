@@ -13,7 +13,7 @@ This is the remaining completion scope as of October 9, after the six extraction
 - [x] Capture ownership is checked after asynchronous reads (#1093).
 - [x] Kilo, Hermes, native identity, Muse/Pi repair, OpenCode control and native hook declarations are eager where session control requires them (#1095, #1097, #1104, #1106, #1110, #1111).
 - [x] Launch preparation gathers dependencies before local writes and commits under current ownership (#1113).
-- [ ] Bounded repair pools and native headers hold incomplete evidence; Stop/Close preserve intent (#1114, reviewed and in final CI).
+- [x] Bounded repair pools and native headers hold incomplete evidence; Stop/Close preserve intent (#1114, merged as `138ae6766` at 13:59:26 UTC).
 
 ## Remaining blockers
 

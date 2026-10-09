@@ -204,3 +204,7 @@ handling, and the OpenCode v2 Close checkpoint audit. The precise gaps are recor
 [OpenCode control](2026-10-09-opencode-control.md). Remaining shared-control work includes bounded identity
 scans, Cursor pending-task persistence, agy turn backstop/control facts, input verification declarations,
 and the final unavailable-service/readiness audit. Line counts do not establish any of those properties.
+
+## Native locations and retry isolation
+
+[PR #1118](https://github.com/autonomous-ai/openharness/pull/1118) bounds exact Cursor/Grok locations and Copilot/agy process claims, rejects incomplete or changing evidence, and retains/retries failed bindings and pending transcript discovery without blocking siblings. The [implementation, independent review corrections, validation and measured cost](2026-10-09-native-location-discovery.md) are recorded separately. Former-code golden artifacts remain unchanged and all 21 broken-wiring variants assertion-fail. Native identity as a whole remains open in the completion checklist: exact resume/legacy records, saved-home catalogs, Hermes pools and shared visible hold state still need completion.

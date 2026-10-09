@@ -6,7 +6,7 @@ import { locateTranscript, transcriptGroups, type TranscriptLocation } from './s
  * Every lookup carries its own candidate identity: remove, replacement and stop revoke it immediately.
  */
 export class TranscriptDiscovery {
-  private readonly pending = new Map<string, { looking: boolean }>()
+  private readonly pending = new Map<string, { looking: boolean; detail?: string }>()
   private timer: NodeJS.Timeout | null = null
   private started = false
   private sweeping = false
@@ -28,14 +28,29 @@ export class TranscriptDiscovery {
     if (!this.rule.id.test(id)) return
     const candidate = { looking: true }
     this.pending.set(id, candidate)
-    const found = await locateTranscript(this.rule, this.home, id, { valid: this.valid })
+    try {
+      const found = await locateTranscript(this.rule, this.home, id, { valid: this.valid })
+      if (found && this.pending.get(id) === candidate) this.publish(id, candidate, found)
+    } catch (error) { this.hold(id, candidate, error) }
+    finally {
+      candidate.looking = false
+      this.schedule()
+    }
+  }
+
+  private hold(id: string, candidate: { looking: boolean; detail?: string }, error: unknown): void {
     if (this.pending.get(id) !== candidate) return
-    candidate.looking = false
-    if (found) {
-      this.pending.delete(id)
-      if (!this.pending.size) this.clearTimer()
-      this.onFound(id, found)
-    } else this.schedule()
+    const detail = error instanceof Error ? error.message : String(error)
+    if (candidate.detail === detail) return
+    candidate.detail = detail
+    console.error(`[discovery] transcript ${id} held · ${detail}`)
+  }
+
+  private publish(id: string, candidate: { looking: boolean }, found: string): void {
+    // A failed publication keeps the pending intent. The callback may also remove or replace it.
+    this.onFound(id, found)
+    if (this.pending.get(id) === candidate) this.pending.delete(id)
+    if (!this.pending.size) this.clearTimer()
   }
 
   remove(id: string): void {
@@ -68,13 +83,20 @@ export class TranscriptDiscovery {
     this.sweeping = true
     const candidates = [...this.pending].filter(([, candidate]) => !candidate.looking)
     try {
-      const groups = await transcriptGroups(this.home, this.rule)
+      let groups: string[] | undefined
+      try { if (this.rule.kind !== 'direct') groups = await transcriptGroups(this.home, this.rule) }
+      catch (error) {
+        for (const [id, candidate] of candidates) this.hold(id, candidate, error)
+        return
+      }
       for (const [id, candidate] of candidates) {
         if (this.pending.get(id) !== candidate) continue
-        const found = await locateTranscript(this.rule, this.home, id, { groups, valid: this.valid })
-        if (!found || this.pending.get(id) !== candidate) continue
-        this.pending.delete(id)
-        this.onFound(id, found)
+        candidate.looking = true
+        try {
+          const found = await locateTranscript(this.rule, this.home, id, { groups, valid: this.valid })
+          if (found && this.pending.get(id) === candidate) this.publish(id, candidate, found)
+        } catch (error) { this.hold(id, candidate, error) }
+        finally { candidate.looking = false }
       }
     } finally {
       this.sweeping = false
