@@ -433,7 +433,7 @@ export async function findLiveSession(
       // own and the answers are pooled, so two homes claiming the same cwd is ambiguous — exactly as
       // two rows in one store already are — rather than "whichever home was listed first".
       const found = await readStorePool(HERMES_HOMES, env.HERMES_HOME, {
-        sql: `SELECT ${HERMES_ID_SQL} AS id, ${HERMES_SOURCE_SQL} AS source, started_at,`
+        sql: `SELECT ${HERMES_ID_SQL} AS id, ${HERMES_SOURCE_SQL} AS source, started_at, typeof(cwd) AS cwd_type,`
           + " CASE WHEN typeof(cwd) = 'text' AND length(CAST(cwd AS BLOB)) <= 4096 AND instr(CAST(cwd AS BLOB), x'00') = 0 THEN cwd END AS cwd"
           + ' FROM sessions LIMIT 8193;',
         params: [], maxRows: 8192, maxBuffer: 40 * 1024 * 1024,
@@ -441,10 +441,16 @@ export async function findLiveSession(
       })
       const candidates: RepairedSession[] = []
       for (const { home, aliases, row } of found) {
-        if (typeof row.cwd !== 'string' || typeof row.started_at !== 'number' || !Number.isFinite(row.started_at)) {
+        // Editor/gateway rows may have no working directory; they cannot claim this process's cwd.
+        if (row.cwd === null && row.cwd_type === 'null') continue
+        if (typeof row.cwd !== 'string') {
           throw new IdentityReadUnavailable('a Hermes store contains invalid discovery evidence')
         }
-        if (!dirs.includes(row.cwd) || row.started_at < Math.trunc(sinceMs / 1000)) continue
+        if (!dirs.includes(row.cwd)) continue
+        if (typeof row.started_at !== 'number' || !Number.isFinite(row.started_at)) {
+          throw new IdentityReadUnavailable('a Hermes store contains invalid discovery evidence')
+        }
+        if (row.started_at < Math.trunc(sinceMs / 1000)) continue
         if (typeof row.source !== 'string') throw new IdentityReadUnavailable('a Hermes session source is unavailable')
         if (!isInteractiveSource(HERMES_SOURCE, row.source)) continue
         if (typeof row.id !== 'string' || !HERMES_HISTORY_ID_RE.test(row.id)) {

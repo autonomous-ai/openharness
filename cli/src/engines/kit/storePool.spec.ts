@@ -127,6 +127,14 @@ it('counts every row, including two matches inside a single store beside a uniqu
   expect(await read()).toHaveLength(3)
 })
 
+it('excludes proven unrelated editor/gateway rows without turning malformed matching evidence into absence', async () => {
+  const path = store(home)
+  update(path, `INSERT INTO sessions VALUES ('editor', 'acp', NULL, NULL), ('unrelated', NULL, '/elsewhere', NULL)`)
+  expect(await find()).toEqual({ sessionId: id, hermesHome: home })
+  update(path, "UPDATE sessions SET cwd = '/fixture/work' WHERE id = 'unrelated'")
+  await held(find())
+})
+
 it('proves empty homes without creating stores or loading an optional engine', async () => {
   expect(await read()).toEqual([])
   mkdirSync(join(home, 'profiles', 'unwritten'), { recursive: true })
