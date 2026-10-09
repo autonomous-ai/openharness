@@ -9,6 +9,8 @@ golden = 'src/engines/repairIdentity.golden.spec.ts'
 eager = 'src/lib/sessionRepair.eager.spec.ts'
 bounded = 'src/engines/kit/sessionIdentity.spec.ts'
 bind = 'src/core/agents/bind.spec.ts'
+stop = 'src/lib/stopAgentService.spec.ts'
+saved = 'src/lib/stoppedAgents.spec.ts'
 mutations = [
     ('Muse workspace field', 'src/engines/muse/contract.ts', "'workspace_root'", "'missing_workspace'", golden),
     ('Muse task mistaken for run', 'src/engines/muse/contract.ts', "value: 'run'", "value: 'task'", golden),
@@ -25,6 +27,9 @@ mutations = [
     ('Muse waits on optional code', 'src/lib/sessionRepair.ts', 'const identity = await museSessionIdentity', "await (await import('../engines/inProcess.js')).loadEngine('muse')\n        const identity = await museSessionIdentity", eager),
     ('Read bound mistaken for absence', 'src/engines/kit/sessionIdentity.ts', "throw new Error('The conversation identity exceeds the bounded read; discovery is held.')", 'return null', bounded),
     ('One hold aborts discovery', 'src/core/agents/bind.ts', 'binding held · ${error instanceof Error ? error.message : error}`)\n        return null', 'binding held · ${error instanceof Error ? error.message : error}`)\n        throw error', bind),
+    ('Stop capture erased by live snapshot', 'src/lib/stoppedAgents.ts', 'session = { ...session, transcriptPath: previous.transcriptPath }', 'session = { ...session, transcriptPath: null }', stop),
+    ('Saved path crosses a conversation', 'src/lib/stoppedAgents.ts', 'session.sessionId === previous.sessionId && session.engine === previous.engine', 'session.engine === previous.engine', saved),
+    ('Saved path crosses a process', 'src/lib/stoppedAgents.ts', '&& (session.hermesHome ?? null) === (previous.hermesHome ?? null)\n      && sameProcessIdentity(session.processIdentity, previous.processIdentity)', '&& (session.hermesHome ?? null) === (previous.hermesHome ?? null)\n      && !!session.processIdentity && !!previous.processIdentity', saved),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 for name in ['TMUX', 'TMUX_PANE', 'RECORD_REPAIR_IDENTITY_GOLDEN']:
@@ -36,7 +41,7 @@ def run(specs):
                           cwd=cli, env=env, capture_output=True, text=True, timeout=180)
 
 
-baseline = run([golden, eager, bounded, bind])
+baseline = run([golden, eager, bounded, bind, stop, saved])
 if baseline.returncode:
     print(baseline.stdout + baseline.stderr)
     raise SystemExit('baseline failed; no mutants ran')
