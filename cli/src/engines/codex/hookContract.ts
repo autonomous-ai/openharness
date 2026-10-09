@@ -22,9 +22,27 @@ export const hooks: HookContract = {
     messages: {
       current: '[hooks] Codex SessionStart/UserPromptSubmit hooks already installed → {file}',
       installed: '[hooks] installed Codex SessionStart/UserPromptSubmit hooks → {file}',
-      after: '[hooks] Codex requires reviewing these user hooks with /hooks before normal use',
+      after: '[hooks] Codex asks to review hooks it has not seen; Harness records its own as reviewed',
       failed: '[hooks] failed to write Codex hooks.json:',
       malformed: ['[hooks] Codex hooks file is invalid JSON; leaving it unchanged: {file}', '[hooks] fix the file, then restart harness login'],
+    },
+    // Codex 0.162 asks a person to review every hook it has not seen ("Hooks need review"), Harness's own
+    // among them, in the first Codex pane: a fresh Mac with real Codex and Claude Code, 2026-10-09. Picked
+    // "Continue without trusting", Harness's hooks never run and its Codex sessions lose their turns and
+    // questions. The answer for Harness's own two is recorded as Codex records it ("Trust all"): matched
+    // against `codex app-server` `hooks/list` of codex-cli 0.162.0 (engines/kit/hookReview.spec.ts). Any other
+    // hook is still asked about. A Codex that hashes differently asks about these again, as before.
+    reviewed: {
+      file: 'config.toml',
+      table: 'hooks.state',
+      key: 'trusted_hash',
+      events: { SessionStart: 'session_start', UserPromptSubmit: 'user_prompt_submit' },
+      matcherEvents: ['SessionStart'],
+      defaultTimeout: 600,
+      messages: {
+        recorded: "[hooks] recorded Harness's own Codex hooks as reviewed → {config}",
+        skipped: "[hooks] {config} defines hooks.state in a form Harness does not edit; Codex will ask to review Harness's hooks",
+      },
     },
   },
   // A delegated session (a Codex sub-agent) runs its hooks from its parent's pane, and its rollout's first

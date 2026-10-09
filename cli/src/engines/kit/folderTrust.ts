@@ -36,7 +36,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * `~/.codex/config.toml` as links into a repo; renaming a temporary file over the link itself would
  * swap it for a plain file and quietly detach the person's dotfiles.
  */
-function replaceConfigFile(file: string, text: string): void {
+export function replaceConfigFile(file: string, text: string): void {
   const target = realpathSync(file)
   const tmp = `${target}.harness-${process.pid}.tmp`
   writeFileSync(tmp, text, { mode: 0o600 })
