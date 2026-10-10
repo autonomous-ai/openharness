@@ -26,7 +26,8 @@ export interface EngineHookDeps {
   /** Hints name tmux panes; without tmux there is nothing they can point at. */
   tmuxBackend: unknown
   agentReconciler: Pick<TerminalAgentReconciler, 'triggerHint' | 'trigger'>
-  registry: Pick<typeof registry, 'byRuntimeEngine'>
+  registry: Pick<typeof registry, 'byRuntimeEngine' | 'byAgent'>
+  syncSession: (row: RegisteredSession) => void
 }
 
 /**
@@ -47,14 +48,14 @@ type HookQuery = Parameters<ResolveHookAgent>[0]
 const recordKey = (session: RegisteredSession | undefined): string =>
   session ? `${session.agentId}\u0000${session.processIdentity?.pid ?? ''}\u0000${session.processIdentity?.startMarker ?? ''}` : ''
 
-export function createEngineHooks({ tmuxBackend, agentReconciler, registry, panePending }: EngineHookDeps) {
+export function createEngineHooks({ tmuxBackend, agentReconciler, registry, panePending, syncSession }: EngineHookDeps) {
   /**
    * The agents on the hinted panes: those whose recorded process the caller descends from, the rest,
    * and of the rest those with no live process recorded at all (none yet, or one that has exited).
    * `ancestry` is the hook's own process and those it descends from, read as the hook arrived
    * (`resolveHookAgent`); `table`, the process table to judge the recorded processes by, else a new read.
    */
-  const matchCaller = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine'], ancestry: ReadonlySet<number>, table?: ProcessRow[]) => {
+  const matchCaller = async (resolved: TerminalRuntimeRef[], engine: HookQuery['engine'], ancestry: ReadonlyMap<number, ProcessRow>, table?: ProcessRow[]) => {
     const rows = table ?? await processRows()
     if (!rows) return null
     const recordedAlive = (session: RegisteredSession): boolean => {
@@ -63,7 +64,8 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
     }
     const callerBelongsTo = (session: RegisteredSession): boolean => {
       const expectedPid = session.processIdentity?.pid
-      return !!expectedPid && ancestry.has(expectedPid)
+      const original = expectedPid && ancestry.get(expectedPid)
+      return !!original && sameProcessIdentity(original, session.processIdentity)
     }
     const candidates = new Map<string, RegisteredSession>()
     /**
@@ -81,12 +83,16 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
     const onHintedRuntime = new Map<string, RegisteredSession>()
     const unrecorded: RegisteredSession[] = []
     for (const runtime of resolved) {
-      const candidate = registry.byRuntimeEngine(runtime, engine)
-      if (!candidate) continue
+      const live = registry.byRuntimeEngine(runtime, engine)
+      if (!live) continue
+      // The caller resumes after this async function returns. Capture at the
+      // ancestry check, before that continuation can observe a replacement row.
+      const candidate = structuredClone(live)
       if (callerBelongsTo(candidate)) candidates.set(candidate.agentId, candidate)
       else {
         onHintedRuntime.set(candidate.agentId, candidate)
-        if (!recordedAlive(candidate)) unrecorded.push(candidate)
+        // A reused PID is positive evidence of another process, not an unrecorded launch.
+        if (!recordedAlive(candidate) && !ancestry.has(candidate.processIdentity?.pid ?? 0)) unrecorded.push(candidate)
       }
     }
     return { candidates, onHintedRuntime, unrecorded }
@@ -111,7 +117,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
     // shell that exits with the hook (its 500ms, or `onWait`'s answer); read after the reconcile pass or
     // the wait, the ancestry stopped at a pid already gone and a restart's new conversation was never
     // bound (e2e/updates.e2e.ts). macOS's /bin/sh is a bash that execs the hook: never seen there.
-    const arrival = processRows()
+    const arrival = processRows().then(rows => rows?.map(row => ({ ...row })) ?? null)
     const resolved: TerminalRuntimeRef[] = []
     for (const hint of runtimeHints ?? []) {
       if (tmuxBackend) resolved.push({ backend: 'tmux', paneId: hint.paneId })
@@ -124,9 +130,14 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
     // A `ps` already running (processRows shares it) may predate the hook's process; the next read has it.
     if (table && !table.some((row) => row.pid === callerPid)) table = await processRows()
     if (!table) return null
-    const parents = new Map(table.map((row) => [row.pid, row.parentPid]))
-    const ancestry = new Set<number>()
-    for (let pid = callerPid; pid > 0 && !ancestry.has(pid); pid = parents.get(pid) ?? 0) ancestry.add(pid)
+    const parents = new Map(table.map(row => [row.pid, row]))
+    const ancestry = new Map<number, ProcessRow>()
+    for (let pid = callerPid; pid > 0 && !ancestry.has(pid);) {
+      const row = parents.get(pid)
+      if (!row) break
+      ancestry.set(pid, { ...row })
+      pid = row.parentPid
+    }
 
     let found = (await matchCaller(resolved, engine, ancestry, table))!
     let choice = chooseHookAgent([...found.candidates.values()], [...found.onHintedRuntime.values()], engine)
@@ -184,7 +195,14 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
   const onSessionEnd = (_sessionId: string, _reason: string | undefined): void => {
     void agentReconciler.trigger()
   }
-  return { resolveHookAgent, onSessionEnd }
+  const onAdmissionHeld = (id: string, reason: string | undefined): void => {
+    const row = registry.byAgent(id)
+    if (!row) return
+    if (reason) row.admissionHold = reason
+    else delete row.admissionHold
+    syncSession(row)
+  }
+  return { resolveHookAgent, onSessionEnd, onAdmissionHeld }
 }
 
 /**

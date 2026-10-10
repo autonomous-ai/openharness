@@ -44,7 +44,6 @@ import { engineHomeSnapshot, sessionRoots, type EngineHomeSnapshot } from './eng
 import { transcriptRoot as TRANSCRIPT_ROOT, needsHomeCatalog, savedTranscriptEvidence, transcriptEvidence, transcriptRootEvidence } from '../engines/transcriptBindings.js'
 export { engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
 import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
-import { admitHook } from '../engines/hooks.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
 import { parseGridLaunchOverride, type GridLaunchOverride, type GridLaunchRecord, type GridWebSearchStatus } from './gridLaunchWire.js'
@@ -93,6 +92,8 @@ export interface RegisteredSession {
   launch?: AgentLaunch
   /** Fresh evidence is unavailable; retain the binding and expose its reason without persisting an authority verdict. */
   identityHold?: string
+  /** Pending native hook evidence; it does not revoke an already-bound conversation. */
+  admissionHold?: string
   /** Monotonic process-local authority: a hold/recovery cycle must never revive an older read. */
   evidenceRevision?: number
   /** Native identity recovered; interpretation stays paused until its replacement tail is installed. */
@@ -474,6 +475,14 @@ function rowFingerprint(row: unknown): string {
     ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, value[key]])) : value)
 }
 
+/** The new image is visible, but its directory has not confirmed durability yet. */
+const BINDING_RECOVERY_HOLD = 'Waiting for native evidence after a concurrent binding write.'
+class RegistryOwnershipChanged extends IdentityReadUnavailable {}
+
+class AtomicWriteUnconfirmed extends Error {
+  constructor(cause: unknown) { super(cause instanceof Error ? cause.message : String(cause), { cause }) }
+}
+
 export function atomicWriteJson(file: string, value: unknown, exclusive = false): void {
   const exists = hardenPrivateStateFileIfPresent(file)
   if (exclusive && exists) return
@@ -490,6 +499,9 @@ export function atomicWriteJson(file: string, value: unknown, exclusive = false)
     renamed = true
     const directoryFd = openSync(dirname(file), 'r')
     try { fsyncSync(directoryFd) } finally { closeSync(directoryFd) }
+  } catch (error) {
+    if (renamed) throw new AtomicWriteUnconfirmed(error)
+    throw error
   } finally {
     if (!renamed) rmSync(temporary, { force: true })
   }
@@ -557,7 +569,7 @@ function tmuxProjection(runtimes: readonly TerminalRuntimeRef[]): string {
 }
 
 function persistedRow(entry: RegisteredSession): RegisteredSession | Omit<RegisteredSession, 'tmuxPane'> {
-  const { identityHold: _hold, evidenceRevision: _revision, interpretationHold: _interpretation, ...saved } = entry
+  const { identityHold: _hold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, ...saved } = entry
   if (saved.tmuxPane) return { ...saved, runtimes: saved.runtimes.map((runtime) => ({ ...runtime })) }
   const { tmuxPane: _legacy, ...row } = saved
   return { ...row, runtimes: row.runtimes.map((runtime) => ({ ...runtime })) }
@@ -595,7 +607,7 @@ export function strictPersistedRow(raw: unknown): RegisteredSession | null {
   // Taken out of the spread and put back only when it is a real moment: the spread would otherwise
   // carry a hand-edited string or a negative number straight into the frame's `toISOString()`.
   // `forkedFrom` is out too, so an invalid one is dropped rather than spread back in as-is.
-  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, ...rest } = row
+  const { identityHold: _identityHold, evidenceRevision: _revision, interpretationHold: _interpretation, admissionHold: _admission, lastOpenedAt: rawOpenedAt, closePlan: rawClosePlan, forkedFrom: rawForkedFrom, scmLaunch: rawScmLaunch, externalResume: _externalResume, ...rest } = row
   const lastOpenedAt = normalizedOpenedAt(rawOpenedAt)
   // Out of the spread for the same reason: a half-formed record is dropped, never relaunched with.
   const scmLaunch = parseScmLaunchRecord(rawScmLaunch)
@@ -1014,6 +1026,10 @@ class Registry {
   private persistedBaseline = new Map<string, string>()
   /** Exact bytes of our last durable save; checked against the file, never just its mtime. */
   private persistedContents: string | null = null
+  // A post-rename failure is not absence. Only the same immutable binding intent,
+  // unchanged local owners and these exact affected rows can confirm that write.
+  private unconfirmedBinding: { image: ReturnType<typeof persistedRow>[]; prior: unknown[]; before: Map<string, string>;
+    agentId: string; intent: string | null; affected: Set<string> } | null = null
   /**
    * Fields a caller set on purpose since the last save, by agent: written as they are now, whatever the
    * file says. The merge alone keeps the file's value wherever this view matches what it last saved, so
@@ -1093,6 +1109,7 @@ class Registry {
     this.rebooted = false
     this.persistedBaseline.clear()
     this.persistedContents = null
+    this.unconfirmedBinding = null
     this.intended.clear()
     try {
       secureStateDirectory(env.ADAPTER_DATA_DIR)
@@ -1372,6 +1389,7 @@ class Registry {
     this.processIndex.clear()
     this.persistedBaseline.clear()
     this.persistedContents = null
+    this.unconfirmedBinding = null
     this.intended.clear()
     const aside = `${FILE}.corrupt-${new Date().toISOString().replace(/[:.]/g, '-')}`
     try {
@@ -1735,7 +1753,7 @@ class Registry {
    * showing two tiles. Returns { entry, isNew, evicted } — isNew=false on a re-register (so callers
    * can skip re-announcing), evicted = the sessionId displaced from this pane (caller removes it).
    */
-  register(input: RegisterInput): {
+  register(input: RegisterInput, options: { verifiedNativeSource?: boolean } = {}): {
     entry: RegisteredSession
     isNew: boolean
     evicted: string | null
@@ -1860,7 +1878,6 @@ class Registry {
       const meta = proof.files.header(effectiveTranscriptPath!, first)
       if (meta.isSubagent || meta.id !== sessionId) { proof.verify(); return null }
     }
-    if (effectiveTranscriptPath && !admitHook(engine, { transcriptPath: effectiveTranscriptPath }).accepted) return null
     // A resumed row that has not yet been told, by a hook, which conversation it actually reopened.
     // Two ways to be in that state, and both have to count:
     //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
@@ -1874,11 +1891,14 @@ class Registry {
       // but only where an exact history was asked for. A resume that opened a NEW conversation (an
       // engine with no resume argv, or a row with no id to reopen) reports a different id BECAUSE
       // it did what it was told; failing it there would refuse the resume the caller requested.
+      if (!validProcessIdentity(input.processIdentity)) return null
       if (sessionId !== existing.sessionId && resumesConversation(engine, existing.sessionId)) {
-        this.setLaunch(agentId, { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' })
+        const failed: RegisteredSession = { ...existing, active: false, touchedAt: now,
+          launch: { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' } }
+        this.save(true, false, undefined, { agentId, candidate: failed, verify: () => proof?.verify() })
+        this.traceLaunch(agentId, existing.launch, failed.launch, 'resume conversation mismatch')
         return null
       }
-      if (!validProcessIdentity(input.processIdentity)) return null
     }
     // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
     // from a subfolder). Claude's transcript never moves from the project dir it was started in, so a
@@ -1969,6 +1989,14 @@ class Registry {
     const previousLaunch = existing?.launch, promoted = !!existing && isTerminalEngine(existing.engine)
     this.save(true, false, undefined, { agentId, candidate: entry, displaced, verify: () => proof?.verify() })
     const committed = this.agents.get(agentId)!
+    // Fileless sources cannot use transcript revalidation. A fresh native hook
+    // source/process check can recover this precise peer-write hold only after
+    // its registration has been committed. It cannot clear unrelated holds.
+    if (!committed.transcriptPath && options.verifiedNativeSource && committed.identityHold === BINDING_RECOVERY_HOLD) {
+      delete committed.identityHold
+      committed.evidenceRevision = ++this.evidenceRevision
+      committed.interpretationHold = 'Waiting for transcript interpretation to recover.'
+    }
     if (orphaned) this.terminalAvailableAgents.delete(orphaned.agentId)
     if (promoted) this.terminalAvailableAgents.add(agentId)
     this.traceLaunch(agentId, previousLaunch, committed.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
@@ -2190,8 +2218,7 @@ class Registry {
     this.drop(row)
     this.index(next)
     try { this.save(true, false, agentId) } catch (error) {
-      this.drop(next)
-      this.index(row)
+      if (!(error instanceof RegistryOwnershipChanged)) { this.drop(next); this.index(row) }
       throw error
     }
     return this.byAgent(agentId) ?? null
@@ -2204,7 +2231,7 @@ class Registry {
     const available = this.terminalAvailable(agentId)
     this.drop(row); this.terminalAvailableAgents.delete(agentId)
     try { this.save(true, false, agentId) } catch (error) {
-      this.index(row); if (available) this.terminalAvailableAgents.add(agentId)
+      if (!(error instanceof RegistryOwnershipChanged)) { this.index(row); if (available) this.terminalAvailableAgents.add(agentId) }
       throw error
     }
     return true
@@ -2229,7 +2256,7 @@ class Registry {
     const intended = this.intended.get(agentId) ?? new Set<string>()
     intended.add('closePlan')
     this.intended.set(agentId, intended)
-    try { this.save(true) } catch (error) {
+    try { this.save(true, false, undefined, undefined, agentId) } catch (error) {
       if (previous) entry.closePlan = previous
       else delete entry.closePlan
       intended.delete('closePlan')
@@ -2527,9 +2554,56 @@ class Registry {
     this.saveNames()
   }
 
+  /** Adopt a peer's complete ownership group without granting native control. */
+  private reconcileUnconfirmed(latest: Map<string, Record<string, unknown>>, affected: Set<string>): void {
+    const selected = new Map(this.list().map(row => [row.agentId, row]))
+    // Follow the same process, terminal and owned/provisional conversation
+    // identities as validatedRows, including external canonical IDs and aliases.
+    const peer = new Map([...latest].map(([id, value]) => [id, strictPersistedRow(value)]))
+    const claims = (row: RegisteredSession): string[] => [
+      ...(row.processIdentity ? [`p:${processIdentityKey(row.engine, row.processIdentity)}`] : []),
+      ...row.runtimes.map(runtime => `r:${terminalRouteKey(runtime)}`),
+      ...externalReservations(row).map(id => `${externalResumePending(row.externalResume) ? 'i' : 's'}:${id}`),
+    ]
+    const owners = new Map<string, Set<string>>()
+    for (const row of [...selected.values(), ...peer.values()]) if (row) {
+      for (const claim of claims(row)) {
+        const ids = owners.get(claim) ?? new Set<string>()
+        ids.add(row.agentId); owners.set(claim, ids)
+      }
+    }
+    for (const id of affected) for (const row of [selected.get(id), peer.get(id)]) if (row) {
+      for (const claim of claims(row)) for (const otherId of owners.get(claim)!) affected.add(otherId)
+    }
+    for (const id of affected) {
+      const row = strictPersistedRow(latest.get(id))
+      if (row) selected.set(id, row)
+      else selected.delete(id)
+    }
+    if (!validatedRows([...selected.values()].map(persistedRow))) {
+      throw new IdentityReadUnavailable('the recovered ownership group is incomplete')
+    }
+    for (const id of affected) {
+      const old = this.agents.get(id)
+      if (old) this.drop(old)
+    }
+    for (const id of affected) {
+      const row = selected.get(id)
+      if (row) {
+        if (row.sessionId) row.identityHold = BINDING_RECOVERY_HOLD
+        row.evidenceRevision = ++this.evidenceRevision
+        this.index(row, false)
+        this.persistedBaseline.set(id, rowFingerprint(persistedRow(row)))
+      } else this.persistedBaseline.delete(id)
+      this.intended.delete(id)
+    }
+    this.persistedContents = null
+  }
+
   private save(strict = false, exiting = false, externalAgentId?: string,
     bindingCommit?: { agentId: string; candidate: RegisteredSession; verify: () => void;
-      displaced?: { agentId: string; candidate: RegisteredSession | null } }): void {
+      displaced?: { agentId: string; candidate: RegisteredSession | null } },
+    mutationAgentId = externalAgentId ?? bindingCommit?.agentId): void {
     // Discovery batches observations, but a recovered binding must be durable before interpretation
     // resumes. Commit a complete batch now; an incomplete batch remains held and retries next pass.
     if (this.transactionDepth > 0 && !exiting && !bindingCommit) {
@@ -2550,6 +2624,12 @@ class Registry {
         const row = persistedRow(entry) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
+      const beforeCommit = new Map([...currentRows].map(([id, row]) => [id, rowFingerprint(row)]))
+      const intent = bindingCommit ? rowFingerprint({ ...persistedRow(bindingCommit.candidate),
+        touchedAt: 0, boundAt: 0, lastHookAt: 0 }) : undefined
+      let unconfirmed = this.unconfirmedBinding
+      let confirming = !!unconfirmed && !!bindingCommit && unconfirmed.agentId === bindingCommit.agentId && unconfirmed.intent === intent
+        && [...unconfirmed.affected].every(id => beforeCommit.get(id) === unconfirmed!.before.get(id))
       if (bindingCommit) {
         currentRows.set(bindingCommit.agentId, persistedRow(bindingCommit.candidate) as unknown as Record<string, unknown>)
         const displaced = bindingCommit.displaced
@@ -2595,7 +2675,43 @@ class Registry {
           if (id) latest.set(id, value as Record<string, unknown>)
         }
 
-        if (bindingCommit) {
+        if (unconfirmed && [...unconfirmed.affected].some(id => {
+          const written = unconfirmed!.image.find(row => rowId(row) === id)
+          return (latest.has(id) ? rowFingerprint(latest.get(id)) : undefined)
+            !== (written ? rowFingerprint(written) : undefined)
+        })) {
+          // A peer changed part of our unpublished ownership group. Its complete
+          // validated table wins that whole group; no fragment of the old draft may
+          // overwrite it. Recovered bindings stay held until native revalidation.
+          this.reconcileUnconfirmed(latest, unconfirmed.affected)
+          for (const id of unconfirmed.affected) {
+            const row = this.agents.get(id)
+            if (row) currentRows.set(id, persistedRow(row) as unknown as Record<string, unknown>)
+            else currentRows.delete(id)
+          }
+          const revoked = mutationAgentId !== undefined && unconfirmed.affected.has(mutationAgentId)
+            || bindingCommit?.displaced !== undefined && unconfirmed.affected.has(bindingCommit.displaced.agentId)
+          this.unconfirmedBinding = unconfirmed = null
+          confirming = false
+          if (revoked) throw new RegistryOwnershipChanged('the unconfirmed binding has a different durable owner; retry with fresh evidence')
+        }
+        // Roll back only the rows of our unpublished group for a different local
+        // operation. Unrelated peer commits remain in the merge throughout recovery.
+        if (unconfirmed && !confirming) {
+          for (const id of unconfirmed.affected) {
+            const prior = unconfirmed.prior.find(row => rowId(row) === id)
+            if (prior) latest.set(id, prior as Record<string, unknown>)
+            else latest.delete(id)
+          }
+        }
+        if (confirming) {
+          for (const id of unconfirmed!.affected) {
+            const written = unconfirmed!.image.find(row => rowId(row) === id)
+            if (written) currentRows.set(id, written as unknown as Record<string, unknown>)
+            else currentRows.delete(id)
+          }
+        }
+        if (bindingCommit && !confirming) {
           if ((latest.has(bindingCommit.agentId) ? rowFingerprint(latest.get(bindingCommit.agentId)) : undefined)
             !== this.persistedBaseline.get(bindingCommit.agentId)) {
             throw new IdentityReadUnavailable('the saved binding changed while its evidence was being read')
@@ -2616,8 +2732,8 @@ class Registry {
               throw new IdentityReadUnavailable('the conversation or terminal has a different durable owner')
             }
           }
-          bindingCommit.verify()
         }
+        bindingCommit?.verify()
 
         if (externalAgentId && (latest.has(externalAgentId) ? rowFingerprint(latest.get(externalAgentId)) : undefined)
           !== this.persistedBaseline.get(externalAgentId)) {
@@ -2639,11 +2755,58 @@ class Registry {
             }
           }
         }
-        const merged = mergedForSave(latest, currentRows, this.persistedBaseline, this.intended)
-        const rows = validatedRows([...merged.values()])
+        // A binding may flush an already-staged discovery batch. Every changed row
+        // must still own what the observation claims, not only the hook's own row.
+        const changed = new Set([...this.persistedBaseline.keys(), ...currentRows.keys()].filter(id =>
+          this.persistedBaseline.get(id) !== (currentRows.has(id) ? rowFingerprint(currentRows.get(id)) : undefined)))
+        if (bindingCommit) {
+          const identities = new MergeIdentities(latest)
+          for (const id of changed) {
+            if (confirming && unconfirmed!.affected.has(id)) continue
+            if ((latest.has(id) ? rowFingerprint(latest.get(id)) : undefined) !== this.persistedBaseline.get(id)) {
+              throw new IdentityReadUnavailable('a staged registry observation has a different durable owner')
+            }
+            const candidate = currentRows.has(id) ? strictPersistedRow(currentRows.get(id)) : null
+            if (!candidate) continue
+            const routes = new Set(candidate.runtimes.map(terminalRouteKey))
+            for (const [otherId, other] of identities.sharing(id, candidate.processIdentity?.pid, candidate.sessionId, routes)) {
+              if (changed.has(otherId)) continue
+              if ((other.engine === candidate.engine && sameProcessIdentity(other.processIdentity, candidate.processIdentity))
+                || (!!candidate.sessionId && other.sessionId === candidate.sessionId)
+                || other.runtimes.some(runtime => routes.has(terminalRouteKey(runtime)))) {
+                throw new IdentityReadUnavailable('a staged registry observation conflicts with a newer durable owner')
+              }
+            }
+          }
+        }
+        const merged = [...mergedForSave(latest, currentRows, this.persistedBaseline, this.intended).values()]
+        const rows = validatedRows(merged)
         if (!rows) throw new Error('registry transaction would violate global identity invariants')
         const serialized = rows.map(persistedRow)
-        atomicWriteJson(FILE, serialized)
+        try { atomicWriteJson(FILE, serialized) }
+        catch (error) {
+          if ((bindingCommit || unconfirmed) && error instanceof AtomicWriteUnconfirmed) {
+            const prior = new Map(latest)
+            if (unconfirmed) for (const id of unconfirmed.affected) {
+              const original = unconfirmed.prior.find(row => rowId(row) === id)
+              if (original) prior.set(id, original as Record<string, unknown>)
+              else prior.delete(id)
+            }
+            const image = new Map(serialized.map(row => [rowId(row), row]))
+            const affected = new Set([...prior.keys(), ...image.keys()].filter(id =>
+              (prior.has(id) ? rowFingerprint(prior.get(id)) : undefined)
+                !== (image.has(id) ? rowFingerprint(image.get(id)) : undefined)))
+            this.unconfirmedBinding = {
+              // Own the actual serialized values, never nested objects a later
+              // controller or caller can mutate through its live row/input.
+              image: JSON.parse(JSON.stringify(serialized)), prior: JSON.parse(JSON.stringify([...prior.values()])),
+              agentId: bindingCommit?.agentId ?? unconfirmed!.agentId, intent: intent ?? null,
+              before: beforeCommit, affected,
+            }
+          }
+          throw error
+        }
+        this.unconfirmedBinding = null
         this.persistedContents = JSON.stringify(serialized, null, 2)
         this.intended.clear()
 
@@ -2659,6 +2822,7 @@ class Registry {
           if (entry !== row) {
             const sameBinding = entry.engine === row.engine && entry.sessionId === row.sessionId
               && entry.transcriptPath === row.transcriptPath && entry.codexHome === row.codexHome
+            const admissionHold = entry.admissionHold
             const identityHold = sameBinding ? entry.identityHold : undefined
             const interpretationHold = sameBinding ? entry.interpretationHold : undefined
             const evidenceRevision = sameBinding ? entry.evidenceRevision : ++this.evidenceRevision
@@ -2668,6 +2832,7 @@ class Registry {
               if (!Object.hasOwn(row, key)) delete (entry as unknown as Record<string, unknown>)[key]
             }
             Object.assign(entry, row)
+            if (admissionHold) entry.admissionHold = admissionHold
             if (identityHold) entry.identityHold = identityHold
             if (interpretationHold) entry.interpretationHold = interpretationHold
             if (evidenceRevision !== undefined) entry.evidenceRevision = evidenceRevision

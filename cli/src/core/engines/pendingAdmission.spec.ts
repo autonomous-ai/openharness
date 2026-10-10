@@ -11,13 +11,14 @@ function request(overrides: Partial<PendingAdmission<string>> = {}): PendingAdmi
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 
 describe('pending hook admission', () => {
-  it.each(['held', 'throws'] as const)('retains the exact candidate until its %s durable commit succeeds', async failure => {
+  it.each(['held', 'throws', 'throws a non-Error'] as const)('retains the exact candidate until its %s durable commit succeeds', async failure => {
     vi.useFakeTimers()
     const queue = createPendingAdmissions({ retryMs: 20 })
     let writable = false
     const commit = vi.fn((): AdmissionDecision<string> => {
       if (writable) return { kind: 'accept', value: 'committed' }
       if (failure === 'throws') throw new Error('durable registry unavailable')
+      if (failure === 'throws a non-Error') throw 'unavailable'
       return { kind: 'hold', reason: 'durable registry unavailable' }
     })
     const held = request({ commit })
@@ -295,7 +296,7 @@ describe('pending hook admission', () => {
       .mockResolvedValueOnce({ kind: 'reject', reason: 'delegated' })
     const r = request({ inspect })
     queue.submit('agent', 'session', r); await flush()
-    expect(r.held).toHaveBeenCalledWith('The session source could not be read.')
+    expect(r.held).toHaveBeenCalledWith('The session source could not be read. broken reader')
     await vi.advanceTimersByTimeAsync(20)
     expect(r.reject).toHaveBeenCalledExactlyOnceWith('delegated')
     expect(r.accept).not.toHaveBeenCalled()
@@ -345,4 +346,48 @@ describe('pending hook admission', () => {
     queue.submit('after', 'session', after)
     expect(after.inspect).not.toHaveBeenCalled()
   })
+})
+
+
+it('retains distinct prompts for one conversation in order through source recovery', async () => {
+  vi.useFakeTimers()
+  const queue = createPendingAdmissions({ retryMs: 20 })
+  let readable = false
+  const accepted: string[] = []
+  const first = request({ conversationId: 'conversation', binding: () => undefined,
+    inspect: async () => { if (!readable) throw 'source unavailable'; return { kind: 'accept', value: 'first' } },
+    accept: value => { accepted.push(value) } })
+  const second = request({ conversationId: 'conversation', binding: () => ({ id: 'conversation', at: 1 }),
+    inspect: async () => readable ? { kind: 'accept', value: 'second' } : { kind: 'hold', reason: 'source unavailable' },
+    accept: value => { accepted.push(value) } })
+  queue.submit('agent', 'delivery-one', first); await flush()
+  queue.submit('agent', 'delivery-two', second); await flush()
+  expect(accepted).toEqual([])
+  expect(first.held).toHaveBeenCalledWith(expect.stringContaining('Native evidence unavailable'))
+  readable = true
+  await vi.advanceTimersByTimeAsync(40)
+  expect(accepted).toEqual(['first', 'second'])
+  queue.close()
+})
+
+
+it('rotates conversation groups so a newer delegated candidate cannot starve two parent prompts', async () => {
+  vi.useFakeTimers()
+  const queue = createPendingAdmissions({ retryMs: 20 })
+  let readable = false
+  const accepted: string[] = []
+  const a1 = request({ conversationId: 'parent', order: { scope: 'process', firedAt: 10, arrival: 1 },
+    inspect: async () => readable ? { kind: 'accept', value: 'a1' } : { kind: 'hold', reason: 'unavailable' }, accept: value => { accepted.push(value) } })
+  const a2 = request({ conversationId: 'parent', order: { scope: 'process', firedAt: 20, arrival: 2 },
+    accept: () => { accepted.push('a2') } })
+  const b = request({ conversationId: 'child', order: { scope: 'process', firedAt: 20, arrival: 3 },
+    inspect: async () => readable ? { kind: 'reject', reason: 'delegated' } : { kind: 'hold', reason: 'unavailable' } })
+  queue.submit('agent', 'a1', a1); await flush()
+  queue.submit('agent', 'a2', a2); await flush()
+  queue.submit('agent', 'b', b); await flush()
+  readable = true
+  await vi.advanceTimersByTimeAsync(100)
+  expect(b.reject).toHaveBeenCalledExactlyOnceWith('delegated')
+  expect(accepted).toEqual(['a1', 'a2'])
+  queue.close()
 })

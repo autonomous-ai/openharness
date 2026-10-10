@@ -183,7 +183,7 @@ it('recovers an equal-time parent after its child has already been held', async 
   await vi.waitFor(() => expect(f.logs.some(line => line.includes('held ·'))).toBe(true))
   f.store(f.home, [[parent, 'cli']])
   await f.hook(parent, 200, 1000)
-  await vi.waitFor(() => expect(f.logs.some(line => line.includes('unambiguous Hermes hook order'))).toBe(true))
+  await vi.waitFor(() => expect(f.logs.some(line => line.includes('unambiguous native hook order'))).toBe(true))
   f.store(f.home, [[parent, 'cli'], [child, 'tool']])
   await vi.waitFor(() => expect(f.current().sessionId).toBe(parent), { timeout: 4_000 })
   expect(f.registered).toHaveBeenCalledOnce()
@@ -232,7 +232,7 @@ it('contains an asynchronous onRegistered rejection after publishing exactly onc
   const wanted = '20261009_120000_666666'
   f.store(f.home, [[wanted, 'cli']])
   await f.hook(wanted)
-  await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('[hooks] pending admission callback failed', expect.any(Error)))
+  await vi.waitFor(() => expect(warning).toHaveBeenCalledWith('[hooks] committed admission notification failed', expect.any(Error)))
   expect(f.current().sessionId).toBe(wanted)
   expect(f.registered).toHaveBeenCalledOnce()
 })

@@ -1698,7 +1698,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     dataDir: env.ADAPTER_DATA_DIR,
   })
   // Which agent a hook belongs to, and what a SessionEnd means (core/engines/hooks.ts).
-  const engineHooks = createEngineHooks({ tmuxBackend, agentReconciler, registry, panePending: restorePanes.pending })
+  const engineHooks = createEngineHooks({ tmuxBackend, agentReconciler, registry, panePending: restorePanes.pending, syncSession })
   const { server: hookServer, port: hookPort, localSocket } = await startHookServer(daemonPort(), {
     onCommandBar: routedCommandBar(backend),
     onAutonomousDeviceRequest: async (method, target, body) => {
@@ -1728,6 +1728,10 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       }, method, target, body)
     },
     resolveHookAgent: engineHooks.resolveHookAgent,
+    hookAdmissionBlocked: id => launchCancelled(id),
+    onAdmissionHeld: engineHooks.onAdmissionHeld,
+    onAdmissionStop: attach.holdAdmissionStop,
+    captureAdmissionStop: attach.captureAdmissionStop,
     onRegistered: handleRegistered,
     onPromptSubmitted: (id, text) => teams.started(id, text, 'hook', registry.byAgent(id)?.engine),
     onSessionEnd: engineHooks.onSessionEnd,

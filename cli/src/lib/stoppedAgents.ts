@@ -149,6 +149,7 @@ export class StoppedAgentStore {
     // A later Resume is an explicit new visit, never an instruction to close it again.
     delete snapshot.closePlan
     // A hold describes this daemon's current observation, never durable conversation evidence.
+    delete snapshot.admissionHold
     delete snapshot.identityHold
     delete snapshot.interpretationHold
     delete snapshot.evidenceRevision
