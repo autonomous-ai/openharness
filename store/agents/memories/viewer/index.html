@@ -10,17 +10,18 @@
 </head>
 <body>
   <header class="top">
-    <div class="brand"><span class="mark" aria-hidden="true">◉</span><h1>memories</h1><span id="live" class="live" role="status">connecting</span></div>
+    <div class="brand"><span class="mark" aria-hidden="true">◉</span><h1>memories</h1><span id="live" class="live" role="status"></span></div>
     <label class="prompt"><span class="caret" aria-hidden="true">❯</span>
       <input id="q" type="search" placeholder="search memories and sessions" aria-label="Search memories and sessions" autocomplete="off" spellcheck="false" autofocus>
       <span id="count" class="count"></span>
     </label>
+    <div id="switch" class="switch" hidden>
+      <span class="switch-name" id="switch-name">About You in your agents</span>
+      <button id="switch-button" type="button" role="switch" aria-checked="false" aria-labelledby="switch-name"><span class="knob"></span><span id="switch-word">OFF</span></button>
+      <span id="switch-detail" class="switch-detail"></span>
+    </div>
   </header>
-  <section id="switch" class="switch" aria-label="About You in your agents" hidden>
-    <span class="switch-name">About You in your agents</span>
-    <button id="switch-button" type="button" role="switch" aria-checked="false"><span class="knob"></span><span id="switch-word">OFF</span></button>
-    <span id="switch-detail" class="switch-detail"></span>
-  </section>
+  <div id="switch-problem" class="switch-problem" role="alert" hidden></div>
   <section id="band" class="band" aria-label="Your work with agents" hidden>
     <div class="heat">
       <svg id="heat" role="img" aria-label="Your messages per day, colored by agent"></svg>

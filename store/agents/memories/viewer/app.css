@@ -31,10 +31,8 @@ kbd { font: inherit; color: var(--text); }
 .brand { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
 .brand h1 { font: inherit; font-weight: 700; margin: 0; letter-spacing: .02em; }
 .mark { color: var(--accent); }
-.live { color: var(--faint); font-size: 11px; }
-.live::before { content: "● "; color: var(--faint); }
-.live.on::before { color: #3fae8c; }
-.live.on { color: var(--muted); }
+.live { color: var(--accent); font-size: 11px; }
+.live:empty { display: none; }
 .prompt { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 10px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); }
 .prompt:focus-within { border-color: var(--muted); }
 .caret { color: var(--accent); font-weight: 700; }
@@ -44,16 +42,18 @@ kbd { font: inherit; color: var(--text); }
 .count { color: var(--faint); white-space: nowrap; }
 
 /* ── the switch: About You in every agent, on or off, and what it costs ─────────────────────── */
-.switch { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-.switch-name { font-weight: 700; white-space: nowrap; }
+.top { flex-wrap: wrap; }
+.switch { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+.switch-name { color: var(--muted); }
 .switch button { display: inline-flex; align-items: center; gap: 7px; padding: 2px 10px 2px 3px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); cursor: pointer; font-weight: 700; min-width: 72px; }
 .switch button .knob { width: 14px; height: 14px; border-radius: 2px; background: var(--faint); }
 .switch button[aria-checked="true"] { border-color: #3fae8c; color: #3fae8c; }
 .switch button[aria-checked="true"] .knob { background: #3fae8c; }
 .switch button:disabled { cursor: default; opacity: .55; }
 .switch button:focus-visible { outline: 1px solid var(--muted); outline-offset: 1px; }
-.switch-detail { color: var(--muted); min-width: 0; }
-.switch-detail .warn { color: var(--accent); }
+.switch-detail { color: var(--faint); }
+.switch-detail:empty { display: none; }
+.switch-problem { padding: 6px 14px; border-bottom: 1px solid var(--line); color: var(--accent); }
 
 /* ── band: your year with agents ────────────────────────────────────────────────────────────── */
 .band { display: flex; gap: 22px; align-items: flex-start; padding: 14px 14px 12px; border-bottom: 1px solid var(--line); overflow: hidden; }
