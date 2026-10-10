@@ -1,3 +1,4 @@
+import { clearEngineHomeFixture } from '../../testing/engineHomeFixture.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -66,7 +67,7 @@ describe('Codex child rollout reader', () => {
       expect(codexSubagentResolverFor(join(root, 'elsewhere'))(childId)).toBeNull()
     } finally {
       vi.unstubAllEnvs()
-      rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+      clearEngineHomeFixture(process.env.ADAPTER_DATA_DIR!)
       homes.resetEngineHomes()
     }
   })
@@ -101,3 +102,6 @@ describe('Codex child rollout reader', () => {
     })
   })
 })
+
+// Filesystem durability deadlines are exercised separately from these deterministic fixture reads.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))

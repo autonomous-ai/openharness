@@ -20,6 +20,7 @@ import { promisify } from 'node:util'
 import { isolatedTmux, type IsolatedTmux } from '../../src/testing/isolatedTmux.js'
 import { artifactLog, artifactsEnabled } from './artifacts.js'
 import { daemonEnvironment } from '../../src/testing/daemonEnvironment.js'
+import { readAdoptedHomes } from '../../src/engines/kit/homeAdoption.js'
 
 const exec = promisify(execFile)
 const here = dirname(fileURLToPath(import.meta.url))
@@ -158,12 +159,20 @@ export function assertHooksContained(root: string, env: NodeJS.ProcessEnv): void
       }
     }
   }
-  try {
-    const remembered = JSON.parse(readFileSync(join(env.ADAPTER_DATA_DIR!, 'engine-homes.json'), 'utf8')) as Record<string, unknown>
-    for (const [engine, homes] of Object.entries(remembered)) {
-      for (const home of Array.isArray(homes) ? homes : []) check(`the ${engine} home remembered in engine-homes.json`, String(home))
-    }
-  } catch { /* none remembered yet */ }
+  // Incomplete published records can be recovered during boot; an unreadable catalog cannot
+  // justify starting a daemon whose recovered destinations have not passed containment.
+  const file = join(env.ADAPTER_DATA_DIR!, 'engine-homes.json')
+  let remembered: ReturnType<typeof readAdoptedHomes>['homes']
+  try { remembered = readAdoptedHomes(file).homes }
+  catch (error) {
+    // A malformed legacy catalog cannot be imported or repaired by adoption. Published journal
+    // intent can recover at boot, so its destinations must pass the guard before starting.
+    if (existsSync(file + '.adoptions') || existsSync(file + '.adopted') || existsSync(file + '.confirmations')) throw error
+    return
+  }
+  for (const [engine, homes] of Object.entries(remembered)) {
+    for (const home of homes) check(`the ${engine} home remembered in engine-homes.json`, home)
+  }
 }
 
 /**

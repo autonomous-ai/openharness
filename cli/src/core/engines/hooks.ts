@@ -5,9 +5,10 @@
  * Moved verbatim out of `runForeground` (the core boundary, step 12: docs/design/2026-10-03-harnessd.md).
  */
 import { engineHooks } from '../../engines/hooks.js'
-import { sessionStoreContracts, type SessionStoreEngine } from '../../engines/sessionStoreContracts.js'
+import { sessionStoreContracts } from '../../engines/sessionStoreContracts.js'
 import { chooseHookAgent, type HookServerHandlers } from '../../hookServer.js'
-import { adoptHomes, movedHomes } from '../../lib/engineHomes.js'
+import { confirmHomes, recoverEngineHomes } from '../../lib/engineHomes.js'
+import { createHomeAdoptions } from './homeAdoptions.js'
 import * as nativeHooks from '../../engines/nativeHooks.js'
 import { sid } from '../../lib/log.js'
 import type { registry, RegisteredSession } from '../../lib/registry.js'
@@ -235,7 +236,7 @@ const OTHER_INSTALLERS: Array<[string, (port: number) => void]> = [
  * An unavailable interpreter cannot delay this step. A vendor whose settings throw is named and skipped;
  * durable launch holds for preparation failures are a separate behavior change. Never rejects.
  */
-export async function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): Promise<void> {
+export async function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): Promise<{ close(): void }> {
   const hookStep = (vendor: string, install: () => void): void => {
     if (options.only && !options.only.has(vendor)) return
     try { install() } catch (error) {
@@ -246,19 +247,22 @@ export async function installEngineHooks(port: number, options: InstallEngineHoo
   // too: every one adopted before, those the daemon's own environment names, and those of the login shell
   // every engine is launched through once it has been read. That read is never waited on (cli.ts), so an
   // engine started in the first seconds of a daemon's very first start with a moved home may miss its first hook.
-  const installIn = (homes: Array<[SessionStoreEngine, string]>): void => {
-    for (const [engine, home] of homes) hookStep(engine, () => engineHooks[engine].installIn(port, home))
-  }
-  const adopt = (environment: NodeJS.ProcessEnv): void => {
-    const moved = (Object.entries(adoptHomes(environment)) as Array<[SessionStoreEngine, string | null]>)
-      .filter((found): found is [SessionStoreEngine, string] => !!found[1])
-    if (!moved.length) return
-    console.log(`[hooks] engines keep their data elsewhere here: ${moved.map(([engine, home]) => `${sessionStoreContracts[engine].product} in ${home}`).join(', ')}`)
-    installIn(moved)
-  }
-  installIn((Object.keys(sessionStoreContracts) as SessionStoreEngine[]).flatMap((engine) => movedHomes(engine).map((home): [SessionStoreEngine, string] => [engine, home])))
-  adopt(options.environment ?? process.env)
-  void options.loginShell?.then(adopt)
+  const adoptions = createHomeAdoptions({
+    read: recoverEngineHomes,
+    confirm: confirmHomes,
+    install: (engine, home) => {
+      if (options.only && !options.only.has(engine)) return
+      engineHooks[engine].installIn(port, home)
+      console.log(`[hooks] ${sessionStoreContracts[engine].product} hooks installed in its adopted home`)
+    },
+    held: reason => {
+      if (reason) console.warn(`[hooks] home adoption held · ${reason}`)
+      else console.log('[hooks] home adoption recovered')
+    },
+  })
+  adoptions.submit(options.environment ?? process.env)
+  void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${error instanceof Error ? error.message : error}`))
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port))
   for (const [vendor, install] of OTHER_INSTALLERS) hookStep(vendor, () => install(port))
+  return { close: adoptions.close }
 }

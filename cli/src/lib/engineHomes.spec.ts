@@ -1,3 +1,4 @@
+import * as fs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -6,25 +7,39 @@ import { env } from '../config/env.js'
 import {
   adoptEngineHomes, adoptHomes, claudeProjectsRoots, codexHomeRoots, launchClaudeConfigDir, launchCodexHome, movedEngineHomes, movedHomes,
   ownHomeOf, profileEnvironment, resetEngineHomes, sessionClaudeHome, sessionCodexHome, sessionFolderOf, sessionRoots,
+  confirmHomes, durableEngineHomes, nativeSessionRoots, recoverEngineHomes, engineHomeSnapshot,
 } from './engineHomes.js'
 
 // The login shell's environment, as the daemon captured it at start-up: none, unless a test says so.
 const shell = vi.hoisted(() => ({ env: {} as NodeJS.ProcessEnv }))
 vi.mock('./loginShellEnv.js', () => ({ loginShellEnvironment: () => shell.env }))
+const clock = vi.hoisted(() => ({ remaining: Infinity }))
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => --clock.remaining < 0 ? 251 : 0 } }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof fs>()
+  return { ...actual, linkSync: vi.fn(actual.linkSync), lstatSync: vi.fn(actual.lstatSync) }
+})
 
 const saved = () => join(env.ADAPTER_DATA_DIR, 'engine-homes.json')
 const defaults = { claudeHome: '/home/someone/.claude', codexHome: '/home/someone/.codex' }
 
 describe('the homes the person moved', () => {
   let root: string
-  beforeEach(() => {
+  let originalData: string
+  beforeEach(async () => {
+    clock.remaining = Infinity
+    const actual = await vi.importActual<typeof fs>('node:fs')
+    vi.mocked(fs.linkSync).mockReset().mockImplementation(actual.linkSync)
+    vi.mocked(fs.lstatSync).mockReset().mockImplementation(actual.lstatSync)
     root = mkdtempSync(join(tmpdir(), 'engine-homes-'))
-    rmSync(saved(), { force: true })
+    originalData = env.ADAPTER_DATA_DIR
+    env.ADAPTER_DATA_DIR = join(root, 'data')
+    mkdirSync(env.ADAPTER_DATA_DIR, { mode: 0o700 })
     resetEngineHomes()
   })
   afterEach(() => {
     rmSync(root, { recursive: true, force: true })
-    rmSync(saved(), { force: true })
+    env.ADAPTER_DATA_DIR = originalData
     resetEngineHomes()
   })
 
@@ -53,7 +68,7 @@ describe('the homes the person moved', () => {
     const claude = join(root, 'claude-work'), codex = join(root, 'codex-work')
     adoptEngineHomes({ CLAUDE_CONFIG_DIR: claude }, defaults)
     adoptEngineHomes({ CODEX_HOME: codex }, defaults)
-    expect(JSON.parse(readFileSync(saved(), 'utf8'))).toEqual({ claude: [claude], codex: [codex] })
+    expect(durableEngineHomes()).toEqual({ claude: [claude], codex: [codex] })
     resetEngineHomes()
     expect(claudeProjectsRoots('/own')).toEqual(['/own', join(claude, 'projects')])
     resetEngineHomes()
@@ -77,19 +92,72 @@ describe('the homes the person moved', () => {
     expect(codexHomeRoots('/default')).toEqual(['/default', join(root, 'previous'), join(root, 'new-login')])
   })
 
-  it('still adopts when the data folder cannot be written; the next boot adopts again', () => {
+  it('holds an unwritable adoption without exposing it as a usable root, then confirms the same request after recovery', () => {
     const blocked = join(root, 'blocked')
     writeFileSync(blocked, 'a file where the folder should be')
     const before = env.ADAPTER_DATA_DIR
     env.ADAPTER_DATA_DIR = join(blocked, 'data')
     try {
       const claude = join(root, 'claude-work')
+      expect(() => adoptEngineHomes({ CLAUDE_CONFIG_DIR: claude }, defaults)).toThrow(/held/)
+      expect(claudeProjectsRoots('/own')).toEqual(['/own'])
+      expect(() => nativeSessionRoots('codex')).toThrow(/held/)
+      rmSync(blocked)
+      mkdirSync(env.ADAPTER_DATA_DIR, { recursive: true, mode: 0o700 })
+      expect(() => nativeSessionRoots('codex')).toThrow('previously observed or unsaved home')
       expect(adoptEngineHomes({ CLAUDE_CONFIG_DIR: claude }, defaults)).toEqual({ claude, codex: null })
       expect(claudeProjectsRoots('/own')).toEqual(['/own', join(claude, 'projects')])
+      expect(confirmHomes({ CLAUDE_CONFIG_DIR: claude })).toEqual({ claude, codex: null })
     } finally {
       env.ADAPTER_DATA_DIR = before
     }
     mkdirSync(root, { recursive: true })
+  })
+
+  it('shares held observations with native roots and empty-environment recovery', async () => {
+    const actual = await vi.importActual<typeof fs>('node:fs')
+    const file = saved(), requested = join(root, 'requested'), competitor = join(root, 'competitor')
+    let probes = 0
+    vi.mocked(fs.linkSync).mockImplementation((from, to) => {
+      if (String(to).endsWith('/000.json')) actual.writeFileSync(file, JSON.stringify({ codex: [competitor] }), { mode: 0o600 })
+      return actual.linkSync(from, to)
+    })
+    vi.mocked(fs.lstatSync).mockImplementation(((path, options) => {
+      if (String(path) === file + '.adoptions/127.json' && ++probes === 2) clock.remaining = 1
+      return actual.lstatSync(path, options)
+    }) as typeof fs.lstatSync)
+    expect(() => confirmHomes({ CODEX_HOME: requested })).toThrow('work deadline')
+    clock.remaining = Infinity
+    vi.mocked(fs.lstatSync).mockImplementation(actual.lstatSync)
+    actual.writeFileSync(file, '{}', { mode: 0o600 })
+    expect(movedHomes('codex')).not.toContain(competitor)
+    expect(() => nativeSessionRoots('codex')).toThrow('previously observed or unsaved home')
+    expect(recoverEngineHomes().codex).toEqual([requested, competitor])
+    expect(nativeSessionRoots('codex')).toContain(join(competitor, 'sessions'))
+  })
+
+  it('does not transfer catalog observations or pending requests into another data directory', () => {
+    adoptHomes({ CODEX_HOME: join(root, 'first-catalog-home') })
+    env.ADAPTER_DATA_DIR = join(root, 'second-catalog')
+    mkdirSync(env.ADAPTER_DATA_DIR, { mode: 0o700 })
+    expect(movedHomes('codex')).toEqual([])
+    expect(nativeSessionRoots('codex')).toEqual([join(env.CODEX_HOME, 'sessions')])
+    expect(confirmHomes({ CODEX_HOME: join(root, 'second-catalog-home') }).codex).toBe(join(root, 'second-catalog-home'))
+    expect(recoverEngineHomes().codex).toEqual([join(root, 'second-catalog-home')])
+  })
+
+  it('requires a fresh final proof for an explicit immutable batch snapshot', () => {
+    const before = join(root, 'before'), after = join(root, 'after')
+    adoptHomes({ CODEX_HOME: before })
+    const snapshot = engineHomeSnapshot()
+    expect(() => snapshot.homes.codex.push(after)).toThrow(TypeError)
+    expect(sessionRoots('codex', undefined, snapshot)).toContain(join(before, 'sessions'))
+    expect(sessionCodexHome({ transcriptPath: join(before, 'sessions', 'thread.jsonl') }, snapshot)).toBe(before)
+    writeFileSync(saved(), JSON.stringify({ codex: [after] }), { mode: 0o600 })
+    expect(() => snapshot.verify()).toThrow('changed during the operation')
+    const fresh = engineHomeSnapshot()
+    expect(fresh.homes.codex).toEqual([before, after])
+    expect(() => fresh.verify()).not.toThrow()
   })
 
   it('a bound conversation stays in its known home even when the current shell changes or a service has no shell cache', () => {
