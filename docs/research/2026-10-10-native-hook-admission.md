@@ -92,24 +92,28 @@ and complete Cursor task journal ordering remain in the completion checklist.
 The [matched workload](2026-10-10-hook-admission-cost.mts) ran alone under
 Node 22.23.2, UTC and `/tmp`, on the same macOS x64 host. Native-evidence platform
 is pinned to Linux and host executables are replaced with placeholders. Each tree
-performs 100 complete registry admissions, 100 complete private HTTP admissions,
-and five held admissions followed by recovery. Every row asserts durable admission
-and callback counts. Baseline is main `cc4983e18`; implementation is `a9b6f40bc`.
-[Raw measurements](2026-10-10-hook-admission-cost.json) retain every sample.
+runs a fresh process for each workload: 100 complete registry admissions, 100 complete
+private HTTP admissions, and five held admissions followed by recovery. Each workload
+repeats admission for the same agent and conversation; every iteration asserts durable
+admission and callback counts. Baseline is main `cc4983e18`; implementation is
+`08afe262b`. [Raw measurements](2026-10-10-hook-admission-cost.json) retain every sample.
+Medians average the two middle samples for even counts. Reported p95 uses the sorted
+sample at zero-based index `floor((n - 1) * 0.95)`; for five recovery samples, that is
+the fourth observation, not the maximum.
 
 | Workload | Tree | Median completion (ms) | p95 completion (ms) | Total CPU (ms) | Peak RSS (MiB) |
 | --- | --- | ---: | ---: | ---: | ---: |
-| registry (100) | main | 59.96 | 63.18 | 407.28 | 103.67 |
-| http (100) | main | 60.58 | 75.83 | 496.00 | 128.30 |
-| held (5) | main | 563.59 | 563.98 | 122.14 | 115.31 |
-| registry (100) | change | 60.51 | 68.10 | 460.75 | 110.52 |
-| http (100) | change | 63.71 | 83.36 | 660.55 | 126.01 |
-| held (5) | change | 1092.57 | 1098.68 | 156.29 | 113.81 |
+| registry (100) | main | 59.87 | 64.84 | 406.50 | 104.66 |
+| http (100) | main | 61.18 | 65.81 | 575.84 | 127.06 |
+| held (5) | main | 565.37 | 565.87 | 125.62 | 116.93 |
+| registry (100) | change | 61.32 | 64.33 | 558.46 | 110.53 |
+| http (100) | change | 62.83 | 67.58 | 749.06 | 123.61 |
+| held (5) | change | 1073.06 | 1073.20 | 163.63 | 114.47 |
 
-Healthy median completion increased by 0.55 ms for direct registration and 3.13 ms
-for HTTP admission. Total CPU increased by 53.47 ms and 164.55 ms across 100
+Healthy median completion increased by 1.45 ms for direct registration and 1.64 ms
+for HTTP admission. Total CPU increased by 151.96 ms and 173.22 ms across 100
 admissions respectively, with the added native evidence and strict durable commit.
-Held HTTP responses still returned immediately (median 3.50 ms before, 4.93 ms
+Held HTTP responses still returned immediately (median 4.03 ms before, 5.58 ms
 after). Recovery moved from the former 500 ms retry to the shared queue's 1 s
 cadence; the queue retains the delivery instead of abandoning it after twenty tries.
 Five recovery samples are descriptive, not a statistical performance threshold.
@@ -132,7 +136,7 @@ registry/HTTP/held-admission costs run separately and alone. A frozen head recei
 independent review and every required CI check before the authorized merge.
 
 Validation, exact-head final attestation and merge receipts are pending. Independent
-source review approved `a9b6f40bc` against `cc4983e18`, conditional on the gates. Record
+source review approved `08afe262b` against `cc4983e18`, conditional on the gates. Record
 implementation, validation, review/CI waiting, merge and publication separately.
 The former golden was recorded at 04:33 UTC on October 10; this implementation
 continued after #1133 merged at 05:16 UTC. Publication remains zero; no release is
