@@ -1,0 +1,18 @@
+{
+  "license": "MIT",
+  "tagline": "Every memory your agents keep, in one place",
+  "examples": [
+    {
+      "prompt": "Build my About You.",
+      "caption": "A short profile of how you work, from your own messages across every agent, each line with its sources"
+    },
+    {
+      "prompt": "What do my agents remember about this repository, and is any of it out of date?",
+      "caption": "Claude Code, Codex and Grok Build notes side by side, checked against the code"
+    },
+    {
+      "prompt": "What did I decide about releases last month?",
+      "caption": "Your own words from past sessions, with the conversations they came from"
+    }
+  ]
+}
