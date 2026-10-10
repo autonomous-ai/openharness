@@ -5,7 +5,7 @@
  * colliding `agent` alias is never assigned from its basename alone.
  */
 
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { accessSync, constants, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, isAbsolute, join, normalize, sep } from 'node:path'
@@ -372,6 +372,48 @@ export function opencodeBin(): string {
   } catch {
     return 'opencode'
   }
+}
+
+/** Launch control must not run the synchronous interactive-shell fallback.
+ * Resolve one captured environment asynchronously; the version probe then owns
+ * and verifies the selected executable before it publishes an answer. */
+export async function opencodeBinAsync(): Promise<string> {
+  const configured = env.OPENCODE_PATH
+  if (configured) return configured
+  const ownPath = processPathEntries(), shell = process.env.SHELL, daemonPath = process.env.PATH ?? ''
+  const installed = join(homedir(), '.opencode', 'bin', 'opencode')
+  for (const entry of ownPath) {
+    const file = join(entry, 'opencode')
+    try { accessSync(file, constants.X_OK); return file } catch { /* next candidate */ }
+  }
+  let extra: string[] = []
+  if (process.env.NODE_ENV !== 'test' && shell && isAbsolute(shell)) {
+    if (interactivePathCache?.shell === shell && interactivePathCache.daemonPath === daemonPath && interactivePathCache.value.length) {
+      extra = interactivePathCache.value
+    } else {
+      extra = await new Promise<string[]>(done => {
+        const flag = basename(shell).toLowerCase() === 'zsh' ? '-lic' : '-ic'
+        const marker = '__HARNESS_ENGINE_PATH__='
+        try {
+          const child = execFile(shell, [flag, `printf '\\n${marker}%s\\n' "$PATH"`], {
+            encoding: 'utf8', timeout: 5_000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024,
+          }, (error, stdout) => {
+            if (error) { done([]); return }
+            const path = stdout.split('\n').reverse().find(line => line.startsWith(marker))?.slice(marker.length)
+            done(path?.split(delimiter).filter(Boolean) ?? [])
+          })
+          child.stdin?.end()
+        } catch { done([]) }
+      })
+      // Failed captures remain retryable. A later launch may find a repaired shell.
+      if (extra.length) interactivePathCache = { shell, daemonPath, value: extra }
+    }
+  }
+  for (const entry of extra) {
+    const file = join(entry, 'opencode')
+    try { accessSync(file, constants.X_OK); return file } catch { /* next candidate */ }
+  }
+  try { accessSync(installed, constants.X_OK); return installed } catch { return 'opencode' }
 }
 
 /** Resolve an installed executable for real-engine verification without trusting a colliding alias. */

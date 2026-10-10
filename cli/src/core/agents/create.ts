@@ -67,7 +67,7 @@ export interface CreateAgentDeps {
    *  `installOpencodePluginBeforeSpawn`): eager, independent of optional interpretation. */
   installOpencodePlugin: (port: number) => Promise<boolean>
   /** The facts about this machine a launch of `engine` needs (lib/gridLaunch.ts). */
-  gridLaunchMachine: (engine: AgentEngine) => GridLaunchMachine
+  gridLaunchMachine: (engine: AgentEngine) => GridLaunchMachine | Promise<GridLaunchMachine>
   /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
    *  builds none itself, and a create on a grid while models is down is refused (GRID_UNAVAILABLE). */
   buildGridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
@@ -153,7 +153,7 @@ export function createAgentCreator({
     // refusal rather than a fallback — an agent silently started on the engine's own login spends the
     // wrong account and looks identical to one that worked. Asked of models before a harness's workspace is
     // laid out or trusted: a create refused here leaves the folder as it was.
-    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: gridLaunchMachine(engine) }) : null
+    const built = grid ? await buildGridLaunch({ engine, override: grid, machine: await gridLaunchMachine(engine) }) : null
     if (built && !built.ok) {
       console.warn(`[agent] create ${engine} refused · ${built.detail}`)
       return { ok: false, error: built.error, detail: built.detail }
@@ -256,7 +256,7 @@ export function createAgentCreator({
     // The named agent takes the same argv slot on every relaunch (`buildLaunchOverrides` appends it
     // from the row's `agent`, after the grid's and the DSH's argv, exactly as here). The engine was
     // checked for a contract at the wire (AGENT_UNSUPPORTED, opencode v2 included), so this cannot throw.
-    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencode ? opencode.opencodeMajorVersion() : null) : [])]
+    const extraArgs = [...(gridLaunch?.args ?? []), ...dshArgs, ...(agent ? namedAgentArgs(engine, agent, opencode ? await opencode.opencodeMajorVersion() : null) : [])]
     // The first prompt is a launch option only — never part of `extraArgs`, which the registry row
     // carries into a relaunch (engineLaunch.ts, `firstPrompt`).
     const firstPrompt = prompt

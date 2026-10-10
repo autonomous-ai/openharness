@@ -186,7 +186,7 @@ export function createLaunchRequests({ receipts, createAgent, forkAgent, resumeA
       }
       // v2's TUI cannot open a named agent. Its native version control is eager.
       const opencode = engine === 'opencode' ? opencodeLaunch : null
-      if (!supportsNamedAgent(engine, opencode ? opencode.opencodeMajorVersion() : null)) {
+      if (!supportsNamedAgent(engine, opencode ? await opencode.opencodeMajorVersion() : null)) {
         reply({ error: 'AGENT_UNSUPPORTED', detail: new NamedAgentUnsupportedError(engine).message }); return
       }
       agent = payload.agent

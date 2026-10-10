@@ -68,7 +68,7 @@ export type LaunchPreparationResult =
 
 export interface LaunchOverridesDeps {
   /** The facts about THIS machine a contract needs and cannot read for itself — see `GridLaunchMachine`. */
-  machine: (engine: AgentEngine) => GridLaunchMachine
+  machine: (engine: AgentEngine) => GridLaunchMachine | Promise<GridLaunchMachine>
   /** A grid or saved-API launch, built by the models service (core/agents/launch.ts `gridLaunchThrough`): the core
    *  builds none itself. */
   gridLaunch: (request: GridLaunchRequest) => Promise<GridLaunchAnswer>
@@ -148,7 +148,7 @@ export async function validateLaunchOverrides(
   source: LaunchSource,
 ): Promise<{ ok: true } | { ok: false; error: string; detail: string; unavailable?: string }> {
   if (!source.gridLaunch) return { ok: true }
-  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(engine) })
+  const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: await deps.machine(engine) })
   if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
   return tmuxRefusal(deps, engine, source.gridLaunch)
 }
@@ -190,7 +190,7 @@ export async function prepareLaunchOverrides(
   const changed = { ok: false, error: 'AGENT_CHANGED', detail: 'The harness changed or stopped during launch preparation.' } as const
   if (!current()) return changed
   source = structuredClone(source)
-  const machine = { ...deps.machine(engine) }
+  const machine = { ...await deps.machine(engine) }
   const base = await prepareBaseLaunchOverrides({ ...deps, machine: () => machine }, engine, source, configKey)
   if (!current()) return changed
   if (!base.ok) return base
@@ -263,7 +263,7 @@ async function prepareBaseLaunchOverrides(
   // back on the DEFAULT profile, reading hooks from a folder that was not the one it writes to.
   let ownLogin: LaunchOverrides | null = null
   if (!source.gridLaunch) {
-    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, deps.machine(engine).opencodeMajor ?? null)
+    const restored = subscriptionModelLaunch(engine, source.subscriptionModel, (await deps.machine(engine)).opencodeMajor ?? null)
     // Ahead of the model on the command line: `-c` configures, `-m` selects, and Codex resolves the
     // model against the provider it has been given.
     const provider = ownLoginProviderArgs(engine, source.codexHome, { read: deps.readCodexConfig })
@@ -279,7 +279,7 @@ async function prepareBaseLaunchOverrides(
   if (source.gridLaunch) {
     // Built once, by the models service, with a saved API's endpoint and key as saved now: a removed API is
     // refused first, then an engine that cannot be pointed there, then a tmux that cannot set the variables.
-    const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: deps.machine(engine), refresh: true })
+    const built = await deps.gridLaunch({ engine, override: source.gridLaunch, machine: await deps.machine(engine), refresh: true })
     if (!built.ok) return { ok: false, error: built.error, detail: built.detail, ...(built.unavailable ? { unavailable: built.unavailable } : {}) }
     const tmux = await tmuxRefusal(deps, engine, built.override)
     if (!tmux.ok) return tmux

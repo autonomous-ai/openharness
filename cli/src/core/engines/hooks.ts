@@ -211,8 +211,7 @@ export function createEngineHooks({ tmuxBackend, agentReconciler, registry, pane
  * never depends on loading its optional interpreter.
  */
 export async function installOpencodePluginBeforeSpawn(port: number): Promise<boolean> {
-  nativeHooks.installOpencodePlugin(port)
-  return true
+  return await nativeHooks.installOpencodePlugin(port) !== false
 }
 
 export interface InstallEngineHooksOptions {
@@ -227,7 +226,7 @@ export interface InstallEngineHooksOptions {
 /**
  * The other engines' declarations are installed in their original order, without an optional import.
  */
-const OTHER_INSTALLERS: Array<[string, (port: number) => void]> = [
+const OTHER_INSTALLERS: Array<[string, (port: number) => void | Promise<unknown>]> = [
   ['cursor', nativeHooks.installCursorHooks],
   ['opencode', nativeHooks.installOpencodePlugin],
   ['kilo', nativeHooks.installKiloPlugin],
@@ -255,11 +254,16 @@ const OTHER_INSTALLERS: Array<[string, (port: number) => void]> = [
  * durable launch holds for preparation failures are a separate behavior change. Never rejects.
  */
 export async function installEngineHooks(port: number, options: InstallEngineHooksOptions = {}): Promise<{ close(): void }> {
-  const hookStep = (vendor: string, install: () => void): void => {
+  const pending: Promise<void>[] = []
+  const hookStep = (vendor: string, install: () => void | Promise<unknown>): void => {
     if (options.only && !options.only.has(vendor)) return
-    try { install() } catch (error) {
+    const failed = (error: unknown) => {
       console.warn(`[hooks] ${vendor} install skipped · ${error instanceof Error ? error.message : error}`)
     }
+    try {
+      const result = install()
+      if (result) pending.push(result.then(() => {}, failed))
+    } catch (error) { failed(error) }
   }
   // The homes the person moved (lib/engineHomes.ts, by each engine's declared session store) get the hooks
   // too: every one adopted before, those the daemon's own environment names, and those of the login shell
@@ -282,5 +286,6 @@ export async function installEngineHooks(port: number, options: InstallEngineHoo
   void options.loginShell?.then(adoptions.submit, error => console.warn(`[hooks] login-shell homes unavailable · ${error instanceof Error ? error.message : error}`))
   for (const [engine, hooks] of Object.entries(engineHooks)) hookStep(engine, () => hooks.install(port))
   for (const [vendor, install] of OTHER_INSTALLERS) hookStep(vendor, () => install(port))
+  await Promise.all(pending)
   return { close: adoptions.close }
 }

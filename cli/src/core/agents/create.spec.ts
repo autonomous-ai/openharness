@@ -19,6 +19,8 @@ import { clearPaneRemainOnExit } from '../../lib/tmux.js'
 import { tmuxSupportsSessionEnv } from '../../lib/tmuxVersion.js'
 import { createAgentCreator, type CreateAgentDeps } from './create.js'
 import { prepareInstructionWrites } from '../../scm/scmProjects.js'
+import { opencodeMajorVersion } from '../../engines/launchControl.js'
+import { installOpencodePlugin } from '../../engines/nativeHooks.js'
 
 vi.mock('../../scm/scmProjects.js', async real => ({ ...await real<object>(), prepareInstructionWrites: vi.fn(async () => {}) }))
 
@@ -33,7 +35,8 @@ vi.mock('../../engines/inProcess.js', async (real) => {
   const actual = await real<typeof import('../../engines/inProcess.js')>()
   return { ...actual, loadEngine: vi.fn(actual.loadEngine) }
 })
-vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(() => 2) }))
+vi.mock('../../engines/launchControl.js', () => ({ opencodeMajorVersion: vi.fn(async () => 2) }))
+vi.mock('../../engines/kit/nativePlugin.js', () => ({ installNativePlugin: vi.fn(), removeNativePlugin: vi.fn() }))
 // The engines' folder trust (engines/launchPrep.ts), one spy per engine: never the person's own config.
 const trust = vi.hoisted(() => ({
   claudeTrusts: vi.fn((_path: string) => false), codexTrusts: vi.fn((_path: string, _profile?: string | null) => false),
@@ -358,6 +361,24 @@ describe('creating an agent', () => {
       expect(warn).toHaveBeenCalledWith('[agent] create opencode refused · OpenCode\'s plugin installer could not be loaded')
       expect(createAndRegisterPane).not.toHaveBeenCalled()
       warn.mockRestore()
+    })
+
+    it('lets concurrent healthy OpenCode creates share the current native hook installation', async () => {
+      const completions: Array<(major: number) => void> = []
+      let entered!: () => void
+      const bothEntered = new Promise<void>(done => { entered = done })
+      const probe = () => new Promise<number>(done => {
+        completions.push(done)
+        if (completions.length === 2) entered()
+      })
+      vi.mocked(opencodeMajorVersion).mockImplementationOnce(probe).mockImplementationOnce(probe)
+      const test = setup({ installOpencodePlugin })
+      const first = test.create(request({ engine: 'opencode' }))
+      const second = test.create(request({ engine: 'opencode' }))
+      await bothEntered
+      completions[0]!(2); completions[1]!(2)
+      expect((await Promise.all([first, second])).map(result => result.ok)).toEqual([true, true])
+      expect(createAndRegisterPane).toHaveBeenCalledTimes(2)
     })
 
     it('creates OpenCode from eager facts when optional code cannot load', async () => {

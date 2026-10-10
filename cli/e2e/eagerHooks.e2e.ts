@@ -1,6 +1,6 @@
 /** Startup and pre-spawn hook preparation cannot wait for the obsolete shared optional installer. */
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterAll, afterEach, beforeAll, expect, it, onTestFailed } from 'vitest'
@@ -31,6 +31,53 @@ it('refuses a native hook destination outside the test, including the OpenCode s
   d.env.HOOK_INSTALL_ENGINES = 'unknown'
   expect(() => assertHooksContained(d.root, d.env)).toThrow('supported hook engines')
 })
+
+it('keeps Stop and agent listing responsive while a native launch version probe waits', async () => {
+  const d = daemon = await IsolatedDaemon.create({ scriptPath: bundle, env: { HARNESS_CONNECTIONS_PORT: '0' } })
+  onTestFailed(() => console.log(d.log()))
+  const binary = join(d.root, 'bin', 'opencode'), entered = join(d.root, 'version-entered'), release = join(d.root, 'version-release')
+  d.env.OPENCODE_PATH = binary
+  d.env.OPENCODE_PLUGIN_DIR = join(d.root, 'opencode', 'plugin')
+  writeFileSync(binary, `#!${process.execPath}\nconsole.log('opencode v2.0.18')\n`, { mode: 0o755 })
+  await d.start()
+  const c = client = await LocalClient.connect(d)
+  const cwd = join(d.projectsDir, 'responsive'); mkdirSync(cwd)
+  const created = await c.request('agent_create', { engine: 'claude', cwd, bypassPermission: true }, 30_000)
+  expect(created.error, JSON.stringify(created)).toBeUndefined()
+  const id = created.agent.id
+  await until('the sibling to bind', async () => {
+    const list = await c.request('agents_list', { includeStopped: true })
+    return list.agents.find((row: any) => row.id === id && row.status === 'active' && row.sessionId)
+  }, 30_000)
+  const ended = c.next(frame => frame.type === 'turn_ended' && frame.agentId === id, 30_000)
+  c.send('message', { agentId: id, content: 'native probe responsiveness fixture' }); await ended
+  // Replace the fixture after startup so no earlier observation can satisfy this
+  // launch. Only this test releases the child; it cannot acknowledge prematurely.
+  writeFileSync(binary, `#!${process.execPath}
+const fs = require('node:fs');
+if (!process.argv.includes('--version')) process.exit(2);
+fs.writeFileSync(${JSON.stringify(entered)}, '');
+const timer = setInterval(() => { if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('opencode v2.0.18'); } }, 10);
+`, { mode: 0o755 })
+  // A connection intentionally handles its requests in order. Use another
+  // private connection so this tests the core, not that connection's queue.
+  const probeClient = await LocalClient.connect(d)
+  let settled = false
+  const launch = probeClient.request('agent_create', { engine: 'opencode', cwd, agent: 'fixture' }, 15_000)
+    .finally(() => { settled = true })
+  try {
+    await until('the native version probe to start', () => existsSync(entered), 5_000, 10)
+    expect((await c.request('agents_list', { includeStopped: true }, 1_500)).agents.some((row: any) => row.id === id)).toBe(true)
+    expect((await c.request('agent_delete', { agentId: id }, 3_000)).error).toBeUndefined()
+    expect(settled).toBe(false)
+    expect(d.coresStarted()).toBe(1)
+  } finally {
+    writeFileSync(release, '')
+    await launch.catch(() => {})
+    probeClient.close()
+  }
+  expect((await launch).error).toBe('AGENT_UNSUPPORTED')
+}, 90_000)
 
 it.each([['missing', 'claude'], ['stalled', 'codex']] as const)(
   '%s shared hooks: ready, native files installed, OpenCode launch and %s Stop/resume work', async (mode, engine) => {

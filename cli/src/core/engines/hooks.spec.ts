@@ -384,6 +384,33 @@ describe('installing every engine\'s hooks', () => {
     expect(loadEngine).not.toHaveBeenCalled()
   })
 
+  it('keeps other native installers moving while the bounded version probe waits', async () => {
+    let finish!: () => void
+    vi.mocked(hooks.installOpencodePlugin).mockImplementationOnce(() => new Promise<boolean>(done => { finish = () => done(true) }))
+    let completed = false
+    const pending = installEngineHooks(4242).then(value => { completed = true; return value })
+    expect(hooks.installCopilotHooks).toHaveBeenCalledWith(4242)
+    await Promise.resolve()
+    expect(completed).toBe(false)
+    finish()
+    const installed = await pending
+    installed.close()
+    expect(completed).toBe(true)
+  })
+
+  it('contains an asynchronous native installer rejection', async () => {
+    vi.mocked(hooks.installOpencodePlugin).mockRejectedValueOnce(new Error('probe unavailable'))
+    const installed = await installEngineHooks(4242)
+    expect(hooks.installCopilotHooks).toHaveBeenCalledWith(4242)
+    expect(console.warn).toHaveBeenCalledWith('[hooks] opencode install skipped · probe unavailable')
+    installed.close()
+  })
+
+  it('does not launch from an obsolete native installation', async () => {
+    vi.mocked(hooks.installOpencodePlugin).mockResolvedValueOnce(false)
+    expect(await installOpencodePluginBeforeSpawn(4242)).toBe(false)
+  })
+
   it('installs synchronously in the original order before returning the completion promise', async () => {
     const order: string[] = []
     for (const [index, install] of installs.entries()) vi.mocked(install).mockImplementationOnce(() => { order.push(String(index)) })

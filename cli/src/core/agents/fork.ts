@@ -105,7 +105,7 @@ export function createAgentForker({
     const installIfMissing = enginePathOverride(engine) ? undefined : engineInstallRecipe(engine)
     // Same guard as a relaunch (`buildLaunchOverrides`): an opencode agent recorded on v1 forks on v2
     // as a general session rather than handing the v2 TUI an `--agent` it exits on.
-    const forkMajor = opencode ? opencode.opencodeMajorVersion() : null
+    const forkMajor = opencode ? await opencode.opencodeMajorVersion() : null
     const extraArgs = [...built.overrides.extraArgs, ...dshArgs, ...(source.agent && supportsNamedAgent(engine, forkMajor) ? namedAgentArgs(engine, source.agent, forkMajor) : [])]
     const firstPrompt = plan.level === 'native' ? (prompt ?? undefined) : plan.firstPrompt
     const launchOptions = {

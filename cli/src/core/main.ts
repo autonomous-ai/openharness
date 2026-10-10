@@ -1956,9 +1956,9 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    * OpenCode launch alone, by OpenCode's own code: every launch of OpenCode loads it before asking, and is refused
    * without it (core/agents/create.ts, lib/launchOverrides.ts).
    */
-  const gridLaunchMachine = (engine: AgentEngine): GridLaunchMachine => ({
+  const gridLaunchMachine = async (engine: AgentEngine): Promise<GridLaunchMachine> => ({
     hermesSystemManaged: existsSync(HERMES_SYSTEM_MANAGED_DIR),
-    opencodeMajor: engine === 'opencode' ? opencodeMajorVersion() : null,
+    opencodeMajor: engine === 'opencode' ? await opencodeMajorVersion() : null,
   })
 
   /**

@@ -1,0 +1,94 @@
+{
+  "linux:v1": {
+    "installed": true,
+    "first": 1,
+    "repeat": 1,
+    "calls": [
+      [
+        "/fixture/bin/opencode",
+        [
+          "--version"
+        ]
+      ]
+    ],
+    "files": [
+      {
+        "file": "<root>/HOME/.config/opencode/plugin/launcher-register.js",
+        "source": "// session-register — auto-installed by the machine adapter. Binds this OpenCode session to the\n// local machine daemon (127.<version>:4242) so it can be mirrored to web/device. No-op if machine isn't running.\nimport { readFileSync } from \"node:fs\"\nconst hookToken = () => { try { return readFileSync(\"<root>/ADAPTER_DATA_DIR/hook-credential\", \"utf8\").trim() } catch { return \"\" } }\nexport const MachineRegister = async ({ directory, worktree, project, client }) => {\n  const seen = new Set()\n  const post = async (sessionID) => {\n    const pane = process.env.TMUX_PANE\n    const token = hookToken()\n    if (!pane || !token || !sessionID || seen.has(sessionID)) return\n    seen.add(sessionID)\n    try {\n      await fetch(\"http://127.<version>:4242/api/hook/session-start\", {\n        method: \"POST\",\n        headers: { \"content-type\": \"application/json\", \"x-harness-hook-token\": token },\n        body: JSON.stringify({\n          engine: \"opencode\",\n          pluginVersion: \"<version>\",\n          sessionId: sessionID,\n          cwd: directory || worktree || (project && project.worktree) || null,\n          tmuxPane: pane,\n          callerPid: process.pid,\n          runtimeHints: [\n            ...(pane ? [{ backend: \"tmux\", paneId: pane }] : []),\n          ],\n        }),\n      })\n    } catch {}\n  }\n  return {\n    event: async ({ event }) => {\n      if (!event) return\n      if (event.type === \"session.created\" || event.type === \"session.updated\") {\n        const p = event.properties || {}\n        const info = p.info || {}\n        if (info.parentID) return // sub-agent child session — shown under its parent's Task card, not a top-level agent\n        await post(info.id || p.sessionID || p.sessionId)\n      }\n    },\n  }\n}\n"
+      },
+      {
+        "file": "<root>/HOME/.config/opencode/plugins/launcher-register/tui.js",
+        "source": "// session-register (OpenCode 2 TUI) — auto-installed by the machine adapter. Tells the local machine\n// daemon (127.<version>:4242) which session this pane shows, as the 1.x plugin does. No-op if machine isn't running.\nimport { readFileSync } from \"node:fs\"\nconst hookToken = () => { try { return readFileSync(\"<root>/ADAPTER_DATA_DIR/hook-credential\", \"utf8\").trim() } catch { return \"\" } }\nexport default {\n  id: \"harness-session-register\",\n  setup(ctx) {\n    const pane = process.env.TMUX_PANE\n    const router = ctx && ctx.ui && ctx.ui.router\n    if (!pane || !router || typeof router.current !== \"function\") return\n    const posted = new Set()\n    let busy = false\n    const post = async (sessionID) => {\n      const token = hookToken()\n      if (!token || !sessionID || posted.has(sessionID) || busy) return\n      busy = true\n      try {\n        let info\n        try { info = await (ctx.data && ctx.data.session && ctx.data.session.get ? ctx.data.session.get(sessionID) : undefined) } catch {}\n        if (info && info.parentID) { posted.add(sessionID); return } // a sub-agent's — shown under its parent's Task card\n        const cwd = (info && info.location && info.location.directory) || (ctx.location && ctx.location.directory) || process.cwd()\n        const res = await fetch(\"http://127.<version>:4242/api/hook/session-start\", {\n          method: \"POST\",\n          headers: { \"content-type\": \"application/json\", \"x-harness-hook-token\": token },\n          body: JSON.stringify({\n            engine: \"opencode\",\n            pluginVersion: \"<version>\",\n            sessionId: sessionID,\n            cwd,\n            tmuxPane: pane,\n            callerPid: process.pid,\n            runtimeHints: [{ backend: \"tmux\", paneId: pane }],\n          }),\n        })\n        if (res && res.ok) posted.add(sessionID)\n      } catch {} finally { busy = false }\n    }\n    const check = () => {\n      try { const at = router.current(); if (at && at.type === \"session\" && at.sessionID) post(at.sessionID) } catch {}\n    }\n    check()\n    const timer = setInterval(check, 1000)\n    if (timer && typeof timer.unref === \"function\") timer.unref()\n    return () => clearInterval(timer)\n  },\n}\n"
+      }
+    ]
+  },
+  "linux:v2": {
+    "installed": true,
+    "first": 2,
+    "repeat": 2,
+    "calls": [
+      [
+        "/fixture/bin/opencode",
+        [
+          "--version"
+        ]
+      ]
+    ],
+    "files": [
+      {
+        "file": "<root>/HOME/.config/opencode/plugin/launcher-register.js",
+        "source": null
+      },
+      {
+        "file": "<root>/HOME/.config/opencode/plugins/launcher-register/tui.js",
+        "source": "// session-register (OpenCode 2 TUI) — auto-installed by the machine adapter. Tells the local machine\n// daemon (127.<version>:4242) which session this pane shows, as the 1.x plugin does. No-op if machine isn't running.\nimport { readFileSync } from \"node:fs\"\nconst hookToken = () => { try { return readFileSync(\"<root>/ADAPTER_DATA_DIR/hook-credential\", \"utf8\").trim() } catch { return \"\" } }\nexport default {\n  id: \"harness-session-register\",\n  setup(ctx) {\n    const pane = process.env.TMUX_PANE\n    const router = ctx && ctx.ui && ctx.ui.router\n    if (!pane || !router || typeof router.current !== \"function\") return\n    const posted = new Set()\n    let busy = false\n    const post = async (sessionID) => {\n      const token = hookToken()\n      if (!token || !sessionID || posted.has(sessionID) || busy) return\n      busy = true\n      try {\n        let info\n        try { info = await (ctx.data && ctx.data.session && ctx.data.session.get ? ctx.data.session.get(sessionID) : undefined) } catch {}\n        if (info && info.parentID) { posted.add(sessionID); return } // a sub-agent's — shown under its parent's Task card\n        const cwd = (info && info.location && info.location.directory) || (ctx.location && ctx.location.directory) || process.cwd()\n        const res = await fetch(\"http://127.<version>:4242/api/hook/session-start\", {\n          method: \"POST\",\n          headers: { \"content-type\": \"application/json\", \"x-harness-hook-token\": token },\n          body: JSON.stringify({\n            engine: \"opencode\",\n            pluginVersion: \"<version>\",\n            sessionId: sessionID,\n            cwd,\n            tmuxPane: pane,\n            callerPid: process.pid,\n            runtimeHints: [{ backend: \"tmux\", paneId: pane }],\n          }),\n        })\n        if (res && res.ok) posted.add(sessionID)\n      } catch {} finally { busy = false }\n    }\n    const check = () => {\n      try { const at = router.current(); if (at && at.type === \"session\" && at.sessionID) post(at.sessionID) } catch {}\n    }\n    check()\n    const timer = setInterval(check, 1000)\n    if (timer && typeof timer.unref === \"function\") timer.unref()\n    return () => clearInterval(timer)\n  },\n}\n"
+      }
+    ]
+  },
+  "darwin:v1": {
+    "installed": true,
+    "first": 1,
+    "repeat": 1,
+    "calls": [
+      [
+        "/fixture/bin/opencode",
+        [
+          "--version"
+        ]
+      ]
+    ],
+    "files": [
+      {
+        "file": "<root>/HOME/.config/opencode/plugin/launcher-register.js",
+        "source": "// session-register — auto-installed by the machine adapter. Binds this OpenCode session to the\n// local machine daemon (127.<version>:4242) so it can be mirrored to web/device. No-op if machine isn't running.\nimport { readFileSync } from \"node:fs\"\nconst hookToken = () => { try { return readFileSync(\"<root>/ADAPTER_DATA_DIR/hook-credential\", \"utf8\").trim() } catch { return \"\" } }\nexport const MachineRegister = async ({ directory, worktree, project, client }) => {\n  const seen = new Set()\n  const post = async (sessionID) => {\n    const pane = process.env.TMUX_PANE\n    const token = hookToken()\n    if (!pane || !token || !sessionID || seen.has(sessionID)) return\n    seen.add(sessionID)\n    try {\n      await fetch(\"http://127.<version>:4242/api/hook/session-start\", {\n        method: \"POST\",\n        headers: { \"content-type\": \"application/json\", \"x-harness-hook-token\": token },\n        body: JSON.stringify({\n          engine: \"opencode\",\n          pluginVersion: \"<version>\",\n          sessionId: sessionID,\n          cwd: directory || worktree || (project && project.worktree) || null,\n          tmuxPane: pane,\n          callerPid: process.pid,\n          runtimeHints: [\n            ...(pane ? [{ backend: \"tmux\", paneId: pane }] : []),\n          ],\n        }),\n      })\n    } catch {}\n  }\n  return {\n    event: async ({ event }) => {\n      if (!event) return\n      if (event.type === \"session.created\" || event.type === \"session.updated\") {\n        const p = event.properties || {}\n        const info = p.info || {}\n        if (info.parentID) return // sub-agent child session — shown under its parent's Task card, not a top-level agent\n        await post(info.id || p.sessionID || p.sessionId)\n      }\n    },\n  }\n}\n"
+      },
+      {
+        "file": "<root>/HOME/.config/opencode/plugins/launcher-register/tui.js",
+        "source": "// session-register (OpenCode 2 TUI) — auto-installed by the machine adapter. Tells the local machine\n// daemon (127.<version>:4242) which session this pane shows, as the 1.x plugin does. No-op if machine isn't running.\nimport { readFileSync } from \"node:fs\"\nconst hookToken = () => { try { return readFileSync(\"<root>/ADAPTER_DATA_DIR/hook-credential\", \"utf8\").trim() } catch { return \"\" } }\nexport default {\n  id: \"harness-session-register\",\n  setup(ctx) {\n    const pane = process.env.TMUX_PANE\n    const router = ctx && ctx.ui && ctx.ui.router\n    if (!pane || !router || typeof router.current !== \"function\") return\n    const posted = new Set()\n    let busy = false\n    const post = async (sessionID) => {\n      const token = hookToken()\n      if (!token || !sessionID || posted.has(sessionID) || busy) return\n      busy = true\n      try {\n        let info\n        try { info = await (ctx.data && ctx.data.session && ctx.data.session.get ? ctx.data.session.get(sessionID) : undefined) } catch {}\n        if (info && info.parentID) { posted.add(sessionID); return } // a sub-agent's — shown under its parent's Task card\n        const cwd = (info && info.location && info.location.directory) || (ctx.location && ctx.location.directory) || process.cwd()\n        const res = await fetch(\"http://127.<version>:4242/api/hook/session-start\", {\n          method: \"POST\",\n          headers: { \"content-type\": \"application/json\", \"x-harness-hook-token\": token },\n          body: JSON.stringify({\n            engine: \"opencode\",\n            pluginVersion: \"<version>\",\n            sessionId: sessionID,\n            cwd,\n            tmuxPane: pane,\n            callerPid: process.pid,\n            runtimeHints: [{ backend: \"tmux\", paneId: pane }],\n          }),\n        })\n        if (res && res.ok) posted.add(sessionID)\n      } catch {} finally { busy = false }\n    }\n    const check = () => {\n      try { const at = router.current(); if (at && at.type === \"session\" && at.sessionID) post(at.sessionID) } catch {}\n    }\n    check()\n    const timer = setInterval(check, 1000)\n    if (timer && typeof timer.unref === \"function\") timer.unref()\n    return () => clearInterval(timer)\n  },\n}\n"
+      }
+    ]
+  },
+  "darwin:v2": {
+    "installed": true,
+    "first": 2,
+    "repeat": 2,
+    "calls": [
+      [
+        "/fixture/bin/opencode",
+        [
+          "--version"
+        ]
+      ]
+    ],
+    "files": [
+      {
+        "file": "<root>/HOME/.config/opencode/plugin/launcher-register.js",
+        "source": null
+      },
+      {
+        "file": "<root>/HOME/.config/opencode/plugins/launcher-register/tui.js",
+        "source": "// session-register (OpenCode 2 TUI) — auto-installed by the machine adapter. Tells the local machine\n// daemon (127.<version>:4242) which session this pane shows, as the 1.x plugin does. No-op if machine isn't running.\nimport { readFileSync } from \"node:fs\"\nconst hookToken = () => { try { return readFileSync(\"<root>/ADAPTER_DATA_DIR/hook-credential\", \"utf8\").trim() } catch { return \"\" } }\nexport default {\n  id: \"harness-session-register\",\n  setup(ctx) {\n    const pane = process.env.TMUX_PANE\n    const router = ctx && ctx.ui && ctx.ui.router\n    if (!pane || !router || typeof router.current !== \"function\") return\n    const posted = new Set()\n    let busy = false\n    const post = async (sessionID) => {\n      const token = hookToken()\n      if (!token || !sessionID || posted.has(sessionID) || busy) return\n      busy = true\n      try {\n        let info\n        try { info = await (ctx.data && ctx.data.session && ctx.data.session.get ? ctx.data.session.get(sessionID) : undefined) } catch {}\n        if (info && info.parentID) { posted.add(sessionID); return } // a sub-agent's — shown under its parent's Task card\n        const cwd = (info && info.location && info.location.directory) || (ctx.location && ctx.location.directory) || process.cwd()\n        const res = await fetch(\"http://127.<version>:4242/api/hook/session-start\", {\n          method: \"POST\",\n          headers: { \"content-type\": \"application/json\", \"x-harness-hook-token\": token },\n          body: JSON.stringify({\n            engine: \"opencode\",\n            pluginVersion: \"<version>\",\n            sessionId: sessionID,\n            cwd,\n            tmuxPane: pane,\n            callerPid: process.pid,\n            runtimeHints: [{ backend: \"tmux\", paneId: pane }],\n          }),\n        })\n        if (res && res.ok) posted.add(sessionID)\n      } catch {} finally { busy = false }\n    }\n    const check = () => {\n      try { const at = router.current(); if (at && at.type === \"session\" && at.sessionID) post(at.sessionID) } catch {}\n    }\n    check()\n    const timer = setInterval(check, 1000)\n    if (timer && typeof timer.unref === \"function\") timer.unref()\n    return () => clearInterval(timer)\n  },\n}\n"
+      }
+    ]
+  }
+}

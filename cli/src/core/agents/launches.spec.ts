@@ -167,7 +167,7 @@ describe('agent_create, refused before any pane exists', () => {
     expect(await ask({ engine: 'claude', cwd: '/w', agent: '../reviewer' })).toStrictEqual({ error: 'INVALID_AGENT', detail: 'agent must be 1-64 letters, digits, `-` or `_`' })
     expect(await ask({ engine: 'claude', cwd: '/w', agent: 7 })).toMatchObject({ error: 'INVALID_AGENT' })
     vi.mocked(supportsNamedAgent).mockReturnValueOnce(false)
-    vi.mocked(opencodeMajorVersion).mockReturnValueOnce(2)
+    vi.mocked(opencodeMajorVersion).mockResolvedValueOnce(2)
     expect(await ask({ engine: 'opencode', cwd: '/w', agent: 'reviewer' })).toMatchObject({ error: 'AGENT_UNSUPPORTED' })
     expect(supportsNamedAgent).toHaveBeenLastCalledWith('opencode', 2)
     expect(create).not.toHaveBeenCalled()
