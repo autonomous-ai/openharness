@@ -54,6 +54,7 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
     ? { sessionId: explicit, transcriptPath: await findResumedTranscript(session.engine, explicit, options) ?? undefined }
     : await findLiveSession(session.engine, session.cwd, Date.parse(expected.startMarker), {
       ...options, hermesHome: session.hermesHome ?? undefined, pid: expected.pid, bornOnly: true,
+      ...(session.forkedFrom?.sessionId ? { excludedSessionId: session.forkedFrom.sessionId } : {}),
       expectedProcess: expected, nativeBudget: budget,
     }))
   // Codex's open-file finder verifies this owner, all candidate headers and its descriptor
@@ -61,11 +62,6 @@ export async function captureResumeIdentity(session: RegisteredSession): Promise
   if (native || explicit || session.engine !== 'codex') await owner.verify()
   claim.verify()
   if (!found?.sessionId) return session
-  // A just-created parent's transcript can fall inside the process clock's start
-  // slack. It is still the fork's input, not evidence that the fork owns it. Keep
-  // the unbound fork and its lineage; only native process or explicit resume
-  // evidence can establish that this process actually took over that conversation.
-  if (!native && !explicit && found.sessionId === session.forkedFrom?.sessionId) return session
   // A file-backed engine still has to produce a transcript this daemon can point a resume at; a
   // database-backed one has nothing to check and is taken on its id alone.
   const transcriptPath = found.transcriptPath && keepsFile ? verifiedPath(found.sessionId, found.transcriptPath) : found.transcriptPath

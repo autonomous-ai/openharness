@@ -222,7 +222,7 @@ async function fileEngineSession(
   cwd: string,
   startedAtMs: number,
   readMeta: (path: string) => Promise<TranscriptMeta | null>,
-  opts?: { bornOnly?: boolean; excludedDirectory?: string },
+  opts?: { bornOnly?: boolean; excludedDirectory?: string; excludedSessionId?: string },
 ): Promise<RepairedSession | null> {
   const since = startedAtMs - START_SLACK_MS
   const born: RepairedSession[] = []
@@ -239,6 +239,9 @@ async function fileEngineSession(
     const meta = await readMeta(file.path)
     if (!meta?.cwd || !await sameDir(meta.cwd, cwd)) continue
     const found = { sessionId: meta.sessionId || idFromFile(file.path), transcriptPath: file.path }
+    // A fork's source can still be within the process start-time slack. Removing
+    // it before uniqueness is decided also lets the fork's own new file be found.
+    if (found.sessionId === opts?.excludedSessionId) continue
     ;(file.birthMs >= since ? born : wrote).push(found)
   }
   // "Unique or nothing" at each tier: two candidates means two agents in one directory, and a wrong guess
@@ -326,7 +329,7 @@ async function storeSession(
   store: SessionStoreContract,
   cwd: string,
   startedAtMs: number,
-  opts?: { bornOnly?: boolean; pid?: number; codexHome?: string; expectedProcess?: ProcessIdentity; nativeBudget?: NativeEvidenceBudget },
+  opts?: { bornOnly?: boolean; excludedSessionId?: string; pid?: number; codexHome?: string; expectedProcess?: ProcessIdentity; nativeBudget?: NativeEvidenceBudget },
 ): Promise<RepairedSession | null> {
   const scan = scanMeta(engine, store.scan, cwd)
   if ('record' in store.live) {
@@ -352,7 +355,9 @@ export async function findLiveSession(
   startedAtMs: number,
   // codexHome: the specific agent's own profile (its CODEX_HOME), when it isn't this machine's default —
   // see RegisteredSession.codexHome. Read only for an engine whose sessions follow one (`sessions.profile`).
-  opts?: { bornOnly?: boolean; pid?: number; codexHome?: string; hermesHome?: string; expectedProcess?: ProcessIdentity; nativeBudget?: NativeEvidenceBudget },
+  // A known fork source is excluded only from the file-time fallback. Exact
+  // native process records and open descriptors remain authoritative.
+  opts?: { bornOnly?: boolean; excludedSessionId?: string; pid?: number; codexHome?: string; hermesHome?: string; expectedProcess?: ProcessIdentity; nativeBudget?: NativeEvidenceBudget },
 ): Promise<RepairedSession | null> {
   const store = sessionStoreOf(engine)
   if (store) return storeSession(engine, store, cwd, startedAtMs, opts)

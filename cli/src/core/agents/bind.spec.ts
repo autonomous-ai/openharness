@@ -748,6 +748,21 @@ describe('binding a running process to its session', () => {
   })
 
   describe('a repair', () => {
+    it('keeps a stopped parent out of an unbound fork\'s fallback discovery', async () => {
+      const owners = { settle: vi.fn(() => []) }, run = setup({ owners })
+      const parent = agent({ agentId: 'parent-agent', sessionId: 'parent', active: false })
+      const fork = agent({ sessionId: '', forkedFrom: { agentId: parent.agentId, name: 'Parent', sessionId: parent.sessionId } })
+      vi.mocked(run.deps.registry.byProcess).mockReturnValue(fork)
+      vi.mocked(run.deps.stoppedAgents.get).mockReturnValue(parent)
+      vi.mocked(findLiveSession).mockImplementation(async (_engine, _cwd, _start, options) =>
+        options?.excludedSessionId === parent.sessionId ? null : { sessionId: parent.sessionId, transcriptPath: '/parent' })
+      await run.binding.bindObservedAgent(observed())
+      expect(run.deps.registry.register).not.toHaveBeenCalled()
+      expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
+      expect(owners.settle).not.toHaveBeenCalled()
+      expect(fork.sessionId).toBe('')
+    })
+
     it.each(['rebound', 'stopped'] as const)('does not publish native Codex evidence after its owner was %s', async change => {
       const run = setup(), entry = agent({ engine: 'codex', sessionId: '' }), seen = observed({ engine: 'codex' })
       vi.mocked(run.deps.registry.byProcess).mockReturnValue(entry)

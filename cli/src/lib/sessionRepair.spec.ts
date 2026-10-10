@@ -48,6 +48,16 @@ const STARTED_AT = Date.parse('2026-08-03T09:00:00Z')
 const CWD = '/Users/demo/work/project'
 
 describe('session repair', () => {
+  it('excludes a known fork parent before deciding whether a recent-file pool is unique', async () => {
+    const root = tempRoot()
+    writeTranscript(root, 'proj', 'parent', CWD, STARTED_AT + 5_000)
+    const { findLiveSession } = await load(root)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true, excludedSessionId: 'parent' })).resolves.toBeNull()
+    writeTranscript(root, 'proj', 'child', CWD, STARTED_AT + 6_000)
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true, excludedSessionId: 'parent' }))
+      .resolves.toMatchObject({ sessionId: 'child' })
+  })
+
   it('finds the session the running engine started in this directory', async () => {
     const root = tempRoot()
     writeTranscript(root, 'proj', 'sess-live', CWD, STARTED_AT + 5_000)
@@ -634,6 +644,9 @@ describe('session repair — homes the person moved', () => {
     const { processSessionOf, findLiveSession } = await moved(claudeHome, tempRoot())
     const transcriptPath = join(claudeHome, 'projects', 'project', `${id}.jsonl`)
     await expect(processSessionOf('claude', 77, CWD, STARTED_AT)).resolves.toEqual({ sessionId: id, transcriptPath })
+    // An exact native process claim can resume that parent despite a fallback exclusion.
+    await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true, pid: 77, excludedSessionId: id }))
+      .resolves.toEqual({ sessionId: id, transcriptPath })
     // And by the folder scan, when there is no process record to read.
     await expect(findLiveSession('claude', CWD, STARTED_AT, { bornOnly: true })).resolves.toEqual({ sessionId: id, transcriptPath })
   })

@@ -134,9 +134,11 @@ it.each(['claude', 'codex'] as const)('does not give an unbound %s fork its pare
   Object.assign(row, { engine, forkedFrom: { agentId: 'parent-agent', name: 'Parent', sessionId: 'parent', transcriptPath: '/parent' } })
   // A parent created in the same process-clock interval is a unique "born" candidate,
   // even though its newer turns and conversation still belong to the parent.
-  vi.mocked(findLiveSession).mockResolvedValue({ sessionId: 'parent', transcriptPath: '/parent' })
+  vi.mocked(findLiveSession).mockImplementation(async (_engine, _cwd, _start, options) =>
+    options?.excludedSessionId === 'parent' ? null : { sessionId: 'parent', transcriptPath: '/parent' })
   expect(await captureResumeIdentity(row)).toBe(row)
   expect(savedTranscriptEvidence).not.toHaveBeenCalled()
+  expect(findLiveSession).toHaveBeenCalledWith(engine, '/work', expect.any(Number), expect.objectContaining({ excludedSessionId: 'parent' }))
 })
 it.each(['native record', 'explicit resume', 'new conversation'] as const)('preserves an unbound fork\'s %s evidence', async mode => {
   row.forkedFrom = { agentId: 'parent-agent', name: 'Parent', sessionId: 'parent', transcriptPath: '/parent' }
