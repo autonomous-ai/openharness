@@ -40,7 +40,9 @@ test('search covers memories and conversations', async () => {
 test('asks prints your messages with their sessions', async () => {
   const { out } = await mem(['asks', '--since', '7d'])
   assert.match(out, /tldr only/)
-  assert.match(out, /\[session:s1\]/)
+  // A conversation's messages under one heading that names its day, agent, folder and session once.
+  assert.match(out, /^\d{4}-\d{2}-\d{2} · claude · ~\/code\/my-app · session:s1\n- please keep it short, tldr only\n- no, too long again$/m)
+  assert.equal(out.match(/session:s1/g).length, 1)
   assert.match(out, /3 messages/)
   assert.throws(() => since('soon'), /--since/)
 })

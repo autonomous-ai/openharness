@@ -122,6 +122,22 @@ test('agents that are not installed get nothing; on without an About You is refu
   assert.deepEqual(deliver('on', { env, home: dir }).results, [])
 })
 
+// The sources after each line are for the pane; a fifth of what every session carried (824 → 582 tokens, one Mac).
+test('agents get About You without its sources, by hook and by block alike; any other bracket stays', () => {
+  const { dir, env } = home()
+  const about = '## How you work\n- Wants short answers. [claude:short-answers.md, asks:98]\n- Keeps [1] footnotes and [a link](x).\n- Ends with [see notes]\n- From a session [session:3f2a-11]  \n'
+  writeAbout(env.MEMORIES_HOME, about)
+  const expected = ['- Wants short answers.', '- Keeps [1] footnotes and [a link](x).', '- Ends with [see notes]', '- From a session']
+  const block = packet(about)
+  for (const line of expected) assert.ok(block.includes(`${line}\n`), `block: ${line}`)
+  assert.doesNotMatch(block, /asks:98|session:3f2a/)
+  const printed = execFileSync('sh', ['-c', hookCommand(join(env.MEMORIES_HOME, 'about-you.md'))], { encoding: 'utf8' })
+  for (const line of expected) assert.ok(printed.includes(`${line}\n`), `hook: ${line}`)
+  assert.doesNotMatch(printed, /asks:98|session:3f2a/)
+  // What the switch says it costs is what is sent.
+  assert.equal(status({ env, home: dir }).tokens, Math.round(block.length / 4))
+})
+
 test('the delivered copy says what it is and is cut to fit the agents\' limits', () => {
   const long = '## A\n' + Array.from({ length: 400 }, (_, i) => `- line ${i} ${'x'.repeat(30)}`).join('\n')
   const text = packet(long)

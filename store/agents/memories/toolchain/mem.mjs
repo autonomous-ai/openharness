@@ -135,7 +135,15 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
       if (!index.db) { err(index.error); return 1 }
       const found = asks(index.db, { since: since(flags.since ?? '30d'), engine: flags.agent ?? null, limit: Number(flags.limit ?? 300), maxChars: Number(flags.chars ?? 400) })
       if (flags.json) { print(found.map((row) => ({ ...row, cwd: tilde(row.cwd, h.home) }))); return 0 }
-      for (const row of found) out(`${day(row.at)}  ${row.engine.padEnd(8)} ${short(tilde(row.cwd, h.home), 34).padEnd(34)}  ${short(row.text, 400)}  [session:${row.sessionId}]`)
+      // Each conversation's run of messages under one heading: date, agent, folder and session written once.
+      // Per line they were half of what a build read (600 messages: 133,679 characters, 60,000 of them
+      // padding and repeated session ids; one Mac, 2026-10-10).
+      let heading = ''
+      for (const row of found) {
+        const next = [day(row.at), row.engine, tilde(row.cwd, h.home), `session:${row.sessionId}`].filter(Boolean).join(' · ')
+        if (next !== heading) { out(`${heading ? '\n' : ''}${next}`); heading = next }
+        out(`- ${short(row.text, 400)}`)
+      }
       out(`${found.length} messages`)
       return 0
     }
