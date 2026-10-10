@@ -96,3 +96,21 @@ test('a request during the first read gets the snapshot, not an empty answer', a
     assert.equal((await get('/api/state', { 'sec-fetch-site': 'cross-site' })).status, 403)
   } finally { await viewer.close() }
 })
+
+test('second review: full-path privacy skip, worktree beats parent, literal blocks, inline speed', async () => {
+  const { resolveProject } = await import('../lib/sources.mjs')
+  const { mkdirSync, mkdtempSync } = await import('node:fs')
+  const home = mkdtempSync(join(tmpdir(), 'memories-dev-'))
+  mkdirSync(join(home, 'dev', 'my-app'), { recursive: true })
+  const found = resolveProject((home + '/dev/my-app').replace(/[^A-Za-z0-9]/g, '-'), { home })
+  assert.equal(found.name, 'my-app', 'a folder named dev below the home folder is probed')
+
+  const projects = projectsFor([{ id: 'r', project: { name: 'autonomous-harness', path: '/h/code/autonomous-harness' } }, { id: 'p', project: { name: 'harnesses', path: '/h/harnesses' } }],
+    [{ cwd: '/h/harnesses/worktrees/autonomous-harness/x', sessions: 3, asks: 3, lastAt: 1, engines: {} }], '/h')
+  assert.equal(projects.find((p) => p.name === 'autonomous-harness').sessions, 3)
+
+  assert.deepEqual(frontmatter('---\ndescription: |\n  Triggers: build it\n  and more\nname: z\n---\n').data, { description: 'Triggers: build it and more', name: 'z' })
+  fast('brackets', () => parse('['.repeat(20_000)))
+  fast('backticks', () => parse('`'.repeat(8_000) + ' text'))
+  assert.equal(parseAbout('## A\n-\titem\n').lines[0].text, 'item')
+})

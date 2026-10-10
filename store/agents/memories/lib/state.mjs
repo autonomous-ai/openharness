@@ -4,10 +4,11 @@
  * row in the pane and a line from `mem list` can never disagree.
  */
 
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { homes } from './agents.mjs'
 import { readAbout } from './about.mjs'
+import { status as deliveryStatus } from './deliver.mjs'
 import { collect } from './sources.mjs'
 import { openIndex, overview } from './sessions.mjs'
 import { encodePath, tilde } from './text.mjs'
@@ -48,7 +49,10 @@ export function projectsFor(memories, folders, home) {
     for (const entry of byKey.values()) {
       const path = real(entry)
       if (!path || !claims(path, folder.cwd)) continue
-      const score = folder.cwd === path ? Infinity : folder.cwd.startsWith(path + '/') ? path.length : path.length / 2
+      // Closest wins: an exact folder, else the match reaching furthest into the folder's path — for a
+      // worktree, the end of its `/worktrees/<repo>/` part, so it beats a project in a parent folder.
+      const worktree = `/worktrees/${basename(path)}/`
+      const score = folder.cwd === path ? Infinity : folder.cwd.startsWith(path + '/') ? path.length : folder.cwd.indexOf(worktree) + worktree.length
       if (!best || score > best.score) best = { entry, score }
     }
     if (best) owners.set(folder, best.entry)
@@ -100,6 +104,7 @@ export async function snapshot({ env = process.env, home, now = Date.now() } = {
     agents,
     about,
     aboutPath: tilde(join(h.memory, 'about-you.md'), h.home),
+    delivery: (() => { try { return deliveryStatus({ env, home: h.home }) } catch { return { on: false, agents: [] } } })(),
     projects: projectsFor(memories, sessions?.folders ?? [], h.home),
     sessions: sessions && {
       sessions: sessions.sessions,
@@ -116,7 +121,7 @@ export async function snapshot({ env = process.env, home, now = Date.now() } = {
 
 /** What changed between two snapshots, cheaply: the pane reloads only when this differs. */
 export function fingerprint(snap) {
-  const parts = [snap.about?.modified ?? 0, snap.sessions?.asks ?? 0, snap.sessions?.sessions ?? 0]
+  const parts = [snap.about?.modified ?? 0, snap.sessions?.asks ?? 0, snap.sessions?.sessions ?? 0, JSON.stringify(snap.delivery ?? null)]
   for (const row of snap.memories) parts.push(row.id, row.modified ?? 0, row.size)
   return parts.join('|')
 }
@@ -141,7 +146,8 @@ export function writeVerdict(workspace, snap) {
   } catch { /* no verdict yet */ }
   mkdirSync(dir, { recursive: true })
   const temporary = join(dir, `.verdict.${process.pid}.tmp`)
-  writeFileSync(temporary, JSON.stringify(next, null, 2) + '\n')
+  rmSync(temporary, { force: true })
+  writeFileSync(temporary, JSON.stringify(next, null, 2) + '\n', { flag: 'wx' })
   renameSync(temporary, join(dir, 'verdict.json'))
   return true
 }

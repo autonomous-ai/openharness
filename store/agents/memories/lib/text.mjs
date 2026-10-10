@@ -28,22 +28,23 @@ export function frontmatter(text) {
   const data = {}
   let parent = null
   let block = []
+  let literal = false
   // `key:` followed by indented lines is either a nested map (`metadata:\n  type: user`) or a block of
   // text (`description: |` or plain continuation lines); text becomes the key's string value.
   const close = () => {
     if (parent && block.length && !Object.keys(data[parent]).length) data[parent] = block.join(' ').trim()
     else if (parent && typeof data[parent] === 'object' && !Object.keys(data[parent]).length) data[parent] = ''
-    parent = null; block = []
+    parent = null; block = []; literal = false
   }
   for (const line of head.split(/\r?\n/)) {
     if (!line.trim() || line.trimStart().startsWith('#')) continue
     const match = /^([ \t]*)([A-Za-z0-9_.-]+):[ \t]*(.*)$/.exec(line.slice(0, 4000))
     const indented = /^[ \t]/.test(line)
-    if (!match) { if (parent && indented) block.push(line.trim()); continue }
+    if (!match || (literal && indented)) { if (parent && indented) block.push(line.trim()); continue }
     const [, indent, key, value] = match
     if (indent.length === 0) {
       close()
-      if (value === '' || value === '|' || value === '>' || value === '|-' || value === '>-') { data[key] = {}; parent = key } else data[key] = unquote(value)
+      if (value === '' || ['|', '>', '|-', '>-', '|+', '>+'].includes(value)) { data[key] = {}; parent = key; literal = value !== '' } else data[key] = unquote(value)
     } else if (parent && typeof data[parent] === 'object' && !block.length) {
       data[parent][key] = unquote(value)
     } else if (parent) block.push(line.trim())

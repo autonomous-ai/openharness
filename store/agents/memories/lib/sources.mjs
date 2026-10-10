@@ -99,13 +99,16 @@ export function resolveProject(encoded, { home, folders = new Map(), now = Date.
 
 // Folders the probe never lists: on macOS, reading these asks the person for permission (a privacy
 // prompt in their face because a viewer was resolving a name), and network volumes can hang.
-const PRIVATE = new Set(['Desktop', 'Documents', 'Downloads', 'Library', 'Pictures', 'Movies', 'Music', 'Public', 'Applications', 'Volumes', 'Network', 'System', 'cores', 'dev', 'proc'])
+const ROOT_PRIVATE = ['Applications', 'Library', 'Network', 'System', 'Volumes', 'cores', 'dev', 'proc']
+const HOME_PRIVATE = ['Desktop', 'Documents', 'Downloads', 'Library', 'Movies', 'Music', 'Pictures', 'Public']
 
 function probeProject(encoded, home) {
+  // Matched by full path: a project in `~/dev/app` or `~/code/Library` is still found.
+  const skip = new Set([...ROOT_PRIVATE.map((name) => join(sep, name)), ...(home ? HOME_PRIVATE.map((name) => join(home, name)) : [])])
   const probe = (dir, rest, depth) => {
     if (!rest) return dir
     if (depth > 14) return null
-    if (depth > 0 && PRIVATE.has(basename(dir))) return null
+    if (skip.has(dir)) return null
     // A symlinked folder counts: on macOS /var and /tmp are links to /private/….
     const names = list(dir).filter((entry) => entry.isDirectory() || entry.isSymbolicLink()).map((entry) => entry.name)
       .sort((a, b) => b.length - a.length)
@@ -415,7 +418,8 @@ export function collect({ env = process.env, home, folders = new Map(), sessions
   try { memories.push(...readInstructions(h)) } catch (error) { problems.push({ agent: 'instructions', error: String(error?.message ?? error) }) }
   memories.sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0) || a.id.localeCompare(b.id))
   if (pass.truncated) problems.push({ agent: 'all', error: `More than ${MAX_FILES} memory files; the rest are not shown.` })
-  // Forget cached files that are gone, so the cache cannot grow without bound.
+  // The cache holds at most two passes' worth of files; past that it starts over, which also drops
+  // files that were deleted.
   if (cache.size > MAX_FILES * 2) cache.clear()
 
   const opaque = windsurfOpaque(h)

@@ -11,6 +11,7 @@
  *   mem activity                      your messages per agent and per folder
  *   mem about                         the About You profile
  *   mem about write < file            replace it (the previous one is kept as about-you.prev.md)
+ *   mem deliver [status|on|off]       About You in every new session of every agent on this computer
  *
  * Every command takes --json. Nothing here writes an agent's files; `about write` writes only
  * ~/.harness/memory/about-you.md.
@@ -19,6 +20,7 @@
 import { readFileSync } from 'node:fs'
 import { homes } from '../lib/agents.mjs'
 import { readAbout, writeAbout } from '../lib/about.mjs'
+import { deliver, status as deliveryStatus } from '../lib/deliver.mjs'
 import { asks, search, MARK_OPEN, MARK_CLOSE } from '../lib/sessions.mjs'
 import { closeIndex, sessionIndex, snapshot } from '../lib/state.mjs'
 import { tilde } from '../lib/text.mjs'
@@ -28,7 +30,8 @@ const USAGE = `usage: mem <sources|list|show|search|asks|activity|about> [option
   mem show <id or list number>
   mem search <words>
   mem asks [--since 30d] [--agent codex] [--limit 400] [--chars 400]
-  mem about [write < file]`
+  mem about [write < file]
+  mem deliver [status|on|off]`
 
 function parseArgs(argv) {
   const flags = {}
@@ -148,6 +151,9 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
       if (words[0] === 'write') {
         const path = writeAbout(h.memory, stdin())
         out(`wrote ${tilde(path, h.home)}`)
+        // Agents that hold a copy get the new one now; Claude Code's hook reads the file itself.
+        const refreshed = deliver('refresh', { env, home })
+        for (const result of refreshed.results) if (result.changed || !result.ok) out(`${result.ok ? 'updated' : 'could not update'} ${result.agent}: ${result.file}${result.error ? ` (${result.error})` : ''}`)
         return 0
       }
       const about = readAbout(h.memory)
@@ -155,6 +161,24 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
       if (flags.json) { print(about); return 0 }
       out(about.text.trimEnd())
       return 0
+    }
+
+    if (command === 'deliver') {
+      const action = words[0] ?? 'status'
+      if (action === 'status') {
+        const now = deliveryStatus({ env, home })
+        if (flags.json) { print(now); return 0 }
+        out(`About You in every agent: ${now.on ? 'on' : 'off'}`)
+        for (const row of now.agents) out(`  ${row.agent.padEnd(9)} ${row.delivered ? (row.current ? 'yes' : 'older copy') : 'no '}  ${row.file}${row.error ? `  (${row.error})` : ''}`)
+        return 0
+      }
+      if (!['on', 'off', 'refresh'].includes(action)) { err('mem deliver [status|on|off]'); return 2 }
+      const done = deliver(action, { env, home })
+      if (flags.json) { print(done); return done.results.every((r) => r.ok) ? 0 : 1 }
+      out(`About You in every agent: ${done.on ? 'on' : 'off'}`)
+      for (const row of done.results) out(`  ${row.agent.padEnd(9)} ${row.ok ? (row.changed ? (done.on ? 'added  ' : 'removed') : 'already') : 'failed '}  ${row.file}${row.error ? `  (${row.error})` : ''}`)
+      if (done.on) out('New sessions start with it; sessions already open do not change.')
+      return done.results.every((r) => r.ok) ? 0 : 1
     }
 
     err(USAGE)

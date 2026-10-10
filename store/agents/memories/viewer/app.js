@@ -265,7 +265,12 @@ function drawRow(row, now) {
       if (opening) state.closed.delete(row.id); else state.closed.add(row.id)
       drawList()
       // Opening a group puts the cursor on its first row, so the preview shows something at once.
-      if (opening) { const index = state.rows.findIndex((r) => r.key === row.key); const first = state.rows.slice(index + 1).find(selectable); if (first) select(first.key) }
+      if (opening) {
+        const index = state.rows.findIndex((r) => r.key === row.key)
+        const next = state.rows.findIndex((r, i) => i > index && r.type === 'group')
+        const first = state.rows.slice(index + 1, next < 0 ? undefined : next).find(selectable)
+        if (first) select(first.key)
+      }
     })
     return node
   }
@@ -440,6 +445,7 @@ function drawPreview() {
     const { line } = row
     preview.append(head('About you', metaLine([line.section, state.snap.about?.modified ? `built ${longAge(state.snap.about.modified)}` : null]), state.snap.aboutPath))
     preview.append(el('p', 'pv-big', line.text))
+    preview.append(deliveryLine())
     if (line.refs.length) {
       preview.append(el('div', 'pv-h', 'where this comes from'))
       const chips = el('div', 'chips')
@@ -497,6 +503,21 @@ function reveal(memory) {
   drawList()
   if (!state.rows.some((row) => row.key === key)) { state.closed.delete('agents'); state.expanded.add(`ag:${memory.agent}`); drawList(); key = `m:${memory.id}@ag:${memory.agent}` }
   select(key)
+}
+
+/** Which agents start every new session with About You, said in one line under it. */
+function deliveryLine() {
+  const delivery = state.snap.delivery
+  const box = el('div', 'callout')
+  const using = (delivery?.agents ?? []).filter((row) => row.delivered)
+  if (delivery?.on && using.length) {
+    const names = using.map((row) => agent(row.agent).name + (row.current ? '' : ' (older copy)'))
+    box.append(el('div', null, `Every new session of ${names.join(', ')} starts with this.`))
+    box.append(el('div', 'pv-meta', 'Sessions already open keep what they started with. Ask the agent to stop using it any time.'))
+  } else {
+    box.append(el('div', null, 'Your agents do not use this yet. Ask the agent on the right:'), el('div', 'say', 'use my About You in every agent'))
+  }
+  return box
 }
 
 function refMemory(ref) {

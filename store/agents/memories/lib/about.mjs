@@ -33,7 +33,7 @@ export function parseAbout(text) {
     const line = raw.trim()
     if (line.startsWith('## ')) { section = line.slice(3).trim() || section; continue }
     if (line.startsWith('# ')) continue
-    if ((line.startsWith('- ') || line.startsWith('* ')) && line.length > 2) {
+    if (/^[-*][ \t]/.test(line) && line.length > 2) {
       let body = line.slice(2).trim()
       let refs = []
       const open = body.endsWith(']') ? body.lastIndexOf('[') : -1
@@ -56,8 +56,9 @@ export function readAbout(dir) {
     // Written only through writeAbout (≤ 32 KB); a larger file someone put there is read in part.
     const buffer = Buffer.alloc(Math.min(info.size, 2 * MAX_ABOUT))
     const fd = openSync(path, 'r')
-    try { readSync(fd, buffer, 0, buffer.length, 0) } finally { closeSync(fd) }
-    const text = buffer.toString('utf8')
+    let read = 0
+    try { read = readSync(fd, buffer, 0, buffer.length, 0) } finally { closeSync(fd) }
+    const text = buffer.subarray(0, read).toString('utf8')
     const modified = info.mtimeMs
     return { text, modified: Math.round(modified), ...parseAbout(text) }
   } catch {

@@ -7,7 +7,7 @@
  * what agents remembered, not a browser, and a click must never navigate it away.
  */
 
-const MAX_INLINE = 20_000
+const MAX_INLINE = 8_000
 const MAX_QUOTE_DEPTH = 8
 
 /** `## Title ##` → { level, text }, without a backtracking pattern (see lib/text.mjs headingText). */
@@ -30,7 +30,7 @@ export function inline(text) {
   // model can write anything, and the preview must never stall.
   if (String(text ?? '').length > MAX_INLINE) return [{ type: 'text', text: String(text) }]
   const source = String(text ?? '')
-  const pattern = /(`+)([^`]+?)\1|\*\*([^*]+?)\*\*|__([^_]+?)__|(?<![\w*])\*([^*\s][^*]*?)\*(?!\w)|(?<![\w_])_([^_\s][^_]*?)_(?!\w)|\[([^\]]+)\]\(([^)\s]+)\)/g
+  const pattern = /(?<!`)(`+)([^`]+?)\1|\*\*([^*]+?)\*\*|__([^_]+?)__|(?<![\w*])\*([^*\s][^*]*?)\*(?!\w)|(?<![\w_])_([^_\s][^_]*?)_(?!\w)|\[([^\][]+)\]\(([^)\s]+)\)/g
   let last = 0
   for (const match of source.matchAll(pattern)) {
     if (match.index > last) spans.push({ type: 'text', text: source.slice(last, match.index) })
