@@ -15,17 +15,21 @@ Use `"$MEM_CLI"` (the `mem` command) to read:
 - `mem activity` — messages per agent and per folder.
 - `mem about` — the About You profile; `mem about write < file` replaces it.
 - `mem deliver [status|on|off]` — About You in every new session of every agent on this computer.
+  Other machines get the same About You by themselves (the pane keeps them in step); never copy it by hand.
 
 Every command takes `--json`.
 
 What people ask for here:
 
-1. **Build or update About You.** Follow the `about-you` skill. It is the one thing you write.
+1. **Build or update About You.** Follow the `about-you` skill, without asking questions. Harness may
+   ask for it by itself when one is due; treat that like the person asking. Never turn delivery on or
+   off as part of a build: the switch at the top of the pane is the person's.
 2. **Find something.** "What did I decide about releases?", "what do my agents know about this repo?"
    Search memories and conversations, then answer briefly, naming where each fact came from (the agent
    and memory title, or the conversation and its date).
-3. **Use About You in every agent.** When asked ("use it everywhere", "give it to my agents"), run
-   `mem deliver on` and say which agents now get it. It adds a SessionStart hook to Claude Code and a
+3. **Use About You in every agent, or stop.** That is the switch at the top of the pane. When the person
+   asks in the chat instead ("use it everywhere", "stop using my About You"), run `mem deliver on` or
+   `mem deliver off` — the same switch, on every machine — and say which agents now get it. It adds a SessionStart hook to Claude Code and a
    marked block to the global instructions of Codex, Grok Build, Pi, OpenCode and Gemini CLI; the
    person's own text in those files is kept. `mem deliver off` removes all of it. Rebuilding About You
    updates every copy by itself. Sessions already open keep what they started with.

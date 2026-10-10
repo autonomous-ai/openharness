@@ -34,7 +34,7 @@ test('writing keeps the previous profile and never leaves a partial file', () =>
   assert.equal(readAbout(dir).lines.length, 3)
   writeAbout(dir, '## New\n- One line.\n')
   assert.equal(readFileSync(join(dir, 'about-you.prev.md'), 'utf8'), PROFILE)
-  assert.deepEqual(readdirSync(dir).sort(), ['about-you.md', 'about-you.prev.md'])
+  assert.deepEqual(readdirSync(dir).sort(), ['about-meta.json', 'about-you.md', 'about-you.prev.md'])
   assert.equal(statSync(join(dir, 'about-you.md')).mode & 0o777, 0o600)
 })
 

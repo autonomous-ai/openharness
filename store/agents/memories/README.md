@@ -22,31 +22,49 @@ for a moment. Memory files are shown as text; nothing in them can run in the pan
 
 ## About You
 
-Ask the agent: **build my About You**. It reads your own messages across every agent and what your
-agents saved about you, keeps only what recurs or what you stated as a rule, and writes a short
-profile to `~/.harness/memory/about-you.md`, every line with its sources. It runs only when you ask,
-with the agent in this pane. The previous version is kept as `about-you.prev.md`.
+A short profile of how you work, built from your own words across every agent, every line with its
+sources. Ask the agent: **build my About You**. It runs on the agent and model you picked for this
+harness, as a turn you see in the chat. It lives at `~/.harness/memory/about-you.md`; the previous
+version is kept beside it. Each build is numbered one past the highest any machine has seen, so
+machines agree on the newest without trusting their clocks.
 
-## In every agent
+Building it by itself — the first time, then after about 200 new messages, at most once a day
+(`mem due`) — is the daemon's memory service's job, which waits for an empty input box before it
+types the request: the pane never types into its agent, where a request could land on top of what you
+are writing.
 
-Ask the agent: **use my About You in every agent** (`mem deliver on`). Every new session then starts
-with it:
+## In every agent: the switch
+
+**About You in your agents** at the top of the pane turns it on or off. On, every new session of each
+agent starts with it:
 
 | Agent | How it gets About You |
 |---|---|
 | Claude Code | a SessionStart hook in `~/.claude/settings.json` that prints the file as it is now |
-| Codex | a marked block in `~/.codex/AGENTS.md` (or `AGENTS.override.md` when you have one) |
+| Codex | a marked block in `~/.codex/AGENTS.md` (or `AGENTS.override.md` when that one has text) |
 | Grok Build | `~/.grok/rules/harness-about-you.md` |
 | Pi, OpenCode, Gemini CLI | a marked block in their global `AGENTS.md` / `GEMINI.md` |
 
-Only its own hook, block or file is ever changed; your text around a block is kept byte for byte, and
-a file that is a link (a dotfiles repository) is left alone. Harness's own hooks and this one keep each
-other. Rebuilding About You updates every copy. `mem deliver off` removes all of it. Each copy says
-what it is and that the current request comes first.
+Once About You exists the switch starts on, at the earliest time a choice can have: your first click,
+on any machine, outranks it everywhere. The line beside the switch says which agents get it and what
+it costs: about this many tokens at the start of every new session. Off removes every copy, and stays
+off: a rebuild, or About You arriving from another machine, only refreshes copies and never turns it
+back on. Between two choices the newer wins, and the same time means off. Only its own hook, block or file is ever changed;
+your text around a block is kept, and a file or folder that is a link (a dotfiles repository) is left
+alone. Harness's own hooks and this one keep each other. Each copy says what it is and that the
+current request comes first. Saying it in the chat ("stop using my About You") flips the same switch.
 
-`npm run test:agents` proves it with the real agents in a throwaway home: a random made-up fact in
-About You must reach a new Claude Code session's answer and Codex's model input, and must not reach
-either without delivery.
+## Every machine
+
+The pane asks each of your online machines for its memories and shows them together, each labeled
+with its machine, with one activity calendar for all of them. About You and the switch are the same
+everywhere: the newest About You and the newest on/off choice reach every machine, and each machine's
+agents get it there. A machine whose Harness is older than its memory service is listed as needing
+the newest Harness.
+
+`npm run test:agents` proves delivery with the real agents in a throwaway home: a random made-up fact
+in About You must reach a new Claude Code session's answer and Codex's model input, and must not reach
+either without it.
 
 ## The `mem` command
 
@@ -72,7 +90,8 @@ rules file. Windsurf keeps its memories
 in a binary format, so only its global rules are shown. Cursor, Pi and OpenCode keep no memory of
 their own; Copilot keeps its memory on GitHub.
 
-This computer only, for now. Memories on your other machines appear when you open Memories there.
+Other machines are read through their own Harness (the memory service), never by reaching into their
+files from here.
 
 ## Credit and stewardship
 
