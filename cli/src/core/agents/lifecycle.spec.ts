@@ -4,6 +4,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { createResumeAgentService } from '../../lib/resumeAgentService.js'
 import { AgentStopError, createStopAgentService } from '../../lib/stopAgentService.js'
 import { createAgentLifecycle, createPurgeRequest, createStopRequest, type LifecycleDeps } from './lifecycle.js'
+import { IdentityReadUnavailable } from '../../engines/kit/identityScan.js'
 
 vi.mock('../../lib/stopAgentService.js', async (real) => ({ ...await real<object>(), createStopAgentService: vi.fn(() => vi.fn(async () => {})) }))
 vi.mock('../../lib/resumeAgentService.js', async (real) => ({
@@ -167,6 +168,15 @@ describe('agent_delete', () => {
     expect(unconfirmed).toStrictEqual({ error: 'STOP_UNCONFIRMED', detail: 'The process could not be verified.' })
     expect(Object.keys(unconfirmed)).toEqual(['error', 'detail'])
     await expect(request(async () => { throw new Error('tmux gone') })({ agentId: 'a1' })).rejects.toThrow('tmux gone')
+  })
+
+  it('returns an unavailable native identity as a retryable hold and permits the same Stop after recovery', async () => {
+    const error = new IdentityReadUnavailable('the native record is incomplete')
+    const stop = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(undefined)
+    const run = request(stop)
+    expect(await run({ agentId: 'a1' })).toStrictEqual({ error: error.code, detail: error.message, held: true, retryable: true })
+    expect(await run({ agentId: 'a1' })).toStrictEqual({ deleted: true })
+    expect(stop.mock.calls).toEqual([['a1'], ['a1']])
   })
 })
 
