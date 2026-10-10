@@ -6,10 +6,11 @@ import { pathToFileURL } from 'url'
 
 /** Pi and OpenCode register through generated source, so pin its process-owned wire contract directly. */
 const dirs: string[] = []
-const version = vi.hoisted(() => ({ major: 1 as number | null }))
-vi.mock('../engines/launchControl.js', () => ({ opencodeMajorVersion: () => version.major }))
+const version = vi.hoisted(() => ({ major: 1 as number | null, read: undefined as undefined | (() => number | null | Promise<number | null>) }))
+vi.mock('../engines/launchControl.js', () => ({ opencodeMajorVersion: () => version.read ? version.read() : version.major }))
 beforeEach(() => {
   version.major = 1
+  version.read = undefined
   vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] })
 })
 afterEach(() => {
@@ -26,6 +27,41 @@ function scratch(): string {
 }
 
 describe('generated discovery scripts', () => {
+  it('does not let an obsolete version probe undo a newer plugin installation', async () => {
+    const config = scratch(), pluginDir = join(config, 'plugin')
+    vi.stubEnv('OPENCODE_PLUGIN_DIR', pluginDir)
+    const { installOpencodePlugin } = await import('./hooks.js')
+    let finish!: (major: null) => void
+    version.read = () => new Promise<null>(done => { finish = done })
+    const obsolete = installOpencodePlugin(4242)
+    version.read = () => 1
+    await installOpencodePlugin(4242)
+    const file = join(pluginDir, 'launcher-register.js'), confirmed = readFileSync(file, 'utf8')
+    finish(null)
+    await obsolete
+    expect(readFileSync(file, 'utf8')).toBe(confirmed)
+  })
+
+  it('bounds a superseded install waiting for its current sibling and refuses a changed port', async () => {
+    const config = scratch(), pluginDir = join(config, 'plugin')
+    vi.stubEnv('OPENCODE_PLUGIN_DIR', pluginDir)
+    const { installOpencodePlugin } = await import('./hooks.js')
+    const { OPENCODE_VERSION } = await import('../engines/opencode/contract.js')
+    const finishes: Array<(major: number) => void> = []
+    version.read = () => new Promise<number>(done => { finishes.push(done) })
+    const older = installOpencodePlugin(4242), newer = installOpencodePlugin(4242)
+    finishes[0]!(1)
+    await vi.advanceTimersByTimeAsync(OPENCODE_VERSION.timeoutMs)
+    expect(await older).toBe(false)
+    expect(existsSync(join(pluginDir, 'launcher-register.js'))).toBe(false)
+    finishes[1]!(1)
+    expect(await newer).toBe(true)
+    const oldPort = installOpencodePlugin(4242), newPort = installOpencodePlugin(4243)
+    finishes[2]!(1); finishes[3]!(1)
+    expect(await oldPort).toBe(false)
+    expect(await newPort).toBe(true)
+  })
+
   it('lets the Pi extension post from any terminal context without launcher metadata', async () => {
     const piHome = scratch()
     vi.resetModules()
@@ -45,7 +81,7 @@ describe('generated discovery scripts', () => {
     vi.resetModules()
     vi.stubEnv('OPENCODE_PLUGIN_DIR', pluginDir)
     const { installOpencodePlugin } = await import('./hooks.js')
-    installOpencodePlugin(18473)
+    await installOpencodePlugin(18473)
 
     const src = readFileSync(join(pluginDir, 'launcher-register.js'), 'utf-8')
     expect(src).toContain('process.env.TMUX_PANE')
@@ -69,7 +105,7 @@ describe('generated discovery scripts', () => {
     vi.stubEnv('ADAPTER_DATA_DIR', data)
     writeFileSync(join(data, 'hook-credential'), 'tok-123\n')
     const { installOpencodePlugin } = await import('./hooks.js')
-    installOpencodePlugin(18473)
+    await installOpencodePlugin(18473)
 
     expect(existsSync(join(pluginDir, 'launcher-register.js'))).toBe(false)
     const tuiPath = join(config, 'plugins', 'launcher-register', 'tui.js')
@@ -117,17 +153,17 @@ describe('generated discovery scripts', () => {
     const { installOpencodePlugin } = await import('./hooks.js')
     const legacy = join(pluginDir, 'launcher-register.js')
     const tui = join(config, 'plugins', 'launcher-register', 'tui.js')
-    installOpencodePlugin(18473)
+    await installOpencodePlugin(18473)
     const original = readFileSync(legacy, 'utf8')
     expect(original).toContain('export const MachineRegister')
     const before = statSync(tui).mtimeMs
     version.major = 2
-    installOpencodePlugin(18473)
-    installOpencodePlugin(18473)
+    await installOpencodePlugin(18473)
+    await installOpencodePlugin(18473)
     expect(existsSync(legacy)).toBe(false)
     expect(statSync(tui).mtimeMs).toBe(before)
     version.major = 1
-    installOpencodePlugin(18473)
+    await installOpencodePlugin(18473)
     expect(readFileSync(legacy, 'utf8')).toBe(original)
   })
 
@@ -144,7 +180,7 @@ describe('generated discovery scripts', () => {
     version.major = major
     vi.stubEnv('OPENCODE_PLUGIN_DIR', pluginDir)
     const { installOpencodePlugin } = await import('./hooks.js')
-    installOpencodePlugin(18473)
+    await installOpencodePlugin(18473)
     expect(readFileSync(legacy, 'utf8')).toBe(foreign)
     expect(readFileSync(settings, 'utf8')).toBe(settingsText)
   })
@@ -155,7 +191,7 @@ describe('generated discovery scripts', () => {
     version.major = null
     vi.stubEnv('OPENCODE_PLUGIN_DIR', pluginDir)
     const { installOpencodePlugin } = await import('./hooks.js')
-    installOpencodePlugin(18473)
+    await installOpencodePlugin(18473)
     expect(existsSync(join(pluginDir, 'launcher-register.js'))).toBe(false)
     expect(existsSync(join(config, 'plugins', 'launcher-register', 'tui.js'))).toBe(true)
   })

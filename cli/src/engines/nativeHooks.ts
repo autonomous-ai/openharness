@@ -2,7 +2,7 @@
 import { join } from 'node:path'
 import { env } from '../config/env.js'
 import { VERSION } from '../version.js'
-import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN, OPENCODE_LEGACY_REMOVAL } from './opencode/contract.js'
+import { OPENCODE_LEGACY_PLUGIN, OPENCODE_TUI_PLUGIN, OPENCODE_LEGACY_REMOVAL, OPENCODE_VERSION } from './opencode/contract.js'
 import { KILO_PLUGIN } from './kilo/contract.js'
 import { PI_EXTENSION } from './pi/contract.js'
 import { AMP_PLUGIN } from './amp/contract.js'
@@ -36,9 +36,39 @@ export const installHermesHooks = (port: number): void =>
   installNativeYamlHooks(HERMES_HOOK_SETTINGS, home => command(port, 'hermes', env.CODEX_HOME, home))
 
 /** Install both discovery surfaces for v1; v2 must not load our incompatible v1 export. */
-export function installOpencodePlugin(port: number): void {
-  const values = pluginValues(port)
-  if (opencodeMajorVersion() === 1) installNativePlugin(OPENCODE_LEGACY_PLUGIN, values)
-  else removeNativePlugin(OPENCODE_LEGACY_REMOVAL)
-  installNativePlugin(OPENCODE_TUI_PLUGIN, values)
+interface OpencodeInstallation { port: number; done: Promise<boolean> }
+let opencodeInstallation: OpencodeInstallation | undefined
+export async function installOpencodePlugin(port: number): Promise<boolean> {
+  const installation: OpencodeInstallation = { port, done: Promise.resolve(false) }
+  opencodeInstallation = installation
+  installation.done = (async () => {
+    const values = pluginValues(port)
+    const major = await opencodeMajorVersion()
+    // A newer request may have installed an upgraded/downgraded engine's hooks
+    // while this probe waited. Only the latest request can change those files.
+    if (installation !== opencodeInstallation) return false
+    if (major === 1) installNativePlugin(OPENCODE_LEGACY_PLUGIN, values)
+    else removeNativePlugin(OPENCODE_LEGACY_REMOVAL)
+    installNativePlugin(OPENCODE_TUI_PLUGIN, values)
+    return true
+  })()
+  let current = installation, installed = await current.done
+  const deadline = performance.now() + OPENCODE_VERSION.timeoutMs
+  while (current !== opencodeInstallation) {
+    current = opencodeInstallation!
+    // Two healthy creates must not fail merely because they overlap. Follow the
+    // current installation without restoring an obsolete request's write rights.
+    // A port change or continuing churn cannot make this caller wait forever.
+    const remaining = deadline - performance.now()
+    if (current.port !== port || remaining <= 0) return false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const result = await Promise.race([current.done, new Promise<'timeout'>(done => {
+        timer = setTimeout(() => done('timeout'), remaining)
+      })])
+      if (result === 'timeout') return false
+      installed = result
+    } finally { clearTimeout(timer) }
+  }
+  return installed
 }

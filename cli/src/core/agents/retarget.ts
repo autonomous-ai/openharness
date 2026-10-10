@@ -127,7 +127,7 @@ export function createAgentRetargeter({
     const rewritesOpencodeSession = session.engine === 'opencode' && !!session.sessionId
       && (!!grid || !!remembered?.includes('/'))
     const opencode = session.engine === 'opencode' ? opencodeLaunch : null
-    const opencodeMajor = opencode ? opencode.opencodeMajorVersion() : null
+    const opencodeMajor = opencode ? await opencode.opencodeMajorVersion() : null
     if (rewritesOpencodeSession && opencode && !opencode.isOpencodeV2(opencodeMajor) && !binaryOnPath('sqlite3')) {
       return {
         ok: false,

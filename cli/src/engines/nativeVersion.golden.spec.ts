@@ -14,8 +14,11 @@ vi.mock('node:child_process', async original => {
     return native.major === 1 ? '1.18.31\n' : 'opencode v2.0.18\n'
   }
   return { ...actual, execFileSync: answer,
-    execFile: (binary: string, args: string[], _options: unknown, callback: (error: null, stdout: string, stderr: string) => void) => {
-      queueMicrotask(() => callback(null, answer(binary, args), ''))
+    execFile: (binary: string, args: string[], _options: unknown, callback: (error: Error | null, stdout: string, stderr: string) => void) => {
+      queueMicrotask(() => {
+        try { callback(null, answer(binary, args), '') }
+        catch (error) { callback(error as Error, '', '') }
+      })
       return { kill: () => true }
     },
     exec: () => { throw Error('Host shells are forbidden in this golden') },
@@ -26,7 +29,7 @@ vi.mock('node:child_process', async original => {
 })
 vi.mock('node:fs', async original => {
   const actual = await original<typeof import('node:fs')>()
-  return { ...actual, statSync: (file: string, ...args: unknown[]) => file === '/fixture/bin/opencode'
+  return { ...actual, realpathSync: Object.assign((file: string) => file === '/fixture/bin/opencode' ? file : actual.realpathSync(file), { native: actual.realpathSync.native }), statSync: (file: string, ...args: unknown[]) => file === '/fixture/bin/opencode'
     ? { dev: 1, ino: native.stamp, size: 64, mtimeMs: native.stamp, ctimeMs: native.stamp, mode: 0o100755,
       isFile: () => true, isSymbolicLink: () => false }
     : (actual.statSync as (...args: unknown[]) => unknown)(file, ...args) }

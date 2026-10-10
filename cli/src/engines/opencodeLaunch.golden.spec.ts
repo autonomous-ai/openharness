@@ -94,7 +94,7 @@ it('records create, fork, relaunch and actual retarget dispatch before the extra
   const { createAgentRetargeter } = await import('../core/agents/retarget.js')
   const { buildEngineLaunchArgv } = await import('../lib/engineLaunch.js')
   const { env } = await import('../config/env.js')
-  const world = { dataDir: join(root, 'adapter_data_dir'), machine: () => ({ hermesSystemManaged: false, opencodeMajor: opencodeMajorVersion() }),
+  const world = { dataDir: join(root, 'adapter_data_dir'), machine: async () => ({ hermesSystemManaged: false, opencodeMajor: await opencodeMajorVersion() }),
     tmuxSupportsSessionEnv: async () => true, readCodexConfig: () => null, setGridLaunch: () => {} }
   const shapes = launchShapes(world)
   const row = (engine: AgentEngine, named = false): RegisteredSession => ({ agentId: 'fixture-agent', sessionId: 'ses_fixture', engine, cwd: work,

@@ -20,7 +20,7 @@ mutations = [
     ('fork version disconnected', 'src/core/agents/fork.ts', 'opencode.opencodeMajorVersion()', 'null', golden),
     ('retarget native model skipped', 'src/core/agents/retarget.ts', 'if (rewritesOpencodeSession && opencode)', 'if (false)', golden),
     ('relaunch depends on optional code', 'src/core/agents/launch.ts', "import { prepareResume, repairedItemsName }", "import { loadEngine } from '../../engines/inProcess.js'\nimport { prepareResume, repairedItemsName }", architecture),
-    ('composition reads optional code', 'src/core/main.ts', "opencodeMajor: engine === 'opencode' ? opencodeMajorVersion() : null", "opencodeMajor: engine === 'opencode' ? engineNow('opencode', 'an OpenCode launch was built')?.opencodeMajorVersion() ?? null : null", architecture),
+    ('composition reads optional code', 'src/core/main.ts', "opencodeMajor: engine === 'opencode' ? await opencodeMajorVersion() : null", "opencodeMajor: engine === 'opencode' ? engineNow('opencode', 'an OpenCode launch was built')?.opencodeMajorVersion() ?? null : null", architecture),
     ('retarget waits on optional reader', 'src/core/agents/retarget.ts', "const opencode = session.engine === 'opencode' ? opencodeLaunch : null", "const opencode = session.engine === 'opencode' ? await (await import('../../engines/inProcess.js')).loadEngine('opencode') : null", eager),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}

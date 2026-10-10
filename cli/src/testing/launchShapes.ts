@@ -30,7 +30,7 @@ import { gridLaunchInProcess } from './gridLaunchInProcess.js'
 export interface LaunchWorld {
   /** The data folder: saved APIs, and the config directories written for file-configured engines. */
   dataDir: string
-  machine: () => GridLaunchMachine
+  machine: () => GridLaunchMachine | Promise<GridLaunchMachine>
   tmuxSupportsSessionEnv: () => Promise<boolean>
   /** A Codex `config.toml`, as the own-login provider reads it. */
   readCodexConfig: (path: string) => string | null

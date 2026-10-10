@@ -1,0 +1,133 @@
+{
+  "scope": "Native-version component only; private fixture executables, parent-process CPU and peak RSS. Same host and pinned Node. No startup or vendor-engine performance claim.",
+  "baseline": "ea4e800b5f19704ab2f4663196c3949bb9b6aaa4",
+  "candidate_base": "564460afacc66abbc42e254758fa5e3c76e9b3ff",
+  "candidate_diff_sha256": "ec94697db4569c6d3e8288c1ba90c731999d06846c6c5538d03dfc6eac9ea085",
+  "measurements": [
+    {
+      "revision": "former",
+      "workload": "healthy",
+      "iterations": 10,
+      "commands": 10,
+      "latencyMs": {
+        "median": 55.837291999999934,
+        "max": 786.685905
+      },
+      "callbackDelayMs": {
+        "median": 56.646866000000045,
+        "max": 786.839451
+      },
+      "elapsedMs": 1302.72547,
+      "parentCpuMs": 10.868,
+      "peakRssMiB": 77.69921875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "revision": "candidate",
+      "workload": "healthy",
+      "iterations": 10,
+      "commands": 10,
+      "latencyMs": {
+        "median": 54.41744400000016,
+        "max": 594.1794380000001
+      },
+      "callbackDelayMs": {
+        "median": 2.1663409999999885,
+        "max": 4.2508689999999945
+      },
+      "elapsedMs": 1097.88018,
+      "parentCpuMs": 42.896,
+      "peakRssMiB": 73.53515625,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "revision": "former",
+      "workload": "slow",
+      "iterations": 10,
+      "commands": 10,
+      "latencyMs": {
+        "median": 156.93449499999997,
+        "max": 717.036659
+      },
+      "callbackDelayMs": {
+        "median": 157.0008560000001,
+        "max": 717.180795
+      },
+      "elapsedMs": 2135.671639,
+      "parentCpuMs": 10.378,
+      "peakRssMiB": 79.32421875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "revision": "candidate",
+      "workload": "slow",
+      "iterations": 10,
+      "commands": 10,
+      "latencyMs": {
+        "median": 157.0257590000001,
+        "max": 688.707009
+      },
+      "callbackDelayMs": {
+        "median": 1.8762229999999818,
+        "max": 2.7413779999999974
+      },
+      "elapsedMs": 2107.45578,
+      "parentCpuMs": 75.195,
+      "peakRssMiB": 78.66796875,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "revision": "former",
+      "workload": "cached",
+      "iterations": 500,
+      "commands": 1,
+      "latencyMs": {
+        "median": 0.03675199999997858,
+        "max": 0.11368400000003476
+      },
+      "callbackDelayMs": {
+        "median": 1.335805000000164,
+        "max": 1.5336849999999913
+      },
+      "elapsedMs": 664.9937649999999,
+      "parentCpuMs": 57.971,
+      "peakRssMiB": 79.6328125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    },
+    {
+      "revision": "candidate",
+      "workload": "cached",
+      "iterations": 500,
+      "commands": 1,
+      "latencyMs": {
+        "median": 0.045546000000058484,
+        "max": 0.17663900000002286
+      },
+      "callbackDelayMs": {
+        "median": 1.3213600000001406,
+        "max": 1.5952459999999746
+      },
+      "elapsedMs": 648.9071530000001,
+      "parentCpuMs": 54.493,
+      "peakRssMiB": 78.03125,
+      "node": "v22.23.2",
+      "platform": "darwin",
+      "arch": "x64"
+    }
+  ],
+  "candidate_inputs": {
+    "cli/src/engines/kit/nativeVersion.ts": "d45ea7439bcbda938940db040e1adb44fe5fab0a97fe14288a660f206422f5da",
+    "cli/src/lib/binaryOnPath.ts": "9be2523e1379ee2653c8a062b9085fefd9e10a709732ca95b19ac3506b3a291f",
+    "cli/scripts/handoff-2026-10-08/native-version-cost.ts": "50f5f8418d579557dcf7ce3551d4eb32b461c560056dea1ba58c6fa0d08e4db8"
+  }
+}
