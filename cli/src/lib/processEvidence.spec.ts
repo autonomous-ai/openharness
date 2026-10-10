@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { readlink } from 'node:fs/promises'
-import { NativeEvidenceBudget, nativeBytes, nativeProbe } from '../engines/kit/nativeEvidence.js'
+import { NativeEvidenceBudget, nativeBytes, nativeProbe, nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import { parseProcessGraph, readProcessEvidence } from './processEvidence.js'
 import { engineProcessMatchScore, resumeSessionId } from './tmux.js'
 import { nativeProcessControl } from './nativeProcessControl.js'
@@ -169,5 +169,30 @@ describe('native process incarnation and executable', () => {
     const proof = await readProcessEvidence(42, budget(), () => true)
     rows[1].ticks++
     await expect(proof.verifyDescriptors(new Map([[42, []], [43, []]]), 43)).rejects.toThrow('owner changed')
+  })
+})
+
+
+it('retains an unrelated Darwin ?E+ row without holding a healthy owner', async () => {
+  Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
+  rows.push({ ...make(43, 99, 'other'), state: '?E+' })
+  const proof = await readProcessEvidence(42, budget(), () => true)
+  expect(proof.parent?.pid).toBe(42)
+  expect(proof.children).toEqual([])
+  await proof.verify()
+  expect(vi.mocked(nativeProcessControl).mock.calls.every(([pids]) => !pids.includes(43))).toBe(true)
+})
+it.each(['owner', 'child'])('cannot treat an inconclusive Darwin %s state as proof of absence', async kind => {
+  Object.defineProperty(process, 'platform', { ...platform, value: 'darwin' })
+  const unknown = kind === 'owner' ? 42 : 43
+  if (kind === 'owner') rows[0].state = '?E+'
+  else rows.push({ ...make(43, 42), state: '?E+' })
+  const read = vi.mocked(nativeProcessControl).getMockImplementation()!
+  vi.mocked(nativeProcessControl).mockImplementation(async (...args) => {
+    if (args[0].includes(unknown)) return nativeUnavailable('the fixture kernel owner is unavailable')
+    return read(...args)
+  })
+  await expect(readProcessEvidence(42, budget(), () => true)).rejects.toMatchObject({
+    code: 'IDENTITY_UNAVAILABLE', message: expect.stringContaining('kernel owner is unavailable'),
   })
 })

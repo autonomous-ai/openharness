@@ -15,7 +15,8 @@ export interface ProcessEvidence {
   verify(selectedPid?: number): Promise<void>
   verifyDescriptors(pools: ReadonlyMap<number, readonly NativeDescriptor[]>, selectedPid?: number): Promise<void>
 }
-// Darwin's X is a modifier meaning traced/debugged, not a dead primary state.
+// Darwin's X is a traced/debugged modifier. Its '?' state is inconclusive: retain
+// it as a possible owner/child for kernel verification, never as proven absence.
 const alive = (state: string) => process.platform === 'darwin' ? state[0] !== 'Z' : !/^[ZXx]/.test(state)
 const pidValue = (text: string) => {
   const value = Number(text)
@@ -28,7 +29,7 @@ export function parseProcessGraph(text: string, budget: NativeEvidenceBudget): M
   const rows = new Map<number, GraphRow>()
   for (const line of text.slice(0, -1).split('\n')) {
     budget.step()
-    const match = /^\s*(\d+)\s+(\d+)\s+([A-Za-z+<>NsLsl-]{1,8})\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s*$/.exec(line)
+    const match = /^\s*(\d+)\s+(\d+)\s+([?A-Za-z+<>NsLsl-]{1,8})\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s*$/.exec(line)
     if (!match || !Number.isFinite(Date.parse(match[4]))) return nativeUnavailable('the native process graph has an unreadable row')
     const pid = pidValue(match[1]), parentPid = pidValue(match[2])
     if (!pid || rows.has(pid) || rows.size >= 4096) return nativeUnavailable('the native process graph is duplicated or exceeds its limit')

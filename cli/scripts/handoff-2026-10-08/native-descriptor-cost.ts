@@ -32,18 +32,18 @@ const child = spawn(process.execPath, ['-e', code], { env: { PATH: process.env.P
 try {
   await Promise.race([once(child.stdout!, 'data'), once(child, 'exit').then(() => { throw Error('Private fixture did not become ready') })])
   const { openFileSessionOf } = await import(pathToFileURL(join(cli, 'src/lib/sessionRepair.ts')).href)
-  const latenciesMs: number[] = [], outcomes: Record<string, number> = {}
+  const latenciesMs: number[] = [], outcomes: Record<string, number> = {}, holds: string[] = []
   const cpu = process.cpuUsage()
   for (let i = 0; i < 5; i++) {
     const started = performance.now()
     let outcome: string
     try { outcome = (await openFileSessionOf('codex', child.pid!, home, cwd))?.sessionId ? 'bound' : 'empty' }
-    catch (error) { if ((error as { code?: string }).code !== 'IDENTITY_UNAVAILABLE') throw error; outcome = 'held' }
+    catch (error) { if ((error as { code?: string }).code !== 'IDENTITY_UNAVAILABLE') throw error; outcome = 'held'; holds.push((error as Error).message) }
     latenciesMs.push(Number((performance.now() - started).toFixed(4)))
     outcomes[outcome] = (outcomes[outcome] ?? 0) + 1
   }
   const used = process.cpuUsage(cpu)
-  console.log(JSON.stringify({ workload, iterations: 5, outcomes, latenciesMs,
+  console.log(JSON.stringify({ workload, iterations: 5, outcomes, holds, latenciesMs,
     cpuMs: (used.user + used.system) / 1000, peakRssMiB: process.resourceUsage().maxRSS / 1024,
     node: process.version, platform: process.platform, arch: process.arch }))
 } finally {
