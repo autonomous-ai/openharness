@@ -70,6 +70,10 @@ const Set<String> encryptedDownTypes = {
   // The harness's branch and pull-request history is a machine RPC too (applicationFrames.ts
   // `MACHINE_REQUESTS`): unsealed, the machine answers E2EE_REQUIRED.
   'git_pull_request',
+  // Memories across machines (CLI services/memory.ts).
+  'memory_snapshot',
+  'memory_about_put',
+  'memory_deliver',
   // The trust-group roster swap (`viewer/group_sync.dart`): the keys every member trusts.
   'group_sync',
   'codex_profiles_list',

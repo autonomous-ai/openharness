@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, MODEL_MANAGER_ID } from './builtinIds.js'
+import { DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, MEMORIES_BUILTIN_SOURCE, MEMORIES_ID, MODEL_MANAGER_ID } from './builtinIds.js'
 import { dshRootDir, isBrokenDsh, readInstalledIndex, resolveInstalled, upsertInstalledRecord } from './installed.js'
 import { lockDsh } from './lock.js'
 import { readDshManifest } from './manifest.js'
@@ -10,7 +10,8 @@ import { samePackageSource } from './updates.js'
 import { builtinFiles } from './bundledFiles.js'
 
 export {
-  DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, isHiddenBuiltin, MODEL_MANAGER_ID,
+  DEVICES_BUILTIN_SOURCE, DEVICES_HARNESS_ID, HARNESS_MONITOR_BUILTIN_SOURCE, HARNESS_MONITOR_ID, isHiddenBuiltin, MEMORIES_BUILTIN_SOURCE,
+  MEMORIES_ID, MODEL_MANAGER_ID,
 } from './builtinIds.js'
 export type BundledFiles = Record<string, { content: string; executable: boolean; encoding?: 'base64' }>
 
@@ -38,11 +39,21 @@ export function ensureBundledHarnessMonitor(files?: BundledFiles): boolean {
     what: 'Harness Monitor', legacyPath: 'store/agents/harness-monitor' })
 }
 
+/** Memories is part of Harness: every agent's memories, About You in every agent, on every machine. Its memory
+ *  service (services/memory.ts) runs its `mem` command, so it must be here on every machine. */
+export function ensureBundledMemories(files?: BundledFiles): boolean {
+  files ??= builtinFiles('memories')
+  if (!files?.['harness.json']) return false
+  return installBuiltin({ id: MEMORIES_ID, source: MEMORIES_BUILTIN_SOURCE, folder: 'memories', files,
+    what: 'Memories', legacyPath: 'store/agents/memories' })
+}
+
 /** Core app DSHs ship with the release. Store applications keep their explicit Update action. */
 export function ensureBundledCoreHarnesses(log: (line: string) => void = console.warn): boolean {
   let ready = true
   for (const [name, install] of [
     ['Model Manager', ensureBundledModelManager], ['Devices', ensureBundledDevices], ['Harness Monitor', ensureBundledHarnessMonitor],
+    ['Memories', ensureBundledMemories],
   ] as const) {
     try { if (!install()) ready = false }
     catch (error) {

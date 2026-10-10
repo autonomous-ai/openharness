@@ -389,6 +389,10 @@ export const SERVICE_HOSTS: Readonly<Record<string, ServiceHostSpec>> = {
   // The command bar (services/commandBarProcess.ts), an experiment: started at its first request. What it holds
   // is at most eight decisions in flight and one bounded JEV answer each (lib/commandBar.ts).
   commandBar: { services: ['commandBar'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
+  // Memories (services/memoryProcess.ts), an experiment: started at its first request, another machine's
+  // Memories pane asking. It runs the Memories package's own command, one at a time per request, and
+  // holds at most its 8 MB answer.
+  memory: { services: ['memory'], heapLimitMiB: 128, rssLimitMiB: 384, onDemand: true },
   // Tab collaboration and teams, an experiment: the prompt scopes, a few drafts and fingerprints per agent, and
   // beside them the teams, their mailbox and the tab channels (services/collaborationProcess.ts), each on its
   // own link to the core. Started only once it is on (core/api.ts `EXPERIMENTS`).
