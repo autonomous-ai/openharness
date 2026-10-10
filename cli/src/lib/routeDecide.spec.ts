@@ -1,11 +1,11 @@
-// Where a typed task goes: Jev alone, asked once (sure at 0.6 → its session, or new work; else new work; not
+// Where a typed task goes: Jev alone, asked once (sure at 0.6, or a clear lead → its session, or new work; else new work; not
 // asked at all → nothing decided), how a new harness is set up, what Jev is asked, and what is logged when it
 // fails. Jev is a fake here: the question it is put and the answer it gives are the contract.
 import { describe, expect, it, vi } from 'vitest'
 
 import type { JevChoice, JevChoiceAnswer } from './jev/jevClient.js'
 import { JevUnavailable } from './jev/jevClient.js'
-import { decideRoute, JEV_SURE_P, jevPick, type RouteDeps, type RouteInput, type RouteOption, type RouteSession } from './routeDecide.js'
+import { decideRoute, JEV_LEAD_P, JEV_LEAD_RATIO, JEV_SURE_P, jevPick, type RouteDeps, type RouteInput, type RouteOption, type RouteSession } from './routeDecide.js'
 
 /** A choice of [choice] at [p] over [options], the rest shared evenly among the others. */
 function said(choice: string, p: number, options: string[]): JevChoiceAnswer {
@@ -39,6 +39,23 @@ describe('Jev\'s pick', () => {
     expect(jevPick(said('s0', 0.59, ['s0', 'new']), ['s0', 'new'])).toBeUndefined()
   })
 
+  it('is its choice below 0.6 when it leads clearly: 0.4 or more, and twice the next option, new work included', () => {
+    expect([JEV_LEAD_P, JEV_LEAD_RATIO]).toEqual([0.4, 2])
+    const options = ['s0', 's1', 's2', 'new']
+    // The owner's desk, 2026-10-10: the right session at 0.45, the rest spread thin.
+    expect(jevPick({ choice: 's0', probabilities: { s0: 0.45, s1: 0.2, s2: 0.15, new: 0.2 } }, options)).toBe('s0')
+    expect(jevPick({ choice: 's0', probabilities: { s0: 0.4, s1: 0.2, s2: 0.2, new: 0.2 } }, options)).toBe('s0')
+    // Torn with new work, or with a session like it: new work.
+    expect(jevPick({ choice: 's0', probabilities: { s0: 0.45, s1: 0.1, s2: 0.1, new: 0.35 } }, options)).toBeUndefined()
+    expect(jevPick({ choice: 's0', probabilities: { s0: 0.5, s1: 0.3, s2: 0.1, new: 0.1 } }, options)).toBeUndefined()
+    // Never below 0.4, however thin the rest.
+    expect(jevPick({ choice: 's0', probabilities: { s0: 0.39, s1: 0.01, s2: 0.01, new: 0.01 } }, options)).toBeUndefined()
+    // A "choice" that is not Jev's likeliest is not a lead.
+    expect(jevPick({ choice: 's0', probabilities: { s0: 0.45, s1: 0.5, s2: 0.05, new: 0 } }, options)).toBeUndefined()
+    // Asked over one option, nothing comes second.
+    expect(jevPick({ choice: 'new', probabilities: { new: 0.4 } }, ['new'])).toBe('new')
+  })
+
   it('is nothing for an answer that is not a whole one over those options', () => {
     expect(jevPick(undefined, ['s0'])).toBeUndefined()
     expect(jevPick({ choice: 's0' } as unknown as JevChoiceAnswer, ['s0'])).toBeUndefined()
@@ -57,7 +74,7 @@ describe('where a task goes', () => {
     const remote = jev({ target: said('s1', 0.8, TARGETS), project: said('p1', 0.9, ['p0', 'p1']), agent: said('a1', 0.9, ['a0', 'a1']) })
     const verdict = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: remote })
     // A session needs no project or agent: Jev's picks of them are not part of the verdict.
-    expect(verdict).toEqual({ kind: 'session', id: 'a2', p: 0.8, trace: '2 sessions · jev: "Prometheus alerts" 0.80' })
+    expect(verdict).toEqual({ kind: 'session', id: 'a2', p: 0.8, trace: '2 sessions · jev: "Prometheus alerts" 0.80, then "billing retries" 0.10' })
     expect(remote).toHaveBeenCalledOnce()
     const [state, questions] = remote.mock.calls[0]!
     expect(state).toEqual({ message: 'the prometheus alert fired again' })
@@ -165,7 +182,7 @@ describe('where a task goes', () => {
       agent: said('a0', 0.65, ['a0', 'a1']),
     })
     const verdict = await decideRoute(input({ text: 'rename my photos by date', projects: PROJECTS, agents: AGENTS }), { jev: remote })
-    expect(verdict).toEqual({ kind: 'new', project: '/code/infra', agent: 'claude', via: 'jev', why: 'Jev: new work', trace: '2 sessions · jev: "new" 0.90' })
+    expect(verdict).toEqual({ kind: 'new', project: '/code/infra', agent: 'claude', via: 'jev', why: 'Jev: new work', trace: '2 sessions · jev: "new" 0.90, then "billing retries" 0.05' })
   })
 
   it('leaves the project and the agent to the caller when Jev is not sure of them, or did not answer them', async () => {
@@ -175,7 +192,7 @@ describe('where a task goes', () => {
       agent: said('a1', 0.4, ['a0', 'a1']),
     })
     const verdict = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: remote })
-    expect(verdict).toEqual({ kind: 'new', via: 'jev', why: 'Jev: new work', trace: '2 sessions · jev: "new" 0.90' })
+    expect(verdict).toEqual({ kind: 'new', via: 'jev', why: 'Jev: new work', trace: '2 sessions · jev: "new" 0.90, then "billing retries" 0.05' })
     const silent = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: jev({ target: said('new', 0.9, TARGETS) }) })
     expect(silent).not.toHaveProperty('project')
     expect(silent).not.toHaveProperty('agent')
@@ -183,22 +200,29 @@ describe('where a task goes', () => {
 
   it('is new work when Jev is not sure where it goes, still in the project and with the agent Jev is sure of', async () => {
     const remote = jev({
-      target: said('s0', 0.5, TARGETS),
+      target: { choice: 's0', probabilities: { s0: 0.5, s1: 0.3, new: 0.2 } },
       project: said('p0', 0.9, ['p0', 'p1']),
       agent: said('a1', 0.8, ['a0', 'a1']),
     })
     const verdict = await decideRoute(input({ projects: PROJECTS, agents: AGENTS }), { jev: remote })
-    expect(verdict).toEqual({ kind: 'new', project: '/code/billing', agent: 'codex', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "billing retries" 0.50' })
+    expect(verdict).toEqual({ kind: 'new', project: '/code/billing', agent: 'codex', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "billing retries" 0.50, then "Prometheus alerts" 0.30' })
   })
 
   it('is new work Jev was not sure of when Jev leans to new work below the bar', async () => {
-    const verdict = await decideRoute(input(), { jev: jev({ target: said('new', 0.55, TARGETS) }) })
-    expect(verdict).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "new" 0.55' })
+    const verdict = await decideRoute(input(), { jev: jev({ target: { choice: 'new', probabilities: { s0: 0.35, s1: 0.1, new: 0.55 } } }) })
+    expect(verdict).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "new" 0.55, then "billing retries" 0.35' })
+  })
+
+  it('goes to a session Jev leads with clearly below 0.6, and traces how far ahead it was', async () => {
+    const verdict = await decideRoute(input(), { jev: jev({ target: { choice: 's1', probabilities: { s0: 0.2, s1: 0.45, new: 0.35 } } }) })
+    expect(verdict.kind).toBe('new')
+    const led = await decideRoute(input(), { jev: jev({ target: { choice: 's1', probabilities: { s0: 0.2, s1: 0.57, new: 0.23 } } }) })
+    expect(led).toEqual({ kind: 'session', id: 'a2', p: 0.57, trace: '2 sessions · jev: "Prometheus alerts" 0.57, then "new" 0.23' })
   })
 
   it('traces what Jev said even when it is no session on the desk, or nothing', async () => {
     const strange = await decideRoute(input(), { jev: jev({ target: { choice: 's7', probabilities: { s0: 0.5, s1: 0.5 } } }) })
-    expect(strange).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "s7" 0.00' })
+    expect(strange).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: "s7" 0.00, then "billing retries" 0.50' })
     const silent = await decideRoute(input(), { jev: jev({}) })
     expect(silent).toEqual({ kind: 'new', via: 'unsure', why: 'Jev was not sure', trace: '2 sessions · jev: no answer' })
   })

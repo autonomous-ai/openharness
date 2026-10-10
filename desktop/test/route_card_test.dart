@@ -154,7 +154,12 @@ Future<(TaskRouteDecision?, _Daemon)> _decided(Object Function() answer) async {
     ..connectionStatus = ConnectionStatus.connected
     ..agentLoadStatus = AgentLoadStatus.loaded
     ..agents = const [
-      Agent(id: 'a0', name: 'Analyze', engine: 'codex', terminalAvailable: true),
+      Agent(
+        id: 'a0',
+        name: 'Analyze',
+        engine: 'codex',
+        terminalAvailable: true,
+      ),
     ];
   final decision = await app.routeDecide('go', taskRouteChoices(app));
   return (decision, daemon);
@@ -200,19 +205,61 @@ Future<void> _say(WidgetTester tester, String text) async {
 
 const _session = 'm\na0';
 
-Agent _agent(String id, {String status = 'idle', int minutesAgo = 0}) => Agent(
+final _now = DateTime(2026, 10, 10, 12);
+
+Agent _agent(
+  String id, {
+  String status = 'idle',
+  int minutesAgo = 0,
+  String engine = 'claude',
+  String? sessionId,
+}) => Agent(
   id: id,
   name: 'Session $id',
-  engine: 'claude',
+  engine: engine,
   status: status,
-  terminalAvailable: true,
-  lastActivityAt: DateTime(
-    2026,
-    10,
-    10,
-    12,
-  ).subtract(Duration(minutes: minutesAgo)),
+  sessionId: sessionId,
+  terminalAvailable: status != 'stopped',
+  lastActivityAt: _now.subtract(Duration(minutes: minutesAgo)),
 );
+
+/// [sendTaskToSession] as the app runs it, with the resume answered by [resume] and the pane noted.
+class _Sender extends AppNotifier {
+  _Sender(this.resume)
+    : super(
+        config: AppConfig.dev,
+        authSession: AuthSession(),
+        configStore: null,
+      ) {
+    const machine = Machine(
+      machineId: 'm',
+      authMode: MachineAuthMode.remote,
+      name: 'Office',
+    );
+    machines = [machine];
+    machineStates['m'] = MachineState(machine)
+      ..nodeOnline = true
+      ..connectionStatus = ConnectionStatus.connected
+      ..agents = [
+        _agent('live'),
+        _agent('saved', status: 'stopped', sessionId: 'c-1', minutesAgo: 600),
+      ];
+  }
+
+  final RestartAgentResult resume;
+  final resumed = <String>[];
+  final forward = <String>[];
+
+  @override
+  Future<RestartAgentResult> resumeAgent(String machineId, String agentId) {
+    resumed.add(agentId);
+    return Future.value(resume);
+  }
+
+  @override
+  void bringSessionForward(String machineId, String agentId) =>
+      forward.add(agentId);
+}
 
 void main() {
   test('the router is offered live sessions on reachable machines, newest first, forty at most', () {
@@ -237,10 +284,87 @@ void main() {
     app.machineStates['off'] = MachineState(away)
       ..nodeOnline = false
       ..agents = [_agent('far')];
-    final ids = taskRouteChoices(app).sessions.values
-        .map((s) => s.agentId)
-        .toList();
+    final ids = taskRouteChoices(
+      app,
+      now: _now,
+    ).sessions.values.map((s) => s.agentId).toList();
     expect(ids, [for (var i = 0; i < 40; i++) 'a$i']);
+  });
+
+  test('a stopped session is offered for a week, when it can resume its own conversation', () {
+    final app = _App();
+    addTearDown(app.dispose);
+    const day = 24 * 60;
+    app.machineStates['m']!.agents = [
+      _agent('live', minutesAgo: 30 * day),
+      _agent(
+        'tuesday',
+        status: 'stopped',
+        sessionId: 'c-1',
+        minutesAgo: 4 * day,
+      ),
+      _agent(
+        'lastweek',
+        status: 'stopped',
+        sessionId: 'c-2',
+        minutesAgo: 8 * day,
+      ),
+      // Nothing of its conversation to go back to: a follow-up would land in a new one.
+      _agent('unsaved', status: 'stopped', minutesAgo: 60),
+      _agent(
+        'other',
+        status: 'stopped',
+        sessionId: 'c-3',
+        engine: 'gemini',
+        minutesAgo: 60,
+      ),
+      const Agent(
+        id: 'undated',
+        name: 'Undated',
+        engine: 'claude',
+        status: 'stopped',
+        sessionId: 'c-4',
+      ),
+    ];
+    final ids = taskRouteChoices(
+      app,
+      now: _now,
+    ).sessions.values.map((s) => s.agentId).toList();
+    expect(ids, ['tuesday', 'live']);
+  });
+
+  test('a stopped session is resumed, then sent to', () async {
+    final app = _Sender(const RestartAgentResult());
+    addTearDown(app.dispose);
+    unawaited(
+      app.sendTaskToSession('m', 'saved', 'pick the lamp work back up'),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(app.resumed, ['saved']);
+    expect(app.forward, ['saved']);
+  });
+
+  test(
+    'a session that will not resume says why at once, and is never typed into',
+    () async {
+      final app = _Sender(
+        const RestartAgentResult(error: 'The machine refused the resume.'),
+      );
+      addTearDown(app.dispose);
+      expect(
+        await app.sendTaskToSession('m', 'saved', 'pick the lamp work back up'),
+        'The machine refused the resume.',
+      );
+    },
+  );
+
+  test('a live session is not resumed', () async {
+    final app = _Sender(const RestartAgentResult());
+    addTearDown(app.dispose);
+    unawaited(app.sendTaskToSession('m', 'live', 'and the chart'));
+    await Future<void>.delayed(Duration.zero);
+    expect(app.resumed, isEmpty);
+    expect(app.forward, ['live']);
   });
 
   test(
@@ -281,12 +405,15 @@ void main() {
     expect(start?.request, isNull);
   });
 
-  test('a folder that could not be read is nowhere to start, not a plain folder', () async {
-    final app = _App();
-    addTearDown(app.dispose);
-    app.gitProjectReaderForTest = (_, _) async => {'error': 'UNAVAILABLE'};
-    expect(await newWorkFolder(app, 'm', '/repos/harness'), isNull);
-  });
+  test(
+    'a folder that could not be read is nowhere to start, not a plain folder',
+    () async {
+      final app = _App();
+      addTearDown(app.dispose);
+      app.gitProjectReaderForTest = (_, _) async => {'error': 'UNAVAILABLE'};
+      expect(await newWorkFolder(app, 'm', '/repos/harness'), isNull);
+    },
+  );
 
   testWidgets('each session goes with what it was last asked and last did', (
     tester,
@@ -444,11 +571,16 @@ void main() {
       },
     );
 
-    test('a daemon without the router hands the card back to the old one', () async {
-      final (decision, daemon) = await _decided(() => _refused('UNSUPPORTED'));
-      expect(decision, isNull);
-      expect(daemon.asked, 1);
-    });
+    test(
+      'a daemon without the router hands the card back to the old one',
+      () async {
+        final (decision, daemon) = await _decided(
+          () => _refused('UNSUPPORTED'),
+        );
+        expect(decision, isNull);
+        expect(daemon.asked, 1);
+      },
+    );
   });
 
   testWidgets('when Jev cannot be asked, the box says so and sends nothing', (

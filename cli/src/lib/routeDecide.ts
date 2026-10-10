@@ -2,9 +2,9 @@
  * Where a typed task goes, decided without asking the person (docs/design/2026-10-09-auto-router.md).
  *
  * Jev 1.13, through OpenRouter (~0.6 s), is asked once: which session the task is for (or none — new
- * work), and, for new work, which project and which agent. Its pick is taken at JEV_SURE_P or more; below
- * that Jev is unsure and the task is new work. A project or agent Jev is unsure of is left to the caller,
- * which uses the pane the person is in.
+ * work), and, for new work, which project and which agent. Its pick is taken at JEV_SURE_P or more, or when
+ * it still leads clearly (`jevPick`); otherwise Jev is unsure and the task is new work. A project or agent
+ * Jev is unsure of is left to the caller, which uses the pane the person is in.
  *
  * Jev alone, owner's call 2026-10-10. It started as a ladder with julia-1, a local model, deciding first:
  * every task sent to a wrong session — on the benchmark and on the owner's desk ("how is lamp v2 going"
@@ -59,15 +59,33 @@ const JEV_OPTIONS = 40
 const LABEL_CHARS = 600
 /** A follow-up names nothing; who the person was just talking to is what Jev gets to go on. */
 const CONTINUITY_MS = 10 * 60_000
-/** Below this Jev is unsure, and the task is new work. */
+/** At this or more Jev is sure. */
 export const JEV_SURE_P = 0.6
+/**
+ * Below JEV_SURE_P, a pick is still taken when it leads clearly: JEV_LEAD_P or more, and JEV_LEAD_RATIO times
+ * the next option, "new" included. Jev's numbers are spread over every session it is shown, so a right
+ * answer among forty can read 0.45. On the owner's desk (2026-10-10) every task that missed its session
+ * did so this way, Jev's top pick right at 0.45 and 0.57; on the 43-prompt benchmark a lower bar added only
+ * right sends. The lead keeps what the bar was for: a pick torn with new work, or with a second session
+ * much like it, is still new work, which costs a harness, never a wrong conversation.
+ */
+export const JEV_LEAD_P = 0.4
+export const JEV_LEAD_RATIO = 2
 
-/** Jev's pick when it is a whole answer over exactly [options] and Jev gives it JEV_SURE_P or more. */
+/** The likeliest of [options] other than [choice], for the log: how far ahead the pick was. */
+function runnerUp(p: Record<string, number>, choice: string, options: string[]): string | undefined {
+  return options.filter((id) => id !== choice && typeof p[id] === 'number').sort((a, b) => p[b] - p[a])[0]
+}
+
+/** Jev's pick when it is a whole answer over exactly [options] and Jev is sure of it or it leads clearly. */
 export function jevPick(answer: JevChoiceAnswer | undefined, options: string[]): string | undefined {
   const p = answer?.probabilities
   if (!answer || !p || !options.includes(answer.choice)) return undefined
   if (options.some((id) => typeof p[id] !== 'number' || !Number.isFinite(p[id]))) return undefined
-  return p[answer.choice] >= JEV_SURE_P ? answer.choice : undefined
+  const top = p[answer.choice]
+  if (top >= JEV_SURE_P) return answer.choice
+  const next = runnerUp(p, answer.choice, options)
+  return top >= JEV_LEAD_P && top >= JEV_LEAD_RATIO * (next === undefined ? 0 : p[next]) ? answer.choice : undefined
 }
 
 /** An error and what caused it: fetch's own message ("fetch failed") says nothing by itself. */
@@ -137,10 +155,14 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
     return { kind: 'unavailable', why: (error as Error).message, trace: [...trace, 'jev: failed'].join(' · ') }
   }
   const said = answers.target
-  const named = said?.choice === 'new' ? 'new' : sessions[Number(said?.choice?.slice(1))]?.name
-  trace.push(`jev: ${said ? `"${named ?? said.choice}" ${(said.probabilities[said.choice] ?? 0).toFixed(2)}` : 'no answer'}`)
+  const targets = [...sessions.map((_, i) => `s${i}`), 'new']
+  const name = (id: string | undefined): string | undefined => id === 'new' ? 'new' : sessions[Number(id?.slice(1))]?.name
+  const odds = (id: string): string => (said!.probabilities[id] ?? 0).toFixed(2)
+  const next = said ? runnerUp(said.probabilities, said.choice, targets) : undefined
+  // The runner-up too: whether a pick led clearly is what the next change to the bar is measured from.
+  trace.push(`jev: ${said ? `"${name(said.choice) ?? said.choice}" ${odds(said.choice)}${next ? `, then "${name(next)}" ${odds(next)}` : ''}` : 'no answer'}`)
 
-  const target = jevPick(said, [...sessions.map((_, i) => `s${i}`), 'new'])
+  const target = jevPick(said, targets)
   if (target && target !== 'new') {
     const session = sessions[Number(target.slice(1))]
     return { kind: 'session', id: session.id, p: said!.probabilities[target], trace: trace.join(' · ') }
