@@ -103,6 +103,25 @@ describe('retargeting an agent', () => {
   })
 
   describe('refusals before anything is touched', () => {
+    it('keeps the admitted conversation in an asynchronous reader while a mutable row changes', async () => {
+      const row = agent()
+      let release!: () => void, entered = false, observed: string | undefined
+      const ready = new Promise<void>(done => { release = done })
+      const run = setup(row, { readScreen: async snapshot => {
+        entered = true
+        await ready
+        observed = snapshot.sessionId
+        return { pane: { idle: true } } as never
+      } })
+      const pending = run.retarget({ agentId: 'a1', grid })
+      await vi.waitFor(() => expect(entered).toBe(true))
+      row.sessionId = 'replacement'
+      release()
+      expect(await pending).toMatchObject({ ok: false, error: 'AGENT_CHANGED' })
+      expect(observed).toBe('s1')
+      expect(restartAgent).not.toHaveBeenCalled()
+    })
+
     it('cannot follow a mutable row to a replacement conversation while capture waits', async () => {
       const row = agent()
       let finish!: (value: string) => void
@@ -302,7 +321,7 @@ describe('retargeting an agent', () => {
 
     it('does not announce a row removed by a publication observer', async () => {
       const run = setup()
-      vi.mocked(run.deps.registry.setActive).mockImplementationOnce(() => { vi.mocked(run.deps.registry.byAgent).mockReturnValue(undefined) })
+      vi.mocked(run.deps.registry.setActive).mockImplementationOnce(() => { vi.mocked(run.deps.registry.byAgent).mockReturnValue(undefined); return true })
       expect(await run.retarget({ agentId: 'a1', grid })).toEqual({ ok: true })
       expect(run.deps.announceSession).not.toHaveBeenCalled()
     })

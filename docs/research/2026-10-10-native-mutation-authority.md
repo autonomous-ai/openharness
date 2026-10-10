@@ -72,3 +72,24 @@ does not provide the whole-launch inode snapshot. Unknown-version retry policy,
 v1 SQLite uncertainty/missing-row handling, durable hook preparation, and atomic
 generated-configuration publication remain on the completion checklist. This
 change must not be described as completing those boundaries or the whole refactor.
+
+## Matched cost observation
+
+`cli/scripts/handoff-2026-10-08/native-mutation-cost.ts` ran on former main
+`f0875b08a` and the changed controller at `542e60748`, using Node 22.23.2 on the
+same Darwin x64 host, pinned Linux evidence and UTC. Seven fresh processes per
+revision/workload ran 40 calls each, alternating revisions. Native API latency
+was a synthetic 2 ms per command; host binaries were forbidden. These are helper
+costs, not vendor-service performance or a full-daemon benchmark.
+
+| Workload | Revision | Median / p95 latency | CPU per 40 calls | Peak RSS | Writes / reads / confirmed |
+| --- | --- | --- | --- | --- | --- |
+| Healthy | Former | 4.84 / 5.28 ms | 22.05 ms | 84.71 MiB | 40 / 40 / 40 |
+| Healthy | Changed | 4.75 / 5.22 ms | 22.72 ms | 83.92 MiB | 40 / 40 / 40 |
+| Lost reply after commit | Former | 6.03 / 6.60 ms | 27.18 ms | 84.21 MiB | 80 / 0 / 0 |
+| Lost reply after commit | Changed | 4.89 / 5.34 ms | 23.77 ms | 85.54 MiB | 40 / 40 / 40 |
+
+CPU and peak RSS are medians across the seven processes; latency pools their
+calls. The useful result is the removed duplicate mutation and successful
+read-back recovery. Small healthy-path timing differences are noise, not a speed
+claim. No new numerical performance gate is proposed.

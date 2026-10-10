@@ -15,7 +15,7 @@ native = 'src/engines/kit/nativeSessionModel.ts'
 control = 'src/core/agents/retarget.ts'
 mutations = [
     ('native provider protocol', 'src/engines/opencode/contract.ts', "provider: 'providerID'", "provider: 'provider'", golden, ''),
-    ('unreadable catalog admits write', native, 'if (known === null) return held(', 'if (false) return held(', faults, 'required catalog'),
+    ('unreadable catalog admits write', native, 'const known = await listsModel(run, requested, receipt.cwd)', 'const known = (await listsModel(run, requested, receipt.cwd)) ?? true', faults, 'required catalog'),
     ('uncertain receipt forgotten', native, 'const previous = pending.get(sessionId)', 'const previous = undefined', faults, 'across later requests'),
     ('wrong conversation accepted', native, "|| data[fields.id] !== sessionId", '', faults, 'matching model data'),
     ('legacy fallback ignores pending write', native, 'if (pending.has(sessionId)) return', 'if (false) return', dispatch, 'does not bypass'),
@@ -23,7 +23,7 @@ mutations = [
     ('retarget follows mutable row', control, 'const session = structuredClone(live)', 'const session = live', retarget, 'mutable row'),
     ('retarget loses revocable authority', control, 'return () => !!registry.byAgent(session.agentId) && owns()', 'return () => true', retarget, 'owner changes during'),
     ('route expires during swap', control, 'holdRoute(routeKey, null)', 'holdRoute(routeKey)', retarget, 'past the default hold timer'),
-    ('old retarget releases newer Stop', control, 'releaseRoute?.()', "(agentReconciler as TerminalAgentReconciler).releaseRoute(routeKey)", retarget, 'newer Stop route hold'),
+    ('old retarget releases newer Stop', control, 'releaseRoute?.()', ";(agentReconciler as TerminalAgentReconciler).releaseRoute(routeKey)", retarget, 'newer Stop route hold'),
     ('confirmed native effect hidden', control, "nativeEffect = written.ok ? 'applied' : (written.effect ?? 'none')", "nativeEffect = 'none'", retarget, 'discloses an applied model'),
     ('environment dispatch not fenced', 'src/lib/tmuxBackend.ts', "if (current?.() === false) return terminalActionNotStarted('The harness changed before clearing its environment')", '', 'src/lib/tmuxBackend.spec.ts', 'revoked during session lookup'),
     ('signal escalation not fenced', 'src/lib/deleteAgentFallback.ts', "if (deps.current?.() === false) return 'not-ours'", '', 'src/lib/deleteAgentFallback.spec.ts', 'ownership is revoked'),
