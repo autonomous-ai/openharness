@@ -294,3 +294,29 @@ independent review overlap that work; their intervals above are not additive ela
 time. Additional clean completed worktrees were narrowed to their tracked CLI
 contents to recover disk space, preserving commits and private evidence. The two-GiB
 guard was unchanged. Merge and publication remain zero at this update.
+
+## Final acceptance and merge
+
+[PR #1145](https://github.com/autonomous-ai/openharness/pull/1145) merged as
+`ea4e800b5f19704ab2f4663196c3949bb9b6aaa4` at October 10 15:13:53 UTC. Independent
+review approved exact head `090286b8a4ac993f60643270f1ba1dbcc19c3ddf` against base
+`cb242cf4c7d21b7b7cd95ac727fedb30317e9878`. The merge helper confirmed that both the
+reviewed target and full tested trees match the merged tree.
+
+[Automatic CI](https://github.com/autonomous-ai/openharness/actions/runs/38061562470)
+passed all selected CLI, Desktop and TUI checks, including `ci/required`.
+[Complete e2e acceptance](https://github.com/autonomous-ai/openharness/actions/runs/38061467828)
+passed all eight Linux shards, macOS full-disk cases and the inventory completeness
+summary. The final local receipt `20261010T145228.906119Z-66762` passed typecheck,
+2,319 core cases with per-file 100% coverage, 265 harnessd cases and one existing
+skip with 100% coverage, architecture, all 81 standalone hook cases and both real
+private offline-registration cases. Earlier runtime goldens and all 15 assertion-
+failing mutations remain applicable to unchanged publication code.
+
+Resumed implementation/diagnosis occupied 14:13–14:52 UTC; local validation overlapped
+14:18–14:55; independent review overlapped those phases. Remote acceptance waiting
+began with the 14:53 push; the final e2e run occupied 14:54:23–15:12:35. Merge
+verification occupied 15:13:40–15:13:53, with receipt
+`20261010T151340.191117Z-merge-1145`. These overlapping intervals are not summed.
+Publication remains zero. Remaining native delivery, launch and lifecycle authority
+work is listed in the completion checklist; this merge does not declare it complete.
