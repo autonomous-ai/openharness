@@ -120,6 +120,7 @@ for native in [False, True]:
         if baseline.returncode:
             raise SystemExit('Baseline failed; no mutants ran.\n' + baseline.stdout + baseline.stderr)
 print('Unchanged baselines passed', flush=True)
+failures = []
 for label, relative, before, after, target, pattern in mutations:
     path = cli / relative
     original = path.read_text()
@@ -130,7 +131,11 @@ for label, relative, before, after, target, pattern in mutations:
         result = run([target], pattern)
         output = result.stdout + result.stderr
         if result.returncode == 0 or 'AssertionError' not in output:
-            raise SystemExit(label + ': not caught by an assertion\n' + output)
-        print(label + ': caught by assertion', flush=True)
+            failures.append(label)
+            print(label + ': not caught by an assertion\n' + output, flush=True)
+        else:
+            print(label + ': caught by assertion', flush=True)
     finally:
         path.write_text(original)
+if failures:
+    raise SystemExit('Mutations without assertion proof: ' + ', '.join(failures))

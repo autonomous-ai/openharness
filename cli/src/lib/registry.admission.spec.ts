@@ -292,7 +292,8 @@ it('keeps its unconfirmed image independent of mutable input objects', () => {
   const written = readFileSync(file, 'utf8')
   pending.processIdentity.startMarker = 'mutated-after-write'
   fault.directorySync = false
-  expect(registry.register(input())?.entry.sessionId).toBe(A)
+  expect(() => registry.register(input())).not.toThrow()
+  expect(registry.byAgent(target)?.sessionId).toBe(A)
   expect(readFileSync(file, 'utf8')).toBe(written)
 })
 
