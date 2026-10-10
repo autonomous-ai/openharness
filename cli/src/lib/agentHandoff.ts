@@ -917,4 +917,3 @@ function floorAnswer(turns: IndexedTurn[], answer: string | null, floor: boolean
   const last = turns[turns.length - 1]
   return [...turns.slice(0, -1), { ...last, answer: last.answer || answer }]
 }
-

@@ -212,7 +212,10 @@ the picker, delayed replies and held-intent reuse. Explicitly reopening Change
 agent discards a stale preparation only before Close was sent, allowing a fresh
 request ID. An uncertain Close or create keeps its original receipt. Regression
 cases cover late replies, held retries, stale pickers and uncertain operations.
-Final TUI validation and review of this correction remain pending.
+The final isolated TUI run passed nineteen switch and two handoff cases; independent
+review approved the correction at `562a5630ab9eb6be0b6cf62de1f2b728938b590e`
+against `cb242cf4c7d21b7b7cd95ac727fedb30317e9878`, conditional on the remaining
+required validation and automatic CI. Review ran no tests and made no edits.
 
 Touched Desktop analysis passed without warnings or errors; eleven preexisting
 bracing advisories in the larger state file remain. The invalid initial analyzer
