@@ -130,5 +130,11 @@
     "sourceSha256": "2369e3ceabeeb694117202ebd25f889b158ac5923d84067982a60c548e59ebf9",
     "pngSha256": "289f7c3b806bcb3e2d1efce9e65435d1e9d44be938058ab6fff208031fb0323b",
     "renderer": "AppKit"
+  },
+  {
+    "id": "autonomous/memories",
+    "sourceSha256": "11e195634f1c67a34d98d24dcd4efab0eb0211a860317aec630a7a4661892394",
+    "pngSha256": "057c8b1d978fb01e832016d75fd1038cdf5b3f36837ef184c329aafb7f8e3ba6",
+    "renderer": "AppKit"
   }
 ]

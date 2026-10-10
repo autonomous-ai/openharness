@@ -357,7 +357,9 @@ function readGemini(h) {
   const path = join(h.gemini, 'GEMINI.md')
   const content = read(path)
   if (!content?.text.trim()) return rows
-  const added = sections(content.text).find((part) => /gemini added memories/i.test(part.title ?? ''))
+  // Delivery appends About You at the end of GEMINI.md, which is inside this section when it comes last:
+  // read without it, or About You's own lines come back as things Gemini saved.
+  const added = sections(withoutOurBlock(content.text)).find((part) => /gemini added memories/i.test(part.title ?? ''))
   if (added) {
     added.body.split(/\r?\n/).map((line) => line.replace(/^\s*[-*]\s+/, '').trim()).filter(Boolean).forEach((line, n) => rows.push(makeRow(h, {
       agent: 'gemini', file: path, part: `saved-${n}`, body: line, kind: 'you', type: 'saved', title: firstLine(line, 90), modified: content.modified,

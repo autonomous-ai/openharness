@@ -270,6 +270,15 @@ const _harnesses = <String, EngineIdentity>{
     color: Color(0xff9bd9dd),
     asset: 'assets/engine-icons/machine-monitor.png',
   ),
+  'autonomous/memories': EngineIdentity(
+    id: "autonomous/memories",
+    label: "Memories",
+    category: "Code",
+    tagline: "Every memory your agents keep, in one place",
+    creator: "Autonomous",
+    color: Color(0xfff0b9a6),
+    asset: 'assets/engine-icons/memories.png',
+  ),
   'autonomous/simskill': EngineIdentity(
     id: "autonomous/simskill",
     label: "SimSkill",
@@ -797,6 +806,7 @@ const knownHarnessBase = <String, String>{
   'autonomous/foam-agent': 'codex',
   'autonomous/juce-agent-toolkit': 'codex',
   'autonomous/machine-monitor': 'claude',
+  'autonomous/memories': 'claude',
   'autonomous/simskill': 'codex',
 
   'autonomous/roundtable': 'claude',

@@ -220,5 +220,14 @@
     "credit": "© 2026 OpenHarness contributors",
     "licenseFile": "licenses/original.txt",
     "catalog": "linked"
+  },
+  {
+    "id": "autonomous/memories",
+    "file": "memories.svg",
+    "color": "#f0b9a6",
+    "kind": "original",
+    "license": "MIT",
+    "credit": "© 2026 OpenHarness contributors",
+    "licenseFile": "licenses/original.txt"
   }
 ]

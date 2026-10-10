@@ -44,6 +44,8 @@ The catalog audit on 2026-09-21 added eight original wrapper marks:
 | Harness Monitor | Status rows and an activity trace | MIT |
 | Harness Builder | Building block and creation spark | MIT |
 
+Memories (2026-10-10): stacked memory cards and the About You spark, MIT.
+
 Harness Monitor and Harness Builder are locally linked tools, not public catalog
 entries. Their marks are recognized when a daemon reports them; bundling an icon
 does not add an installable product to the Store.
