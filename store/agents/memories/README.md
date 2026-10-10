@@ -23,11 +23,15 @@ for a moment. Memory files are shown as text; nothing in them can run in the pan
 ## About You
 
 A short profile of how you work, built from your own words across every agent, every line with its
-sources. It builds by itself: while a Memories harness is open and its agent is idle, the pane asks
-that agent to build it — the first time, then again after about 200 new messages, at most once a day
-— as a turn you see in the chat. So it runs on the agent and model you picked for this harness, and
-only while one is open: close the harness and nothing builds. You can also just ask: **build my
-About You**. It lives at `~/.harness/memory/about-you.md`; the previous version is kept beside it.
+sources. Ask the agent: **build my About You**. It runs on the agent and model you picked for this
+harness, as a turn you see in the chat. It lives at `~/.harness/memory/about-you.md`; the previous
+version is kept beside it. Each build is numbered one past the highest any machine has seen, so
+machines agree on the newest without trusting their clocks.
+
+Building it by itself — the first time, then after about 200 new messages, at most once a day
+(`mem due`) — is the daemon's memory service's job, which waits for an empty input box before it
+types the request: the pane never types into its agent, where a request could land on top of what you
+are writing.
 
 ## In every agent: the switch
 
@@ -41,8 +45,11 @@ agent starts with it:
 | Grok Build | `~/.grok/rules/harness-about-you.md` |
 | Pi, OpenCode, Gemini CLI | a marked block in their global `AGENTS.md` / `GEMINI.md` |
 
-The line beside the switch says which agents get it and what it costs: about this many tokens at the
-start of every new session. Off removes every copy. Only its own hook, block or file is ever changed;
+Once About You exists the switch starts on, at the earliest time a choice can have: your first click,
+on any machine, outranks it everywhere. The line beside the switch says which agents get it and what
+it costs: about this many tokens at the start of every new session. Off removes every copy, and stays
+off: a rebuild, or About You arriving from another machine, only refreshes copies and never turns it
+back on. Between two choices the newer wins, and the same time means off. Only its own hook, block or file is ever changed;
 your text around a block is kept, and a file or folder that is a link (a dotfiles repository) is left
 alone. Harness's own hooks and this one keep each other. Each copy says what it is and that the
 current request comes first. Saying it in the chat ("stop using my About You") flips the same switch.

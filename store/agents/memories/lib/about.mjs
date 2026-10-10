@@ -15,11 +15,40 @@
  * `session:<id>` for a conversation, `asks:<n>` for how many of your messages say it.
  */
 
-import { constants, copyFileSync, lstatSync, mkdirSync, openSync, readSync, closeSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { constants, copyFileSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, closeSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const ABOUT_FILE = 'about-you.md'
 export const PREVIOUS_FILE = 'about-you.prev.md'
+/**
+ * Which build this is. Every machine keeps the highest it has seen; a build here is one more than that.
+ * Machines compare generations, not file times: a machine whose clock runs ahead must not make every
+ * newer build elsewhere look older.
+ */
+export const META_FILE = 'about-meta.json'
+
+export function readMeta(dir) {
+  try {
+    const meta = JSON.parse(readFileSync(join(dir, META_FILE), 'utf8'))
+    return { gen: Number.isInteger(meta.gen) ? meta.gen : 0, seen: Number.isInteger(meta.seen) ? meta.seen : 0 }
+  } catch { return { gen: 0, seen: 0 } }
+}
+
+function writeMeta(dir, meta) {
+  const temporary = join(dir, `.${META_FILE}.${process.pid}.tmp`)
+  rmSync(temporary, { force: true })
+  writeFileSync(temporary, JSON.stringify(meta) + '\n', { mode: 0o600, flag: 'wx' })
+  renameSync(temporary, join(dir, META_FILE))
+}
+
+/** Remember the highest generation another machine has, so the next build here outranks it. */
+export function noteSeen(dir, gen) {
+  if (!Number.isInteger(gen)) return
+  const meta = readMeta(dir)
+  if (gen <= meta.seen) return
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  writeMeta(dir, { ...meta, seen: gen })
+}
 const MAX_ABOUT = 32 * 1024
 
 /** The file split into sections and lines, each line with its sources. */
@@ -60,14 +89,17 @@ export function readAbout(dir) {
     try { read = readSync(fd, buffer, 0, buffer.length, 0) } finally { closeSync(fd) }
     const text = buffer.subarray(0, read).toString('utf8')
     const modified = info.mtimeMs
-    return { text, modified: Math.round(modified), ...parseAbout(text) }
+    return { text, modified: Math.round(modified), gen: readMeta(dir).gen, ...parseAbout(text) }
   } catch {
     return null
   }
 }
 
-/** Replace the profile. The previous one is kept as about-you.prev.md; a half-written file never shows. */
-export function writeAbout(dir, text) {
+/**
+ * Replace the profile. The previous one is kept as about-you.prev.md; a half-written file never shows.
+ * A build here gets the next generation; a copy of another machine's build keeps that build's (`gen`).
+ */
+export function writeAbout(dir, text, { gen } = {}) {
   const value = String(text ?? '')
   if (!value.trim()) throw new Error('Refusing to write an empty About You.')
   if (Buffer.byteLength(value) > MAX_ABOUT) throw new Error(`About You is limited to ${MAX_ABOUT / 1024} KB; keep it short.`)
@@ -87,5 +119,8 @@ export function writeAbout(dir, text) {
   } catch { /* the first profile has nothing to keep */ }
   writeFileSync(temporary, value.endsWith('\n') ? value : value + '\n', { mode: 0o600, flag: 'wx' })
   renameSync(temporary, path)
+  const meta = readMeta(dir)
+  const next = Number.isInteger(gen) ? gen : Math.max(meta.gen, meta.seen) + 1
+  writeMeta(dir, { gen: next, seen: Math.max(meta.seen, next) })
   return path
 }

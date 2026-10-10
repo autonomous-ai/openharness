@@ -217,8 +217,19 @@ function apply(target, about, on, h, created) {
   }
 }
 
+/** The default "on" for a person who never chose: any real choice, made at any time, outranks it. */
+export const DEFAULT_CHOICE_AT = 1
+
 export function readState(h) {
-  try { return JSON.parse(readFileSync(join(h.memory, STATE_FILE), 'utf8')) } catch { return { on: false } }
+  let state
+  try { state = JSON.parse(readFileSync(join(h.memory, STATE_FILE), 'utf8')) } catch { return { on: false } }
+  // Written before choices carried a time (the first Memories): an on or off then was always the
+  // person's, so it keeps counting as one, dated when it was written.
+  if (state && state.choiceAt === undefined && typeof state.on === 'boolean') {
+    state.choseOff = state.choseOff ?? !state.on
+    state.choiceAt = Date.parse(state.updatedAt) || DEFAULT_CHOICE_AT
+  }
+  return state ?? { on: false }
 }
 
 function writeState(h, state) {
@@ -234,19 +245,21 @@ function aboutText(h) {
 /**
  * `on` and `off` are the person's choice, from the pane's switch, `mem deliver`, or the agent asked in
  * chat. The choice carries its time (`choiceAt`) so every machine can keep the newest one: a choice
- * made on another machine is applied here with that machine's time, never as a new one.
+ * made here is later than any this machine knows of; a choice made on another machine is applied with
+ * that machine's time (`exact`), never as a new one. `refresh` is not a choice: it only rewrites copies.
  */
-export function deliver(action, { env = process.env, home, choiceAt = Date.now() } = {}) {
+export function deliver(action, { env = process.env, home, choiceAt = Date.now(), exact = false } = {}) {
   const h = homes(env, home)
   const state = readState(h)
+  if (!exact) choiceAt = Math.max(choiceAt, (state.choiceAt ?? 0) + 1)
   if (action === 'refresh' && !state.on) return { on: false, results: [] }
   const on = action !== 'off'
   const about = aboutText(h)
   if (on && !about) throw new Error('There is no About You yet. Build it first: ask the agent in Memories to build your About You.')
   const created = new Set(Array.isArray(state.created) ? state.created : [])
   const results = targets(h).map((target) => apply(target, about, on, h, created))
-  // `off` is the person's choice and is kept: automatic builds and other machines' About You then update
-  // only the profile, never turn delivery back on (lib/autobuild.mjs, lib/fleet.mjs).
+  // `on` and `off` are the person's choice and are kept with their time; `refresh` (a rebuilt or synced
+  // About You) only rewrites copies and never changes the choice (lib/fleet.mjs, viewer.mjs).
   const chosen = action === 'on' || action === 'off'
   writeState(h, {
     on,

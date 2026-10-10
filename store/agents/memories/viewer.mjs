@@ -13,10 +13,9 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { homes } from './lib/agents.mjs'
-import { writeAbout } from './lib/about.mjs'
-import { checkAutobuild } from './lib/autobuild.mjs'
-import { deliver } from './lib/deliver.mjs'
-import { askMachines, merge, syncAbout, syncChoice } from './lib/fleet.mjs'
+import { noteSeen, writeAbout } from './lib/about.mjs'
+import { DEFAULT_CHOICE_AT, deliver } from './lib/deliver.mjs'
+import { askMachines, merge, newestChoice, syncAbout, syncChoice } from './lib/fleet.mjs'
 import { search } from './lib/sessions.mjs'
 import { closeIndex, fingerprint, sessionIndex, snapshot as takeSnapshot, writeVerdict } from './lib/state.mjs'
 
@@ -32,10 +31,13 @@ const ASSETS = {
 const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'you', 'are', 'not', 'but', 'use', 'when', 'what', 'how', 'why', 'all', 'any', 'one', 'its', 'has', 'have', 'was', 'were', 'out', 'new', 'via', 'per'])
 
 /**
- * `fleet` is the bridge to the daemon (lib/bridge.mjs: `machinesReport`, `request`, `send`). Given, the
- * pane also shows every other machine's memories, keeps About You the same on all of them, and asks its
- * own agent to build About You when one is due (lib/autobuild.mjs). Without it — tests, a pane started
- * by hand — the pane reads this computer only and asks nothing of anyone.
+ * `fleet` is the bridge to the daemon (lib/bridge.mjs: `machinesReport`, `request`). Given, the pane also
+ * shows every other machine's memories and keeps About You and the on/off choice the same on all of
+ * them. Without it — tests, a pane started by hand — the pane reads this computer only.
+ *
+ * The pane never types into its agent: a turn typed into a pane lands on top of whatever the person is
+ * writing there. Building About You by itself is the daemon's memory service's, which waits for an
+ * empty input box; until then it is built when the person asks.
  */
 export function createViewer({ workspace, port = 0, intervalMs = 4000, env = process.env, home, now = () => Date.now(), snapshot = takeSnapshot, fleet = null, fleetIntervalMs = 60_000, idleFleetIntervalMs = 10 * 60_000 } = {}) {
   const clients = new Set()
@@ -51,6 +53,7 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
   let fleetTimer = null
   let asking = null
   let refreshedAt = 0
+  let fleetProblems = []
   let printed = ''
   let stopped = false
   let timer = null
@@ -73,6 +76,13 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     looking = (async () => {
       try {
         local = await snapshot({ env, home, now: now() })
+        // About You built and nobody has chosen on or off, on any machine this one knows of: on, as the
+        // default — at the earliest time a choice can have, so the person's first click on Off, here or
+        // on any machine, outranks it everywhere.
+        const anyChoice = newestChoice(local, machines?.remotes ?? [], machines?.here)
+        if (local.about && !anyChoice) {
+          try { deliver('on', { env, home, choiceAt: DEFAULT_CHOICE_AT, exact: true }); local = await snapshot({ env, home, now: now() }) } catch { /* shown as off */ }
+        }
         // Delivery on and a copy out of date (About You edited by hand, or a newer Memories writes copies
         // differently): bring them up to date here, at most every ten minutes. Not a choice, so the
         // person's on/off stays as it is.
@@ -81,7 +91,8 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
           refreshedAt = now()
           try { deliver('refresh', { env, home }); local = await snapshot({ env, home, now: now() }) } catch { /* the pane shows the older copy */ }
         }
-        const next = { ...(machines ? merge(local, machines.remotes, machines.here) : { ...local, machines: [] }), instance }
+        const merged = machines ? merge(local, machines.remotes, machines.here) : { ...local, machines: [] }
+        const next = { ...merged, problems: [...(merged.problems ?? []), ...fleetProblems], instance }
         const print = fingerprint(next) + JSON.stringify(next.machines.map((machine) => [machine.id, machine.ok, machine.error]))
         const changed = print !== printed
         current = next
@@ -104,19 +115,36 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
   async function tend() {
     if (!fleet || stopped) return
     if (asking) return asking
+    // Each step on its own: one that fails (a profile from another machine this one refuses, a machine
+    // that drops the link) is reported in the pane and never stops the steps after it.
     asking = (async () => {
-      try {
-        const asked = await askMachines({ machinesReport: fleet.machinesReport, request: fleet.request })
+      const problems = []
+      const attempt = async (what, step) => {
+        try { return await step() } catch (error) { problems.push({ agent: what, error: error instanceof Error ? error.message : String(error) }); return null }
+      }
+      const memory = homes(env, home).memory
+      const asked = await attempt('machines', () => askMachines({ machinesReport: fleet.machinesReport, request: fleet.request }))
+      if (asked) {
         machines = { ...asked, at: now() }
-        if (!local) await look()
-        const synced = await syncAbout({ local, remotes: machines.remotes, here: machines.here, request: fleet.request,
-          writeHere: (text) => { writeAbout(homes(env, home).memory, text); deliver(local?.delivery?.choseOff ? 'refresh' : 'on', { env, home }) } })
-        const chose = await syncChoice({ local, remotes: machines.remotes, here: machines.here, request: fleet.request,
-          applyHere: (on, at) => deliver(on ? 'on' : 'off', { env, home, choiceAt: at }) })
-        if (synced.sentTo.length || chose.sentTo.length || chose.appliedHere) machines = { ...(await askMachines({ machinesReport: fleet.machinesReport, request: fleet.request })), at: now() }
-        await look()
-        if (machines.here) await checkAutobuild({ snapshot: local, workspace, local: machines.here.id, request: fleet.request, send: fleet.send, now: now() })
-      } catch { /* the next round asks again; this computer's memories still show */ }
+        for (const remote of machines.remotes) if (Number.isInteger(remote.snapshot?.about?.gen)) noteSeen(memory, remote.snapshot.about.gen)
+      }
+      if (!local) await attempt('this computer', () => look())
+      if (machines && local) {
+        // A copy of another machine's build keeps its generation; it only refreshes the copies here,
+        // never turns delivery on: that is the person's choice, which syncChoice carries.
+        const synced = await attempt('About You', () => syncAbout({ local, remotes: machines.remotes, here: machines.here, request: fleet.request,
+          writeHere: (text, gen) => { writeAbout(memory, text, { gen }); deliver('refresh', { env, home }) } }))
+        if (synced?.wroteHere) await attempt('this computer', () => look())
+        const chose = await attempt('the switch', () => syncChoice({ local, remotes: machines.remotes, here: machines.here, request: fleet.request,
+          applyHere: (on, at) => deliver(on ? 'on' : 'off', { env, home, choiceAt: at, exact: true }) }))
+        for (const failed of [...(synced?.failed ?? []), ...(chose?.failed ?? [])]) problems.push({ agent: failed.name, error: failed.error })
+        if (synced?.sentTo.length || chose?.sentTo.length || chose?.appliedHere) {
+          const again = await attempt('machines', () => askMachines({ machinesReport: fleet.machinesReport, request: fleet.request }))
+          if (again) machines = { ...again, at: now() }
+        }
+      }
+      fleetProblems = problems
+      await attempt('this computer', () => look())
     })()
     try { await asking } finally { asking = null }
   }
@@ -132,9 +160,11 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
    * with this choice's time). A machine that cannot take it yet gets it at the next round after it can.
    */
   async function setDelivery(on) {
-    const at = now()
+    // Later than any choice this pane knows of, on any machine: a click always outranks what came before.
+    const known = newestChoice(local ?? {}, machines?.remotes ?? [], machines?.here)
+    const at = Math.max(now(), (known?.at ?? 0) + 1)
     let here
-    try { here = deliver(on ? 'on' : 'off', { env, home, choiceAt: at }) } catch (error) {
+    try { here = deliver(on ? 'on' : 'off', { env, home, choiceAt: at, exact: true }) } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) }
     }
     const sentTo = []
@@ -273,7 +303,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const port = Number(process.env.HARNESS_VIEWER_PORT || 0)
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('HARNESS_VIEWER_PORT must be a port number.')
   const bridge = await import('./lib/bridge.mjs')
-  const fleet = { machinesReport: () => bridge.machinesReport(), request: bridge.request, send: bridge.send, close: bridge.closeBridges }
+  const fleet = { machinesReport: () => bridge.machinesReport(), request: bridge.request, close: bridge.closeBridges }
   const viewer = createViewer({ workspace, port, fleet })
   console.log(`[memories] http://127.0.0.1:${await viewer.start()}/`)
   const close = () => viewer.close().then(() => process.exit(0))

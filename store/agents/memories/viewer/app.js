@@ -76,6 +76,7 @@ function who(id, tag = 'span', name = agent(id).name) {
 
 const token = document.querySelector('meta[name="memories-token"]')?.content ?? ''
 let switching = false
+let switchError = null
 
 function drawSwitch() {
   const snap = state.snap
@@ -93,7 +94,7 @@ function drawSwitch() {
   const machines = (snap.machines ?? [])
   const needUpdate = machines.filter((machine) => !machine.current && machine.online && !machine.ok).length
   if (!delivery.built) {
-    detail.append(document.createTextNode('Not built yet. It builds by itself while this Memories harness is open and idle.'))
+    detail.append(document.createTextNode('Not built yet. Ask the agent on the right: build my About You.'))
   } else if (on) {
     const names = (delivery.agents ?? []).filter((row) => row.delivered).map((row) => agent(row.agent).name)
     const onMachines = 1 + machines.filter((machine) => !machine.current && machine.ok && machine.deliveryOn).length
@@ -103,6 +104,7 @@ function drawSwitch() {
     detail.append(document.createTextNode('Your agents don\'t get About You.'))
   }
   if (needUpdate) detail.append(document.createTextNode(' · '), el('span', 'warn', `${needUpdate} ${needUpdate === 1 ? 'machine needs' : 'machines need'} the newest Harness`))
+  if (switchError) detail.append(document.createTextNode(' · '), el('span', 'warn', switchError))
   const failed = (delivery.agents ?? []).filter((row) => row.error)
   if (failed.length) detail.append(document.createTextNode(' · '), el('span', 'warn', failed.map((row) => `${agent(row.agent).name}: ${row.error}`).join('; ')))
 }
@@ -114,8 +116,9 @@ $('switch-button').addEventListener('click', async () => {
   drawSwitch()
   try {
     const answer = await (await fetch('/api/deliver', { method: 'POST', headers: { 'content-type': 'application/json', 'x-memories-token': token }, body: JSON.stringify({ on }) })).json()
-    if (!answer.ok && answer.error) $('switch-detail').textContent = answer.error
-  } catch { $('switch-detail').textContent = 'The switch did not answer. Try again.' }
+    const failed = [...(answer.results ?? []).filter((row) => !row.ok).map((row) => `${agent(row.agent).name}: ${row.error}`), ...(answer.failed ?? []).map((row) => `${row.name}: ${row.error}`)]
+    switchError = answer.error ?? (failed.length ? failed.join('; ') : null)
+  } catch { switchError = 'The switch did not answer. Try again.' }
   switching = false
   drawSwitch()
   $('q').focus()
@@ -595,13 +598,13 @@ function drawBuild(preview) {
   preview.append(head('About you', metaLine(['not built yet']), state.snap.aboutPath))
   preview.append(el('p', 'pv-big', 'A short profile of how you work, built from your own words across every agent.'))
   const call = el('div', 'callout')
-  call.append(el('div', null, 'It builds by itself while this Memories harness is open and idle, on the model you picked for it. To build it now, ask the agent on the right:'), el('div', 'say', 'build my About You'))
+  call.append(el('div', null, 'Ask the agent on the right, on the model you picked for this harness:'), el('div', 'say', 'build my About You'))
   preview.append(call)
   const facts = []
   if (sessions?.asks) facts.push(`${number(sessions.asks)} messages you sent to ${sessions.engines.filter((row) => row.asks).length} agents`)
   if (yours) facts.push(`${yours} notes your agents saved about you`)
   if (facts.length) preview.append(el('p', null, `It reads ${facts.join(' and ')}, and writes the profile here. Every line says where it came from.`))
-  preview.append(el('p', 'pv-meta', 'Only this harness\'s agent builds it, as a turn you can see on the right. Close the harness and nothing builds.'))
+  preview.append(el('p', 'pv-meta', 'Only this harness\'s agent builds it, as a turn you can see on the right. Then every agent gets it; the switch at the top turns that off.'))
 }
 
 const TURN_ON = {

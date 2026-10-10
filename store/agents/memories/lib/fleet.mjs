@@ -38,24 +38,26 @@ export function merge(local, remotes, here) {
       ours.memories += theirs.memories ?? 0
       ours.sessions += theirs.sessions ?? 0
       ours.instructions += theirs.instructions ?? 0
-      ours.present ||= theirs.present
       if (theirs.memories || theirs.sessions) ours.machines.push(remote.name)
     }
   }
 
-  // Projects by name: the same repository is in a different folder on each machine.
-  const projects = new Map()
-  for (const [snap, owner] of [[local, null], ...answered.map((remote) => [remote.snapshot, remote])]) {
-    for (const project of snap.projects ?? []) {
-      const entry = projects.get(project.name) ?? { ...project, key: `name:${project.name}`, memories: [], sessions: 0, asks: 0, engines: {}, lastAt: null, machines: [] }
-      entry.memories.push(...project.memories.map((id) => (owner ? `${owner.id}|${id}` : id)))
+  // This machine's projects stay as they are, two folders with one name included. Another machine's
+  // project joins this machine's project of the same name when there is exactly one — the same
+  // repository, in a different folder there — and is a project of its own otherwise.
+  const projects = new Map((local.projects ?? []).map((project) => [project.key, { ...project, memories: [...project.memories], engines: { ...project.engines }, machines: [machine.name] }]))
+  for (const remote of answered) {
+    for (const project of remote.snapshot.projects ?? []) {
+      const named = [...projects.values()].filter((entry) => entry.name === project.name && entry.machines.includes(machine.name))
+      const key = named.length === 1 ? named[0].key : `${remote.id}|${project.key}`
+      const entry = projects.get(key) ?? { ...project, key, memories: [], sessions: 0, asks: 0, engines: {}, lastAt: null, machines: [] }
+      entry.memories.push(...project.memories.map((id) => `${remote.id}|${id}`))
       entry.sessions += project.sessions ?? 0
       entry.asks += project.asks ?? 0
       entry.lastAt = Math.max(entry.lastAt ?? 0, project.lastAt ?? 0) || null
       addCounts(entry.engines, project.engines)
-      entry.machines.push(owner ? owner.name : machine.name)
-      if (!owner && project.path) entry.path = project.path
-      projects.set(project.name, entry)
+      entry.machines.push(remote.name)
+      projects.set(key, entry)
     }
   }
 
@@ -82,10 +84,13 @@ export function merge(local, remotes, here) {
 
 /** The newest About You among every machine that answered: `{ text, modified, from }` or null. */
 export function newestAbout(local, remotes, here) {
-  let best = local.about ? { text: local.about.text, modified: local.about.modified, from: here?.id ?? 'local' } : null
+  // Highest generation first; file time only between copies of the same generation (older builds, or
+  // two built at once), then the text itself so every machine picks the same one.
+  const rank = (a, b) => (a.gen ?? 0) - (b.gen ?? 0) || (a.modified ?? 0) - (b.modified ?? 0) || (a.text < b.text ? -1 : a.text > b.text ? 1 : 0)
+  let best = local.about ? { text: local.about.text, modified: local.about.modified, gen: local.about.gen ?? 0, from: here?.id ?? 'local' } : null
   for (const remote of remotes) {
     const about = remote.snapshot?.about
-    if (about?.text && (!best || about.modified > best.modified)) best = { text: about.text, modified: about.modified, from: remote.id }
+    if (about?.text && (!best || rank(about, best) > 0)) best = { text: about.text, modified: about.modified, gen: about.gen ?? 0, from: remote.id }
   }
   return best
 }
@@ -100,13 +105,13 @@ export async function syncAbout({ local, remotes, here, request, writeHere }) {
   const result = { wroteHere: false, sentTo: [], failed: [] }
   if (!best) return result
   if (best.from !== (here?.id ?? 'local') && local.about?.text !== best.text) {
-    await writeHere(best.text)
+    await writeHere(best.text, best.gen)
     result.wroteHere = true
   }
   for (const remote of remotes) {
     if (!remote.snapshot || remote.snapshot.about?.text === best.text) continue
     try {
-      await request(remote.id, 'memory_about_put', { text: best.text })
+      await request(remote.id, 'memory_about_put', { text: best.text, gen: best.gen })
       result.sentTo.push(remote.name)
     } catch (error) {
       result.failed.push({ name: remote.name, error: error instanceof Error ? error.message : String(error) })
@@ -122,12 +127,7 @@ export async function syncAbout({ local, remotes, here, request, writeHere }) {
  */
 export async function syncChoice({ local, remotes, here, request, applyHere }) {
   const result = { appliedHere: false, sentTo: [], failed: [] }
-  const choiceOf = (delivery) => (delivery?.choiceAt ? { on: !delivery.choseOff, at: delivery.choiceAt } : null)
-  let best = choiceOf(local.delivery) && { ...choiceOf(local.delivery), from: here?.id ?? 'local' }
-  for (const remote of remotes) {
-    const theirs = choiceOf(remote.snapshot?.delivery)
-    if (theirs && (!best || theirs.at > best.at)) best = { ...theirs, from: remote.id }
-  }
+  const best = newestChoice(local, remotes, here)
   if (!best) return result
   const differs = (delivery) => !delivery || delivery.choiceAt !== best.at || Boolean(delivery.choseOff) === best.on
   if (best.from !== (here?.id ?? 'local') && differs(local.delivery)) {
@@ -145,6 +145,18 @@ export async function syncChoice({ local, remotes, here, request, applyHere }) {
     }
   }
   return result
+}
+
+const choiceOf = (delivery) => (delivery?.choiceAt > 0 ? { on: !delivery.choseOff, at: delivery.choiceAt } : null)
+
+/** The newest on/off choice any machine knows of; at the same time, off wins (never flip-flop). */
+export function newestChoice(local, remotes, here) {
+  let best = choiceOf(local.delivery) && { ...choiceOf(local.delivery), from: here?.id ?? 'local' }
+  for (const remote of remotes) {
+    const theirs = choiceOf(remote.snapshot?.delivery)
+    if (theirs && (!best || theirs.at > best.at || (theirs.at === best.at && !theirs.on && best.on))) best = { ...theirs, from: remote.id }
+  }
+  return best
 }
 
 /** Ask every online machine but this one for its snapshot. Never throws: a machine that fails says why. */

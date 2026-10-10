@@ -5,9 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { DAY } from './fixtures.mjs'
-import { buildRequest, due, messagesSince } from '../lib/due.mjs'
-import { checkAutobuild, ownAgent, RETRY_MS } from '../lib/autobuild.mjs'
-import { askMachines, merge, newestAbout, syncAbout } from '../lib/fleet.mjs'
+import { due, messagesSince } from '../lib/due.mjs'
+import { askMachines, merge, newestAbout, newestChoice, syncAbout } from '../lib/fleet.mjs'
 
 const now = new Date('2026-10-10T12:00:00').getTime()
 const day = (offset) => { const d = new Date(now - offset * DAY); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
@@ -22,43 +21,6 @@ test('due: first build as soon as there is anything; then enough new messages, a
   assert.equal(due(built(4), { now }).due, true)
   assert.equal(due(built(0.5), { now }).reason, 'built in the last day')
   assert.equal(due(built(2), { now }).due, false, 'only 100 new since two days ago')
-  assert.equal(buildRequest({ first: true }), 'Build my About You, and use it in every agent.')
-  assert.equal(buildRequest({ first: false }, { deliveryOff: true }), 'Update my About You with what I have said since it was last built.')
-})
-
-function bridge(agents) {
-  const calls = []
-  return {
-    calls,
-    request: async (machine, type, payload) => { calls.push([machine, type, payload]); return { agents } },
-    send: async (machine, type, payload) => { calls.push([machine, type, payload]) },
-  }
-}
-
-test('autobuild asks its own idle agent once, and never a busy one, another workspace\'s, or twice in two hours', async () => {
-  const workspace = mkdtempSync(join(tmpdir(), 'memories-auto-'))
-  const elsewhere = mkdtempSync(join(tmpdir(), 'memories-other-'))
-  const snap = { memories: [], sessions: { asks: 40 } }
-  const agent = (over) => ({ id: 'a1', dsh: 'autonomous/memories', status: 'active', project: { cwd: workspace }, monitor: { activity: 'idle', activityKnown: true }, ...over })
-
-  const busy = bridge([agent({ monitor: { activity: 'working', activityKnown: true } })])
-  assert.equal((await checkAutobuild({ snapshot: snap, workspace, local: 'm1', ...busy, now })).reason, 'agent is working')
-  const other = bridge([agent({ project: { cwd: elsewhere } })])
-  assert.equal((await checkAutobuild({ snapshot: snap, workspace, local: 'm1', ...other, now })).reason, 'no agent in this workspace')
-
-  const idle = bridge([agent()])
-  const done = await checkAutobuild({ snapshot: snap, workspace, local: 'm1', ...idle, now })
-  assert.equal(done.sent, true)
-  assert.deepEqual(idle.calls.at(-1), ['m1', 'message', { agentId: 'a1', content: 'Build my About You, and use it in every agent.' }])
-  assert.equal((await checkAutobuild({ snapshot: snap, workspace, local: 'm1', ...idle, now: now + 60_000 })).reason, 'asked recently')
-  assert.equal((await checkAutobuild({ snapshot: snap, workspace, local: 'm1', ...bridge([agent()]), now: now + RETRY_MS + 1 })).sent, true)
-  assert.equal(JSON.parse(readFileSync(join(workspace, '.harness', 'memories-autobuild.json'), 'utf8')).agentId, 'a1')
-
-  const quiet = mkdtempSync(join(tmpdir(), 'memories-auto-'))
-  const off = bridge([agent({ project: { cwd: quiet } })])
-  await checkAutobuild({ snapshot: { ...snap, delivery: { choseOff: true } }, workspace: quiet, local: 'm1', ...off, now })
-  assert.equal(off.calls.at(-1)[2].content, 'Build my About You.', 'a person who turned delivery off is not turned back on')
-  assert.equal(ownAgent([agent({ status: 'stopped' })], workspace), null)
 })
 
 const remoteSnapshot = (name, about) => ({
@@ -81,7 +43,7 @@ test('merge: rows labeled and unique per machine, counts summed, projects joined
   assert.deepEqual(all.memories.map((row) => [row.id, row.machine.name]), [['claude:x.md', 'laptop'], ['m2|claude:x.md', 'mini']])
   assert.equal(all.memories[1].origin, 'claude:x.md')
   assert.deepEqual(all.agents.find((agent) => agent.id === 'claude'), { id: 'claude', memories: 2, sessions: 14, instructions: 1, present: true, machines: ['laptop', 'mini'] })
-  assert.equal(all.agents.find((agent) => agent.id === 'codex').present, true)
+  assert.equal(all.agents.find((agent) => agent.id === 'codex').present, false, 'installed on the mini is not installed here')
   assert.deepEqual(all.projects.map((project) => [project.name, project.memories, project.sessions, project.machines]), [['app', ['claude:x.md', 'm2|claude:x.md'], 5, ['laptop', 'mini']]])
   assert.equal(all.sessions.asks, 120)
   assert.equal(all.sessions.firstAt, now - 90 * DAY)
@@ -92,8 +54,8 @@ test('merge: rows labeled and unique per machine, counts summed, projects joined
 
 test('sync: the newest About You everywhere, by text, never sent back to where it came from', async () => {
   const here = { id: 'm1', name: 'laptop' }
-  const older = { text: '## A\n- old\n', modified: now - 2 * DAY }
-  const newer = { text: '## A\n- new\n', modified: now - DAY }
+  const older = { text: '## A\n- old\n', modified: now - 2 * DAY, gen: 3 }
+  const newer = { text: '## A\n- new\n', modified: now - DAY, gen: 4 }
   const remotes = [
     { id: 'm2', name: 'mini', snapshot: remoteSnapshot('mini', newer) },
     { id: 'm3', name: 'box', snapshot: remoteSnapshot('box', older) },
@@ -102,9 +64,10 @@ test('sync: the newest About You everywhere, by text, never sent back to where i
   assert.equal(newestAbout({ about: older }, remotes, here).from, 'm2')
   const written = []
   const sent = []
-  const result = await syncAbout({ local: { about: older }, remotes, here, request: async (id, type, payload) => { sent.push([id, type, payload.text]) }, writeHere: async (text) => { written.push(text) } })
+  const result = await syncAbout({ local: { about: older }, remotes, here, request: async (id, type, payload) => { sent.push([id, type, payload.text]); assert.equal(payload.gen, 4) }, writeHere: async (text, gen) => { written.push(text); assert.equal(gen, 4) } })
   assert.deepEqual(written, [newer.text])
   assert.deepEqual(sent, [['m3', 'memory_about_put', newer.text]])
+  assert.deepEqual(written.length, 1)
   assert.deepEqual(result, { wroteHere: true, sentTo: ['box'], failed: [] })
 
   // A moment later this machine's copy is newer by file time but the same words: nothing moves.
@@ -145,11 +108,9 @@ test('the viewer with a fleet: other machines merged in, About You synced, the b
     machinesReport: async () => ({ machines: [{ machineId: 'm1', name: 'laptop', current: true, online: true }, { machineId: 'm2', name: 'mini', current: false, online: true }] }),
     request: async (id, type, payload) => {
       calls.push([id, type])
-      if (type === 'memory_snapshot') return { snapshot: remoteSnapshot('mini', { text: '## How you work\n- From the mini.\n', modified: Date.now() - 60_000 }) }
-      if (type === 'agents_list') return { agents: [{ id: 'a1', dsh: 'autonomous/memories', status: 'active', project: { cwd: workspace }, monitor: { activity: 'idle', activityKnown: true } }] }
+      if (type === 'memory_snapshot') return { snapshot: remoteSnapshot('mini', { text: '## How you work\n- From the mini.\n', modified: Date.now() - 60_000, gen: 2 }) }
       return {}
     },
-    send: async (id, type, payload) => { calls.push([id, type, payload.content]) },
   }
   const viewer = createViewer({ workspace, env, home, fleet, intervalMs: 60_000 })
   await viewer.start()
@@ -159,7 +120,9 @@ test('the viewer with a fleet: other machines merged in, About You synced, the b
     assert.ok(snap.memories.some((row) => row.machine?.name === 'mini'))
     assert.match(readFileSync(join(home, '.harness', 'memory', 'about-you.md'), 'utf8'), /From the mini/, 'About You built on the mini arrived here')
     assert.equal(snap.about.lines[0].text, 'From the mini.')
-    assert.ok(!calls.some(([, type]) => type === 'message'), 'About You exists now: no build is due')
+    assert.ok(!calls.some(([, type]) => type === 'message'), 'the pane never types into an agent')
+    assert.equal(snap.delivery.on, true, 'nobody chose: on, as the default')
+    assert.equal(snap.delivery.choiceAt, 1, 'at the earliest time, so any real choice wins')
   } finally { await viewer.close() }
 })
 
@@ -196,10 +159,8 @@ test('the switch in the viewer: a token, then off and on, here and on the machin
     machinesReport: async () => ({ machines: [{ machineId: 'm1', name: 'laptop', current: true, online: true }, { machineId: 'm2', name: 'mini', current: false, online: true }] }),
     request: async (id, type, payload) => {
       if (type === 'memory_snapshot') return { snapshot: remoteSnapshot('mini', { text: '## How you work\n- Short answers.\n', modified: 1 }) }
-      if (type === 'agents_list') return { agents: [] }
       sent.push([id, type, payload.on]); return {}
     },
-    send: async () => {},
   }
   const workspace = mkdtempSync(join(tmpdir(), 'memories-ws-'))
   const viewer = createViewer({ workspace, env, home, fleet, intervalMs: 60_000 })
@@ -222,7 +183,9 @@ test('the switch in the viewer: a token, then off and on, here and on the machin
     assert.deepEqual(off.body.sentTo, ['mini'])
     assert.equal(viewer.snapshot().delivery.on, false)
     assert.equal(viewer.snapshot().delivery.choseOff, true)
-    assert.deepEqual(sent.filter(([, type]) => type === 'memory_deliver'), [['m2', 'memory_deliver', true], ['m2', 'memory_deliver', false]])
+    const delivers = sent.filter(([, type]) => type === 'memory_deliver')
+    assert.deepEqual(delivers[0], ['m2', 'memory_deliver', true], 'the default on reached the mini, which had no choice')
+    assert.deepEqual(delivers.at(-1), ['m2', 'memory_deliver', false], 'and the click on Off reached it too')
     const page = await new Promise((resolve) => httpRequest({ host: '127.0.0.1', port, path: '/', headers: { host: `127.0.0.1:${port}` } }, (res) => { let t = ''; res.on('data', (c) => { t += c }); res.on('end', () => resolve(t)) }).end())
     assert.ok(page.includes(viewer.token) && !page.includes('__MEMORIES_TOKEN__'), 'the page carries its token')
   } finally { await viewer.close() }
@@ -247,4 +210,88 @@ test('copies out of date are brought up to date by the pane while delivery is on
     assert.ok(viewer.snapshot().delivery.agents.every((agent) => agent.current), 'every copy current again')
     assert.match(readFileSync(join(home, '.codex', 'AGENTS.md'), 'utf8'), /Tabs, not spaces/)
   } finally { await viewer.close() }
+})
+
+test('clocks cannot win: a newer build outranks a machine whose clock runs ahead', async () => {
+  const here = { id: 'm1', name: 'laptop' }
+  const fresh = { text: '## A\n- built here just now\n', modified: now, gen: 7 }
+  const ahead = { text: '## A\n- older build, clock an hour ahead\n', modified: now + 3_600_000, gen: 6 }
+  const best = newestAbout({ about: fresh }, [{ id: 'm2', name: 'fast-clock', snapshot: remoteSnapshot('fast-clock', ahead) }], here)
+  assert.equal(best.from, 'm1')
+  assert.equal(best.gen, 7)
+})
+
+test('choices: newest wins, the same time goes to off, the default on loses to any real choice', () => {
+  const here = { id: 'm1', name: 'laptop' }
+  const d = (on, at) => ({ delivery: { on, choseOff: !on, choiceAt: at } })
+  assert.equal(newestChoice(d(true, 5), [{ id: 'm2', snapshot: d(false, 5) }], here).on, false, 'tie: off')
+  assert.equal(newestChoice(d(false, 5), [{ id: 'm2', snapshot: d(true, 5) }], here).on, false, 'tie: off, either side')
+  assert.equal(newestChoice(d(true, 1), [{ id: 'm2', snapshot: d(false, 2) }], here).on, false, 'the default on (1) loses')
+  assert.equal(newestChoice({ delivery: { on: true } }, [{ id: 'm2', snapshot: { delivery: { on: false } } }], here), null, 'no time, no choice')
+})
+
+test('a machine that slept through Off cannot turn it back on with a rebuild', async () => {
+  const { deliver, readState } = await import('../lib/deliver.mjs')
+  const { writeAbout } = await import('../lib/about.mjs')
+  const { makeHome } = await import('./fixtures.mjs')
+  const { homes } = await import('../lib/agents.mjs')
+  const { home, env } = makeHome()
+  const memory = join(home, '.harness', 'memory')
+  writeAbout(memory, '## A\n- one\n')
+  deliver('on', { env, home, choiceAt: 1, exact: true })
+  deliver('off', { env, home })
+  const off = readState(homes(env, home))
+  assert.equal(off.on, false)
+  assert.ok(off.choiceAt > 1)
+  // A rebuild here, or one arriving from another machine, only refreshes: the choice stays off.
+  writeAbout(memory, '## A\n- two\n')
+  deliver('refresh', { env, home })
+  assert.equal(readState(homes(env, home)).on, false)
+  assert.equal(readState(homes(env, home)).choiceAt, off.choiceAt)
+  // A local choice is always later than the last one, whatever the clock says.
+  deliver('on', { env, home, choiceAt: 5 })
+  assert.equal(readState(homes(env, home)).choiceAt, off.choiceAt + 1)
+})
+
+test('state written by the first Memories keeps the person\'s choice', async () => {
+  const { readState } = await import('../lib/deliver.mjs')
+  const { writeFileSync } = await import('node:fs')
+  const dir = mkdtempSync(join(tmpdir(), 'memories-legacy-'))
+  writeFileSync(join(dir, 'delivery.json'), JSON.stringify({ on: false, updatedAt: '2026-10-10T04:00:00.000Z', agents: [] }))
+  const state = readState({ memory: dir })
+  assert.equal(state.choseOff, true)
+  assert.equal(state.choiceAt, Date.parse('2026-10-10T04:00:00.000Z'))
+})
+
+test('builds number themselves: one more than any generation seen anywhere; a copy keeps its own', async () => {
+  const { writeAbout, readAbout, noteSeen } = await import('../lib/about.mjs')
+  const dir = mkdtempSync(join(tmpdir(), 'memories-gen-'))
+  writeAbout(dir, '## A\n- one\n')
+  assert.equal(readAbout(dir).gen, 1)
+  noteSeen(dir, 9)
+  writeAbout(dir, '## A\n- two\n')
+  assert.equal(readAbout(dir).gen, 10)
+  writeAbout(dir, '## A\n- a copy\n', { gen: 4 })
+  assert.equal(readAbout(dir).gen, 4)
+  writeAbout(dir, '## A\n- three\n')
+  assert.equal(readAbout(dir).gen, 11, 'still outranks the highest ever seen')
+})
+
+test('merge keeps two local projects with one name apart; another machine joins only an unambiguous one', () => {
+  const local = { memories: [], agents: [], sessions: null, projects: [
+    { key: '/a/api', name: 'api', path: '~/a/api', memories: ['x'], sessions: 1, asks: 1, engines: {}, lastAt: 1 },
+    { key: '/b/api', name: 'api', path: '~/b/api', memories: ['y'], sessions: 1, asks: 1, engines: {}, lastAt: 1 },
+    { key: '/c/web', name: 'web', path: '~/c/web', memories: ['z'], sessions: 1, asks: 1, engines: {}, lastAt: 1 },
+  ] }
+  const remote = { memories: [], agents: [], projects: [
+    { key: '/r/api', name: 'api', memories: ['q'], sessions: 2, asks: 2, engines: {}, lastAt: 2 },
+    { key: '/r/web', name: 'web', memories: ['w'], sessions: 2, asks: 2, engines: {}, lastAt: 2 },
+  ] }
+  const all = merge(local, [{ id: 'm2', name: 'mini', online: true, snapshot: remote }], { id: 'm1', name: 'laptop' })
+  const by = Object.fromEntries(all.projects.map((p) => [p.key, p]))
+  assert.equal(by['/a/api'].path, '~/a/api')
+  assert.equal(by['/b/api'].path, '~/b/api')
+  assert.deepEqual(by['m2|/r/api'].memories, ['m2|q'], 'ambiguous here: its own project')
+  assert.deepEqual(by['/c/web'].memories, ['z', 'm2|w'], 'unambiguous: joined')
+  assert.deepEqual(by['/c/web'].machines, ['laptop', 'mini'])
 })

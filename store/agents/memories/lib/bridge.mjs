@@ -8,8 +8,8 @@
  * same `requestId`. Nothing here reaches the network, and no credential passes through this file.
  *
  * Memories asks each machine for what its agents remember (`memory_snapshot`) and hands it the person's
- * About You (`memory_about_put`); on this machine it finds its own agent (`agents_list`) and gives it a
- * turn (`message`). Writes are never automatically retried after a lost reply.
+ * About You (`memory_about_put`) and the person's on/off choice (`memory_deliver`). Writes are never
+ * automatically retried after a lost reply.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -202,15 +202,6 @@ export async function listAgents(machineId, options = {}) {
 export async function request(machineId, type, payload = {}, options = {}) {
   const { session } = await bridgeSession(machineId, options)
   return session.rpc(type, payload, { callTimeoutMs: options.timeoutMs ?? 30_000 })
-}
-
-/**
- * A one-way frame (`message`: text into an agent's pane): the daemon answers it with nothing, so this
- * resolves once it is on the wire, not when the agent has read it.
- */
-export async function send(machineId, type, payload = {}, options = {}) {
-  const { session } = await bridgeSession(machineId, options)
-  session.socket.send(JSON.stringify({ type, payload }))
 }
 
 /** Drop every kept bridge session (the pane is closing). */
