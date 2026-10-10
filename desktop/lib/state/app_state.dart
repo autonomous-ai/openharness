@@ -4185,14 +4185,23 @@ class AppNotifier extends ChangeNotifier {
   /// The pane a task just landed in — ⌘B's receipt: its rim lights once (`pane_grid.dart`), so the eye
   /// sees where the words went, in whichever tab. [seq] tells one landing from the next on the same pane.
   final paneLanding =
-      ValueNotifier<({String machineId, String agentId, int seq})?>(null);
+      ValueNotifier<
+        ({String machineId, String agentId, int seq, DateTime at})?
+      >(null);
   int _landings = 0;
 
   void markLanding(String machineId, String agentId) => paneLanding.value = (
     machineId: machineId,
     agentId: agentId,
     seq: ++_landings,
+    at: DateTime.now(),
   );
+
+  /// The landing is over: a pane of that session opened later (reopened from ⌘P, restored at sign-in)
+  /// must not light for words that landed long ago.
+  void endLanding(int seq) {
+    if (paneLanding.value?.seq == seq) paneLanding.value = null;
+  }
 
   /// ⌘B's send: the session's pane comes forward and the task goes into its prompt, through this app's
   /// own door on any machine (`deliverTask`). [stillWanted] is asked just before the words are typed:

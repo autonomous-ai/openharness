@@ -1476,6 +1476,8 @@ class _PaneCell extends StatelessWidget {
 /// in, once, and fades, so the eye finds where the words went. A wash, not a rim: pane rims carry focus
 /// and location and never glow (`desktop/design/desktop-design-system.md`). Optional motion, so Reduce
 /// Motion skips it and the pane taking focus is the receipt.
+const _landingFor = Duration(milliseconds: 900);
+
 class _PaneLanding extends StatelessWidget {
   const _PaneLanding({required this.notifier, required this.pane});
 
@@ -1490,14 +1492,17 @@ class _PaneLanding extends StatelessWidget {
         if (landing == null ||
             landing.machineId != pane.machineId ||
             landing.agentId != pane.agentId ||
-            MediaQuery.disableAnimationsOf(context)) {
+            MediaQuery.disableAnimationsOf(context) ||
+            // Mounted after the moment has passed: nothing is landing now.
+            DateTime.now().difference(landing.at) > _landingFor) {
           return const SizedBox.shrink();
         }
         return TweenAnimationBuilder<double>(
           key: ValueKey('pane-landing:${pane.id}:${landing.seq}'),
           tween: Tween(begin: 1, end: 0),
-          duration: const Duration(milliseconds: 900),
+          duration: _landingFor,
           curve: Curves.easeOut,
+          onEnd: () => notifier.endLanding(landing.seq),
           builder: (context, wash, _) => wash == 0
               ? const SizedBox.shrink()
               : DecoratedBox(

@@ -200,5 +200,15 @@ void main() {
 
     await tester.pump(const Duration(seconds: 2));
     expect(find.byKey(ValueKey('pane-landing:${lit.id}')), findsNothing);
+    // Over: a pane of it opened later does not light for words that landed long ago.
+    expect(app.paneLanding.value, isNull);
+    app.paneLanding.value = (
+      machineId: 'm',
+      agentId: 'a0',
+      seq: 99,
+      at: DateTime.now().subtract(const Duration(seconds: 5)),
+    );
+    await tester.pump();
+    expect(find.byKey(ValueKey('pane-landing:${lit.id}')), findsNothing);
   });
 }

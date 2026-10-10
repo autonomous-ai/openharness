@@ -261,7 +261,12 @@ class _TaskPaletteState extends State<_TaskPalette> {
     // Not while one is in flight: Return held down would send the same task twice.
     if (task.isEmpty || _stage == _Stage.routing) return;
     // Remembered as it is said, sent or not: one that could not be sent is there to say again.
-    unawaited(widget.notifier.taskHistory.add(task));
+    unawaited(
+      widget.notifier.taskHistory.add(
+        task,
+        account: widget.notifier.currentUser?.id,
+      ),
+    );
     final mine = ++_generation;
     setState(() {
       _stage = _Stage.routing;
@@ -380,7 +385,7 @@ class _TaskPaletteState extends State<_TaskPalette> {
     }
 
     if (answer.confidence >= _confidentEnough) {
-      _answer = answer; // so the receipt can name who took it
+      _answer = answer;
       await _commit(answer.agentId, answer.machineId, task);
       return;
     }
@@ -471,7 +476,15 @@ class _TaskPaletteState extends State<_TaskPalette> {
       id: taskRouteSessionId(machineId, agentId),
       at: DateTime.now(),
     );
-    _landed(machineId, agentId);
+    // The old router may name no machine: the pane then opens where the send went (`sendRoutedTask`).
+    final target = machineId.isNotEmpty
+        ? machineId
+        : (widget.notifier.viewer == null
+                  ? widget.notifier.localMachineState
+                  : widget.notifier.ownedActionMachine)
+              ?.machine
+              .machineId;
+    _landed(target ?? machineId, agentId);
   }
 
   /// How many recent prompts the box offers: as many as a search box shows, and the same six the
@@ -485,9 +498,12 @@ class _TaskPaletteState extends State<_TaskPalette> {
   /// that contain the words so far. None while it decides, and none for a prompt of several lines.
   List<String> get _suggestions {
     if (_stage != _Stage.typing) return const [];
+    // A prompt of several lines keeps its arrows for its own lines: checked before trimming, which would
+    // drop the newline just typed.
+    if (_text.text.contains('\n')) return const [];
     final typed = _text.text.trim().toLowerCase();
-    if (typed.contains('\n')) return const [];
-    return widget.notifier.taskHistory.recent
+    return widget.notifier.taskHistory
+        .recentFor(widget.notifier.currentUser?.id)
         .where((said) {
           final lower = said.toLowerCase();
           return typed.isEmpty || (lower.contains(typed) && lower != typed);

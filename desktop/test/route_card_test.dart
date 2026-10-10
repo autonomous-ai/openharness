@@ -26,6 +26,7 @@ class _App extends AppNotifier {
       authMode: MachineAuthMode.remote,
       name: 'Office',
     );
+    currentUser = const CurrentUserProfile(id: 'u1', email: 'u1@example.com');
     machines = [machine];
     machineStates['m'] = MachineState(machine)
       ..nodeOnline = true
@@ -665,7 +666,7 @@ void main() {
     Future<_App> withHistory(WidgetTester tester, List<String> said) async {
       final (app, _) = await _open(tester);
       for (final prompt in said.reversed) {
-        await app.taskHistory.add(prompt);
+        await app.taskHistory.add(prompt, account: 'u1');
       }
       // The box draws them once read.
       await tester.pump();
@@ -735,13 +736,41 @@ void main() {
     );
 
     testWidgets(
+      'a prompt of several lines keeps its arrows for its own lines',
+      (tester) async {
+        await withHistory(tester, ['deploy the dev firmware']);
+        await tester.enterText(find.byType(TextField), 'deploy\n');
+        await tester.pump();
+        expect(find.text('deploy the dev firmware'), findsNothing);
+      },
+    );
+
+    testWidgets('another account signed in here sees none of them', (
+      tester,
+    ) async {
+      final app = await withHistory(tester, ['a private prompt']);
+      app.currentUser = const CurrentUserProfile(
+        id: 'u2',
+        email: 'u2@example.com',
+      );
+      Navigator.of(tester.element(find.byType(TextField))).pop();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Open'));
+      await tester.pumpAndSettle();
+      expect(find.text('a private prompt'), findsNothing);
+    });
+
+    testWidgets(
       'Return with nothing picked sends what is typed, and remembers it',
       (tester) async {
         final app = await withHistory(tester, ['plot signups by week']);
         app.reply = (_) => {'decided': 'session', 'id': _session, 'via': 'jev'};
         await _say(tester, 'plot');
         expect(app.sent.single.$3, 'plot');
-        expect(app.taskHistory.recent, ['plot', 'plot signups by week']);
+        expect(app.taskHistory.recentFor('u1'), [
+          'plot',
+          'plot signups by week',
+        ]);
       },
     );
   });
