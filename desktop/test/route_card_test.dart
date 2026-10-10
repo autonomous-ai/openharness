@@ -293,6 +293,22 @@ void main() {
       now: _now,
     ).sessions.values.map((s) => s.agentId).toList();
     expect(ids, ['tuesday', 'live']);
+    // Jev is told it is stopped, and since when; a live one says nothing of the kind.
+    final sent = {
+      for (final row
+          in taskRouteChoices(app, now: _now).toPayload()['sessions'] as List)
+        (row as Map)['id']: row['stoppedAgoMs'],
+    };
+    expect(sent, {
+      'm\ntuesday': const Duration(days: 4).inMilliseconds,
+      'm\nlive': null,
+    });
+    // A machine whose clock runs ahead still reads as stopped, never as live.
+    final ahead = taskRouteChoices(
+      app,
+      now: _now.subtract(const Duration(days: 5)),
+    );
+    expect(ahead.sessions['m\ntuesday']?.stoppedFor, Duration.zero);
   });
 
   test(

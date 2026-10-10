@@ -84,7 +84,8 @@ Future<_Connection> _routeNewWork(
 
 final _taskField = find.byWidgetPredicate(
   (widget) =>
-      widget is TextField && widget.decoration?.hintText == 'Describe the work…',
+      widget is TextField &&
+      widget.decoration?.hintText == 'Describe the work…',
 );
 
 void main() {
@@ -108,8 +109,10 @@ void main() {
   ) async {
     final connection = await _routeNewWork(
       tester,
-      before: (app) => app.agentPreference.successfulLaunch =
-          const LaunchSetup(engine: 'codex', permissionMode: 'ask'),
+      before: (app) => app.agentPreference.successfulLaunch = const LaunchSetup(
+        engine: 'codex',
+        permissionMode: 'ask',
+      ),
     );
     final create = connection.asked['agent_create']!;
     expect(create['permissionMode'], 'ask');
@@ -149,6 +152,31 @@ void main() {
       expect(app.activeSwarmId, backlog);
       expect(app.focusedPane?.agentId, 'a0');
       expect(app.allPanes.length, panes);
+    },
+  );
+
+  testWidgets(
+    'a pane brought forward from a tab behind with no terminal yet is attached',
+    (tester) async {
+      final app = createApp(connectionForTest: (_) => _Connection());
+      app.machineStates['m']!
+        ..nodeOnline = true
+        ..connectionStatus = ConnectionStatus.connected;
+      await app.addAgentToSwarm('m', 'a0');
+      final pane = app.allPanes.firstWhere((p) => p.agentId == 'a0');
+      // Restored after a restart, or its session just resumed: nothing has attached it.
+      pane.session = null;
+      app.newSwarm(name: 'Work', newTabPage: true);
+      app.machineStates['m']!.terminalCapabilityAvailable = true;
+
+      app.bringSessionForward('m', 'a0');
+      await tester.pump();
+
+      expect(app.focusedPane?.agentId, 'a0');
+      expect(pane.session, isNotNull);
+      // The terminal it opened keeps an open deadline: let it lapse with the app.
+      app.dispose();
+      await tester.pump(const Duration(minutes: 1));
     },
   );
 }

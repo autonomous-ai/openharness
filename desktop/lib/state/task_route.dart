@@ -71,6 +71,8 @@ const _sessionCap = 40;
 /// spreads Jev thinner over work nobody is coming back to.
 const stoppedSessionsWithin = Duration(days: 7);
 
+Duration _atLeastZero(Duration d) => d.isNegative ? Duration.zero : d;
+
 /// The sessions, projects and agents ⌘B's router chooses from. [now] is for tests.
 TaskRouteChoices taskRouteChoices(AppNotifier app, {DateTime? now}) {
   final since = (now ?? DateTime.now()).subtract(stoppedSessionsWithin);
@@ -164,8 +166,11 @@ TaskRouteChoices taskRouteChoices(AppNotifier app, {DateTime? now}) {
         about:
             _recent[app]?['${machine.machine.machineId}\n${agent.id}']?.about ??
             _about(_preview(app, machine.machine.machineId, agent)),
+        // Never less than nothing: a machine whose clock runs ahead would otherwise read as live.
         stoppedFor: agent.isStopped
-            ? (now ?? DateTime.now()).difference(agent.lastActivityAt!)
+            ? _atLeastZero(
+                (now ?? DateTime.now()).difference(agent.lastActivityAt!),
+              )
             : null,
       ),
   };

@@ -4207,8 +4207,12 @@ class AppNotifier extends ChangeNotifier {
   /// The session's own pane, wherever it is: its tab comes forward and the pane takes focus. Only a
   /// session with no pane in any tab gets a new one, here. 2026-10-10: a task for "Personal AI
   /// Computer" opened a second pane on it in the current tab while its own sat in the Backlog tab.
+  ///
+  /// The pane revealed is then selected, as a click on it would: a pane in a tab behind this one that has
+  /// no terminal yet (restored after a restart, say, or a session just resumed) is attached here, since
+  /// nothing attaches a pane in a tab nobody was looking at.
   void bringSessionForward(String machineId, String agentId) {
-    if (revealAgentView(machineId, agentId)) return;
+    revealAgentView(machineId, agentId);
     unawaited(selectAgent(machineId, agentId));
   }
 
