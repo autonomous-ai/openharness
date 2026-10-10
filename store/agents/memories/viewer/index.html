@@ -7,6 +7,7 @@
   <meta name="memories-instance" content="__MEMORIES_INSTANCE__">
   <title>Memories</title>
   <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="self.css">
 </head>
 <body>
   <header class="top">
@@ -22,26 +23,7 @@
     </div>
   </header>
   <div id="switch-problem" class="switch-problem" role="alert" hidden></div>
-  <section id="band" class="band" aria-label="Your work with agents" hidden>
-    <div class="heat">
-      <svg id="heat" role="img" aria-label="Your messages per day, colored by agent"></svg>
-      <div id="heat-note" class="heat-note"></div>
-    </div>
-    <div class="stats">
-      <div class="big"><span id="stat-asks">0</span><small>messages to your agents</small></div>
-      <div id="stat-line" class="stat-line"></div>
-      <div id="bar" class="bar" aria-hidden="true"></div>
-      <div id="legend" class="legend"></div>
-    </div>
-  </section>
-  <main class="split">
-    <div id="list" class="list" role="listbox" aria-label="Memories" tabindex="-1"></div>
-    <article id="preview" class="preview" aria-live="polite"></article>
-  </main>
-  <footer class="keys">
-    <span><kbd>↑↓</kbd> move</span><span><kbd>→</kbd> open</span><span><kbd>←</kbd> back</span><span><kbd>esc</kbd> clear</span>
-    <span class="spacer"></span><span id="updated"></span>
-  </footer>
+  <main id="stage" class="stage" aria-label="Sense of Self"></main>
   <script type="module" src="app.js"></script>
 </body>
 </html>

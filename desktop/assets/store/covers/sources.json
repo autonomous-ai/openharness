@@ -322,7 +322,7 @@
     "asset": "memories.jpg",
     "source": "desktop/tool/store_artwork/capture-covers.mjs memories",
     "credit": "OpenHarness example",
-    "sha256": "def5e19216c090cde07a51a6236ed326920d12b4763053012263446733bffb39",
+    "sha256": "fee78a02f05ce205ec1d4d47159ee41ad10d1a6f1ccca586a30f5a991b140bf5",
     "capture": "Synthetic memories and sessions in an empty home directory. No user account, machines, or activity were read.",
     "harness": "autonomous/memories"
   },

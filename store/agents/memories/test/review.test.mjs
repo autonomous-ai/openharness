@@ -1,17 +1,21 @@
 /** Regressions from the first review of this package: each test names the failure it guards. */
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { request } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { firstHeading, frontmatter, sections } from '../lib/text.mjs'
 import { parseAbout, writeAbout } from '../lib/about.mjs'
 import { projectsFor } from '../lib/state.mjs'
-import { parse } from '../viewer/markdown.js'
+import { renderBody } from '../viewer/self.js'
 import { createViewer } from '../viewer.mjs'
+
+/** A memory body as the pane renders it, into elements that only record what they hold. */
+function body(text) {
+  const node = (tag) => ({ tag, children: [], textContent: '', className: '', append(...items) { this.children.push(...items) } })
+  return renderBody({ createElement: node, createTextNode: (value) => ({ tag: '#text', value }) }, node('div'), text)
+}
 
 const fast = (label, fn, budgetMs = 200) => {
   const started = performance.now()
@@ -24,14 +28,14 @@ test('a heading line of thousands of spaces parses in linear time (it once took 
   const line = '# a' + ' '.repeat(20_000) + 'b'
   fast('firstHeading', () => firstHeading(line))
   fast('sections', () => sections('## a' + ' '.repeat(20_000) + 'b\ntext'))
-  fast('markdown', () => parse(line + '\n\n' + '`'.repeat(30_000)))
+  fast('memory body', () => body(line + '\n\n' + '`'.repeat(30_000)))
   fast('About You', () => parseAbout('## A\n- x' + ' '.repeat(30_000) + 'y [' + ' '.repeat(30_000)))
   assert.equal(firstHeading('## Title ##'), 'Title')
   assert.equal(firstHeading('#hashtag\n### C# tips'), 'C# tips')
 })
 
 test('thousands of nested quotes do not exhaust the stack', () => {
-  assert.doesNotThrow(() => parse('>'.repeat(20_000) + ' deep'))
+  assert.doesNotThrow(() => body('>'.repeat(20_000) + ' deep'))
 })
 
 test('a front-matter key followed by indented text is a string, never "[object Object]"', () => {
@@ -63,18 +67,6 @@ test('About You never writes through a link planted at its file names', () => {
   writeAbout(dir, '## A\n- two\n')
   assert.equal(readFileSync(victim, 'utf8'), 'untouched')
   assert.match(readFileSync(join(dir, 'about-you.prev.md'), 'utf8'), /one/)
-})
-
-test('the streak counts calendar days across daylight-saving changes', () => {
-  const heatmap = fileURLToPath(new URL('../viewer/heatmap.js', import.meta.url))
-  const script = `
-    const { streak, dayKey } = await import(${JSON.stringify(heatmap)})
-    const days = (list) => new Map(list.map((d) => [d, { total: 1 }]))
-    const spring = streak(days(['2027-03-12', '2027-03-13', '2027-03-14', '2027-03-15']), new Date('2027-03-15T00:30:00').getTime())
-    const fall = streak(days(['2026-10-31', '2026-11-01']), new Date('2026-11-01T23:30:00').getTime())
-    console.log(JSON.stringify([spring, fall]))`
-  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, TZ: 'America/New_York' } }).toString()
-  assert.deepEqual(JSON.parse(out), [4, 2])
 })
 
 test('a request during the first read gets the snapshot, not an empty answer', async () => {
@@ -110,7 +102,7 @@ test('second review: full-path privacy skip, worktree beats parent, literal bloc
   assert.equal(projects.find((p) => p.name === 'autonomous-harness').sessions, 3)
 
   assert.deepEqual(frontmatter('---\ndescription: |\n  Triggers: build it\n  and more\nname: z\n---\n').data, { description: 'Triggers: build it and more', name: 'z' })
-  fast('brackets', () => parse('['.repeat(20_000)))
-  fast('backticks', () => parse('`'.repeat(8_000) + ' text'))
+  fast('brackets', () => body('['.repeat(20_000)))
+  fast('backticks', () => body('`'.repeat(8_000) + ' text'))
   assert.equal(parseAbout('## A\n-\titem\n').lines[0].text, 'item')
 })
