@@ -174,11 +174,16 @@ describe('the session search service', () => {
         row({ agentId: 'nothing-to-read', sessionId: 's-none' }),
       ]
       const { index } = setup(agents)
+      // Each carries its folder and title for the index's own readers; the header is as it was.
       expect(index.opts.sources()).toEqual([
-        { agentId: 'file', sessionId: 's-file', engine: 'claude', transcriptPath: '/t/file.jsonl', header: 'name of file · Fix login · api app', changedAt: 70, readHistory: undefined },
-        { agentId: 'db', sessionId: 's-db', engine: 'opencode', transcriptPath: null, header: 'name of db', changedAt: 40, readHistory: reader },
-        { agentId: 'fresh', sessionId: 's-fresh', engine: 'claude', transcriptPath: '/t/fresh.jsonl', header: 'name of fresh', changedAt: 30, readHistory: undefined },
-        { agentId: 'unstamped', sessionId: 's-un', engine: 'claude', transcriptPath: '/t/un.jsonl', header: 'name of unstamped', changedAt: 0, readHistory: undefined },
+        { agentId: 'file', sessionId: 's-file', engine: 'claude', transcriptPath: '/t/file.jsonl', header: 'name of file · Fix login · api app', changedAt: 70, readHistory: undefined,
+          harness: { cwd: '/work/app/api', title: 'Fix login' } },
+        { agentId: 'db', sessionId: 's-db', engine: 'opencode', transcriptPath: null, header: 'name of db', changedAt: 40, readHistory: reader,
+          harness: { cwd: '', title: 'name of db' } },
+        { agentId: 'fresh', sessionId: 's-fresh', engine: 'claude', transcriptPath: '/t/fresh.jsonl', header: 'name of fresh', changedAt: 30, readHistory: undefined,
+          harness: { cwd: '', title: 'name of fresh' } },
+        { agentId: 'unstamped', sessionId: 's-un', engine: 'claude', transcriptPath: '/t/un.jsonl', header: 'name of unstamped', changedAt: 0, readHistory: undefined,
+          harness: { cwd: '', title: 'name of unstamped' } },
       ])
     })
 

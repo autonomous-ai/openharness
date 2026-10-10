@@ -310,6 +310,92 @@ describe('SessionSearchIndex', () => {
     expect(store.counts().sessions).toBe(0)
   })
 
+  it("keeps a Harness session's folder and title on its row, filled in and kept current without reading its transcript again", async () => {
+    // A row indexed before Harness rows carried either: on one Mac, all 165 of them.
+    const { store, index, settle, setSources, path } = setup(prompt('flash the dial firmware', 0) + answer('Flashed.', 1))
+    await settle()
+    expect(store.session('s1')).toMatchObject({ agentId: 'agent-1', title: '', cwd: '', origin: '' })
+    const write = vi.spyOn(store, 'writeSession')
+    const harness = (cwd: string, title: string): SearchSource =>
+      ({ agentId: 'agent-1', sessionId: 's1', engine: 'claude', transcriptPath: path, header: 'Dial firmware · harness', changedAt: 1, harness: { cwd, title } })
+
+    // The next sweep fills it in: the header row alone, no turn read again.
+    setSources([harness('/work/dial/firmware', 'Dial firmware')])
+    await settle()
+    expect(store.session('s1')).toMatchObject({ agentId: 'agent-1', header: 'Dial firmware · harness', title: 'Dial firmware', cwd: '/work/dial/firmware', origin: '', turns: 1 })
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(write.mock.calls[0][2]).toEqual([])
+    await settle()
+    expect(write).toHaveBeenCalledTimes(1)
+
+    // A rename, and a folder put right, under the same header: each reaches the row.
+    setSources([harness('/work/dial/firmware', 'Keyboard firmware')])
+    await settle()
+    expect(store.session('s1')?.title).toBe('Keyboard firmware')
+    setSources([harness('/Users/me/work/dial/firmware', 'Keyboard firmware')])
+    await settle()
+    expect(store.session('s1')?.cwd).toBe('/Users/me/work/dial/firmware')
+    expect(write.mock.calls.map((call) => call[2])).toEqual([[], [], []])
+
+    // Still Harness's: no hit or preview of it reads as a conversation Harness did not start.
+    expect(index.search('flash').hits[0]).toMatchObject({ sessionId: 's1', agentId: 'agent-1' })
+    expect(index.search('flash').hits[0].external).toBeUndefined()
+    expect((await index.tail('s1'))?.external).toBeUndefined()
+    // A catalog entry the harness records do not cover any more (an earlier conversation) now has
+    // its own title and folder, as the records give a current one, where it had the header and no folder.
+    expect(index.search('', { catalogAfter: '' }).hits[0].catalogEntry).toEqual({ title: 'Keyboard firmware', cwd: '/Users/me/work/dial/firmware', origin: 'harness' })
+
+    // A transcript read from the start writes them with its turns.
+    write.mockClear()
+    writeFileSync(path, prompt('tiny', 0))
+    await settle()
+    expect(store.session('s1')).toMatchObject({ title: 'Keyboard firmware', cwd: '/Users/me/work/dial/firmware', turns: 1 })
+    expect(write.mock.calls[0][2]).toHaveLength(1)
+  })
+
+  it("keeps the folder and title of a Harness session with nothing to read, or a database's history, without reading it again", async () => {
+    const store = SessionSearchStore.open(':memory:')!
+    let reads = 0
+    const history: LiveEvent[] = [{ type: 'user_message', payload: { content: 'draft the release notes' } }]
+    let sources: SearchSource[] = []
+    const set = (cwd: string, title: string) => {
+      sources = [
+        { agentId: 'agent-t', sessionId: 'term', engine: 'terminal', transcriptPath: null, header: 'Shell', changedAt: 1, harness: { cwd, title } },
+        { agentId: 'agent-oc', sessionId: 'ses_1', engine: 'opencode', transcriptPath: null, header: 'OpenCode harness', changedAt: 100,
+          readHistory: async () => { reads++; return history }, harness: { cwd, title } },
+      ]
+    }
+    const index = new SessionSearchIndex({ store, sources: () => sources })
+    cleanups.push(() => { index.stop(); store.close() })
+    const settle = async () => {
+      index.sweep()
+      await vi.waitFor(() => { expect((index as unknown as { running: boolean }).running).toBe(false) })
+    }
+    set('/work/notes', 'Release notes')
+    await settle()
+    for (const id of ['term', 'ses_1']) expect(store.session(id)).toMatchObject({ title: 'Release notes', cwd: '/work/notes', origin: '' })
+    expect(reads).toBe(1)
+    const write = vi.spyOn(store, 'writeSession')
+    await settle()
+    expect(write).not.toHaveBeenCalled()
+
+    set('/work/notes', 'Changelog')
+    await settle()
+    set('/work/release-notes', 'Changelog')
+    await settle()
+    for (const id of ['term', 'ses_1']) expect(store.session(id)).toMatchObject({ agentId: id === 'term' ? 'agent-t' : 'agent-oc', title: 'Changelog', cwd: '/work/release-notes', origin: '' })
+    expect(write).toHaveBeenCalledTimes(4)
+    expect(store.session('ses_1')?.turns).toBe(1)
+    expect(reads).toBe(1)
+
+    // Read again after a turn event, with nothing new said: a changed folder alone is still written.
+    set('/work/notes', 'Changelog')
+    index.touch('ses_1')
+    await settle()
+    expect(reads).toBe(2)
+    expect(store.session('ses_1')).toMatchObject({ cwd: '/work/notes', turns: 1, lastAt: 100 })
+  })
+
   it('indexes a touched session shortly after its turn event', async () => {
     const { path, index, found } = setup(prompt('first ask', 0))
     index.touch('s1')
