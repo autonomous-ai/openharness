@@ -152,6 +152,9 @@ export async function eraseNativeHistory(history: History): Promise<number> {
       return nativeUnavailable('the reviewed conversation file changed before deletion')
     }
     history.verify?.(nativeFileKey(current))
+    // The logical review path can be an alias. Recheck the fixed unlink route as well:
+    // moving the original file and retargeting that alias must not lend its identity to a replacement.
+    current.verify()
     unlinkSync(history.file.path)
     return current.bytes
   }

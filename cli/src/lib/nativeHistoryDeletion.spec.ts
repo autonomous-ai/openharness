@@ -76,6 +76,25 @@ it('retains the same confirmation through a one-shot final native-target read fa
   expect(ctx.stop).toHaveBeenCalledOnce()
 })
 
+it('keeps both files when the reviewed alias moves between final acquisition and logical verification', async () => {
+  const { inspectNativeHistory, eraseNativeHistory } = await import('./purgeAgentService.js')
+  const sessions = dirname(path), a = join(sessions, 'A'), c = join(sessions, 'C'), alias = join(sessions, 'selected')
+  const original = join(a, basename(path)), replacement = codex(OTHER)
+  write(original, codex()); fs.symlinkSync(a, alias)
+  const history = await inspectNativeHistory({ ...row, transcriptPath: join(alias, basename(path)) })
+  const verify = history.verify!
+  history.verify = key => {
+    if (key !== undefined) {
+      fs.renameSync(a, c); write(original, replacement)
+      fs.unlinkSync(alias); fs.symlinkSync(c, alias)
+    }
+    verify(key)
+  }
+  await expect(eraseNativeHistory(history)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+  expect(fs.readFileSync(original, 'utf8')).toBe(replacement)
+  expect(fs.readFileSync(join(c, basename(path)), 'utf8')).toBe(codex())
+})
+
 it.each(['shared conversation', 'saved binding'])('keeps history when %s changes during the worktree await', async change => {
   const worktrees = await import('./worktreeDeletion.js')
   const tree = { path: join(root, 'tree'), main: cwd, branch: 'fixture', head: 'fixture', bytes: 1,

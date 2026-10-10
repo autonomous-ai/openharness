@@ -43,7 +43,8 @@ map refuses excess previews rather than evicting an unexpired or in-flight confi
 Independent review of the first implementation found a pathname/inode race, missing
 ownership revalidation after the worktree await, healthy Pi combined-deletion failure
 and confirmation eviction under capacity pressure. The corrections bind canonical
-path and inode through one verified route, retain typed final-read holds, recheck saved
+path and inode through one verified route, check both the original alias and fixed
+canonical unlink route immediately before erasure, retain typed final-read holds, recheck saved
 and shared ownership before erase and preserve pending confirmations. Pi gets a narrow
 operation-owned workspace-removal proof: completion permits only the removed physical
 subtree to disappear; observed external ancestors, aliases, transcript identity and
@@ -68,7 +69,7 @@ both native engines, held deletion and same-confirmation recovery, plus search o
 and recovery. Tests use disposable homes/ports and explicitly private tmux sockets;
 `TMUX` and `TMUX_PANE` are unset. No owner data is read or deleted.
 
-Sixteen deliberate wiring faults must fail behavioral assertions after their passing
+Seventeen deliberate wiring faults must fail behavioral assertions after their passing
 baseline, including a broken healthy golden result. Matched inspection/deletion costs
 use two revisions, the same host/toolchain and four private workloads, each sample in
 its own process. CPU, memory and latency are reported without inventing a performance

@@ -8,7 +8,7 @@ import { nativeUnavailable } from '../engines/kit/nativeEvidence.js'
 import { nativeFileKey } from '../engines/kit/nativePaths.js'
 import type { AgentEngine } from '../engines/types.js'
 
-export type NativeHistoryFile = { path: string; dev: bigint; ino: bigint; bytes: number }
+export type NativeHistoryFile = { path: string; dev: bigint; ino: bigint; bytes: number; verify(): void }
 type RemovedWorktree = { path: string; dev: number; ino: number }
 export interface NativeHistoryProof {
   path: string
@@ -28,7 +28,8 @@ export function nativeHistoryFile(path: string): NativeHistoryFile {
   }
   files.verify(path)
   return { path: target.path, dev: info.dev, ino: info.ino,
-    bytes: Number.isFinite(Number(info.blocks)) ? Number(info.blocks) * 512 : Number(info.size) }
+    bytes: Number.isFinite(Number(info.blocks)) ? Number(info.blocks) * 512 : Number(info.size),
+    verify: () => files.verify(path) }
 }
 
 export function nativeHistoryEvidence(engine: AgentEngine, id: string, path: string,
