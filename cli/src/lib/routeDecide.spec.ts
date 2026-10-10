@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { JevChoice, JevChoiceAnswer } from './jev/jevClient.js'
 import { JevUnavailable } from './jev/jevClient.js'
-import { decideRoute, JEV_LEAD_OPTIONS, JEV_LEAD_P, JEV_LEAD_RATIO, JEV_LIVE_RATIO, JEV_SURE_P, jevPick, offered, type RouteDeps, type RouteInput, type RouteOption, type RouteSession } from './routeDecide.js'
+import { decideRoute, JEV_LEAD_OPTIONS, JEV_LEAD_P, JEV_LEAD_RATIO, JEV_LIVE_RATIO, JEV_OVER_STOPPED, JEV_SURE_P, jevPick, offered, type RouteDeps, type RouteInput, type RouteOption, type RouteSession } from './routeDecide.js'
 
 /** A choice of [choice] at [p] over [options], the rest shared evenly among the others. */
 function said(choice: string, p: number, options: string[]): JevChoiceAnswer {
@@ -351,7 +351,7 @@ describe('the sessions Jev is shown', () => {
 
 describe('a message that names nothing of its own', () => {
   it('goes where the last task went, minutes ago, whatever the sessions\' words', async () => {
-    const remote = jev({ target: said('s0', 0.9, TARGETS), topic: topicless() })
+    const remote = jev({ target: said('s0', 0.5, TARGETS), topic: topicless() })
     const verdict = await decideRoute(input({ text: 'merge it', last: { id: 'a2', agoMs: 60_000 } }), { jev: remote })
     expect(verdict).toMatchObject({ kind: 'session', id: 'a2', p: 0.8 })
     expect(steps(verdict.trace)).toContain('names nothing: to "Prometheus alerts", where the last went')
@@ -366,20 +366,46 @@ describe('a message that names nothing of its own', () => {
     expect(steps(verdict.trace)).toContain('names nothing: nowhere to go')
   })
 
-  it('is decided by the sessions when Jev doubts it names nothing', async () => {
-    const verdict = await decideRoute(input({ text: 'also check retention' }), { jev: jev({ target: said('s0', 0.9, TARGETS), topic: topicless(0.45) }) })
+  it('is new work when Jev is sure of another session than the last: the two disagree', async () => {
+    const verdict = await decideRoute(input({ text: 'merge it', last: { id: 'a2', agoMs: 60_000 } }), { jev: jev({ target: said('s0', 0.9, TARGETS), topic: topicless() }) })
+    expect(verdict).toMatchObject({ kind: 'new', why: 'names nothing, and Jev pointed elsewhere' })
+    // Sure of the last itself: it goes there.
+    const agreed = await decideRoute(input({ text: 'merge it', last: { id: 'a2', agoMs: 60_000 } }), { jev: jev({ target: said('s1', 0.9, TARGETS), topic: topicless() }) })
+    expect(agreed).toMatchObject({ kind: 'session', id: 'a2' })
+  })
+
+  it('finds the last session by its conversation when it is shown as its live self', async () => {
+    const sessions: RouteSession[] = [
+      { ...session('a1', 'billing retries', ['why was the card charged twice']), conversation: 'c1' },
+      { ...session('old', 'billing (before the rename)', ['refund the order']), conversation: 'c1', stoppedAgoMs: 60_000 },
+    ]
+    const verdict = await decideRoute(input({ text: 'merge it', sessions, last: { id: 'old', agoMs: 60_000 } }), { jev: jev({ target: said('new', 0.5, ['s0', 'new']), topic: topicless() }) })
     expect(verdict).toMatchObject({ kind: 'session', id: 'a1' })
-    // An answer without its odds is no answer.
-    const odd = await decideRoute(input({ text: 'also check retention' }), { jev: jev({ target: said('s0', 0.9, TARGETS), topic: { choice: 'no', probabilities: { yes: 0.2 } } }) })
-    expect(odd).toMatchObject({ kind: 'session', id: 'a1' })
+    // A last that is not there at all is nowhere to go.
+    const gone = await decideRoute(input({ text: 'merge it', last: { id: 'nowhere', agoMs: 60_000 } }), { jev: jev({ target: said('new', 0.5, TARGETS), topic: topicless() }) })
+    expect(gone).toMatchObject({ kind: 'new', why: 'names nothing, and no task went anywhere just now' })
+  })
+
+  it('is decided by the sessions when Jev is not sure it names nothing', async () => {
+    for (const topic of [topicless(0.55), topicless(0.5), { choice: 'no', probabilities: { yes: 0.2 } }, { choice: 'no', probabilities: { yes: 0.1, no: Number.NaN } }]) {
+      const verdict = await decideRoute(input({ text: 'also check retention' }), { jev: jev({ target: said('s0', 0.9, TARGETS), topic }) })
+      expect(verdict, JSON.stringify(topic)).toMatchObject({ kind: 'session', id: 'a1' })
+    }
   })
 })
 
 describe('a message that asks for a new session', () => {
   it('is new work, whatever Jev picks', async () => {
-    for (const text of ['start a new session and write an x post about lamp', 'in a fresh session, look at the usage data', 'redo the estimate from scratch']) {
+    for (const text of ['start a new session and write an x post about lamp', 'in a fresh session, look at the usage data', 'Open a new harness for the parser', 'spin up another session to check retention']) {
       const verdict = await decideRoute(input({ text }), { jev: jev({ target: said('s0', 0.95, TARGETS) }) })
       expect(verdict, text).toMatchObject({ kind: 'new', why: 'asked for a new session' })
+    }
+  })
+
+  it('is not one that only talks about a new pane, a thread or a session', async () => {
+    for (const text of ['the new pane is broken', 'race on a different thread', 'rewrite the parser from scratch', 'new session restore drops the cwd']) {
+      const verdict = await decideRoute(input({ text }), { jev: jev({ target: said('s0', 0.95, TARGETS) }) })
+      expect(verdict, text).toMatchObject({ kind: 'session', id: 'a1' })
     }
   })
 })
@@ -395,14 +421,20 @@ describe('a running session\'s lead', () => {
   // Jev's answer over the desk as it is shown: live ones first, so the stopped copy is s4.
   const answer = (p: Record<string, number>, choice = 's0') => ({ target: { choice, probabilities: p } })
 
-  it('is not held back by a stopped copy of its work, nor by a twin of its own name', async () => {
-    expect(JEV_LIVE_RATIO).toBe(1.75)
+  it('is not held back by a stopped copy of its work, by 1.25 times it or more', async () => {
+    expect([JEV_LIVE_RATIO, JEV_OVER_STOPPED]).toEqual([1.75, 1.25])
     const verdict = await decideRoute(input({ text: 'post this on x', sessions: desk }), { jev: jev(answer({ s0: 0.44, s1: 0.1, s2: 0.06, s3: 0.04, s4: 0.32, new: 0.04 })) })
     expect(verdict).toMatchObject({ kind: 'session', id: 'live' })
   })
 
-  it('is held back by another running session or new work within 1.75 times it', async () => {
-    for (const p of [{ s0: 0.44, s1: 0.05, s2: 0.3, s3: 0.08, s4: 0.05, new: 0.08 }, { s0: 0.44, s1: 0.05, s2: 0.08, s3: 0.08, s4: 0.05, new: 0.3 }]) {
+  it('is held back by another running session, a twin of its name too, or new work within 1.75 times it, or a stopped one within 1.25', async () => {
+    for (const p of [
+      { s0: 0.44, s1: 0.05, s2: 0.3, s3: 0.08, s4: 0.05, new: 0.08 },
+      { s0: 0.44, s1: 0.05, s2: 0.08, s3: 0.08, s4: 0.05, new: 0.3 },
+      // Two "X Posts" running: a coin flip, not a lead.
+      { s0: 0.42, s1: 0.4, s2: 0.05, s3: 0.05, s4: 0.04, new: 0.04 },
+      { s0: 0.41, s1: 0.05, s2: 0.05, s3: 0.05, s4: 0.4, new: 0.04 },
+    ]) {
       const verdict = await decideRoute(input({ text: 'post this on x', sessions: desk }), { jev: jev(answer(p)) })
       expect(verdict.kind, JSON.stringify(p)).toBe('new')
     }
@@ -414,7 +446,8 @@ describe('a running session\'s lead', () => {
       ['low', answer({ s0: 0.39, s1: 0.1, s2: 0.1, s3: 0.06, s4: 0.3, new: 0.05 }), desk],
       ['not top', answer({ s0: 0.42, s1: 0.03, s2: 0.03, s3: 0.03, s4: 0.45, new: 0.04 }), desk],
       ['broken', answer({ s0: 0.45, s4: 0.3 }), desk],
-      ['five', answer({ s0: 0.45, s1: 0.05, s2: 0.1, s3: 0.3, new: 0.1 }), desk.filter((s) => s.id !== 'copy')],
+      // Would lead (0.5 against 0.2) over six; over five there is no spread to excuse it.
+      ['five', answer({ s0: 0.5, s1: 0.05, s2: 0.2, s3: 0.2, new: 0.05 }), desk.filter((s) => s.id !== 'copy')],
     ]
     for (const [name, answers, sessions] of cases) {
       const verdict = await decideRoute(input({ text: 'post this on x', sessions }), { jev: jev(answers) })

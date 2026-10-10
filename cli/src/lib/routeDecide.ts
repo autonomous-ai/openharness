@@ -10,7 +10,8 @@
  *
  * Hill-climbed on the owner's real desk (2026-10-10, 80 sessions on three machines, 390 labelled
  * messages, a red team's 116 written to break it, and 50 held out): from 63% right with 25 wrong sends in
- * 123 to about 90% right with 1 wrong send in 202, and 84% with 3 in 100 held out. What moved it, in order:
+ * 123 to 90% right with none in 202, 51% to 72% right with 66 to 6 in a red team's 232, and 83% with 4 in
+ * 100 held out. What moved it, in order:
  * the sessions Jev is shown (live ones first, no stopped twins or empty leftovers, no pasted-text noise),
  * a question that asks for the same work on the same subject rather than shared words, and the check for
  * a message that names nothing. docs/design/2026-10-09-auto-router.md has the runs.
@@ -92,12 +93,11 @@ export const JEV_SURE_P = 0.6
 export const JEV_LEAD_P = 0.4
 export const JEV_LEAD_RATIO = 2
 export const JEV_LEAD_OPTIONS = 6
-/** A running session's lead, over the other running sessions of another name and new work alone: a stopped
- *  copy of the same work ("X Posts" 0.44 against the stopped "write an x post about the" 0.32) or a twin of
- *  its own name must not hold it back. */
+/** A running session's lead over every other running session and new work. A stopped copy of the same work
+ *  ("X Posts" 0.44 against the stopped "write an x post about the" 0.32) holds it back only within
+ *  JEV_OVER_STOPPED: the person prefers what is running, but not on a coin flip. */
 export const JEV_LIVE_RATIO = 1.75
-/** Whether the message names nothing of its own, taken at this or more. */
-const TOPICLESS_P = 0.5
+export const JEV_OVER_STOPPED = 1.25
 
 /** The likeliest of [options] other than [choice], for the log: how far ahead the pick was. */
 function runnerUp(p: Record<string, number>, choice: string, options: string[]): string | undefined {
@@ -144,7 +144,7 @@ const FILLER = new Set(("ok okay yes yeah yep no nope sure please pls thanks tha
   "i you me my our continue cont keep going again now then just also all them merge merged ship push approve allow run retry " +
   "try fix go ahead done next proceed").split(' '))
 const namesSomething = (text: string): boolean =>
-  text.toLowerCase().replace(/[^a-z0-9#' ]+/g, ' ').split(/\s+/).filter((word) => word.length > 1 && !FILLER.has(word)).length >= 2
+  text.toLowerCase().replace(/[^\p{L}\p{N}#' ]+/gu, ' ').split(/\s+/).filter((word) => word.length > 1 && !FILLER.has(word)).length >= 2
 /** The person's last prompt worth showing Jev: their own words, naming something. */
 const lastAsk = (session: RouteSession): string | undefined =>
   session.asks.map(tidy).find((ask) => ask && !NOT_SAID.test(ask) && namesSomething(ask))
@@ -191,20 +191,27 @@ export function offered(all: RouteSession[]): RouteSession[] {
   return out.slice(0, JEV_OPTIONS)
 }
 
-/** "start a new session and…", "in a fresh session…", "…from scratch": what the person asked for, decided. */
-const ASKS_FOR_NEW = /\b(new|fresh|separate|another|different)\s+(session|harness|chat|pane|conversation|thread)\b|\bfrom scratch\b/i
+/** "start a new session and…", "open a fresh harness for…", "in a fresh session, …": what the person asked
+ *  for, decided. A verb or "in" before it: "the new pane is broken" and "new session restore drops the cwd"
+ *  are about a new pane and a new session, not asking for one. */
+const ASKS_FOR_NEW = /\b(?:(?:start|open|spin up|make|create|launch|begin|use)\s+(?:an?\s+)?(?:new|fresh|separate|another|different)\s+(?:session|harness|chat|pane|conversation)|in\s+an?\s+(?:new|fresh|separate)\s+(?:session|harness|chat|conversation))\b/i
 
-/** A running pick that leads every other running session of another name, and new work, by JEV_LIVE_RATIO. */
+/** A running pick that leads every other running session, and new work, by JEV_LIVE_RATIO, and a stopped one
+ *  by JEV_OVER_STOPPED. A running twin of its own name is a rival like any other: two "Untitled Pane"s at
+ *  0.42 and 0.40 are a coin flip, not a lead. */
 function leadsLive(answer: JevChoiceAnswer | undefined, sessions: RouteSession[], targets: string[]): string | undefined {
   const p = answer?.probabilities
   if (!answer || !p || answer.choice === 'new' || !targets.includes(answer.choice) || targets.length < JEV_LEAD_OPTIONS) return undefined
-  if (targets.some((id) => typeof p[id] !== 'number' || !Number.isFinite(p[id]))) return undefined
+  // A missing or broken number compares false below: no lead.
   const top = sessions[Number(answer.choice.slice(1))]
   const pTop = p[answer.choice]
   if (top.stoppedAgoMs !== undefined || pTop < JEV_LEAD_P || targets.some((id) => p[id] > pTop)) return undefined
-  const rivals = targets.filter((id) => id !== answer.choice && (id === 'new' ||
-    (sessions[Number(id.slice(1))].stoppedAgoMs === undefined && sessions[Number(id.slice(1))].name.toLowerCase() !== top.name.toLowerCase())))
-  return pTop >= JEV_LIVE_RATIO * Math.max(0, ...rivals.map((id) => p[id])) ? answer.choice : undefined
+  const others = targets.filter((id) => id !== answer.choice)
+  const stopped = (id: string) => id !== 'new' && sessions[Number(id.slice(1))].stoppedAgoMs !== undefined
+  const most = (ids: string[]) => Math.max(0, ...ids.map((id) => p[id]))
+  return pTop >= JEV_LIVE_RATIO * most(others.filter((id) => !stopped(id))) && pTop >= JEV_OVER_STOPPED * most(others.filter(stopped))
+    ? answer.choice
+    : undefined
 }
 
 /** [signal] stops the question when whoever asked has gone: Jev's answer would act on nothing. */
@@ -216,7 +223,10 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
   const trace: string[] = [`${sessions.length} sessions`]
   if (!deps.jev) return { kind: 'unavailable', why: 'Jev is not set up', trace: [...trace, 'jev: not set up'].join(' · ') }
 
-  const last = input.last && input.last.agoMs <= CONTINUITY_MS ? sessions.find((session) => session.id === input.last!.id) : undefined
+  // Where the last task went, minutes ago: found by its conversation when the session shown for it is its
+  // live self or the one listed first (`offered` shows a conversation once).
+  const sent = input.last && input.last.agoMs <= CONTINUITY_MS ? input.sessions.find((session) => session.id === input.last!.id) : undefined
+  const last = sent && (sessions.includes(sent) ? sent : sent.conversation ? sessions.find((session) => session.conversation === sent.conversation) : undefined)
   const questions: Record<string, JevChoice> = {
     target: {
       type: 'choice',
@@ -278,19 +288,22 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
   // The runner-up too: whether a pick led clearly is what the next change to the bar is measured from.
   trace.push(`jev: ${said ? `"${name(said.choice) ?? said.choice}" ${odds(said.choice)}${next ? `, then "${name(next)}" ${odds(next)}` : ''}` : 'no answer'}`)
 
+  // Names nothing, on Jev's sure word: a yes or no at 0.5 is a coin flip, and a coin flip must not override
+  // where the words point.
   const topic = answers.topic
-  const topicless = topic?.choice === 'no' && (topic.probabilities.no ?? 0) >= TOPICLESS_P
+  const noOdds = topic?.probabilities.no
+  const topicless = topic?.choice === 'no' && typeof noOdds === 'number' && Number.isFinite(noOdds) && noOdds >= JEV_SURE_P
   const askedForNew = ASKS_FOR_NEW.test(text)
-  if (topicless) trace.push(`names nothing: ${last ? `to "${last.name}", where the last went` : 'nowhere to go'}`)
+  const picked = jevPick(said, targets, true) ?? leadsLive(said, sessions, targets)
+  const lastId = last ? `s${sessions.indexOf(last)}` : undefined
+  // Names nothing, yet Jev is sure of another session than the last: the two disagree, and new work is safe.
+  const torn = topicless && lastId !== undefined && picked !== undefined && picked !== 'new' && picked !== lastId
+  if (topicless) trace.push(`names nothing: ${torn ? 'but Jev is sure of another session than the last' : last ? `to "${last.name}", where the last went` : 'nowhere to go'}`)
   if (askedForNew) trace.push('asked for a new session')
-  const target = askedForNew
-    ? 'new'
-    : topicless
-      ? (last ? `s${sessions.indexOf(last)}` : 'new')
-      : jevPick(said, targets, true) ?? leadsLive(said, sessions, targets)
+  const target = askedForNew ? 'new' : topicless ? (torn || !lastId ? 'new' : lastId) : picked
   if (target && target !== 'new') {
     const session = sessions[Number(target.slice(1))]
-    return { kind: 'session', id: session.id, p: topicless ? topic!.probabilities.no : said!.probabilities[target], trace: trace.join(' · ') }
+    return { kind: 'session', id: session.id, p: topicless ? noOdds! : said!.probabilities[target], trace: trace.join(' · ') }
   }
 
   const pick = (key: 'project' | 'agent', prefix: string, options: RouteOption[]): string | undefined => {
@@ -304,7 +317,7 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: A
     ...(project ? { project } : {}),
     ...(agent ? { agent } : {}),
     via: target ? 'jev' : 'unsure',
-    why: askedForNew ? 'asked for a new session' : topicless ? 'names nothing, and no task went anywhere just now' : target ? 'Jev: new work' : 'Jev was not sure',
+    why: askedForNew ? 'asked for a new session' : torn ? 'names nothing, and Jev pointed elsewhere' : topicless ? 'names nothing, and no task went anywhere just now' : target ? 'Jev: new work' : 'Jev was not sure',
     trace: trace.join(' · '),
   }
 }
