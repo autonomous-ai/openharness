@@ -162,10 +162,18 @@ completion group 4. Legacy readers that cannot replay ordered file boundaries ho
 that interpretation rather than apply the cancellation to a guessed turn. Durable
 control intent across daemon restart remains part of the lifecycle completion work.
 
+The final legacy interaction review identified two additional regressions and their
+composed tests. An ordinary database Cancel after a retained Stop stays on its eager
+native control path; lack of a file cutoff holds only a future reconstruction. A
+held legacy Stop snapshots the known turn state from the existing core normalizer
+maps, including an inactive control ledger whose next turn has since opened. A real
+Copilot normalizer remains open through both held-Stop/recovery sequences. No parser
+or service is loaded to obtain that eager state.
+
 The former core HTTP hook-admission golden was recorded separately from main
 `c7d460b1d` in `d331c49a4`; its twenty Linux/macOS observations and artifact are
 unchanged. Additional actual-composition regressions cover both inline parsing and
-the real worker request/transport/reconstruction path. At 04:16 UTC, 224 affected
+the real worker request/transport/reconstruction path. At 04:23 UTC, 230 affected
 core tests passed at 100% coverage for the changed attachment, replacement-control
 and turn-hook modules. Full gates, private lanes, mutations and review are still
 required on the final source before this PR can land.

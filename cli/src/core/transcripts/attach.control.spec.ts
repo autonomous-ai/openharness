@@ -4,6 +4,7 @@ import * as nativeReads from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { liveFor } from '../../engines/live.js'
+import { CopilotNormalizer } from '../../engines/copilot/normalizer.js'
 import { engineLiveRequests } from '../../engines/worker/liveRequests.js'
 import type { RegisteredSession } from '../../lib/registry.js'
 import { Watcher } from '../../watcher/watcher.js'
@@ -275,4 +276,31 @@ it.each([
   await t.attach.attachSession(t.row)
   expect(t.row.interpretationHold).toBeUndefined()
   expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(true)
+})
+
+
+it.each([false, true])('preserves the known legacy open turn through a held Stop and recovery (retained=%s)', async retained => {
+  const record = (text: string) => JSON.stringify({ type: 'user.message', data: { content: text }, id: text, parentId: '' })
+  const t = setup('inline', record('T1') + '\n')
+  t.row.engine = 'copilot'
+  const normalizer = new CopilotNormalizer()
+  normalizer.ingest(record('T1'))
+  t.normalizers.copilotNormalizers.set(t.row.sessionId, normalizer)
+  if (retained) {
+    t.hooks.onTurnStop({ sessionId: t.row.sessionId })
+    await vi.waitFor(() => expect(normalizer.turnOpen).toBe(false), { timeout: 3_000 })
+    appendFileSync(t.file, record('T2') + '\n')
+    normalizer.ingest(record('T2'))
+  }
+  expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(true)
+  const sent = t.emit.mock.calls.length
+  t.hold(); t.hooks.onTurnStop({ sessionId: t.row.sessionId })
+  expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(true)
+  expect(normalizer.turnOpen).toBe(true)
+  t.recover(); await t.attach.attachSession(t.row)
+  expect(t.row.interpretationHold).toContain('Stop could not be matched')
+  expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(true)
+  expect(normalizer.turnOpen).toBe(true)
+  expect(t.emit).toHaveBeenCalledTimes(sent)
+  expect(t.settled).not.toHaveBeenCalled()
 })

@@ -9,7 +9,7 @@ export interface ReplacementPlan { readonly revision: number; readonly closes: r
 /** Control remains eager while interpretation is replaced. A cancellation is replayed at its original
  * file boundary, never against whichever turn a later retry happens to hydrate. Uncorrelated Stop
  * intent remains visible until native evidence can resolve it. */
-export function createTurnReplacements(normalizers: Pick<SessionNormalizers, 'liveParsers'>) {
+export function createTurnReplacements(normalizers: Pick<SessionNormalizers, 'liveParsers' | 'sessionTurnState'>) {
   const pending = new Map<string, ReturnType<typeof create>>()
   let generation = 0
   const create = (session: RegisteredSession, active = true) => {
@@ -17,7 +17,7 @@ export function createTurnReplacements(normalizers: Pick<SessionNormalizers, 'li
     const binding = JSON.stringify([session.agentId, id, session.engine])
     let transcriptPath = session.transcriptPath
     let state = normalizers.liveParsers.get(id)?.snapshot()
-      ?? { identity: `held:${++generation}`, turnOpen: false, continued: false }
+      ?? { identity: `held:${++generation}`, turnOpen: normalizers.sessionTurnState(id) ?? false, continued: false }
     let revision = 0, stopRevision = 0, cancelRevision = 0, failure: string | undefined
     const boundaries: RecoveryBoundary[] = []
     const verify = (): void => {
@@ -60,7 +60,11 @@ export function createTurnReplacements(normalizers: Pick<SessionNormalizers, 'li
         return failure
       },
       activate(path: RegisteredSession['transcriptPath']): void {
-        if (!active) { state = normalizers.liveParsers.get(id)?.snapshot() ?? state; active = true; revision++ }
+        if (!active) {
+          state = normalizers.liveParsers.get(id)?.snapshot()
+            ?? { ...state, turnOpen: normalizers.sessionTurnState(id) ?? state.turnOpen }
+          active = true; revision++
+        }
         if (path !== transcriptPath) { transcriptPath = path; revision++ }
         normalizers.liveParsers.set(id, handle)
       },

@@ -52,6 +52,9 @@ mutations = [
     ('worker cancellation replay disconnected', 'src/engines/worker/liveStreams.ts', 'closeThrough: replayCloses(ask.closes ?? [], reason => {', 'closeThrough: replayCloses([], reason => {', controls),
     ('worker boundary failure loses its reason', 'src/engines/worker/liveRequests.ts', "'ENGINE_TRANSCRIPT_CHANGED', 'ENGINE_CONTROL_BOUNDARY_CHANGED'", "'ENGINE_TRANSCRIPT_CHANGED'", controls),
     ('replay descriptor fence omitted', 'src/lib/transcriptBoundary.ts', '!actual.isFile() || actual.dev !== expected.device || actual.ino !== expected.inode', 'false', controls),
+    ('ordinary database Cancel starts a file hold', 'src/core/transcripts/attach.ts', 'if (reason && session.transcriptPath)', 'if (reason)', 'src/core/transcripts/attach.spec.ts'),
+    ('legacy open-turn snapshot ignored', 'src/core/transcripts/turnReplacement.ts', 'turnOpen: normalizers.sessionTurnState(id) ?? false', 'turnOpen: false', controls),
+    ('retained legacy open turn ignored', 'src/core/transcripts/turnReplacement.ts', 'normalizers.sessionTurnState(id) ?? state.turnOpen', 'state.turnOpen', controls),
     ('core Cancel wiring disconnected', 'src/core/main.ts', 'beforeCancel: attach.beforeCancel,', '', 'e2e/enginehomes.e2e.ts'),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}

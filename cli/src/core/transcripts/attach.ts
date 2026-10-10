@@ -101,7 +101,7 @@ export function createAttach({
     if (session.identityHold || session.interpretationHold) turnReplacements.stage(session)
     else if (session.transcriptPath || turnReplacements.retains(session)) {
       const reason = turnReplacements.cancel(session)
-      if (reason) holdInterpretation(session, `Waiting for transcript interpretation: ${reason}.`)
+      if (reason && session.transcriptPath) holdInterpretation(session, `Waiting for transcript interpretation: ${reason}.`)
     }
   }
   const holdInterpretation = (session: RegisteredSession, reason: string): void => {

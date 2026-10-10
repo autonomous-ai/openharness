@@ -1427,3 +1427,24 @@ it('leaves an ordinary database cancellation on its eager native control path', 
   expect(run.deps.terminalGone).not.toHaveBeenCalled()
   expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
 })
+
+it.each(['opencode', 'kilo', 'hermes', 'devin'])('keeps %s Cancel eager after retaining a previous Stop without a file boundary', async engine => {
+  const run = setup(), row = session(engine)
+  const reader = { turnOpen: false, closeTurn() { this.turnOpen = false } }
+  const maps = { opencode: run.normalizers.opencodeReaders, kilo: run.normalizers.kiloReaders,
+    hermes: run.normalizers.hermesReaders, devin: run.normalizers.devinReaders }
+  ;(maps[engine as keyof typeof maps] as Map<string, unknown>).set(row.sessionId, reader)
+  run.attach.afterStop(row)
+  reader.turnOpen = true
+  run.attach.beforeCancel(row)
+  run.normalizers.closeTurns(row.sessionId)
+  expect(reader.turnOpen).toBe(false)
+  expect(row.interpretationHold).toBeUndefined()
+  expect(run.normalizers.liveParsers.has(row.sessionId)).toBe(false)
+  expect(run.deps.watcher.removeSession).not.toHaveBeenCalled()
+  row.evidenceRevision = 1; row.interpretationHold = 'pending'
+  await run.attach.attachSession(row)
+  expect(row.interpretationHold).toContain('no file cancellation boundary')
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  run.attach.forget(row.sessionId)
+})
