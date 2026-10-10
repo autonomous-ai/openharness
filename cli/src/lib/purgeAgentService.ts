@@ -6,7 +6,11 @@ import { existsSync, lstatSync, realpathSync, unlinkSync } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { env } from '../config/env.js'
 import { hermesDbPath } from '../engines/hermes/contract.js'
-import { engineKeepsTranscriptFile, validTranscriptPath, type RegisteredSession } from './registry.js'
+import type { RegisteredSession } from './registry.js'
+import { controlTranscriptEvidence, engineKeepsTranscriptFile, transcriptEvidence } from '../engines/transcriptBindings.js'
+import { nativeFileKey } from '../engines/kit/nativePaths.js'
+import { nativeUnavailable } from '../engines/kit/nativeEvidence.js'
+import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { sqliteReadAll } from './sqliteRead.js'
 import type { StoppedAgentStore } from './stoppedAgents.js'
 import type { SessionCheckpointStore } from './sessionCheckpoint.js'
@@ -15,18 +19,20 @@ import { inspectWorkspace, inspectWorktree, removeReviewedWorktree, type Worktre
 
 const exec = promisify(execFile)
 const identity = (s: RegisteredSession) => JSON.stringify([s.agentId, s.engine, s.sessionId,
-  s.registeredAt, s.cwd, s.codexHome, s.hermesHome, s.transcriptPath, s.processIdentity])
+  s.registeredAt, s.boundAt, s.cwd, s.codexHome, s.hermesHome, s.transcriptPath, s.processIdentity, s.runtimes])
 const conversation = (s: RegisteredSession) => JSON.stringify([s.engine, s.codexHome, s.hermesHome, s.sessionId])
 const fail = (message: string): never => { throw new Error(message) }
-type File = { path: string; dev: number; ino: number; bytes: number }
-type History = { file?: File; missingFile?: string; database?: string; databaseFile?: File; statements?: string[]; bytes: number | null }
+type File = { path: string; dev: bigint; ino: bigint; bytes: number }
+type History = { file?: File; missingFile?: string; database?: string; databaseFile?: File; statements?: string[];
+  bytes: number | null; verify?: (openedFileKey?: string) => void }
 const lit = (value: string) => "'" + value.replace(/'/g, "''") + "'"
 
 function file(path: string): File {
-  const info = lstatSync(path)
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1
-    || (process.getuid && info.uid !== process.getuid())) fail('The session data is not a private regular file. Nothing was deleted.')
-  return { path: realpathSync(path), dev: info.dev, ino: info.ino, bytes: Number.isFinite(info.blocks) ? info.blocks * 512 : info.size }
+  const info = lstatSync(path, { bigint: true })
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1n
+    || (process.getuid && info.uid !== BigInt(process.getuid()))) fail('The session data is not a private regular file. Nothing was deleted.')
+  return { path: realpathSync(path), dev: info.dev, ino: info.ino,
+    bytes: Number.isFinite(Number(info.blocks)) ? Number(info.blocks) * 512 : Number(info.size) }
 }
 
 /** Known native history layouts only. A shared database is never removed or vacuumed. */
@@ -34,9 +40,8 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
   if (!s.sessionId || s.engine === 'terminal') return { bytes: 0 }
   if (engineKeepsTranscriptFile(s.engine)) {
     const path = s.transcriptPath
-    if (!path || !validTranscriptPath(s.engine, path, s.codexHome ?? undefined, true)) {
-      return fail('The conversation file could not be verified. Refresh before deleting this harness.')
-    }
+    if (!path) return nativeUnavailable('the conversation file could not be verified for deletion')
+    const engine = s.engine, profile = s.codexHome ?? undefined, cwd = s.cwd
     const name = basename(path), id = s.sessionId
     if (!(basename(dirname(path)) === id || name === id + '.jsonl' || name === id + '.json'
       || name.endsWith('-' + id + '.jsonl') || name.endsWith('_' + id + '.jsonl'))) {
@@ -44,9 +49,25 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
     }
     // An interrupted deletion can leave checkpoints after the native file has gone.
     // Review the remaining files again, but never delete a newly recreated native file.
-    if (!existsSync(path)) return { missingFile: join(realpathSync(dirname(path)), name), bytes: 0 }
-    const target = file(path)
-    return { file: target, bytes: target.bytes }
+    const missing = () => {
+      const proof = transcriptEvidence(engine, path, profile, true)
+      if (!proof.valid || proof.files.file(path, true)) return nativeUnavailable('the reviewed missing conversation is no longer confirmed absent')
+      const parent = proof.files.locate(dirname(path))!
+      proof.verify()
+      return { path: join(parent.path, name), key: nativeFileKey(parent.info) }
+    }
+    // existsSync cannot distinguish an absent file from unavailable ancestry. The native proof must.
+    if (!existsSync(path)) {
+      const before = missing()
+      return { missingFile: before.path, bytes: 0, verify: () => {
+        const after = missing()
+        if (after.path !== before.path || after.key !== before.key) nativeUnavailable('the missing conversation parent changed since review')
+      } }
+    }
+    const proof = controlTranscriptEvidence(engine, id, path, profile, cwd)
+    const target = file(proof.path)
+    proof.verify(nativeFileKey(target))
+    return { file: target, bytes: target.bytes, verify: proof.verify }
   }
   let database: string, sessionTable: string, children: [string, string][]
   const id = lit(s.sessionId)
@@ -121,10 +142,12 @@ export async function inspectNativeHistory(s: RegisteredSession): Promise<Histor
 }
 
 export async function eraseNativeHistory(history: History): Promise<number> {
+  history.verify?.()
   if (history.missingFile && existsSync(history.missingFile)) fail('The conversation file was recreated. Review deletion again.')
   if (history.file) {
     const current = file(history.file.path)
     if (current.dev !== history.file.dev || current.ino !== history.file.ino) fail('The conversation file changed. Refresh and review deletion again.')
+    history.verify?.(nativeFileKey(current))
     unlinkSync(current.path)
     return current.bytes
   }
@@ -245,6 +268,7 @@ export class PurgeAgentService {
 
   async request(request: PurgeRequest): Promise<Record<string, unknown>> {
     let stopped = false, worktreeDeleted = false, sessionDeleted = false
+    let reviewedId: string | undefined, retainReview = false, historyErased = false
     const sessionData = request.choices ? request.choices.sessionData === true : true
     const worktreeData = request.choices?.worktreeData === true
     try {
@@ -284,14 +308,17 @@ export class PurgeAgentService {
           } } : {}) }
       }
       const review = this.reviews.get(request.reviewId ?? '')
-      this.reviews.delete(request.reviewId ?? '')
       if (!review || review.signature !== identity(current)) return fail('The deletion review expired or changed. Review this harness again.')
+      reviewedId = request.reviewId
       if (!sessionData && !worktreeData) return fail('Select session data, worktree data, or both.')
       if (sessionData && !review.history) return fail('Session data was not verified. Review this harness again.')
       if (worktreeData && (!review.includesWorktree || !review.worktree || request.path !== review.worktree.path)) {
         return fail('Only the reviewed worktree folder can be deleted. Review it again.')
       }
       if (worktreeData && review.worktree?.dirty && !request.discardChanges) return fail('Confirm discarding the listed uncommitted files before deleting this worktree.')
+      // Native evidence can recover while this exact, unexpired confirmation remains valid. Do not
+      // consume it or stop the pane until every selected native history proof is available again.
+      if (sessionData) review.history!.verify?.()
       this.jobs.add(request.agentId)
       if (worktreeData) this.worktreeJobs.set(request.agentId, review.worktree!.path)
       try {
@@ -312,6 +339,7 @@ export class PurgeAgentService {
         if (!reservation) return fail('Another operation is using this saved harness. Nothing was deleted.')
         try {
           const files = sessionData ? this.deps.checkpoints.deletionFiles(saved).map(file) : []
+          if (sessionData) review.history!.verify?.()
           if (worktreeData) {
             await removeReviewedWorktree(review.worktree!, saved, this.deps.sessions(), request.discardChanges === true)
             worktreeDeleted = true
@@ -319,6 +347,7 @@ export class PurgeAgentService {
           let freedBytes = 0
           if (sessionData) {
             freedBytes = await (this.deps.erase ?? eraseNativeHistory)(review.history!)
+            historyErased = true
             for (const target of files) {
               const current = file(target.path)
               if (current.dev !== target.dev || current.ino !== target.ino) return fail('Saved session data changed. Some data may already have been deleted; refresh to check.')
@@ -333,11 +362,15 @@ export class PurgeAgentService {
         } finally { this.deps.stopped.finishResume(request.agentId, reservation) }
       } finally { this.jobs.delete(request.agentId); this.worktreeJobs.delete(request.agentId) }
     } catch (error) {
+      if (error instanceof IdentityReadUnavailable && !worktreeDeleted && !historyErased) {
+        retainReview = true
+        return { error: 'IDENTITY_UNAVAILABLE', retryable: true, stopped, worktreeDeleted, sessionDeleted, detail: error.message }
+      }
       return { error: 'DELETE_REFUSED', stopped, worktreeDeleted, sessionDeleted,
         detail: (error instanceof Error ? error.message : 'Could not delete this harness.')
           + (worktreeDeleted ? ' The worktree was deleted.' : '')
           + (sessionDeleted ? ' Session data was deleted.' : worktreeDeleted && sessionData ? ' Session data deletion did not finish.' : '')
           + (stopped ? ' The harness is stopped; refresh before trying again.' : '') }
-    }
+    } finally { if (reviewedId && !retainReview) this.reviews.delete(reviewedId) }
   }
 }

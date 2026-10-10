@@ -325,6 +325,16 @@ describe('how an agent\'s life ends', () => {
     const forged = await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'delete', reviewId: 'not-a-review' }, 60_000)
     expect(forged.error).toBe('DELETE_REFUSED')
     expect((await row(client, agent.id))?.status).toBe('active')
+    // A location is not authority to delete it. Hold this exact unexpired confirmation while
+    // its native header is incomplete; restoring the same file permits the reviewed retry.
+    const transcript = files[0], original = readFileSync(transcript, 'utf8')
+    writeFileSync(transcript, '{')
+    const held = await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'delete', reviewId: review.reviewId }, 60_000)
+    expect(held, JSON.stringify(held)).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', retryable: true, stopped: false })
+    expect(held.detail).toEqual(expect.any(String))
+    expect((await row(client, agent.id))?.status).toBe('active')
+    expect(readFileSync(transcript, 'utf8')).toBe('{')
+    writeFileSync(transcript, original)
     const deleted = await client.request('agent_purge', { agentId: agent.id, sessionId: agent.sessionId, createdAt, mode: 'delete', reviewId: review.reviewId }, 90_000)
     expect(deleted, JSON.stringify(deleted)).toMatchObject({ deleted: true, sessionDeleted: true })
     for (const file of files) expect(existsSync(file), file).toBe(false)

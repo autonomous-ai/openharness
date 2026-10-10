@@ -22,10 +22,48 @@ deleted. Workspace folders remain. Recording and unchanged replay passed, follow
 by typecheck; an initial typecheck required acknowledging the filesystem API's optional
 missing-stat result in the fixture wrapper.
 
-## Remaining implementation
+## Reviewed history deletion
 
-Carry exact native identity through asynchronous handoff reads and final publication,
-and through review, Stop and the last deletion boundary. Retain the former healthy
+The first migration is reviewed history deletion. It uses the eager native transcript
+proof shared by binding and lifecycle control, including the current home catalog,
+conversation header and physical file. A review keeps immutable identity and earns
+fresh evidence before Stop, after Stop and immediately before unlinking. Missing-file
+cleanup proves absence in the same owned physical parent on every boundary; it cannot
+silently switch to a recreated parent or an unavailable catalog. File identities use
+exact bigint device/inode values.
+
+Unavailable evidence preserves an unexpired confirmation while no data has been
+deleted, including after Stop. The reply carries its reason and is retryable; recovery
+permits the same confirmation. A completed worktree or native-history deletion is not
+silently replayed. A changed binding or runtime cannot reuse the old review. Appended
+turns of the exact conversation remain eligible for the person's confirmed deletion.
+
+The former implementation failed behavioral assertions for wrong/incomplete/delegated
+headers, changed same-inode headers, unavailable home catalogs, missing-file cleanup
+and lost confirmation recovery. The first new incomplete-header fixture accidentally
+used a complete JSON object without a newline; the native Codex header contract accepts
+that complete record. The regression now supplies actually incomplete JSON. One legacy
+spec now requires the earlier hold before Stop instead of the former refusal after
+Stop. All healthy golden artifacts remain unchanged.
+
+### Validation selected before the final run
+
+Typecheck, architecture, full core/services coverage and harnessd coverage; the native
+consumer golden, native-history authority, purge, checkpoint, worktree deletion and
+transcript-binding specs. The full private `ends` and `serviceProcesses` lanes cover
+both native engines, held deletion and same-confirmation recovery, plus search outage
+and recovery. Tests use disposable homes/ports and explicitly private tmux sockets;
+`TMUX` and `TMUX_PANE` are unset. No owner data is read or deleted.
+
+Eight deliberate wiring faults must fail behavioral assertions after their passing
+baseline, including a broken healthy golden result. Matched inspection/deletion costs
+use two revisions, the same host/toolchain and four private workloads, each sample in
+its own process. CPU, memory and latency are reported without inventing a performance
+threshold. Final results, independent exact-head review and merge evidence follow.
+
+## Remaining handoff migration
+
+Carry exact native identity through asynchronous handoff reads and final publication. Retain the former healthy
 golden unchanged; add concrete incomplete, replaced-file, changed-catalog and stale
 ownership regressions, with assertion-failing wiring mutations. Select coverage,
 affected private lifecycle/handoff acceptance and matched cost checks before running

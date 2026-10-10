@@ -172,7 +172,7 @@ it('keeps history if stopping fails, another harness uses it, or the file was re
   const changed = await review()
   renameSync(session.transcriptPath!, session.transcriptPath! + '.old')
   writeFileSync(session.transcriptPath!, 'different file')
-  expect(await remove(changed.reviewId)).toMatchObject({ error: 'DELETE_REFUSED', stopped: true })
+  expect(await remove(changed.reviewId)).toMatchObject({ error: 'IDENTITY_UNAVAILABLE', retryable: true, stopped: false })
   expect(existsSync(session.transcriptPath!)).toBe(true)
   expect(deleted).not.toHaveBeenCalled()
 })

@@ -237,3 +237,26 @@ has independent source approval and passing unit, core, harnessd and Resume gate
 private lifecycle acceptance, mutation checks, costs and final CI remain under way.
 The [completion checklist](2026-10-09-daemon-core-completion.md) still tracks durable
 delivery/lifecycle intent and the other concrete architecture gaps.
+
+## October 10: native transcript authority landed
+
+PR #1139 merged as `d852e1d9998e939ec40f3d52d864e1717e74d8ae` after independent
+review of `74afc203000c8504dcb88cfb91454f3a894f1968` against main
+`526d6bb9d081a5e8afbefd21ddefb28586570adc`. The guarded merge receipt started at
+10:03:54 UTC and confirms that the reviewed and tested trees match the squash.
+[Automatic CI](https://github.com/autonomous-ai/openharness/actions/runs/38043296667)
+passes all four Linux shards, typecheck, process checks and `ci/required`. Private
+acceptance passed all 74 cases in six lanes in 694.3 seconds. Core/services and
+harnessd retain 100% coverage; serial Resume passed 602 cases with 100% coverage.
+Both new healthy goldens remain unchanged; 30 wiring faults fail by assertion.
+
+The initial CI's legacy fixtures were corrected without product-code changes: two
+purge fixtures now supply a native header, and two explicitly named unsafe capture
+answers now require a typed hold with unchanged inputs. The final fixture delta
+passed typecheck and its 18 affected tests; CI covers the complete final source.
+Independent review approved the exact final head and the declared evidence reuse.
+Implementation, validation, CI/review waiting and guarded merge remain separate
+intervals; overlap is not summed into an elapsed duration. No release or publication.
+
+Reviewed native-history deletion is the next isolated migration. The recorded native
+consumer golden also preserves the former handoff behavior for its subsequent move.
