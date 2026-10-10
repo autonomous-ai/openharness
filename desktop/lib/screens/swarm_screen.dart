@@ -6290,6 +6290,8 @@ class _SwarmScreenState extends State<SwarmScreen> {
         id: taskRouteSessionId(machineId, agentId),
         at: DateTime.now(),
       );
+      // The receipt is the new pane lighting, as a send's is the pane it landed in.
+      app.markLanding(machineId, agentId);
       spoken?.sent(agentId);
     } else {
       spoken?.cancelled();

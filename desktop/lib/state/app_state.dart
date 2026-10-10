@@ -62,6 +62,7 @@ import '../core/machine_resources.dart';
 import '../core/project_folder.dart';
 import '../core/git_worktree.dart';
 import '../core/project_history.dart';
+import '../core/task_history.dart';
 import '../core/project_preview.dart';
 import '../core/repository_clone.dart';
 import '../core/retry.dart';
@@ -3126,6 +3127,7 @@ class AppNotifier extends ChangeNotifier {
        agentPreference = AgentPreference(paneLayoutStore?.storage),
        firstArrival = FirstArrival(paneLayoutStore?.storage),
        projectHistory = ProjectHistory(paneLayoutStore?.storage),
+       taskHistory = TaskHistory(paneLayoutStore?.storage),
        session = authSession,
        _store = configStore,
        config = configStore?.config ?? config,
@@ -3263,6 +3265,9 @@ class AppNotifier extends ChangeNotifier {
   final DialState dial;
   final AgentPreference agentPreference;
   final ProjectHistory projectHistory;
+
+  /// ⌘B's recent prompts (`core/task_history.dart`).
+  final TaskHistory taskHistory;
 
   /// The first workspace on a computer new to Harness opens with agents already in it.
   final FirstArrival firstArrival;
@@ -4176,6 +4181,27 @@ class AppNotifier extends ChangeNotifier {
 
   /// The session ⌘B last sent a task to, which the router tells Jev so a follow-up finds it.
   ({String id, DateTime at})? lastRoutedTask;
+
+  /// The pane a task just landed in — ⌘B's receipt: its rim lights once (`pane_grid.dart`), so the eye
+  /// sees where the words went, in whichever tab. [seq] tells one landing from the next on the same pane.
+  final paneLanding =
+      ValueNotifier<
+        ({String machineId, String agentId, int seq, DateTime at})?
+      >(null);
+  int _landings = 0;
+
+  void markLanding(String machineId, String agentId) => paneLanding.value = (
+    machineId: machineId,
+    agentId: agentId,
+    seq: ++_landings,
+    at: DateTime.now(),
+  );
+
+  /// The landing is over: a pane of that session opened later (reopened from ⌘P, restored at sign-in)
+  /// must not light for words that landed long ago.
+  void endLanding(int seq) {
+    if (paneLanding.value?.seq == seq) paneLanding.value = null;
+  }
 
   /// ⌘B's send: the session's pane comes forward and the task goes into its prompt, through this app's
   /// own door on any machine (`deliverTask`). [stillWanted] is asked just before the words are typed:
@@ -17394,6 +17420,7 @@ class AppNotifier extends ChangeNotifier {
     if (cliLogin case final CliLogin cli) {
       cli.waitingNote.removeListener(_loginWaitingChanged);
     }
+    paneLanding.dispose();
     _closeOwnerMemories();
     _agentDownloadsTick?.cancel();
     agentPrefetch?.close();
