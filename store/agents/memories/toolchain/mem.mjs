@@ -12,6 +12,9 @@
  *   mem about                         the About You profile
  *   mem about write < file            replace it (the previous one is kept as about-you.prev.md)
  *   mem deliver [status|on|off]       About You in every new session of every agent on this computer
+ *   mem due [--json]                  whether an About You build is due now, and why (the memory service)
+ *   mem snapshot --json               everything above, for another machine's Memories pane (the
+ *                                     daemon's memory service answers `memory_snapshot` with it)
  *
  * Every command takes --json. Nothing here writes an agent's files; `about write` writes only
  * ~/.harness/memory/about-you.md.
@@ -21,6 +24,7 @@ import { readFileSync } from 'node:fs'
 import { homes } from '../lib/agents.mjs'
 import { readAbout, writeAbout } from '../lib/about.mjs'
 import { deliver, status as deliveryStatus } from '../lib/deliver.mjs'
+import { due } from '../lib/due.mjs'
 import { asks, search, MARK_OPEN, MARK_CLOSE } from '../lib/sessions.mjs'
 import { closeIndex, sessionIndex, snapshot } from '../lib/state.mjs'
 import { tilde } from '../lib/text.mjs'
@@ -149,7 +153,16 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
 
     if (command === 'about') {
       if (words[0] === 'write') {
-        const path = writeAbout(h.memory, stdin())
+        // `--gen`: a copy of another machine's build keeps that build's generation (the memory service).
+        const gen = flags.gen !== undefined ? Number(flags.gen) : undefined
+        if (gen !== undefined && !Number.isInteger(gen)) { err('--gen takes a whole number'); return 2 }
+        const path = writeAbout(h.memory, stdin(), gen !== undefined ? { gen } : {})
+        if (flags.json) {
+          const refreshed = path ? deliver('refresh', { env, home }) : { results: [] }
+          print({ written: Boolean(path), refreshed: refreshed.results.filter((r) => r.ok && r.changed).map((r) => r.agent) })
+          return 0
+        }
+        if (!path) { out('A newer About You is already here; left as it is.'); return 0 }
         out(`wrote ${tilde(path, h.home)}`)
         // Agents that hold a copy get the new one now; Claude Code's hook reads the file itself.
         const refreshed = deliver('refresh', { env, home })
@@ -163,6 +176,36 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
       return 0
     }
 
+    if (command === 'due') {
+      const state = due(await snapshot({ env, home }))
+      if (flags.json) print(state); else out(`${state.due ? 'due' : 'not due'}: ${state.reason}`)
+      return 0
+    }
+
+    if (command === 'snapshot') {
+      const snap = await snapshot({ env, home })
+      // What another machine's pane shows of this one: no local paths it could not open anyway beyond
+      // the ~ form, and the session index's folder list left out (it is this machine's layout).
+      const { sessions, ...rest } = snap
+      const answer = { ...rest, sessions: sessions && { ...sessions, folders: [] }, about: snap.about && { text: snap.about.text, modified: snap.about.modified, gen: snap.about.gen } }
+      // The bridge drops a frame past 8 MB, which the asking pane would read as a timeout: past 4 MB,
+      // the oldest memories are sent with their first lines only.
+      const budget = 4 * 1024 * 1024
+      let size = JSON.stringify(answer).length
+      for (const row of [...answer.memories].reverse()) {
+        if (size <= budget) break
+        const cut = row.body.slice(0, 600)
+        size -= row.body.length - cut.length
+        row.body = cut.length < row.body.length ? cut + '\n…' : cut
+      }
+      while (size > budget && answer.memories.length) {
+        const dropped = answer.memories.pop()
+        size -= JSON.stringify(dropped).length + 1
+      }
+      print(answer)
+      return 0
+    }
+
     if (command === 'deliver') {
       const action = words[0] ?? 'status'
       if (action === 'status') {
@@ -173,7 +216,10 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
         return 0
       }
       if (!['on', 'off', 'refresh'].includes(action)) { err('mem deliver [status|on|off]'); return 2 }
-      const done = deliver(action, { env, home })
+      const choiceAt = flags['choice-at'] !== undefined ? Number(flags['choice-at']) : undefined
+      if (choiceAt !== undefined && !Number.isFinite(choiceAt)) { err('--choice-at takes a time in milliseconds'); return 2 }
+      // `--choice-at`: a choice made on another machine, applied with its own time (the memory service).
+      const done = deliver(action, { env, home, ...(choiceAt !== undefined ? { choiceAt, exact: true } : {}) })
       if (flags.json) { print(done); return done.results.every((r) => r.ok) ? 0 : 1 }
       out(`About You in every agent: ${done.on ? 'on' : 'off'}`)
       for (const row of done.results) out(`  ${row.agent.padEnd(9)} ${row.ok ? (row.changed ? (done.on ? 'added  ' : 'removed') : 'already') : 'failed '}  ${row.file}${row.error ? `  (${row.error})` : ''}`)

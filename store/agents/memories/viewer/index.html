@@ -3,6 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="memories-token" content="__MEMORIES_TOKEN__">
+  <meta name="memories-instance" content="__MEMORIES_INSTANCE__">
   <title>Memories</title>
   <link rel="stylesheet" href="app.css">
 </head>
@@ -14,6 +16,11 @@
       <span id="count" class="count"></span>
     </label>
   </header>
+  <section id="switch" class="switch" aria-label="About You in your agents" hidden>
+    <span class="switch-name">About You in your agents</span>
+    <button id="switch-button" type="button" role="switch" aria-checked="false"><span class="knob"></span><span id="switch-word">OFF</span></button>
+    <span id="switch-detail" class="switch-detail"></span>
+  </section>
   <section id="band" class="band" aria-label="Your work with agents" hidden>
     <div class="heat">
       <svg id="heat" role="img" aria-label="Your messages per day, colored by agent"></svg>

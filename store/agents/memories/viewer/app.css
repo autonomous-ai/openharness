@@ -43,6 +43,18 @@ kbd { font: inherit; color: var(--text); }
 .prompt input::-webkit-search-cancel-button { display: none; }
 .count { color: var(--faint); white-space: nowrap; }
 
+/* ── the switch: About You in every agent, on or off, and what it costs ─────────────────────── */
+.switch { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.switch-name { font-weight: 700; white-space: nowrap; }
+.switch button { display: inline-flex; align-items: center; gap: 7px; padding: 2px 10px 2px 3px; border: 1px solid var(--line); border-radius: 3px; background: var(--panel); cursor: pointer; font-weight: 700; min-width: 72px; }
+.switch button .knob { width: 14px; height: 14px; border-radius: 2px; background: var(--faint); }
+.switch button[aria-checked="true"] { border-color: #3fae8c; color: #3fae8c; }
+.switch button[aria-checked="true"] .knob { background: #3fae8c; }
+.switch button:disabled { cursor: default; opacity: .55; }
+.switch button:focus-visible { outline: 1px solid var(--muted); outline-offset: 1px; }
+.switch-detail { color: var(--muted); min-width: 0; }
+.switch-detail .warn { color: var(--accent); }
+
 /* ── band: your year with agents ────────────────────────────────────────────────────────────── */
 .band { display: flex; gap: 22px; align-items: flex-start; padding: 14px 14px 12px; border-bottom: 1px solid var(--line); overflow: hidden; }
 .heat { flex: 0 1 auto; min-width: 0; }

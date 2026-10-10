@@ -302,6 +302,13 @@ const storeCoverArt = <String, StoreCoverArt>{
     viewport: Rect.fromLTWH(0, 0, 1080, 540),
     background: Color(0xff131312),
   ),
+  'autonomous/memories': StoreCoverArt(
+    asset: 'assets/store/covers/memories.jpg',
+    description: 'Memories’ About You and agent notes from an illustrative demo home',
+    imageSize: Size(1080, 720),
+    viewport: Rect.fromLTWH(0, 0, 1080, 540),
+    background: Color(0xff0e0f11),
+  ),
   'autonomous/machine-monitor': StoreCoverArt(
     asset: 'assets/store/covers/machine-monitor.jpg',
     description: 'Machine Monitor’s fleet view with an illustrative demo fleet',

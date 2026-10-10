@@ -13,7 +13,7 @@
 import * as esbuild from 'esbuild'
 import { appendFileSync, readFileSync, copyFileSync, rmSync, writeFileSync } from 'fs'
 import { readDshRegistry } from './scripts/lib/dshRegistry.mjs'
-import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
+import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './scripts/lib/modelManagerBundle.mjs'
 import { readProcessImageBundle } from './scripts/lib/processImageBundle.mjs'
 import { leanBlock } from './scripts/lib/leanBlock.mjs'
 import { asciiOnly } from './scripts/lib/asciiOnly.mjs'
@@ -22,6 +22,7 @@ import { basename } from 'node:path'
 const modelManagerBundle = JSON.stringify(readModelManagerBundle(fileURLToPath(new URL('../store/agents/autonomous-grid', import.meta.url))))
 const devicesBundle = JSON.stringify(readBuiltinBundle(fileURLToPath(new URL('../store/agents/devices', import.meta.url)), ['harness.json', 'AGENTS.md', 'LICENSE', 'template']))
 const harnessMonitorBundle = JSON.stringify(readHarnessMonitorBundle(fileURLToPath(new URL('../store/agents/harness-monitor', import.meta.url))))
+const memoriesBundle = JSON.stringify(readMemoriesBundle(fileURLToPath(new URL('../store/agents/memories', import.meta.url))))
 
 const version =
   process.env.ADAPTER_VERSION ||
@@ -52,6 +53,7 @@ const options = {
     __MODEL_MANAGER_BUNDLE__: JSON.stringify(modelManagerBundle),
     __DEVICES_BUNDLE__: JSON.stringify(devicesBundle),
     __HARNESS_MONITOR_BUNDLE__: JSON.stringify(harnessMonitorBundle),
+    __MEMORIES_BUNDLE__: JSON.stringify(memoriesBundle),
     __DARWIN_PROCESS_IMAGES__: processImages ? JSON.stringify(processImages) : 'undefined',
   },
   // The copyright line is MIT's one condition — it has to travel with the copy the user actually

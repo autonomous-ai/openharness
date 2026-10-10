@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { readBuiltinBundle, readHarnessMonitorBundle, readModelManagerBundle } from './lib/modelManagerBundle.mjs'
+import { readBuiltinBundle, readHarnessMonitorBundle, readMemoriesBundle, readModelManagerBundle } from './lib/modelManagerBundle.mjs'
 
 const cli = resolve(process.argv[2] || fileURLToPath(new URL('../dist/cli.js', import.meta.url)))
 const root = mkdtempSync(join(tmpdir(), 'core-harness-upgrade-'))
@@ -15,6 +15,7 @@ const packages = [
   ['autonomous-grid', 'model-manager', readModelManagerBundle],
   ['devices', 'devices', dir => readBuiltinBundle(dir, ['harness.json', 'AGENTS.md', 'LICENSE', 'template'])],
   ['harness-monitor', 'harness-monitor', readHarnessMonitorBundle],
+  ['memories', 'memories', readMemoriesBundle],
 ]
 const env = { ...process.env, DSH_DIR: dshDir, ADAPTER_DATA_DIR: join(root, 'data'),
   ADAPTER_COMPUTER_ID: 'core-upgrade-test', ADAPTER_COMPUTER_ID_FILE: join(root, 'computer-id') }
