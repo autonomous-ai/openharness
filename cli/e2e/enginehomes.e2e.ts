@@ -245,6 +245,46 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     again.close()
   })
 
+  it('retains a saved binding with an incomplete header while readiness and a sibling work, then recovers in place', async () => {
+    const d = await IsolatedDaemon.create(); daemon = d
+    onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
+    await d.start()
+    let client = await LocalClient.connect(d)
+    const agents: Row[] = []
+    for (const engine of ['codex', 'claude']) {
+      const created = await client.request('agent_create', { engine, cwd: d.projectsDir, bypassPermission: true }, 90_000)
+      expect(created.error, JSON.stringify(created)).toBeUndefined()
+      agents.push(await until('the private conversation to bind', async () => {
+        const value = await row(client, created.agent.id); return value?.sessionId ? value : null
+      }, 45_000))
+    }
+    const [bound, sibling] = agents
+    await turn(client, bound!.id, 'before the incomplete header')
+    client.close(); await d.stop()
+    const original = (JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Row[])
+      .find(value => value.agentId === bound!.id)!
+    const file = original.transcriptPath as string
+    expect(file.startsWith(d.root + '/')).toBe(true)
+    const complete = readFileSync(file)
+    writeFileSync(file, complete.subarray(0, 12))
+    await d.start(); client = await LocalClient.connect(d)
+    const held = await until('the saved conversation to expose its hold', async () => {
+      const value = await row(client, bound!.id); return value?.identityHold ? value : null
+    }, 45_000)
+    expect(held).toMatchObject({ sessionId: bound!.sessionId, status: 'active' })
+    await turn(client, sibling!.id, 'a sibling works during the hold')
+    const saved = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Row[]
+    expect(saved.find(value => value.agentId === bound!.id)).toMatchObject({ sessionId: bound!.sessionId, transcriptPath: file })
+    writeFileSync(file, complete)
+    await until('the same live binding to recover without another restart', async () => {
+      const value = await row(client, bound!.id)
+      return value?.sessionId === bound!.sessionId && !value.identityHold ? value : null
+    }, 45_000)
+    await turn(client, bound!.id, 'after the header recovered')
+    expect(d.coresStarted()).toBe(2)
+    client.close()
+  }, 240_000)
+
   it.each(['claude', 'codex'] as const)('search finds external %s conversations in the moved home after startup', async engine => {
     const d = await IsolatedDaemon.create(); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))

@@ -53,7 +53,7 @@ export type RegisteredMeta = {
 }
 
 export interface BindDeps {
-  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession'>
+  registry: Pick<typeof registry, 'inheritName' | 'unbindSession' | 'byAgent' | 'byProcess' | 'register' | 'has' | 'bySession' | 'setIdentityHold' | 'revalidateBinding'>
   mirror: Pick<TurnRecaps, 'inheritSummary'>
   forgetSession: (id: string, opts?: { force?: boolean; keepAgent?: boolean; agentId?: string }) => void
   /** The app. */
@@ -218,17 +218,43 @@ export function createBinding({
   const ownTranscript = (engine: 'cursor' | 'grok' | 'agy' | 'copilot', sessionId: string, cwd: string): Promise<string | null> =>
     transcriptOf(engine, engine === 'cursor' ? cursorDataDir() : homes[engine], sessionId, cwd)
   const bindObservedAgent = async (observed: DiscoveredTerminalAgent): Promise<void> => {
-    const agent = registry.byProcess(observed.engine, observed.processIdentity)
-    if (!agent) return
+    const found = registry.byProcess(observed.engine, observed.processIdentity)
+    if (!found || changing(found.agentId) || isRecentlyDeleted(found.agentId)) return
+    let agent: RegisteredSession = found
+    if (agent.identityHold && agent.sessionId && agent.transcriptPath) {
+      try {
+        const previous = { id: agent.sessionId, path: agent.transcriptPath }
+        const retried = registry.revalidateBinding(agent.agentId)
+        if (!retried) return
+        agent = retried
+        if (!agent.sessionId) forgetSession(previous.id, { force: true, keepAgent: true, agentId: agent.agentId })
+        else if (agent.transcriptPath !== previous.path) followRegistered(agent, { isNew: false, evicted: null, rebound: null })
+        announceSession(agent)
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)
+        return
+      }
+    }
     const authority = paneReadIdentity(agent)
     const current = () => !changing(agent.agentId) && !isRecentlyDeleted(agent.agentId)
       && paneReadIdentity(registry.byProcess(observed.engine, observed.processIdentity)) === authority
+    const hold = (error: unknown) => {
+      if (!current()) return
+      const reason = error instanceof Error ? error.message : String(error)
+      if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)
+      console.log(`[discovery] ${sid(agent.agentId)} binding held · ${reason}`)
+    }
+    const commit = (input: Parameters<typeof registry.register>[0]) => {
+      try { return registry.register(input) }
+      catch (error) { hold(error); return null }
+    }
     // Only native reads are contained here. A rejected lookup cannot end the serial
     // discovery/readiness pass or bind an unwritten session as if evidence were absent.
     const read = async <T>(work: () => Promise<T>): Promise<{ value: T } | null> => {
       try { return { value: await work() } }
       catch (error) {
-        if (current()) console.log(`[discovery] ${sid(agent.agentId)} binding held · ${error instanceof Error ? error.message : error}`)
+        hold(error)
         return null
       }
     }
@@ -265,7 +291,7 @@ export function createBinding({
         const transcript = located.value
         if (!current() || !mayClaim(next)) return
         console.log(`[discovery] ${sid(agent.agentId)} switched copilot session ${sid(agent.sessionId)} → ${sid(next)} (/resume)`)
-        const rotated = registry.register({
+        const rotated = commit({
           engine: 'copilot',
           sessionId: next,
           transcriptPath: transcript ?? undefined,
@@ -295,7 +321,7 @@ export function createBinding({
           || registry.has(continuation.sessionId) || isRecentlyDeleted(continuation.sessionId)) return
         if (!current()) return
         console.log(`[discovery] ${sid(agent.agentId)} ${observed.engine} session continued ${sid(agent.sessionId)} → ${sid(continuation.sessionId)}`)
-        const rotated = registry.register({
+        const rotated = commit({
           engine: observed.engine,
           sessionId: continuation.sessionId,
           transcriptPath: continuation.transcriptPath,
@@ -359,7 +385,7 @@ export function createBinding({
 
     if (!current() || !mayClaim(sessionId)) return
     const previousOwner = registry.bySession(sessionId)
-    const result = registry.register({
+    const result = commit({
       engine: observed.engine,
       sessionId,
       transcriptPath,

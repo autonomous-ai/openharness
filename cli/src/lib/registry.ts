@@ -38,12 +38,12 @@ import {
 import { randomUUID } from 'crypto'
 import { join, basename, dirname, relative, isAbsolute } from 'path'
 import { machineNames } from './machineNames.js'
-import { cursorDataDir } from '../engines/cursor/contract.js'
 import { IdentityReadUnavailable } from '../engines/kit/identityScan.js'
 import { env } from '../config/env.js'
-import { engineHomeSnapshot, sessionFolderOf, sessionRoots, type EngineHomeSnapshot } from './engineHomes.js'
-import { findSessionFileOf, sessionMetaOf } from '../engines/sessionFiles.js'
-import { isSessionStoreEngine, sessionStoreContracts, sessionStoreOf } from '../engines/sessionStoreContracts.js'
+import { engineHomeSnapshot, sessionRoots, type EngineHomeSnapshot } from './engineHomes.js'
+import { transcriptRoot as TRANSCRIPT_ROOT, needsHomeCatalog, savedTranscriptEvidence, transcriptEvidence, transcriptRootEvidence } from '../engines/transcriptBindings.js'
+export { engineKeepsTranscriptFile } from '../engines/transcriptBindings.js'
+import { sessionStoreOf } from '../engines/sessionStoreContracts.js'
 import { admitHook } from '../engines/hooks.js'
 import { ENGINES, isTerminalEngine, type AgentEngine } from '../engines/types.js'
 import type { GridAssignment } from './gridAssignment.js'
@@ -923,43 +923,6 @@ function isWithin(root: string, file: string): boolean {
 }
 
 /**
- * Where each engine's conversation file lives, or **null for an engine that keeps no file at all**.
- *
- * The null entries are not gaps: opencode, kilo, hermes and devin keep their conversations in a
- * SQLite database (`sessionRepair.ts`'s `dbEngineSession` reads an id out and has no path to
- * return), and a terminal has no conversation. Written as a table rather than the nested ternary it
- * replaces so "this engine has no transcript" is a fact a caller can ASK for — Pause and Resume both
- * need it, and both used to demand a file every engine was assumed to have.
- */
-const TRANSCRIPT_ROOT: Readonly<Record<AgentEngine, (() => string) | 'store' | null>> = {
-  // Amp's root is OURS, not Amp's: the transcript is written by the adapter's own plugin because Amp
-  // keeps no conversation on disk (see installAmpPlugin).
-  amp: () => env.AMP_SESSIONS_DIR,
-  muse: () => join(env.MUSE_HOME, 'sessions'),
-  // Declared by the engine's session store (engines/sessionStoreContracts.ts): the folders `transcriptRoots` names.
-  codex: 'store',
-  grok: () => join(env.GROK_HOME, 'sessions'),
-  agy: () => join(env.AGY_HOME, 'brain'),
-  copilot: () => join(env.COPILOT_HOME, 'session-state'),
-  cursor: () => join(cursorDataDir(), 'projects'),
-  pi: () => join(env.PI_HOME, 'agent', 'sessions'),
-  commandcode: () => join(env.COMMANDCODE_HOME, 'projects'),
-  claude: 'store',
-  opencode: null,
-  kilo: null,
-  hermes: null,
-  devin: null,
-  terminal: null,
-}
-
-/** Whether this engine's conversation is a FILE the daemon can point a resume at. False for the
- *  database-backed engines and the shell — for them a recorded session id is the whole record, and
- *  demanding a transcript would refuse a resume that works. */
-export function engineKeepsTranscriptFile(engine: AgentEngine): boolean {
-  return TRANSCRIPT_ROOT[engine] !== null
-}
-
-/**
  * The folders an engine's transcripts may be in: its own, and for an engine with a declared session store each
  * home the person moved in their shell profile (lib/engineHomes.ts). An agent's own profile (its CODEX_HOME) is
  * its only one, for an engine whose sessions follow one.
@@ -973,8 +936,10 @@ export function validTranscriptPath(engine: AgentEngine, filePath: string, codex
 }
 
 /** Existing control candidates: an unreadable path cannot be excluded from a complete identity pool. */
-export function inspectTranscriptPath(engine: AgentEngine, filePath: string): boolean {
-  return checkTranscriptPath(engine, filePath, undefined, false, true)
+export function inspectTranscriptPath(engine: AgentEngine, filePath: string, codexHome?: string, allowMissing = false): boolean {
+  const proof = transcriptEvidence(engine, filePath, codexHome, allowMissing)
+  proof.verify()
+  return proof.valid
 }
 
 function checkTranscriptPath(engine: AgentEngine, filePath: string, codexHome: string | undefined, allowMissing: boolean, strict: boolean, snapshot?: EngineHomeSnapshot): boolean {
@@ -1176,8 +1141,22 @@ class Registry {
       let snapshot: EngineHomeSnapshot | undefined, unavailableHomes: unknown
       const dependent = new Map<string, Partial<RegisteredSession>>()
       const staged = new Map<string, RegisteredSession>()
+      const bindingProofs = new Map<string, { proof: ReturnType<typeof savedTranscriptEvidence>; original: Partial<RegisteredSession> }>()
+      const rootScopes = new Map<string, { proof?: ReturnType<typeof transcriptRootEvidence>; error?: unknown;
+        rows: Map<string, Partial<RegisteredSession>> }>()
+      const rootsFor = (engine: AgentEngine, profile: string | undefined, catalog: EngineHomeSnapshot | undefined) => {
+        const key = JSON.stringify([engine, profile ?? null])
+        let scope = rootScopes.get(key)
+        if (!scope) {
+          scope = { rows: new Map() }; rootScopes.set(key, scope)
+          try { scope.proof = transcriptRootEvidence(engine, profile, catalog) }
+          catch (error) { scope.error = error }
+        }
+        if (scope.error) throw scope.error
+        return scope
+      }
       const catalogFor = (engine: AgentEngine, profile?: string): EngineHomeSnapshot | undefined => {
-        if (TRANSCRIPT_ROOT[engine] !== 'store' || sessionStoreOf(engine)?.sessions.profile && profile) return undefined
+        if (!needsHomeCatalog(engine, profile)) return undefined
         if (unavailableHomes) throw unavailableHomes
         try { return snapshot ??= engineHomeSnapshot() }
         catch (error) { unavailableHomes = error; throw error }
@@ -1211,44 +1190,33 @@ class Registry {
         // profile), else release the binding. Declared by the engine's session store (`repairsOverwrittenParent`)
         // and read with the kit, in core.
         let repairedParentTranscript = false, homeError: unknown
-        const needsCatalog = !!transcriptPath && TRANSCRIPT_ROOT[engine] === 'store' && !(sessionStoreOf(engine)?.sessions.profile && rawCodexHome)
+        const needsCatalog = bound && !!transcriptPath && needsHomeCatalog(engine, rawCodexHome)
+        let bindingProof: ReturnType<typeof savedTranscriptEvidence> | undefined
+        let rootScope: ReturnType<typeof rootsFor> | undefined
         try {
           const rowSnapshot = needsCatalog ? catalogFor(engine, rawCodexHome) : undefined
-          if (isSessionStoreEngine(engine) && sessionStoreContracts[engine].repairsOverwrittenParent && transcriptPath) {
-            const meta = sessionMetaOf(engine, transcriptPath)
-            if (meta?.isSubagent) {
-              const repaired = meta.parentThreadId === rawSessionId
-                ? findSessionFileOf(engine, rawSessionId, sessionFolderOf(engine, { profile: rawCodexHome, transcriptPath }, rowSnapshot))
-                : null
-              if (!repaired || !checkTranscriptPath(engine, repaired, rawCodexHome, false, false, rowSnapshot) || sessionMetaOf(engine, repaired)?.isSubagent) {
-                changed = true
-                bound = false
-                transcriptPath = null
-              } else {
-                console.log(`[registry] repaired ${sessionStoreContracts[engine].label} parent ${rawSessionId.slice(0, 8)} transcript after child hook overwrite`)
-                transcriptPath = repaired
-                repairedParentTranscript = true
-                changed = true
-              }
-            }
-          }
-          // A process agent remains valid without a session. A missing/invalid transcript releases only the
-          // binding so the discovery/store repair path can bind it again if appropriate.
           if (!bound) transcriptPath = null
-          if (
-            (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && !transcriptPath)
-            || (bound && transcriptPath !== null && !checkTranscriptPath(engine, transcriptPath, rawCodexHome, false, false, rowSnapshot))
-          ) {
+          if (bound && transcriptPath) {
+            rootScope = rootsFor(engine, rawCodexHome, rowSnapshot)
+            bindingProof = savedTranscriptEvidence(engine, rawSessionId, transcriptPath, rawCodexHome, rowSnapshot, rootScope.proof)
+            const verified = bindingProof.path
+            if (verified !== transcriptPath) {
+              changed = true
+              repairedParentTranscript = !!verified
+              transcriptPath = verified
+            }
+            if (!verified) bound = false
+          } else if (bound && engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi'
+            && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin') {
             bound = false
-            transcriptPath = null
             changed = true
           }
         } catch (error) {
-          if (!(error instanceof IdentityReadUnavailable)) throw error
           homeError = error
           transcriptPath = typeof raw.transcriptPath === 'string' && raw.transcriptPath ? raw.transcriptPath : null
           bound = !!rawSessionId
           repairedParentTranscript = false
+          bindingProof = undefined
         }
         // Old launcher-owned records used launcherId as the public id. Preserve it while process discovery
         // validates/adopts the live runtime, then save the record without the legacy ownership field.
@@ -1333,9 +1301,19 @@ class Registry {
           this.quarantine('contains duplicate agent identities')
           return
         }
+        if (bindingProof) bindingProofs.set(s.agentId, { proof: bindingProof, original: raw })
+        rootScope?.rows.set(s.agentId, raw)
         if (needsCatalog) dependent.set(s.agentId, raw)
         if (homeError) preserve(s, raw, homeError)
         staged.set(s.agentId, s)
+      }
+      for (const [id, { proof, original }] of bindingProofs) {
+        try { proof.verify() }
+        catch (error) { preserve(staged.get(id)!, original, error) }
+      }
+      for (const { proof, rows } of rootScopes.values()) {
+        try { proof?.verify() }
+        catch (error) { for (const [id, raw] of rows) preserve(staged.get(id)!, raw, error) }
       }
       if (snapshot) {
         try { snapshot.verify() }
@@ -1346,6 +1324,10 @@ class Registry {
       for (const row of staged.values()) {
         this.index(row)
         if (row.identityHold) console.log(`[registry] ${row.agentId.slice(0, 8)} binding held · ${row.identityHold}`)
+        else if (row.transcriptPath && bindingProofs.has(row.agentId)
+          && bindingProofs.get(row.agentId)!.original.transcriptPath !== row.transcriptPath) {
+          console.log(`[registry] repaired ${sessionStoreOf(row.engine)!.label} parent ${row.sessionId.slice(0, 8)} transcript after child hook overwrite`)
+        }
       }
       if (!validatedRows(this.list().map(persistedRow))) {
         this.quarantine('violates global identity invariants')
@@ -1684,6 +1666,35 @@ class Registry {
   /** Discovered process agents that have no engine session bound yet. */
   unbound(): RegisteredSession[] {
     return this.list().filter((s) => !s.sessionId)
+  }
+
+  /** A current observation for frames; never persisted as conversation evidence. */
+  setIdentityHold(agentId: string, reason?: string): boolean {
+    const entry = this.agents.get(agentId)
+    const detail = reason === undefined ? undefined : reason.slice(0, 1024) || 'Waiting for conversation identity.'
+    if (!entry || entry.identityHold === detail) return false
+    if (detail) entry.identityHold = detail
+    else delete entry.identityHold
+    return true
+  }
+
+  /** Retry only this saved binding. A failed read leaves all of its prior facts intact. */
+  revalidateBinding(agentId: string): RegisteredSession | null {
+    const entry = this.agents.get(agentId)
+    if (!entry) return null
+    if (!entry.sessionId || !entry.transcriptPath) return entry
+    const proof = savedTranscriptEvidence(entry.engine, entry.sessionId, entry.transcriptPath, entry.codexHome ?? undefined)
+    proof.verify()
+    if (this.agents.get(agentId) !== entry) return null
+    const changed = proof.path !== entry.transcriptPath
+    if (!proof.path) this.releaseBinding(entry)
+    else if (changed) {
+      entry.transcriptPath = proof.path
+      entry.projectDir = basename(dirname(proof.path))
+    }
+    delete entry.identityHold
+    if (changed) this.save()
+    return entry
   }
 
   /**
