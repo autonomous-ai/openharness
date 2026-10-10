@@ -1,0 +1,103 @@
+{
+  "new:roots": [
+    [
+      "<root>/CLAUDE_CONFIG_DIR/projects"
+    ],
+    [
+      "<root>/CODEX_HOME/sessions"
+    ]
+  ],
+  "new:empty-environment": {
+    "claude": null,
+    "codex": null
+  },
+  "adopt:first": {
+    "claude": "<root>/claude-first",
+    "codex": "<root>/codex-first"
+  },
+  "adopt:catalog": {
+    "claude": [
+      "<root>/claude-first"
+    ],
+    "codex": [
+      "<root>/codex-first"
+    ]
+  },
+  "adopt:repeat": {
+    "claude": null,
+    "codex": null
+  },
+  "adopt:roots": [
+    [
+      "<root>/CLAUDE_CONFIG_DIR/projects",
+      "<root>/claude-first/projects"
+    ],
+    [
+      "<root>/CODEX_HOME/sessions",
+      "<root>/codex-first/sessions"
+    ]
+  ],
+  "adopt:second": {
+    "claude": null,
+    "codex": "<root>/codex-second"
+  },
+  "restart:known": {
+    "claude": [
+      "<root>/claude-first"
+    ],
+    "codex": [
+      "<root>/codex-first",
+      "<root>/codex-second"
+    ]
+  },
+  "restart:repeat": {
+    "claude": null,
+    "codex": null
+  },
+  "merge:external": {
+    "claude": [
+      "<root>/claude-first",
+      "<root>/external-claude"
+    ],
+    "codex": [
+      "<root>/codex-first",
+      "<root>/codex-second"
+    ]
+  },
+  "merge:adopt": {
+    "claude": "<root>/claude-second",
+    "codex": null
+  },
+  "merge:catalog": {
+    "claude": [
+      "<root>/claude-first",
+      "<root>/external-claude",
+      "<root>/claude-second"
+    ],
+    "codex": [
+      "<root>/codex-first",
+      "<root>/codex-second"
+    ]
+  },
+  "own:explicit-default": {
+    "claude": null,
+    "codex": null
+  },
+  "invalid:relative": {
+    "claude": null,
+    "codex": null
+  },
+  "restart:complete": [
+    [
+      "<root>/CLAUDE_CONFIG_DIR/projects",
+      "<root>/claude-first/projects",
+      "<root>/external-claude/projects",
+      "<root>/claude-second/projects"
+    ],
+    [
+      "<root>/CODEX_HOME/sessions",
+      "<root>/codex-first/sessions",
+      "<root>/codex-second/sessions"
+    ]
+  ]
+}
