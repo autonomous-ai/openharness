@@ -108,14 +108,16 @@ it.each(['same', 'absent', 'repaired'] as const)('never overwrites a peer bindin
     } }) + '\n')
     const parent = join(home, 'sessions', `rollout-${ids[0]}-parent.jsonl`)
     writeFileSync(parent, header(ids[0]!))
-    expect(binding.savedTranscriptEvidence('codex', ids[0]!, transcript(0), home).path).toBe(parent)
+    await vi.waitFor(() => expect(binding.savedTranscriptEvidence('codex', ids[0]!, transcript(0), home).path).toBe(parent), { timeout: 3_000, interval: 25 })
   }
   const nextId = 'dddddddd-4444-4444-8444-dddddddddddd'
   const nextPath = join(home, 'sessions', `rollout-${nextId}.jsonl`)
   writeFileSync(nextPath, header(nextId))
   expect(peer.register({ engine: 'codex', sessionId: nextId, transcriptPath: nextPath, tmuxPane: '%1', cwd: root })).not.toBeNull()
   const latest = readFileSync(file, 'utf8')
-  expect(() => registry.revalidateBinding(original.agentId)).toThrow('saved binding changed')
+  // A parallel private fixture can change a shared ancestor during enumeration. Require a fresh
+  // attempt to reach this exact durable-owner fence; an arbitrary native hold is not success.
+  await vi.waitFor(() => expect(() => registry.revalidateBinding(original.agentId)).toThrow('saved binding changed'), { timeout: 3_000, interval: 25 })
   expect(readFileSync(file, 'utf8')).toBe(latest)
   expect(registry.bySession(ids[0]!)).toBe(original)
   expect(original).toMatchObject({ sessionId: ids[0], transcriptPath: transcript(0), identityHold: 'waiting' })

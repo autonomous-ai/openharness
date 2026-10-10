@@ -220,3 +220,94 @@ Implementation and preliminary review corrections followed the #1132 merge at
 01:43:24. Validation, independent review/CI waiting and merge time are recorded
 separately in the PR and final receipts. Publication remains zero; no release is
 authorized.
+
+
+## Final validation and test race corrections
+
+Receipt `20261010T043754.267016Z-78890` tested clean reviewed `43db408c1` at
+04:37:54–04:45:57 UTC. Types passed in 4.6 seconds; core/services passed 2,089 tests
+in 165 files at 100% statements, branches, functions and lines (30.5 seconds), and
+harnessd passed 265 tests plus one existing skip at 100% (29.5 seconds). The private
+engine-home/machine/chaos lane passed in 442.2 seconds, and the private tmux lane
+passed 57 cases in 108.4 seconds, with fifteen unavailable installed-vendor cases
+explicitly excluded.
+
+The receipt is overall **failed**, because one of 967 focused tests observed a
+valid native-enumeration hold before reaching its expected durable-owner fence.
+The corrected registry test retries fresh reads for at most three seconds and still
+requires that exact ownership error, followed by unchanged live and durable rows.
+Automatic Linux run `38024635620` separately exposed an existing tmux fixture race:
+redirecting its output creates an empty file before printf writes the expected
+literal arguments. That test now waits for complete expected contents, retaining
+the same literal argv/environment/cwd assertions. Neither correction changes
+production. All affected checks run again; unchanged production coverage and private
+end-to-end evidence remain attributable to `43db408c1` rather than being described
+as a new full passing suite.
+
+The first forty mutation variants each failed assertions after their unchanged
+baseline. The final core Cancel-wiring variant passed its corrected unchanged e2e
+baseline and then failed an assertion on `c061a7697`. Only the six variants whose
+registry test changed need another baseline/mutation pass. The independent reviewer
+approved the production, assertion correction and cost documentation at exact heads;
+the final test-only delta also requires review. Composed resume runs alone. Final
+receipts, exact-head review, CI and merge accounting are recorded in PR #1133.
+
+
+The corrected single-worker focused command passed all 969 tests in 26 files
+(one skipped file) on `d3c607e68`, receipt `20261010T045306.949449Z-89491`, in
+75.1 seconds. The prior delta command accidentally dropped its worker-limit flag;
+its failed concurrent run is not counted as passing. Types were reused from the
+same-source receipt. Linux run `38025366227` then found a composed test racing a
+file replacement against the detached tail read started by recovery. The test now
+explicitly drains that read and proves the cancelled state before replacing the
+file and restarting the worker. Its exact boundary-error, visible hold and later
+explicit-Cancel assertions remain unchanged. Only tests and this report change;
+affected composed tests and their mutation variants run again.
+
+
+Receipt `20261010T045933.778026Z-20994` passed types, 70 composed control/worker
+checks and all 17 large-transcript resume cases on clean `7691335b4`. Its serial
+resume check is **failed** (508 passed, two failed): fixture home adoption exhausted
+its real 250 ms journal deadline during fsync, before the intended count/authority
+assertions. The ownership/count fixture now pins the monotonic clock; production
+limits are unchanged. The separate journal deadline regressions still advance that
+clock and passed alongside all four affected ownership/count cases (seven selected
+cases total). Serial resume runs again. Automatic Linux run `38025771424` passed
+all head checks, including `ci/required`, for `7691335b4`; the final test-only clock
+correction receives its own review and automatic CI.
+
+
+## Final gate receipts
+
+The final source-specific evidence is complete on `06d2ff7c8` (production unchanged
+since `4a05df81a`). Receipt `20261010T050314.141907Z-44077` passed types and the full
+serial resume/native-pool/journal composition: 551 tests in eleven files, at 100%
+statements, branches, functions and lines. The earlier valid production evidence
+is retained: 2,089 core/services tests and 265 harnessd tests at 100%, 36 private
+engine-home/machine/chaos cases, 57 private tmux cases, 969 focused/architecture/golden
+checks, 70 composed control/worker checks and seventeen large-history resume cases.
+The receipt/source distinctions above remain part of this evidence; interrupted or
+failed batches are not relabelled green.
+
+All 41 deliberately broken variants have assertion-failure evidence following their
+unchanged baselines. The nineteen variants affected by the registry/control fixture
+changes were rerun alone on `06d2ff7c8` and passed that requirement; unaffected variants
+reuse the production-identical `4a05df81a` run and the corrected `c061a7697` private
+Cancel-wiring run. The disposable worktree restored every mutated file.
+
+The independent reviewer approved exact head `06d2ff7c830a8c521b6771bd6aba3e3fc579f4bd`
+against `c7d460b1d8018ed56126c662702fd44db886d07d`. All automatic head checks, including
+`ci/required`, passed in [run 38026193103](https://github.com/autonomous-ai/openharness/actions/runs/38026193103).
+Main then advanced with #1134, which adds the separate Memories Store package and
+its report. Integration has no CLI code conflict or shared module change. Existing
+local evidence remains valid for unchanged CLI behavior; the combined head receives
+independent review and a fresh automatic CI run before merge. No extra full local
+suite is required solely for that integration.
+
+Accounting (UTC; overlapping windows are not added): golden creation started
+01:39:46; implementation and review corrections ran from the preceding merge at
+01:43:24 through the last production commit at 04:24:14. Validation started 02:19
+and the final affected mutation pass completed by 05:09. Test-only corrections ended
+05:03:11. Independent review and CI waiting overlapped that validation; the combined
+head's final review/CI and actual merge receipt are recorded in PR #1133 and the
+following progress entry. Publication remains zero.

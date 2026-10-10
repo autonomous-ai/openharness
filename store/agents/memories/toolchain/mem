@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# `mem`: what your agents remember. See toolchain/mem.mjs for the commands.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=runtimes.sh
+. "$here/runtimes.sh"
+harness_node 22 >/dev/null || { echo "mem needs Node 22 or newer" >&2; exit 1; }
+# node:sqlite (the session index) still prints an experimental warning on Node 22; it is expected.
+exec node --disable-warning=ExperimentalWarning "$here/mem.mjs" "$@"

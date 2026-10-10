@@ -175,6 +175,11 @@ it.each(['inline', 'worker'] as const)('%s retains a Stop whose drain outlasts a
 it('holds rewritten worker evidence visibly and accepts a later explicit cancellation of the new incarnation', async () => {
   const t = setup('worker')
   t.hold(); await t.cancel(t.row.agentId); t.recover(); await t.attach.attachSession(t.row)
+  // Recovery starts a detached tail read. Finish it before replacing the file so the assertion
+  // below observes the restarted worker's request, not that earlier read during the rename.
+  await t.watcher.pollSession(t.row.sessionId)
+  expect(t.row.interpretationHold).toBeUndefined()
+  expect(t.normalizers.sessionTurnOpen(t.row.sessionId)).toBe(false)
   renameSync(t.file, t.file + '.old'); writeFileSync(t.file, prompt('T2'))
   t.restartWorker()
   await expect(t.watcher.pollSession(t.row.sessionId)).rejects.toThrow('ENGINE_CONTROL_BOUNDARY_CHANGED')

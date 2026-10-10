@@ -42,8 +42,8 @@ describe.skipIf(!resolveBinaryOnPath('tmux'))('external adoption on a private tm
     expect(existsSync(output)).toBe(false)
     expect(await backend.isHeld(pane, token)).toBe(true)
     expect(await backend.respawn(pane, { ...request, expectedHeldToken: token })).toMatchObject({ state: 'succeeded' })
-    await vi.waitFor(() => expect(existsSync(output)).toBe(true))
-    expect(readFileSync(output, 'utf8').split('\n')).toEqual([value, folder, value, ''])
+    // The shell creates its redirected file before printf fills it; existence is not completion.
+    await vi.waitFor(() => expect(readFileSync(output, 'utf8').split('\n')).toEqual([value, folder, value, '']))
     expect(await backend.isHeld(pane, token)).toBe(false)
     expect(await backend.killHeld(pane, token, () => true)).toMatchObject({ dispatch: 'not_started' })
     await backend.kill(pane)
