@@ -461,9 +461,6 @@ export const STORE_REQUESTS = ['dsh_list', 'dsh_install', 'dsh_update', 'dsh_rem
 export const USAGE_REQUESTS = ['usage_read'] as const
 /** The machine monitor (services/monitor.ts). */
 export const MONITOR_REQUESTS = ['machine_resources'] as const
-/** The command bar (services/commandBar.ts), an experiment: the socket's `command_bar`, and the hook server's
- *  `/api/command-bar/*`, which it asks as `command_bar_http`. */
-export const COMMAND_BAR_REQUESTS = ['command_bar', 'command_bar_http'] as const
 /** Memories (services/memory.ts), an experiment: what this machine's agents remember, for the owner's Memories
  *  panes on their other machines, and the About You profile and its on/off choice from them. */
 export const MEMORY_REQUESTS = ['memory_snapshot', 'memory_about_put', 'memory_deliver'] as const
@@ -554,9 +551,8 @@ export const EXPERIMENTS: Readonly<Record<string, { requests: readonly string[];
   collaboration: { requests: TEAMS_REQUESTS, state: ['teams'] },
   // Its invitations and links: a harness was shared from here.
   sharing: { requests: SHARE_REQUESTS, state: ['harness-shares.json', 'harness-collaboration.json'] },
-  // Request-only: it keeps nothing, so it is on from its first request until the daemon stops.
-  commandBar: { requests: COMMAND_BAR_REQUESTS, state: [] },
-  // Request-only too: another machine's Memories pane asks, and the package's own files are its state.
+  // Request-only, on from its first request until the daemon stops: another machine's Memories pane asks, and
+  // the package's own files are its state.
   memory: { requests: MEMORY_REQUESTS, state: [] },
 }
 

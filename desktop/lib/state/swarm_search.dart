@@ -244,18 +244,11 @@ class SwarmSearchController extends ChangeNotifier {
     ].any((word) => word.contains(words) || words.contains(word));
   }
 
-  /// A section's heading in the list. The downloads, chat models' and decision models', name the
-  /// machine they are for.
+  /// A section's heading in the list. The downloads name the machine they are for.
   String modelSectionLabel(ModelSearchSection section) =>
-      models != null &&
-          (section == ModelSearchSection.catalog ||
-              section == ModelSearchSection.jevCatalog)
-      ? models!.catalogHeadingFor(section)
+      section == ModelSearchSection.catalog && models != null
+      ? models!.catalogHeading
       : section.label;
-
-  /// A Jev (System One) model's row: nothing to Use, its pane says how to call it.
-  bool isJevRow(SwarmDestination? row) =>
-      models?.entries[row?.modelId]?.isJev == true;
 
   String? modelRowAction(SwarmDestination row) {
     final entry = models?.entries[row.modelId];
@@ -264,14 +257,6 @@ class SwarmSearchController extends ChangeNotifier {
         ? 'Use'
         : canGetModel(row)
         ? 'Get'
-        : canStartJev(row)
-        ? 'Start'
-        // A Jev model on a grid: Enter copies how to call it — a resting grid wakes on that call,
-        // so its rest is the pane's to say, not the row's.
-        : entry.isJev &&
-              entry.gridModel != null &&
-              entry.gridModel!.unavailable == null
-        ? 'Copy'
         : null;
   }
 
@@ -299,11 +284,7 @@ class SwarmSearchController extends ChangeNotifier {
     // A subscription says how much of it is left — the one figure worth a glance; Enter on it is
     // the preview's to say. Other rows with no weights here say what Enter does.
     if (entry.subscription != null) return entry.status;
-    if (local == null) {
-      return _jevServing(entry)
-          ? 'Serving'
-          : modelRowAction(row) ?? entry.status;
-    }
+    if (local == null) return modelRowAction(row) ?? entry.status;
     final owner = entry.controller ?? catalog.manager;
     final operation = owner.operationFor(local);
     if (operation?.active == true ||
@@ -316,15 +297,6 @@ class SwarmSearchController extends ChangeNotifier {
     if (usingModelId == row.modelId) {
       return local.downloaded ? 'Starting' : 'Downloading';
     }
-    // A decision model on a grid says it is serving. Enter copies how to call it, which the pane and
-    // its hint say; "Copy" at the end of the row read as the model's state.
-    if (_jevServing(entry)) return 'Serving';
-    // A decision model of yours says one of two things: Serving, or Start. "Running" (its engine up while
-    // the grid sleeps) is serving — the first call wakes the grid — and "Downloaded" beside Serving and
-    // Start read as a third state to work out, for a model that is only ever started.
-    if (entry.isJev && local.downloaded) {
-      return local.running ? 'Serving' : 'Start';
-    }
     return modelRowAction(row) ??
         (local.running
             ? 'Running'
@@ -332,12 +304,6 @@ class SwarmSearchController extends ChangeNotifier {
             ? 'Downloaded'
             : null);
   }
-
-  /// A decision model a grid serves now, to be called — its row says Serving, live.
-  bool _jevServing(ModelSearchEntry entry) =>
-      entry.isJev &&
-      entry.gridModel != null &&
-      entry.gridModel!.unavailable == null;
 
   static const inUseWord = '● In use';
 
@@ -392,7 +358,7 @@ class SwarmSearchController extends ChangeNotifier {
     if (entry == null || catalog == null) return false;
     if (modelRowInUse(row)) return true;
     final local = entry.local;
-    if (local == null) return _jevServing(entry);
+    if (local == null) return false;
     final owner = entry.controller ?? catalog.manager;
     return owner.operationFor(local)?.active == true ||
         owner.pendingId == local.id ||
@@ -427,13 +393,9 @@ class SwarmSearchController extends ChangeNotifier {
     return '${size.padLeft(6)}  ${speed.padLeft(9)}';
   }
 
-  /// A chat model's download, folded under "More models" past the first few. Never a Jev model's: its
-  /// own section is the only place it is offered, and it ranks after every chat download, so folding
-  /// it with them hid it.
-  bool _foldedDownload(SwarmDestination row) {
-    final entry = models?.entries[row.modelId];
-    return entry != null && entry.needsDownload && !entry.isJev;
-  }
+  /// A download, folded under "More models" past the first few.
+  bool _foldedDownload(SwarmDestination row) =>
+      models?.entries[row.modelId]?.needsDownload == true;
 
   bool canGetModel(SwarmDestination? row) {
     if (!isModelMode) return false;
@@ -453,46 +415,16 @@ class SwarmSearchController extends ChangeNotifier {
     if (!canGetModel(row)) return null;
     final entry = models!.entries[row.modelId]!;
     final owner = entry.controller!;
-    // A Jev model's Get is the whole of it — download, an engine new enough to serve it, and the model
-    // on the grid — since nothing else would ever start one.
     await owner.control(
       entry.local!,
-      entry.isJev || !owner.supportsDownload ? 'start' : 'download',
+      owner.supportsDownload ? 'download' : 'start',
     );
     return owner.error;
-  }
-
-  /// A Jev model of yours that is downloaded and not running: Start runs it on your grid, beside the
-  /// models already there.
-  bool canStartJev(SwarmDestination? row) {
-    if (!isModelMode) return false;
-    final entry = models?.entries[row?.modelId];
-    final local = entry?.local, owner = entry?.controller;
-    return entry != null &&
-        entry.isJev &&
-        local != null &&
-        owner != null &&
-        local.downloaded &&
-        !local.running &&
-        local.canStart &&
-        owner.operationFor(local)?.active != true &&
-        owner.inventoryAvailable &&
-        !owner.busy &&
-        owner.machine?.connectionStatus == ConnectionStatus.connected &&
-        owner.machine?.needsLink == false;
-  }
-
-  Future<String?> startJev(SwarmDestination row) async {
-    if (!canStartJev(row)) return null;
-    final entry = models!.entries[row.modelId]!;
-    await entry.controller!.control(entry.local!, 'start');
-    return entry.controller!.error;
   }
 
   String? modelUseReason(SwarmDestination? row) {
     final entry = models?.entries[row?.modelId];
     if (entry == null || canSelectModel(row)) return null;
-    if (entry.isJev) return 'Jev model';
     if (modelSelectionEngine == null) return 'No active harness';
     if (entry.subscription case final subscription?) {
       if (subscription['engine'] != modelSelectionEngine) {
@@ -618,10 +550,7 @@ class SwarmSearchController extends ChangeNotifier {
       }
     }
     final offered = entry?.gridModel;
-    // A Jev model answers decisions, not a harness's turns: there is nothing to run on it.
-    if (offered == null || offered.unavailable != null || offered.decision) {
-      return null;
-    }
+    if (offered == null || offered.unavailable != null) return null;
     for (final section in _modelChoices!.sections) {
       if (section.name != offered.grid && !(section.own && entry!.own)) {
         continue;
@@ -679,7 +608,6 @@ class SwarmSearchController extends ChangeNotifier {
     return model != null &&
         owner != null &&
         entry!.own &&
-        !entry.isJev &&
         model.downloaded &&
         !model.running &&
         model.canStart &&
@@ -712,22 +640,18 @@ class SwarmSearchController extends ChangeNotifier {
   /// running on that machine is stopped first ([otherRunningModel]): it runs one at a time.
   bool canGetModelForUse(SwarmDestination? row) =>
       canGetModel(row) &&
-      !models!.entries[row!.modelId]!.isJev &&
       modelSelectionEngine != null &&
       _modelChoices?.reachable == true &&
       _modelChoices?.canRunLocally(modelSelectionEngine) == true &&
-      models!.entries[row.modelId]!.own;
+      models!.entries[row!.modelId]!.own;
 
-  /// Another chat model of yours running on [row]'s machine — the one to stop before [row]'s can run.
-  /// Never a Jev model: it runs beside chat models, and Use on a chat model stopped one.
+  /// Another model of yours running on [row]'s machine — the one to stop before [row]'s can run.
   LocalModel? otherRunningModel(SwarmDestination? row) {
     final entry = models?.entries[row?.modelId];
     final local = entry?.local, owner = entry?.controller;
-    if (local == null || owner == null || local.decision) return null;
+    if (local == null || owner == null) return null;
     return owner.localModels
-        .where(
-          (model) => model.canStop && model.id != local.id && !model.decision,
-        )
+        .where((model) => model.canStop && model.id != local.id)
         .firstOrNull;
   }
 
@@ -1469,10 +1393,6 @@ class SwarmSearchController extends ChangeNotifier {
       ? 'Use'
       : canGetModel(row)
       ? 'Get'
-      : canStartJev(row)
-      ? 'Start'
-      : isJevRow(row) && models!.entries[row!.modelId]!.gridModel != null
-      ? 'Copy request'
       : row?.isModel == true
       ? 'Unavailable'
       : setupLayout && row?.isMachine == true
@@ -2226,11 +2146,6 @@ class SwarmSearchController extends ChangeNotifier {
     if (destination.isModel &&
         !canSelectModel(destination) &&
         !canGetModel(destination)) {
-      // A Jev model has nothing to Use: clicking one shows its pane, which says how to call it.
-      if (isJevRow(destination)) {
-        final index = rows.indexWhere((row) => row.id == destination.id);
-        if (index >= 0 && index != cursor) move(index - cursor);
-      }
       return null;
     }
     if (setupLayout && (destination.isMachine || destination.isModel)) {

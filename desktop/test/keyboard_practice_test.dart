@@ -76,8 +76,7 @@ void main() {
       final lessons = keyboardLessons(map);
       for (final context in KeymapContext.values) {
         for (final binding in map.current.bindingsFor(context)) {
-          if (binding.command == 'navigation.command_bar' ||
-              binding.command == 'app.debug' ||
+          if (binding.command == 'app.debug' ||
               harnessCommandById[binding.command]?.hidden == true ||
               // The daemon's exist only while daemons are on (off here).
               !harnessCommandActive(binding.command!)) {
@@ -107,10 +106,6 @@ void main() {
         reason: 'with daemons on, ⌘⌥T is practised too',
       );
       daemonCommandsActive.value = false;
-      expect(
-        lessons.any((l) => l.command == 'navigation.command_bar'),
-        isFalse,
-      );
     },
   );
 

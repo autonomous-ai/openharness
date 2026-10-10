@@ -747,7 +747,7 @@ class _TerminalPanelState extends State<TerminalPanel>
     }
     _followTail = atEnd;
     // Resizes and resyncs are output updates, not requests to enter this pane.
-    // Its retained renderer/editor keeps its current focus; a command bar or
+    // Its retained renderer/editor keeps its current focus; a palette or
     // other control must keep any keyboard ownership it already has.
     _afterTerminalMounted(scrollToEnd: atEnd, claimFocus: false);
   }

@@ -205,41 +205,6 @@
     }
   },
   {
-    "id": "jev-sheets",
-    "name": "Jev Sheets",
-    "craft": "Data",
-    "title": "Ask a better question.",
-    "intro": "Before asking a whole spreadsheet, compare two versions of a question on frozen rows. Read the answers side by side and use your judgment to decide what the wording missed.",
-    "poster": "images/question-lab.png",
-    "alt": "Question Lab comparing two urgency questions on fictional support rows, prominently labeled offline practice.",
-    "video": "images/question-lab-demo.mp4",
-    "scene": "Offline practice with fictional rows. The demo shows the workflow, not Jev's live judgment quality.",
-    "badge": "Offline practice demo",
-    "prompt": "Help me turn our support tickets into a sheet. Start with an urgency question, then suggest clearer wording to compare in Question Lab. I want to review a small sample and the unsure rows before asking the entire file.",
-    "steps": [
-      {
-        "title": "Freeze a sample",
-        "text": "Open Question Lab, choose an existing question and write a candidate. Preview 10, 20 or 40 rows and inspect the exact text and context."
-      },
-      {
-        "title": "Compare the wording",
-        "text": "Compare asks both versions together. Inspect changed answers and full probabilities, then mark Original, New wording or Unsure and add your notes."
-      },
-      {
-        "title": "Keep your reasoning",
-        "text": "Keep this trial saves the evidence. Try on whole sheet adds the candidate as a separate column; ask the agent to retain the chosen header in sheet.json."
-      }
-    ],
-    "keeps": "Frozen rows, exact questions, answers, probabilities, provider details, your notes and CSV/ZIP exports.",
-    "followup": "Read my kept trial in .harness/question-trials, including the rows and review.md. Help me choose clearer wording and retain that header in sheet.json before running the whole file.",
-    "note": "Real answers send sampled rows to your connected Jev provider and require a key. Offline mode is practice only. Confidence and reviewer preferences are not measures of accuracy.",
-    "guide": "../store/agents/jev-sheets/README.md",
-    "demo": {
-      "prompt": "Create an offline practice sheet of fictional support tickets. Help me compare two urgency questions on the same frozen rows in Question Lab, inspect changed answers and unsure rows, and keep the trial with my notes.",
-      "caption": "Offline practice recording · fictional support tickets · paired questions and a kept review"
-    }
-  },
-  {
     "id": "circuitjs",
     "name": "CircuitJS",
     "craft": "Circuits",

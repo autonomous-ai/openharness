@@ -67,7 +67,7 @@ Shared viewers never appear as creative projects.
 
 ## Curated artwork library
 
-The 48 covers in `store_cover_art.dart` include 13 upstream images and 35 original Harness
+The 49 covers in `store_cover_art.dart` include 13 upstream images and 36 original Harness
 outputs or viewer captures. They are retained as a sourced artwork library, not displayed
 as a thumbnail grid. Discover and category features use the editorial illustrations
 above; their browsing collections use app icons. Individual harness pages retain their
@@ -120,8 +120,6 @@ screenshots, with the corresponding software notices preserved.
 | `covers/drone-pilot.jpg` | `store/showcase/drone-pilot/works-yard.jpg` |
 | `covers/game-master.jpg` | `store/showcase/game-master/signal-garden.jpg` |
 | `covers/lab-bench.jpg` | `store/showcase/lab-bench/canopy.jpg` |
-| `covers/jev-browser.jpg` | `store/showcase/jev-browser/jev-picks-the-columns.jpg` |
-| `covers/jev-sheets.jpg` | `store/showcase/jev-sheets/typed-column.jpg` |
 | `covers/roundtable.jpg` | `store/showcase/roundtable/claim-map-mid-round.jpg` |
 | `covers/phaser.jpg` | `store/showcase/phaser/sunset-fox-platformer.jpg` |
 | `covers/manim.jpg` | `store/showcase/manim/fourier-knight.jpg` |

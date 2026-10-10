@@ -392,18 +392,6 @@ const _harnesses = <String, EngineIdentity>{
     asset: 'assets/engine-icons/lab-bench.png',
   ),
 
-  // Jev harnesses; marks are built by store/tools/jev-kit/brand.mjs from brand/icon.svg.
-  'autonomous/jev-sheets': EngineIdentity(
-    id: 'autonomous/jev-sheets',
-    label: 'Jev Sheets',
-    category: 'Productivity',
-    tagline:
-        "Ask every row a question, test better wording, and keep the evidence",
-    creator: 'Autonomous',
-    color: Color(0xfffbbf24),
-    asset: 'assets/engine-icons/jev-sheets.png',
-  ),
-
   'autonomous/autonomous-circuit': EngineIdentity(
     id: 'autonomous/autonomous-circuit',
     label: 'Autonomous Circuit',
@@ -597,15 +585,6 @@ const _harnesses = <String, EngineIdentity>{
     creator: 'Autonomous',
     color: Color(0xff94b9a5),
     asset: 'assets/engine-icons/roundtable.png',
-  ),
-  'autonomous/jev-browser': EngineIdentity(
-    id: 'autonomous/jev-browser',
-    label: 'Jev Browser',
-    category: 'Research',
-    tagline: 'Name a site, say what you want, and get a spreadsheet',
-    creator: 'Autonomous',
-    color: Color(0xff8bd3cc),
-    asset: 'assets/engine-icons/jev-browser.png',
   ),
   'autonomous/godogen': EngineIdentity(
     id: 'autonomous/godogen',
@@ -810,7 +789,6 @@ const knownHarnessBase = <String, String>{
   'autonomous/simskill': 'codex',
 
   'autonomous/roundtable': 'claude',
-  'autonomous/jev-browser': 'claude',
   'autonomous/godogen': 'claude',
   'autonomous/trailofbits-skills': 'claude',
   'autonomous/ollama': 'codex',
@@ -823,8 +801,6 @@ const knownHarnessBase = <String, String>{
   'autonomous/drone-pilot': 'claude',
   'autonomous/game-master': 'claude',
   'autonomous/lab-bench': 'claude',
-
-  'autonomous/jev-sheets': 'claude',
 
   'autonomous/autonomous-circuit': 'claude',
   'autonomous/kicad': 'claude',

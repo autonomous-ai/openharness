@@ -17,7 +17,7 @@
  * `COMPAT_FROM=<that>/dist/cli.js npm run test:e2e -- compat`. `COMPAT_REPORT=<file>` writes both
  * sides' answers and every difference, for reading one by one.
  */
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -125,57 +125,6 @@ function differences(a: unknown, b: unknown, path = ''): Array<{ path: string; f
   }
   if (Array.isArray(a) && Array.isArray(b) && a.length === b.length) return a.flatMap((item, i) => differences(item, b[i], `${path}[${i}]`))
   return [{ path, from: a, to: b }]
-}
-
-/**
- * The command bar (services/commandBar.ts; in the core before), at its two doors: the socket's `command_bar`
- * and the hook server's `/api/command-bar/*`. With no OpenRouter key: what reaches JEV is the same code on
- * either build, and no test may call it. The key is read from `ORI_CREDENTIALS_PATH`, a FIFO here, so that
- * a decision waits on it, in flight, for as long as nothing writes: what each door answers beyond its
- * limits, two at once per connection and two at once in all, is compared too.
- */
-async function commandBar(d: IsolatedDaemon, answers: Answers, walk: (value: unknown) => unknown, client: LocalClient): Promise<void> {
-  const request = { prompt: 'take me back to the release notes', candidates: [{ id: 'open:notes', kind: 'open', title: 'Release notes', detail: 'Writing the release notes' }] }
-  const http = async (step: string, route: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) => {
-    const response = await fetch(`http://127.0.0.1:${d.port}/api/command-bar/${route}`, {
-      method: init.method ?? (route === 'status' ? 'GET' : 'POST'),
-      headers: init.headers ?? { 'x-adapter-local': '1', 'content-type': 'application/json' },
-      ...(init.body === undefined ? {} : { body: init.body }),
-    })
-    answers[step] = walk({ status: response.status, body: await response.json() })
-  }
-  const ask = async (step: string, on: LocalClient, payload: Record<string, unknown>) => {
-    answers[step] = walk(await on.request('command_bar', payload, 60_000).catch(() => ({ '<no reply>': true })))
-  }
-  // Refused before any key is read.
-  await ask('command_bar with nothing', client, {})
-  await ask('command_bar too large', client, { request: { prompt: 'x'.repeat(2_001), candidates: [] } })
-  await http('command bar over HTTP without the native header', 'resolve', { headers: { 'content-type': 'application/json' }, body: '{}' })
-  await http('command bar over HTTP from a browser', 'resolve', { headers: { 'x-adapter-local': '1', origin: 'https://example.com' }, body: '{}' })
-  await http('command bar over HTTP, the wrong method', 'resolve', { method: 'GET' })
-  await http('command bar over HTTP, not JSON', 'resolve', { body: '{' })
-  await http('command bar over HTTP, too large', 'resolve', { body: 'x'.repeat(129_000) })
-  await http('command bar over HTTP, invalid', 'resolve', { body: JSON.stringify({ prompt: '' }) })
-  // Two decisions in flight on one connection, each waiting on the key: its third is refused by the
-  // socket's limit, another connection's and the HTTP door's by the command bar's own.
-  const other = await LocalClient.connect(d)
-  const waiting = [client.request('command_bar', { request }, 60_000), client.request('command_bar', { request }, 60_000)]
-  await new Promise((done) => setTimeout(done, 3_000))
-  await ask('command_bar, a connection\'s third at once', client, { request })
-  await ask('command_bar, another connection beyond two at once', other, { request })
-  await http('command bar over HTTP beyond two at once', 'resolve', { body: JSON.stringify(request) })
-  // The key, written for every reader from now on: none, so each decision ends there. A pause after each
-  // write, or a reader still reading could be fed by the next writer forever and never reach its end.
-  const writer = spawn('/bin/sh', ['-c', 'while :; do printf "{}" > "$1"; sleep 0.2; done', 'sh', d.env.ORI_CREDENTIALS_PATH!], { stdio: 'ignore' })
-  try {
-    answers['command_bar, the two that waited'] = walk(await Promise.all(waiting))
-    await ask('command_bar', other, { request })
-    await http('command bar status over HTTP', 'status')
-    await http('command bar over HTTP', 'resolve', { body: JSON.stringify(request) })
-  } finally {
-    writer.kill()
-    other.close()
-  }
 }
 
 /** The scenario, on one daemon: what it answered, made comparable. */
@@ -314,7 +263,6 @@ async function scenario(d: IsolatedDaemon): Promise<Answers> {
   await ask('grid_fleet_run', 'grid_fleet_run', { args: ['--remote', 'ls', '--json'], timeoutMs: 5_000 })
   await ask('grid_fleet_cancel', 'grid_fleet_cancel', { commandId: 'compat-not-running' })
   await ask('agent_create on a grid model', 'agent_create', { engine: 'codex', cwd: cwd('codex'), gridModel: 'Qwen3-Coder-30B', gridName: 'mine', bypassPermission: true })
-  await commandBar(d, answers, walk, client)
   await ask('a request nobody answers', 'compat_unknown_request')
   await ask('agent_create_status for no such creation', 'agent_create_status', { creationId: 'compat-no-such-creation' })
 
@@ -389,11 +337,9 @@ describe.skipIf(!FROM)('what the apps see, compared with the released build', ()
     copyFileSync(join(dirname(FROM!), 'notify.mjs'), join(released, 'notify.mjs'))
     for (const dir of [build, released]) writeFileSync(join(dir, 'package.json'), '{"type":"module"}\n')
 
-    // Where each side reads its OpenRouter key: a FIFO, so that a command bar decision can wait on it.
-    const ori = (side: string) => { const path = join(scratch, `${side}.ori`); execFileSync('mkfifo', [path]); return path }
     for (const [side, options] of [
-      ['released', { scriptPath: join(released, 'cli.js'), env: { ADAPTER_CLI_DIR: released, HARNESS_GRID_BIN: NO_GRID, ORI_CREDENTIALS_PATH: ori('released') } }],
-      ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build, HARNESS_GRID_BIN: NO_GRID, ORI_CREDENTIALS_PATH: ori('this') } }],
+      ['released', { scriptPath: join(released, 'cli.js'), env: { ADAPTER_CLI_DIR: released, HARNESS_GRID_BIN: NO_GRID } }],
+      ['this', { scriptPath: join(build, 'cli.js'), env: { ADAPTER_CLI_DIR: build, HARNESS_GRID_BIN: NO_GRID } }],
     ] as const) {
       const d = await IsolatedDaemon.create(options)
       // tmux titles each new pane with the machine's name as it is then, and a daemon refuses that title

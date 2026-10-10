@@ -81,7 +81,7 @@ function mark(id, label, x, y, size) {
   const vector = `store/branding/${id.replace('autonomous/', '')}.svg`;
   // The new original marks stay vectors in the diagram, and are also bundled
   // as PNGs for the app. No letter placeholders for featured packages.
-  if (['autonomous/roundtable', 'autonomous/jev-browser', 'autonomous/godogen'].includes(id)) {
+  if (['autonomous/roundtable', 'autonomous/godogen'].includes(id)) {
     const body = read(vector).replace(/^<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '').replace(/<title[\s\S]*?<\/title>/, '').trim();
     return `<svg x="${x}" y="${y}" width="${size}" height="${size}" viewBox="0 0 64 64">${body}</svg>`;
   }
