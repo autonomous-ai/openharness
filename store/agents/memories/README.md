@@ -5,20 +5,24 @@ Every agent learns on its own and keeps what it learned to itself: Claude Code i
 Hermes in `~/.hermes/memories/`. Memories reads all of them in one place, beside a year of your work
 with those agents from Harness's session index. Opening it sends no prompt and changes nothing.
 
-## The pane
+## The pane: Sense of Self
 
-- **The band** at the top: your messages per day over the past year, each day tinted with the agent you
-  talked to most, with totals and each agent's share.
-- **About you**: the profile the agent on the right builds from your own words (below), then everything
-  your agents saved about you — Claude Code's user and feedback notes, Hermes and OpenClaw profiles,
-  Grok Build's global topics, what you asked Codex to remember.
-- **Projects**: what each agent knows about each repository, with how much you worked there.
-- **Notes and summaries**, **What you told them** (your global CLAUDE.md, AGENTS.md and rules), and
-  **Agents**: where each one keeps its memory, whether it is on, and how to turn it on.
-- **Search** filters memories as you type, fzf-style, and searches your past conversations too.
+- **About You** is a tree of light: every line is a belief, one strand, and each section (How you work,
+  Taste, …) a frond. The focused belief is written large beside it, with **why your agents believe
+  this**: the memories it cites and how many of your messages say it, lit down to where they are.
+- **The lake** below holds every memory your agents keep, one orb each, colored by the agent, in the
+  column of its project, newer nearer the surface; old ones lose letters. Threads rise from a memory to
+  the beliefs it holds up. Dive in, swim between them, lift one out to read it and the conversations
+  about it.
+- **The mist** over the water is your own messages, gathered over the project you said them in.
+- **Recall** is the prompt at the top: type and the memories and messages that answer rise, and the
+  beliefs they hold up pulse. Conversations found by the same search as Cmd-P rise too; open one to read
+  its words.
 
-Keys: ↑↓ move, → or ⏎ open, ← back, esc clear. A memory an agent saves while the pane is open glows
-for a moment. Memory files are shown as text; nothing in them can run in the pane.
+Keys: ←→ section, ↑↓ belief (↓ past the last dives into the lake), space plucks a belief, tab steps
+through why, ⏎ follows it down. In the lake: arrows swim, ⏎ lifts a memory out, esc rises. Clicking a
+section, a belief or an orb does the same. A memory an agent saves while the pane is open glows when it
+appears. Memory text is shown as text; nothing in it can run in the pane.
 
 ## About You
 
@@ -56,15 +60,19 @@ current request comes first. Saying it in the chat ("stop using my About You") f
 
 ## Every machine
 
-The pane asks each of your online machines for its memories and shows them together, each labeled
-with its machine, with one activity calendar for all of them. About You and the switch are the same
-everywhere: the newest About You and the newest on/off choice reach every machine, and each machine's
-agents get it there. A machine whose Harness is older than its memory service is listed as needing
-the newest Harness.
+The pane asks each of your online machines for its memories and shows them together in one lake, each
+memory labeled with its machine. About You and the switch are the same everywhere: the newest About You
+and the newest on/off choice reach every machine, and each machine's agents get it there. A machine that
+does not answer, or whose Harness is older than its memory service, is named at the foot of the pane
+with why.
 
 `npm run test:agents` proves delivery with the real agents in a throwaway home: a random made-up fact
 in About You must reach a new Claude Code session's answer and Codex's model input, and must not reach
 either without it.
+
+`PLAYWRIGHT=<path to playwright/index.mjs> npm run test:self [screenshots folder]` drives the pane in a
+browser on made-up homes only (one the size of a real person's, one without About You, one with
+nothing), by keys and clicks, at two sizes in both themes, and prints what a frame costs.
 
 ## The `mem` command
 

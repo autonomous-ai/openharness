@@ -1,10 +1,11 @@
 /**
  * A made-up person's computer: a few agents' memory folders and a session index, all synthetic.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { writeAbout } from '../lib/about.mjs'
 
 export const DAY = 86_400_000
 
@@ -108,4 +109,63 @@ export function makeHome({ now = Date.now() } = {}) {
   })
   // Each test passes this env, never process.env: the folders come from `home` alone.
   return { home, project, key, env: { MEMORIES_HOME: join(home, '.harness', 'memory') } }
+}
+
+const GROWN_PROJECTS = ['payments', 'widgets', 'docs-site', 'mobile-app', 'infra', 'ml-pipeline', 'design-system', 'api-gateway']
+const GROWN_TOPICS = ['Release train', 'Test layout', 'Deploy steps', 'Code owners', 'Flaky tests', 'Error budget', 'Naming rules', 'Review rules', 'Build cache', 'Feature flags', 'On-call notes']
+const GROWN_SAYINGS = ['why do the retries pile up after an outage?', 'make the refund flow handle a third partial refund', 'regenerate the snapshots and show me the diff',
+  'rewrite the quickstart in plain words', 'the app crashes on resume, find out why', 'rotate the staging certs', 'freeze the eval set for this quarter',
+  'rename the color tokens by role', 'rate limit per key, not per IP', 'tldr the incident from last night', 'one change per pull request', 'merge it once CI is green',
+  'measure before and after', 'make the empty state clearer', 'never release on a Friday', 'add a test that fails first']
+const GROWN_SECTIONS = ['How you work', 'What you want from agents', 'Taste', 'Engineering principles', 'Right now']
+
+/**
+ * makeHome() grown to the size of a real person's: about `memories` memories across eight projects,
+ * an About You of `lines` lines citing them, and `asks` messages over four months in those folders (a
+ * few in a worktree, a few with no folder). Everything is made up and deterministic.
+ */
+export function growHome(made, { memories = 100, lines = 25, asks = 4200, now = Date.now() } = {}) {
+  const { home } = made
+  let seed = 20261010
+  const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+  const folders = GROWN_PROJECTS.map((name) => { const path = join(home, 'code', name); mkdirSync(path, { recursive: true }); return { name, path, key: path.replace(/[^A-Za-z0-9]/g, '-') } })
+  const notes = []
+  for (let n = 0; notes.length < memories - 22; n++) {
+    const folder = folders[n % folders.length]
+    const topic = GROWN_TOPICS[Math.floor(n / folders.length) % GROWN_TOPICS.length]
+    const file = `${topic.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${folder.name}.md`
+    const type = ['project', 'feedback', 'reference', 'user'][n % 4]
+    const path = put(home, `.claude/projects/${folder.key}/memory/${file}`, `---\nname: ${topic}\ndescription: ${topic} for ${folder.name}\ntype: ${type}\n---\n\n${topic} in ${folder.name}: ${GROWN_SAYINGS[n % GROWN_SAYINGS.length]}.\n\n**Why:** it came up ${2 + (n % 5)} times.\n`)
+    // Saved over four months, the way a person's memories pile up: more of them lately.
+    const saved = new Date(now - Math.floor(Math.pow(((n * 37) % 97) / 97, 1.6) * 140 * DAY))
+    utimesSync(path, saved, saved)
+    notes.push({ file, project: folder.name })
+  }
+  const about = ['# About you', '', `Built from ${asks} of your messages.`, '']
+  for (let i = 0; i < lines; i++) {
+    if (i % 5 === 0) about.push(`## ${GROWN_SECTIONS[(i / 5) % GROWN_SECTIONS.length]}`)
+    const cited = [notes[(i * 3) % notes.length], notes[(i * 7 + 1) % notes.length]].map((note) => `claude:${note.file}`)
+    const text = GROWN_SAYINGS[i % GROWN_SAYINGS.length].replace(/^./, (c) => c.toUpperCase()).replace(/[?.]$/, '')
+    about.push(`- ${text}, in ${notes[i % notes.length].project}. [${cited.join(', ')}, asks:${10 + i}]`)
+    if (i % 5 === 4) about.push('')
+  }
+  writeAbout(made.env.MEMORIES_HOME, about.join('\n') + '\n', { now })
+  const turns = []
+  const engines = ['codex', 'codex', 'claude', 'claude', 'codex', 'grok', 'hermes']
+  for (let n = 0; n < asks; n++) {
+    const daysAgo = Math.floor(Math.pow(random(), 1.3) * 120) + random() * 0.6
+    const folder = folders[Math.floor(Math.pow(random(), 1.5) * folders.length)]
+    const engine = engines[Math.floor(random() * engines.length)]
+    const where = n % 97 === 0 ? '' : n % 41 === 0 ? join(home, 'code', 'worktrees', folder.name, 'fix') : folder.path
+    turns.push({ session: `g-${folder.name}-${Math.floor(daysAgo / 3)}-${engine}`, engine, cwd: where, title: `${folder.name}: ${GROWN_SAYINGS[n % 7]}`,
+      ask: `${GROWN_SAYINGS[Math.floor(random() * GROWN_SAYINGS.length)]} (${folder.name}, ${n})`, answer: 'done', daysAgo })
+  }
+  // Older than the newest messages the pane loads: only search finds these.
+  for (let n = 0; n < 12; n++) {
+    turns.push({ session: 'g-old-zeppelin', engine: 'codex', cwd: folders[1].path, title: 'widgets: the zeppelin migration', ask: `the zeppelin manifest is wrong again, step ${n}`, answer: 'fixed', daysAgo: 130 + n / 10 })
+  }
+  const data = join(home, '.harness', 'cli', 'data')
+  rmSync(join(data, 'session-search.db'), { force: true })
+  sessionIndex(data, { now, turns })
+  return { ...made, projects: folders }
 }

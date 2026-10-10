@@ -215,6 +215,25 @@ function wordPattern(parts: string[]): RegExp {
   return new RegExp(`(?<![\\p{L}\\p{N}])${body}[\\p{L}\\p{N}]*`, 'giu')
 }
 
+/**
+ * A word as typed and its common English endings: "mode" is mode, modes, moded and moding, never "model". The
+ * index keeps words as written (unicode61, no stemming), so a typed-out word would otherwise miss its plural.
+ */
+export function wordFamily(word: string): string[] {
+  if (!/^\p{L}{2,}$/u.test(word)) return [word]
+  const forms = new Set([word, `${word}s`])
+  if (word.endsWith('e')) { forms.add(`${word}d`); forms.add(`${word.slice(0, -1)}ing`) }
+  else { forms.add(`${word}es`); forms.add(`${word}ed`); forms.add(`${word}ing`) }
+  if (/[^aeiou]y$/u.test(word)) { forms.add(`${word.slice(0, -1)}ies`); forms.add(`${word.slice(0, -1)}ied`) }
+  return [...forms]
+}
+
+/** Where a query word occurs as a whole word, in any form of its family; a phrase of parts, as itself. */
+function wholePattern(parts: string[]): RegExp {
+  const body = parts.length > 1 ? parts.map(escapeRegExp).join('[^\\p{L}\\p{N}]+') : `(?:${wordFamily(parts[0]).map(escapeRegExp).join('|')})`
+  return new RegExp(`(?<![\\p{L}\\p{N}])${body}(?![\\p{L}\\p{N}])`, 'giu')
+}
+
 const SNIPPET_BEFORE = 4
 const SNIPPET_WORDS = 12
 
@@ -685,13 +704,17 @@ export class SessionSearchStore {
         return { sid, match, session, score }
       })
       .sort((a, b) => Number(b.match.together) - Number(a.match.together) || b.score - a.score)
-      .slice(0, limit)
+      // A few more than are shown, for step 5 to choose from.
+      .slice(0, Math.min(100, limit * 3))
 
     // 4. For the hits only: which field matched, and the words around it — what the person asked
     // says the most about a session, then its name, then the answer, then the tools.
-    const patterns = queryWords(query).map(wordPattern)
+    const words = queryWords(query)
+    const patterns = words.map(wordPattern)
+    const wholes = words.map(wholePattern)
+    const holds = (pattern: RegExp, text: string) => { pattern.lastIndex = 0; return pattern.test(text) }
     const text = this.statement('SELECT name, ask, answer, tools FROM turns WHERE id = CAST(? AS INTEGER)')
-    return ranked.map(({ sid, match, session, score }) => {
+    const hits = ranked.map(({ sid, match, session, score }) => {
       const row = text.get(match.id)
       let field: (typeof FIELDS)[number] = 'ask'
       let snippet = ''
@@ -703,7 +726,7 @@ export class SessionSearchStore {
           break
         }
       }
-      return {
+      const hit: SearchHit = {
         sessionId: sid,
         agentId: session.agentId,
         engine: session.engine,
@@ -716,7 +739,18 @@ export class SessionSearchStore {
         score: Math.round(score * 1000) / 1000,
         ...externalOf(session),
       }
+      // A word typed out that this turn holds only as the start of a longer one: "mode" in "model".
+      const said = FIELDS.map((name) => String(row?.[name] ?? '')).join('\n')
+      return { hit, partial: words.some((_, at) => holds(patterns[at], said) && !holds(wholes[at], said)) }
     })
+    // 5. Such a hit goes below the ones that hold the words as words; otherwise the order above stands. On one
+    // Mac's index (2026-10-10) "dark mode" put a desk-lamp *model* first and "mode" found only "model". A
+    // word still being typed is a part of every hit alike, so it moves nothing.
+    return hits
+      .map((entry, at) => ({ ...entry, at }))
+      .sort((a, b) => Number(b.hit.together) - Number(a.hit.together) || Number(a.partial) - Number(b.partial) || a.at - b.at)
+      .slice(0, limit)
+      .map((entry) => entry.hit)
   }
 
   /** The last window asked about, and its sessions: typing on, the window stays the same. */

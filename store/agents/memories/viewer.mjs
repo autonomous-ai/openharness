@@ -1,7 +1,8 @@
 /**
  * The Memories pane: a loopback server that reads every agent's memory and the session index, and
- * serves one page to browse them. It never writes anything an agent owns and needs no model: opening
- * the pane sends no prompt. The only file it writes is the pane header's verdict.
+ * serves one page to see them: Sense of Self, About You held up by every memory (viewer/self.js). It
+ * never writes anything an agent owns and needs no model: opening the pane sends no prompt. The only
+ * file it writes is the pane header's verdict.
  *
  * While a pane is connected it looks again every few seconds and pushes a new snapshot when anything
  * changed — an agent saved a memory, the About You was rebuilt, you finished a turn somewhere.
@@ -16,7 +17,7 @@ import { homes } from './lib/agents.mjs'
 import { noteSeen, writeAbout } from './lib/about.mjs'
 import { DEFAULT_CHOICE_AT, deliver } from './lib/deliver.mjs'
 import { askMachines, merge, newestChoice, syncAbout, syncChoice } from './lib/fleet.mjs'
-import { around, headings, search } from './lib/sessions.mjs'
+import { around, asks, headings, search } from './lib/sessions.mjs'
 import { closeIndex, fingerprint, sessionIndex, snapshot as takeSnapshot, writeVerdict } from './lib/state.mjs'
 
 const PACKAGE = dirname(fileURLToPath(import.meta.url))
@@ -24,10 +25,16 @@ const ASSETS = {
   '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/app.css': ['app.css', 'text/css; charset=utf-8'],
-  '/markdown.js': ['markdown.js', 'text/javascript; charset=utf-8'],
-  '/fuzzy.js': ['fuzzy.js', 'text/javascript; charset=utf-8'],
-  '/heatmap.js': ['heatmap.js', 'text/javascript; charset=utf-8'],
+  '/self.css': ['self.css', 'text/css; charset=utf-8'],
+  '/self.js': ['self.js', 'text/javascript; charset=utf-8'],
+  '/self-model.js': ['self-model.js', 'text/javascript; charset=utf-8'],
+  '/loop.js': ['loop.js', 'text/javascript; charset=utf-8'],
+  '/memory-data.js': ['memory-data.js', 'text/javascript; charset=utf-8'],
 }
+// What /api/asks answers: the person's latest messages, cut short. Fixed, not asked for: a page can
+// never read more of what the person typed than the scene draws as mist.
+export const ASKS_LIMIT = 4000
+export const ASKS_CHARS = 400
 const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'you', 'are', 'not', 'but', 'use', 'when', 'what', 'how', 'why', 'all', 'any', 'one', 'its', 'has', 'have', 'was', 'were', 'out', 'new', 'via', 'per'])
 
 /**
@@ -245,6 +252,12 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     } catch (error) { return { turns: [], error: String(error?.message ?? error) } }
   }
 
+  async function recentAsks() {
+    const index = await sessionIndex(homes(env, home))
+    if (!index.db) return { asks: [], error: index.error }
+    try { return { asks: asks(index.db, { limit: ASKS_LIMIT, maxChars: ASKS_CHARS }) } } catch (error) { return { asks: [], error: String(error?.message ?? error) } }
+  }
+
   const server = createServer(async (req, res) => {
     try {
       const address = server.address()
@@ -285,6 +298,12 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
         const sessionId = (url.searchParams.get('sessionId') ?? '').slice(0, 200)
         const turn = Number.parseInt(url.searchParams.get('turn') ?? '', 10)
         json(res, 200, sessionId ? await conversation(sessionId, Number.isInteger(turn) ? turn : null) : { turns: [] })
+        return
+      }
+      if (url.pathname === '/api/asks') {
+        // Your own latest messages, the mist over the lake (viewer/memory-data.js). Takes no
+        // parameters: how many and how long is fixed here.
+        json(res, 200, { limit: ASKS_LIMIT, maxChars: ASKS_CHARS, ...(await recentAsks()) })
         return
       }
       if (url.pathname === '/api/related') {

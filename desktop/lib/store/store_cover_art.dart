@@ -289,7 +289,7 @@ const storeCoverArt = <String, StoreCoverArt>{
   ),
   'autonomous/memories': StoreCoverArt(
     asset: 'assets/store/covers/memories.jpg',
-    description: 'Memories’ About You and agent notes from an illustrative demo home',
+    description: 'About You as a tree of light, rooted in an illustrative person’s memories',
     imageSize: Size(1080, 720),
     viewport: Rect.fromLTWH(0, 0, 1080, 540),
     background: Color(0xff0e0f11),
