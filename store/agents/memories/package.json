@@ -1,0 +1,13 @@
+{
+  "name": "@autonomous/memories-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --disable-warning=ExperimentalWarning --import ./test/setup.mjs --test test/*.test.mjs",
+    "start": "./viewer.sh",
+    "test:agents": "node --disable-warning=ExperimentalWarning test/e2e/agents.e2e.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -275,3 +275,39 @@ clock and passed alongside all four affected ownership/count cases (seven select
 cases total). Serial resume runs again. Automatic Linux run `38025771424` passed
 all head checks, including `ci/required`, for `7691335b4`; the final test-only clock
 correction receives its own review and automatic CI.
+
+
+## Final gate receipts
+
+The final source-specific evidence is complete on `06d2ff7c8` (production unchanged
+since `4a05df81a`). Receipt `20261010T050314.141907Z-44077` passed types and the full
+serial resume/native-pool/journal composition: 551 tests in eleven files, at 100%
+statements, branches, functions and lines. The earlier valid production evidence
+is retained: 2,089 core/services tests and 265 harnessd tests at 100%, 36 private
+engine-home/machine/chaos cases, 57 private tmux cases, 969 focused/architecture/golden
+checks, 70 composed control/worker checks and seventeen large-history resume cases.
+The receipt/source distinctions above remain part of this evidence; interrupted or
+failed batches are not relabelled green.
+
+All 41 deliberately broken variants have assertion-failure evidence following their
+unchanged baselines. The nineteen variants affected by the registry/control fixture
+changes were rerun alone on `06d2ff7c8` and passed that requirement; unaffected variants
+reuse the production-identical `4a05df81a` run and the corrected `c061a7697` private
+Cancel-wiring run. The disposable worktree restored every mutated file.
+
+The independent reviewer approved exact head `06d2ff7c830a8c521b6771bd6aba3e3fc579f4bd`
+against `c7d460b1d8018ed56126c662702fd44db886d07d`. All automatic head checks, including
+`ci/required`, passed in [run 38026193103](https://github.com/autonomous-ai/openharness/actions/runs/38026193103).
+Main then advanced with #1134, which adds the separate Memories Store package and
+its report. Integration has no CLI code conflict or shared module change. Existing
+local evidence remains valid for unchanged CLI behavior; the combined head receives
+independent review and a fresh automatic CI run before merge. No extra full local
+suite is required solely for that integration.
+
+Accounting (UTC; overlapping windows are not added): golden creation started
+01:39:46; implementation and review corrections ran from the preceding merge at
+01:43:24 through the last production commit at 04:24:14. Validation started 02:19
+and the final affected mutation pass completed by 05:09. Test-only corrections ended
+05:03:11. Independent review and CI waiting overlapped that validation; the combined
+head's final review/CI and actual merge receipt are recorded in PR #1133 and the
+following progress entry. Publication remains zero.
