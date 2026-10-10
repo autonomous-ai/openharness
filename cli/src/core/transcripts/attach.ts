@@ -84,11 +84,24 @@ export function createAttach({
   const readerLoads = createReaderLoads(readerLoadWaitMs)
   const turnReplacements = createTurnReplacements(normalizers)
   const recoveryRetries = new Map<string, ReturnType<typeof setTimeout>>()
+  const pendingAttaches = new Map<string, number>()
+  const admissionStops = new Map<string, { sessionId: string }>()
+  const captureAdmissionStop = (session: RegisteredSession): (() => boolean) => {
+    const agentId = session.agentId
+    let token = admissionStops.get(agentId)
+    if (token?.sessionId !== session.sessionId) {
+      token = { sessionId: session.sessionId }
+      admissionStops.set(agentId, token)
+    }
+    const captured = token
+    return () => admissionStops.get(agentId) === captured
+  }
   const lifetimes = new Map<string, object>()
   const forget = (sessionId: string): void => {
     readerLoads.forget(sessionId)
     lifetimes.delete(sessionId)
     turnReplacements.forget(sessionId)
+    for (const [agentId, token] of admissionStops) if (token.sessionId === sessionId) admissionStops.delete(agentId)
     clearTimeout(recoveryRetries.get(sessionId))
     recoveryRetries.delete(sessionId)
   }
@@ -98,6 +111,7 @@ export function createAttach({
     return true
   }
   const beforeCancel = (session: RegisteredSession): void => {
+    admissionStops.delete(session.agentId)
     if (session.identityHold || session.interpretationHold) turnReplacements.stage(session)
     else if (session.transcriptPath || turnReplacements.retains(session)) {
       const reason = turnReplacements.cancel(session)
@@ -108,7 +122,10 @@ export function createAttach({
     turnReplacements.stage(session)
     if (setInterpretationHold(session.agentId, session.evidenceRevision, reason, true)) {
       const latest = resolve(session.agentId)!
-      announceSession(latest)
+      // The control obligation already exists. A failed status notification must
+      // never make its caller replay that Stop after a later explicit Cancel.
+      try { announceSession(latest) }
+      catch (error) { console.warn('[agent] interpretation hold notification failed', error) }
       void attachSession(latest, true).catch(error => console.warn(`[agent] recovery held: ${String(error)}`))
     }
   }
@@ -119,6 +136,14 @@ export function createAttach({
     return true
   }
   const afterStop = (session: RegisteredSession): void => { turnReplacements.stop(session) }
+  const holdAdmissionStop = (session: RegisteredSession, unmatched: boolean): boolean => {
+    // A catch hook can supply the first transcript path, or arrive before a
+    // parser exists. Retain that completion before any recovered fold starts.
+    if (!unmatched && normalizers.sessionTurnState(session.sessionId) !== undefined
+      && !session.identityHold && !session.interpretationHold && !pendingAttaches.has(session.sessionId)
+      && !relaunchMarks?.read(session.sessionId)) return false
+    return holdStop(session, true)
+  }
   /**
    * Sessions that attached before their transcript existed, so nothing was folded and nothing has ever
    * been streamed for them.
@@ -660,6 +685,8 @@ export function createAttach({
       void cursorDiscovery.add(session.sessionId).catch(error => console.error(
         `[cursor-discovery] lookup failed: ${error instanceof Error ? error.message : error}`))
     }
+    const key = session.sessionId
+    pendingAttaches.set(key, (pendingAttaches.get(key) ?? 0) + 1)
     return attaches.attach(session, reset, async () => {
       // A normal attach may have taken the import's result while this retry waited for its slot.
       if (retryCurrent && !retryCurrent()) return false
@@ -701,9 +728,13 @@ export function createAttach({
           recoveryRetries.get(session.sessionId)!.unref()
         }
       }
-    }, authority)
+    }, authority).finally(() => {
+      const pending = pendingAttaches.get(key)! - 1
+      if (pending) pendingAttaches.set(key, pending)
+      else pendingAttaches.delete(key)
+    })
   }
-  return { attachSession, attaches, neverFoldedHistory, replayedFirstTurn, forget, beforeCancel, afterStop, holdStop, holdInterpretation }
+  return { attachSession, attaches, neverFoldedHistory, replayedFirstTurn, forget, beforeCancel, afterStop, holdStop, holdAdmissionStop, holdInterpretation, captureAdmissionStop }
 }
 
 export type Attach = ReturnType<typeof createAttach>

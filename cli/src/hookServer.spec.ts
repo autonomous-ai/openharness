@@ -13,6 +13,7 @@ import { engineHooks } from './engines/hooks.js'
 let server: Server | null = null
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   if (!server) return
   await new Promise<void>((resolve) => server!.close(() => resolve()))
   server = null
@@ -40,11 +41,13 @@ describe('process-owned hook server', () => {
   it('honors engine admission before registering or announcing a prompt, including a failed check', async () => {
     const admit = vi.spyOn(engineHooks.codex, 'admit')
       .mockReturnValueOnce({ accepted: false, reason: 'codex_subagent' })
-      .mockImplementationOnce(() => { throw new Error('rollout unavailable') })
+      .mockImplementation(() => { throw new Error('rollout unavailable') })
+    const agent = { engine: 'codex', agentId: 'parent', runtimes: [{ backend: 'tmux', paneId: '%41' }], primaryRuntimeKey: 'tmux\u0000%41', processIdentity: { pid: 4242, startMarker: 'fixture', executable: '<codex>' } } as RegisteredSession
+    const byAgent = vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
     try {
       const onPromptSubmitted = vi.fn()
       const { handlers, base, headers } = await start({
-        resolveHookAgent: async () => ({ engine: 'codex', agentId: 'parent' }) as RegisteredSession,
+        resolveHookAgent: async () => agent,
         onPromptSubmitted,
       })
       for (const reason of ['codex_subagent', 'engine_hook_failed']) {
@@ -52,11 +55,11 @@ describe('process-owned hook server', () => {
           method: 'POST', headers,
           body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: 'child', hookEvent: 'UserPromptSubmit' }),
         })
-        expect(await response.json()).toEqual({ ignored: true, reason })
+        expect(await response.json()).toEqual(reason === 'engine_hook_failed' ? { pending: true } : { ignored: true, reason })
       }
       expect(handlers.onRegistered).not.toHaveBeenCalled()
       expect(onPromptSubmitted).not.toHaveBeenCalled()
-    } finally { admit.mockRestore() }
+    } finally { admit.mockRestore(); byAgent.mockRestore() }
   })
 
   it('runs targeted resolution and rejects a hook without a matching pane engine process', async () => {
@@ -126,7 +129,8 @@ describe('process-owned hook server', () => {
         new Promise<'held'>((resolve) => setTimeout(() => resolve('held'), 2_000)),
       ])
       expect(reply).not.toBe('held')
-      expect(await (reply as Response).json()).toEqual({ pending: true })
+      expect((reply as Response).status).toBe(202)
+      expect(await (reply as Response).json()).toMatchObject({ pending: false, retry: true })
       // The wait ends with no agent for it: said in the log, and nothing is answered twice.
       found(null)
       await vi.waitFor(() => expect(log).toHaveBeenCalledWith('[hooks] session- session-start ignored · no_matching_engine_process'))
@@ -167,9 +171,10 @@ describe('process-owned hook server', () => {
 
   it('treats SessionEnd as a reconciliation hint and exposes no launcher websocket endpoint', async () => {
     const onSessionEnd = vi.fn()
-    const resolveHookAgent = vi.fn(async () => ({
-      engine: 'claude', sessionId: 'session-1', agentId: 'agent-1',
-    } as never))
+    const agent = { engine: 'claude', sessionId: 'session-1', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const resolveHookAgent = vi.fn(async () => agent)
     const { base, headers } = await start({ onSessionEnd, resolveHookAgent })
     const ended = await fetch(`${base}/api/hook/session-end`, {
       method: 'POST',
@@ -240,7 +245,10 @@ describe('process-owned hook server', () => {
 
   it('hands a Stop on with when its engine ran it, and holds it as long as a test asks', async () => {
     const onTurnStop = vi.fn()
-    const resolveHookAgent = vi.fn(async () => ({ engine: 'claude', sessionId: 'real-session', agentId: 'agent-1' } as never))
+    const agent = { engine: 'claude', sessionId: 'real-session', agentId: 'agent-1', runtimes: [], processIdentity: null } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(agent)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(agent)
+    const resolveHookAgent = vi.fn(async () => agent)
     const stop = (base: string, headers: Record<string, string>) => fetch(`${base}/api/hook/turn-stop`, {
       method: 'POST', headers, body: JSON.stringify({ engine: 'claude', sessionId: 'real-session', tmuxPane: '%1', callerPid: 123 }),
     })
@@ -389,13 +397,13 @@ describe('knownTranscriptFor', () => {
     expect(knownTranscriptFor({ engine: 'claude', sessionId, transcriptPath: known }, { ...row, transcriptPath: join(root, 'other.jsonl') })).toBe(known)
   })
 
-  it('keeps the announcement if the engine lookup fails', () => {
+  it('retains a failed native correction as unavailable evidence', () => {
     const lookup = vi.spyOn(engineHooks.claude, 'transcriptFor')
       .mockImplementationOnce(() => { throw new Error('lookup failed') })
       .mockImplementationOnce(() => { throw 'lookup failed again' })
     try {
-      expect(knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toBe(announced)
-      expect(knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toBe(announced)
+      expect(() => knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toThrow()
+      expect(() => knownTranscriptFor({ sessionId, transcriptPath: announced }, row)).toThrow()
     } finally { lookup.mockRestore() }
   })
 
@@ -519,7 +527,8 @@ describe('requests must name this server', () => {
     const hook = await fetch(`${base}/api/hook/session-start`, {
       method: 'POST', headers, body: JSON.stringify({ engine: 'codex', tmuxPane: '%41', sessionId: '019fea92-e31a-7692-9c35-f616e9d458b7' }),
     })
-    expect(await hook.json()).toEqual({ pending: true })
+    expect(hook.status).toBe(202)
+    expect(await hook.json()).toMatchObject({ pending: false, retry: true })
     expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', 'status read failed')
     expect(error).toHaveBeenCalledWith('[hooks] GET /api/status failed:', expect.stringContaining('BigInt'))
     await vi.waitFor(() => expect(error).toHaveBeenCalledWith('[hooks] POST /api/hook/session-start failed:', 'resolution failed after the answer'))
@@ -702,3 +711,21 @@ describe('the device history and dismiss endpoints', () => {
     expect((await post({ confirm: true, head: 'x' })).status).toBe(400)
   })
 })
+
+
+it.each(['/api/hook/session-end', '/api/hook/turn-start', '/api/hook/tool-start', '/api/hook/turn-stop'])(
+  'refuses a binding changed during process resolution on %s', async path => {
+    const row = { engine: 'claude', sessionId: 'race-session', agentId: 'race-agent', runtimes: [], processIdentity: null,
+      evidenceRevision: 1 } as unknown as RegisteredSession
+    vi.spyOn(registry, 'bySession').mockReturnValue(row)
+    vi.spyOn(registry, 'byAgent').mockReturnValue(row)
+    const mutation = vi.fn()
+    const { base, headers } = await start({ onSessionEnd: mutation, onTurnStart: mutation, onToolStart: mutation, onTurnStop: mutation,
+      resolveHookAgent: async () => { await Promise.resolve(); row.evidenceRevision = 2; return row } })
+    const response = await fetch(`${base}${path}`, { method: 'POST', headers,
+      body: JSON.stringify({ engine: 'claude', sessionId: row.sessionId, tmuxPane: '%1', callerPid: 4242,
+        toolUseId: 'fixture-tool', toolName: 'Task' }) })
+    expect(response.status).toBe(403)
+    expect(mutation).not.toHaveBeenCalled()
+  },
+)

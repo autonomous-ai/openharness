@@ -201,7 +201,8 @@ it.each(['identity', 'interpretation', 'unbound'] as const)('does not transfer t
   writeFileSync(path, header(id))
   const result = registry.register({ engine: 'codex', sessionId: id, transcriptPath: path, tmuxPane: '%1', cwd: root })!
   expect(result.isNew).toBe(true)
-  expect(result.entry).toMatchObject({ sessionId: id, evidenceRevision: revision })
+  // The staged commit replaces the binding in place and revokes every old read.
+  expect(result.entry).toMatchObject({ sessionId: id, evidenceRevision: revision! + 1 })
   expect(result.entry.identityHold).toBeUndefined(); expect(result.entry.interpretationHold).toBeUndefined()
   const { createBinding } = await import('../core/agents/bind.js')
   const attachSession = vi.fn(async () => true)

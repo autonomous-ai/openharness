@@ -273,7 +273,7 @@ describe('registry remote display names', () => {
     const sessionsDir = join(dataDir, 'sessions')
     const transcriptPath = join(sessionsDir, 'codex-session.jsonl')
     mkdirSync(sessionsDir)
-    writeFileSync(transcriptPath, '{}\n')
+    writeFileSync(transcriptPath, JSON.stringify({ type: 'session_meta', payload: { id: 'codex-session', cwd: '/tmp/codex', source: 'cli' } }) + '\n')
 
     const { registry } = await loadRegistryModule()
     registry.load()
@@ -709,12 +709,12 @@ describe('a Command Code session without a transcript path', () => {
       engine: 'commandcode',
       sessionId: 'ae93cc89-0dff-452a-a875-33b1516bbc80',
       tmuxPane: '%9',
-      cwd: '/Users/me/Working/Tmux/Agent-6',
+      cwd: '/workspace/project',
     })
     // The file does not exist yet — that is the whole point. The watcher opens at offset 0 and chokidar
     // delivers the lines when the CLI finally writes them.
     expect(registered?.entry.transcriptPath).toBe(
-      join(dataDir, 'projects', 'users-me-working-tmux-agent-6', 'ae93cc89-0dff-452a-a875-33b1516bbc80.jsonl'),
+      join(dataDir, 'projects', 'workspace-project', 'ae93cc89-0dff-452a-a875-33b1516bbc80.jsonl'),
     )
   })
 
@@ -730,7 +730,7 @@ describe('a Command Code session without a transcript path', () => {
       engine: 'commandcode',
       sessionId: 'reported',
       tmuxPane: '%9',
-      cwd: '/Users/me/Working/Tmux/Agent-6',
+      cwd: '/workspace/project',
       transcriptPath: reported,
     })
     expect(registered?.entry.transcriptPath).toBe(reported)
@@ -1434,7 +1434,7 @@ describe('agent identity: the process owns the agent, the session is bound to it
 
       const transcriptFile = join(profile, 'sessions', 'rollout-x.jsonl')
       mkdirSync(join(transcriptFile, '..'), { recursive: true })
-      writeFileSync(transcriptFile, '{}\n')
+      writeFileSync(transcriptFile, JSON.stringify({ type: 'session_meta', payload: { id: 'sess-1', cwd: '/tmp/demo', source: 'cli' } }) + '\n')
 
       const result = registry.register({
         engine: 'codex',
@@ -1461,7 +1461,7 @@ describe('agent identity: the process owns the agent, the session is bound to it
       const rollout = (id: string, source: unknown): string => {
         const file = join(profile, 'sessions', `rollout-${id}.jsonl`)
         mkdirSync(join(file, '..'), { recursive: true })
-        writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { id, source } }) + '\n')
+        writeFileSync(file, JSON.stringify({ type: 'session_meta', payload: { id, cwd: '/tmp/demo', source } }) + '\n')
         return file
       }
       const register = (sessionId: string, transcriptPath: string) => registry.register({

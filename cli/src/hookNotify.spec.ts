@@ -279,19 +279,22 @@ describe('hook notify terminal scope', () => {
     expect(statSync(credential).isFIFO()).toBe(true)
   })
 
-  it('forwards Cursor Task/stop hooks, journals the launcher, and always prints JSON', async () => {
+  it.each(['applied', 'pending', 'duplicate'])('forwards Cursor Task/stop hooks and retains tasks unless completion was applied: %s', async acknowledgement => {
     const dir = mkdtempSync(join(tmpdir(), 'adapter-hook-cursor-'))
     tmpDirs.push(dir)
     const dataDir = join(dir, 'data')
     const cursorHome = join(dir, 'cursor')
     const requests: Array<{ url: string; body: Record<string, unknown> }> = []
+    const deliveries: unknown[] = []
     const server = createServer((req, res) => {
       if (req.method !== 'POST') { res.writeHead(405).end(); return }
       let raw = ''
       req.on('data', (chunk) => { raw += chunk.toString() })
       req.on('end', () => {
         requests.push({ url: req.url ?? '', body: JSON.parse(raw) as Record<string, unknown> })
-        res.end('{}')
+        deliveries.push([req.headers['x-harness-hook-delivery-id'], req.headers['x-harness-hook-fired-at']])
+        res.end(req.url === '/api/hook/turn-stop' && acknowledgement !== 'applied'
+          ? JSON.stringify({ [acknowledgement]: true }) : '{}')
       })
     })
     servers.push(server)
@@ -334,6 +337,7 @@ describe('hook notify terminal scope', () => {
     }])
 
     requests.splice(0)
+    deliveries.splice(0)
     await runHook({
       port: address.port,
       tmuxPane: '%21',
@@ -342,6 +346,7 @@ describe('hook notify terminal scope', () => {
       cursorHome,
       input: {
         hook_event_name: 'stop',
+        status: 'error',
         session_id: 'cursor-session',
         workspace_roots: ['/tmp/cursor-workspace'],
         cursor_version: '2026.07.20-8cc9c0b',
@@ -351,7 +356,13 @@ describe('hook notify terminal scope', () => {
       '/api/hook/session-start',
       '/api/hook/turn-stop',
     ])
-    expect(() => readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')).toThrow()
+    expect(requests.map(request => request.body.status)).toEqual(['error', 'error'])
+    expect(deliveries[0]).toEqual(deliveries[1])
+    if (acknowledgement !== 'applied') {
+      expect(() => readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')).not.toThrow()
+      expect(JSON.parse(readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8'))).toHaveLength(1)
+    }
+    else expect(() => readFileSync(join(dataDir, 'cursor-pending-tasks.json'), 'utf8')).toThrow()
   })
 
   it('keeps a Cursor session\'s tasks when its end was not answered in time', async () => {
@@ -741,12 +752,14 @@ describe('hook notify terminal scope', () => {
     writeLegacyStateFile(join(dataDir, 'registry.json'), '[]')
     let attempts = 0
     const firedAt: unknown[] = []
+    const deliveryIds: unknown[] = []
     const server = createServer((req, res) => {
       if (req.method !== 'POST') { req.resume(); res.writeHead(405).end(); return }
       req.resume()
       req.on('end', () => {
         attempts++
         firedAt.push(req.headers['x-harness-hook-fired-at'])
+        deliveryIds.push(req.headers['x-harness-hook-delivery-id'])
         if (outcome === 'disconnects' && attempts > 1) { res.destroy(); return }
         if (outcome === 'recovers' && attempts === 3) { res.end(JSON.stringify({ pending: true })); return }
         res.writeHead(outcome === 'resolving' ? 202 : 429)
@@ -764,6 +777,8 @@ describe('hook notify terminal scope', () => {
     })).toBe('{}\n')
     expect(attempts).toBe(outcome === 'recovers' ? 3 : outcome === 'disconnects' ? 2 : 4)
     expect(new Set(firedAt).size).toBe(1)
+    expect(new Set(deliveryIds).size).toBe(1)
+    expect(deliveryIds[0]).toMatch(/^[a-f0-9-]{36}$/)
     expect(readFileSync(join(dataDir, 'registry.json'), 'utf8')).toBe('[]')
     expect(() => statSync(join(dataDir, 'registry-boot'))).toThrow()
   })

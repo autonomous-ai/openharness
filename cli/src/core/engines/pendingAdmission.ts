@@ -8,9 +8,14 @@ export type AdmissionDecision<T> =
 
 export interface PendingAdmission<T> {
   order: AdmissionOrder
-  binding?: { id: string; at: number | null }
+  /** Delivery IDs distinguish prompts; ordering compares their native conversation. */
+  conversationId?: string
+  binding?: { id: string; at: number | null } | (() => { id: string; at: number | null } | undefined)
   current: () => boolean
   inspect: () => Promise<AdmissionDecision<T>>
+  /** Synchronous durable publication. Uncertainty retains this candidate and its place. */
+  commit?: (value: T) => AdmissionDecision<T>
+  /** Optional notification after durable acceptance; never the publication itself. */
   accept: (value: T) => void | Promise<void>
   reject: (reason: string) => void | Promise<void>
   held: (reason: string) => void | Promise<void>
@@ -25,7 +30,14 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
   const order = createAdmissionOrder(isProcessCurrent)
   let closed = false
   const current = (key: string, job: Job) => !closed && !!jobs.get(key)?.includes(job) && job.request.current()
-  const selected = (key: string) => jobs.get(key)?.at(-1)
+  const conversation = (job: Job) => job.request.conversationId ?? job.id
+  const selected = (key: string) => {
+    const queue = jobs.get(key)
+    const newest = queue?.at(-1)
+    // Distinct prompts for one conversation retain delivery order. A newer
+    // conversation still gets first chance to establish or refuse its ownership.
+    return newest && queue!.find(job => conversation(job) === conversation(newest))
+  }
   // Known older intents wait behind the greatest native timestamp. Headerless and
   // equal-time candidates remain incomparable, so each must get a chance to prove
   // delegation or cancellation before another can publish.
@@ -36,6 +48,7 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
   }
   const clearTimer = (job: Job) => { if (job.timer) { clearTimeout(job.timer); job.timer = null } }
   const discard = (key: string, job: Job) => {
+    clearTimer(job)
     const queue = jobs.get(key)
     if (!queue) return
     const index = queue.indexOf(job)
@@ -49,12 +62,16 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
   const run = async (key: string, job: Job, retry = false): Promise<void> => {
     running.add(key)
     try {
+      // One lookup owns the key. A group rotation or a new prompt may select an
+      // already-held job; none of its old timers may start a concurrent lookup.
+      for (const pending of jobs.get(key)!) clearTimer(pending)
       if (retry && current(key, job)) {
-        const peer = leaders(key, job).find(other => other !== job)
+        const peer = leaders(key, job).find(other => conversation(other) !== conversation(job))
         if (peer) {
           const queue = jobs.get(key)!
-          queue.splice(queue.indexOf(peer), 1); queue.push(peer)
-          job = peer
+          const group = queue.filter(other => conversation(other) === conversation(peer))
+          jobs.set(key, [...queue.filter(other => conversation(other) !== conversation(peer)), ...group])
+          job = group[0]!
         }
       }
       await inspect(key, job)
@@ -70,21 +87,27 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
     }
   }
   const inspect = async (key: string, job: Job): Promise<void> => {
-    if (!current(key, job)) { discard(key, job); return }
-    order.observe(key, job.request.order.scope, job.request.binding)
+    if (!current(key, job)) { discard(key, job); notified(job.request.reject('stale_hook')); return }
+    order.observe(key, job.request.order.scope, typeof job.request.binding === 'function' ? job.request.binding() : job.request.binding)
     let decision: AdmissionDecision<unknown>
-    try { decision = await job.request.inspect() } catch {
-      decision = { kind: 'hold', reason: 'The session source could not be read.' }
+    try { decision = await job.request.inspect() } catch (error) {
+      decision = { kind: 'hold', reason: `The session source could not be read. ${error instanceof Error ? error.message : 'Native evidence unavailable.'}`.slice(0, 1024) }
     }
-    if (!current(key, job)) { discard(key, job); return }
+    if (!current(key, job)) { discard(key, job); notified(job.request.reject('stale_hook')); return }
     // A newer unverified hook pauses this candidate; it does not erase it. Hermes
     // children use their parent's process, and a rejected child must leave the parent pending.
     if (selected(key) !== job && decision.kind !== 'reject') return
-    const status = order.status(key, job.id, job.request.order)
+    const status = order.status(key, conversation(job), job.request.order)
     if (status === 'older') decision = { kind: 'reject', reason: 'stale_hook' }
     else if (decision.kind === 'accept') {
-      const unresolved = leaders(key, job).some(other => other !== job)
-      if (status === 'ambiguous' || unresolved) decision = { kind: 'hold', reason: 'Waiting for unambiguous Hermes hook order; keeping the current conversation.' }
+      const unresolved = leaders(key, job).some(other => other !== job && conversation(other) !== conversation(job))
+      if (status === 'ambiguous' || unresolved) decision = { kind: 'hold', reason:
+        'Waiting for unambiguous native hook order; keeping the current conversation.'
+        + (job.request.order.firedAt === undefined ? ' This hook has no native timestamp; reload or restart the engine with updated hooks.' : '') }
+    }
+    if (decision.kind === 'accept' && job.request.commit) {
+      try { decision = job.request.commit(decision.value) }
+      catch (error) { decision = { kind: 'hold', reason: `Waiting for durable hook admission: ${error instanceof Error ? error.message : 'commit unavailable'}`.slice(0, 1024) } }
     }
     if (decision.kind === 'hold') {
       job.timer = setTimeout(() => { job.timer = null; void run(key, job, true) }, retryMs)
@@ -96,8 +119,8 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
       return
     }
     if (decision.kind === 'accept') {
-      order.accept(key, job.id, job.request.order)
-      jobs.delete(key)
+      order.accept(key, conversation(job), job.request.order)
+      discard(key, job)
       notified(job.request.accept(decision.value))
     } else {
       discard(key, job)

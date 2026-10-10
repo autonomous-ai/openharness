@@ -217,7 +217,7 @@ export async function agentFrame(
     closePlan: s.closePlan ? { state: s.closePlan.state, ...(s.closePlan.detail ? { detail: s.closePlan.detail } : {}) } : null,
     closeSupported: true,
     launch: s.launch ?? { state: 'ready' },
-    ...((s.identityHold || s.interpretationHold) ? { identityHold: s.identityHold || s.interpretationHold } : {}),
+    ...((s.identityHold || s.interpretationHold || s.admissionHold) ? { identityHold: s.identityHold || s.interpretationHold || s.admissionHold } : {}),
     createdAt: new Date(s.registeredAt).toISOString(),
     updatedAt: new Date(updatedAt).toISOString(),
     // Null, never omitted, for the reason the module doc gives: a push without the key would erase

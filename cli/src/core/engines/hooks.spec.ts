@@ -50,8 +50,10 @@ const hint = (paneId: string) => ({ backend: 'tmux' as const, paneId })
 function setup(onPane: Record<string, RegisteredSession> = {}, over: Partial<EngineHookDeps> = {}) {
   const deps: EngineHookDeps = {
     tmuxBackend: {},
+    syncSession: vi.fn(),
     agentReconciler: { triggerHint: vi.fn(async () => true), trigger: vi.fn(async () => true) } as unknown as EngineHookDeps['agentReconciler'],
-    registry: { byRuntimeEngine: vi.fn((runtime: { paneId: string }) => onPane[runtime.paneId]) } as unknown as EngineHookDeps['registry'],
+    registry: { byRuntimeEngine: vi.fn((runtime: { paneId: string }) => onPane[runtime.paneId]),
+      byAgent: vi.fn((id: string) => Object.values(onPane).find(row => row.agentId === id)) } as unknown as EngineHookDeps['registry'],
     ...over,
   }
   return { deps, hooks: createEngineHooks(deps) }
@@ -72,7 +74,7 @@ describe('which agent a hook belongs to', () => {
     const { deps, hooks } = setup({ '%1': a1 })
     vi.mocked(processRows).mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
     const onWait = vi.fn()
-    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300, onWait })).toBe(a1)
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300, onWait })).toEqual(a1)
     // Matched at once: nothing to wait for, and the hook is answered with its agent.
     expect(onWait).not.toHaveBeenCalled()
     expect(deps.agentReconciler.triggerHint).toHaveBeenCalledWith({ backend: 'tmux', paneId: '%1' }, 'claude')
@@ -80,12 +82,33 @@ describe('which agent a hook belongs to', () => {
     expect(console.log).not.toHaveBeenCalled()
   })
 
+  it('does not give a delayed hook to a replacement with the same PID', async () => {
+    const original = agent('original', 100)
+    const replacement = { ...agent('replacement', 100), processIdentity: { pid: 100, startMarker: 'replacement' } } as RegisteredSession
+    const panes = { '%1': original }
+    vi.mocked(processRows).mockResolvedValueOnce(tree([300, 100], [100, 1]) as never)
+    const { hooks } = setup(panes, { agentReconciler: {
+      triggerHint: vi.fn(async () => { panes['%1'] = replacement; return true }), trigger: vi.fn(),
+    } as unknown as EngineHookDeps['agentReconciler'] })
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toBeNull()
+  })
+
+  it('copies the arriving process identities before asynchronous reconciliation changes its table', async () => {
+    const original = agent('original', 100)
+    const rows = tree([300, 100], [100, 1])
+    vi.mocked(processRows).mockResolvedValueOnce(rows as never)
+    const { hooks } = setup({ '%1': original }, { agentReconciler: {
+      triggerHint: vi.fn(async () => { await Promise.resolve(); rows[1]!.startMarker = 'replacement'; return true }), trigger: vi.fn(),
+    } as unknown as EngineHookDeps['agentReconciler'] })
+    expect(await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(original)
+  })
+
   it('reads the table again when the one in flight began before the hook\'s own process, and matches it', async () => {
     const a1 = agent('a1', 100)
     vi.mocked(processRows)
       .mockResolvedValueOnce(tree([200, 100], [100, 1]) as never)
       .mockResolvedValueOnce(tree([300, 200], [200, 100], [100, 1]) as never)
-    expect(await setup({ '%1': a1 }).hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toBe(a1)
+    expect(await setup({ '%1': a1 }).hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(a1)
     expect(processRows).toHaveBeenCalledTimes(2)
     expect(console.log).not.toHaveBeenCalled()
   })
@@ -103,7 +126,7 @@ describe('which agent a hook belongs to', () => {
   it('a Cursor agent on the pane alone, saying the caller is outside its process tree', async () => {
     const c1 = { ...agent('cursor-1'), engine: 'cursor' } as RegisteredSession
     vi.mocked(processRows).mockResolvedValueOnce(tree([300, 1]) as never)
-    expect(await setup({ '%1': c1 }).hooks.resolveHookAgent({ engine: 'cursor', runtimeHints: [hint('%1')], callerPid: 300 })).toBe(c1)
+    expect(await setup({ '%1': c1 }).hooks.resolveHookAgent({ engine: 'cursor', runtimeHints: [hint('%1')], callerPid: 300 })).toEqual(c1)
     expect(console.log).toHaveBeenCalledWith('[hooks] cursor hook accepted on runtime evidence alone · agent=cursor-1 · caller=300 is outside that engine\'s process tree')
   })
 
@@ -132,7 +155,7 @@ describe('which agent a hook belongs to', () => {
       expect(admitted).not.toHaveBeenCalled()
       commit()
       await finished
-      expect(await resolution).toBe(['committed', 'no acknowledgement'].includes(outcome) ? c1 : null)
+      expect(await resolution).toEqual(['committed', 'no acknowledgement'].includes(outcome) ? c1 : null)
       vi.mocked(processRows).mockReset().mockResolvedValue([])
     },
   )
@@ -463,4 +486,36 @@ describe('installing every engine\'s hooks', () => {
     expect(console.warn).toHaveBeenCalledWith('[hooks] grok install skipped · settings mid-write')
     for (const install of installs) expect(install).toHaveBeenCalledTimes(1)
   })
+})
+
+
+it('returns an immutable authority snapshot across the resolver continuation', async () => {
+  const row = agent('original', 100)
+  row.runtimes = [{ backend: 'tmux', paneId: '%1' }]
+  vi.mocked(processRows).mockResolvedValueOnce(tree([300, 100], [100, 1]) as never)
+  const { hooks } = setup({}, { registry: { byAgent: vi.fn(), byRuntimeEngine: () => {
+    queueMicrotask(() => {
+      row.processIdentity!.startMarker = 'replacement'
+      row.runtimes[0]!.paneId = '%2'
+    })
+    return row
+  } } })
+  const result = await hooks.resolveHookAgent({ engine: 'claude', runtimeHints: [hint('%1')], callerPid: 300 })
+  expect(row.processIdentity!.startMarker).toBe('replacement')
+  expect(result?.processIdentity?.startMarker).toBe('m')
+  expect(result?.runtimes[0]?.paneId).toBe('%1')
+  expect(result).not.toBe(row)
+})
+
+it('publishes admission holds without changing binding authority and contains removed rows', () => {
+  const row = agent('original', 100)
+  row.evidenceRevision = 17
+  const { hooks, deps } = setup({ '%1': row })
+  hooks.onAdmissionHeld('original', 'Waiting for complete native evidence.')
+  expect(row.admissionHold).toBe('Waiting for complete native evidence.')
+  expect(row.evidenceRevision).toBe(17)
+  hooks.onAdmissionHeld('original', undefined)
+  expect(row.admissionHold).toBeUndefined()
+  hooks.onAdmissionHeld('removed', 'Waiting')
+  expect(deps.syncSession).toHaveBeenCalledTimes(2)
 })
