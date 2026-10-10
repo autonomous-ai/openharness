@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 import * as C from './core.js'
 import type { Rng } from './core.js'
-import { STRICT_DOWN_TYPES, encryptDownFrameFor } from './applicationFrames.js'
+import { STRICT_DOWN_TYPES, encryptDownFrameFor, encryptRpcResult } from './applicationFrames.js'
 
 // Deterministic RNG for reproducible key material in tests.
 function seeded(seed: number): Rng {
@@ -134,8 +134,8 @@ describe('e2ee core — codes + fingerprint + classification', () => {
     expect(C.isEncryptedDownType('agents_list')).toBe(true)
     expect(C.isEncryptedDownType('agent_update')).toBe(true)
     expect(C.isEncryptedDownType('agent_create_status')).toBe(true)
-    expect(C.isEncryptedDownType('agent_create_cancel')).toBe(true)
-    expect(C.isEncryptedRpcResultType('agent_create_cancel_result')).toBe(true)
+    expect(encryptDownFrameFor('agent_create_cancel', { strictDown: false })).toBe(true)
+    expect(encryptRpcResult('agent_create_cancel_result')).toBe(true)
     expect(C.isEncryptedRpcResultType('agent_create_status_result')).toBe(true)
     // A machine's account usage names what the person spends and on whose subscription. Missing from
     // either list the request would not fail — it would time out, which is harder to find.

@@ -281,12 +281,18 @@ export class AgentCreationReceipts {
   }
 
   private intentStatus(id: string, receipt: IntentReceipt, live = this.inFlight.has(id)): AgentCreationStatus {
+    const known = this.intentResults.get(id)
     if ('cancelled' in receipt) {
-      if (this.claim(id) || this.readIntentPart(this.intentFile(id, 'result'))) throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+      if (known || this.claim(id) || this.readIntentPart(this.intentFile(id, 'result'))) throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
       return { state: 'cancelled' }
     }
     const claim = this.claim(id)
     const result = this.readIntentPart<IntentResult>(this.intentFile(id, 'result'))
+    // A completed effect cannot become pending or cancelled when its disk
+    // evidence disappears. Its retained result still requires the exact claim.
+    if (known && (!claim || claim.kind !== 'dispatch' || known.fingerprint !== claim.fingerprint || known.token !== claim.token)) {
+      throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
+    }
     if (!claim) {
       if (result) throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
       return { state: 'pending', held: receipt.held }
@@ -295,10 +301,6 @@ export class AgentCreationReceipts {
     if (claim.kind === 'cancel') {
       if (result) throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
       return { state: 'cancelled' }
-    }
-    const known = this.intentResults.get(id)
-    if (known && (known.fingerprint !== claim.fingerprint || known.token !== claim.token)) {
-      throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
     }
     if (result) {
       if (result.fingerprint !== claim.fingerprint || result.token !== claim.token || !validOutcome(result.outcome)
@@ -384,9 +386,10 @@ export class AgentCreationReceipts {
     const file = this.file(id)
     const unsaved = this.unsaved.get(id)
     if (unsaved) return unsaved
+    const completedIntent = this.intentResults.has(id)
     try { secureStateDirectory(this.directory, false) }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !completedIntent) return null
       throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
     }
     try {
@@ -400,7 +403,7 @@ export class AgentCreationReceipts {
         throw new Error('Invalid creation intent')
       }
       const outcome = value.version === 1 ? value.outcome : undefined
-      if (this.readIntentPart(this.intentFile(id, 'claim')) || this.readIntentPart(this.intentFile(id, 'result'))) {
+      if (completedIntent || this.readIntentPart(this.intentFile(id, 'claim')) || this.readIntentPart(this.intentFile(id, 'result'))) {
         throw new Error('Legacy receipt has conflicting intent evidence')
       }
       if (value.version !== 1 || !/^[a-f0-9]{64}$/.test(value.fingerprint ?? '') || !outcome ||
@@ -413,7 +416,7 @@ export class AgentCreationReceipts {
       }
       return value as Receipt
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT'
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT' && !completedIntent
         && !this.readIntentPart(this.intentFile(id, 'claim')) && !this.readIntentPart(this.intentFile(id, 'result'))) return null
       throw new AgentCreationReceiptError('CREATION_STORAGE_FAILED')
     }

@@ -52,8 +52,31 @@ microbenchmarks, not total agent startup or end-to-end responsiveness measuremen
 The extra immutable intent/claim/result and directory syncs add measurable local
 I/O latency. RSS changes are noisy deltas, not peak-memory bounds. This change
 makes no speedup claim. Recovery keeps four preparations, 128 retry IDs and a
-shared 20 ms per-pass work budget; the private crash test separately checks
+shared 20 ms per-pass work budget, checked between operations; a single synchronous
+filesystem operation can exceed it. The private crash test separately checks
 readiness within 15 seconds and working unrelated sessions during the outage.
+
+The [anonymous results](2026-10-10-durable-model-requests-cost.json) retain all six
+runs. For 60 sorted samples, the reported median is the upper middle sample at
+index 30 and p95 is the sample at index 57. The measurement script is
+[`receipt-cost.mjs`](../../cli/scripts/handoff-2026-10-08/receipt-cost.mjs).
+From the repository root, prepare both implementations with the same installed
+CLI dependencies, then alternate these commands three times on an otherwise
+quiet host (Node 22.23.2 for the recorded measurement):
+
+```sh
+mkdir -p .harness/receipt-cost-before
+git show 71f42b852:cli/src/lib/agentCreationReceipt.ts > .harness/receipt-cost-before/agentCreationReceipt.ts
+git show 71f42b852:cli/src/lib/secureState.ts > .harness/receipt-cost-before/secureState.ts
+cli/node_modules/.bin/esbuild .harness/receipt-cost-before/agentCreationReceipt.ts --bundle --platform=node --format=esm --outfile=.harness/receipt-before.mjs
+cli/node_modules/.bin/esbuild cli/src/lib/agentCreationReceipt.ts --bundle --platform=node --format=esm --outfile=.harness/receipt-after.mjs
+TZ=UTC TMPDIR=/tmp node cli/scripts/handoff-2026-10-08/receipt-cost.mjs .harness/receipt-before.mjs legacy
+TZ=UTC TMPDIR=/tmp node cli/scripts/handoff-2026-10-08/receipt-cost.mjs .harness/receipt-after.mjs intent
+```
+
+The recorded v2 source was `3f960b4db`; the subsequent receipt-evidence correction
+does not change the healthy benchmark path. Each invocation owns and removes only
+its newly created temporary fixture directory.
 
 ## Accounting
 

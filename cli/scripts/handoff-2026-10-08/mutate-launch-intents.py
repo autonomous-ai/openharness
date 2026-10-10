@@ -11,7 +11,7 @@ receipt = 'src/lib/agentCreationReceipt.spec.ts'
 requests = 'src/core/agents/launches.spec.ts'
 scheduler = 'src/core/agents/pendingLaunches.spec.ts'
 mutations = [
-    ('drop resolved model', 'src/core/agents/launches.ts', 'input.grid = target', 'input.grid = null', golden),
+    ('drop resolved model', 'src/core/agents/launches.ts', '    input.grid = target\n    return () => executeCreate', '    input.grid = null\n    return () => executeCreate', golden),
     ('drop Codex profile', 'src/core/agents/launches.ts', '      codexHome,\n      dsh,', '      codexHome: null,\n      dsh,', golden),
     ('wrong project label', 'src/core/agents/launches.ts', '?? engineLabel(input.engine)', "?? 'Wrong fixture label'", golden),
     ('lose created identity', 'src/core/agents/launches.ts', 'byAgent(status.agentId)', "byAgent('missing-created-agent')", golden),
@@ -20,6 +20,7 @@ mutations = [
     ('forget intent identity after await', 'src/lib/agentCreationReceipt.ts', 'const current = this.read(id)', 'const current = saved', receipt),
     ('forget directory identity', 'src/lib/agentCreationReceipt.ts', '      directory.verify()', '      void directory', receipt),
     ('hide conflicting disk result', 'src/lib/agentCreationReceipt.ts', '    if (result) {\n      if (result.fingerprint', '    if (known) return known.outcome\n    if (result) {\n      if (result.fingerprint', receipt),
+    ('forget completion before missing evidence', 'src/lib/agentCreationReceipt.ts', 'const completedIntent = this.intentResults.has(id)', 'const completedIntent = false', receipt),
     ('drop cancellation claim', 'src/lib/agentCreationReceipt.ts', "this.publish(this.intentFile(id, 'claim'), { fingerprint: receipt.fingerprint, token: randomUUID(), kind: 'cancel' }, true)", 'void receipt', receipt),
     ('unbounded retry window', 'src/core/agents/pendingLaunches.ts', 'const windowSize = 128', 'const windowSize = 1_000_000', scheduler),
     ('omit retry read budget', 'src/core/agents/pendingLaunches.ts', 'started < 4 && !stopped && performance.now() - began < 20', 'started < 4 && !stopped', scheduler),

@@ -258,7 +258,7 @@ describe('recoverable undispatched creation intents', () => {
     expect(effect).not.toHaveBeenCalled()
   })
 
-  it.each(['claim-token', 'result-token', 'outcome', 'preexisting'])('does not hide conflicting %s evidence beneath an unsaved local outcome', async conflict => {
+  it.each(['claim-token', 'result-token', 'outcome', 'preexisting', 'missing-claim', 'cancel-kind', 'missing-all', 'missing-directory', 'tombstone', 'legacy'])('does not hide conflicting %s evidence beneath an unsaved local outcome', async conflict => {
     const { directory, receipts } = fixture()
     const effect = vi.fn(async () => {
       if (conflict === 'preexisting') {
@@ -274,11 +274,22 @@ describe('recoverable undispatched creation intents', () => {
       const claimFile = join(directory, `${id}.json.claim`)
       const claim = JSON.parse(readFileSync(claimFile, 'utf8'))
       if (conflict === 'claim-token') writeFileSync(claimFile, JSON.stringify({ ...claim, token: 'other-claim' }))
+      else if (conflict === 'cancel-kind') writeFileSync(claimFile, JSON.stringify({ ...claim, kind: 'cancel' }))
+      else if (['missing-claim', 'missing-all', 'tombstone', 'legacy'].includes(conflict)) {
+        rmSync(claimFile)
+        if (conflict === 'missing-all') rmSync(join(directory, `${id}.json`))
+        if (conflict === 'tombstone') writeFileSync(join(directory, `${id}.json`), JSON.stringify({ version: 2, cancelled: true }))
+        if (conflict === 'legacy') writeFileSync(join(directory, `${id}.json`), JSON.stringify({ version: 1, fingerprint, outcome: { state: 'pending' } }))
+      }
+      else if (conflict === 'missing-directory') rmSync(directory, { recursive: true })
       else writeFileSync(join(directory, `${id}.json.result`), JSON.stringify({ ...claim,
         token: conflict === 'result-token' ? 'other-claim' : claim.token,
         outcome: conflict === 'outcome' ? { state: 'created', agentId: 'different-agent' } : created }), { mode: 0o600 })
     }
     expect(() => receipts.status(id)).toThrow('CREATION_STORAGE_FAILED')
+    await expect(async () => await receipts.runIntent(id, fingerprint, request, held, async () => effect)).rejects.toThrow('CREATION_STORAGE_FAILED')
+    await expect(async () => await receipts.run(id, fingerprint, effect)).rejects.toThrow('CREATION_STORAGE_FAILED')
+    expect(() => receipts.cancelIntent(id)).toThrow('CREATION_STORAGE_FAILED')
     expect(effect).toHaveBeenCalledOnce()
   })
 
