@@ -7,11 +7,16 @@
  * changed — an agent saved a memory, the About You was rebuilt, you finished a turn somewhere.
  */
 
+import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { homes } from './lib/agents.mjs'
+import { writeAbout } from './lib/about.mjs'
+import { checkAutobuild } from './lib/autobuild.mjs'
+import { deliver } from './lib/deliver.mjs'
+import { askMachines, merge, syncAbout, syncChoice } from './lib/fleet.mjs'
 import { search } from './lib/sessions.mjs'
 import { closeIndex, fingerprint, sessionIndex, snapshot as takeSnapshot, writeVerdict } from './lib/state.mjs'
 
@@ -26,9 +31,23 @@ const ASSETS = {
 }
 const STOP = new Set(['the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'you', 'are', 'not', 'but', 'use', 'when', 'what', 'how', 'why', 'all', 'any', 'one', 'its', 'has', 'have', 'was', 'were', 'out', 'new', 'via', 'per'])
 
-export function createViewer({ workspace, port = 0, intervalMs = 4000, env = process.env, home, now = () => Date.now(), snapshot = takeSnapshot } = {}) {
+/**
+ * `fleet` is the bridge to the daemon (lib/bridge.mjs: `machinesReport`, `request`, `send`). Given, the
+ * pane also shows every other machine's memories, keeps About You the same on all of them, and asks its
+ * own agent to build About You when one is due (lib/autobuild.mjs). Without it — tests, a pane started
+ * by hand — the pane reads this computer only and asks nothing of anyone.
+ */
+export function createViewer({ workspace, port = 0, intervalMs = 4000, env = process.env, home, now = () => Date.now(), snapshot = takeSnapshot, fleet = null, fleetIntervalMs = 60_000, idleFleetIntervalMs = 10 * 60_000 } = {}) {
   const clients = new Set()
+  // The one write the pane can make — the About You switch — needs this token, served inside the page:
+  // another page in the browser cannot read it, so it cannot flip the switch.
+  const token = randomBytes(24).toString('base64url')
   let current = null
+  let local = null
+  let machines = null // { here, remotes, at } from the last ask
+  let fleetTimer = null
+  let asking = null
+  let refreshedAt = 0
   let printed = ''
   let stopped = false
   let timer = null
@@ -50,8 +69,17 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     if (looking) return looking.then(() => current)
     looking = (async () => {
       try {
-        const next = await snapshot({ env, home, now: now() })
-        const print = fingerprint(next)
+        local = await snapshot({ env, home, now: now() })
+        // Delivery on and a copy out of date (About You edited by hand, or a newer Memories writes copies
+        // differently): bring them up to date here, at most every ten minutes. Not a choice, so the
+        // person's on/off stays as it is.
+        const stale = local.delivery?.on && local.delivery.agents?.some((agent) => agent.delivered && !agent.current)
+        if (stale && now() - refreshedAt > 10 * 60_000) {
+          refreshedAt = now()
+          try { deliver('refresh', { env, home }); local = await snapshot({ env, home, now: now() }) } catch { /* the pane shows the older copy */ }
+        }
+        const next = machines ? merge(local, machines.remotes, machines.here) : { ...local, machines: [] }
+        const print = fingerprint(next) + JSON.stringify(next.machines.map((machine) => [machine.id, machine.ok, machine.error]))
         const changed = print !== printed
         current = next
         printed = print
@@ -63,6 +91,59 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     })()
     try { await looking } finally { looking = null }
     return current
+  }
+
+  /**
+   * The other machines, About You across them, and the build when one is due. Every minute while the
+   * pane is open; every ten minutes while it is not, so About You still reaches the other machines and
+   * gets rebuilt while the Memories harness sits in a background tab.
+   */
+  async function tend() {
+    if (!fleet || stopped) return
+    if (asking) return asking
+    asking = (async () => {
+      try {
+        const asked = await askMachines({ machinesReport: fleet.machinesReport, request: fleet.request })
+        machines = { ...asked, at: now() }
+        if (!local) await look()
+        const synced = await syncAbout({ local, remotes: machines.remotes, here: machines.here, request: fleet.request,
+          writeHere: (text) => { writeAbout(homes(env, home).memory, text); deliver(local?.delivery?.choseOff ? 'refresh' : 'on', { env, home }) } })
+        const chose = await syncChoice({ local, remotes: machines.remotes, here: machines.here, request: fleet.request,
+          applyHere: (on, at) => deliver(on ? 'on' : 'off', { env, home, choiceAt: at }) })
+        if (synced.sentTo.length || chose.sentTo.length || chose.appliedHere) machines = { ...(await askMachines({ machinesReport: fleet.machinesReport, request: fleet.request })), at: now() }
+        await look()
+        if (machines.here) await checkAutobuild({ snapshot: local, workspace, local: machines.here.id, request: fleet.request, send: fleet.send, now: now() })
+      } catch { /* the next round asks again; this computer's memories still show */ }
+    })()
+    try { await asking } finally { asking = null }
+  }
+
+  const scheduleFleet = () => {
+    clearTimeout(fleetTimer); fleetTimer = null
+    if (!fleet || stopped) return
+    fleetTimer = setTimeout(async () => { await tend(); scheduleFleet() }, clients.size ? fleetIntervalMs : idleFleetIntervalMs)
+  }
+
+  /**
+   * The switch: on or off here now, then on every other machine that answers (its own daemon applies it
+   * with this choice's time). A machine that cannot take it yet gets it at the next round after it can.
+   */
+  async function setDelivery(on) {
+    const at = now()
+    let here
+    try { here = deliver(on ? 'on' : 'off', { env, home, choiceAt: at }) } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+    const sentTo = []
+    const failed = []
+    if (fleet && machines) {
+      for (const remote of machines.remotes.filter((r) => r.snapshot)) {
+        try { await fleet.request(remote.id, 'memory_deliver', { on, choiceAt: at }); sentTo.push(remote.name) }
+        catch (error) { failed.push({ name: remote.name, error: error instanceof Error ? error.message : String(error) }) }
+      }
+    }
+    await look()
+    return { ok: here.results.every((r) => r.ok), on, results: here.results, sentTo, failed }
   }
 
   // Looks again only while a pane is open: a viewer nobody is watching reads nothing.
@@ -89,7 +170,18 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
       // connection slots open. Browsers say where a request comes from; only this page's own count.
       const site = req.headers['sec-fetch-site']
       if (site && site !== 'same-origin' && site !== 'none') { json(res, 403, { error: 'Only this pane may ask.' }); return }
-      if (!['GET', 'HEAD'].includes(req.method)) { res.setHeader('allow', 'GET, HEAD'); json(res, 405, { error: 'This pane only reads.' }); return }
+      // The one write: the About You switch. Everything else in this pane only reads.
+      if (req.method === 'POST' && url.pathname === '/api/deliver') {
+        if (req.headers['x-memories-token'] !== token) { json(res, 403, { error: 'This pane did not mint that token.' }); return }
+        let body = ''
+        for await (const chunk of req) { body += chunk; if (body.length > 1024) { json(res, 413, { error: 'Too large.' }); return } }
+        let wanted
+        try { wanted = JSON.parse(body || '{}').on } catch { json(res, 400, { error: 'Send JSON.' }); return }
+        if (typeof wanted !== 'boolean') { json(res, 400, { error: 'Say on: true or on: false.' }); return }
+        json(res, 200, await setDelivery(wanted))
+        return
+      }
+      if (!['GET', 'HEAD'].includes(req.method)) { res.setHeader('allow', 'GET, HEAD, POST'); json(res, 405, { error: 'This pane only reads, but for its switch.' }); return }
 
       if (url.pathname === '/health') { json(res, 200, { ok: true }); return }
       if (url.pathname === '/api/state') {
@@ -121,12 +213,16 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
         await look()
         res.write(`event: snapshot\ndata: ${JSON.stringify(current)}\n\n`)
         if (!timer) schedule()
+        // A pane just opened: the other machines now, not at the next idle round.
+        if (fleet && (!machines || now() - machines.at > fleetIntervalMs)) { void tend().then(scheduleFleet) }
         return
       }
 
       const asset = ASSETS[url.pathname]
       if (!asset) { json(res, 404, { error: 'Not found' }); return }
-      const content = await readFile(join(PACKAGE, 'viewer', asset[0]), 'utf8')
+      let content = await readFile(join(PACKAGE, 'viewer', asset[0]), 'utf8')
+      // The token goes in a meta tag, not an inline script: the policy stays script-src 'self'.
+      if (asset[0] === 'index.html') content = content.replace('__MEMORIES_TOKEN__', token)
       res.writeHead(200, {
         ...headers,
         'content-type': asset[1],
@@ -144,18 +240,23 @@ export function createViewer({ workspace, port = 0, intervalMs = 4000, env = pro
     server,
     look,
     snapshot: () => current,
+    tend,
+    token,
+    setDelivery,
     start: () => new Promise((ok, fail) => {
       server.once('error', fail)
       server.listen(port, '127.0.0.1', () => {
         server.removeListener('error', fail)
-        void look()
+        void look().then(() => tend()).then(scheduleFleet)
         heartbeat = setInterval(() => { for (const client of clients) client.write(': pulse\n\n') }, 20_000)
         ok(server.address().port)
       })
     }),
     close: async () => {
-      stopped = true; clearTimeout(timer); clearInterval(heartbeat)
+      stopped = true; clearTimeout(timer); clearTimeout(fleetTimer); clearInterval(heartbeat)
       await looking?.catch(() => {})
+      await asking?.catch(() => {})
+      fleet?.close?.()
       for (const client of clients) client.end()
       server.closeAllConnections()
       await new Promise((done) => server.close(done))
@@ -168,7 +269,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const workspace = resolve(process.env.HARNESS_WORKSPACE || process.cwd())
   const port = Number(process.env.HARNESS_VIEWER_PORT || 0)
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('HARNESS_VIEWER_PORT must be a port number.')
-  const viewer = createViewer({ workspace, port })
+  const bridge = await import('./lib/bridge.mjs')
+  const fleet = { machinesReport: () => bridge.machinesReport(), request: bridge.request, send: bridge.send, close: bridge.closeBridges }
+  const viewer = createViewer({ workspace, port, fleet })
   console.log(`[memories] http://127.0.0.1:${await viewer.start()}/`)
   const close = () => viewer.close().then(() => process.exit(0))
   process.once('SIGINT', close); process.once('SIGTERM', close)

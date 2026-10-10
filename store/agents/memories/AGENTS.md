@@ -15,12 +15,17 @@ Use `"$MEM_CLI"` (the `mem` command) to read:
 - `mem activity` — messages per agent and per folder.
 - `mem about` — the About You profile; `mem about write < file` replaces it.
 - `mem deliver [status|on|off]` — About You in every new session of every agent on this computer.
+  Other machines get the same About You by themselves (the pane keeps them in step); never copy it by hand.
 
 Every command takes `--json`.
 
 What people ask for here:
 
-1. **Build or update About You.** Follow the `about-you` skill. It is the one thing you write.
+1. **Build or update About You.** Follow the `about-you` skill. The pane sends this request by itself
+   when one is due ("Build my About You, and use it in every agent" — the first time, then after enough
+   new messages, at most daily), as if the person had typed it. Do it without asking questions, and
+   when the request says "use it in every agent", finish with `mem deliver on`. A request without those
+   words means the person turned delivery off: update the profile only.
 2. **Find something.** "What did I decide about releases?", "what do my agents know about this repo?"
    Search memories and conversations, then answer briefly, naming where each fact came from (the agent
    and memory title, or the conversation and its date).

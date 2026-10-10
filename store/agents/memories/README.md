@@ -22,31 +22,42 @@ for a moment. Memory files are shown as text; nothing in them can run in the pan
 
 ## About You
 
-Ask the agent: **build my About You**. It reads your own messages across every agent and what your
-agents saved about you, keeps only what recurs or what you stated as a rule, and writes a short
-profile to `~/.harness/memory/about-you.md`, every line with its sources. It runs only when you ask,
-with the agent in this pane. The previous version is kept as `about-you.prev.md`.
+A short profile of how you work, built from your own words across every agent, every line with its
+sources. It builds by itself: while a Memories harness is open and its agent is idle, the pane asks
+that agent to build it — the first time, then again after about 200 new messages, at most once a day
+— as a turn you see in the chat. So it runs on the agent and model you picked for this harness, and
+only while one is open: close the harness and nothing builds. You can also just ask: **build my
+About You**. It lives at `~/.harness/memory/about-you.md`; the previous version is kept beside it.
 
-## In every agent
+## In every agent: the switch
 
-Ask the agent: **use my About You in every agent** (`mem deliver on`). Every new session then starts
-with it:
+**About You in your agents** at the top of the pane turns it on or off. On, every new session of each
+agent starts with it:
 
 | Agent | How it gets About You |
 |---|---|
 | Claude Code | a SessionStart hook in `~/.claude/settings.json` that prints the file as it is now |
-| Codex | a marked block in `~/.codex/AGENTS.md` (or `AGENTS.override.md` when you have one) |
+| Codex | a marked block in `~/.codex/AGENTS.md` (or `AGENTS.override.md` when that one has text) |
 | Grok Build | `~/.grok/rules/harness-about-you.md` |
 | Pi, OpenCode, Gemini CLI | a marked block in their global `AGENTS.md` / `GEMINI.md` |
 
-Only its own hook, block or file is ever changed; your text around a block is kept byte for byte, and
-a file that is a link (a dotfiles repository) is left alone. Harness's own hooks and this one keep each
-other. Rebuilding About You updates every copy. `mem deliver off` removes all of it. Each copy says
-what it is and that the current request comes first.
+The line beside the switch says which agents get it and what it costs: about this many tokens at the
+start of every new session. Off removes every copy. Only its own hook, block or file is ever changed;
+your text around a block is kept, and a file or folder that is a link (a dotfiles repository) is left
+alone. Harness's own hooks and this one keep each other. Each copy says what it is and that the
+current request comes first. Saying it in the chat ("stop using my About You") flips the same switch.
 
-`npm run test:agents` proves it with the real agents in a throwaway home: a random made-up fact in
-About You must reach a new Claude Code session's answer and Codex's model input, and must not reach
-either without delivery.
+## Every machine
+
+The pane asks each of your online machines for its memories and shows them together, each labeled
+with its machine, with one activity calendar for all of them. About You and the switch are the same
+everywhere: the newest About You and the newest on/off choice reach every machine, and each machine's
+agents get it there. A machine whose Harness is older than its memory service is listed as needing
+the newest Harness.
+
+`npm run test:agents` proves delivery with the real agents in a throwaway home: a random made-up fact
+in About You must reach a new Claude Code session's answer and Codex's model input, and must not reach
+either without it.
 
 ## The `mem` command
 
@@ -72,7 +83,8 @@ rules file. Windsurf keeps its memories
 in a binary format, so only its global rules are shown. Cursor, Pi and OpenCode keep no memory of
 their own; Copilot keeps its memory on GitHub.
 
-This computer only, for now. Memories on your other machines appear when you open Memories there.
+Other machines are read through their own Harness (the memory service), never by reaching into their
+files from here.
 
 ## Credit and stewardship
 

@@ -59,6 +59,9 @@ const longAge = (at) => {
   return unit ? `${short.slice(0, -1)} ${unit} ago` : short
 }
 const kindLabel = (row) => row.type && row.type !== row.kind ? row.type : row.kind
+/** More than one machine answered: rows then say which machine they live on. */
+const manyMachines = () => (state.snap?.machines ?? []).filter((machine) => machine.ok).length > 1
+const where = (memory) => (manyMachines() && memory.machine ? memory.machine.name : null)
 
 const short = (id) => agent(id).name.split(' ')[0].toLowerCase()
 
@@ -68,6 +71,55 @@ function who(id, tag = 'span', name = agent(id).name) {
   node.style.color = info.color
   return node
 }
+
+// ── the switch: About You in every agent ───────────────────────────────────────────────────────
+
+const token = document.querySelector('meta[name="memories-token"]')?.content ?? ''
+let switching = false
+
+function drawSwitch() {
+  const snap = state.snap
+  const box = $('switch')
+  if (!snap) { box.hidden = true; return }
+  box.hidden = false
+  const delivery = snap.delivery ?? {}
+  const button = $('switch-button')
+  const detail = $('switch-detail')
+  const on = Boolean(delivery.on)
+  button.setAttribute('aria-checked', String(on))
+  $('switch-word').textContent = switching ? '…' : on ? 'ON' : 'OFF'
+  button.disabled = switching || !delivery.built
+  detail.replaceChildren()
+  const machines = (snap.machines ?? [])
+  const needUpdate = machines.filter((machine) => !machine.current && machine.online && !machine.ok).length
+  if (!delivery.built) {
+    detail.append(document.createTextNode('Not built yet. It builds by itself while this Memories harness is open and idle.'))
+  } else if (on) {
+    const names = (delivery.agents ?? []).filter((row) => row.delivered).map((row) => agent(row.agent).name)
+    const onMachines = 1 + machines.filter((machine) => !machine.current && machine.ok && machine.deliveryOn).length
+    const parts = [names.join(', ') || 'no agent installed here', `on ${onMachines} ${onMachines === 1 ? 'machine' : 'machines'}`, `~${number(delivery.tokens)} tokens per new session`]
+    detail.append(document.createTextNode(parts.join(' · ')))
+  } else {
+    detail.append(document.createTextNode('Your agents don\'t get About You.'))
+  }
+  if (needUpdate) detail.append(document.createTextNode(' · '), el('span', 'warn', `${needUpdate} ${needUpdate === 1 ? 'machine needs' : 'machines need'} the newest Harness`))
+  const failed = (delivery.agents ?? []).filter((row) => row.error)
+  if (failed.length) detail.append(document.createTextNode(' · '), el('span', 'warn', failed.map((row) => `${agent(row.agent).name}: ${row.error}`).join('; ')))
+}
+
+$('switch-button').addEventListener('click', async () => {
+  if (switching || !state.snap?.delivery?.built) return
+  const on = !state.snap.delivery.on
+  switching = true
+  drawSwitch()
+  try {
+    const answer = await (await fetch('/api/deliver', { method: 'POST', headers: { 'content-type': 'application/json', 'x-memories-token': token }, body: JSON.stringify({ on }) })).json()
+    if (!answer.ok && answer.error) $('switch-detail').textContent = answer.error
+  } catch { $('switch-detail').textContent = 'The switch did not answer. Try again.' }
+  switching = false
+  drawSwitch()
+  $('q').focus()
+})
 
 // ── the band: your year with agents ────────────────────────────────────────────────────────────
 
@@ -130,7 +182,8 @@ function drawBand() {
   $('stat-asks').textContent = number(sessions.asks)
   const agents = sessions.engines.filter((row) => row.asks > 0)
   const since = sessions.firstAt ? new Date(sessions.firstAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : ''
-  $('stat-line').textContent = `${number(sessions.sessions)} sessions · ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}${since ? ` · since ${since}` : ''}`
+  const answered = (state.snap.machines ?? []).filter((machine) => machine.ok).length
+  $('stat-line').textContent = `${number(sessions.sessions)} sessions · ${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}${answered > 1 ? ` · ${answered} machines` : ''}${since ? ` · since ${since}` : ''}`
   const bar = $('bar'), legend = $('legend')
   bar.replaceChildren(); legend.replaceChildren()
   for (const row of agents) {
@@ -289,7 +342,7 @@ function drawRow(row, now) {
     const memory = row.memory
     const dot = el('span', 'dot', '•'); dot.style.color = agent(memory.agent).color
     label.textContent = memory.title
-    const tag = el('span', 'tag', row.parent?.startsWith('ag:') ? kindLabel(memory) : short(memory.agent))
+    const tag = el('span', 'tag', [row.parent?.startsWith('ag:') ? kindLabel(memory) : short(memory.agent), where(memory)].filter(Boolean).join(' · '))
     node.append(dot, label, tag, el('span', 'age', age(memory.modified, now)))
     if (state.fresh.has(memory.id) && now - state.fresh.get(memory.id) < 6000) { node.classList.add('fresh'); node.style.setProperty('--glow', agent(memory.agent).color) }
   } else if (row.type === 'about') {
@@ -432,7 +485,7 @@ function drawPreview() {
   if (row.type === 'memory') {
     const memory = row.memory
     const scope = memory.project ? memory.project.name : memory.scope === 'global' ? 'every project' : null
-    preview.append(head(memory.title, metaLine([who(memory.agent), kindLabel(memory), scope, longAge(memory.modified)]), memory.path))
+    preview.append(head(memory.title, metaLine([who(memory.agent), kindLabel(memory), scope, where(memory) ?? (memory.machine && !memory.machine.current ? memory.machine.name : null), longAge(memory.modified)]), memory.path))
     if (memory.description && memory.description !== memory.title && !memory.body.startsWith(memory.description)) preview.append(el('p', 'pv-big', memory.description))
     preview.append(el('hr', 'pv-rule'))
     preview.append(render(document, el('div', 'md'), parse(memory.body)))
@@ -513,9 +566,9 @@ function deliveryLine() {
   if (delivery?.on && using.length) {
     const names = using.map((row) => agent(row.agent).name + (row.current ? '' : ' (older copy)'))
     box.append(el('div', null, `Every new session of ${names.join(', ')} starts with this.`))
-    box.append(el('div', 'pv-meta', 'Sessions already open keep what they started with. Ask the agent to stop using it any time.'))
+    box.append(el('div', 'pv-meta', 'Sessions already open keep what they started with. Turn it off at the top any time.'))
   } else {
-    box.append(el('div', null, 'Your agents do not use this yet. Ask the agent on the right:'), el('div', 'say', 'use my About You in every agent'))
+    box.append(el('div', null, 'Your agents do not use this. Turn on "About You in your agents" at the top.'))
   }
   return box
 }
@@ -542,13 +595,13 @@ function drawBuild(preview) {
   preview.append(head('About you', metaLine(['not built yet']), state.snap.aboutPath))
   preview.append(el('p', 'pv-big', 'A short profile of how you work, built from your own words across every agent.'))
   const call = el('div', 'callout')
-  call.append(el('div', null, 'Ask the agent on the right:'), el('div', 'say', 'build my About You'))
+  call.append(el('div', null, 'It builds by itself while this Memories harness is open and idle, on the model you picked for it. To build it now, ask the agent on the right:'), el('div', 'say', 'build my About You'))
   preview.append(call)
   const facts = []
   if (sessions?.asks) facts.push(`${number(sessions.asks)} messages you sent to ${sessions.engines.filter((row) => row.asks).length} agents`)
   if (yours) facts.push(`${yours} notes your agents saved about you`)
   if (facts.length) preview.append(el('p', null, `It reads ${facts.join(' and ')}, and writes the profile here. Every line says where it came from.`))
-  preview.append(el('p', 'pv-meta', 'Nothing is sent anywhere by opening this pane. Building runs only when you ask, with the agent in this pane.'))
+  preview.append(el('p', 'pv-meta', 'Only this harness\'s agent builds it, as a turn you can see on the right. Close the harness and nothing builds.'))
 }
 
 const TURN_ON = {
@@ -569,6 +622,7 @@ function drawAgent(preview, info) {
   if (info.unreadable) add('unreadable', `${info.unreadable} memories in a format Harness cannot read`)
   add('kept in', info.where)
   add('home', info.present ? info.home : 'not installed here')
+  if (info.machines?.length > 1) add('machines', info.machines.join(', '))
   preview.append(facts)
   const turnOn = info.memory === 'off' ? TURN_ON[info.id] : null
   if (turnOn) {
@@ -589,7 +643,21 @@ function drawOverview(preview) {
   add('projects', `${snap.projects.length}`)
   add('sessions', snap.sessions ? `${number(snap.sessions.sessions)} with ${number(snap.sessions.asks)} of your messages` : null)
   preview.append(facts)
+  drawMachines(preview)
   preview.append(el('p', 'pv-meta', state.query.trim() ? 'Nothing matches that yet. Esc clears the search.' : 'Open a group on the left, or type to search.'))
+}
+
+/** Which machines answered, and why the others did not. */
+function drawMachines(preview) {
+  const list = state.snap.machines ?? []
+  if (list.length < 2) return
+  preview.append(el('div', 'pv-h', 'machines'))
+  const facts = el('dl', 'kv')
+  for (const machine of list) {
+    const count = state.snap.memories.filter((row) => row.machine?.id === machine.id && row.kind !== 'instructions').length
+    facts.append(el('dt', null, machine.name + (machine.current ? ' (this one)' : '')), el('dd', null, machine.ok ? `${number(count)} memories` : machine.error ?? 'did not answer'))
+  }
+  preview.append(facts)
 }
 
 function drawWelcome(preview) {
@@ -654,6 +722,7 @@ function receive(snap) {
   state.known = ids
   state.snap = snap
   if (firstLoad && snap.about?.lines?.length) state.selected = 'a:0'
+  drawSwitch()
   drawBand()
   drawList()
   $('updated').textContent = `read ${new Date(snap.observedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`

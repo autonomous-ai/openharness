@@ -12,6 +12,8 @@
  *   mem about                         the About You profile
  *   mem about write < file            replace it (the previous one is kept as about-you.prev.md)
  *   mem deliver [status|on|off]       About You in every new session of every agent on this computer
+ *   mem snapshot --json               everything above, for another machine's Memories pane (the
+ *                                     daemon's memory service answers `memory_snapshot` with it)
  *
  * Every command takes --json. Nothing here writes an agent's files; `about write` writes only
  * ~/.harness/memory/about-you.md.
@@ -163,6 +165,15 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
       return 0
     }
 
+    if (command === 'snapshot') {
+      const snap = await snapshot({ env, home })
+      // What another machine's pane shows of this one: no local paths it could not open anyway beyond
+      // the ~ form, and the session index's folder list left out (it is this machine's layout).
+      const { sessions, ...rest } = snap
+      print({ ...rest, sessions: sessions && { ...sessions, folders: [] }, about: snap.about && { text: snap.about.text, modified: snap.about.modified } })
+      return 0
+    }
+
     if (command === 'deliver') {
       const action = words[0] ?? 'status'
       if (action === 'status') {
@@ -173,7 +184,9 @@ export async function run(argv, { out = (line) => process.stdout.write(line + '\
         return 0
       }
       if (!['on', 'off', 'refresh'].includes(action)) { err('mem deliver [status|on|off]'); return 2 }
-      const done = deliver(action, { env, home })
+      const choiceAt = flags['choice-at'] !== undefined ? Number(flags['choice-at']) : undefined
+      if (choiceAt !== undefined && !Number.isFinite(choiceAt)) { err('--choice-at takes a time in milliseconds'); return 2 }
+      const done = deliver(action, { env, home, ...(choiceAt !== undefined ? { choiceAt } : {}) })
       if (flags.json) { print(done); return done.results.every((r) => r.ok) ? 0 : 1 }
       out(`About You in every agent: ${done.on ? 'on' : 'off'}`)
       for (const row of done.results) out(`  ${row.agent.padEnd(9)} ${row.ok ? (row.changed ? (done.on ? 'added  ' : 'removed') : 'already') : 'failed '}  ${row.file}${row.error ? `  (${row.error})` : ''}`)

@@ -231,7 +231,12 @@ function aboutText(h) {
 }
 
 /** Turn delivery on (and write every copy now), refresh the copies, or turn it off and remove them. */
-export function deliver(action, { env = process.env, home } = {}) {
+/**
+ * `on` and `off` are the person's choice, from the pane's switch, `mem deliver`, or the agent asked in
+ * chat. The choice carries its time (`choiceAt`) so every machine can keep the newest one: a choice
+ * made on another machine is applied here with that machine's time, never as a new one.
+ */
+export function deliver(action, { env = process.env, home, choiceAt = Date.now() } = {}) {
   const h = homes(env, home)
   const state = readState(h)
   if (action === 'refresh' && !state.on) return { on: false, results: [] }
@@ -240,7 +245,17 @@ export function deliver(action, { env = process.env, home } = {}) {
   if (on && !about) throw new Error('There is no About You yet. Build it first: ask the agent in Memories to build your About You.')
   const created = new Set(Array.isArray(state.created) ? state.created : [])
   const results = targets(h).map((target) => apply(target, about, on, h, created))
-  writeState(h, { on, updatedAt: new Date().toISOString(), agents: results.filter((r) => r.ok).map((r) => r.agent), created: [...created] })
+  // `off` is the person's choice and is kept: automatic builds and other machines' About You then update
+  // only the profile, never turn delivery back on (lib/autobuild.mjs, lib/fleet.mjs).
+  const chosen = action === 'on' || action === 'off'
+  writeState(h, {
+    on,
+    choseOff: action === 'off' ? true : action === 'on' ? false : Boolean(state.choseOff),
+    choiceAt: chosen ? choiceAt : (state.choiceAt ?? null),
+    updatedAt: new Date().toISOString(),
+    agents: results.filter((r) => r.ok).map((r) => r.agent),
+    created: [...created],
+  })
   return { on, results }
 }
 
@@ -264,5 +279,8 @@ export function status({ env = process.env, home } = {}) {
       return { agent: target.agent, file: shown, delivered: false, current: false, error: error instanceof Error ? error.message : String(error) }
     }
   })
-  return { on: Boolean(state.on), agents }
+  // What it costs: every new session of every agent that gets it starts with this many more tokens
+  // (about four characters a token for English prose).
+  const tokens = about ? Math.round(packet(about).length / 4) : 0
+  return { on: Boolean(state.on), choseOff: Boolean(state.choseOff), choiceAt: state.choiceAt ?? null, tokens, built: Boolean(about), agents }
 }
