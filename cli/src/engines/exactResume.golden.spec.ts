@@ -96,3 +96,6 @@ it('records Pi custom ids, lossy folders and unwritten conversations', async () 
   await check('pi:missing-directory', repair.findResumedTranscript('pi', 'not-written', { cwd: path('absent') }))
 })
 it('records every observation', () => { if (!RECORD) expect(Object.keys(captured).sort()).toEqual(Object.keys(expected).sort()) })
+
+// Filesystem durability deadlines are exercised separately from these deterministic fixture reads.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))

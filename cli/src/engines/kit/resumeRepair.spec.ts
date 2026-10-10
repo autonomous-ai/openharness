@@ -1,3 +1,4 @@
+import { clearEngineHomeFixture } from '../../testing/engineHomeFixture.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { constants as bufferConstants } from 'node:buffer'
 import { createHash } from 'node:crypto'
@@ -206,7 +207,7 @@ describe('preparing a stopped Codex session for resume', () => {
       expect(() => fresh.prepareResume({ ...source(), codexHome: null, transcriptPath: stray })).toThrow('outside the session profile')
     } finally {
       vi.unstubAllEnvs()
-      rmSync(join(process.env.ADAPTER_DATA_DIR!, 'engine-homes.json'), { force: true })
+      clearEngineHomeFixture(process.env.ADAPTER_DATA_DIR!)
       homes.resetEngineHomes()
     }
   })
@@ -235,3 +236,6 @@ describe('preparing a stopped Codex session for resume', () => {
     expect(prepareCodexResume({ ...source(), transcriptPath: null })).toEqual({ repairedItems: 0 })
   })
 })
+
+// Filesystem durability deadlines are exercised separately from these deterministic fixture reads.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))

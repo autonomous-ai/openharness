@@ -1910,7 +1910,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   })
   localWsServerRef = localWsServer
   // Every engine's hooks, pointed at the port the local server actually bound (core/engines/hooks.ts).
-  if (!env.DISABLE_HOOK_INSTALL) await installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
+  const installedHooks = env.DISABLE_HOOK_INSTALL ? undefined
+    : await installEngineHooks(hookPort, { only: env.HOOK_INSTALL_ENGINES, loginShell: loginShellEnvPromise })
 
   // Each transcript line, through its engine's normalizer, into the funnel (core/transcripts/ingest.ts).
   const ingest = createIngest({
@@ -2448,7 +2449,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // stops being `bootHandoff` HERE, and not a line earlier: everything the teardown releases exists by now.
   // A straight-line assignment, never a wait: if the body never reaches this line the handler stays
   // `bootHandoff`, and the fix still lands.
-  const updateTeardown = (): TeardownStep[] => { externalResumes?.stop(); return [
+  const updateTeardown = (): TeardownStep[] => { installedHooks?.close(); externalResumes?.stop(); return [
     ['the registry', () => registry.flush({ exiting: true })], ['the updater', () => daemonBoot.updaterBeside?.()],
     ['the reconciler', () => agentReconciler.stop()],
     ['the timers', () => { clearInterval(logTrimTimer); clearInterval(runtimeReconcileTimer); clearInterval(paneTitleSyncTimer) }],
@@ -2485,6 +2486,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
    *  which restarts any other exit (harnessd/protocol.ts). */
   const forGood = (reason: string): boolean => reason === 'revoked' || reason === 'busy'
   const shutdown = async (signal: string): Promise<void> => {
+    installedHooks?.close()
     externalResumes?.stop()
     console.log(`\n[cli] ${signal} — shutting down`)
     // A slow teardown may exhaust the master's grace. Persist already acknowledged bindings first.

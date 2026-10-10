@@ -21,6 +21,11 @@ function session(grid: RegisteredSession['grid'], codexHome: RegisteredSession['
 const assignment = { baseUrl: 'https://grid.autonomous.ai/grid-abc/relay', model: 'DeepSeek-V4-Flash-0731' }
 
 describe('agentFrame', () => {
+  it('exposes an unavailable identity reason while retaining the current session', async () => {
+    const row = { ...session(null), identityHold: 'Waiting for the saved session homes.' }
+    expect(await agentFrame(row, { selectedModel: null, terminalAvailable: true }))
+      .toMatchObject({ sessionId: 's1', status: 'active', identityHold: row.identityHold })
+  })
   it('carries only the owning machine’s cached token snapshot, including a measured zero', async () => {
     const context = { selectedModel: null, terminalAvailable: true }
     const usage = { totalTokens: 0, updatedAt: '2026-09-22T16:00:00Z' }
