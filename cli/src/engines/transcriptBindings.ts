@@ -1,5 +1,5 @@
 /** Eager native transcript authority shared by binding, Stop and resume preflight. */
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { env } from '../config/env.js'
 import { engineHomeSnapshot, sessionRoots, type EngineHomeSnapshot } from '../lib/engineHomes.js'
 import { cursorDataDir } from './cursor/contract.js'
@@ -42,13 +42,49 @@ export function transcriptRootEvidence(engine: AgentEngine, profile?: string, sn
   return { directories, verify(): void { files.verify(); ownSnapshot?.verify() } }
 }
 
-/** A caller can supply its explicit synchronous batch proofs and verify them before publication. */
+/** A deterministic engine locator can precede its directories. Retain the first
+ * missing component and its owned ancestor; a dangling alias is not absence. */
+function futureDirectory(files: NativeFiles, path: string): { path: string; present: boolean } {
+  if (path.split('/').includes('..')) return nativeUnavailable('an unwritten transcript has an unresolved parent step')
+  const suffix: string[] = []
+  for (let at = path;; at = dirname(at)) {
+    files.budget.step()
+    const location = files.locate(at, true)
+    if (location) {
+      if (!location.info.isDirectory()) return nativeUnavailable('the announced transcript ancestor is not a directory')
+      if (typeof process.getuid === 'function' && location.info.uid !== BigInt(process.getuid())) {
+        return nativeUnavailable('the announced transcript ancestor has an unconfirmed owner')
+      }
+      if (suffix.length && !files.paths.absentLeaf(join(location.path, suffix[0]))) {
+        return nativeUnavailable('the announced transcript ancestor is not a proven absent leaf')
+      }
+      return { path: join(location.path, ...suffix), present: !suffix.length }
+    }
+    if (suffix.length >= 64 || at === dirname(at)) return nativeUnavailable('the unwritten transcript ancestor limit was reached')
+    suffix.unshift(basename(at))
+  }
+}
+
+/** A caller can supply its explicit synchronous batch proofs and verify them before publication.
+ * Only core-derived locators may name directories that the engine has not written yet. */
 export function transcriptEvidence(engine: AgentEngine, path: string, profile?: string,
-  allowMissing = false, snapshot?: EngineHomeSnapshot, roots?: ReturnType<typeof transcriptRootEvidence>,
+  allowMissing: boolean | 'derived' = false, snapshot?: EngineHomeSnapshot, roots?: ReturnType<typeof transcriptRootEvidence>,
 ) {
   const files = new NativeFiles(), root = transcriptRoot[engine]
   const scope = roots ?? transcriptRootEvidence(engine, profile, snapshot)
   const location = root ? files.file(path, true) : null
+  if (!location && allowMissing === 'derived') {
+    if (typeof root !== 'function') return nativeUnavailable('the unwritten transcript has no deterministic root')
+    const parent = futureDirectory(files, dirname(path)), declared = futureDirectory(files, root())
+    const actual = join(parent.path, basename(path))
+    if (parent.present && !files.paths.absentLeaf(actual)) {
+      return nativeUnavailable('the announced transcript is not a proven absent leaf')
+    }
+    const member = relative(declared.path, actual)
+    return { valid: !!member && member !== '..' && !member.startsWith('../') && !isAbsolute(member), files,
+      matchingRoots: scope.directories,
+      verify(selected = path): void { files.verify(selected); if (!roots) scope.verify() } }
+  }
   const parent = !location && allowMissing ? files.locate(dirname(path), true) : null
   if (parent && !parent.info.isDirectory()) return nativeUnavailable('the announced transcript parent is not a directory')
   if (parent && typeof process.getuid === 'function' && parent.info.uid !== BigInt(process.getuid())) {

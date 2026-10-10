@@ -1867,7 +1867,7 @@ class Registry {
     const effectiveTranscriptPath = transcriptPath ?? (sameSession ? existing.transcriptPath : null) ?? derived ?? null
     // Native evidence is staged before terminal adoption, displacement or any live publication.
     const proof = effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
-      processAgent?.codexHome ?? undefined, !transcriptPath && !!derived) : undefined
+      processAgent?.codexHome ?? undefined, !transcriptPath && derived === effectiveTranscriptPath ? 'derived' : false) : undefined
     if (proof && !proof.valid) {
       proof.verify()
       if (!proof.files.file(effectiveTranscriptPath!, true)) throw new IdentityReadUnavailable('the announced transcript is not yet available')

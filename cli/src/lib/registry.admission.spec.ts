@@ -52,7 +52,9 @@ beforeEach(async () => {
   home = join(root, 'codex'); file = join(root, 'data', 'registry.json'); fault.file = file
   mkdirSync(join(home, 'sessions'), { recursive: true }); mkdirSync(join(root, 'data'))
   for (const [key, value] of Object.entries({ HOME: root, ADAPTER_DATA_DIR: join(root, 'data'),
-    ADAPTER_RUNTIME_DIR: join(root, 'runtime'), CODEX_HOME: home, CLAUDE_CONFIG_DIR: join(root, 'claude') })) vi.stubEnv(key, value)
+    ADAPTER_RUNTIME_DIR: join(root, 'runtime'), CODEX_HOME: home, CLAUDE_CONFIG_DIR: join(root, 'claude'),
+    COMMANDCODE_HOME: join(root, 'commandcode'), GROK_HOME: join(root, 'grok'),
+    AGY_HOME: join(root, 'agy'), COPILOT_HOME: join(root, 'copilot') })) vi.stubEnv(key, value)
   writeFileSync(join(root, 'data', 'engine-homes.json'), '{}')
   transcript = join(home, 'sessions', `rollout-${A}.jsonl`); writeFileSync(transcript, header())
   vi.resetModules(); observeNativeProof(); ({ registry } = await import('./registry.js'))
@@ -96,10 +98,10 @@ it('rechecks the native header under the write lock before publishing any regist
   let checked = false
   fault.beforeVerify = () => {
     checked = true
-    expect(readFileSync(file + '.lock', 'utf8')).toBeTruthy()
+    expect(JSON.parse(readFileSync(join(file + '.lock', 'owner.json'), 'utf8')).pid).toBe(process.pid)
     writeFileSync(transcript, header(B))
   }
-  expect(() => registry.register(input())).toThrow()
+  expect(() => registry.register(input())).toThrow('header changed')
   expect(checked).toBe(true)
   unchanged(before)
 })
@@ -413,6 +415,35 @@ it('holds a missing announced transcript on the actual HTTP path and retries com
   writeFileSync(transcript, header())
   await vi.waitFor(() => expect(f.prompts).toEqual(['fixture prompt']), { timeout: 4_000 })
   expect(registry.bySession(A)?.agentId).toBe(source)
+})
+
+it.each(['commandcode', 'grok', 'agy', 'copilot'] as const)('admits the %s SessionStart before its deterministic transcript directories exist', async engine => {
+  const agent = registry.openProcessAgent({ engine, tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: `<${engine}>` } })!.entry
+  const f = await httpFixture()
+  expect(await f.post({ engine, tmuxPane: '%3', transcriptPath: undefined, hookEvent: 'SessionStart', prompt: undefined }))
+    .toEqual({ status: 200, body: { ok: true } })
+  expect(registry.byAgent(agent.agentId)?.sessionId).toBe(A)
+  expect(registry.byAgent(agent.agentId)?.transcriptPath).toContain(join(root, engine))
+  expect(f.registered).toHaveBeenCalledOnce()
+  expect(f.prompts).toEqual([])
+})
+
+it('rechecks an unwritten derived locator proof under the lock and never grants it to a reported path', () => {
+  const agent = registry.openProcessAgent({ engine: 'commandcode', tmuxPane: '%3', cwd: root,
+    processIdentity: { pid: 5103, startMarker: 'fixture-start', executable: '<commandcode>' } })!.entry
+  const body = { engine: 'commandcode' as const, sessionId: A, tmuxPane: '%3', cwd: root, processIdentity: agent.processIdentity! }
+  const before = snapshot()
+  expect(() => registry.register({ ...body, transcriptPath: join(root, 'commandcode', 'projects', 'announced.jsonl') })).toThrow('not yet available')
+  unchanged(before)
+  fault.beforeVerify = () => {
+    expect(JSON.parse(readFileSync(join(file + '.lock', 'owner.json'), 'utf8')).pid).toBe(process.pid)
+    mkdirSync(join(root, 'commandcode'))
+  }
+  expect(() => registry.register(body)).toThrow('changed')
+  unchanged(before)
+  fault.beforeVerify = undefined
+  expect(registry.register(body)?.entry.sessionId).toBe(A)
 })
 
 it('the actual Stop job blocks hook admission before its first asynchronous step settles', async () => {

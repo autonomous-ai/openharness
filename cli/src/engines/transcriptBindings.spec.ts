@@ -27,6 +27,8 @@ beforeEach(async () => {
   home = join(root, 'codex'); file = join(home, 'sessions', 'day', `rollout-${A}.jsonl`)
   vi.stubEnv('ADAPTER_DATA_DIR', join(root, 'data')); vi.stubEnv('CODEX_HOME', home)
   vi.stubEnv('CLAUDE_PROJECTS_DIR', join(root, 'claude', 'projects'))
+  vi.stubEnv('COMMANDCODE_HOME', join(root, 'commandcode')); vi.stubEnv('GROK_HOME', join(root, 'grok'))
+  vi.stubEnv('AGY_HOME', join(root, 'agy')); vi.stubEnv('COPILOT_HOME', join(root, 'copilot'))
   write(join(root, 'data', 'engine-homes.json'), '{}'); write(file)
   vi.resetModules(); bindings = await import('./transcriptBindings.js')
 })
@@ -88,6 +90,55 @@ it('does not authorize a dangling leaf alias through its original parent', () =>
   const path = join(dirname(file), 'announced.jsonl')
   fs.symlinkSync(join(root, 'outside-absent.jsonl'), path)
   expect(() => bindings.transcriptEvidence('codex', path, undefined, true)).toThrow('absent leaf')
+})
+it.each([
+  ['commandcode', 'commandcode/projects/project/session.jsonl'],
+  ['grok', 'grok/sessions/project/session/updates.jsonl'],
+  ['agy', 'agy/brain/session/transcript.jsonl'],
+  ['copilot', 'copilot/session-state/session/events.jsonl'],
+] as const)('fences the unwritten %s derived locator before its root exists', (engine, suffix) => {
+  const path = join(root, suffix)
+  expect(bindings.transcriptEvidence(engine, path).valid).toBe(false)
+  const result = bindings.transcriptEvidence(engine, path, undefined, 'derived')
+  expect(result.valid).toBe(true); result.verify()
+  fs.mkdirSync(dirname(path), { recursive: true })
+  expect(() => result.verify()).toThrow('changed')
+  const parentOnly = bindings.transcriptEvidence(engine, path, undefined, 'derived')
+  expect(parentOnly.valid).toBe(true); parentOnly.verify()
+  write(path, '')
+  expect(() => parentOnly.verify()).toThrow('changed')
+  expect(bindings.transcriptEvidence(engine, path).valid).toBe(true)
+})
+it('does not let an unwritten locator borrow a dangling directory or leaf alias', () => {
+  const base = join(root, 'commandcode', 'projects')
+  fs.mkdirSync(base, { recursive: true })
+  for (const [path, link] of [[join(base, 'project', 'session.jsonl'), join(base, 'project')],
+    [join(base, 'session.jsonl'), join(base, 'session.jsonl')]]) {
+    fs.symlinkSync(join(root, 'outside-absent'), link)
+    expect(() => bindings.transcriptEvidence('commandcode', path, undefined, 'derived')).toThrow('absent leaf')
+    fs.rmSync(link)
+  }
+})
+it('requires owned surviving ancestry and keeps a derived locator inside its declared root', () => {
+  const path = join(root, 'commandcode', 'projects', 'project', 'session.jsonl')
+  const result = bindings.transcriptEvidence('commandcode', path, undefined, 'derived')
+  vi.mocked(fs.lstatSync).mockImplementation(((at: fs.PathLike, ...args: unknown[]) => {
+    const info = Reflect.apply(actual.lstatSync, actual, [at, ...args])
+    return String(at) === root ? Object.assign(info, { uid: info.uid + 1n }) : info
+  }) as typeof fs.lstatSync)
+  expect(() => result.verify()).toThrow('changed')
+  expect(() => bindings.transcriptEvidence('commandcode', path, undefined, 'derived')).toThrow('owner')
+  vi.mocked(fs.lstatSync).mockImplementation(actual.lstatSync)
+  expect(bindings.transcriptEvidence('commandcode', join(root, 'outside', 'session.jsonl'), undefined, 'derived').valid).toBe(false)
+})
+it('does not treat an existing unreadable derived transcript as an unwritten locator', () => {
+  const path = join(root, 'commandcode', 'projects', 'project', 'session.jsonl')
+  write(path, '')
+  vi.mocked(fs.openSync).mockImplementation(((at: fs.PathLike, ...args: unknown[]) => {
+    if (String(at) === path) throw Object.assign(new Error('fixture denied'), { code: 'EACCES' })
+    return Reflect.apply(actual.openSync, actual, [at, ...args])
+  }) as typeof fs.openSync)
+  expect(() => bindings.transcriptEvidence('commandcode', path, undefined, 'derived')).toThrow('could not be read')
 })
 it.each(['', '{', record().slice(0, -4), ' '.repeat(128 * 1024) + record(), record(A, { future: 'unknown' })])('holds an incomplete or unknown native header', text => {
   fs.writeFileSync(file, text)

@@ -78,9 +78,11 @@ Each lookup retry is bounded, readiness waits on none of them, and a full queue
 returns explicit unowned backpressure. Process exit/replacement prunes receipts.
 
 This ownership is **in memory**. A daemon restart still requires a durable delivery
-journal and native-client acknowledgement/retry migration. Existing long-running
-OpenCode, Kilo, Pi and Amp plugins also need immutable callback IDs/native order;
-an old timestamp-less conflicting hook currently holds with a reload explanation.
+journal and native-client acknowledgement/retry migration. Both currently generated
+and already-running OpenCode, Kilo, Pi and Amp plugins still need immutable callback
+IDs/native order. A timestamp-less conflicting hook currently holds with a reload
+explanation, but reloading this build does not resolve that missing client protocol.
+That client migration and the corrected recovery explanation are required before release.
 Unknown Stop-to-turn correlation remains visible until authoritative native evidence
 or explicit Cancel resolves it. Per-engine close facts, asynchronous drain authority,
 and complete Cursor task journal ordering remain in the completion checklist.
