@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Memories</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="mark" aria-hidden="true">◉</span><h1>memories</h1><span id="live" class="live" role="status">connecting</span></div>
+    <label class="prompt"><span class="caret" aria-hidden="true">❯</span>
+      <input id="q" type="search" placeholder="search memories and sessions" aria-label="Search memories and sessions" autocomplete="off" spellcheck="false" autofocus>
+      <span id="count" class="count"></span>
+    </label>
+  </header>
+  <section id="band" class="band" aria-label="Your work with agents" hidden>
+    <div class="heat">
+      <svg id="heat" role="img" aria-label="Your messages per day, colored by agent"></svg>
+      <div id="heat-note" class="heat-note"></div>
+    </div>
+    <div class="stats">
+      <div class="big"><span id="stat-asks">0</span><small>messages to your agents</small></div>
+      <div id="stat-line" class="stat-line"></div>
+      <div id="bar" class="bar" aria-hidden="true"></div>
+      <div id="legend" class="legend"></div>
+    </div>
+  </section>
+  <main class="split">
+    <div id="list" class="list" role="listbox" aria-label="Memories" tabindex="-1"></div>
+    <article id="preview" class="preview" aria-live="polite"></article>
+  </main>
+  <footer class="keys">
+    <span><kbd>↑↓</kbd> move</span><span><kbd>→</kbd> open</span><span><kbd>←</kbd> back</span><span><kbd>esc</kbd> clear</span>
+    <span class="spacer"></span><span id="updated"></span>
+  </footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
