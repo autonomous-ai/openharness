@@ -220,3 +220,34 @@ Implementation and preliminary review corrections followed the #1132 merge at
 01:43:24. Validation, independent review/CI waiting and merge time are recorded
 separately in the PR and final receipts. Publication remains zero; no release is
 authorized.
+
+
+## Final validation and test race corrections
+
+Receipt `20261010T043754.267016Z-78890` tested clean reviewed `43db408c1` at
+04:37:54–04:45:57 UTC. Types passed in 4.6 seconds; core/services passed 2,089 tests
+in 165 files at 100% statements, branches, functions and lines (30.5 seconds), and
+harnessd passed 265 tests plus one existing skip at 100% (29.5 seconds). The private
+engine-home/machine/chaos lane passed in 442.2 seconds, and the private tmux lane
+passed 57 cases in 108.4 seconds, with fifteen unavailable installed-vendor cases
+explicitly excluded.
+
+The receipt is overall **failed**, because one of 967 focused tests observed a
+valid native-enumeration hold before reaching its expected durable-owner fence.
+The corrected registry test retries fresh reads for at most three seconds and still
+requires that exact ownership error, followed by unchanged live and durable rows.
+Automatic Linux run `38024635620` separately exposed an existing tmux fixture race:
+redirecting its output creates an empty file before printf writes the expected
+literal arguments. That test now waits for complete expected contents, retaining
+the same literal argv/environment/cwd assertions. Neither correction changes
+production. All affected checks run again; unchanged production coverage and private
+end-to-end evidence remain attributable to `43db408c1` rather than being described
+as a new full passing suite.
+
+The first forty mutation variants each failed assertions after their unchanged
+baseline. The final core Cancel-wiring variant passed its corrected unchanged e2e
+baseline and then failed an assertion on `c061a7697`. Only the six variants whose
+registry test changed need another baseline/mutation pass. The independent reviewer
+approved the production, assertion correction and cost documentation at exact heads;
+the final test-only delta also requires review. Composed resume runs alone. Final
+receipts, exact-head review, CI and merge accounting are recorded in PR #1133.
