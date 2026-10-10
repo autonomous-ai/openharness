@@ -191,8 +191,10 @@ try {
       const page = await browser.newPage({ viewport: { width: 1080, height: 720 }, deviceScaleFactor: 1, colorScheme: 'dark' });
       try {
         await page.goto(`http://127.0.0.1:${await viewer.start()}/`);
-        await page.waitForSelector('#list > *');
-        await page.waitForTimeout(1500); // Let the layout settle before recording.
+        // The pane is Sense of Self: wait for the scene, skip its arrival, and let the light settle.
+        await page.waitForFunction(() => document.getElementById('stage')?.inspectSelf?.().ready);
+        await page.keyboard.press('Escape');
+        await page.waitForTimeout(2500);
         await page.screenshot({ path: join(output, `${id}.png`) });
         if (process.env.COVER_DUMP_TEXT) console.log(await page.innerText('body'));
       } finally { await page.close(); await viewer.close(); await rm(home, { recursive: true, force: true }); }
