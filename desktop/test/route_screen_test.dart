@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:harness/core/launch_setup.dart';
 import 'package:harness/core/models.dart';
+import 'package:harness/state/app_state.dart';
 import 'package:harness/ws/ws_conn.dart';
 
 import 'swarm_interactions_test.dart' show chord;
@@ -48,45 +50,85 @@ class _Connection extends WsConn {
   }
 }
 
+/// ⌘B, the task typed and Return pressed, on a desk with one session in /work/analytics.
+Future<_Connection> _routeNewWork(
+  WidgetTester tester, {
+  Future<Map<String, dynamic>> Function(String, String)? git,
+  void Function(AppNotifier app)? before,
+}) async {
+  final connection = _Connection();
+  final app = createApp(connectionForTest: (_) => connection);
+  app.machineStates['m']!
+    ..nodeOnline = true
+    ..connectionStatus = ConnectionStatus.connected
+    ..localOnly = true
+    ..localProjects = const {
+      'a0': AgentProject(name: 'analytics', cwd: '/work/analytics'),
+    };
+  // Not a Git project; a real disk read would never finish under the test's clock.
+  app.gitProjectReaderForTest = git ?? (_, _) async => {'isGit': false};
+  before?.call(app);
+  app.adoptSessionForTest(terminal('a0', []));
+  await app.addAgentToSwarm('m', 'a0');
+  await mount(tester, app);
+
+  await chord(tester, LogicalKeyboardKey.keyB);
+  await tester.enterText(_taskField, 'plot signups by week');
+  await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+  for (var i = 0; i < 10; i++) {
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  expect(connection.asked['route_decide']?['text'], 'plot signups by week');
+  return connection;
+}
+
+final _taskField = find.byWidgetPredicate(
+  (widget) =>
+      widget is TextField && widget.decoration?.hintText == 'Describe the work…',
+);
+
 void main() {
   testWidgets('⌘B makes new work at once, set up as the router chose', (
     tester,
   ) async {
-    final connection = _Connection();
-    final app = createApp(connectionForTest: (_) => connection);
-    app.machineStates['m']!
-      ..nodeOnline = true
-      ..connectionStatus = ConnectionStatus.connected
-      ..localOnly = true
-      ..localProjects = const {
-        'a0': AgentProject(name: 'analytics', cwd: '/work/analytics'),
-      };
-    // Not a Git project; a real disk read would never finish under the test's clock.
-    app.gitProjectReaderForTest = (_, _) async => {'isGit': false};
-    app.adoptSessionForTest(terminal('a0', []));
-    await app.addAgentToSwarm('m', 'a0');
-    await mount(tester, app);
-
-    await chord(tester, LogicalKeyboardKey.keyB);
-    final field = find.byWidgetPredicate(
-      (widget) =>
-          widget is TextField &&
-          widget.decoration?.hintText == 'Describe the work…',
-    );
-    await tester.enterText(field, 'plot signups by week');
-    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
-    for (var i = 0; i < 10; i++) {
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-
-    expect(connection.asked['route_decide']?['text'], 'plot signups by week');
+    final connection = await _routeNewWork(tester);
     final create = connection.asked['agent_create'];
     expect(create, isNotNull);
     expect(create!['engine'], 'codex');
     expect(create['cwd'], '/work/analytics');
     expect(create['prompt'], 'plot signups by week');
+    // Nobody chose otherwise: New Harness's own default.
+    expect(create['permissionMode'], 'auto');
+    expect(create['bypassPermission'], isTrue);
     await tester.pump(const Duration(seconds: 1));
   });
+
+  testWidgets('new work starts in the permission mode the person last chose', (
+    tester,
+  ) async {
+    final connection = await _routeNewWork(
+      tester,
+      before: (app) => app.agentPreference.successfulLaunch =
+          const LaunchSetup(engine: 'codex', permissionMode: 'ask'),
+    );
+    final create = connection.asked['agent_create']!;
+    expect(create['permissionMode'], 'ask');
+    expect(create['bypassPermission'], isFalse);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets(
+    'a project that could not be read opens New Harness on the task, never its checkout',
+    (tester) async {
+      final connection = await _routeNewWork(
+        tester,
+        git: (_, _) async => {'error': 'UNAVAILABLE'},
+      );
+      expect(connection.asked['agent_create'], isNull);
+      await tester.pump(const Duration(seconds: 1));
+      expect(find.text('plot signups by week'), findsWidgets);
+    },
+  );
 
   testWidgets(
     'a session with a pane in another tab is brought forward there, never opened twice',

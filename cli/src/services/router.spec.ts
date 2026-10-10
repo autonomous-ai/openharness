@@ -143,7 +143,7 @@ describe('the router', () => {
       .toEqual({ decided: 'session', id: 'a1', via: 'jev' })
     expect(lines).toEqual(['session — 2 sessions · jev: "billing retries" 0.80'])
     // Jev was asked the task as the client sent it, trimmed.
-    expect(jev).toHaveBeenCalledWith({ message: 'refund it' }, expect.objectContaining({ target: expect.any(Object) }))
+    expect(jev).toHaveBeenCalledWith({ message: 'refund it' }, expect.objectContaining({ target: expect.any(Object) }), undefined)
   })
 
   it('answers new work with the project and agent Jev chose, handing back the client\'s own ids', async () => {
@@ -217,6 +217,19 @@ describe('the router', () => {
     for (const [task, resolve] of waiting) if (task !== 'one-1') resolve()
     expect(await Promise.all([mine[1], again, ...others])).toEqual(Array.from({ length: 8 }, () => expect.objectContaining({ decided: 'new' })))
     expect(jev).toHaveBeenCalledTimes(9)
+  })
+
+  it('stops asking Jev when the connection that asked closes, and gives its slot back then', async () => {
+    const jev = vi.fn((_state: unknown, _questions: unknown, signal?: AbortSignal) => new Promise<Record<string, JevChoiceAnswer>>((_, reject) => {
+      signal?.addEventListener('abort', () => reject(new JevUnavailable('UNAVAILABLE', 'the asker went away')))
+    }))
+    const handlers = startRouter(fakeCore(), router({ jev }).router)
+    const closing = new AbortController()
+    const asked = [0, 1].map(() => handlers.route_decide!({ text: 'go', sessions: DESK }, OWNER, closing.signal))
+    expect(await handlers.route_decide!({ text: 'go', sessions: DESK }, OWNER)).toEqual({ error: 'BUSY' })
+    closing.abort()
+    expect(await Promise.all(asked)).toEqual([0, 1].map(() => ({ error: 'JEV_UNAVAILABLE', detail: 'the asker went away' })))
+    expect(jev.mock.calls.map((call) => call[2])).toEqual([closing.signal, closing.signal])
   })
 
   it('gives a slot back when its decision fails', async () => {

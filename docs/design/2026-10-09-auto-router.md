@@ -12,12 +12,15 @@ task goes and does it, without a list and without a question:
   the current tab — and the words go into its prompt. The box shows who took it for
   a moment, then closes.
 - **New work:** a new harness starts with the words as its task, set up as ⌘N then
-  Return would make it (a fresh worktree from main in a Git project), in the
-  project and with the agent the router chose. A line says which.
-- **Jev cannot be reached** (no key, offline, no credit): the box says so and sends
-  nothing.
+  Return would make it (a fresh worktree from main in a Git project, in the
+  permission mode last chosen for that agent), in the project and with the agent
+  the router chose. A line says which. A project that cannot be read opens New
+  Harness on the task instead of guessing.
+- **Nothing decided** — Jev cannot be reached (no key, offline, no credit) or the
+  router fails: the box says so and sends nothing.
 
-There is no undo; the owner chose instant sends. The safety is the bar: a session
+There is no undo; the owner chose instant sends. Esc while the session's pane comes
+forward still stops the words before they are typed. The safety is the bar: a session
 is chosen only when Jev is sure, and everything else becomes new work, which costs
 little and pollutes nobody's conversation.
 
@@ -43,7 +46,8 @@ nothing from the core, keeps no session list, and reaches no other machine.
 
 Request (`ROUTER_REQUESTS` in `cli/src/core/api.ts`): `route_decide`. A daemon
 without the router answers `UNSUPPORTED` and the box falls back to Boss mode's old
-router.
+router; every other failure is nothing decided, never the old router, which sends on
+its own when it is confident.
 
 ## How it decides
 

@@ -2,6 +2,7 @@ import 'package:path/path.dart' as p;
 
 import '../core/git_worktree.dart';
 import '../core/launch_setup.dart';
+import '../core/permission_modes.dart';
 import '../core/project_folder.dart';
 import '../core/models.dart' show Agent, AgentProject, ConnectionStatus;
 import 'session_preview.dart';
@@ -133,7 +134,7 @@ TaskRouteChoices taskRouteChoices(AppNotifier app) {
       });
   final sessions = {
     for (final (:machine, :agent) in live.take(_sessionCap))
-      '${machine.machine.machineId}\n${agent.id}': (
+      taskRouteSessionId(machine.machine.machineId, agent.id): (
         machineId: machine.machine.machineId,
         agentId: agent.id,
         name: agent.displayName,
@@ -339,7 +340,10 @@ class TaskRouteDecision {
 /// Where new work starts, as ⌘N then Return would start it: in a Git project, a fresh worktree from its
 /// main branch — never inside a checkout another harness may be working in — and in [folder]'s
 /// repository when [folder] is itself a worktree. Outside Git, the folder as it is.
-Future<({String folder, ProjectFolderRequest? request})> newWorkFolder(
+///
+/// Null when the folder could not be read (a machine slow to answer, a folder gone): "not read" is not
+/// "not Git", and taking it for that would start the work in the repository's own checkout.
+Future<({String folder, ProjectFolderRequest? request})?> newWorkFolder(
   AppNotifier app,
   String machineId,
   String folder,
@@ -349,10 +353,11 @@ Future<({String folder, ProjectFolderRequest? request})> newWorkFolder(
   );
   var root = folder;
   if (info.mainFolder case final main?
-      when p.normalize(main) != p.normalize(folder)) {
+      when info.error == null && p.normalize(main) != p.normalize(folder)) {
     root = main;
     info = GitProjectInfo.fromJson(await app.readGitProject(machineId, main));
   }
+  if (info.error != null) return null;
   if (!info.isGit) return (folder: root, request: null);
   return (
     folder: root,
@@ -366,3 +371,17 @@ Future<({String folder, ProjectFolderRequest? request})> newWorkFolder(
     ),
   );
 }
+
+/// The permission mode New Harness would start [engine] in: the one the person last started it with,
+/// else the default; null for an agent that has no modes. A spoken or typed task must not start an
+/// agent that approves its own actions for someone who chose to be asked.
+String? taskRoutePermission(AppNotifier app, String engine) {
+  if (permissionModesOf(engine).isEmpty) return null;
+  final last = app.agentPreference.successfulLaunch;
+  return (last?.engine == engine ? last?.permissionMode : null) ??
+      kDefaultPermissionMode;
+}
+
+/// A session as the router names it: its machine and its agent.
+String taskRouteSessionId(String machineId, String agentId) =>
+    '$machineId\n$agentId';

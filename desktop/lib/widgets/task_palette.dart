@@ -75,16 +75,24 @@ class SpokenTask {
 class NewHarnessFromTask {
   const NewHarnessFromTask({
     required this.task,
+    this.command = '',
     this.machineId,
     this.folder,
     this.engine,
   });
   final String task;
+
+  /// The dial's Goal or Loop button, when the task was spoken with one held (see [SpokenTask.cmd]).
+  final String command;
   final String? machineId, folder, engine;
+
+  /// What the new harness is first told: the words, as the slash command the person pressed.
+  String get prompt => command.isEmpty ? task : '/$command $task';
 }
 
 /// Resolves to the new harness to make when the task was decided to be new work; null on every other
-/// way out — sent to a session, cancelled, or asked and answered by the person.
+/// way out — sent to a session, cancelled, or asked and answered by the person. A spoken task that
+/// became new work is still owed its answer: the caller gives it once the harness is made.
 Future<NewHarnessFromTask?> showTaskPalette(
   BuildContext context,
   AppNotifier notifier, {
@@ -103,7 +111,10 @@ Future<NewHarnessFromTask?> showTaskPalette(
     // Every exit lands here — Esc, a tap on the veil, and the self-close after a send. A commit has
     // already answered by then and this does nothing; anything else is a person walking away, which the
     // dial has to hear about or it keeps showing work that is not happening.
-  ).whenComplete(() => spoken?.cancelled());
+  ).then((plan) {
+    if (plan == null) spoken?.cancelled();
+    return plan;
+  });
 }
 
 /// Below this the palette stops guessing and asks.
@@ -249,7 +260,11 @@ class _TaskPaletteState extends State<_TaskPalette> {
   /// router, and a question when it is unsure.
   Future<void> _decide() async {
     final task = _text.text.trim();
-    if (task.isEmpty || _stage == _Stage.routing) return;
+    // Not while one is in flight, and not during the receipt: Return held down, or pressed again as the
+    // card says who took it, would send the same task twice.
+    if (task.isEmpty || _stage == _Stage.routing || _stage == _Stage.sent) {
+      return;
+    }
     final mine = ++_generation;
     setState(() {
       _stage = _Stage.routing;
@@ -277,13 +292,19 @@ class _TaskPaletteState extends State<_TaskPalette> {
       });
       return;
     }
+    // The dial's Goal or Loop button, applied where the words are sent, as [_commit] does.
+    final cmd = widget.spoken?.cmd ?? '';
     final session = decision.session;
     if (session == null) {
       _stopClock();
+      // A follow-up belongs to the new harness now, not to wherever the last task went: the screen points
+      // the hint at it once it is made.
+      widget.notifier.lastRoutedTask = null;
       final project = decision.project;
       Navigator.of(context).pop(
         NewHarnessFromTask(
           task: task,
+          command: cmd,
           machineId: project?.machineId,
           folder: project?.folder,
           engine: decision.engine,
@@ -311,7 +332,8 @@ class _TaskPaletteState extends State<_TaskPalette> {
     final failure = await widget.notifier.sendTaskToSession(
       session.machineId,
       session.agentId,
-      task,
+      cmd.isEmpty ? task : '/$cmd $task',
+      stillWanted: () => mounted && mine == _generation,
     );
     if (!mounted || mine != _generation) return;
     _stopClock();
@@ -464,6 +486,10 @@ class _TaskPaletteState extends State<_TaskPalette> {
       });
       return;
     }
+    widget.notifier.lastRoutedTask = (
+      id: taskRouteSessionId(machineId, agentId),
+      at: DateTime.now(),
+    );
     // Landed. Tell the daemon before the beat, not after: it is holding the dial's overlay open on this
     // answer, and three quarters of a second is long enough to be seen as a stall on a device whose only
     // feedback is that overlay.

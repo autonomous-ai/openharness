@@ -69,7 +69,7 @@ export function startRouter(_core: CoreApi, router: Router = defaultRouter()): S
   /** Decisions in flight, each with the connection that asked: what the limits count. */
   const pending = new Map<object, unknown>()
   return {
-    route_decide: async (payload, asker) => {
+    route_decide: async (payload, asker, closed) => {
       if (!asker.owner) return { error: 'OWNER_REQUIRED' }
       const input = routeInput(payload)
       if (!input) return { error: 'INVALID_REQUEST' }
@@ -78,7 +78,8 @@ export function startRouter(_core: CoreApi, router: Router = defaultRouter()): S
       const request = {}
       pending.set(request, connection)
       try {
-        const verdict = await decideRoute(input, router)
+        // The asker gone frees its slot at once rather than when Jev answers (up to eight seconds later).
+        const verdict = await decideRoute(input, router, closed)
         router.log?.(`${verdict.kind === 'session' ? 'session' : verdict.kind === 'new' ? `new (${verdict.why})` : `nothing decided (${verdict.why})`} — ${verdict.trace}`)
         if (verdict.kind === 'unavailable') return { error: 'JEV_UNAVAILABLE', detail: verdict.why }
         return verdict.kind === 'session'

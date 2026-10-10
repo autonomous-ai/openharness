@@ -6221,9 +6221,13 @@ class _SwarmScreenState extends State<SwarmScreen> {
     } finally {
       _spokenPaletteOpen = false;
       if (_menuHost && mounted) _syncNative();
-      spoken.cancelled();
+      // New work is answered once its harness is made; every other way out has been answered already,
+      // and this does nothing then.
+      if (newTask == null || !mounted) spoken.cancelled();
     }
-    if (newTask != null && mounted) await _createFromTask(newTask);
+    if (newTask != null && mounted) {
+      await _createFromTask(newTask, spoken: spoken);
+    }
   }
 
   /// ⌘B, Boss mode: say what you want and it is done
@@ -6238,34 +6242,58 @@ class _SwarmScreenState extends State<SwarmScreen> {
 
   /// A new harness for a task the router called new work, made at once with
   /// the setup the models chose; what they were not sure of comes from the
-  /// pane the person is in, as ⌘N then Return would. With no folder to start
-  /// in at all, New Harness opens on the task instead.
-  Future<void> _createFromTask(NewHarnessFromTask plan) async {
+  /// pane the person is in, as ⌘N then Return would — its permission mode
+  /// too. With no folder to start in, or one that could not be read, New
+  /// Harness opens on the task instead. A spoken task hears which harness took
+  /// it, or that none did.
+  Future<void> _createFromTask(
+    NewHarnessFromTask plan, {
+    SpokenTask? spoken,
+  }) async {
     final fallback = taskRouteDefault(app);
     final machineId = plan.machineId ?? fallback?.machineId;
     final folder = plan.machineId != null ? plan.folder : fallback?.folder;
     final chosen = plan.engine ?? fallback?.engine ?? 'claude';
     // An agent that cannot take a first task would drop the words.
     final engine = takesFirstTask(chosen) ? chosen : 'claude';
-    if (machineId == null || folder == null) {
-      await _newAgent(task: plan.task, placement: HarnessPlacement.currentTab);
+    final start = machineId == null || folder == null
+        ? null
+        : await newWorkFolder(app, machineId, folder);
+    if (!mounted) {
+      spoken?.cancelled();
       return;
     }
-    final start = await newWorkFolder(app, machineId, folder);
-    if (!mounted) return;
-    const mode = kDefaultPermissionMode;
+    if (machineId == null || start == null) {
+      spoken?.cancelled();
+      await _newAgent(task: plan.prompt, placement: HarnessPlacement.currentTab);
+      return;
+    }
+    final mode = taskRoutePermission(app, engine);
+    final attempt = AgentCreationAttempt();
     final failure = await app.createAgent(
       machineId,
       engine: engine,
       folder: start.folder,
       projectFolder: start.request,
-      prompt: plan.task,
+      prompt: plan.prompt,
       name: taskProjectTitle(plan.task),
       permissionMode: mode,
-      bypassPermission: permissionModeApproves(mode),
+      bypassPermission: mode != null && permissionModeApproves(mode),
       swarmId: app.activeSwarmId,
       placement: HarnessPlacement.currentTab,
+      attempt: attempt,
     );
+    final agentId = failure == null ? attempt.agentId : null;
+    if (agentId != null) {
+      // A follow-up said next is about this work.
+      app.lastRoutedTask = (
+        id: taskRouteSessionId(machineId, agentId),
+        at: DateTime.now(),
+      );
+      spoken?.sent(agentId);
+    } else {
+      spoken?.cancelled();
+    }
     if (!mounted) return;
     _showPaneActionHint(
       failure ??

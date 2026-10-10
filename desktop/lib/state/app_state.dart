@@ -4097,7 +4097,10 @@ class AppNotifier extends ChangeNotifier {
   /// acts on it at once, through this app's own doors.
   ///
   /// A daemon that predates the router answers `UNSUPPORTED` at once and is not asked again until the
-  /// app restarts; the card then asks Boss mode's old router, as it always did.
+  /// app restarts; the card then asks Boss mode's old router, as it always did. Every other way the
+  /// router can fail — Jev unreachable, the router busy, down or slow, an answer naming a session it was
+  /// not offered — is a decision not made, which the card says and acts on by sending nothing: the old
+  /// router sends on its own when it is confident, and that is not what ⌘B promised.
   Future<TaskRouteDecision?> routeDecide(
     String text,
     TaskRouteChoices choices,
@@ -4129,13 +4132,23 @@ class AppNotifier extends ChangeNotifier {
         },
         timeout: const Duration(seconds: 20),
       );
-      if (reply['error'] == 'UNSUPPORTED') {
+      return TaskRouteDecision.fromJson(reply, choices) ??
+          const TaskRouteDecision.unavailable(
+            'the router named a session it was not offered',
+          );
+    } on WsRequestFailure catch (failure) {
+      if (failure.code == 'UNSUPPORTED') {
         _routeDecideUnsupported = true;
         return null;
       }
-      return TaskRouteDecision.fromJson(reply, choices);
-    } catch (_) {
-      return null;
+      return TaskRouteDecision.unavailable(
+        failure.code == 'JEV_UNAVAILABLE'
+            ? failure.detail ?? ''
+            : 'the router answered ${failure.code}',
+      );
+    } catch (error) {
+      appLog.warn('route', 'the router did not answer', error: error);
+      return const TaskRouteDecision.unavailable('the router did not answer');
     }
   }
 
@@ -4164,18 +4177,22 @@ class AppNotifier extends ChangeNotifier {
   ({String id, DateTime at})? lastRoutedTask;
 
   /// ⌘B's send: the session's pane comes forward and the task goes into its prompt, through this app's
-  /// own door on any machine (`deliverTask`). Returns what went wrong, or null.
+  /// own door on any machine (`deliverTask`). [stillWanted] is asked just before the words are typed:
+  /// the pane comes forward first, and a person who sees the wrong one and presses Esc stops the send.
+  /// Returns what went wrong, or null.
   Future<String?> sendTaskToSession(
     String machineId,
     String agentId,
-    String task,
-  ) async {
+    String task, {
+    bool Function()? stillWanted,
+  }) async {
     bringSessionForward(machineId, agentId);
     return deliverTask(
       this,
       machineId: machineId,
       agentId: agentId,
       task: task,
+      stillWanted: stillWanted,
     );
   }
 

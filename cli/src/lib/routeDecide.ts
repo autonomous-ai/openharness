@@ -90,7 +90,8 @@ function describe(session: RouteSession): string {
   ].filter(Boolean).join(' — '))
 }
 
-export async function decideRoute(input: RouteInput, deps: RouteDeps): Promise<RouteVerdict> {
+/** [signal] stops the question when whoever asked has gone: Jev's answer would act on nothing. */
+export async function decideRoute(input: RouteInput, deps: RouteDeps, signal?: AbortSignal): Promise<RouteVerdict> {
   const { text } = input
   const sessions = input.sessions.slice(0, JEV_OPTIONS)
   const projects = input.projects.slice(0, JEV_OPTIONS)
@@ -130,7 +131,7 @@ export async function decideRoute(input: RouteInput, deps: RouteDeps): Promise<R
 
   let answers: Awaited<ReturnType<JevDecide>>
   try {
-    answers = await deps.jev(state, questions)
+    answers = await deps.jev(state, questions, signal)
   } catch (error) {
     deps.log?.(`jev could not answer: ${why(error)}`)
     return { kind: 'unavailable', why: (error as Error).message, trace: [...trace, 'jev: failed'].join(' · ') }
