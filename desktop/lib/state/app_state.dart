@@ -2689,9 +2689,15 @@ class AppNotifier extends ChangeNotifier {
     });
   }
 
+  /// Replaces the socket send of the window's tile roster and swarms in tests.
+  @visibleForTesting
+  void Function(String type, Map<String, dynamic> payload)?
+  dialAnnouncementSenderForTest;
+
   void _announceOpenPanesToDial() {
     final pool = _pool;
-    if (pool == null) return;
+    final test = dialAnnouncementSenderForTest;
+    if (pool == null && test == null) return;
     // Every tile that HAS an agent id, shells included. A terminal used to be
     // left out here — the dial drives agents, and a shell has no turn to watch
     // — but leaving it out is what made the dial disagree with its own promise
@@ -2764,6 +2770,15 @@ class AppNotifier extends ChangeNotifier {
         },
     ];
     final overview = playerOverview;
+    if (test != null) {
+      test('app_swarms', {
+        'active': activeSwarmId,
+        'swarms': swarmRows,
+        'tiles': activeTiles,
+        'overview': overview,
+      });
+    }
+    if (pool == null) return;
     for (final machineId in machineStates.keys) {
       final connection = pool[machineId];
       if (connection == null) continue;

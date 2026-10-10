@@ -43,7 +43,7 @@ import { DialLog } from './cable/dialLog.js'
 import { buildLogBundle, bundleFileName, redactSecretsInText } from './lib/logBundle.js'
 import { CableSession } from './cable/cableSession.js'
 import { CableFleet } from './cable/cableFleet.js'
-import { DaemonCableHost, cableEventFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
+import { DaemonCableHost, cableEventFor, cableStepFor, cableQuestionFor, cableQuestionCloseFor } from './cable/cableHost.js'
 import { terminalActivitySnapshot } from './cable/terminalActivity.js'
 
 import { MachineListCache, machineListCachePath, withStaleMarker } from './device/machineList.js'
@@ -6861,6 +6861,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
 (frame as { type?: string; agentId?: string; payload?: { requestId?: string; questions?: unknown } })
     if (question) { void cable.question(question.agentId, question.requestId, question.questions); return }
+    const step = cableStepFor(frame as { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string } })
+    if (step) { void cable.turnStep(step.agentId, step.step); return }
     const event = cableEventFor(frame as { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string } })
     // Logged at the fork, not at the send: this is the one place that can answer "did the daemon even
     // decide to tell the dial", which is a different question from "did the wire carry it" and was the
@@ -6875,7 +6877,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
       // Quiet when the window already has this agent on screen; silent when the
       // turn was a sub-agent's. The tile still updates — the recap is what it
       // draws — only the beep and the drawer entry are withheld.
-      void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent)
+      void cable.summary(event.agentId, event.recap || event.text, event.text, alreadyOnScreen(event.agentId), event.subagent,
+        mirror.lastFullText(registry.byAgent(event.agentId)?.sessionId ?? event.agentId))
     }
     else void cable.turnError(event.agentId, event.text)
   }

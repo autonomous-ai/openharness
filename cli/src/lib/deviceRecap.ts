@@ -39,6 +39,25 @@ export function deriveTurnBody(text: string): string {
   return clip(stripMarkdown(text).replace(/\s+/g, ' ').trim(), BODY_MAX_CHARS)
 }
 
+/** The longer text a `recap: "long-v1"` device draws under the headline. */
+export const LONG_RECAP_MAX_CHARS = 1200
+/** The frame cap is 8192 B; the long text never takes more than this many UTF-8 bytes of it. */
+export const LONG_RECAP_MAX_BYTES = 3600
+
+/**
+ * The answer's prose for a device with room to read: markdown stripped, whitespace collapsed, clipped
+ * on a word boundary with "…". Null when there is nothing to say.
+ */
+export function deriveLongRecap(text: string): string | null {
+  let max = LONG_RECAP_MAX_CHARS
+  let out = clip(stripMarkdown(text).replace(/\s+/g, ' ').trim(), max)
+  while (out && Buffer.byteLength(out, 'utf8') > LONG_RECAP_MAX_BYTES) {
+    max = Math.floor(max * 0.9)
+    out = clip(stripMarkdown(text).replace(/\s+/g, ' ').trim(), max)
+  }
+  return out || null
+}
+
 /** Cut to `max` characters on a word boundary, marking the cut. Never mid-word if it can be helped. */
 function clip(text: string, max: number, marker = '…'): string {
   const t = text.trim()

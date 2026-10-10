@@ -21,6 +21,9 @@
 #include "cable_machines.h"
 #include "device_mac.h"
 #include "esp_app_desc.h"
+#ifdef DEVICE_POD
+#include "esp_attr.h"
+#endif
 #include "esp_log.h"
 #include "audio_capture.h"   // audio_notify_done() — the completion beep
 #include "audio_client.h"
@@ -183,6 +186,12 @@ static void send_hello(void)
 #ifdef DEVICE_PRO_COMPANION
     if (audio_speech_available()) msg_string(&root, "speech", "pcm16-v1");
     msg_string(&root, "player", "library-v1");
+#ifdef DEVICE_POD
+    // The daemon sends swarms agentIds (who is in each tab) only to a device that asks for them this way.
+    msg_string(&root, "swarms", "members-v1");
+    // ...and the longer recap text (`full` on a summary) that fills the Recap screen.
+    msg_string(&root, "recap", "long-v1");
+#endif
 #endif
     // Also the device's USB serial number, so the daemon can tell one dial from another before a byte is
     // exchanged — and can tell a keepalive greeting from a new board.
@@ -713,6 +722,12 @@ static const char *str_of(const cJSON *o, const char *key)
     return cJSON_IsString(v) && v->valuestring ? v->valuestring : NULL;
 }
 
+#ifdef DEVICE_POD
+// 24 x 24 x 48 B = 27 KB: PSRAM, not internal RAM (the same reason ui_habitat.c's model is there).
+static EXT_RAM_BSS_ATTR cable_swarm_members_t s_swarm_members;
+const cable_swarm_members_t *cable_swarm_members(void) { return &s_swarm_members; }
+#endif
+
 // `swarms`: the whole list, replaced on arrival. Rows missing an id are dropped; a name is optional
 // (the window's default is "New swarm", but a blank one still has to be a row that can be picked).
 static void handle_swarms(const cJSON *p)
@@ -720,6 +735,10 @@ static void handle_swarms(const cJSON *p)
     const cJSON *items = cJSON_GetObjectItemCaseSensitive(p, "items");
     if (!cJSON_IsArray(items)) return;
     static cable_swarm_t rows[SWARMS_MAX];   // static: 24 × ~96 B is too much for the reader task's stack
+#ifdef DEVICE_POD
+    memset(s_swarm_members.count, 0, sizeof s_swarm_members.count);
+    memset(s_swarm_members.meta, 0, sizeof s_swarm_members.meta);
+#endif
     int n = 0;
     const cJSON *it = NULL;
     cJSON_ArrayForEach(it, items) {
@@ -739,6 +758,36 @@ static void handle_swarms(const cJSON *p)
         // before tiles were counted separately.
         const cJSON *panes = cJSON_GetObjectItemCaseSensitive(it, "panes");
         rows[n].panes = cJSON_IsNumber(panes) ? (panes->valueint > 0 ? panes->valueint : 0) : rows[n].agents;
+#ifdef DEVICE_POD
+        // Optional (an older daemon omits it). Row n keeps its ids in slot n; a bad entry is skipped, not fatal.
+        const cJSON *ids = cJSON_GetObjectItemCaseSensitive(it, "agentIds");
+        const cJSON *aid = NULL, *id_list = cJSON_IsArray(ids) ? ids : NULL;
+        cJSON_ArrayForEach(aid, id_list) {
+            if (s_swarm_members.count[n] >= SWARM_MEMBERS_MAX) break;
+            if (!cJSON_IsString(aid) || !aid->valuestring[0] || strlen(aid->valuestring) >= ID_MAX) continue;
+            snprintf(s_swarm_members.id[n][s_swarm_members.count[n]++], ID_MAX, "%s", aid->valuestring);
+        }
+        // `members`: who each id is, for the ones nobody else lists (an offline machine's agent). Matched to the ids above by
+        // id; an entry whose id is not among them, or one that is malformed, is skipped.
+        const cJSON *mem = NULL, *mem_raw = cJSON_GetObjectItemCaseSensitive(it, "members");
+        const cJSON *mem_list = cJSON_IsArray(mem_raw) ? mem_raw : NULL;
+        cJSON_ArrayForEach(mem, mem_list) {
+            const char *mid = str_of(mem, "id");
+            if (!mid) continue;
+            for (int k = 0; k < s_swarm_members.count[n]; k++) {
+                if (strcmp(s_swarm_members.id[n][k], mid)) continue;
+                cable_swarm_member_meta_t *mm = &s_swarm_members.meta[n][k];
+                const char *nm = str_of(mem, "name"), *en = str_of(mem, "engine"), *ma = str_of(mem, "machine");
+                const cJSON *on = cJSON_GetObjectItemCaseSensitive(mem, "online");
+                snprintf(mm->name, sizeof mm->name, "%s", nm ? nm : "");
+                snprintf(mm->engine, sizeof mm->engine, "%s", en ? en : "");
+                snprintf(mm->machine, sizeof mm->machine, "%s", ma ? ma : "");
+                mm->online = !cJSON_IsBool(on) || cJSON_IsTrue(on);
+                mm->has = true;
+                break;
+            }
+        }
+#endif
         n++;
     }
     const char *selected = str_of(p, "selected");
@@ -1127,6 +1176,7 @@ static void handle_message(const cJSON *root)
             elapsed->valuedouble==(double)elapsed->valueint ? elapsed->valueint : -1;
         if (agent_id) ui_project_player_activity(agent_id,str_of(p,"action"),seconds);
 #endif
+        if (agent_id && str_of(p, "step")) ui_project_step(agent_id, str_of(p, "step"));
 #endif
         return;
     }
@@ -1145,9 +1195,11 @@ static void handle_message(const cJSON *root)
         // would make plugging the cable in announce every turn that finished while it was unplugged.
         if (cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(p, "restore"))) {
             ui_project_restore_event(agent_id, "summary", str_of(p, "text"), str_of(p, "recap"));
+            ui_project_recap_full(agent_id, str_of(p, "full"), true);
             return;
         }
         ui_project_emit(agent_id, "", "summary", str_of(p, "text"), str_of(p, "recap"));
+        ui_project_recap_full(agent_id, str_of(p, "full"), false);
         // The beep and the notification both hang off the SUMMARY, never the bare `done`. A real turn
         // emits done THEN summary; an empty or phantom turn emits only done — so a session that briefly
         // registers and vanishes stays silent, and the notification always carries a real recap.

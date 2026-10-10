@@ -303,6 +303,7 @@ export class DeviceFleet implements MachineFleet {
           recap: typeof r.recap === 'string' ? r.recap : '',
           text: typeof r.text === 'string' ? r.text : '',
           ask: typeof r.ask === 'string' ? r.ask : '',
+          ...(typeof r.fullText === 'string' && r.fullText ? { fullText: r.fullText } : {}),
         }
       })
       this.recapCache.set(key, turns)

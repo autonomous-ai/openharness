@@ -179,6 +179,34 @@ typedef struct {
     int  panes;
 } cable_swarm_t;
 
+/* What the daemon knows about a member (`members` on a `swarms` item, daemon >= members metadata): who it is and whether
+ * its machine is online. meta[i][k] belongs to id[i][k]; has is false for a member the daemon described nothing about
+ * (and for every member of an older daemon). */
+typedef struct {
+    char name[CABLE_NAME_MAX], engine[12], machine[CABLE_NAME_MAX];
+    bool has, online;
+} cable_swarm_member_meta_t;
+
+#ifdef DEVICE_POD
+/*
+ * Which agents each tab holds, as the daemon lists them (`agentIds` on a `swarms` item, in the window's
+ * order). Pod draws every tab from these. count[i] belongs to the i-th row of the SAME frame, after the rows
+ * that were dropped for a missing or duplicate id, so it lines up with the rows ui_swarms_replace() received.
+ * An item without the field (an older daemon) has count 0. Ids that do not fit are dropped, as are ids past
+ * SWARM_MEMBERS_MAX.
+ *
+ * Written only by the cable reader task, in handle_swarms(), just before ui_swarms_replace()/ui_tiles_replace()
+ * run on that same task. Read it only from inside those callbacks and copy what you keep.
+ */
+#define SWARM_MEMBERS_MAX 24   // the window's own ceiling on panes in a tab (== SWARM_TILES_MAX)
+typedef struct {
+    uint8_t count[SWARMS_MAX];
+    char id[SWARMS_MAX][SWARM_MEMBERS_MAX][ID_MAX];
+    cable_swarm_member_meta_t meta[SWARMS_MAX][SWARM_MEMBERS_MAX];
+} cable_swarm_members_t;
+const cable_swarm_members_t *cable_swarm_members(void);
+#endif
+
 /*
  * ONE TILE OF THE SELECTED TAB'S GRID, exactly where the window put it.
  *

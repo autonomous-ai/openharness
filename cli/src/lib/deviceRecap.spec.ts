@@ -31,3 +31,23 @@ describe('device recap minimum', () => {
     expect(extendShortRecap('The fix is installed.', 'The fix is installed. All checks passed.')).toBe('The fix is installed. All checks passed.')
   })
 })
+
+import { deriveLongRecap, LONG_RECAP_MAX_BYTES } from './deviceRecap.js'
+
+describe('deriveLongRecap', () => {
+  it('strips markdown and collapses whitespace', () => {
+    expect(deriveLongRecap('## Kết quả\n\n- **SJC**: 149 triệu\n\n```sh\nls\n```\nDone.')).toBe('Kết quả SJC: 149 triệu Done.')
+  })
+  it('clips long text at a word boundary with an ellipsis, within the char and byte caps', () => {
+    const long = Array.from({ length: 600 }, (_, i) => `từ${i}`).join(' ')
+    const out = deriveLongRecap(long)!
+    expect(out.length).toBeLessThanOrEqual(1200)
+    expect(out.endsWith('…')).toBe(true)
+    expect(out.slice(0, -1).endsWith(' ')).toBe(false)
+    expect(Buffer.byteLength(out)).toBeLessThanOrEqual(LONG_RECAP_MAX_BYTES)
+  })
+  it('keeps short text whole and returns null for nothing', () => {
+    expect(deriveLongRecap('All good.')).toBe('All good.')
+    expect(deriveLongRecap('  ')).toBeNull()
+  })
+})

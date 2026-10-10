@@ -7996,6 +7996,16 @@ void ui_project_restore_event(const char *project_id, const char *kind, const ch
     project_apply_event(project_id, NULL, kind, text, recap, true);
 }
 
+void ui_project_recap_full(const char *project_id, const char *full, bool restore)
+{
+    (void)project_id; (void)full; (void)restore;
+}
+
+void ui_project_step(const char *project_id, const char *step)
+{
+    (void)project_id; (void)step;
+}
+
 void ui_project_clear_event(const char *project_id)
 {
     if (!project_id || !project_id[0]) return;

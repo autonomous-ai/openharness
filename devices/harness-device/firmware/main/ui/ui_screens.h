@@ -365,6 +365,12 @@ void ui_player_library(const pro_player_library_t *page);
 #endif
 // Restore a persisted historical card without changing the live busy lifecycle for this project.
 void ui_project_restore_event(const char *project_id, const char *kind, const char *text, const char *recap);
+// The longer answer text of a summary (`full`, only when the hello asked `recap: "long-v1"`), for a screen with room
+// to read it. NULL or empty: nothing. Pod replaces the recap it was just given; every other build ignores it.
+void ui_project_recap_full(const char *project_id, const char *full, bool restore);
+// A tool the turn just started (`turn.activity` `step`, "Read · file.c"). Pod shows it on the working screen;
+// every other build ignores it.
+void ui_project_step(const char *project_id, const char *step);
 void ui_project_clear_event(const char *project_id);
 // Ack of a cancel we sent: clear the matching project's transient "processing" status (the killed
 // turn won't emit a 'done'). Matches by session_id; no-op if not found.

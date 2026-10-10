@@ -25,7 +25,7 @@ import { configuredCreatureVoice } from './creatureVoiceConfig.js'
 //   3. SAY NOTHING WHEN NOTHING CHANGED. That is what keeps the link idle during a long turn, and it is
 //      why rule 2 has to exist at all.
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_PAYLOAD, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { DialLog } from './dialLog.js'
 import { FirmwareTransfer } from './fwPush.js'
 import { SerialLink, findDialPort } from './serial.js'
@@ -130,6 +130,9 @@ const DEFAULT_VOICE_RATE = 16_000
 /** A voice turn longer than this is a stuck dial, not a person talking. 16 kHz mono 16-bit ≈ 32 KB/s. */
 const VOICE_MAX_BYTES = 10 * 60 * 32_000
 
+/** What a `swarms` item's `members` says about one member id (see CableSession.memberMeta). */
+export interface SwarmMemberMeta { id: string; name: string; engine: string; machine: string; online: boolean }
+
 export interface CableAgent {
   id: string
   name: string
@@ -173,6 +176,8 @@ export interface CableSwarm {
   name: string
   /** How many agents it holds — the dial draws the count, never the members. */
   agents: number
+  /** The agents it holds, in the window's own order — the dial lists them as that tab's members. */
+  agentIds: string[]
   /**
    * How many TILES it holds, of any kind — agents, shells, viewers.
    *
@@ -234,7 +239,7 @@ import type { WindowRoute } from './windowRoute.js'
 import { withSelectedPassage, type SelectionCommand, type SelectionResult } from './windowSelection.js'
 import type { VisitCommand, VisitResult } from './windowVisit.js'
 import type { FormCommand, FormResult } from './windowForm.js'
-import { extendShortRecap } from '../lib/deviceRecap.js'
+import { deriveLongRecap, extendShortRecap } from '../lib/deviceRecap.js'
 
 export interface RouteDecision {
   agentId: string
@@ -340,7 +345,7 @@ export interface CableHost {
   /** The runtime model/effort catalog for one agent, as opaque profile ids the dial groups and shows. */
   listModels(agentId: string): Promise<string[]>
   /** One agent's last turn summaries, newest first — what a reattached dial needs to redraw its tiles. */
-  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string }>>
+  recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; fullText?: string }>>
   /** What the window still has unread, newest first — replayed to a dial that has just attached. */
   listUnread(): UnreadNotification[]
   /**
@@ -712,6 +717,8 @@ export class CableSession {
     this.lastMachinesKey = ''
     this.playerOverviewKey = ''
     this.playerCapable = false
+    this.swarmMembers = false
+    this.longRecap = false
     this.playerOffset = this.playerRequest = 0
     this.playerLibraryKey = ''
     this.playerLibraryAt = 0
@@ -753,6 +760,8 @@ export class CableSession {
     this.lastAgentsKey = ''
     this.lastMachinesKey = ''
     this.playerCapable = false
+    this.swarmMembers = false
+    this.longRecap = false
     this.playerOffset = this.playerRequest = 0
     this.playerLibraryKey = ''
     this.playerLibraryAt = 0
@@ -823,6 +832,8 @@ export class CableSession {
           return
         }
         this.playerCapable = str('player') === 'library-v1'
+        this.swarmMembers = str('swarms') === 'members-v1'
+        this.longRecap = str('recap') === 'long-v1'
         this.speech.capability(str('speech') === 'pcm16-v1')
         const mac = str('mac') ?? ''
         // Rule 1: every greeting is answered, but only an unfamiliar dial gets the full state.
@@ -1623,6 +1634,16 @@ export class CableSession {
   }
 
   private playerCapable = false
+  /** The device said `swarms: 'members-v1'` in its hello: it draws every tab's members, so it gets `agentIds`. */
+  private swarmMembers = false
+  /** The device said `recap: 'long-v1'`: it draws a longer text than the headline, so `summary` carries `full`. */
+  private longRecap = false
+
+  /** `{ full }` for a capable device and an answer with something to say; nothing otherwise. */
+  private fullField(fullText?: string): { full?: string } {
+    const full = this.longRecap && fullText ? deriveLongRecap(fullText) : null
+    return full ? { full } : {}
+  }
   private playerOffset = 0
   private playerRequest = 0
   private playerLibraryKey = ''
@@ -1768,7 +1789,7 @@ export class CableSession {
     // behind them — including the `focus` the person who just clicked is waiting for. Measured on the
     // desk: a click from a local agent to a remote one took 1.5 s, of which 0.7 s was this loop waiting
     // on the first `agent_recent` while the dial sat on the old tile.
-    const rows: Array<{ id: string; past: Array<{ recap: string; text: string }> }> = []
+    const rows: Array<{ id: string; past: Array<{ recap: string; text: string; fullText?: string }> }> = []
     for (const a of await this.host.listAgents()) {
       // Marked as it is ASKED FOR, not as it is sent: the answer is a cloud round trip, and a tick
       // arriving mid-loop would otherwise start a second walk over the same agents.
@@ -1782,7 +1803,7 @@ export class CableSession {
         // Oldest first, so the newest ends up on top of the tile's stack.
         for (const s of [...row.past].reverse()) {
           if (!s.recap && !s.text) continue
-          await this.send({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, restore: true })
+          await this.send({ t: 'summary', agentId: row.id, recap: s.recap, text: s.text, ...this.fullField(s.fullText), restore: true })
         }
       }
     })
@@ -1838,6 +1859,7 @@ export class CableSession {
 
   private async syncSwarmsNow(force: boolean): Promise<void> {
     const { selected, swarms, tiles } = this.host.listSwarms()
+    const meta = await this.memberMeta(swarms)
     // `panes` belongs in the key as much as `agents` does. Opening a terminal on a tab that holds no
     // agent moves only the tile count, and a key blind to it would swallow that push and leave the
     // dial showing a tab it still believes is empty — the very row this field exists to keep.
@@ -1846,20 +1868,81 @@ export class CableSession {
     // exactly where they were, which a key blind to it would swallow — leaving the device drawing the
     // shape the tab used to have.
     const shape = tiles.map((t) => `${t.x1},${t.y1},${t.x2},${t.y2},${t.agentId}`).join(';')
-    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}:${s.panes}`).join('|')}|${shape}`
+    const key = `${selected}|${swarms.map((s) => `${s.id}:${s.name}:${s.agents}:${s.agentIds.join(',')}:${s.panes}`).join('|')}|${shape}|${[...meta].map(([id, m]) => `${id}=${m.name}/${m.engine}/${m.machine}/${m.online ? 1 : 0}`).join(',')}`
     if (!force && key === this.lastSwarmsKey) return
-    this.lastSwarmsKey = key
     this.log(`cable: swarms → ${swarms.length}${selected ? ` (on ${selected})` : ''}${force ? ' [push]' : ''}`)
     // ONE frame, not a begin/row/end stream: two dozen rows of an id, a name and a count fit in a
     // kilobyte, and the dial replaces the whole list on arrival either way.
-    await this.send({
-      t: 'swarms', selected,
-      items: swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agents, panes: s.panes })),
-      // Flat quads plus an id, rather than objects: this is read by a C parser on a device, and four
-      // numbers in a row cost it nothing to walk.
-      tiles: tiles.map((t) => ({ x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, a: t.agentId })),
-    })
+    const message = this.swarmsMessage(selected, swarms, tiles, key, meta)
+    // The key is recorded only once the frame is out. A failed write closes the link, and a key
+    // already stored would make the reconnect think the dial had been told and leave it without.
+    if (await this.send(message)) this.lastSwarmsKey = key
   }
+
+  /**
+   * Build the swarms frame, member ids only for a device that asked for them and only as many as fit.
+   * `encodeCableFrame` throws over 8192 bytes, `send` treats that as a dead link and closes it, and the
+   * reconnect would send the same frame again: one oversized frame is a loop for every device.
+   */
+  /**
+   * What the daemon knows about every member of every tab: name, engine, machine and whether that machine is
+   * online. A tab can hold an agent of a machine that is offline: it is in the window's `agentIds` but in nobody's
+   * roster or library, so the device had only an id to draw. Empty for a device that did not ask for member ids, and
+   * an id the daemon has never heard of simply has no entry.
+   */
+  private async memberMeta(swarms: CableSwarm[]): Promise<Map<string, SwarmMemberMeta>> {
+    const out = new Map<string, SwarmMemberMeta>()
+    if (!this.swarmMembers) return out
+    let machines: CableMachine[] = []
+    try { machines = (await this.host.listMachines()).machines } catch { /* unknown liveness reads as online */ }
+    for (const sw of swarms) {
+      for (const id of sw.agentIds) {
+        if (out.has(id)) continue
+        const who = this.host.describe(id)
+        if (!who || (!who.name && !who.machine)) continue
+        const m = who.machine ? machines.find((x) => x.name === who.machine) : undefined
+        out.set(id, { id, name: who.name, engine: who.engine, machine: who.machine, online: !m || m.state !== 'offline' })
+      }
+    }
+    return out
+  }
+
+  private swarmsMessage(selected: string, swarms: CableSwarm[], tiles: CableTile[], key: string,
+                        meta: Map<string, SwarmMemberMeta> = new Map()): Message {
+    // Flat quads plus an id, rather than objects: this is read by a C parser on a device, and four
+    // numbers in a row cost it nothing to walk.
+    const flatTiles = tiles.map((t) => ({ x1: t.x1, y1: t.y1, x2: t.x2, y2: t.y2, a: t.agentId }))
+    const build = (withIds: (s: CableSwarm) => boolean, withMeta = false): Message => ({
+      t: 'swarms', selected,
+      items: swarms.map((s) => {
+        const members = withMeta && withIds(s) ? s.agentIds.flatMap((id) => meta.get(id) ?? []) : []
+        return {
+          id: s.id, name: s.name, agents: s.agents, ...(withIds(s) ? { agentIds: s.agentIds } : {}),
+          ...(members.length ? { members } : {}), panes: s.panes,
+        }
+      }),
+      tiles: flatTiles,
+    })
+    if (!this.swarmMembers) return build(() => false)
+    // Margin under the cap for anything the frame carries beyond this JSON.
+    const budget = CABLE_MAX_PAYLOAD - 256
+    const fits = (m: Message) => Buffer.byteLength(JSON.stringify(m), 'utf8') <= budget
+    // Metadata goes first when the frame is too big: ids are what the device lists, metadata only names the ones it
+    // cannot find elsewhere.
+    const withMeta = build(() => true, true)
+    if (fits(withMeta)) return withMeta
+    const all = build(() => true)
+    if (fits(all)) return all
+    const selectedOnly = build((s) => s.id === selected)
+    const trimmed = fits(selectedOnly) ? selectedOnly : build(() => false)
+    if (this.swarmsTrimmedKey !== key) {
+      this.swarmsTrimmedKey = key
+      this.log(`cable: swarms too large for one frame — ${trimmed === selectedOnly ? "member ids kept for the selected tab only" : 'member ids dropped'}`)
+    }
+    return trimmed
+  }
+
+  private swarmsTrimmedKey = ''
 
   // ── machines ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -2019,6 +2102,10 @@ export class CableSession {
       this.activityRefreshPending = false
     }
   }
+  /** The tool the turn just started, for the working screen's step lines. Older firmware ignores `step`. */
+  async turnStep(agentId: string, step: string): Promise<void> {
+    await this.send({ t: 'turn.activity', agentId, text: '', step })
+  }
   async turnDone(agentId: string): Promise<void> {
     this.speech.completed(agentId)
     this.activityReads.delete(agentId)
@@ -2035,13 +2122,13 @@ export class CableSession {
    * rather than different frames, so firmware that predates them simply
    * notifies as it always did instead of losing the recap.
    */
-  async summary(agentId: string, recap: string, text: string, quiet = false, silent = false): Promise<void> {
+  async summary(agentId: string, recap: string, text: string, quiet = false, silent = false, fullText?: string): Promise<void> {
     this.speech.completed(agentId)
     this.activityReads.delete(agentId)
     this.activityEndedAt.set(agentId, Date.now())
     recap = extendShortRecap(recap, text)
     const who = this.whoIs(agentId)
-    const sent = await this.send({ t: 'summary', agentId, ...who, recap, text, ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
+    const sent = await this.send({ t: 'summary', agentId, ...who, recap, text, ...this.fullField(fullText), ...(quiet ? { quiet: true } : {}), ...(silent ? { silent: true } : {}) })
     if (sent) void this.speech.summary(agentId, recap, text, this.desiredFocus, silent)
   }
 

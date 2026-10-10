@@ -29,6 +29,9 @@
 #include "creature_gallery.h"
 static ht_gallery_t gallery;
 #endif
+#ifdef DEVICE_POD
+#include "pod_glue.h"
+#endif
 #include "ui_screens.h"
 #include "display.h"
 #include "audio_client.h"
@@ -398,6 +401,11 @@ static _Atomic(TaskHandle_t) reload_waiter;
 static atomic_bool reload_requested;
 static bool scroll_reversed;
 static ht_scroll_t scroll;
+#ifdef DEVICE_POD
+#define POD_SCROLL_LIVE && !pod.scroll.live
+#else
+#define POD_SCROLL_LIVE
+#endif
 static ht_selection_t selection;
 static ht_workspace_t workspace;
 static ht_tab_carousel_t tab_carousel;
@@ -864,6 +872,32 @@ static bool pro_work_available(const agent_t *a, int mode)
 {
     return !pro_work_block_reason(a, mode);
 }
+#ifdef DEVICE_POD
+// Pod's plain voice to a named agent (A_VOICE value 9). Pod opens any agent of the library, not only the window's
+// tab, so the pane gates of pro_work_block_reason (the agent must be on s.agents, the roster confirmed, nothing
+// loading) do not apply: the daemon routes a turn by agent id. What is kept is the negative evidence that names
+// the agent: a terminal, an offline computer, an open question. NULL: record.
+static const char *pod_voice_block_reason(const char *id)
+{
+    if (!s.connected) return "Not connected";
+    int i = find(id);
+    if (i < 0) return NULL;   // a library agent from another tab: nothing here says it cannot be reached
+    const agent_t *a = &s.agents[i];
+    if (!strcmp(a->engine, "terminal")) return "Choose an agent pane.";
+    if (a->machine_id[0])
+        for (int k = 0; k < s.machine_count; k++) if (!strcmp(a->machine_id, s.machines[k].id)) {
+            if (!strcmp(s.machines[k].state, "offline")) return "This computer is offline.";
+            if (!strcmp(s.machines[k].state, "needs-link")) return "Link this computer in Harness.";
+            break;
+        }
+    for (int k = 0; k < s.notice_count; k++) {
+        const cable_notif_t *n = &s.notice[k];
+        if (n->question && n->question_current && !strcmp(a->id, n->agent_id))
+            return n->question_unavailable ? "Check its question in Harness." : "Answer its question first.";
+    }
+    return NULL;
+}
+#endif
 static void pro_work_capture_pin(const agent_t *a, int mode)
 {
     COPY(s.work_capture.machine, a->machine_id);
@@ -2628,6 +2662,79 @@ static void render_lock(ht_scene_t *f)
 #include "pro_player_controls.inc"
 #include "pro_home.inc"
 #endif
+#ifdef DEVICE_POD
+// Pod (pod/, glued by pod_glue.c). The model, the navigation stack and the last frame's hits: one object in PSRAM
+// (about 130 KB). LOCK: display_lock() (model_lock, recursive), the same one that guards `s`. Every writer holds
+// it: the cable reader task in the ui_* callbacks, the touch task in habitat_touch (touch_habitat.c locks around
+// it), the render task in habitat_tick / habitat_scene_take / habitat_next_wake_ms (display_habitat.c locks
+// around them). Nothing reads it outside those.
+static EXT_RAM_BSS_ATTR pod_ui_t pod;
+static int pod_sweep_offset;      // the library offset the running sweep asks for next
+static uint32_t pod_sweep_try_ms; // last (re)request of it, so a busy queue is retried once a second
+// Perform what Pod asked for, through the same actions Player 1 used. Called with display_lock held.
+static void pod_perform(pod_out_t o)
+{
+    switch (o.fx) {
+    case POD_FX_VOICE_BEGIN: {
+        action_t a = {.kind = A_VOICE, .value = 9}; // plain voice to a named agent, any the library lists
+        COPY(a.id, o.agent);
+        bool was_open = s.voice_open;
+        s.title[0] = s.message[0] = 0;
+        dispatch(a);
+        // A start that was refused (a recording or a send still in flight, no cable) must not leave Talking up,
+        // and says why for a moment.
+        if (!s.voice_start_pending) {
+            pod_ui_talk_over(&pod);
+            // A busy queue parks Player 1 on its MESSAGE view; Pod never shows it, and its gates read s.view.
+            bool busy = !strcmp(s.title, "One moment") && s.message[0];
+            if (s.view == MESSAGE) view(HOME);
+            pod_ui_notice(&pod, !s.connected ? "Not connected" :
+                          (busy || !strcmp(s.title, "Instruction unavailable")) && s.message[0] ? s.message :
+                          was_open ? "Still sending the last message" : "Can't talk right now", ms());
+            change();
+        }
+        break;
+    }
+    case POD_FX_VOICE_END:
+        // Stopped before the recorder even started: there is nothing to send, so cancel the start.
+        if (s.voice_open && s.voice_start_pending) {
+            dispatch((action_t){.kind = A_VOICE_ABORT});
+            pod_ui_unsend(&pod, ms());   // nothing was recorded or sent: no send scene, "Not sent"
+            change();
+        } else {
+            dispatch((action_t){.kind = A_VOICE_STOP});
+        }
+        break;
+    case POD_FX_VOICE_ABORT:
+        dispatch((action_t){.kind = A_VOICE_ABORT});
+        break;
+    case POD_FX_AGENT_OPEN: {
+        action_t a = {.kind = A_DESKTOP}; // agent.open (cable_client_send_open), as the desktop button
+        COPY(a.id, o.agent);
+        dispatch(a);
+        break;
+    }
+    case POD_FX_NONE:
+        break;
+    }
+}
+// After any feed: perform its effect, then redraw if the model or the stack moved.
+static void pod_settle(pod_out_t o)
+{
+    pod_perform(o);
+    if (pod_ui_take_changed(&pod)) change();
+}
+static void pod_roster_sync(void)
+{
+    if (s.bulk) return; // refresh_projects() reconciles inside a bulk bracket and syncs once at its end
+    // Scratch in PSRAM, not on the 6 KB cable_link stack. Single writer: every caller holds display_lock().
+    static EXT_RAM_BSS_ATTR pod_roster_row_t rows[POD_AGENTS_MAX];
+    int n = s.count < POD_AGENTS_MAX ? s.count : POD_AGENTS_MAX;
+    for (int i = 0; i < n; i++)
+        rows[i] = (pod_roster_row_t){s.agents[i].id, s.agents[i].name, s.agents[i].engine, s.agents[i].machine};
+    pod_settle(pod_ui_roster(&pod, rows, n));
+}
+#endif
 bool habitat_scene_take(ht_scene_t *f)
 {
 #ifdef DEVICE_CREATURE_GALLERY
@@ -2645,6 +2752,12 @@ bool habitat_scene_take(ht_scene_t *f)
         render_lock(f);
         return true;
     }
+#ifdef DEVICE_POD
+    // Pod replaces every Player 1 and Pro screen. Its hits live in pod.frame, not in s.hits: they are 32 of a
+    // different shape (a pod_action_t and a 16-bit argument), and habitat_touch hands them to Pod whole.
+    pod_ui_render(&pod, f, ms());
+    return true;
+#endif
 #ifdef DEVICE_PRO_COMPANION
     if (s.player && (s.view==HOME || s.view==AGENT || s.view==VOICE)) { pro_player_home(f); return true; }
     if (s.player && s.view==AGENTS && !s.carry_route.choosing) { pro_player_library(f); return true; }
@@ -2763,7 +2876,7 @@ static bool queue(action_t a)
     if (a.kind == A_NOTICE_READ)
         return actions && uxQueueSpacesAvailable(actions) > 1 && xQueueSend(actions, &a, 0) == pdPASS;
     // A live scroll owns the final slot, so a stalled USB writer cannot drop its UP.
-    if (actions && ((!scroll.live && !selection.active && !visit.id[0]) || uxQueueSpacesAvailable(actions) > 1) &&
+    if (actions && ((!scroll.live POD_SCROLL_LIVE && !selection.active && !visit.id[0]) || uxQueueSpacesAvailable(actions) > 1) &&
         xQueueSend(actions, &a, 0) == pdPASS)
         return true;
     COPY(s.title, "One moment");
@@ -3773,6 +3886,13 @@ static void dispatch(action_t a)
             find(a.id) < 0 || (int32_t)(ms() - carry.deadline) >= 0)) break;
         // A question sheet can only record for its explicit reviewed question.
         if (question_view(s.view) && a.value != 4) break;
+#ifdef DEVICE_POD
+        if (a.value == 9) {
+            // s.view stays HOME under Pod, where the block below would drop the reason silently.
+            const char *reason = pod_voice_block_reason(a.id);
+            if (reason) { COPY(s.title, "Instruction unavailable"); COPY(s.message, reason); change(); break; }
+        }
+#endif
         // Reject known engine/recipient mismatches before recording. Existing
         // voice.draft support does not attest a host's strict intent handling.
         if (a.value == 0 || a.value == 1 || a.value == 3 || a.value == 8) {
@@ -3818,7 +3938,7 @@ static void dispatch(action_t a)
         if (s.connected && !visit.pending) {
             // Main-surface voice always has an explicit recipient. Home orchestration is deferred.
             if (s.view == HOME || s.view == AGENT) {
-                if (!a.id[0] || s.loading) break;
+                if (!a.id[0] || (s.loading && a.value != 9)) break;
             }
             if (a.value==4) {
                 s.voice_question_revision=s.q.revision; s.voice_question_index=s.q.index;
@@ -4557,6 +4677,21 @@ void habitat_touch(bool down, int x, int y, uint32_t now)
         s.touch_down = down;
         return;
     }
+#ifdef DEVICE_POD
+    {
+        // Pod's own gesture: a tap on a hit, or a vertical drag on Tabs / Tab. The side button's hold is not
+        // touch and stays where it was. s.touch_down is kept for habitat_touch_cancel and the readers of it.
+        bool redraw = false;
+        pod_ui_scroll_sink(&pod, scroll_emit, NULL, scroll_reversed);
+        pod_out_t o = pod_ui_touch(&pod, down, x, y, now, &redraw);
+        s.touch_down = down;
+        s.last_x = x;
+        s.last_y = y;
+        pod_perform(o);
+        if (redraw || pod_ui_take_changed(&pod)) change();
+        return;
+    }
+#endif
     bool surface = s.view == HOME || s.view == AGENT;
     if (s.touch_down && !s.touch_cancelled) {
         // Classify this sample before the hold deadline. A delayed MOVE/UP
@@ -4899,6 +5034,9 @@ void habitat_touch_cancel(void)
     ht_gallery_cancel(&gallery);
     return;
 #endif
+#ifdef DEVICE_POD
+    pod_ui_touch_cancel(&pod);
+#endif
     bool visible = s.touch_down || s.pressed >= 0;
     input_cancel();
     s.touch_down = false; // driver swallows the rest of this contact until a trustworthy UP
@@ -4907,6 +5045,9 @@ void habitat_touch_cancel(void)
 #ifdef DEVICE_PRO_COMPANION
 static bool workspace_gesture_allowed(void)
 {
+#ifdef DEVICE_POD
+    return false; // Pod has no workspace chord; s.view stays HOME underneath it
+#endif
     return s.ready && s.connected && !s.loading && !s.locked &&
            (s.view == HOME || s.view == AGENT) && !display_is_asleep() &&
            !s.voice_open && !s.voice_start_pending && !s.voice_waiting && !audio_client_active() &&
@@ -4952,6 +5093,10 @@ uint32_t habitat_next_wake_ms(void)
     uint32_t delay = 1000, now = ms();
     if (!s.ready)
         return delay;
+#ifdef DEVICE_POD
+    // The pet's next step while one is on screen, else the next second for the clocks.
+    if (!s.locked && !display_is_asleep()) delay = pod_ui_wake_ms(&pod, now);
+#endif
 #ifdef DEVICE_PRO_COMPANION
     if ((s.view == VOICE_SAMPLES || s.view == VOICE_PARAMS) && pro_voice_sample_owns_audio()) {
         int32_t left = (int32_t)(s.sample_poll_due - now);
@@ -5125,6 +5270,28 @@ void habitat_tick(void)
             }
         }
     }
+#ifdef DEVICE_POD
+    // Talking with no recording behind it (the start failed, the link dropped) or one that the 600 s cap already
+    // stopped and sent (voice_waiting): leave it for the Agent or Recap screen it came from. Its ABORT is moot, and
+    // a later back must not abort the message that is already on its way.
+    if (pod_ui_talking(&pod) && (!s.voice_open || s.voice_waiting)) { pod_ui_talk_over(&pod); change(); }
+    if (!s.locked && !display_is_asleep() && pod_ui_clock_tick(&pod, now)) change();
+    // The library sweep (see pod_glue.h). The request is the one Player 1 used: pinned by s.player_library.request,
+    // retried after 3 s; a queue that was busy is retried once a second.
+    if (s.connected && cable_client_supports(CABLE_FEATURE_PLAYER_LIBRARY)) {
+        if (pod_ui_sweeping(&pod) && (!s.player_library.pending ? now - pod_sweep_try_ms >= 1000
+                                                                : now - s.player_library.requested_ms > 3000)) {
+            pod_sweep_try_ms = now;
+            pro_player_request(pod_sweep_offset);
+        }
+        if (pod_ui_sweep_due(&pod, now)) {
+            pod_ui_sweep_begin(&pod, now);
+            pod_sweep_offset = 0;
+            pod_sweep_try_ms = now;
+            pro_player_request(0);
+        }
+    }
+#endif
 }
 static void power(bool on)
 {
@@ -5149,6 +5316,9 @@ void ui_init(void)
 {
     display_lock();
     memset(&s, 0, sizeof(s));
+#ifdef DEVICE_POD
+    pod_ui_init(&pod);
+#endif
     s.active = -1;
     s.pressed = -1;
     s.brightness = (config_load_brightness() * 100 + 127) / 255;
@@ -5172,8 +5342,10 @@ void ui_init(void)
         ht_character_select(&character, ht_character_default());
     unsigned scene = appearance >> 8;
     s.scene_choice = scene < PRO_SCENE_COUNT ? (pro_scene_id_t)scene : PRO_SCENE_MATCH;
+#ifndef DEVICE_POD // Pod draws neither: ~6.4 MB of PSRAM stays free (and their packs are not linked)
     pro_visual_init();
     pro_living_init();
+#endif
     s.living_selected=config_load_pro_living(0);
     s.player=true; // Harness Player is the Pro interface; older firmware is the rollback.
     s.living_character=s.living_selected;
@@ -5338,6 +5510,14 @@ void ui_set_connected(bool value)
 #ifdef DEVICE_PRO_COMPANION
     if (!value && draft.page.active) view(DRAFT);
 #endif
+#ifdef DEVICE_POD
+    {
+        // A dropped link has already aborted the recording above; its ABORT would only queue a cancel for a
+        // cable that is gone, so it is not performed.
+        pod_out_t o = pod_ui_link(&pod, value);
+        pod_settle(value ? o : (pod_out_t){0});
+    }
+#endif
     change();
     display_unlock();
 }
@@ -5408,6 +5588,9 @@ void ui_project_set_name(const char *id, const char *name)
     if (i >= 0) {
         COPY(s.agents[i].name, name);
         change();
+#ifdef DEVICE_POD
+        pod_roster_sync();
+#endif
     }
     display_unlock();
 }
@@ -5418,6 +5601,9 @@ void ui_project_set_engine(const char *id, const char *engine)
     if (i >= 0) {
         COPY(s.agents[i].engine, engine);
         change();
+#ifdef DEVICE_POD
+        pod_roster_sync();
+#endif
     }
     display_unlock();
 }
@@ -5435,6 +5621,9 @@ void ui_project_set_machine(const char *id, const char *machine_id, const char *
         COPY(s.agents[i].machine_id, machine_id);
         COPY(s.agents[i].machine, name);
         change();
+#ifdef DEVICE_POD
+        pod_roster_sync();
+#endif
     }
     display_unlock();
 }
@@ -5473,6 +5662,9 @@ void ui_projects_bulk_end(void)
     if (s.bulk)
         s.bulk--;
     change();
+#ifdef DEVICE_POD
+    pod_roster_sync(); // a no-op until the outermost bracket closes
+#endif
     display_unlock();
 }
 void ui_project_remove(const char *id)
@@ -5500,6 +5692,9 @@ void ui_project_remove(const char *id)
         else if (s.active >= s.count)
             s.active = s.count - 1;
         change();
+#ifdef DEVICE_POD
+        pod_roster_sync();
+#endif
     }
     display_unlock();
 }
@@ -5514,6 +5709,9 @@ void ui_project_clear_all(void)
     s.count = 0;
     s.active = -1;
     change();
+#ifdef DEVICE_POD
+    pod_roster_sync();
+#endif
     display_unlock();
 }
 void ui_project_apply_order(const char *const *ids, int n)
@@ -5536,6 +5734,9 @@ void ui_project_apply_order(const char *const *ids, int n)
     }
     s.active = find(selected);
     change();
+#ifdef DEVICE_POD
+    pod_roster_sync(); // the order is the tab's pane order for agents without agentIds
+#endif
     display_unlock();
 }
 int ui_project_count(void)
@@ -5610,6 +5811,12 @@ static void event(const char *id, const char *session, const char *kind, const c
         if (m->busy && ms() - m->last_busy <= 25000) {
             activity_text(m->activity, sizeof m->activity, text_);
             if (a) { COPY(a->tool, m->activity); change(); }
+#ifdef DEVICE_POD
+            {   // keep the elapsed clock: turn.activity carries it in the next callback, player_activity
+                const pod_agent_t *pa = pod_model_find(&pod.model, id);
+                pod_settle(pod_ui_turn(&pod, id, "verb", m->activity, pa ? (int)pa->elapsed_s : 0, ms()));   // the footer word: its own field
+            }
+#endif
         }
         display_unlock(); return;
     }
@@ -5622,6 +5829,9 @@ static void event(const char *id, const char *session, const char *kind, const c
 #ifdef DEVICE_PRO_COMPANION
             // A heartbeat can arrive before the periodic stale-state prune.
             if (m->busy && ms() - m->last_busy > 25000) m->busy = false;
+#endif
+#ifdef DEVICE_POD
+            bool pod_new_turn = !m->busy;
 #endif
             if (!m->busy) {
                 m->busy_ms = ms();
@@ -5639,6 +5849,14 @@ static void event(const char *id, const char *session, const char *kind, const c
             if (text_ && *text_ && strcmp(text_, "Processing") &&
                 strcmp(text_, "Summarizing...") && strcmp(text_, "Summarizing\xe2\x80\xa6"))
                 activity_text(m->activity, sizeof m->activity, text_);
+#ifdef DEVICE_POD
+            // A new turn starts the clock; a heartbeat only refreshes the line it carries.
+            if (pod_new_turn) pod_settle(pod_ui_turn(&pod, id, "started", "", 0, ms()));
+            if (m->activity[0]) {
+                const pod_agent_t *pa = pod_model_find(&pod.model, id);
+                pod_settle(pod_ui_turn(&pod, id, "verb", m->activity, pa ? (int)pa->elapsed_s : 0, ms()));
+            }
+#endif
             if (a) {
                 a->busy = true;
                 a->recap_ready = false;
@@ -5664,6 +5882,14 @@ static void event(const char *id, const char *session, const char *kind, const c
     }
 #endif
     bool has_text = text_ && *text_ && strcmp(text_, "done");
+#ifdef DEVICE_POD
+    if (!restore && kind) {
+        if (!strcmp(kind, "error")) pod_settle(pod_ui_turn(&pod, id, "error", "", 0, ms()));
+        else if (!strcmp(kind, "done") || !strcmp(kind, "summary")) pod_settle(pod_ui_turn(&pod, id, "done", "", 0, ms()));
+    }
+    if (kind && !strcmp(kind, "summary") && ((recap && *recap) || has_text))
+        pod_settle(pod_ui_recap(&pod, id, recap && *recap ? recap : text_, restore));
+#endif
     if ((has_text || (recap && *recap)) && !(restore && (m->live_summary || m->awaiting_result || m->busy))) {
         char preview[sizeof m->preview];
         recap_preview(preview, sizeof preview, recap && *recap ? recap : text_);
@@ -5702,6 +5928,13 @@ void ui_project_player_activity(const char *id, const char *action, int elapsed_
         m->player.observed_ms=ms();
         int i=find(id);
         if (i>=0) { s.agents[i].player=m->player; change(); }
+#ifdef DEVICE_POD
+        if (action || elapsed_seconds>=0) {
+            const pod_agent_t *pa=pod_model_find(&pod.model,id);
+            pod_settle(pod_ui_turn(&pod,id,"activity",action ? m->player.action : "",   /* the sentence only; an absent one blanks nothing */
+                                   elapsed_seconds>=0 ? elapsed_seconds : pa ? (int)pa->elapsed_s : 0,ms()));
+        }
+#endif
     }
     display_unlock();
 }
@@ -5715,6 +5948,31 @@ void ui_project_restore_event(const char *id, const char *kind, const char *text
                               const char *recap)
 {
     event(id, NULL, kind, text_, recap, true);
+}
+void ui_project_recap_full(const char *id, const char *full, bool restore)
+{
+#ifdef DEVICE_POD
+    if (!id || !full || !*full) return;
+    display_lock();
+    pod_settle(pod_ui_recap(&pod, id, full, restore));
+    display_unlock();
+#else
+    (void)id; (void)full; (void)restore;
+#endif
+}
+void ui_project_step(const char *id, const char *step)
+{
+#ifdef DEVICE_POD
+    if (!id || !step || !*step) return;
+    display_lock();
+    // Only into a live turn: a step that lands after turn.done must not bring the agent back to working.
+    const pod_agent_t *pa = pod_model_find(&pod.model, id);
+    if (pa && pa->state == POD_WORKING)
+        pod_settle(pod_ui_turn(&pod, id, "step", step, (int)pa->elapsed_s, ms()));
+    display_unlock();
+#else
+    (void)id; (void)step;
+#endif
 }
 void ui_project_clear_event(const char *id)
 {
@@ -5830,6 +6088,32 @@ void ui_player_library(const pro_player_library_t *page)
 {
     if(!page) return;
     display_lock();
+#ifdef DEVICE_POD
+    int pod_next = -1;
+    {   // Any page tells Pod the state of its rows; one a sweep asked for also moves the sweep on.
+        static const char *const names[] = {"idle", "working", "question", "finished", "failed", "paused", "offline"};
+        pod_library_row_t rows[PRO_PLAYER_ROWS];
+        int n = page->count < PRO_PLAYER_ROWS ? page->count : PRO_PLAYER_ROWS;
+        for (int i = 0; i < n; i++) {
+            const pro_player_row_t *r = &page->rows[i];
+            unsigned st = (unsigned)r->status;
+            // The machine's name if the device knows the id, else nothing: an id on the glass is noise.
+            const char *machine = "";
+            for (int k = 0; k < s.machine_count; k++)
+                if (!strcmp(s.machines[k].id, r->machine_id)) { machine = s.machines[k].name; break; }
+            rows[i] = (pod_library_row_t){r->id, r->name, r->engine, machine,
+                                          st < sizeof names / sizeof names[0] ? names[st] : "idle", r->age_seconds};
+        }
+        pod_out_t fx = {0};
+        if (s.connected && pod_ui_sweeping(&pod) && page->request == s.player_library.request) {
+            pod_next = pod_ui_library_page(&pod, rows, n, page->offset, page->total, ms(), &fx);
+            pod_sweep_offset = pod_next < 0 ? 0 : pod_next;
+        } else {
+            fx = pod_ui_library_rows(&pod, rows, n, ms());
+        }
+        pod_settle(fx);
+    }
+#endif
     if(s.connected && page->request==s.player_library.request &&
        (!s.touch_down || s.player_library.pending)) {
         uint32_t revision=s.player_library.revision+1;
@@ -5841,6 +6125,9 @@ void ui_player_library(const pro_player_library_t *page)
         if(s.view==AGENTS && !s.carry_route.choosing) s.offset=page->offset;
         change();
     }
+#ifdef DEVICE_POD
+    if (pod_next >= 0) pro_player_request(pod_next);
+#endif
     display_unlock();
 }
 void ui_player_overview(int harnesses, int machines, int models, int valid_ms)
@@ -5884,6 +6171,12 @@ void ui_focus_project(const char *id)
 {
     if (!id || !*id || strnlen(id, ID_MAX) >= ID_MAX) return;
     display_lock();
+#ifdef DEVICE_POD
+    // Pod follows the host's focus through its own navigation (pod_nav_follow); the pending case lives in pod_glue.
+    pod_settle(pod_ui_focus(&pod, id, ms()));
+    display_unlock();
+    return;
+#endif
 #ifdef DEVICE_PRO_COMPANION
     uint32_t previous_focus=s.reader_focus_generation;
     pro_reader_focus(id);
@@ -6503,6 +6796,9 @@ void ui_question_show(const char *id, const char *name, const char *machine, con
 #else
     notice_forget_read(id);
 #endif
+#ifdef DEVICE_POD
+    pod_settle(pod_ui_question(&pod, id, cJSON_IsString(prompt) && prompt->valuestring[0] ? prompt->valuestring : "Needs your answer"));
+#endif
 #ifdef DEVICE_PRO_COMPANION
     if (!same)
 #endif
@@ -6657,6 +6953,9 @@ void ui_question_close(const char *id, const char *request)
         notice_remove(id,true);
     } else if (strcmp(s.q.agent,id)) notice_remove(id,true);
 #endif
+#ifdef DEVICE_POD
+    pod_settle(pod_ui_question_close(&pod, id));
+#endif
     notice_sync_view();
     change(); display_unlock();
 }
@@ -6747,6 +7046,13 @@ void ui_tiles_replace(const cable_tile_t *rows, int count, const char *tab)
                  named, resolved, s.count,
                  bounded ? s.tiles[0].agent_id : "", s.count ? s.agents[0].id : "");
     }
+#ifdef DEVICE_POD
+    // handle_swarms() calls ui_swarms_replace() then this, on the same task, so s.tabs, the members it just
+    // parsed and these tiles are one frame. Always fed, changed or not: the model compares by itself.
+    pod_settle(pod_ui_swarms(&pod, s.tabs, s.tab_count, cable_swarm_members(), s.selected_tab,
+                             strcmp(s.tile_tab, s.selected_tab) ? NULL : s.tiles,
+                             strcmp(s.tile_tab, s.selected_tab) ? 0 : s.tile_count));
+#endif
     display_unlock();
 }
 #endif

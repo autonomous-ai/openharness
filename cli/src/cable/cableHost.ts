@@ -34,6 +34,8 @@ export interface RecentTurn {
   text?: string
   /** What the USER asked on that turn. The topic lives here; the recap holds the answer. */
   ask?: string
+  /** The turn's whole answer when the mirror still holds it — what a `recap: 'long-v1'` device reads. */
+  fullText?: string
 }
 
 export interface CableHostWiring {
@@ -432,7 +434,7 @@ export class DaemonCableHost implements CableHost {
     if (!app) return { selected: '', swarms: [], tiles: [] }
     return {
       selected: app.active,
-      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, panes: s.panes })),
+      swarms: app.swarms.map((s) => ({ id: s.id, name: s.name, agents: s.agentIds.length, agentIds: s.agentIds, panes: s.panes })),
       tiles: app.tiles,
     }
   }
@@ -903,12 +905,12 @@ export class DaemonCableHost implements CableHost {
   }
 
   /** The last few turns, newest first, in the shape the dial's tile draws: a headline and a body. */
-  async recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string }>> {
+  async recentSummaries(agentId: string): Promise<Array<{ recap: string; text: string; ask: string; fullText?: string }>> {
     const raw = this.isLocalAgent(agentId)
       ? this.wiring.recent(agentId, 3)
       : await this.fleet!.recentSummaries(this.machineOf(agentId), agentId)
     return raw
-      .map((r) => ({ recap: extendShortRecap(r?.recap ?? '', r?.text ?? ''), text: r?.text ?? '', ask: r?.ask ?? '' }))
+      .map((r) => ({ recap: extendShortRecap(r?.recap ?? '', r?.text ?? ''), text: r?.text ?? '', ask: r?.ask ?? '', ...(r?.fullText ? { fullText: r.fullText } : {}) }))
       .filter((s) => s.recap || s.text || s.ask)
   }
 
@@ -1152,6 +1154,24 @@ export function multipart(file: Buffer, filename: string, mimeType: string, boun
     'utf8',
   )
   return Buffer.concat([head, file, Buffer.from(`\r\n--${boundary}--\r\n`, 'utf8')])
+}
+
+/**
+ * A tool card as one short step line ("Read · cableSession.ts") for the dial's working screen, or null.
+ *
+ * The working screen otherwise has only the assistant's prose to show, and a turn that is all tool calls
+ * has none: the body stayed empty through a whole turn of work. A path argument keeps its last segment.
+ */
+export function cableStepFor(
+  frame: { type?: string; agentId?: string; payload?: { kind?: string; text?: string; recap?: string } },
+): { agentId: string; step: string } | null {
+  if (frame.type !== 'commander_event' || !frame.agentId || frame.payload?.kind !== 'tool') return null
+  const tool = (frame.payload.text ?? '').trim()
+  if (!tool) return null
+  let arg = (frame.payload.recap ?? '').replace(/[\r\n\t]+/g, ' ').trim()
+  if (/^[~.]?\/\S+$/.test(arg)) arg = arg.replace(/\/+$/, '').split('/').at(-1) ?? arg
+  const step = arg ? `${tool} \u00b7 ${arg}` : tool
+  return { agentId: frame.agentId, step: [...step].slice(0, 120).join('') }
 }
 
 /**

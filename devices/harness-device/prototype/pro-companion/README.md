@@ -122,3 +122,28 @@ Never publish this image through the production updater.
 
 The earlier companion implementation and installation notes are archived in
 [LIVING-HISTORY.md](LIVING-HISTORY.md).
+
+## Pod build
+
+Pod replaces Player 1 on the Pro (design: `docs/superpowers/specs/2026-10-10-pro-pod-design.md`). It is the same
+firmware with two more cmake options: `-DDEVICE_POD=1`, and `-DPOD_PANEL_TURN=180` for the unit whose panel is
+mounted upside down (it turns the picture and the touch together; leave it off otherwise). Pod needs the generated
+fonts but not the Living or Daemon art, so `pro_art.pack` and `pro_living.pack` are neither required nor linked.
+Use ESP-IDF v5.5.4 (the version that boots the P4 rev v3.2 here) and a dedicated build directory:
+
+```sh
+. ~/esp/esp-idf-5.5.4/export.sh
+cd devices/harness-device/firmware
+idf.py -G 'Unix Makefiles' -B build-pod \
+  -DIDF_TARGET=esp32p4 \
+  -DSDKCONFIG=build-pod/sdkconfig \
+  -DSDKCONFIG_DEFAULTS='sdkconfig.defaults;sdkconfig.defaults.esp32p4;../prototype/pro-companion/sdkconfig.defaults;../prototype/pro-companion/sdkconfig.wifi.defaults' \
+  -DDEVICE_HABITAT=1 -DDEVICE_PRO_COMPANION=1 -DDEVICE_PRO_WIFI=1 -DDEVICE_POD=1 -DPOD_PANEL_TURN=180 \
+  -DDEVICE_DEFAULT_CHARACTER=tim \
+  -DPROJECT_VER=0.0.99-pod \
+  -DCCACHE_ENABLE=0 build
+idf.py -B build-pod size        # the app must fit the 0x7E0000 slot
+```
+
+Host tests: `bash devices/harness-device/firmware/test/run-pod.sh` and
+`python3 devices/harness-device/firmware/test/test_pod_touch_ui.py`.

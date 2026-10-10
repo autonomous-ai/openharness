@@ -24,6 +24,9 @@
 #include <assert.h>
 #if defined(CONFIG_IDF_TARGET_ESP32P4) && defined(DEVICE_PRO_COMPANION)
 #include "pro_contacts.h"
+#ifdef DEVICE_POD
+#include "pod_turn.h"
+#endif
 _Static_assert(CONFIG_ESP_LCD_TOUCH_MAX_POINTS >= PRO_CONTACTS_MAX,
                "Pro must observe all GT911 contacts to reject extra fingers safely");
 #endif
@@ -124,8 +127,13 @@ static void task(void *arg)
             trusted = esp_lcd_touch_get_data(controller, data, &count, PRO_CONTACTS_MAX) == ESP_OK &&
                       count <= PRO_CONTACTS_MAX;
             for (unsigned i = 0; trusted && i < count; i++) {
-                points[i] = (pro_contact_t){data[i].x, data[i].y, data[i].track_id};
                 if (data[i].x >= HT_WIDTH || data[i].y >= HT_HEIGHT) trusted = false;
+#ifdef DEVICE_POD
+                // POD_PANEL_TURN=180 turns the contact with the picture (pod_turn.h). An out-of-range raw point
+                // is already untrusted, so it never reaches the turned value.
+                if (trusted) { data[i].x = pod_turn_coord(data[i].x); data[i].y = pod_turn_coord(data[i].y); }
+#endif
+                points[i] = (pro_contact_t){data[i].x, data[i].y, data[i].track_id};
                 for (unsigned j = 0; j < i; j++)
                     if (data[i].track_id == data[j].track_id) trusted = false;
             }

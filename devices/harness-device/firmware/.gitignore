@@ -41,3 +41,7 @@ build-prod/
 # conversation, not a build input — nothing here compiles or ships.
 mockup/
 build-probe/
+
+# Reference renders of Pod screens (test/pod_render.py)
+test/out/
+build-pod/

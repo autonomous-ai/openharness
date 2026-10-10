@@ -31,4 +31,5 @@ int ht_pro_wrap(ht_scene_t *s, int x, int y, int width, int rows, int skip,
 void ht_pro_center(ht_scene_t *s, int y, const ht_pro_font_t *font, uint16_t ink, const char *text);
 bool ht_pro_rect(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t ink);
 bool ht_pro_image(ht_scene_t *s, int x, int y, const ht_pro_bitmap_t *bitmap);
+bool ht_pro_image_faded(ht_scene_t *s, int x, int y, const ht_pro_bitmap_t *bitmap, unsigned opacity);   // opacity 1..254 of 255
 void ht_pro_raster(const ht_run_t *run, ht_rect_t clip, uint16_t *out);

@@ -56,7 +56,13 @@ static esp_lcd_panel_handle_t panel;
 static SemaphoreHandle_t model_lock, dma_done;
 static TaskHandle_t renderer;
 static uint16_t *pixels[2];
+#ifdef DEVICE_POD
+// Pod's screens need up to 128 runs (terminal.h); two scenes of those are 53 KB, more than the internal heap has
+// left (about 17.5 KB on the Player 1 build), so they live in PSRAM. Damage and raster read them per frame.
+static EXT_RAM_BSS_ATTR ht_scene_t scenes[2];
+#else
 static ht_scene_t scenes[2];
+#endif
 static bool painted;
 static atomic_bool asleep, force_frame;
 static atomic_uint last_activity;
@@ -305,14 +311,26 @@ static uint32_t paint(const ht_scene_t *next, const ht_damage_t *damage)
 #else
             ht_raster(next, strip, pixels[buffer]);
 #endif
+#if defined(POD_PANEL_TURN) && POD_PANEL_TURN == 180
+            // The panel is mounted upside down: rotate the strip by reversing its pixels and write it to the
+            // opposite corner of the glass. The damage and the scene stay in the upright coordinates.
+            for (uint16_t *a = pixels[buffer], *b = pixels[buffer] + (size_t)rect.w * h - 1; a < b; a++, b--) {
+                uint16_t v = *a; *a = *b; *b = v;
+            }
+#endif
             raster_us += (uint32_t)(esp_timer_get_time() - t);
             // CPU prepares B while DMA owns A. Neither buffer is reused before the ISR fence.
             if (pending)
                 wait_dma();
             ui_perf_flush((size_t)rect.w * h * 2);
             render_progress(RENDER_SUBMIT);
+#if defined(POD_PANEL_TURN) && POD_PANEL_TURN == 180
+            ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel, HT_WIDTH - rect.x - rect.w, HT_HEIGHT - y - h,
+                                                      HT_WIDTH - rect.x, HT_HEIGHT - y, pixels[buffer]));
+#else
             ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel, rect.x, y, rect.x + rect.w, y + h,
                                                       pixels[buffer]));
+#endif
             pending = true;
             buffer ^= 1;
         }

@@ -1,7 +1,7 @@
 // How the wheel's rows are composed: the local row, and the fleet's rows around it.
 import { describe, expect, it, vi } from 'vitest'
 
-import { DaemonCableHost, cableEventFor, type CableHostWiring } from './cableHost.js'
+import { DaemonCableHost, cableEventFor, cableStepFor, type CableHostWiring } from './cableHost.js'
 import type { FleetMachine, MachineFleet } from './machineFleet.js'
 
 const AGENTS: Array<{ agentId: string; registeredAt: number; active: boolean; terminalAvailable: boolean; engine: string }> = []
@@ -685,11 +685,11 @@ describe('DaemonCableHost.listSwarms', () => {
     expect(host.listSwarms()).toEqual({
       selected: 'work',
       swarms: [
-        { id: 'work', name: 'harness-1', agents: 1, panes: 1 },
+        { id: 'work', name: 'harness-1', agents: 1, agentIds: ['a1'], panes: 1 },
         // No agents and still a place to go: this is the row that used to disappear.
-        { id: 'shell', name: 'harness-2', agents: 0, panes: 1 },
+        { id: 'shell', name: 'harness-2', agents: 0, agentIds: [], panes: 1 },
         // Nothing on it at all — still nothing the dial can offer, which was always the intent.
-        { id: 'fresh', name: 'New Harness', agents: 0, panes: 0 },
+        { id: 'fresh', name: 'New Harness', agents: 0, agentIds: [], panes: 0 },
       ],
       tiles: [],
     })
@@ -762,5 +762,19 @@ describe('spoken question capability', () => {
     expect((await host.answerReviewed({ ...answer, agentId: 'spoken-remote' })).ok).toBe(false)
     expect(fleet.answer).not.toHaveBeenCalled(); expect(fleet.answerReviewed).not.toHaveBeenCalled()
     expect(answerReviewed).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('cableStepFor', () => {
+  const tool = (text: string, recap = '') => ({ type: 'commander_event', agentId: 'a1', payload: { kind: 'tool', text, recap } })
+  it('turns a tool card into one step line, a path into its last segment', () => {
+    expect(cableStepFor(tool('Read', '/work/cli/src/cable/cableSession.ts'))).toEqual({ agentId: 'a1', step: 'Read · cableSession.ts' })
+    expect(cableStepFor(tool('Bash', 'npm test -- --run'))).toEqual({ agentId: 'a1', step: 'Bash · npm test -- --run' })
+    expect(cableStepFor(tool('TodoWrite'))).toEqual({ agentId: 'a1', step: 'TodoWrite' })
+  })
+  it('ignores every other card, and clips long arguments', () => {
+    expect(cableStepFor({ type: 'commander_event', agentId: 'a1', payload: { kind: 'processing', text: 'Processing' } })).toBeNull()
+    expect(cableStepFor(tool(''))).toBeNull()
+    expect(cableStepFor(tool('Bash', 'x'.repeat(400)))!.step.length).toBe(120)
   })
 })

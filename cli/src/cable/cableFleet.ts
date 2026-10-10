@@ -144,6 +144,7 @@ export class CableFleet {
   question(...args: Parameters<Surface['question']>) { return this.send('question', ...args) }
   questionClose(...args: Parameters<Surface['questionClose']>) { return this.send('questionClose', ...args) }
   turnStarted(...args: Parameters<Surface['turnStarted']>) { return this.send('turnStarted', ...args) }
+  turnStep(...args: Parameters<Surface['turnStep']>) { return this.send('turnStep', ...args) }
   turnDone(...args: Parameters<Surface['turnDone']>) { return this.send('turnDone', ...args) }
   summary(...args: Parameters<Surface['summary']>) { return this.send('summary', ...args) }
   turnError(...args: Parameters<Surface['turnError']>) { return this.send('turnError', ...args) }

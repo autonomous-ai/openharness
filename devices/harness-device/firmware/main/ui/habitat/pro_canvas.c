@@ -1,5 +1,8 @@
 #include "pro_canvas.h"
 #include <string.h>
+#ifdef DEVICE_POD
+#include "pod/pod_draw.h"
+#endif
 
 enum { PRO_TEXT = 1, PRO_RECT, PRO_IMAGE };
 static int min_(int a, int b) { return a < b ? a : b; }
@@ -219,6 +222,13 @@ bool ht_pro_rect(ht_scene_t *s, int x, int y, int w, int h, int radius, uint16_t
     r->fg = ink; r->radius = min_(max_(0, radius), min_(w,h)/2);
     return true;
 }
+// An image drawn at `opacity` (1..254 of 255; anything else is plain): the run's radius holds it.
+bool ht_pro_image_faded(ht_scene_t *s, int x, int y, const ht_pro_bitmap_t *bitmap, unsigned opacity)
+{
+    if (!ht_pro_image(s, x, y, bitmap)) return false;
+    if (opacity > 0 && opacity < 255) s->runs[s->count - 1].radius = (uint8_t)opacity;
+    return true;
+}
 bool ht_pro_image(ht_scene_t *s, int x, int y, const ht_pro_bitmap_t *bitmap)
 {
     if (!bitmap || (!bitmap->pixels && !bitmap->asset)) return false;
@@ -248,7 +258,15 @@ void ht_pro_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
         for (int y=y0;y<y1;y++) {
             size_t src=(size_t)(y-r->y)*r->bitmap.width+x0-r->x;
             uint16_t *dst=out+(y-clip.y)*clip.w+x0-clip.x;
-            image_span(dst, r->bitmap.pixels + src, r->bitmap.alpha ? r->bitmap.alpha + src : NULL, x1-x0);
+            if (r->radius) {   // faded (ht_pro_image_faded): every pixel's coverage scaled by the opacity
+                for (int i = 0; i < x1-x0; i++) {
+                    unsigned a = r->bitmap.alpha ? r->bitmap.alpha[src+i] : 255;
+                    a = a * r->radius / 255;
+                    if (a) dst[i] = over(r->bitmap.pixels[src+i], dst[i], a);
+                }
+            } else {
+                image_span(dst, r->bitmap.pixels + src, r->bitmap.alpha ? r->bitmap.alpha + src : NULL, x1-x0);
+            }
         }
     } else if (r->pro_kind == PRO_TEXT) {
         const ht_pro_font_t *f=r->pro_font;
@@ -262,4 +280,7 @@ void ht_pro_raster(const ht_run_t *r, ht_rect_t clip, uint16_t *out)
             gx+=g->advance;
         }
     }
+#ifdef DEVICE_POD
+    else if (r->pro_kind >= POD_KIND_BASE) pod_draw_raster(r, clip, out);
+#endif
 }

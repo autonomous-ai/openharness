@@ -15,7 +15,11 @@
 #endif
 #define HT_WIDTH HT_FACE_PX
 #define HT_HEIGHT HT_FACE_PX
-#ifdef DEVICE_PRO_COMPANION
+#if defined(DEVICE_POD)
+// Pod: a pet scene alone can take 40 runs, beside the status bar and the transport (display_habitat.c keeps the
+// scenes in PSRAM for this).
+#define HT_RUNS 128
+#elif defined(DEVICE_PRO_COMPANION)
 #define HT_RUNS 64
 #else
 #define HT_RUNS 40

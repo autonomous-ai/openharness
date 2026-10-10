@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 
-import { CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
+import { CABLE_MAX_FRAME, CableDecoder, CableType, encodeCableFrame } from './cableFrame.js'
 import { CableSession, type CableAgent, type CableHost, type CableMachine, type CablePort } from './cableSession.js'
 import { DialLog } from './dialLog.js'
 
@@ -649,8 +649,71 @@ describe('cable session', () => {
     await session.stop()
   })
 
+  it('sends every tab its agent ids', async () => {
+    const swarms = {
+      selected: 't1',
+      swarms: [
+        { id: 't1', name: 'One', agents: 2, agentIds: ['a', 'b'], panes: 2 },
+        { id: 't2', name: 'Two', agents: 1, agentIds: ['c'], panes: 1 },
+      ],
+      tiles: [],
+    }
+    const { port } = await connect(makeHost({ listSwarms: () => swarms }))
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', swarms: 'members-v1' })
+    await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+    const frame = port.sent.find((m) => m.t === 'swarms') as { items: Array<{ id: string; agentIds: string[] }> }
+    expect(frame.items.map((i) => [i.id, i.agentIds])).toEqual([['t1', ['a', 'b']], ['t2', ['c']]])
+  })
+
+  it('leaves agent ids out for a device that did not ask for them', async () => {
+    const swarms = { selected: 't1', swarms: [{ id: 't1', name: 'One', agents: 2, agentIds: ['a', 'b'], panes: 2 }], tiles: [] }
+    const { port } = await connect(makeHost({ listSwarms: () => swarms }))
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+    const frame = port.sent.find((m) => m.t === 'swarms') as { items: Array<Record<string, unknown>> }
+    expect(frame.items).toEqual([{ id: 't1', name: 'One', agents: 2, panes: 2 }])
+  })
+
+  it('keeps the swarms frame under the cap, preferring the selected tab\'s ids', async () => {
+    const uuid = (n: number) => `${String(n).padStart(8, '0')}-aaaa-bbbb-cccc-${'d'.repeat(12)}`
+    const tabs = Array.from({ length: 24 }, (_, t) => {
+      const agentIds = Array.from({ length: 24 }, (_, i) => uuid(t * 100 + i))
+      return { id: `tab${t}`, name: `Tab ${t}`, agents: agentIds.length, agentIds, panes: agentIds.length }
+    })
+    const swarms = { selected: 'tab5', swarms: tabs, tiles: [] }
+    const { port } = await connect(makeHost({ listSwarms: () => swarms }))
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', swarms: 'members-v1' })
+    await vi.waitFor(() => expect(port.types()).toContain('agents.end'))
+    const frame = port.sent.find((m) => m.t === 'swarms') as { items: Array<{ id: string; agents: number; agentIds?: string[] }> }
+    expect(frame).toBeDefined()
+    for (const f of port.frames) expect(f.length).toBeLessThanOrEqual(CABLE_MAX_FRAME)
+    expect(frame.items).toHaveLength(24)
+    expect(frame.items.find((i) => i.id === 'tab5')!.agentIds).toEqual(tabs[5]!.agentIds)
+    expect(frame.items.find((i) => i.id === 'tab6')!.agentIds).toBeUndefined()
+    expect(frame.items.find((i) => i.id === 'tab6')!.agents).toBe(24)
+    expect(port.closedWith).toBeNull()
+  })
+
+  it('does not mark swarms as sent when the write failed, so the next push retries', async () => {
+    const swarms = { selected: 's1', swarms: [{ id: 's1', name: 'One', agents: 0, agentIds: [], panes: 0 }], tiles: [] }
+    const { session, port } = await connect(makeHost({ listSwarms: () => swarms }))
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
+    const real = port.write.bind(port)
+    let fail = true
+    port.write = async (bytes) => { if (fail) throw new Error('boom'); return real(bytes) }
+    // Keep the port open so the retry can reach it; the point is the key, not the reconnect.
+    port.close = async () => {}
+    swarms.swarms = [{ id: 's1', name: 'Renamed', agents: 0, agentIds: [], panes: 0 }]
+    await session.syncSwarms(false)
+    expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1)
+    fail = false
+    await session.syncSwarms(false)
+    expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2)
+  })
+
   it('names the swarms once and again only when they change, and relays a pick', async () => {
-    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Workshop', agents: 2, panes: 2 }, { id: 's2', name: 'Launch', agents: 0, panes: 0 }], tiles: [] }
+    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Workshop', agents: 2, agentIds: ['a', 'b'], panes: 2 }, { id: 's2', name: 'Launch', agents: 0, agentIds: [], panes: 0 }], tiles: [] }
     const host = makeHost({ listSwarms: () => swarms })
     const { session, port } = await connect(host)
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
@@ -678,17 +741,101 @@ describe('cable session', () => {
     // The change this field exists for: a terminal opened on a tab that holds no agent moves the
     // TILE count and nothing else. A diff watching only `agents` swallowed that push and left the
     // dial showing a row it still believed was empty — the row it would then refuse to list.
-    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 0 }], tiles: [] }
+    let swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, agentIds: [], panes: 0 }], tiles: [] }
     const host = makeHost({ listSwarms: () => swarms })
     const { session, port } = await connect(host)
     port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
     await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
 
-    swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, panes: 1 }], tiles: [] }
+    swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Shell', agents: 0, agentIds: [], panes: 1 }], tiles: [] }
     await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2))
     expect(port.sent.filter((m) => m.t === 'swarms')[1]).toMatchObject({
       items: [{ id: 's1', agents: 0, panes: 1 }],
     })
+    await session.stop()
+  })
+
+  it('names every member of a tab, an offline machine\'s agent included, and drops the names before the ids', async () => {
+    const away: CableMachine = { id: 'm2', name: "Diego's Mac", state: 'offline', local: false }
+    const who: Record<string, { name: string; engine: string; machine: string }> = {
+      mine: { name: 'Devin', engine: 'claude', machine: LOCAL_ROW.name },
+      far: { name: 'Stylist', engine: 'codex', machine: "Diego's Mac" },
+    }
+    const swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Thoi trang', agents: 3, agentIds: ['mine', 'far', 'ghost'], panes: 3 }], tiles: [] as never[] }
+    const host = makeHost({
+      listSwarms: () => swarms,
+      listMachines: async () => ({ machines: [LOCAL_ROW, away], source: 'backend' as const }),
+      describe: (id) => who[id],
+    })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', swarms: 'members-v1' })
+    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
+    const item = (port.sent.filter((m) => m.t === 'swarms')[0] as { items: Array<Record<string, unknown>> }).items[0]
+    expect(item.agentIds).toEqual(['mine', 'far', 'ghost'])
+    // An id the daemon has never heard of has no entry (the device draws nothing for it); the rest say where they live.
+    expect(item.members).toEqual([
+      { id: 'mine', name: 'Devin', engine: 'claude', machine: LOCAL_ROW.name, online: true },
+      { id: 'far', name: 'Stylist', engine: 'codex', machine: "Diego's Mac", online: false },
+    ])
+    await session.stop()
+  })
+
+  it('sends no member names to a device that did not ask for members, and trims them first when the frame is full', async () => {
+    const ids = Array.from({ length: 60 }, (_, i) => `agent-${String(i).padStart(3, '0')}-aaaaaaaaaaaaaaaaaaaaaaaa`)
+    const swarms = { selected: 's1', swarms: [{ id: 's1', name: 'Big', agents: ids.length, agentIds: ids, panes: ids.length }], tiles: [] as never[] }
+    const describe = (id: string) => ({ name: `name of ${id}`.padEnd(60, 'x'), engine: 'claude', machine: 'A machine with a long name' })
+    // Plain device: ids only for the plain hello, nothing about members at all.
+    const plain = await connect(makeHost({ listSwarms: () => swarms, describe }))
+    plain.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+    await vi.waitFor(() => expect(plain.port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
+    const p = (plain.port.sent.filter((m) => m.t === 'swarms')[0] as { items: Array<Record<string, unknown>> }).items[0]
+    expect(p.members).toBeUndefined()
+    expect(p.agentIds).toBeUndefined()
+    await plain.session.stop()
+    // Members-v1 device: the metadata is too big for the frame, the ids still fit, so the ids stay and the metadata goes.
+    const full = await connect(makeHost({ listSwarms: () => swarms, describe }))
+    full.port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', swarms: 'members-v1' })
+    await vi.waitFor(() => expect(full.port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
+    const f = (full.port.sent.filter((m) => m.t === 'swarms')[0] as { items: Array<Record<string, unknown>> }).items[0]
+    expect(f.agentIds).toEqual(ids)
+    expect(f.members).toBeUndefined()
+    await full.session.stop()
+  })
+
+  it('pushes again when a member\'s machine goes offline', async () => {
+    let state: CableMachine['state'] = 'ready'
+    const swarms = { selected: 's1', swarms: [{ id: 's1', name: 'T', agents: 1, agentIds: ['far'], panes: 1 }], tiles: [] as never[] }
+    const host = makeHost({
+      listSwarms: () => swarms,
+      listMachines: async () => ({ machines: [LOCAL_ROW, { id: 'm2', name: 'Far', state, local: false }], source: 'backend' as const }),
+      describe: () => ({ name: 'Stylist', engine: 'codex', machine: 'Far' }),
+    })
+    const { session, port } = await connect(host)
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', swarms: 'members-v1' })
+    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
+    state = 'offline'
+    await session.syncSwarms()
+    const sent = port.sent.filter((m) => m.t === 'swarms') as Array<{ items: Array<{ members: Array<{ online: boolean }> }> }>
+    expect(sent).toHaveLength(2)
+    expect(sent[0].items[0].members[0].online).toBe(true)
+    expect(sent[1].items[0].members[0].online).toBe(false)
+    await session.stop()
+  })
+
+  it('pushes again when an agent moves with the same tab, counts and tile shape', async () => {
+    // Moving an agent (reordering panes, or between tabs) changes WHO sits where and nothing else: the
+    // selected tab, every count and — when the window has no tile shape — the rectangles all stay put.
+    const row = (agentIds: string[]) => ({ id: 's1', name: 'One', agents: agentIds.length, agentIds, panes: agentIds.length })
+    let swarms = { selected: 's1', swarms: [row(['a', 'b']), { id: 's2', name: 'Two', agents: 1, agentIds: ['c'], panes: 1 }], tiles: [] as never[] }
+    const { session, port } = await connect(makeHost({ listSwarms: () => swarms }))
+    port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', swarms: 'members-v1' })
+    await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(1))
+    swarms = { ...swarms, swarms: [row(['b', 'a']), swarms.swarms[1]] }   // reorder inside the tab
+    await session.syncSwarms()
+    expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(2)
+    swarms = { ...swarms, swarms: [row(['b']), { id: 's2', name: 'Two', agents: 1, agentIds: ['a'], panes: 1 }] }   // a leaves, c leaves
+    await session.syncSwarms()
+    expect(port.sent.filter((m) => m.t === 'swarms')).toHaveLength(3)
     await session.stop()
   })
 
@@ -1638,6 +1785,43 @@ describe('cable session', () => {
     expect(port.sent.find((m) => m.t === 'question')).toMatchObject({ name: 'Fix login screen', engine: 'claude', id: 'q1' })
     expect(port.sent.find((m) => m.t === 'summary' && m.agentId === 'ghost')).toMatchObject({ name: '', engine: '' })
     await session.stop()
+  })
+
+  describe('long recap capability', () => {
+    const answer = '## Kết quả\n\n' + Array.from({ length: 500 }, (_, i) => `**từ${i}**`).join(' ')
+
+    it('gives a recap: "long-v1" device the stripped, clipped answer as `full`', async () => {
+      const { session, port } = await connect(makeHost({}))
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', recap: 'long-v1' })
+      await session.summary('a1', 'Kết quả', 'Kết quả', false, false, answer)
+      const frame = port.sent.filter((m) => m.t === 'summary').at(-1) as { full: string }
+      expect(frame.full.length).toBeLessThanOrEqual(1200)
+      expect(frame.full.endsWith('…')).toBe(true)
+      expect(frame.full).not.toContain('*')
+      expect(frame.full.startsWith('Kết quả từ0 từ1')).toBe(true)
+      for (const f of port.frames) expect(f.length).toBeLessThanOrEqual(CABLE_MAX_FRAME)
+      await session.stop()
+    })
+
+    it('leaves `full` off for a device that did not ask, and when the link drops', async () => {
+      const { session, port } = await connect(makeHost({}))
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb' })
+      await session.summary('a1', 'r', 'b', false, false, answer)
+      expect(port.sent.filter((m) => m.t === 'summary').at(-1)).not.toHaveProperty('full')
+      await session.stop()
+    })
+
+    it('carries `full` on restores', async () => {
+      const history = [{ recap: 'r', text: 'b', fullText: answer }, { recap: 'old', text: 'old' }]
+      const { session, port } = await connect(makeHost({ recentSummaries: async () => history }))
+      port.say({ t: 'hello', product: 'harness', mac: 'aa:bb', recap: 'long-v1' })
+      await vi.waitFor(() => expect(port.sent.filter((m) => m.t === 'summary' && m.restore).length).toBeGreaterThan(0))
+      const restores = port.sent.filter((m) => m.t === 'summary' && m.restore) as Array<{ recap: string; full?: string }>
+      expect(restores.find((m) => m.recap === 'r')!.full!.endsWith('…')).toBe(true)
+      expect(restores.find((m) => m.recap === 'old')).not.toHaveProperty('full')
+      for (const f of port.frames) expect(f.length).toBeLessThanOrEqual(CABLE_MAX_FRAME)
+      await session.stop()
+    })
   })
 
   it('marks a summary quiet when the window already has that agent on screen', async () => {
