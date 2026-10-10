@@ -11,6 +11,9 @@ export interface PendingAdmission<T> {
   binding?: { id: string; at: number | null }
   current: () => boolean
   inspect: () => Promise<AdmissionDecision<T>>
+  /** Synchronous durable publication. Uncertainty retains this candidate and its place. */
+  commit?: (value: T) => AdmissionDecision<T>
+  /** Optional notification after durable acceptance; never the publication itself. */
   accept: (value: T) => void | Promise<void>
   reject: (reason: string) => void | Promise<void>
   held: (reason: string) => void | Promise<void>
@@ -85,6 +88,10 @@ export function createPendingAdmissions({ retryMs = 1_000, capacity = 64, isProc
     else if (decision.kind === 'accept') {
       const unresolved = leaders(key, job).some(other => other !== job)
       if (status === 'ambiguous' || unresolved) decision = { kind: 'hold', reason: 'Waiting for unambiguous Hermes hook order; keeping the current conversation.' }
+    }
+    if (decision.kind === 'accept' && job.request.commit) {
+      try { decision = job.request.commit(decision.value) }
+      catch (error) { decision = { kind: 'hold', reason: `Waiting for durable hook admission: ${error instanceof Error ? error.message : 'commit unavailable'}`.slice(0, 1024) } }
     }
     if (decision.kind === 'hold') {
       job.timer = setTimeout(() => { job.timer = null; void run(key, job, true) }, retryMs)

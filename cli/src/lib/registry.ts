@@ -1036,12 +1036,17 @@ class Registry {
    */
   onEnter: ((engine: AgentEngine) => void) | null = null
 
-  private index(entry: RegisteredSession): void {
+  private index(entry: RegisteredSession, notify = true): void {
     this.agents.set(entry.agentId, entry)
     if (entry.sessionId) this.sessionIndex.set(entry.sessionId, entry.agentId)
     for (const runtime of entry.runtimes) this.runtimeIndex.set(terminalRouteKey(runtime), entry.agentId)
     if (entry.processIdentity) this.processIndex.set(processIdentityKey(entry.engine, entry.processIdentity), entry.agentId)
-    this.onEnter?.(entry.engine)
+    if (notify) this.entered(entry.engine)
+  }
+
+  private entered(engine: AgentEngine): void {
+    try { this.onEnter?.(engine) }
+    catch (error) { console.warn('[registry] engine entry notification failed:', error) }
   }
 
   private drop(entry: RegisteredSession | undefined): void {
@@ -1749,7 +1754,7 @@ class Registry {
     orphaned: { agentId: string; sessionId: string } | null
   } | null {
 
-    if (this.writeBlocked) return null
+    if (this.writeBlocked) throw new IdentityReadUnavailable('the saved session registry is unavailable')
     const transcriptPath = input.transcriptPath
     const sessionId =
       input.sessionId || (transcriptPath ? basename(transcriptPath).replace(/\.jsonl$/, '') : '')
@@ -1768,7 +1773,6 @@ class Registry {
       ?? (isTerminalEngine(engine) ? undefined : inputRuntimes
         .map((runtime) => this.byRuntimeTerminal(runtime))
         .filter((agent): agent is RegisteredSession => !!agent)
-        .map((agent) => this.adoptEngine(agent.agentId, engine, validProcessIdentity(input.processIdentity) ? input.processIdentity : null))
         .find((agent): agent is RegisteredSession => !!agent))
     const agentId = processAgent?.agentId ?? ''
     // An inert adoption pane cannot bind a hook before core has admitted its external conversation.
@@ -1788,33 +1792,10 @@ class Registry {
       || (engine !== 'cursor' && engine !== 'opencode' && engine !== 'kilo' && engine !== 'pi' && engine !== 'hermes' && engine !== 'commandcode' && engine !== 'devin' && engine !== 'grok' && engine !== 'agy' && engine !== 'copilot' && !transcriptPath)
       // The already-registered agent (opened at agent_create time) already carries its own
       // CODEX_HOME profile, if it has one other than the default — see RegisteredSession.codexHome.
-      || (transcriptPath && !validTranscriptPath(engine, transcriptPath, processAgent?.codexHome ?? undefined))
     ) return null
-    // A delegated session is never registered, by any caller: the same admission the hook server asks before
-    // it credits a prompt (hookServer.ts), so that the two can never disagree.
-    if (transcriptPath && !admitHook(engine, { transcriptPath }).accepted) return null
 
     const now = Date.now()
     const existing = this.agents.get(agentId)
-    // A resumed row that has not yet been told, by a hook, which conversation it actually reopened.
-    // Two ways to be in that state, and both have to count:
-    //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
-    //    `launch` may ALREADY read `ready`, because a resume is confirmed by its own live engine
-    //    process now (`resumeStoppedAgent.ts`) and that is usually earlier than the hook. Reading
-    //    only `launch` here disarmed this guard for exactly the resumes it exists to protect.
-    //  - a launch that is not `ready` — a row put back by the post-reboot restore, which relaunches
-    //    `--resume` against a row that kept `lastHookAt` from its previous life.
-    if (existing?.resumeOnly && (existing.lastHookAt === 0 || (existing.launch && existing.launch.state !== 'ready'))) {
-      // A native startup hook, carrying the verified process, must confirm this exact history —
-      // but only where an exact history was asked for. A resume that opened a NEW conversation (an
-      // engine with no resume argv, or a row with no id to reopen) reports a different id BECAUSE
-      // it did what it was told; failing it there would refuse the resume the caller requested.
-      if (sessionId !== existing.sessionId && resumesConversation(engine, existing.sessionId)) {
-        this.setLaunch(agentId, { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' })
-        return null
-      }
-      if (!validProcessIdentity(input.processIdentity)) return null
-    }
     // `isNew` still means "this SESSION id was not bound here before" — a rotation counts as new, which is
     // what makes the caller announce the newly bound session. The agent itself may be long-lived.
     const isNew = !existing || existing.sessionId !== sessionId
@@ -1826,18 +1807,14 @@ class Registry {
     // newest bind wins; the old process agent remains visible but becomes unbound.
     let orphaned: { agentId: string; sessionId: string } | null = null
     const stolenFrom = this.bySession(sessionId)
+    let displaced: { agentId: string; candidate: RegisteredSession | null } | undefined
     if (stolenFrom && stolenFrom.agentId !== agentId) {
-      console.log(`[registry] session ${sessionId.slice(0, 8)} moved from agent ${stolenFrom.agentId.slice(0, 8)} to ${agentId.slice(0, 8)}`)
-      const wasDormant = !stolenFrom.active
-      this.releaseBinding(stolenFrom)
-      // The verified canonical conversation moved. Its old row no longer owns the admission or
-      // its aliases, and cannot later replay that resume as though it still owned the conversation.
-      if (stolenFrom.externalResume) { delete stolenFrom.externalResume; delete stolenFrom.resumeOnly }
-      if (wasDormant) {
-        orphaned = { agentId: stolenFrom.agentId, sessionId }
-        this.drop(stolenFrom)
-        this.terminalAvailableAgents.delete(stolenFrom.agentId)
-      }
+      const released = { ...stolenFrom, sessionId: '', boundAt: null, transcriptPath: null,
+        source: null, lastTranscriptAt: now }
+      delete released.externalResume; delete released.resumeOnly
+      delete released.identityHold; delete released.interpretationHold
+      displaced = { agentId: stolenFrom.agentId, candidate: stolenFrom.active ? released : null }
+      if (!stolenFrom.active) orphaned = { agentId: stolenFrom.agentId, sessionId }
     }
 
 
@@ -1869,7 +1846,40 @@ class Registry {
           : !transcriptPath && engine === 'copilot'
             ? copilotTranscriptPath(env.COPILOT_HOME, sessionId)
             : null
-    const effectiveTranscriptPath = transcriptPath ?? existing?.transcriptPath ?? derived ?? null
+    const effectiveTranscriptPath = transcriptPath ?? (sameSession ? existing.transcriptPath : null) ?? derived ?? null
+    // Native evidence is staged before terminal adoption, displacement or any live publication.
+    const proof = effectiveTranscriptPath ? transcriptEvidence(engine, effectiveTranscriptPath,
+      processAgent?.codexHome ?? undefined, !transcriptPath && !!derived) : undefined
+    if (proof && !proof.valid) {
+      proof.verify()
+      if (!proof.files.file(effectiveTranscriptPath!, true)) throw new IdentityReadUnavailable('the announced transcript is not yet available')
+      return null
+    }
+    const first = sessionStoreOf(engine)?.first
+    if (proof && first) {
+      const meta = proof.files.header(effectiveTranscriptPath!, first)
+      if (meta.isSubagent || meta.id !== sessionId) { proof.verify(); return null }
+    }
+    if (effectiveTranscriptPath && !admitHook(engine, { transcriptPath: effectiveTranscriptPath }).accepted) return null
+    // A resumed row that has not yet been told, by a hook, which conversation it actually reopened.
+    // Two ways to be in that state, and both have to count:
+    //  - `lastHookAt === 0` — a resume allocated by `resumePendingAgent` and not yet hooked. Its
+    //    `launch` may ALREADY read `ready`, because a resume is confirmed by its own live engine
+    //    process now (`resumeStoppedAgent.ts`) and that is usually earlier than the hook. Reading
+    //    only `launch` here disarmed this guard for exactly the resumes it exists to protect.
+    //  - a launch that is not `ready` — a row put back by the post-reboot restore, which relaunches
+    //    `--resume` against a row that kept `lastHookAt` from its previous life.
+    if (existing?.resumeOnly && (existing.lastHookAt === 0 || (existing.launch && existing.launch.state !== 'ready'))) {
+      // A native startup hook, carrying the verified process, must confirm this exact history —
+      // but only where an exact history was asked for. A resume that opened a NEW conversation (an
+      // engine with no resume argv, or a row with no id to reopen) reports a different id BECAUSE
+      // it did what it was told; failing it there would refuse the resume the caller requested.
+      if (sessionId !== existing.sessionId && resumesConversation(engine, existing.sessionId)) {
+        this.setLaunch(agentId, { state: 'failed', error: 'RESUME_SESSION_MISMATCH', detail: 'The agent reported a different conversation. The requested conversation is still saved.' })
+        return null
+      }
+      if (!validProcessIdentity(input.processIdentity)) return null
+    }
     // Even a first bind can carry a drifted cwd (a fork inherits its source's; `claude --resume` typed
     // from a subfolder). Claude's transcript never moves from the project dir it was started in, so a
     // cwd that does not round-trip to that directory name is not this session's folder — the row's own
@@ -1884,7 +1894,7 @@ class Registry {
     const retainEvidence = sameSession && existing.engine === engine && existing.transcriptPath === effectiveTranscriptPath
     const entry: RegisteredSession = {
       schemaVersion: 2,
-      active: existing?.active ?? true,
+      active: existing && isTerminalEngine(existing.engine) ? true : existing?.active ?? true,
       ...(existing?.evidenceRevision === undefined ? {} : { evidenceRevision: existing.evidenceRevision }),
       ...(retainEvidence && existing.identityHold ? { identityHold: existing.identityHold } : {}),
       ...(retainEvidence && existing.interpretationHold ? { interpretationHold: existing.interpretationHold } : {}),
@@ -1942,7 +1952,7 @@ class Registry {
       ...(existing?.resumeOnly ? { resumeOnly: true, launch: { state: 'ready' as const } } : {}),
       // Keep alias reservations and profile arguments across the first hook and daemon restart.
       ...(existing?.externalResume && existing.engine === engine ? { externalResume: existing.externalResume } : {}),
-      ...(existing?.terminalHost ? { terminalHost: true } : {}),
+      ...(existing?.terminalHost || existing && isTerminalEngine(existing.engine) ? { terminalHost: true } : {}),
       processIdentity: validProcessIdentity(input.processIdentity) ? input.processIdentity : existing?.processIdentity ?? null,
       registeredAt: existing?.registeredAt ?? now,
       touchedAt: now,
@@ -1956,14 +1966,13 @@ class Registry {
     }
     entry.tmuxPane = tmuxProjection(entry.runtimes)
     entry.primaryRuntimeKey = selectedRuntimeKey(entry.runtimes, input.primaryRuntimeKey || existing?.primaryRuntimeKey)
-    // A bind REBUILDS the row, and the rebuild carries no `launch` unless the row is resume-only:
-    // an engine reporting for duty is the end of any launch. Traced like the setters, because this
-    // is the one that changes the state without naming it.
-    this.traceLaunch(agentId, existing?.launch, entry.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
-    if (rebound) this.sessionIndex.delete(rebound)
-    this.index(entry)
-    this.save()
-    return { entry, isNew, evicted, rebound, orphaned }
+    const previousLaunch = existing?.launch, promoted = !!existing && isTerminalEngine(existing.engine)
+    this.save(true, false, undefined, { agentId, candidate: entry, displaced, verify: () => proof?.verify() })
+    const committed = this.agents.get(agentId)!
+    if (orphaned) this.terminalAvailableAgents.delete(orphaned.agentId)
+    if (promoted) this.terminalAvailableAgents.add(agentId)
+    this.traceLaunch(agentId, previousLaunch, committed.launch, `register ${engine} (${isNew ? 'new session' : 're-register'})`)
+    return { entry: committed, isNew, evicted, rebound, orphaned }
   }
 
   remove(sessionId: string): boolean {
@@ -2519,7 +2528,8 @@ class Registry {
   }
 
   private save(strict = false, exiting = false, externalAgentId?: string,
-    bindingCommit?: { agentId: string; candidate: RegisteredSession; verify: () => void }): void {
+    bindingCommit?: { agentId: string; candidate: RegisteredSession; verify: () => void;
+      displaced?: { agentId: string; candidate: RegisteredSession | null } }): void {
     // Discovery batches observations, but a recovered binding must be durable before interpretation
     // resumes. Commit a complete batch now; an incomplete batch remains held and retries next pass.
     if (this.transactionDepth > 0 && !exiting && !bindingCommit) {
@@ -2533,13 +2543,19 @@ class Registry {
       return
     }
     if (this.namesUnsaved) this.saveNames()
+    const entered: AgentEngine[] = []
     try {
       secureStateDirectory(env.ADAPTER_DATA_DIR)
       const currentRows = new Map(this.list().map((entry) => {
         const row = persistedRow(entry) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
-      if (bindingCommit) currentRows.set(bindingCommit.agentId, persistedRow(bindingCommit.candidate) as unknown as Record<string, unknown>)
+      if (bindingCommit) {
+        currentRows.set(bindingCommit.agentId, persistedRow(bindingCommit.candidate) as unknown as Record<string, unknown>)
+        const displaced = bindingCommit.displaced
+        if (displaced?.candidate) currentRows.set(displaced.agentId, persistedRow(displaced.candidate) as unknown as Record<string, unknown>)
+        else if (displaced) currentRows.delete(displaced.agentId)
+      }
       // A discovery batch may be awaiting a reader after acknowledging a complete binding. Exit cannot
       // wait for it. Check BEFORE merge conflict resolution: an incomplete pane swap must never be
       // made to look valid by evicting its other owner. Its last durable snapshot remains untouched.
@@ -2583,6 +2599,22 @@ class Registry {
           if ((latest.has(bindingCommit.agentId) ? rowFingerprint(latest.get(bindingCommit.agentId)) : undefined)
             !== this.persistedBaseline.get(bindingCommit.agentId)) {
             throw new IdentityReadUnavailable('the saved binding changed while its evidence was being read')
+          }
+          const displaced = bindingCommit.displaced
+          if (displaced && (latest.has(displaced.agentId) ? rowFingerprint(latest.get(displaced.agentId)) : undefined)
+            !== this.persistedBaseline.get(displaced.agentId)) {
+            throw new IdentityReadUnavailable('the displaced binding changed while its evidence was being read')
+          }
+          const candidate = bindingCommit.candidate
+          const routes = new Set(candidate.runtimes.map(terminalRouteKey))
+          for (const [otherId, other] of new MergeIdentities(latest).sharing(candidate.agentId,
+            candidate.processIdentity?.pid, candidate.sessionId, routes)) {
+            if (otherId === displaced?.agentId) continue
+            if ((other.engine === candidate.engine && sameProcessIdentity(other.processIdentity, candidate.processIdentity))
+              || (!!candidate.sessionId && other.sessionId === candidate.sessionId)
+              || other.runtimes.some(runtime => routes.has(terminalRouteKey(runtime)))) {
+              throw new IdentityReadUnavailable('the conversation or terminal has a different durable owner')
+            }
           }
           bindingCommit.verify()
         }
@@ -2640,7 +2672,8 @@ class Registry {
             if (interpretationHold) entry.interpretationHold = interpretationHold
             if (evidenceRevision !== undefined) entry.evidenceRevision = evidenceRevision
           }
-          this.index(entry)
+          this.index(entry, false)
+          entered.push(entry.engine)
         }
         this.persistedBaseline = new Map(serialized.map((row) => [rowId(row), rowFingerprint(row)]))
       })
@@ -2648,6 +2681,8 @@ class Registry {
       if (strict) throw err
       console.error('[registry] save failed:', err)
     }
+    // Optional engine startup observes the complete durable publication, outside the write lock.
+    for (const engine of entered) this.entered(engine)
   }
 
   /**

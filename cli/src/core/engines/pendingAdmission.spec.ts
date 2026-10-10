@@ -11,6 +11,39 @@ function request(overrides: Partial<PendingAdmission<string>> = {}): PendingAdmi
 const flush = async () => { await Promise.resolve(); await Promise.resolve() }
 
 describe('pending hook admission', () => {
+  it.each(['held', 'throws'] as const)('retains the exact candidate until its %s durable commit succeeds', async failure => {
+    vi.useFakeTimers()
+    const queue = createPendingAdmissions({ retryMs: 20 })
+    let writable = false
+    const commit = vi.fn((): AdmissionDecision<string> => {
+      if (writable) return { kind: 'accept', value: 'committed' }
+      if (failure === 'throws') throw new Error('durable registry unavailable')
+      return { kind: 'hold', reason: 'durable registry unavailable' }
+    })
+    const held = request({ commit })
+    queue.submit('agent', 'delivery', held); await flush()
+    expect(held.accept).not.toHaveBeenCalled()
+    expect(held.held).toHaveBeenCalledWith(expect.stringContaining('durable'))
+    writable = true
+    await vi.advanceTimersByTimeAsync(20)
+    expect(commit).toHaveBeenCalledTimes(2)
+    expect(held.accept).toHaveBeenCalledExactlyOnceWith('committed')
+    queue.close()
+  })
+
+  it('does not advance order when the durable commit conclusively refuses admission', async () => {
+    const queue = createPendingAdmissions()
+    const refused = request({ order: { scope: 'process', firedAt: 20, arrival: 1 },
+      commit: () => ({ kind: 'reject', reason: 'confirmed-invalid' }) })
+    queue.submit('agent', 'invalid', refused); await flush()
+    expect(refused.accept).not.toHaveBeenCalled()
+    expect(refused.reject).toHaveBeenCalledExactlyOnceWith('confirmed-invalid')
+    const older = request({ order: { scope: 'process', firedAt: 10, arrival: 2 } })
+    queue.submit('agent', 'parent', older); await flush()
+    expect(older.accept).toHaveBeenCalledOnce()
+    queue.close()
+  })
+
   it('rechecks an already-held equal-time child so its parent can recover', async () => {
     vi.useFakeTimers()
     const queue = createPendingAdmissions({ retryMs: 20 })
