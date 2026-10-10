@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Memory Brain</title>
+<style>
+  :root { --bg: #0b0c0e; --panel: #131518; --text: #e6e7e9; --muted: #8b8f96; --faint: #5a5e65; --line: #24272c; --accent: #e8875f; color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 ui-monospace, "SF Mono", Menlo, monospace; }
+  main { max-width: 1240px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: .01em; }
+  h1 span { color: var(--accent); }
+  .lede { color: var(--muted); margin: 0 0 8px; max-width: 72ch; }
+  .mode { color: var(--faint); margin: 0 0 28px; }
+  .mode a { color: var(--text); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 22px; }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; }
+  .card a.shot { display: block; aspect-ratio: 1360 / 900; background: #000 center / cover no-repeat; border-bottom: 1px solid var(--line); }
+  .card .body { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .card h2 { font-size: 16px; margin: 0; }
+  .card .film { color: var(--faint); font-size: 12px; }
+  .card p { margin: 0; color: var(--muted); }
+  .card .keys { color: var(--faint); font-size: 12px; margin-top: auto; padding-top: 8px; }
+  .card .open { display: flex; gap: 14px; padding-top: 6px; }
+  .card .open a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--faint); }
+  .card .open a:hover { border-color: var(--text); }
+  .card .open a.real { color: var(--accent); border-color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1><span>◉</span> walking into the brain</h1>
+  <p class="lede">Four ways to explore what your agents remember: by place, by association and by time, the way a mind finds a memory. The chat beside Memories answers questions; this is for wandering in. Every one is keyboard first: just start typing to recall.</p>
+  <p class="mode" id="mode"></p>
+  <div class="grid" id="grid"></div>
+</main>
+<script src="index.js"></script>
+</body>
+</html>
