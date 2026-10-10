@@ -1,0 +1,354 @@
+{
+  "linux:first": {
+    "entry": {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": null
+  },
+  "linux:same-preserves-folder": {
+    "entry": {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    "isNew": false,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": null
+  },
+  "linux:rotation": {
+    "entry": {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    "isNew": true,
+    "evicted": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "rebound": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "orphaned": null
+  },
+  "linux:terminal-promotion": {
+    "entry": {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": true
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": null
+  },
+  "linux:move-active": {
+    "entry": {
+      "agent": "codex",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": null
+  },
+  "linux:after-active-move": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    {
+      "agent": "codex",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "",
+      "transcript": null,
+      "cwd": "<root>",
+      "source": null,
+      "active": true,
+      "terminalHost": true
+    }
+  ],
+  "linux:move-dormant": {
+    "entry": {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": true
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": {
+      "agentId": "<codex>",
+      "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+    }
+  },
+  "linux:delegated-rejected": null,
+  "linux:final-live": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": true
+    }
+  ],
+  "linux:final-saved": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": true
+    }
+  ],
+  "darwin:first": {
+    "entry": {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": null
+  },
+  "darwin:same-preserves-folder": {
+    "entry": {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    "isNew": false,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": null
+  },
+  "darwin:rotation": {
+    "entry": {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    "isNew": true,
+    "evicted": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "rebound": "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
+    "orphaned": null
+  },
+  "darwin:terminal-promotion": {
+    "entry": {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": true
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": null
+  },
+  "darwin:move-active": {
+    "entry": {
+      "agent": "codex",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": null
+  },
+  "darwin:after-active-move": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    {
+      "agent": "codex",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "",
+      "transcript": null,
+      "cwd": "<root>",
+      "source": null,
+      "active": true,
+      "terminalHost": true
+    }
+  ],
+  "darwin:move-dormant": {
+    "entry": {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": true
+    },
+    "isNew": true,
+    "evicted": null,
+    "rebound": null,
+    "orphaned": {
+      "agentId": "<codex>",
+      "sessionId": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+    }
+  },
+  "darwin:delegated-rejected": null,
+  "darwin:final-live": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": true
+    }
+  ],
+  "darwin:final-saved": [
+    {
+      "agent": "claude",
+      "engine": "claude",
+      "session": "cccccccc-3333-4333-8333-cccccccccccc",
+      "transcript": "<root>/CLAUDE_CONFIG_DIR/projects/fixture/cccccccc-3333-4333-8333-cccccccccccc.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": false
+    },
+    {
+      "agent": "terminal",
+      "engine": "codex",
+      "session": "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa",
+      "transcript": "<root>/CODEX_HOME/sessions/rollout-aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa.jsonl",
+      "cwd": "<root>",
+      "source": "fixture",
+      "active": true,
+      "terminalHost": true
+    }
+  ]
+}
