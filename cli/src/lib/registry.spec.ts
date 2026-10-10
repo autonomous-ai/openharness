@@ -557,6 +557,19 @@ describe('registry remote display names', () => {
     const { registry } = await loadRegistryModule()
     registry.load()
 
+    // Other fixtures can change a shared temporary-directory ancestor while the parent pool is
+    // enumerated. That is a supported hold: keep the saved identity, then earn fresh evidence
+    // through the same retry used by discovery, without reloading or weakening the route proof.
+    if (registry.get(parentId)?.identityHold) {
+      expect(registry.get(parentId)?.identityHold).toContain('directory or ancestor changed during enumeration')
+      expect(registry.get(parentId)?.transcriptPath).toBe(childPath)
+      expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0]).toMatchObject({ sessionId: parentId, transcriptPath: childPath })
+      await vi.waitFor(() => {
+        registry.revalidateBinding('h1')
+        expect(registry.get(parentId)?.identityHold).toBeUndefined()
+      }, { timeout: 1_000, interval: 20 })
+    }
+    expect(registry.get(parentId)?.identityHold).toBeUndefined()
     expect(registry.get(parentId)?.transcriptPath).toBe(parentPath)
     expect(JSON.parse(readFileSync(join(dataDir, 'registry.json'), 'utf8'))[0].transcriptPath).toBe(parentPath)
     expect(registerProcess(registry, {

@@ -109,3 +109,18 @@ The fresh route/header/catalog reads add roughly 1–4 ms to these explicit revi
 and deletion operations. These are observations, not a new numerical gate or a
 measurement of live turn throughput. The healthy outputs and confirmed deletion
 outcomes remain the same; this comparison does not cover shared-database deletion.
+
+
+## Linux recovery-fixture correction
+
+Automatic CI run `38046179495` passed three CLI shards but found one failure in
+`registry.spec.ts`: the parent-repair fixture expected immediate success while
+another fixture changed a shared temporary-directory ancestor during enumeration.
+The recorded hold was `a binding directory or ancestor changed during enumeration`;
+the original session and child path remained intact. The test now permits only this
+specific transient condition, verifies preservation, and requires successful fresh
+`revalidateBinding` evidence within one second, the parent path in memory and disk,
+and the identity hold cleared. It loads only once and still rejects a later child
+registration. Production evidence and the ancestor-round-trip regression are unchanged.
+Independent review recommended this normal recovery path instead of weakening or
+mocking the ancestor checks. Final CI must pass after this test correction.
