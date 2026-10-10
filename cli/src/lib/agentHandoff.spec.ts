@@ -775,7 +775,11 @@ describe('prepareAgentHandoff: refusals and limits', () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const events: LiveEvent[] = [{ type: 'turn_started', payload: { userMessage: 'hi' } }]
-    const sessions = ['a1', 'a2', 'a3'].map((agentId) => session({ agentId, sessionId: `s-${agentId}`, engine: 'opencode', transcriptPath: null }))
+    const sessions = ['a1', 'a2', 'a3'].map((agentId) => {
+      const cwd = join(root, agentId)
+      mkdirSync(cwd)
+      return session({ agentId, sessionId: `s-${agentId}`, engine: 'opencode', transcriptPath: null, cwd })
+    })
     const d = depsFor(sessions, { deadlineMs: 10_000, readHistory: () => async () => { await gate; return events } })
     const first = prepareAgentHandoff(d, request(cid(1), 'a1'))
     const second = prepareAgentHandoff(d, request(cid(2), 'a2'))

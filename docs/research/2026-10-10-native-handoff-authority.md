@@ -172,7 +172,10 @@ SHA-256. At 12:43:24–12:43:41 UTC, eighteen fresh processes ran three interlea
 samples per revision/workload, three measured operations per sample. Each used the
 same 45,151-byte, twenty-turn native transcript, private homes, pinned Linux evidence
 semantics and Node 22.23.2 on the same macOS x64 host. Host binaries were replaced
-with fixture responses. All 54 measured operations confirmed the selected history.
+with fixture responses. Each project was outside Git: these measurements do not
+exercise Git commands or the exclusion stage. The separate real-Git wire
+responsiveness checks and private e2e cover those paths. All 54 measured operations
+confirmed the selected history.
 
 | Workload | Former mean latency | Candidate mean latency | Candidate maximum callback delay | Former/candidate CPU per operation | Former/candidate peak RSS |
 |---|---:|---:|---:|---:|---:|
@@ -185,4 +188,34 @@ handoff in this workload; a verified retry adds about 43 ms. This is a measured 
 not a speed improvement. The request remains within its existing five-second
 budget, and the longest measured callback remains below the existing one-second
 responsiveness assertion. These samples cover explicit handoffs, not startup,
-turn throughput or all possible filesystems. No numerical gate was relaxed.
+turn throughput or all possible filesystems. Synchronous filesystem calls have
+practical bounded reads and revalidation, but cannot cancel a stuck kernel call.
+No numerical gate was relaxed.
+
+## Final fixture and client review
+
+The full local core gate passed 2,310 tests with 100% statements, branches,
+functions and lines; harnessd passed 265 tests with its one existing skip and
+100% coverage. All fifteen deliberately broken handoff wirings failed behavioral
+assertions after their unchanged baselines passed. The affected gate initially
+passed 463 cases and failed five. Two socket expectations predated typed held
+replies, the concurrency-limit fixture unintentionally shared one physical project,
+and one test put three durable handoffs inside Vitest's single five-second limit.
+The three fork states now have separate cases; production deadlines are unchanged.
+The remaining expectation conflated a conclusively older process incarnation with
+a current process record naming the wrong folder. The former is ignored; the latter
+holds. The corrected three files passed all 195 cases.
+
+Independent review also found that TUI handoff callbacks compared session and
+creation identity but omitted the source engine and project. Those fields now fence
+the picker, delayed replies and held-intent reuse. Explicitly reopening Change
+agent discards a stale preparation only before Close was sent, allowing a fresh
+request ID. An uncertain Close or create keeps its original receipt. Regression
+cases cover late replies, held retries, stale pickers and uncertain operations.
+Final TUI validation and review of this correction remain pending.
+
+Touched Desktop analysis passed without warnings or errors; eleven preexisting
+bracing advisories in the larger state file remain. The invalid initial analyzer
+option exited before analysis and was rerun with supported arguments. The worktree
+was narrowed to relevant tracked components to recover space; branches, edits and
+private evidence remain intact, and the two-GiB validation guard is unchanged.

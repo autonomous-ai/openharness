@@ -133,7 +133,7 @@ describe('fork record → registry → stopped copy → inheritance (real module
     return { parent, parentFile, fork }
   }
 
-  it('a live fork, the same fork after a daemon restart, and its stopped copy inherit exactly the recorded session up to the fork', async () => {
+  it.each(['live', 'restarted', 'stopped'] as const)('the %s fork inherits exactly the recorded session up to the fork', async (label) => {
     const m = await modules()
     const { parent, parentFile, fork } = await forkOfParent(m)
     expect(fork.forkedFrom).toEqual({ agentId: 'parent-1', name: 'harness Devops', sessionId: PARENT_SESSION, transcriptPath: parentFile })
@@ -151,7 +151,8 @@ describe('fork record → registry → stopped copy → inheritance (real module
     const stoppedFork = new m.StoppedAgentStore(join(data, 'stopped-agents')).get(fork.agentId)!
     expect(stoppedFork.forkedFrom).toEqual(fork.forkedFrom)
 
-    for (const [label, row] of [['live', fork], ['restarted', restartedFork], ['stopped', stoppedFork]] as const) {
+    {
+      const row = { live: fork, restarted: restartedFork, stopped: stoppedFork }[label]
       const changeId = { live: CHANGE, restarted: OTHER_CHANGE, stopped: 'a'.repeat(32) }[label]
       const findLiveSession = vi.fn(m.findLiveSession)
       const claudeProcessSession = vi.fn(m.processSession)
@@ -259,14 +260,15 @@ describe('discovery through the real Claude process record (handoffDiscovery ↔
     }
   })
 
-  it('refuses a record from another process start or another folder', async () => {
+  it('ignores a conclusively older process record and holds a current record naming another folder', async () => {
     const m = await modules()
     const marker = startMarker()
     ownFile(Date.parse(marker) + 500)
-    for (const [label, procStart, cwd] of [['older start', new Date(Date.parse(marker) - 60_000).toISOString(), ws], ['other folder', marker, root]] as const) {
-      processRecord(FOUND_SESSION, procStart, cwd)
-      await expect(ask(m, cliDeps(m, [unbound(marker)])), label).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
-    }
+    processRecord(FOUND_SESSION, new Date(Date.parse(marker) - 60_000).toISOString())
+    await expect(ask(m, cliDeps(m, [unbound(marker)]))).resolves.toEqual({ file: null, gitRepo: false, cwd: ws, degraded: [] })
+    processRecord(FOUND_SESSION, marker, root)
+    await expect(ask(m, cliDeps(m, [unbound(marker)]), OTHER_CHANGE)).rejects.toMatchObject({ code: 'IDENTITY_UNAVAILABLE' })
+    expect(existsSync(join(ws, '.harness'))).toBe(false)
   })
 
   it('never hands over a session a stopped agent holds, read from the real stopped store', async () => {
