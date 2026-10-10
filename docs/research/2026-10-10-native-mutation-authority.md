@@ -64,6 +64,16 @@ unchanged. Mutation tests deliberately break protocol fields, admission, live
 receipt retention, response identity, version fallback, stream closure, session
 ownership, route lifetime, failure reporting and final tmux/signal fences.
 
+The full end-to-end run also exposed an ownership error at Stop: an unbound fork
+could claim its recently created parent's conversation through discovery's
+start-time slack. The stopped-conversation index then superseded the parent,
+breaking handoff. Known fork sources are now excluded from fallback file and
+database pools and from descriptors opened while copying the source. Complete
+native process records and explicit resumes retain their authority. Excluded
+descriptor headers still participate in final evidence verification; removing a
+row from a truncated database pool cannot establish uniqueness. The handoff test
+checks the actual saved parent and fork after Stop instead of reseeding the fork.
+
 ## Still unfinished
 
 These receipts survive requests in one live core, not a daemon crash. Manual

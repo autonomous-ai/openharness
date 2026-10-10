@@ -18,6 +18,7 @@ export interface NativeConversationSources {
 }
 export interface NativeConversationOptions {
   expected?: ProcessIdentity
+  excludedSessionId?: string
   budget?: NativeEvidenceBudget
   sources?: NativeConversationSources
 }
@@ -110,6 +111,10 @@ export async function nativeOpenFileSession(engine: AgentEngine, pid: number, ro
     if ((declared && !declared.info.isDirectory()) || (requested && !requested.info.isDirectory())) return nativeUnavailable('a native conversation folder is not a directory')
     const same = meta.cwd === cwd || (declared && requested && nativeFileKey(declared.info) === nativeFileKey(requested.info))
     if (!same) continue
+    // A fork opens its source while copying it. A descriptor proves that read,
+    // not that the new process owns the source conversation. Keep its proof in
+    // the final checks even though it cannot be selected as the child.
+    if (meta.id === options.excludedSessionId) continue
     found.set(key, { sessionId: meta.id, transcriptPath: location.path })
   }
   await evidence.verify()

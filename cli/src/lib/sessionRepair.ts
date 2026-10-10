@@ -267,7 +267,7 @@ async function reportMissingSqliteOnce(): Promise<void> {
 }
 
 /** Read-only, through the same helper the readers use, so a repair can never write to the user's store. */
-async function dbEngineSession(dbPath: string, sql: string, params: SqliteParam[]): Promise<RepairedSession | null> {
+async function dbEngineSession(dbPath: string, sql: string, params: SqliteParam[], excludedSessionId?: string): Promise<RepairedSession | null> {
   const result = await sqliteReadAll(dbPath, sql, params, { maxBuffer: 1024 * 1024 })
   if (!result.ok) {
     // No reader at all is not a transient DB lock, and repair returning null forever with no signal is
@@ -276,9 +276,11 @@ async function dbEngineSession(dbPath: string, sql: string, params: SqliteParam[
     return null
   }
   const rows = result.rows
+  // These queries return at most two rows. Removing the source from that
+  // truncated result cannot establish that the remaining row is unique.
   if (rows.length !== 1) return null // 0 = nothing to adopt, >1 = ambiguous
   const id = rows[0].id
-  return typeof id === 'string' && id ? { sessionId: id } : null
+  return typeof id === 'string' && id && id !== excludedSessionId ? { sessionId: id } : null
 }
 
 /** One `?` per directory, for an `IN (…)` over both spellings of the cwd. */
@@ -338,7 +340,8 @@ async function storeSession(
   }
   const sessions = repairRoots(engine, opts?.codexHome)
   const found = opts?.pid && 'open' in store.live
-    ? await openFileSessionOf(engine, opts.pid, sessions, cwd, { expected: opts.expectedProcess, budget: opts.nativeBudget })
+    ? await openFileSessionOf(engine, opts.pid, sessions, cwd,
+      { expected: opts.expectedProcess, budget: opts.nativeBudget, excludedSessionId: opts.excludedSessionId })
     : await fileEngineSession(sessions, cwd, startedAtMs, scan,
       { ...opts, ...(store.scan.from === 'head' ? { excludedDirectory: store.scan.childFolder } : {}) })
   // The login shell may adopt another home during any native read. Its unseen candidates
@@ -355,8 +358,8 @@ export async function findLiveSession(
   startedAtMs: number,
   // codexHome: the specific agent's own profile (its CODEX_HOME), when it isn't this machine's default —
   // see RegisteredSession.codexHome. Read only for an engine whose sessions follow one (`sessions.profile`).
-  // A known fork source is excluded only from the file-time fallback. Exact
-  // native process records and open descriptors remain authoritative.
+  // A known fork source cannot identify the child through a file/DB pool or a
+  // descriptor opened for copying. Exact native current-session records still can.
   opts?: { bornOnly?: boolean; excludedSessionId?: string; pid?: number; codexHome?: string; hermesHome?: string; expectedProcess?: ProcessIdentity; nativeBudget?: NativeEvidenceBudget },
 ): Promise<RepairedSession | null> {
   const store = sessionStoreOf(engine)
@@ -423,6 +426,7 @@ export async function findLiveSession(
           + ' AND (time_created >= ? OR time_updated >= ?)'
           + ' ORDER BY time_updated DESC LIMIT 2;',
         [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
+        opts?.excludedSessionId,
       )
     case 'kilo':
       // Same store shape as opencode (measured: `session` is byte-identical between the two DBs), and
@@ -433,6 +437,7 @@ export async function findLiveSession(
           + ' AND (time_created >= ? OR time_updated >= ?)'
           + ' ORDER BY time_updated DESC LIMIT 2;',
         [...dirs, Math.trunc(sinceMs), Math.trunc(sinceMs)],
+        opts?.excludedSessionId,
       )
     case 'hermes': {
       // started_at is epoch SECONDS (fractional).
@@ -467,6 +472,7 @@ export async function findLiveSession(
           throw new IdentityReadUnavailable('a Hermes store contains an invalid conversation id')
         }
         if (opts?.hermesHome && !aliases.includes(opts.hermesHome)) continue
+        if (row.id === opts?.excludedSessionId) continue
         candidates.push({ sessionId: row.id, hermesHome: opts?.hermesHome ?? home })
       }
       return candidates.length === 1 ? candidates[0] : null
@@ -481,6 +487,7 @@ export async function findLiveSession(
           + ' AND (created_at >= ? OR last_activity_at >= ?)'
           + ' ORDER BY last_activity_at DESC LIMIT 2;',
         [...dirs, Math.trunc(sinceMs / 1000), Math.trunc(sinceMs / 1000)],
+        opts?.excludedSessionId,
       )
     case 'copilot': {
       // The lock the process holds is the only thing a `/resume` leaves behind, and it is exact.
