@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, rmSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterEach, describe, expect, it, onTestFailed } from 'vitest'
@@ -245,8 +245,8 @@ describe('the person\'s engines keeping their data elsewhere', () => {
     again.close()
   })
 
-  it('retains a saved binding with an incomplete header while readiness and a sibling work, then recovers in place', async () => {
-    const d = await IsolatedDaemon.create(); daemon = d
+  it.each([false, true])('retains a saved binding with an incomplete header while readiness and a sibling work, then recovers in place: inline=%s', async inline => {
+    const d = await IsolatedDaemon.create(inline ? { env: { HARNESSD_SERVICES: 'none' } } : {}); daemon = d
     onTestFailed(() => console.log(`---- daemon log\n${d.log().split('\n').slice(-150).join('\n')}`))
     await d.start()
     let client = await LocalClient.connect(d)
@@ -272,7 +272,15 @@ describe('the person\'s engines keeping their data elsewhere', () => {
       const value = await row(client, bound!.id); return value?.identityHold ? value : null
     }, 45_000)
     expect(held).toMatchObject({ sessionId: bound!.sessionId, status: 'active' })
+    // A mistakenly installed tail would parse this valid turn record despite its invalid header.
+    // Only this fixture's file is written; no synthetic input goes to the held pane.
+    appendFileSync(file, '\n' + JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'unconfirmed held record' } }) + '\n')
     await turn(client, sibling!.id, 'a sibling works during the hold')
+    await until('discovery to retry the still-invalid header', async () => {
+      const value = await row(client, bound!.id)
+      return value?.identityHold && value.identityHold !== held.identityHold
+    }, 30_000)
+    expect(client.frames.filter(frame => frame.agentId === bound!.id && ['turn_started', 'turn_ended'].includes(frame.type))).toEqual([])
     const saved = JSON.parse(readFileSync(join(d.dataDir, 'registry.json'), 'utf8')) as Row[]
     expect(saved.find(value => value.agentId === bound!.id)).toMatchObject({ sessionId: bound!.sessionId, transcriptPath: file })
     writeFileSync(file, complete)

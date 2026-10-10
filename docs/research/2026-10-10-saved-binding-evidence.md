@@ -51,6 +51,20 @@ registry or restarting the daemon. Successful registration or proven binding
 release clears its transient hold. Discovery contains registration/read failures,
 announces changed reasons, and does not archive, unbind or save unavailable evidence.
 
+The composed review found three further defects. Held rows could enter attachment;
+recovery could retain an inline parser of the old path; and cleanup after releasing
+the session index lost its agent key. Discovery and interpretation now defer held
+bindings, delayed reads lose authority when a hold arrives, and recovery rebuilds
+both unchanged and repaired paths without replaying saved history as a new turn.
+Agent-scoped input and scopes use the retained agent id during cleanup.
+
+Review also found a concurrent-write hazard. Revalidation now stages its candidate
+without changing the live row or indices. Inside the registry write lock it compares
+the exact durable baseline, re-verifies native evidence and commits before publishing.
+A peer's newer binding is preserved. A complete discovery batch may commit there;
+an incomplete batch or failed write holds the retry. Two independent Registry
+instances cover same-path recovery, release and parent repair against a peer write.
+
 ## Validation plan and progress
 
 The required plan is typecheck; architecture; core/services and harnessd per-file
@@ -70,6 +84,17 @@ does not expose it; it now reads only its disposable daemon's private registry.
 An initial registry unit run was invalidated by macOS sandbox rejection of uptime;
 the authorized rerun isolated one incomplete healthy header fixture, now corrected.
 Final receipts, exact-head review and measured results follow before landing.
+
+The initial full validation receipt `20261010T021955.961388Z-42225` passed types,
+274 focused tests in 14 files, architecture, core/services (1,960 tests, 100%),
+harnessd (265 tests, 100%; one existing skip), 35 private engine-home/machine/chaos
+cases and 57 private tmux cases. Fifteen installed-vendor tmux cases are explicitly
+excluded because those tools are not installed in the fixture. After the composed
+review corrections, core/services passed 1,977 tests in 163 files at 100% statements,
+branches, functions and lines (27 seconds, October 10 02:40 UTC); typecheck passed.
+The current e2e case additionally appends a valid turn under the incomplete header,
+asserts no held-session turn is emitted, and runs with workers and explicit inline
+mode. Final affected lanes and composed resume are rerun after these changes.
 
 ## Matched runtime cost
 

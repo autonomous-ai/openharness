@@ -359,12 +359,12 @@ describe('binding a running process to its session', () => {
     expect(continuationOf).not.toHaveBeenCalled()
   })
 
-  it.each(['repaired', 'absent'] as const)('updates transcript attachment after a held binding is conclusively %s', async outcome => {
+  it.each(['repaired', 'same', 'absent'] as const)('updates transcript attachment after a held binding is conclusively %s', async outcome => {
     const run = setup(), row = agent({ transcriptPath: '/t/child.jsonl', identityHold: 'unavailable' })
     run.byAgent.set(row.agentId, row)
     vi.mocked(run.deps.registry.byProcess).mockReturnValue(row)
     vi.mocked(run.deps.registry.revalidateBinding).mockImplementation(() => {
-      Object.assign(row, { sessionId: outcome === 'absent' ? '' : 's1', transcriptPath: outcome === 'absent' ? null : '/t/parent.jsonl' })
+      Object.assign(row, { sessionId: outcome === 'absent' ? '' : 's1', transcriptPath: outcome === 'absent' ? null : outcome === 'same' ? row.transcriptPath : '/t/parent.jsonl' })
       delete row.identityHold
       return row
     })
@@ -373,7 +373,7 @@ describe('binding a running process to its session', () => {
       expect(run.deps.forgetSession).toHaveBeenCalledWith('s1', { force: true, keepAgent: true, agentId: 'a1' })
       expect(run.deps.stoppedAgents.save).not.toHaveBeenCalled()
     } else {
-      await vi.waitFor(() => expect(run.deps.attachSession).toHaveBeenCalledWith(row, false, false, false))
+      await vi.waitFor(() => expect(run.deps.attachSession).toHaveBeenCalledWith(row, true, false, false))
       expect(run.deps.forgetSession).not.toHaveBeenCalled()
     }
     expect(run.deps.announceSession).toHaveBeenCalledWith(row)

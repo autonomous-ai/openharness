@@ -2,7 +2,8 @@
   "started": "2026-10-10T02:15:46.449830+00:00",
   "finished": "2026-10-10T02:17:09.064508+00:00",
   "baseline": "c7d460b1d8018ed56126c662702fd44db886d07d",
-  "candidate": "saved-binding working tree, before documentation and validation-only changes",
+  "candidate": "094d3842c65cdf4432830fd0db0501cac52cd422",
+  "candidateScope": "The measured complete registry-load and native descriptor paths match this commit. Later review fixes affect held-binding retry and attachment, not the measured load/descriptor operations; native primitives and the load batch are unchanged. These samples do not measure recovery writes or attachment latency.",
   "runs": [
     {
       "repetition": 1,

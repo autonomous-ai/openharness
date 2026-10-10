@@ -185,7 +185,7 @@ export function createAttach({
     let observed = false
     sideRead('device', session.sessionId, () => { observed = !!device()?.needsTranscript(session.agentId, session.sessionId, session.engine) })
     const observe = observed
-      ? (line: string): void => sideRead('device', session.sessionId, () => device()?.observeTranscript(session.agentId, session.sessionId, session.engine, line))
+      ? (line: string): void => { if (current()) sideRead('device', session.sessionId, () => device()?.observeTranscript(session.agentId, session.sessionId, session.engine, line)) }
       : undefined
     // Returns `turnOpen` rather than assigning it: every engine folds exactly once, and a second call
     // quietly overwriting the first is the kind of mistake a returned value makes impossible to write.
@@ -235,7 +235,7 @@ export function createAttach({
           if (frame.profile && !profile.ingestFrames) sideRead('runtime profile', session.sessionId, () => profile.ingest(frame.raw))
           if (frame.observe && observe) observe(frame.raw)
         }, profile.ingestFrames)
-        if (profile.config) await profile.config()
+        if (current() && profile.config) await profile.config()
       } catch {
         if (prepared) remote.discard(prepared)
         remote.retry(session)
@@ -266,6 +266,7 @@ export function createAttach({
       if (handover.hold && (read.failed || handover.hold.expired)) {
         return keepLiveNormalizer(read.failed ? 'could not read the transcript' : 'outlasted its hold on the tail')
       }
+      if (!current()) return false
       try { await profile.config?.() }
       catch { return keepLiveNormalizer('could not read its runtime profile') }
       fromEnd = read
@@ -282,11 +283,19 @@ export function createAttach({
       if (read.truncated) console.warn(`[agent] ${sid(session.agentId)} transcript over ${Math.round(wholeReadCapBytes / 1024 / 1024)} MB · folded from its newest ${Math.round(wholeReadCapBytes / 1024 / 1024)} MB`)
       lines = read.lines
     }
+    if (!current()) {
+      if (prepared) remote!.discard(prepared)
+      return false
+    }
     if (!fromEnd) {
       if (observe) for (const line of lines) observe(line)
       sideRead('runtime profile', session.sessionId, () => runtimeProfiles.hydrate(session, lines))
     }
     if (!profileHydration?.config) await runtimeProfiles.ingestConfig(session, true)
+    if (!current()) {
+      if (prepared) remote!.discard(prepared)
+      return false
+    }
     // From here to the release in `attachSession` nothing is awaited for a held tail, so the hold cannot
     // expire between installing the new normalizer and handing it the tail.
     if (handover.hold?.expired) {
@@ -447,6 +456,7 @@ export function createAttach({
       historyTurnOpen = fold((line) => normalizer.ingest(line), () => normalizer.turnOpen)
       commandcodeNormalizers.set(session.sessionId, normalizer)
     }
+    if (!current()) return false
     // Close the old engine's turn before starting the tail: addSession may synchronously deliver a
     // new turn written after resume. Closing afterward would abandon that new turn instead.
     const abandonedHistory = !historySuperseded && historyTurnOpen && relaunch?.engineStarted
@@ -475,6 +485,7 @@ export function createAttach({
       // that brings the path must read the file whole rather than from its end.
       neverFoldedHistory.add(session.sessionId)
     }
+    if (!current()) return false
     // Marked on the FOLD, not on the emission. A live fold that happened to produce nothing — the file
     // was still empty when this attach ran — would otherwise leave the session unmarked, and the next
     // `reset` attach (claude fires `SessionStart` on compact, which resets) would fold the by-then
@@ -541,9 +552,13 @@ export function createAttach({
     replayFromStart = false,
     retryCurrent?: () => boolean,
   ): Promise<boolean> => {
+    // An unavailable identity is still the agent's binding, but grants no interpretation authority.
+    // Snapshot the mutable row before yielding so a later bind cannot redirect this read's writes.
+    session = { ...session }
     const authority = paneReadIdentity(session)
     const current = () => paneReadIdentity(resolve(session.agentId)) === authority
     if (!current()) return Promise.resolve(false)
+    if (session.identityHold) return Promise.resolve(true)
     readerLoads.supersede(session.sessionId, authority)
     // Location is core control, outside the optional reader pool. Four stalled readers must not
     // prevent a fifth Cursor session finding its file. add records its candidate synchronously, so
@@ -560,7 +575,9 @@ export function createAttach({
       // so delivery resumes into it, in order. Released on every exit, however the attach ends.
       const handover = { hold: null as TailHold | null, next: null as number | null }
       try {
-        return await attachSessionNow(session, current, reset, replayCursorFromStart, replayFromStart, handover)
+        const attached = await attachSessionNow(session, current, reset, replayCursorFromStart, replayFromStart, handover)
+        // A hold that arrived during the read is not evidence that the terminal disappeared.
+        return attached || !!resolve(session.agentId)?.identityHold
       } finally {
         handover.hold?.release(handover.next)
       }

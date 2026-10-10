@@ -1684,17 +1684,21 @@ class Registry {
     if (!entry) return null
     if (!entry.sessionId || !entry.transcriptPath) return entry
     const proof = savedTranscriptEvidence(entry.engine, entry.sessionId, entry.transcriptPath, entry.codexHome ?? undefined)
-    proof.verify()
-    if (this.agents.get(agentId) !== entry) return null
-    const changed = proof.path !== entry.transcriptPath
-    if (!proof.path) this.releaseBinding(entry)
-    else if (changed) {
-      entry.transcriptPath = proof.path
-      entry.projectDir = basename(dirname(proof.path))
+    // Stage the change without releasing the live index. A daemon-down hook may have bound another
+    // conversation since load; a three-way save of this repair must never overwrite that newer bind.
+    const candidate = { ...entry }
+    if (!proof.path) Object.assign(candidate, { sessionId: '', boundAt: null, transcriptPath: null, source: null, lastTranscriptAt: Date.now() })
+    else if (proof.path !== entry.transcriptPath) {
+      candidate.transcriptPath = proof.path
+      candidate.projectDir = basename(dirname(proof.path))
     }
-    delete entry.identityHold
-    if (changed) this.save()
-    return entry
+    delete candidate.identityHold
+    this.save(true, false, undefined, { agentId, candidate, verify: () => proof.verify() })
+    // save refreshes the indices only after the durable commit. Even same-path recovery is fenced
+    // against another writer and rechecks the native evidence after obtaining the lock.
+    const saved = this.agents.get(agentId)!
+    delete saved.identityHold
+    return saved
   }
 
   /**
@@ -2488,8 +2492,11 @@ class Registry {
     this.saveNames()
   }
 
-  private save(strict = false, exiting = false, externalAgentId?: string): void {
-    if (this.transactionDepth > 0 && !exiting) {
+  private save(strict = false, exiting = false, externalAgentId?: string,
+    bindingCommit?: { agentId: string; candidate: RegisteredSession; verify: () => void }): void {
+    // Discovery batches observations, but a recovered binding must be durable before interpretation
+    // resumes. Commit a complete batch now; an incomplete batch remains held and retries next pass.
+    if (this.transactionDepth > 0 && !exiting && !bindingCommit) {
       if (strict) throw new Error('Cannot acknowledge a close intent inside an uncommitted registry transaction')
       this.savePending = true
       return
@@ -2506,10 +2513,12 @@ class Registry {
         const row = persistedRow(entry) as unknown as Record<string, unknown>
         return [entry.agentId, row] as const
       }))
+      if (bindingCommit) currentRows.set(bindingCommit.agentId, persistedRow(bindingCommit.candidate) as unknown as Record<string, unknown>)
       // A discovery batch may be awaiting a reader after acknowledging a complete binding. Exit cannot
       // wait for it. Check BEFORE merge conflict resolution: an incomplete pane swap must never be
       // made to look valid by evicting its other owner. Its last durable snapshot remains untouched.
       if (exiting && !validatedRows([...currentRows.values()])) throw new Error('Cannot flush an incomplete registry transaction at exit')
+      if (bindingCommit && !validatedRows([...currentRows.values()])) throw new IdentityReadUnavailable('the registry observation batch is incomplete')
       // Discovery still calls save on an unchanged observation so a daemon-down hook's commit is
       // noticed. If neither side changed, avoid the lock's process probe and all three fsyncs.
       // Read through the normal ownership/mode/no-symlink checks; timestamps cannot prove equality.
@@ -2542,6 +2551,14 @@ class Registry {
         for (const value of latestValues) {
           const id = rowId(value)
           if (id) latest.set(id, value as Record<string, unknown>)
+        }
+
+        if (bindingCommit) {
+          if ((latest.has(bindingCommit.agentId) ? rowFingerprint(latest.get(bindingCommit.agentId)) : undefined)
+            !== this.persistedBaseline.get(bindingCommit.agentId)) {
+            throw new IdentityReadUnavailable('the saved binding changed while its evidence was being read')
+          }
+          bindingCommit.verify()
         }
 
         if (externalAgentId && (latest.has(externalAgentId) ? rowFingerprint(latest.get(externalAgentId)) : undefined)

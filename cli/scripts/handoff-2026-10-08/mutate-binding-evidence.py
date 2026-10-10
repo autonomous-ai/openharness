@@ -21,7 +21,7 @@ mutations = [
     ('held reason not exposed', core, 'if (registry.setIdentityHold(agent.agentId, reason)) announceSession(agent)', 'if (false) announceSession(agent)', core_spec),
     ('saved header id ignored', binding, 'meta.id !== sessionId', 'false', loaded),
     ('saved header read omitted', binding, 'const meta = proof.files.header(selected, store.first)', "const meta = { id: sessionId, isSubagent: false, parentThreadId: undefined }", loaded),
-    ('opened file identity ignored', files, 'nativeFileKey(before) !== nativeFileKey(location.info)', 'false', primitive),
+    ('opened file identity ignored', files, '!before.isFile() || nativeFileKey(before) !== nativeFileKey(location.info)', '!before.isFile() || false', primitive),
     ('final header change ignored', files, 'firstLine(bytes, record.limit - 1) !== record.line', 'false', primitive),
     ('repeated header evidence replaced', files, 'earlier.line !== line', 'false', primitive),
     ('final ancestry ignored', paths, 'identity(now) !== identity(before.info)', 'false', primitive),
@@ -32,6 +32,14 @@ mutations = [
     ('ambiguous parent accepted', binding, 'selected.size > 1', 'false', primitive),
     ('parent pool final stamp ignored', files, 'stamp(lstatSync(path, { bigint: true })) !== before', 'false', primitive),
     ('ancestor round trip ignored', files, 'route.size !== after.size || [...route].some(([part, version]) => after.get(part) !== version)', 'false', primitive),
+    ('recovery does not reset parser', core, 'const reset = meta.isNew || !!meta.recovered', 'const reset = meta.isNew', 'src/core/transcripts/attach.spec.ts'),
+    ('recovery replays saved first turn', core, '!meta.recovered && !resumedConversation', '!resumedConversation', 'src/core/transcripts/attach.spec.ts'),
+    ('released input loses agent key', 'src/core/agents/forget.ts', 'input.forget(announceId)', 'input.forget(sessionId)', 'src/core/agents/forget.spec.ts'),
+    ('durable binding comparison omitted', registry, '!== this.persistedBaseline.get(bindingCommit.agentId)', '!== this.persistedBaseline.get(bindingCommit.agentId) && false', loaded),
+    ('native commit fence omitted', registry, 'bindingCommit.verify()', 'void 0', loaded),
+    ('held attachment admitted', 'src/core/transcripts/attach.ts', 'if (session.identityHold) return Promise.resolve(true)', 'if (false) return Promise.resolve(true)', 'src/core/transcripts/attach.spec.ts'),
+    ('held replies retain authority', 'src/core/transcripts/readIdentity.ts', "...(session.identityHold ? ['identity-held'] : [])", '...[]', 'src/core/transcripts/attach.spec.ts'),
+    ('held line is interpreted', 'src/core/transcripts/ingest.ts', 'session.identityHold || ', '', 'src/core/transcripts/ingest.spec.ts'),
 ]
 env = {**os.environ, 'TZ': 'UTC', 'TMPDIR': '/tmp'}
 for key in list(env):

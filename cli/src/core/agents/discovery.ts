@@ -8,6 +8,7 @@
  * docs/design/2026-10-03-harnessd.md). The reconciler itself, with what it scans, stays there.
  */
 import { externalResumePending } from '../../lib/externalResume.js'
+import { paneReadIdentity } from '../transcripts/readIdentity.js'
 import { isTerminalEngine } from '../../engines/types.js'
 import type { AutonomousDeviceInput } from '../deviceInput.js'
 import type { QuestionWatcher } from '../../lib/questionController.js'
@@ -146,7 +147,7 @@ export function createDiscoveryHandlers({
     if (wasDormant || wasLaunching || adopted) {
       const active = registry.byAgent(current.agentId)
       if (!active) return
-      if (!active.sessionId) {
+      if (!active.sessionId || active.identityHold) {
         syncRecapPool()
         announceSession(active)
         return
@@ -154,7 +155,10 @@ export function createDiscoveryHandlers({
       // Not awaited: the attach reads this agent's whole history, and this callback runs inside the
       // reconcile pass whose completion is what publishes `discoveryReady`. One agent's slow store
       // must not hold the pass — or, at boot, the app. The tracker runs a few of these at a time.
+      const authority = paneReadIdentity(active)
       void attachSession(active).then((attached) => {
+        const latest = registry.byAgent(active.agentId)
+        if (paneReadIdentity(latest) !== authority || latest?.identityHold) return
         if (!attached) {
           registry.setActive(active.agentId, false)
           return

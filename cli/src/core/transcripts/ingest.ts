@@ -50,7 +50,7 @@ export function createIngest({
   const observeLine = (evt: Pick<LineEvent, 'sessionId' | 'engine' | 'text'>, profileAccepted = false): RegisteredSession | null => {
     if (!has(evt.sessionId)) return null // scope to terminal-registered sessions
     const session = bySession(evt.sessionId)
-    if (!session || session.engine !== evt.engine) return null
+    if (!session || session.identityHold || session.engine !== evt.engine) return null
     tokenUsage.changed(session)
     sideRead('device', evt.sessionId, () => {
       const service = device()

@@ -5,7 +5,8 @@ import { processIdentityKey } from '../../lib/terminalRuntime.js'
 export function transcriptReadIdentity(session: RegisteredSession | undefined): string {
   return session ? JSON.stringify([session.agentId, session.sessionId, session.engine, session.transcriptPath,
     session.codexHome, session.boundAt,
-    session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : undefined]) : ''
+    session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : undefined,
+    ...(session.identityHold ? ['identity-held'] : [])]) : ''
 }
 
 /** A pane belongs to its process, conversation and current terminal routes. Copy before capture. */

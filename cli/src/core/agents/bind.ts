@@ -50,6 +50,8 @@ export type RegisteredMeta = {
   rebound: string | null
   orphaned?: { agentId: string; sessionId: string } | null
   hookEvent?: string
+  /** A saved binding's evidence recovered; rebuild even an inline parser of the old file. */
+  recovered?: boolean
 }
 
 export interface BindDeps {
@@ -86,7 +88,7 @@ export function createBinding({
   const handleRegistered = async (entry: RegisteredSession, meta: RegisteredMeta): Promise<void> => {
     const authority = paneReadIdentity(entry)
     const current = () => paneReadIdentity(registry.byAgent(entry.agentId)) === authority
-    if (!current()) return
+    if (!current() || entry.identityHold) return
     const forkSource = pendingForkInherit.get(entry.agentId)
     if (forkSource && entry.sessionId) {
       pendingForkInherit.delete(entry.agentId)
@@ -151,7 +153,7 @@ export function createBinding({
     // `userPromptSubmitted` and `sessionStart` hooks both register (measured 2.5s apart, and in that
     // order — sessionStart fires AFTER the first prompt), so treating the second as a reset re-folded
     // the transcript and emitted a second `turn_started` for one exchange.
-    const reset = meta.isNew
+    const reset = meta.isNew || !!meta.recovered
       || (entry.engine !== 'cursor' && entry.engine !== 'agy' && entry.engine !== 'copilot'
         && meta.hookEvent === 'SessionStart')
     // Deliberately NOT gated on `meta.isNew`. `isNew` is false in exactly the case this is meant to catch:
@@ -180,16 +182,16 @@ export function createBinding({
     // announced as running with nothing left to end it (found end to end: stop in the middle of a first
     // turn, resume, and the agent read as working for good). A new session started in the agent after
     // the resume is not this conversation, and is judged like any other.
-    const bornAfterAgent = !resumedConversation && transcriptIsFirstTurn(
+    const bornAfterAgent = !meta.recovered && !resumedConversation && transcriptIsFirstTurn(
       entry,
       entry.transcriptPath ? await statBirthMs(entry.transcriptPath) : 0,
       { rebound: !!meta.rebound, now: Date.now() },
     )
-    if (!current()) return
+    if (!current() || entry.identityHold) return
     const attached = await attachSession(entry, reset, entry.engine === 'cursor', bornAfterAgent)
     // The registry mutates rows in place. This completion cannot unbind or re-announce a later
     // conversation, nor an agent that Stop has already retired.
-    if (!current()) return
+    if (!current() || entry.identityHold) return
     if (!attached) {
       // A terminal reads as gone while a stop or a restart ends its engine. A registration that comes in
       // then, such as the old engine's own SessionStart arriving late on a loaded machine, is still the
@@ -223,12 +225,12 @@ export function createBinding({
     let agent: RegisteredSession = found
     if (agent.identityHold && agent.sessionId && agent.transcriptPath) {
       try {
-        const previous = { id: agent.sessionId, path: agent.transcriptPath }
+        const previous = agent.sessionId
         const retried = registry.revalidateBinding(agent.agentId)
         if (!retried) return
         agent = retried
-        if (!agent.sessionId) forgetSession(previous.id, { force: true, keepAgent: true, agentId: agent.agentId })
-        else if (agent.transcriptPath !== previous.path) followRegistered(agent, { isNew: false, evicted: null, rebound: null })
+        if (!agent.sessionId) forgetSession(previous, { force: true, keepAgent: true, agentId: agent.agentId })
+        else followRegistered(agent, { isNew: false, evicted: null, rebound: null, recovered: true })
         announceSession(agent)
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)

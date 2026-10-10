@@ -12,6 +12,11 @@ import { createRelaunchMarks, type RelaunchMark } from './relaunch.js'
 import type { PreparedLive } from '../engines/liveSessions.js'
 import type { LiveFrame } from '../../engines/worker/liveProtocol.js'
 import { TranscriptDiscovery } from '../../engines/kit/transcriptDiscovery.js'
+import { createBinding, type BindDeps } from '../agents/bind.js'
+import { createDiscoveryHandlers, type DiscoveryDeps } from '../agents/discovery.js'
+import type { DiscoveredTerminalAgent } from '../../lib/terminalAgentDiscovery.js'
+
+vi.mock('../../lib/deletedSessions.js', () => ({ isRecentlyDeleted: () => false }))
 
 /**
  * The engines' own normalizers and readers are tested with each engine. Here each is a fake that
@@ -152,6 +157,120 @@ afterEach(() => {
   fakes.copilotOpen.value = true
   bindings.clear()
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+
+it.each(['same', 'repaired'] as const)('composes discovery, retry and inline attachment after %s binding recovery', async outcome => {
+  const run = setup({ settled: vi.fn() })
+  const savedPath = transcript([{ events: [started('unconfirmed')], open: true }])
+  const verifiedPath = outcome === 'same' ? savedPath : transcript([{ events: [started('verified')], open: true }, { close: true }])
+  const row = session('codex', savedPath, { active: false, registeredAt: 1, boundAt: 2, permissionMode: 'default' })
+  let previous: unknown
+  if (outcome === 'repaired') {
+    await run.attach.attachSession(row)
+    previous = run.normalizers.liveParsers.get(row.sessionId)
+    expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(true)
+  }
+  row.identityHold = 'header incomplete'
+  let available = false
+  const registry = {
+    byAgent: (id: string) => bindings.get(id), byProcess: () => row,
+    updateRuntimes: vi.fn(), updateProcessIdentity: () => { row.active = true },
+    setBypassPermission: vi.fn(), setLaunch: vi.fn(),
+    revalidateBinding: () => {
+      if (!available) throw new Error('header incomplete')
+      row.transcriptPath = verifiedPath; delete row.identityHold; return row
+    },
+    setIdentityHold: (_id: string, reason: string) => { row.identityHold = reason; return false },
+    bySession: () => row,
+  }
+  const bind = createBinding({ registry, attachSession: run.attach.attachSession,
+    announceSession: vi.fn(), stoppedAgents: { save: vi.fn() }, syncRecapPool: vi.fn(),
+  } as unknown as BindDeps)
+  const discover = createDiscoveryHandlers({ registry, bindObservedAgent: bind.bindObservedAgent,
+    attachSession: run.attach.attachSession, announceSession: vi.fn(), syncRecapPool: vi.fn(),
+  } as unknown as DiscoveryDeps)
+  const seen = { engine: 'codex', processIdentity: { pid: 42, startMarker: 'fixture' }, args: 'codex', runtimes: [] } as unknown as DiscoveredTerminalAgent
+  vi.clearAllMocks()
+  await discover.onObserved(seen, row)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  expect(run.deps.terminalGone).not.toHaveBeenCalled()
+  expect(run.deps.runtimeProfiles.beginHydrate).not.toHaveBeenCalled()
+  expect(run.profile.commit).not.toHaveBeenCalled()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
+  expect(row).toMatchObject({ active: true, identityHold: 'header incomplete', transcriptPath: savedPath })
+  if (outcome === 'same') writeFileSync(savedPath, JSON.stringify({ events: [started('verified')], open: true }) + '\n' + JSON.stringify({ close: true }) + '\n')
+  available = true
+  await discover.onObserved(seen, row)
+  await vi.waitFor(() => expect(run.deps.watcher.addSession).toHaveBeenCalledOnce())
+  expect(row).not.toHaveProperty('identityHold')
+  expect(run.normalizers.liveParsers.get(row.sessionId)).not.toBe(previous)
+  expect(run.normalizers.sessionTurnOpen(row.sessionId)).toBe(false)
+  expect(run.profile.commit).toHaveBeenCalledOnce()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  expect(run.deps.settled).toHaveBeenCalledWith(row.sessionId)
+})
+
+it('keeps an already held binding without starting a terminal probe or reader', async () => {
+  const run = setup()
+  expect(await run.attach.attachSession(session('codex', transcript([]), { identityHold: 'waiting' }))).toBe(true)
+  expect(run.deps.terminalGone).not.toHaveBeenCalled()
+  expect(run.deps.runtimeProfiles.beginHydrate).not.toHaveBeenCalled()
+})
+
+it.each(['terminal', 'config', 'watcher'] as const)('revokes inline attachment when identity becomes held during %s', async phase => {
+  const run = setup(), row = session('codex', transcript([{ events: [started()], open: true }]))
+  const hold = () => { row.identityHold = 'identity unavailable' }
+  if (phase === 'terminal') vi.mocked(run.deps.terminalGone).mockImplementationOnce(async () => { hold(); return false })
+  if (phase === 'config') vi.mocked(run.deps.runtimeProfiles.ingestConfig).mockImplementationOnce(async () => { hold(); return false })
+  if (phase === 'watcher') vi.mocked(run.deps.watcher.addSession).mockImplementationOnce(async () => { hold() })
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  if (phase !== 'watcher') {
+    expect(run.profile.commit).not.toHaveBeenCalled()
+    expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+  }
+})
+
+it.each(['prepare', 'config'] as const)('discards worker history when identity becomes held during %s', async phase => {
+  const run = remoteSetup(true), row = session('claude', '/fixture/transcript')
+  if (phase === 'prepare') vi.mocked(run.remote.prepare).mockImplementationOnce(async () => { row.identityHold = 'waiting'; return run.candidate })
+  else vi.mocked(run.deps.runtimeProfiles.ingestConfig).mockImplementationOnce(async () => { row.identityHold = 'waiting'; return false })
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.remote.discard).toHaveBeenCalledWith(run.candidate)
+  expect(run.remote.install).not.toHaveBeenCalled()
+  expect(run.profile.commit).not.toHaveBeenCalled()
+  expect(run.deps.emit).not.toHaveBeenCalled()
+})
+
+it('discards an inline fold held during its file read, without observing it on a device', async () => {
+  const run = setup(), row = session('codex', transcript([{ events: [started()], open: true }]))
+  run.service.needsTranscript.mockReturnValue(true)
+  run.profile.ingest.mockImplementation(() => { row.identityHold = 'header changed' })
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.service.observeTranscript).not.toHaveBeenCalled()
+  expect(run.profile.commit).not.toHaveBeenCalled()
+  expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+})
+
+it('discards a whole-file read when identity becomes held before hydration', async () => {
+  const row = session('terminal', transcript([{}]))
+  const run = setup({ liveFor: engine => {
+    queueMicrotask(() => { row.identityHold = 'path changed' })
+    return liveFor(engine)
+  } })
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.deps.runtimeProfiles.hydrate).not.toHaveBeenCalled()
+  expect(run.normalizers.hasState(row.sessionId)).toBe(false)
+})
+
+it('defers history publication if identity becomes held during pane hydration', async () => {
+  const row = session('cursor', transcript([{ events: [started()], open: true }]))
+  const run = setup({ captureTerminal: async () => { row.identityHold = 'path changed'; return null } })
+  expect(await run.attach.attachSession(row)).toBe(true)
+  expect(run.deps.emit).not.toHaveBeenCalled()
+  expect(run.deps.watcher.addSession).not.toHaveBeenCalled()
 })
 
 describe('the order of an attach of another engine\'s session', () => {

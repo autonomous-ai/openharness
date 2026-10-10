@@ -15,6 +15,7 @@ it('copies binding identity before yielding, ignoring ordinary activity updates'
   expect(transcriptReadIdentity({ ...session, processIdentity: { ...session.processIdentity!, pid: 8 } })).not.toBe(before)
   expect(transcriptReadIdentity({ ...session, processIdentity: { ...session.processIdentity!, startMarker: 'two' } })).not.toBe(before)
   expect(transcriptReadIdentity({ ...session, processIdentity: null })).not.toBe(before)
+  expect(transcriptReadIdentity({ ...session, identityHold: 'header incomplete' })).not.toBe(before)
 })
 
 it('keeps a Linux process bound across a wall-clock correction, but rejects pid reuse', () => {

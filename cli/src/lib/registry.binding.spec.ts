@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -92,4 +92,71 @@ it('keeps holds transient and only retries bindings that still exist', () => {
   expect(registry.setIdentityHold('fixture-0')).toBe(true)
   registry.unbindSession(ids[0]!)
   expect(registry.revalidateBinding('fixture-0')).toMatchObject({ sessionId: '', transcriptPath: null })
+})
+
+it.each(['same', 'absent', 'repaired'] as const)('never overwrites a peer binding while retrying %s evidence', outcome => {
+  const peer = new (registry.constructor as new () => typeof registry)()
+  peer.load()
+  const original = registry.byAgent('fixture-0')!
+  registry.setIdentityHold(original.agentId, 'waiting')
+  if (outcome === 'absent') rmSync(transcript(0))
+  if (outcome === 'repaired') {
+    writeFileSync(transcript(0), JSON.stringify({ type: 'session_meta', payload: {
+      id: 'cccccccc-3333-4333-8333-cccccccccccc', cwd: root,
+      source: { subagent: { thread_spawn: { parent_thread_id: ids[0] } } },
+    } }) + '\n')
+    writeFileSync(join(home, 'sessions', 'parent.jsonl'), header(ids[0]!))
+  }
+  const nextId = 'dddddddd-4444-4444-8444-dddddddddddd'
+  const nextPath = join(home, 'sessions', `rollout-${nextId}.jsonl`)
+  writeFileSync(nextPath, header(nextId))
+  expect(peer.register({ engine: 'codex', sessionId: nextId, transcriptPath: nextPath, tmuxPane: '%1', cwd: root })).not.toBeNull()
+  const latest = readFileSync(file, 'utf8')
+  expect(() => registry.revalidateBinding(original.agentId)).toThrow('saved binding changed')
+  expect(readFileSync(file, 'utf8')).toBe(latest)
+  expect(registry.bySession(ids[0]!)).toBe(original)
+  expect(original).toMatchObject({ sessionId: ids[0], transcriptPath: transcript(0), identityHold: 'waiting' })
+  expect(peer.bySession(nextId)?.transcriptPath).toBe(nextPath)
+  // Ordinary reconciliation can refresh the peer's commit because the failed retry changed no facts.
+  registry.flush()
+  expect(registry.byAgent(original.agentId)).toMatchObject({ sessionId: nextId, transcriptPath: nextPath })
+  expect(registry.revalidateBinding(original.agentId)?.sessionId).toBe(nextId)
+})
+
+it('commits a conclusive release inside a discovery batch before its callback continues', async () => {
+  registry.setIdentityHold('fixture-0', 'waiting')
+  rmSync(transcript(0))
+  await registry.transaction(async () => {
+    const saved = registry.revalidateBinding('fixture-0')!
+    expect(saved.sessionId).toBe('')
+    expect(registry.bySession(ids[0]!)).toBeUndefined()
+    expect(JSON.parse(readFileSync(file, 'utf8')).find((row: { agentId: string }) => row.agentId === saved.agentId).sessionId).toBe('')
+    await Promise.resolve()
+  })
+})
+
+it('rechecks native evidence while holding the registry write lock and publishes nothing on a failed fence', async () => {
+  let retry = false, checked = false
+  vi.doMock('../engines/transcriptBindings.js', async original => {
+    const actual = await original<typeof import('../engines/transcriptBindings.js')>()
+    return { ...actual, savedTranscriptEvidence: (...args: Parameters<typeof actual.savedTranscriptEvidence>) => {
+      const proof = actual.savedTranscriptEvidence(...args)
+      return { ...proof, verify() {
+        if (retry) {
+          checked = true
+          expect(existsSync(`${file}.lock`)).toBe(true)
+          writeFileSync(transcript(0), header(ids[1]!))
+        }
+        proof.verify()
+      } }
+    } }
+  })
+  vi.resetModules(); ({ registry } = await import('./registry.js')); registry.load()
+  registry.setIdentityHold('fixture-0', 'waiting')
+  const before = readFileSync(file, 'utf8')
+  retry = true
+  expect(() => registry.revalidateBinding('fixture-0')).toThrow()
+  expect(checked).toBe(true)
+  expect(readFileSync(file, 'utf8')).toBe(before)
+  expect(registry.bySession(ids[0]!)).toMatchObject({ identityHold: 'waiting', transcriptPath: transcript(0) })
 })
