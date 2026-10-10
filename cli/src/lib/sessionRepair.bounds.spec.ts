@@ -10,6 +10,10 @@ import { identityBytes, identityEntries, identityScanBudget } from '../engines/k
 import type { RegisteredSession } from './registry.js'
 import type { StopAgentServiceDeps } from './stopAgentService.js'
 
+// These cases exercise count/byte bounds and changing ownership, not host fsync speed.
+// homeAdoption.spec.ts separately advances this clock to prove the work deadline holds.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>()
   return { ...actual, open: vi.fn(actual.open), opendir: vi.fn(actual.opendir), stat: vi.fn(actual.stat),

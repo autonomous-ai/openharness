@@ -86,6 +86,16 @@ describe('ingesting a transcript line', () => {
     expect(deps.tokenUsage.changed).not.toHaveBeenCalled()
   })
 
+  it('defers live interpretation, usage and profile effects while a saved binding is held', () => {
+    const run = setup({ s1: 'claude' })
+    run.sessions.get('s1')!.identityHold = 'header unavailable'
+    expect(run.ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))).toBeNull()
+    expect(run.normalizers.hasState('s1')).toBe(false)
+    expect(run.deps.tokenUsage.changed).not.toHaveBeenCalled()
+    expect(run.deps.runtimeProfiles.ingest).not.toHaveBeenCalled()
+    expect(run.service.needsTranscript).not.toHaveBeenCalled()
+  })
+
   it('counts tokens, shows the device its raw lines when it asks, and reads the runtime from each line', () => {
     const { ingest, deps, service, sessions } = setup({ s1: 'claude' })
     ingest.ingestLine(line('s1', 'claude', CLAUDE_PROMPT))

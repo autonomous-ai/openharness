@@ -526,7 +526,7 @@ describe('registry remote display names', () => {
     const childPath = join(sessionsDir, `rollout-${childId}.jsonl`)
     writeFileSync(parentPath, JSON.stringify({
       type: 'session_meta',
-      payload: { id: parentId, source: 'cli' },
+      payload: { id: parentId, cwd: '/fixture/work', source: 'cli' },
     }) + '\n')
     writeFileSync(childPath, JSON.stringify({
       type: 'session_meta',

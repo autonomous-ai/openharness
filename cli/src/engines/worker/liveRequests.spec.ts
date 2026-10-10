@@ -322,7 +322,13 @@ describe('engine live checkpoints', () => {
       expect(await requests[LIVE_PREPARE](t.payload, caller)).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
     }
     for (const fields of [{ version: 2 }, { token: '' }, { cursor: {} }, { session: { ...t.session, engine: 'codex' } },
-      { session: { ...t.session, transcriptPath: 'relative' } }, { fromStart: 'yes' }, { end: -1 }]) {
+      { session: { ...t.session, transcriptPath: 'relative' } }, { fromStart: 'yes' }, { end: -1 },
+      ...[null, {}, [null], [{ offset: -1, reason: 'cancel' }], [{ offset: 0, reason: 'unknown' }],
+        [{ offset: 2, reason: 'cancel' }, { offset: 1, reason: 'cancel' }],
+        Array.from({ length: 129 }, () => ({ offset: 0, reason: 'cancel' })),
+        [{ offset: 1, reason: 'cancel', boundary: { offset: 2, device: 1, inode: 1, digest: 'a'.repeat(64) } }],
+        [{ offset: 1, reason: 'cancel', boundary: { offset: 1, device: 1, inode: 1, digest: 'unknown' } }],
+      ].map(closes => ({ closes }))]) {
       expect(await requests[LIVE_PREPARE]({ ...t.payload, ...fields }, who)).toMatchObject({ error: 'ENGINE_INVALID_REQUEST' })
     }
     expect(load).not.toHaveBeenCalled()

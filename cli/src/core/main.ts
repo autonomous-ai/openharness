@@ -1011,6 +1011,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     prepareFrames: (session, frames) => runtimeProfiles.prepareFrames(session, frames),
     frame: (session, frame) => ingest.acceptFrame(session.sessionId, session.engine, frame, runtimeProfiles.handles(session.engine)),
     reattach: (session) => attachSession(session, true),
+    hold: (session, reason) => attach.holdInterpretation(session, reason),
   })
   // Whether a turn is really working, beyond its transcript (core/turns/activity.ts).
   const activity = createTurnActivity({
@@ -1067,6 +1068,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
   // Following a session: its history read into its engine's normalizer, then its tail
   // (core/transcripts/attach.ts).
   const attach = createAttach({
+    setInterpretationHold: registry.setInterpretationHold.bind(registry),
+    announceSession,
     liveFor,
     resolve: id => registry.resolve(id),
     remoteLive: engineLive,
@@ -1679,6 +1682,8 @@ async function runForeground(session: AuthSession | null): Promise<void> {
     })
 
   const turnHooks = createTurnHooks({
+    holdStop: attach.holdStop,
+    afterStop: attach.afterStop,
     resolve: (id) => registry.resolve(id),
     normalizers,
     emit: (sessionId, events) => emitSessionEvents(sessionId, events),
@@ -2207,6 +2212,7 @@ async function runForeground(session: AuthSession | null): Promise<void> {
 
   // Cancelling a turn (core/turns/cancel.ts).
   const cancelAgent = createCancel({
+    beforeCancel: attach.beforeCancel,
     resolve: (id) => registry.resolve(id),
     normalizers,
     cursorSubagents,

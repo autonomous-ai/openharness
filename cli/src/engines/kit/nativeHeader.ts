@@ -7,9 +7,9 @@ import { firstRecordMeta, type SessionMeta } from './sessionRecords.js'
 import { NativeEvidenceBudget, nativeText, nativeUnavailable } from './nativeEvidence.js'
 import { nativeFileKey } from './nativePaths.js'
 
-type First = NonNullable<SessionStoreContract['first']>
+export type NativeFirstRecord = NonNullable<SessionStoreContract['first']>
 const stamp = (info: BigIntStats) => `${nativeFileKey(info)}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
-function firstLine(bytes: Buffer, maxBytes: number): string {
+export function firstLine(bytes: Buffer, maxBytes: number): string {
   // Do not decode a truncated UTF-8 character in the body after the complete metadata line.
   let start = 0
   while (start < Math.min(bytes.length, maxBytes)) {
@@ -23,38 +23,44 @@ function firstLine(bytes: Buffer, maxBytes: number): string {
   return nativeUnavailable('the native rollout header is incomplete or exceeds its limit')
 }
 
+/** The same conclusive record rules serve descriptors, registry loading and hook admission. */
+export function nativeSessionMeta(line: string, first: NativeFirstRecord): SessionMeta {
+  const meta = firstRecordMeta(line, first)
+  if (!meta || (!meta.isSubagent && (!meta.id || !meta.cwd || !meta.cwd.startsWith('/')))) return nativeUnavailable('the native rollout header is invalid')
+  const record: unknown = JSON.parse(line)
+  const field = (path: readonly string[]) => path.reduce((at: any, key) => at && typeof at === 'object' && !Array.isArray(at) ? at[key] : undefined, record)
+  if (first.source) {
+    const source: unknown = field(first.source.field)
+    const object = source && typeof source === 'object' && !Array.isArray(source) ? source as Record<string, unknown> : null
+    const keys = object ? Object.keys(object) : []
+    const named = keys.length === 1 && first.source.named.includes(keys[0]) && typeof object![keys[0]] === 'string' && String(object![keys[0]]).trim()
+    const child = keys.length === 1 && keys[0] === first.child.at(-1) && meta.isSubagent
+    if (!(source === undefined && first.source.legacyMissing)
+      && !(typeof source === 'string' && first.source.values.includes(source)) && !named && !child) {
+      return nativeUnavailable('the native rollout source is invalid or unknown')
+    }
+  }
+  if (meta.isSubagent) {
+    const claim: unknown = field(first.child)
+    if (!(typeof claim === 'string' && claim.trim())
+      && !(claim && typeof claim === 'object' && !Array.isArray(claim) && meta.parentThreadId)) {
+      return nativeUnavailable('the native rollout delegated-source claim is invalid')
+    }
+  }
+  return meta
+}
+
 export async function descriptorHeader(path: string, identity: { device: bigint; inode: bigint },
-  first: First, budget: NativeEvidenceBudget,
+  first: NativeFirstRecord, budget: NativeEvidenceBudget,
 ): Promise<{ meta: SessionMeta; verify(): void }> {
   budget.step()
-  let line: string, meta: SessionMeta | null
+  let line: string, meta: SessionMeta
   try {
     const version = await lstat(path)
     const bytes = await identityBytes(path, first.maxBytes + 1, { ...version, fileKey: identity }, budget)
     budget.step()
     line = firstLine(bytes, first.maxBytes)
-    meta = firstRecordMeta(line, first)
-    if (!meta || (!meta.isSubagent && (!meta.id || !meta.cwd || !meta.cwd.startsWith('/')))) return nativeUnavailable('the native rollout header is invalid')
-    const record: unknown = JSON.parse(line)
-    const field = (path: readonly string[]) => path.reduce((at: any, key) => at && typeof at === 'object' && !Array.isArray(at) ? at[key] : undefined, record)
-    if (first.source) {
-      const source: unknown = field(first.source.field)
-      const object = source && typeof source === 'object' && !Array.isArray(source) ? source as Record<string, unknown> : null
-      const keys = object ? Object.keys(object) : []
-      const named = keys.length === 1 && first.source.named.includes(keys[0]) && typeof object![keys[0]] === 'string' && String(object![keys[0]]).trim()
-      const child = keys.length === 1 && keys[0] === first.child.at(-1) && meta.isSubagent
-      if (!(source === undefined && first.source.legacyMissing)
-        && !(typeof source === 'string' && first.source.values.includes(source)) && !named && !child) {
-        return nativeUnavailable('the native rollout source is invalid or unknown')
-      }
-    }
-    if (meta.isSubagent) {
-      const claim: unknown = field(first.child)
-      if (!(typeof claim === 'string' && claim.trim())
-        && !(claim && typeof claim === 'object' && !Array.isArray(claim) && meta.parentThreadId)) {
-        return nativeUnavailable('the native rollout delegated-source claim is invalid')
-      }
-    }
+    meta = nativeSessionMeta(line, first)
   } catch (error) {
     if (error instanceof IdentityReadUnavailable) throw error
     return nativeUnavailable('the native rollout header could not be read completely')

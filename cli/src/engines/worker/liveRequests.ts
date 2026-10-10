@@ -4,6 +4,7 @@ import type { ServiceRequests } from '../../core/api.js'
 import type { RuntimeField } from '../facets/runtime.js'
 import type { EngineLive } from '../facets/live.js'
 import { transcriptFields } from '../kit/runtime.js'
+import { transcriptCloses } from '../../lib/transcriptControls.js'
 import { record, READER_REPLY_BYTES, type ReaderEngine } from './protocol.js'
 import { LiveStreams } from './liveStreams.js'
 import {
@@ -41,11 +42,13 @@ function pullOf(payload: Record<string, unknown>, engine: ReaderEngine): LivePul
     || typeof payload.fromStart !== 'boolean' || typeof payload.replay !== 'boolean'
     || (payload.end !== undefined && !position(payload.end)) || (payload.liveStart !== undefined && typeof payload.liveStart !== 'boolean')
     || (payload.rewritten !== undefined && typeof payload.rewritten !== 'boolean')
+    || (payload.closes !== undefined && !transcriptCloses(payload.closes))
     || (payload.rewrittenFrom !== undefined && !label(payload.rewrittenFrom))) return null
   return { token: payload.token, session, cursor: payload.cursor, fromStart: payload.fromStart,
     replay: payload.replay, ...(payload.liveStart === undefined ? {} : { liveStart: payload.liveStart }),
     ...(payload.rewritten === undefined ? {} : { rewritten: payload.rewritten }),
     ...(payload.rewrittenFrom === undefined ? {} : { rewrittenFrom: payload.rewrittenFrom }),
+    ...(payload.closes === undefined ? {} : { closes: payload.closes }),
     ...(payload.end === undefined ? {} : { end: payload.end }) }
 }
 
@@ -148,7 +151,8 @@ export function engineLiveRequests(engine: ReaderEngine, deps: LiveRequestDeps =
       })()])
     } catch (error) {
       await forget(ask.token)
-      return failure(error instanceof Error && error.message === 'ENGINE_TRANSCRIPT_CHANGED' ? error.message : 'ENGINE_UNAVAILABLE')
+      return failure(error instanceof Error && ['ENGINE_TRANSCRIPT_CHANGED', 'ENGINE_CONTROL_BOUNDARY_CHANGED'].includes(error.message)
+        ? error.message : 'ENGINE_UNAVAILABLE')
     } finally { clearTimeout(timer); pending-- }
   }
   return Object.fromEntries([LIVE_CAPABILITIES, LIVE_PREPARE, LIVE_READ, LIVE_PART, LIVE_CLOSE, LIVE_FORGET].map(type => [type, handler(type)]))

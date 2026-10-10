@@ -15,6 +15,7 @@ it('copies binding identity before yielding, ignoring ordinary activity updates'
   expect(transcriptReadIdentity({ ...session, processIdentity: { ...session.processIdentity!, pid: 8 } })).not.toBe(before)
   expect(transcriptReadIdentity({ ...session, processIdentity: { ...session.processIdentity!, startMarker: 'two' } })).not.toBe(before)
   expect(transcriptReadIdentity({ ...session, processIdentity: null })).not.toBe(before)
+  expect(transcriptReadIdentity({ ...session, identityHold: 'header incomplete' })).not.toBe(before)
 })
 
 it('keeps a Linux process bound across a wall-clock correction, but rejects pid reuse', () => {
@@ -24,5 +25,14 @@ it('keeps a Linux process bound across a wall-clock correction, but rejects pid 
   session.processIdentity!.startMarker = 'two'
   expect(transcriptReadIdentity(session)).toBe(before)
   session.processIdentity!.startTicks = 43
+  expect(transcriptReadIdentity(session)).not.toBe(before)
+})
+
+it('revokes old reads across a complete same-path hold and recovery', () => {
+  const session = { agentId: 'a', sessionId: 's', engine: 'claude', transcriptPath: '/t' } as RegisteredSession
+  const before = transcriptReadIdentity(session)
+  session.identityHold = 'header incomplete'; session.evidenceRevision = 1
+  expect(transcriptReadIdentity(session)).not.toBe(before)
+  delete session.identityHold; session.evidenceRevision = 2
   expect(transcriptReadIdentity(session)).not.toBe(before)
 })

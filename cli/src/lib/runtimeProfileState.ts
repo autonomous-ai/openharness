@@ -34,7 +34,7 @@ const CHANGE_DEBOUNCE_MS = 120
 const readIdentity = (session: RegisteredSession): string => JSON.stringify([session.agentId, session.sessionId,
   session.engine, session.cwd, session.transcriptPath, session.codexHome, session.hermesHome,
   session.model, session.cliVersion, session.boundAt, session.tmuxPane, session.primaryRuntimeKey, session.runtimes,
-  session.active, session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : undefined])
+  session.active, session.evidenceRevision, !!session.identityHold, session.processIdentity ? processIdentityKey(session.engine, session.processIdentity) : undefined])
 const copyControl = (control: RuntimeControl | undefined): RuntimeControl | undefined => control && {
   ...control, target: { ...control.target },
 }
@@ -62,7 +62,7 @@ export class RuntimeProfileState {
   }
   private currentSession(session: RegisteredSession, identity = readIdentity(session)): RegisteredSession | undefined {
     const current = this.resolve ? this.resolve(session.agentId) : session
-    return current && readIdentity(current) === identity && readIdentity(session) === identity ? current : undefined
+    return current && !current.identityHold && readIdentity(current) === identity && readIdentity(session) === identity ? current : undefined
   }
 
   private observe(context: InlineRuntimeContext): InlineRuntimeContext {

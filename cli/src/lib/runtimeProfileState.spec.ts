@@ -428,3 +428,29 @@ describe('runtime profiles without the pilot implementations', () => {
     expect(manager.getState(agent.sessionId).cliVersion).toBe('1.0.0')
   })
 })
+
+describe('native evidence recovery', () => {
+  it.each(['configured effort', 'optional config', 'pane'] as const)('rejects a deferred %s after a complete hold/recovery cycle', async operation => {
+    const agent = session(operation === 'optional config' ? 'commandcode' : 'claude')
+    let finish!: () => void
+    const waiting = new Promise<void>(resolve => { finish = resolve })
+    const config = vi.fn(async ({ state }: InlineRuntimeContext) => { await waiting; state.effort = 'high'; return true })
+    vi.mocked(loadEngine).mockResolvedValue({ createRuntimeProfileReader: () => ({ engine: 'commandcode', config }) } as never)
+    const manager = new RuntimeProfileState(engine => engine === 'claude' ? { ...claudeRuntime,
+      configuredEffort: async () => { await waiting; return 'high' },
+      pane: ({ state }, text) => { state.model = text },
+    } : undefined, () => agent)
+    manager.hydrate(agent, [])
+    const before = { ...manager.getState(agent.sessionId) }
+    const pending = operation === 'pane'
+      ? manager.capturePane(agent, async () => { await waiting; return 'stale-model' }, 20, true)
+      : manager.ingestConfig(agent, true)
+    if (operation === 'optional config') await vi.waitFor(() => expect(config).toHaveBeenCalledOnce())
+    agent.identityHold = 'incomplete'; agent.evidenceRevision = 1
+    expect(manager.ingestPane(agent, 'held-model')).toBe(false)
+    delete agent.identityHold; agent.evidenceRevision = 2
+    finish(); await pending
+    expect(manager.getState(agent.sessionId)).toEqual(before)
+    manager.forget(agent.sessionId)
+  })
+})

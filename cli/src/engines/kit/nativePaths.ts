@@ -5,15 +5,55 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { NativeEvidenceBudget, nativeUnavailable } from './nativeEvidence.js'
 
 export const nativeFileKey = (info: Pick<BigIntStats, 'dev' | 'ino'>) => `${info.dev}:${info.ino}`
-const identity = (info: BigIntStats | null) => info && `${nativeFileKey(info)}:${info.mode}`
+const identity = (info: BigIntStats | null) => info && `${nativeFileKey(info)}:${info.mode}:${info.uid}`
 const version = (info: BigIntStats) => `${identity(info)}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
 type Part = { info: BigIntStats | null; target?: string }
+type Location = { path: string; info: BigIntStats } | null
 
 export class NativePaths {
   private readonly parts = new Map<string, Part>()
   constructor(private readonly budget: NativeEvidenceBudget) {}
 
-  async resolve(path: string, missingOkay = false): Promise<{ path: string; info: BigIntStats } | null> {
+  async resolve(path: string, missingOkay = false): Promise<Location> {
+    const steps = this.walk(path, missingOkay)
+    let next = steps.next()
+    while (!next.done) {
+      let proof: Part
+      try {
+        const info = await lstat(next.value, { bigint: true })
+        proof = { info, ...(info.isSymbolicLink() ? { target: await readlink(next.value) } : {}) }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') proof = { info: null }
+        else return nativeUnavailable('a native location could not be inspected')
+      }
+      next = steps.next(proof)
+    }
+    return next.value
+  }
+
+  /** Eager binding and hook admission share exactly the same bounded ancestry rules. */
+  resolveSync(path: string, missingOkay = false): Location {
+    const steps = this.walk(path, missingOkay)
+    let next = steps.next()
+    while (!next.done) {
+      let proof: Part
+      try {
+        const info = lstatSync(next.value, { bigint: true })
+        proof = { info, ...(info.isSymbolicLink() ? { target: readlinkSync(next.value) } : {}) }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') proof = { info: null }
+        else return nativeUnavailable('a native location could not be inspected')
+      }
+      next = steps.next(proof)
+    }
+    return next.value
+  }
+
+  /** Only an observed absent leaf can be announced before creation. A dangling alias is
+   * still an existing leaf and must not borrow the authority of its original parent. */
+  absentLeaf(path: string): boolean { return this.parts.get(path)?.info === null }
+
+  private *walk(path: string, missingOkay: boolean): Generator<string, Location, Part> {
     if (!isAbsolute(path) || path.includes('\0') || Buffer.byteLength(path) > 4096) return nativeUnavailable('a native location is invalid or exceeds its limit')
     // Follow links in component order. Normalizing bridge/../home first would skip bridge.
     let prefix = '/', pending = path.slice(1).split('/').filter(Boolean), links = 0
@@ -28,13 +68,7 @@ export class NativePaths {
       const next = part === '.' ? prefix : join(prefix, part)
       let proof = this.parts.get(next)
       if (!proof) {
-        try {
-          info = await lstat(next, { bigint: true })
-          proof = { info, ...(info.isSymbolicLink() ? { target: await readlink(next) } : {}) }
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') proof = { info: null }
-          else return nativeUnavailable('a native location could not be inspected')
-        }
+        proof = yield next
         this.parts.set(next, proof)
       }
       info = proof.info

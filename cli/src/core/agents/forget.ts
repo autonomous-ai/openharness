@@ -94,9 +94,9 @@ export function createForgetSession({
     runtimeProfiles.forget(sessionId)
     void watcher.removeSession(sessionId)
     stopHeartbeat(sessionId)
-    teams.forget(doomed?.agentId ?? sessionId)
-    input.forget(doomed?.agentId ?? sessionId)
-    deviceInput.forget(doomed?.agentId ?? sessionId)
+    teams.forget(announceId)
+    input.forget(announceId)
+    deviceInput.forget(announceId)
     if (!opts.keepAgent) { detachDsh(announceId); onRemoved?.(announceId) }
     mirror.forget(sessionId) // aborts any in-flight recap + clears busy; KEEPS the persisted summary
     if (opts.keepAgent) return

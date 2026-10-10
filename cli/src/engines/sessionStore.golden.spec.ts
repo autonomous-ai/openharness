@@ -31,6 +31,19 @@ import type { RegisteredSession } from '../lib/registry.js'
 
 const fixtureClock = vi.hoisted(() => ({ root: '', now: Date.parse('2026-10-09T00:00:00Z') }))
 vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+// Other test processes create and remove siblings under the host's temporary directory. Those
+// mutations are outside this recording; keep ancestor content stamps stable, retaining native inode
+// identity and all content stamps within the fixture. The expected artifact remains unchanged.
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>()
+  return { ...fs, lstatSync: (...args: Parameters<typeof fs.lstatSync>) => {
+    const info = Reflect.apply(fs.lstatSync, fs, args)
+    const path = String(args[0])
+    if (!info || !fixtureClock.root || path === fixtureClock.root || path.startsWith(fixtureClock.root + '/') || !info.isDirectory()) return info
+    return new Proxy(info, { get: (value, key) => ['size', 'mtimeNs', 'ctimeNs'].includes(String(key)) ? 0n : Reflect.get(value, key) })
+  } }
+})
+
 
 vi.mock('../lib/bootId.js', async original => ({ ...await original<object>(), currentBootId: () => 'fixture-boot', bootChanged: () => false }))
 vi.mock('../lib/processLiveness.js', async original => ({ ...await original<object>(),

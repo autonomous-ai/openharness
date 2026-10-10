@@ -5,6 +5,7 @@ import type { RegisteredSession } from '../../lib/registry.js'
 import { record, sessionEvent } from './protocol.js'
 import type { RuntimeRecord } from '../facets/runtime.js'
 import { runtimeRecord } from './runtimeProtocol.js'
+import type { TranscriptClose } from '../../lib/transcriptControls.js'
 
 export const LIVE_VERSION = 1
 export const LIVE_CAPABILITIES = 'engine_live_capabilities'
@@ -133,4 +134,6 @@ export interface LivePull {
    *  A worker that never saw that read, or a file changed again since, hydrates as `rewritten` alone. */
   rewrittenFrom?: string
   end?: number
+  /** Eager core decisions retained across parser reconstruction, in native byte order. */
+  closes?: readonly TranscriptClose[]
 }
