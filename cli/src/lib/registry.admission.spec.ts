@@ -5,6 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+// These are ownership and injected-I/O outcomes, independent of host scheduling. Actual
+// elapsed-work deadlines are exercised separately in engines/kit/nativeEvidence.spec.ts.
+vi.mock('node:perf_hooks', async original => ({ ...await original<object>(), performance: { now: () => 0 } }))
+
 const fault = vi.hoisted(() => ({ file: '', rename: false, directorySync: false, renamed: false,
   afterProof: undefined as (() => void) | undefined, beforeVerify: undefined as (() => void) | undefined }))
 vi.mock('fs', async original => {

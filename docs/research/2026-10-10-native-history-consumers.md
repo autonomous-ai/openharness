@@ -124,3 +124,13 @@ and the identity hold cleared. It loads only once and still rejects a later chil
 registration. Production evidence and the ancestor-round-trip regression are unchanged.
 Independent review recommended this normal recovery path instead of weakening or
 mocking the ancestor checks. Final CI must pass after this test correction.
+
+
+The merged-main automatic run `38047163106` then passed the corrected recovery
+fixture and three shards but reached the 250 ms native-evidence deadline before an
+injected directory-sync failure in `registry.admission.spec.ts`. That suite now pins
+its monotonic clock, as the native goldens do: it checks ownership and injected I/O
+ordering, not host scheduling. The native-evidence deadline/timeout suite retains its
+independent clock tests; no production limit changed. Targeted admission, native
+budget and type checks precede another automatic final-head run. Unchanged runtime
+validation, private acceptance and mutation evidence remain applicable.
