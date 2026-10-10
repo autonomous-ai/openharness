@@ -25,6 +25,8 @@ it.each([
   line({ ...opening, cwd: 'relative' }), line({ ...opening, cwd: 9 }), line({ ...opening, isSidechain: 'false' }),
   line({ type: 'bookkeeping' }).repeat(20) + line(opening),
   line({ sessionId: 'first' }) + line(opening), line({ cwd: '/other' }) + line(opening),
+  line({ sessionId: 'native-conversation', isSidechain: false }) + line({ cwd: '/fixture/work', isSidechain: true }),
+  line({ sessionId: 'native-conversation', isSidechain: false }) + line({ cwd: '/fixture/work', isSidechain: 'false' }),
   line({ ...opening, padding: 'x'.repeat(1024 * 1024) }),
 ].map((text, index) => ({ text, index })))('holds incomplete or contradictory Claude opening $index', ({ text }) => {
   expect(() => controlIdentity(Buffer.from(text), claude)).toThrow(expect.objectContaining({ code: 'IDENTITY_UNAVAILABLE' }))

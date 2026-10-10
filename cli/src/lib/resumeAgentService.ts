@@ -215,6 +215,10 @@ export function createResumeAgentService(deps: ResumeAgentServiceDeps) {
         let sourceError: unknown
         const sourceCurrent = () => {
           if (!current() || sourceError) return false
+          if (saved.sessionId && registry.bySession(saved.sessionId)) {
+            sourceError = new IdentityReadUnavailable('another live harness owns this conversation')
+            return false
+          }
           try { transcript?.verify(); return true }
           catch (error) { sourceError = error; return false }
         }

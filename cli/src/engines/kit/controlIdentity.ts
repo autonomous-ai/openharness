@@ -39,10 +39,11 @@ export function controlIdentity(bytes: Buffer, rule: ControlIdentityRule) {
     }
     id ??= nextId as string | undefined
     cwd ??= nextCwd as string | undefined
-    if (rule.sidechain && side === undefined) {
+    if (rule.sidechain) {
       const valueSide = field(value, [rule.sidechain])
       if (valueSide !== undefined && typeof valueSide !== 'boolean') return nativeUnavailable('the conversation delegation is unconfirmed')
-      side = valueSide as boolean | undefined
+      if (side !== undefined && valueSide !== undefined && valueSide !== side) return nativeUnavailable('the conversation opening has conflicting delegation')
+      side ??= valueSide as boolean | undefined
     }
     if (id && cwd) return { id, cwd, delegated: side === true, bytes: start }
   }

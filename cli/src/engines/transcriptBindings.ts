@@ -178,6 +178,7 @@ export function controlTranscriptEvidence(engine: AgentEngine, sessionId: string
     if (rule) {
       const files = new NativeFiles()
       const head = files.opening(proof.path, rule)
+      if (head.fileKey !== proof.fileKey) return nativeUnavailable('the conversation opening belongs to a replaced file')
       if (head.id !== sessionId || head.delegated) return nativeUnavailable('the saved transcript names a different or delegated conversation')
       if (rule.canonicalWorkspace) {
         if (!cwd) return nativeUnavailable('the saved conversation workspace is unavailable')

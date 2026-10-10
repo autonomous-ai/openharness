@@ -245,6 +245,33 @@ it.each(['claude', 'pi'] as const)('eagerly checks the saved %s opening without 
   await expect(capture(row)).resolves.toMatchObject({ sessionId: A, transcriptPath: transcript })
 })
 
+it.each(['claude', 'pi'] as const)('does not let a different physical %s file lend its valid opening to a saved path', async engine => {
+  const { NativeFiles } = await import('../engines/kit/nativeFiles.js')
+  const { controlTranscriptEvidence } = await import('../engines/transcriptBindings.js')
+  const parent = engine === 'claude' ? join(root, 'CLAUDE_CONFIG_DIR', 'projects') : join(root, 'PI_HOME', 'agent', 'sessions')
+  const folder = join(parent, 'source'), parked = join(parent, 'parked'), other = join(parent, 'other')
+  mkdirSync(folder, { recursive: true }); mkdirSync(other)
+  const opening = (id: string) => JSON.stringify(engine === 'claude'
+    ? { type: 'user', sessionId: id, cwd: root, isSidechain: false } : { type: 'session', id, cwd: root }) + '\n'
+  const path = join(folder, `${A}.jsonl`)
+  writeFileSync(path, opening(B)); writeFileSync(join(other, `${A}.jsonl`), opening(A))
+  const readOpening = NativeFiles.prototype.opening, verify = NativeFiles.prototype.verify
+  const swapped = new Set<import('../engines/kit/nativeFiles.js').NativeFiles>()
+  let moved = false
+  const restore = () => { if (moved) { renameSync(folder, other); renameSync(parked, folder); moved = false } }
+  vi.spyOn(NativeFiles.prototype, 'opening').mockImplementation(function (this: import('../engines/kit/nativeFiles.js').NativeFiles, selected, rule) {
+    renameSync(folder, parked); renameSync(other, folder); moved = true; swapped.add(this)
+    return readOpening.call(this, selected, rule)
+  })
+  vi.spyOn(NativeFiles.prototype, 'verify').mockImplementation(function (this: import('../engines/kit/nativeFiles.js').NativeFiles, selected) {
+    verify.call(this, selected)
+    if (swapped.has(this)) restore()
+  })
+  try { expect(() => controlTranscriptEvidence(engine, A, path, undefined, root)).toThrow(expect.objectContaining({ code: 'IDENTITY_UNAVAILABLE' })) }
+  finally { restore() }
+  expect(readFileSync(path, 'utf8')).toBe(opening(B))
+})
+
 it('preserves a repaired parent through Stop and the final real forget archive', async () => {
   const { createStopAgentService } = await import('./stopAgentService.js')
   const { createForgetSession } = await import('../core/agents/forget.js')
@@ -367,7 +394,7 @@ it.each(['binding', 'process birth', 'native grant', 'contained grant', 'process
     if (phase === 'native grant' || phase === 'contained grant' || phase === 'binding' || phase === 'process birth') expect(nativeMutation).not.toHaveBeenCalled()
   })
 
-it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispatch', 'allocation'] as const)(
+it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispatch', 'conversation ownership', 'allocation'] as const)(
   'holds Resume when its native conversation changes during %s', async phase => {
     const { createResumeAgentService } = await import('./resumeAgentService.js')
     const { StoppedAgentStore } = await import('./stoppedAgents.js')
@@ -391,9 +418,16 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
     })
     const kill = vi.fn(async () => ({ state: 'succeeded' as const, dispatch: 'executed' as const }))
     const announce = vi.fn()
-    const backend = phase === 'tmux dispatch' ? new TmuxBackend(undefined, () => 'fixture-owner', () => {}, async () => {
+    let newOwner: string | undefined
+    const backend = phase === 'tmux dispatch' || phase === 'conversation ownership' ? new TmuxBackend(undefined, () => 'fixture-owner', () => {}, async () => {
       // The backend has accepted the request, but has not crossed its actual process-dispatch gate.
-      writeFileSync(transcript, header(B)); return tmuxFeaturesOf({ major: 3, minor: 7 })
+      if (phase === 'conversation ownership') {
+        const other = registry.openPendingAgent({ engine: 'codex', cwd: root, runtimes: [{ backend: 'tmux', paneId: '%88' }] })!
+        const admitted = registry.register({ engine: 'codex', cwd: root, tmuxPane: '%88', sessionId: A, transcriptPath: transcript })!
+        expect(admitted.entry.agentId).toBe(other.agentId)
+        newOwner = other.agentId
+      } else writeFileSync(transcript, header(B))
+      return tmuxFeaturesOf({ major: 3, minor: 7 })
     }) : { create, kill }
     const resume = createResumeAgentService({ registry, stoppedAgents: stopped, restartJobs: new AgentRestartCoordinator(),
       stopJobs: new Map(), pinnedControls: new Set(), tmuxBackend: backend,
@@ -409,10 +443,12 @@ it.each(['before', 'configuration', 'history repair', 'permission', 'tmux dispat
     })
     if (phase === 'before') writeFileSync(transcript, header(B))
     await expect(resume(row.agentId)).resolves.toMatchObject({ ok: false,
-      error: phase === 'allocation' ? 'RESUME_UNCONFIRMED' : 'IDENTITY_UNAVAILABLE', detail: expect.stringContaining('different conversation') })
+      error: phase === 'allocation' ? 'RESUME_UNCONFIRMED' : 'IDENTITY_UNAVAILABLE',
+      detail: expect.stringContaining(phase === 'conversation ownership' ? 'another live harness' : 'different conversation') })
     expect(registry.byAgent(row.agentId)).toBeUndefined()
     expect(announce).not.toHaveBeenCalled()
     expect(stopped.get(row.agentId)?.sessionId).toBe(A)
+    if (newOwner) expect(registry.bySession(A)?.agentId).toBe(newOwner)
     if (phase === 'before' || phase === 'configuration') {
       expect(writeConfiguration).not.toHaveBeenCalled()
       expect(prepare).not.toHaveBeenCalled()

@@ -52,7 +52,7 @@ export class NativeFiles {
     const meta = controlIdentity(bytes, rule)
     const prefix = Buffer.from(bytes.subarray(0, meta.bytes))
     this.reads.set(location.path, { location, limit: prefix.length, prefix })
-    return meta
+    return { ...meta, fileKey: nativeFileKey(location.info) }
   }
 
   private read(location: Location, limit: number): Buffer {
